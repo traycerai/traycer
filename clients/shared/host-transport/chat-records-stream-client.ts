@@ -2,6 +2,7 @@ import {
   hostChatRecordsSubscribeServerFrameSchemaV11,
   hostChatRecordsSubscribeServerFrameSchemaV12,
   hostChatRecordsSubscribeServerFrameSchemaV13,
+  hostChatRecordsSubscribeServerFrameSchemaV14,
   type ChatRecordRemovalReason,
   type ChatRecordSummaryStreamV13,
   type HostChatRecordsSubscribeServerFrameV13,
@@ -86,11 +87,16 @@ export type TuiAgentRecordDelta =
     };
 
 /**
- * Everything `host.chatRecords.subscribe@1.3` can deliver. An older host
- * negotiates down and simply never sends what its minor did not have: @1.0
- * omits the terminal-agent kinds entirely, @1.1 sends them for its OWN rows
- * only and never for a cross-host replica, and @1.0-@1.2 carry no `head` on
- * the chat `upsert` row.
+ * Everything `host.chatRecords.subscribe` can deliver AS THIS CLIENT NAMES IT.
+ * An older host negotiates down and simply never sends what its minor did not
+ * have: @1.0 omits the terminal-agent kinds entirely, @1.1 sends them for its
+ * OWN rows only and never for a cross-host replica, and @1.0-@1.2 carry no
+ * `head` on the chat `upsert` row.
+ *
+ * A `@1.4` host sends two things more - `listRevision` on every record frame
+ * and the session facet on `tuiUpsert`'s row - and they are parsed (see
+ * {@link ParsedFrame}) but not yet named here. Stage 2 names them; until then
+ * they are carried as unnamed data rather than stripped at the wire.
  */
 export type ChatRecordsStreamDelta = ChatRecordDelta | TuiAgentRecordDelta;
 
@@ -167,6 +173,21 @@ export interface ChatRecordsStreamClientOptions {
  * no fill is needed there, and none would be honest (an older host never said
  * whether the chat has a publication).
  */
+/**
+ * The `@1.3` frame is what every arm resolves to, `@1.4` included, and the
+ * direction is what makes that safe: `@1.4` only ADDS (`listRevision` on the
+ * four record kinds, the session facet on `tuiUpsert`'s row), so a `@1.4` frame
+ * is a `@1.3` frame with more on it and the extra travels as data this file's
+ * consumers do not yet name.
+ *
+ * That is a TYPE ceiling, not a parse one, and the difference is the whole of
+ * F2: each minor is parsed by its own schema, so nothing is stripped off the
+ * wire, and the added fields reach whatever names them next. Consuming
+ * `listRevision` is stage 2's (it is what advances a client's list stamp from a
+ * delta), and the session facet rides that same plumbing - see
+ * `tui-agent-record-table.ts`'s `applyDelta`, which carries the facet forward
+ * from the held row meanwhile.
+ */
 type ParsedFrame =
   | {
       readonly success: true;
@@ -189,6 +210,22 @@ function parseV11Frame(envelope: StreamFrameEnvelope): ParsedFrame {
   };
 }
 
+/**
+ * The newest `host.chatRecords.subscribe` minor this client has a parse arm
+ * for.
+ *
+ * Exported for ONE purpose: the test pins it against
+ * `hostStreamRpcRegistry["host.chatRecords.subscribe"][1].latestMinor`, so
+ * registering a minor without adding an arm here fails loudly. That pin is the
+ * only thing that can catch it. Registering a minor is an edit in another
+ * package, `prepareStreamSubscribeRequest` declares `min(mine, theirs)` off the
+ * registry with no reference to this file, and a `>=` ladder answers for
+ * every minor above its top arm without anybody choosing that - which is
+ * exactly how `@1.4` came to be negotiated and then parsed as `@1.3`, silently
+ * discarding the list revision and the session facet the minor exists to carry.
+ */
+export const CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING = 4;
+
 function parseNegotiatedFrame(
   negotiated: SchemaVersion | null,
   envelope: StreamFrameEnvelope,
@@ -196,10 +233,26 @@ function parseNegotiatedFrame(
   if (negotiated === null || negotiated.major !== 1) {
     return parseV11Frame(envelope);
   }
-  if (negotiated.minor >= 3) {
+  // A minor with no arm of its own. DROPPED rather than parsed with the newest
+  // arm this build has: every schema here is a plain (non-strict) object, so a
+  // newer frame parsed with an older arm SUCCEEDS with the new minor's fields
+  // stripped - the failure mode that has no symptom. A drop has one (the poll
+  // carries the table meanwhile, per this class's degrade contract) and the pin
+  // on the constant above means a build whose protocol and client moved
+  // together never reaches it.
+  if (negotiated.minor > CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING) {
+    return { success: false };
+  }
+  // EXACT minors below, never `>=`. `>=` is what let the top arm answer for a
+  // minor it was never written for; the guard above is only a backstop, and it
+  // cannot help while the ladder itself still claims everything above it.
+  if (negotiated.minor === 4) {
+    return hostChatRecordsSubscribeServerFrameSchemaV14.safeParse(envelope);
+  }
+  if (negotiated.minor === 3) {
     return hostChatRecordsSubscribeServerFrameSchemaV13.safeParse(envelope);
   }
-  if (negotiated.minor >= 2) {
+  if (negotiated.minor === 2) {
     return hostChatRecordsSubscribeServerFrameSchemaV12.safeParse(envelope);
   }
   return parseV11Frame(envelope);
@@ -255,6 +308,15 @@ export class ChatRecordsStreamClient {
     // very fact the minor exists to carry - the published-copy tile would
     // never learn a new turn was published. Same rule as the `tuiUpsert`
     // regression above: the negotiated minor picks the schema, always.
+    //
+    // "Always" is now enforced by the ladder's shape rather than asserted by
+    // this comment. It used to read `minor >= 3`, which is the same silent
+    // strip one minor along: `@1.4` is registered, so this client advertises it
+    // and a `@1.4` host negotiates it, and the `@1.3` schema would have dropped
+    // `listRevision` and the session facet off every delta with nothing failing
+    // anywhere. Each minor now has its own arm, and
+    // `CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING` is pinned against the
+    // registry so the NEXT minor cannot repeat it.
     const negotiated = this.session.getNegotiatedSchemaVersion();
     const parsed = parseNegotiatedFrame(negotiated, envelope);
     // A frame this build cannot parse is dropped rather than guessed at. The

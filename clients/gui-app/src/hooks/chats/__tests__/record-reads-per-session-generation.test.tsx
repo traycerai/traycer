@@ -273,13 +273,24 @@ function createFixture(): Fixture {
         "epic.listChatRecords": () => {
           chatListCalls.value += 1;
           return Promise.resolve({
+            kind: "snapshot" as const,
+            listStamp: null,
             chats: chatRows.map((row) => ({ ...row })),
           });
         },
         "epic.listTuiAgents": () => {
           tuiListCalls.value += 1;
           return Promise.resolve({
-            tuiAgents: tuiRows.map((row) => ({ ...row })),
+            kind: "snapshot" as const,
+            listStamp: null,
+            // The `@1.3` row carries the session facet; the fixture builder
+            // stays on the `@1.2` shape because that is what the store
+            // consumes, so the two keys are stamped on at the wire edge.
+            tuiAgents: tuiRows.map((row) => ({
+              ...row,
+              sessionState: null,
+              lastExit: null,
+            })),
           });
         },
       },

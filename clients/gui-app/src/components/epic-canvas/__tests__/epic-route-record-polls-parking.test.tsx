@@ -158,11 +158,19 @@ function createRecordChannelFixture(): RecordChannelFixture {
       handlers: {
         "epic.listChatRecords": () => {
           chatCalls.value += 1;
-          return Promise.resolve({ chats: [] });
+          return Promise.resolve({
+            kind: "snapshot" as const,
+            listStamp: null,
+            chats: [],
+          });
         },
         "epic.listTuiAgents": () => {
           tuiCalls.value += 1;
-          return Promise.resolve({ tuiAgents: [] });
+          return Promise.resolve({
+            kind: "snapshot" as const,
+            listStamp: null,
+            tuiAgents: [],
+          });
         },
       },
     }),

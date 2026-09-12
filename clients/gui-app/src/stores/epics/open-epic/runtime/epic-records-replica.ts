@@ -25,7 +25,8 @@ import {
   encodeAwarenessUpdate,
 } from "y-protocols/awareness";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -248,6 +249,13 @@ export interface EpicRecordsReplica extends Replica<
     records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
   ): void;
+  /**
+   * The recency patches an `unchanged` chat-list answer carried. Separate from
+   * {@link EpicRecordsReplica.applyChatRecords} because the two arms of that
+   * answer are different statements: one delivers rows, the other says the
+   * rows are still current and only their recency moved.
+   */
+  applyChatRecordTouches(patches: readonly RecordListRecencyPatch[]): void;
   applyChatRecordDelta(delta: ChatRecordDelta): void;
   applyConfirmedChatMutation(mutation: ConfirmedChatMutation): void;
   peekChatIngestSeq(): number;
@@ -268,9 +276,11 @@ export interface EpicRecordsReplica extends Replica<
    */
   markChatRecordListNotAuthoritative(): void;
   applyTuiAgentRecords(
-    records: readonly TuiAgentRecordSummaryV12[],
+    records: readonly TuiAgentRecordSummaryV13[],
     issuedAtSeq: number | null,
   ): void;
+  /** The terminal twin of {@link EpicRecordsReplica.applyChatRecordTouches}. */
+  applyTuiAgentRecordTouches(patches: readonly RecordListRecencyPatch[]): void;
   applyTuiAgentRecordDelta(delta: TuiAgentRecordDelta): void;
   peekTuiAgentIngestSeq(): number;
   beginPendingChatCreation(pending: PendingChatCreation): void;
@@ -444,6 +454,8 @@ export function createEpicRecordsReplica(
       // RUNS, which is after construction completes.
       chatIngestSeq: chatTable.ingestSeq(),
       tuiAgentIngestSeq: tuiTable.ingestSeq(),
+      chatSnapshotIncompleteSeq: chatTable.snapshotIncompleteSeq(),
+      tuiAgentSnapshotIncompleteSeq: tuiTable.snapshotIncompleteSeq(),
     });
   }
 
@@ -565,6 +577,100 @@ export function createEpicRecordsReplica(
       publish(patch);
       projector.projectFull();
     });
+  }
+
+  /**
+   * What a record table's COUNTERS look like from here. Both are read by a
+   * caller on the far side of the fire-and-forget command bridge, and both are
+   * projected by {@link publish}, so both have to be checked by
+   * {@link publishRecordApply}.
+   */
+  interface RecordTableCounters {
+    ingestSeq(): number;
+    snapshotIncompleteSeq(): number;
+  }
+
+  /**
+   * Run one record-table apply and publish what it produced - or, when the
+   * change gate held and only a COUNTER moved, publish the counters alone.
+   *
+   * The second arm is the one worth arguing. The two counters exist to be read
+   * on the MAIN THREAD (the dispatch fence a list request sends, and the
+   * complete-apply signal a list stamp is declined on), they reach it only
+   * through `publish`, and `publish` runs only when a table returns a
+   * publication - which the change gate withholds whenever the slice did not
+   * move. Both counters can move without the slice moving, and neither is
+   * cosmetic when they do:
+   *
+   *  - `ingestSeq` advances for a row write the published slice cannot see -
+   *    `revision` is not in it, and `chatSlicesEq` cannot compare what is not
+   *    there - so the row's `rowSeq` would sit permanently above the fence the
+   *    client keeps sending, and every later snapshot's copy of it would be
+   *    fence-skipped for the life of the session.
+   *  - `snapshotIncompleteSeq` advances on a snapshot whose ONLY effect was a
+   *    fence skip, which by construction changes no slice and ingests nothing.
+   *    That is the most reachable case of all (one delta racing one poll), and
+   *    an unpublished counter there is a stamp held for an answer this table
+   *    did not take - the defect the counter exists to close.
+   *
+   * `publish` rather than `publishRecordSlice`: nothing about the projection's
+   * slices moved, so a full re-projection would cost a snapshot-shaped rebuild
+   * to deliver two numbers.
+   */
+  function publishRecordApply<TPublication>(
+    table: RecordTableCounters,
+    apply: () => TPublication | null,
+    patchOf: (publication: TPublication) => Partial<EpicRecordsProjection>,
+  ): void {
+    const ingestSeqBefore = table.ingestSeq();
+    const incompleteSeqBefore = table.snapshotIncompleteSeq();
+    const publication = apply();
+    if (publication !== null) {
+      publishRecordSlice(patchOf(publication));
+      return;
+    }
+    if (
+      table.ingestSeq() === ingestSeqBefore &&
+      table.snapshotIncompleteSeq() === incompleteSeqBefore
+    ) {
+      return;
+    }
+    publish({});
+  }
+
+  /**
+   * The patch for a chat publication that MAY carry retractions - the rows and
+   * delta paths, which are the two that can absorb a removal.
+   *
+   * The retraction key is omitted rather than written as `null` when nothing
+   * moved: the projection's field is the absorbing map, and publishing an empty
+   * one would retract the retractions.
+   */
+  function chatRecordPatch(publication: {
+    readonly chatRecords: EpicRecordsProjection["chatRecords"];
+    readonly chatRetractions: EpicRecordsProjection["chatRetractions"] | null;
+  }): Partial<EpicRecordsProjection> {
+    return publication.chatRetractions === null
+      ? { chatRecords: publication.chatRecords }
+      : {
+          chatRecords: publication.chatRecords,
+          chatRetractions: publication.chatRetractions,
+        };
+  }
+
+  /** The terminal twin of {@link chatRecordPatch}. */
+  function tuiAgentRecordPatch(publication: {
+    readonly tuiAgentRecords: EpicRecordsProjection["tuiAgentRecords"];
+    readonly tuiAgentRetractions:
+      | EpicRecordsProjection["tuiAgentRetractions"]
+      | null;
+  }): Partial<EpicRecordsProjection> {
+    return publication.tuiAgentRetractions === null
+      ? { tuiAgentRecords: publication.tuiAgentRecords }
+      : {
+          tuiAgentRecords: publication.tuiAgentRecords,
+          tuiAgentRetractions: publication.tuiAgentRetractions,
+        };
   }
 
   // ── Replica lifecycle ─────────────────────────────────────────────────────
@@ -1425,36 +1531,40 @@ export function createEpicRecordsReplica(
 
     applyChatRecords(records, issuedAtSeq): void {
       if (isDisposed()) return;
-      const publication = chatTable.applyRecords(records, issuedAtSeq);
-      if (publication === null) return;
-      publishRecordSlice(
-        publication.chatRetractions === null
-          ? { chatRecords: publication.chatRecords }
-          : {
-              chatRecords: publication.chatRecords,
-              chatRetractions: publication.chatRetractions,
-            },
+      publishRecordApply(
+        chatTable,
+        () => chatTable.applyRecords(records, issuedAtSeq),
+        chatRecordPatch,
+      );
+    },
+
+    applyChatRecordTouches(patches): void {
+      if (isDisposed()) return;
+      // No retraction arm: a patch cannot retract anything, so this publishes
+      // the slice alone and the two-branch shape the rows path needs would be
+      // a branch that never takes its second arm.
+      publishRecordApply(
+        chatTable,
+        () => chatTable.applyTouches(patches),
+        (publication) => ({ chatRecords: publication.chatRecords }),
       );
     },
 
     applyConfirmedChatMutation(mutation): void {
       if (isDisposed()) return;
-      const publication = chatTable.applyConfirmedMutation(mutation);
-      if (publication !== null)
-        publishRecordSlice({ chatRecords: publication.chatRecords });
+      publishRecordApply(
+        chatTable,
+        () => chatTable.applyConfirmedMutation(mutation),
+        (publication) => ({ chatRecords: publication.chatRecords }),
+      );
     },
 
     applyChatRecordDelta(delta): void {
       if (isDisposed()) return;
-      const publication = chatTable.applyDelta(delta);
-      if (publication === null) return;
-      publishRecordSlice(
-        publication.chatRetractions === null
-          ? { chatRecords: publication.chatRecords }
-          : {
-              chatRecords: publication.chatRecords,
-              chatRetractions: publication.chatRetractions,
-            },
+      publishRecordApply(
+        chatTable,
+        () => chatTable.applyDelta(delta),
+        chatRecordPatch,
       );
     },
 
@@ -1472,29 +1582,28 @@ export function createEpicRecordsReplica(
 
     applyTuiAgentRecords(records, issuedAtSeq): void {
       if (isDisposed()) return;
-      const publication = tuiTable.applyRecords(records, issuedAtSeq);
-      if (publication === null) return;
-      publishRecordSlice(
-        publication.tuiAgentRetractions === null
-          ? { tuiAgentRecords: publication.tuiAgentRecords }
-          : {
-              tuiAgentRecords: publication.tuiAgentRecords,
-              tuiAgentRetractions: publication.tuiAgentRetractions,
-            },
+      publishRecordApply(
+        tuiTable,
+        () => tuiTable.applyRecords(records, issuedAtSeq),
+        tuiAgentRecordPatch,
+      );
+    },
+
+    applyTuiAgentRecordTouches(patches): void {
+      if (isDisposed()) return;
+      publishRecordApply(
+        tuiTable,
+        () => tuiTable.applyTouches(patches),
+        (publication) => ({ tuiAgentRecords: publication.tuiAgentRecords }),
       );
     },
 
     applyTuiAgentRecordDelta(delta): void {
       if (isDisposed()) return;
-      const publication = tuiTable.applyDelta(delta);
-      if (publication === null) return;
-      publishRecordSlice(
-        publication.tuiAgentRetractions === null
-          ? { tuiAgentRecords: publication.tuiAgentRecords }
-          : {
-              tuiAgentRecords: publication.tuiAgentRecords,
-              tuiAgentRetractions: publication.tuiAgentRetractions,
-            },
+      publishRecordApply(
+        tuiTable,
+        () => tuiTable.applyDelta(delta),
+        tuiAgentRecordPatch,
       );
     },
 

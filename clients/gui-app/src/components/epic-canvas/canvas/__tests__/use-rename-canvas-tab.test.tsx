@@ -35,7 +35,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   EpicArtifactRef,
   EpicTerminalRef,
@@ -252,7 +252,7 @@ function newSession(): OpenedStoreForTest {
 /** A REGISTRY row (docResident: false) - the shape that routes to the RPC. */
 function agentRecord(
   tuiAgentId: string,
-): Extract<TuiAgentRecordSummaryV12, { origin: "registry" }> {
+): Extract<TuiAgentRecordSummaryV13, { origin: "registry" }> {
   return {
     tuiAgentId,
     ownerUserId: "user-1",
@@ -278,6 +278,10 @@ function agentRecord(
     revision: 1,
     docResident: false,
     origin: "registry",
+    // `@1.3`'s session facet. `null` is what a host that cannot say answers,
+    // and nothing in this file is about the facet.
+    sessionState: null,
+    lastExit: null,
   };
 }
 

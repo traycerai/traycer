@@ -311,6 +311,12 @@ describe("agent host schemas", () => {
             active: false,
             folderPaths: ["/repo"],
             isWorktree: false,
+            // The `@9.1` session facet: required and nullable, filled by the
+            // upgrade path for an older host (the convention
+            // `assertCanonicalResponseSchema` names). A GUI chat has no PTY
+            // session, so `null` is its permanent answer.
+            sessionState: null,
+            lastExit: null,
           },
         ],
       }),
@@ -338,6 +344,8 @@ describe("agent host schemas", () => {
           active: false,
           folderPaths: [],
           isWorktree: false,
+          sessionState: null,
+          lastExit: null,
           runConfig: {
             model: { kind: "concrete", slug: "gpt-5.6-codex" },
             reasoningEffort: "high",
@@ -374,6 +382,12 @@ describe("agent host schemas", () => {
           active: false,
           folderPaths: [],
           isWorktree: false,
+          // The row under test is a v7 host's as far as `runConfig` goes -
+          // that field's `.default(null)` backstop is what this case pins.
+          // The `@9.1` facet is a different mechanism: required on the wire
+          // and supplied by the upgrade path, so it is spelled out here.
+          sessionState: null,
+          lastExit: null,
         },
       ],
     });

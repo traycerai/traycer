@@ -1,4 +1,5 @@
 export * from "./agent";
+export * from "./agent-session-state";
 export * from "./asset-stream-schemas";
 export * from "./browser";
 export * from "./chat-fallback";

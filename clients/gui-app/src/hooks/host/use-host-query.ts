@@ -77,6 +77,35 @@ export interface UseHostQueryWithResponseMapOptions<
    */
   readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
   /**
+   * The wire payload for THIS dispatch, derived from `params` at the moment
+   * the request goes out. Omitted (the default) sends `params` itself.
+   *
+   * `params` is both the query KEY and the payload everywhere else, and for
+   * almost every method that identity is the right one: what you asked for is
+   * what identifies the answer. The seam exists for a field that is neither -
+   * a REVISION THE CLIENT ALREADY HOLDS, which says nothing about which
+   * resource is being read and everything about how much of it needs to come
+   * back. The revision-gated record lists (`epic.listChatRecords@1.3`,
+   * `epic.listTuiAgents@1.3`) send their last answer's list stamp this way:
+   * putting it in `params` would mint a new cache entry on every poll tick -
+   * so the 20s cadence would refetch from scratch forever and the gating would
+   * never fire - while a stamp frozen into the key at mount would be stale by
+   * the second tick.
+   *
+   * Called once per dispatch, inside the queryFn, AFTER `preflight` and before
+   * `captureRequestContext` - so the ordering fence stays the last thing read
+   * before the request leaves. A throw is normalized by the same boundary the
+   * dispatch is.
+   *
+   * What must NOT go through here: anything that changes which answer is
+   * correct for this key. The cache slot is shared by every dispatch that
+   * agrees on `params`, so a payload difference this seam introduces has to be
+   * one the cached representation is indifferent to.
+   */
+  readonly buildRequest?: (
+    params: RequestOfMethod<Registry, Method>,
+  ) => RequestOfMethod<Registry, Method>;
+  /**
    * Pass-through TanStack options (`enabled`, `staleTime`, etc.). Query key
    * and queryFn are owned by this hook so the invalidation contract holds.
    */
@@ -224,8 +253,14 @@ export function useHostQueryWithResponseMap<
         return Promise.reject<TData>(hostClientUnavailableError(method));
       }
       args.preflight?.();
+      // The payload, which is `params` unless a caller derives one per
+      // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
+      // that fence remains the last thing captured before the request leaves.
+      const buildRequest = args.buildRequest;
+      const payload =
+        buildRequest === undefined ? params : buildRequest(params);
       const requestContext = args.captureRequestContext?.();
-      const response = await client.requestWithSignal(method, params, signal);
+      const response = await client.requestWithSignal(method, payload, signal);
       return mapResponse({
         response,
         queryClient,
