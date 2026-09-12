@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { sessionKeyOf } from "@traycer-clients/shared/replica-runtime";
 import type { RecordListStamp } from "@traycer/protocol/host/epic/record-list-revision";
 import { subscribeRecordListDeltaStamps } from "@/lib/records/record-list-delta-stamps";
@@ -264,6 +264,22 @@ export function useRecordListStamp(
  * re-shipping them. A plane holding nothing (`null`) is already asking for a
  * snapshot on every dispatch, so a delta has nothing to tell it.
  */
+/**
+ * One of the record projection's counters, read reactively off an open-epic
+ * store, or `null` with no session.
+ *
+ * Both record hooks need this and neither needs a slice: the counters are
+ * plain numbers on the projection, so `useSyncExternalStore` over the store's
+ * own subscribe is the whole mechanism and a selector library would only add
+ * an equality function for `===`.
+ */
+export function useProjectedRecordCounter(
+  subscribeToStore: (onChange: () => void) => () => void,
+  readCounter: () => number | null,
+): number | null {
+  return useSyncExternalStore(subscribeToStore, readCounter, readCounter);
+}
+
 export function useRecordListStreamStamp(
   epicId: string,
   stamp: RecordListStampHold,
@@ -281,7 +297,46 @@ export function useRecordListStreamStamp(
    * already the query's `error`.
    */
   refetch: () => Promise<unknown>,
+  /**
+   * This plane's live repair inputs, as ONE argument rather than two - they
+   * are read together by the single effect below, and a fifth positional
+   * parameter is over this package's `max-params` ceiling.
+   */
+  incomplete: {
+    /**
+     * This plane's projected `deltaIncompleteSeq`, or `null` with no session.
+     *
+     * A move in it means a delta INTRODUCED a row the store cannot fully
+     * state - a chat with no home, an agent with no session facet - so the
+     * rows this client holds are not the rows the host's list describes, and
+     * the stamp the same delta advanced is a claim to hold them.
+     *
+     * Read as a value rather than through the stamp's own getter, because
+     * this is the one input that has to drive a RENDER: the counter crosses
+     * the runtime worker's command bridge long after the delta was
+     * announced, so there is no callback to hang the repair off.
+     */
+    readonly deltaIncompleteSeq: number | null;
+    /**
+     * Whether this plane's list read is in flight right now.
+     *
+     * The division of labour between the two incomplete-apply clauses, and
+     * the reason they compose instead of overlapping. A read already on the
+     * wire is a repair already happening: its answer either states the field
+     * the delta could not - and there is nothing left to do - or it cannot,
+     * in which case the row it was dispatched before is held back by the
+     * request-time fence, `snapshotIncompleteSeq` moves, and the DISPATCH
+     * comparison declines its stamp. Either way the snapshot clause owns it.
+     *
+     * Re-reading over the top would not merely be wasteful: it replaces the
+     * in-flight answer, so the fence skip that is the snapshot clause's whole
+     * trigger never happens and that repair path is disabled by the one meant
+     * to complement it.
+     */
+    readonly listIsFetching: boolean;
+  },
 ): void {
+  const { deltaIncompleteSeq, listIsFetching } = incomplete;
   // Through a ref so the subscription survives re-renders: `refetch` is read
   // at NOTIFICATION time, and re-subscribing whenever the query result object
   // is rebuilt (every render) would churn the channel for nothing.
@@ -289,6 +344,47 @@ export function useRecordListStreamStamp(
   useEffect(() => {
     refetchRef.current = refetch;
   }, [refetch]);
+  // THE GAP RULE, reached by the other route.
+  //
+  // The delta whose apply turned out to be incomplete has already advanced
+  // the held stamp by the time this fires - the announcement is synchronous
+  // and the apply is not - so this is the correction, not a pre-check. It is
+  // the same two moves a non-contiguous revision makes, and for the same
+  // reason: this client cannot describe the list it just claimed to hold, and
+  // only a snapshot can fix that.
+  //
+  // Not folded into the dispatch comparison (`snapshotIncompleteSeq`), which
+  // would also work but only at the NEXT scheduled poll - up to 20s of a
+  // just-created chat rendering as unadopted, with rename, archive, reparent
+  // and delete closed on it. A delta has no dispatch of its own to bind to,
+  // so there is nothing here for that mechanism to be the repair of.
+  const seenDeltaIncompleteSeq = useRef(deltaIncompleteSeq);
+  // Synced in an effect rather than written during render, and DECLARED
+  // ABOVE the one that reads it so effect order makes it current: when this
+  // value and the counter move in the same commit, this runs first.
+  const listIsFetchingRef = useRef(listIsFetching);
+  useEffect(() => {
+    listIsFetchingRef.current = listIsFetching;
+  }, [listIsFetching]);
+  useEffect(() => {
+    if (deltaIncompleteSeq === null) return;
+    // Also the mount case: the ref seeds from the first render's value, so a
+    // session that already has a non-zero counter does not re-read on mount.
+    if (seenDeltaIncompleteSeq.current === deltaIncompleteSeq) return;
+    // Marked seen even when the read below is skipped, so one counter move
+    // costs at most one action. Not marking it would re-read the moment the
+    // in-flight answer settled, which is the one point at which a re-read is
+    // guaranteed to be redundant.
+    seenDeltaIncompleteSeq.current = deltaIncompleteSeq;
+    // The stamp goes regardless. It was advanced by a delta whose apply this
+    // client cannot describe, so it may not be sent whatever repairs it.
+    stamp.hold(null, null);
+    // Read through a ref rather than a dependency: this is a decision about
+    // the instant the counter moved, and re-running the effect when the
+    // query later settles would act on a world that has already changed.
+    if (listIsFetchingRef.current) return;
+    void refetchRef.current();
+  }, [deltaIncompleteSeq, stamp]);
   useEffect(
     () =>
       subscribeRecordListDeltaStamps(epicId, (listRevision) => {

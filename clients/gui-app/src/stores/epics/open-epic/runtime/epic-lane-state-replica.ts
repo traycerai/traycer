@@ -565,7 +565,12 @@ export function createEpicLaneStateReplica(
     }
     const held = heldRowFor(change.row);
     if (held === null) return false;
-    return table.applyUpsert(held) !== null;
+    // `"complete"`: the lane carries whole rows from the authority, so there
+    // is no field this path leaves unstated for a later list read to fill.
+    // The incomplete counter is about the record STREAM's two seeded gaps
+    // (an unknown chat home, an unstated session facet) - see
+    // `UpsertCompleteness`.
+    return table.applyUpsert(held, "complete") !== null;
   }
 
   function applyRecordSnapshot(

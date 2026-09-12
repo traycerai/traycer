@@ -456,6 +456,8 @@ export function createEpicRecordsReplica(
       tuiAgentIngestSeq: tuiTable.ingestSeq(),
       chatSnapshotIncompleteSeq: chatTable.snapshotIncompleteSeq(),
       tuiAgentSnapshotIncompleteSeq: tuiTable.snapshotIncompleteSeq(),
+      chatDeltaIncompleteSeq: chatTable.deltaIncompleteSeq(),
+      tuiAgentDeltaIncompleteSeq: tuiTable.deltaIncompleteSeq(),
     });
   }
 
@@ -588,6 +590,7 @@ export function createEpicRecordsReplica(
   interface RecordTableCounters {
     ingestSeq(): number;
     snapshotIncompleteSeq(): number;
+    deltaIncompleteSeq(): number;
   }
 
   /**
@@ -612,6 +615,12 @@ export function createEpicRecordsReplica(
    *    That is the most reachable case of all (one delta racing one poll), and
    *    an unpublished counter there is a stamp held for an answer this table
    *    did not take - the defect the counter exists to close.
+   *  - `deltaIncompleteSeq` advances for a delta that introduced a row with
+   *    an unstated home or session facet. That one DOES ingest, so the first
+   *    arm usually carries it - but not always: a row belonging to another
+   *    viewer is filtered out of the published slice, so the apply changes
+   *    nothing visible and the change gate holds. Unpublished, the gap rule
+   *    never fires and the row's home is never asked for.
    *
    * `publish` rather than `publishRecordSlice`: nothing about the projection's
    * slices moved, so a full re-projection would cost a snapshot-shaped rebuild
@@ -624,6 +633,7 @@ export function createEpicRecordsReplica(
   ): void {
     const ingestSeqBefore = table.ingestSeq();
     const incompleteSeqBefore = table.snapshotIncompleteSeq();
+    const deltaIncompleteSeqBefore = table.deltaIncompleteSeq();
     const publication = apply();
     if (publication !== null) {
       publishRecordSlice(patchOf(publication));
@@ -631,7 +641,8 @@ export function createEpicRecordsReplica(
     }
     if (
       table.ingestSeq() === ingestSeqBefore &&
-      table.snapshotIncompleteSeq() === incompleteSeqBefore
+      table.snapshotIncompleteSeq() === incompleteSeqBefore &&
+      table.deltaIncompleteSeq() === deltaIncompleteSeqBefore
     ) {
       return;
     }

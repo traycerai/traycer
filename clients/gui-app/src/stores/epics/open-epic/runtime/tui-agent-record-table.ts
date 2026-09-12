@@ -56,6 +56,8 @@ export interface TuiAgentRecordTable {
    * {@link RecordTable.snapshotIncompleteSeq}.
    */
   snapshotIncompleteSeq(): number;
+  /** The delta twin - see {@link RecordTable.deltaIncompleteSeq}. */
+  deltaIncompleteSeq(): number;
   /**
    * The `@1.3` row, which is the `@1.2` row plus the SESSION FACET
    * (`sessionState` / `lastExit`). Typed up to it rather than left at `@1.2`
@@ -118,6 +120,37 @@ export interface TuiAgentRecordTable {
  * whose whole point is that `tuiUpsert` can now carry a cross-host replica.
  * A delta path still comparing revisions first is exactly the stale-replica
  * trap above, reached by the newer of the two routes.
+ *
+ * ## The facet waiver, and why it is NARROW where the chat twin's is not
+ *
+ * Same race as the chat twin's unknown-home clause: a pre-`@1.4` `tuiUpsert`
+ * seeds an agent this table never held with `sessionState: null`, and the
+ * answer that STATES the facet is a fresher read of the same registry row, so
+ * it routinely carries the same revision. `n > n` is false, so without a
+ * waiver a reaped agent keeps `null` - "this host cannot know", rendered as
+ * ABSENT rather than asleep-and-resumable - for the life of the session. It
+ * is asleep, so nothing writes to it, so no later revision ever arrives to
+ * carry the repair. That is the symptom this whole epic exists to fix,
+ * reached after both the complete-apply rule and the stamp decline have done
+ * their jobs correctly.
+ *
+ * The chat twin waives UNCONDITIONALLY on `held.docResident === null`, and
+ * this plane must not, because the two nulls are not the same fact.
+ * `docResident: null` is only ever the delta's seed - the resolver stamps
+ * every real answer `true` or `false` - so an unknown home is by construction
+ * a row awaiting its first answer. `sessionState: null` is a legitimate
+ * STEADY STATE: a peer-host row, a cloud replica, a doc-resident entry and a
+ * row from a host that predates the facet all rest there forever. Waiving on
+ * it unconditionally would retire the revision test permanently for every one
+ * of those rows, and a stale in-flight answer could then clobber a newer
+ * push. The asymmetry is invisible from inside either function, which is why
+ * it is written down here.
+ *
+ * So the waiver is keyed on the candidate being strictly MORE INFORMATIVE
+ * about the facet, at no-lower revision - see {@link statesMoreOfTheFacet}.
+ * It can only ever add facet information, never remove it, which is the same
+ * "nothing anyone stated is overwritten" property the chat twin gets for free
+ * from having a single field.
  */
 function tuiAgentRowSupersedes(
   candidate: TuiAgentRecordSummaryV13,
@@ -127,7 +160,45 @@ function tuiAgentRowSupersedes(
   const heldIsLocal = held.origin !== "cloud";
   if (candidateIsLocal !== heldIsLocal) return candidateIsLocal;
   if (candidate.origin === "doc" && held.origin === "doc") return true;
+  // AFTER the authority clauses, deliberately: a cloud candidate against a
+  // local held row is refused on authority however much of the facet it
+  // states, and this waiver must not reopen that.
+  if (
+    candidate.revision >= held.revision &&
+    statesMoreOfTheFacet(candidate, held)
+  ) {
+    return true;
+  }
   return candidate.revision > held.revision;
+}
+
+/**
+ * Whether `candidate` says something about the session facet that `held` does
+ * not, while saying nothing LESS.
+ *
+ * Both fields, not `sessionState` alone: at equal revision the two are reads
+ * of one row, so a candidate that fills in `lastExit` for an agent already
+ * known to be `sleeping` is the same repair one field along, and keying only
+ * on `sessionState` would leave "asleep, reason unknown" permanently.
+ *
+ * The no-loss half is what keeps the waiver one-directional. The row is
+ * replaced WHOLE, so without it a candidate that gained `lastExit` while
+ * blanking `sessionState` would waive the revision test and lose a stated
+ * fact. At equal revision the two should agree and the case should not
+ * arise - which is exactly why it is cheap to refuse rather than reason
+ * about.
+ */
+function statesMoreOfTheFacet(
+  candidate: TuiAgentRecordSummaryV13,
+  held: TuiAgentRecordSummaryV13,
+): boolean {
+  const gains =
+    (held.sessionState === null && candidate.sessionState !== null) ||
+    (held.lastExit === null && candidate.lastExit !== null);
+  const loses =
+    (held.sessionState !== null && candidate.sessionState === null) ||
+    (held.lastExit !== null && candidate.lastExit === null);
+  return gains && !loses;
 }
 
 export function createTuiAgentRecordTable(
@@ -242,6 +313,7 @@ export function createTuiAgentRecordTable(
     current: () => table.current(),
     ingestSeq: () => table.ingestSeq(),
     snapshotIncompleteSeq: () => table.snapshotIncompleteSeq(),
+    deltaIncompleteSeq: () => table.deltaIncompleteSeq(),
 
     applyRecords: (records, issuedAtSeq) =>
       published(table.applySnapshot(records, issuedAtSeq)),
@@ -296,28 +368,42 @@ export function createTuiAgentRecordTable(
       //
       // On that carry-forward path the staleness is bounded to one poll
       // interval rather than to the session, WHEN the delta came from a live
-      // write: that write moved the host's list revision, so the next gated
-      // poll cannot answer `unchanged` and the snapshot it answers states the
-      // facet. That is the same guarantee `snapshotIncompleteSeq` restores for
-      // a fence-skipped row - see `record-table.ts`.
+      // write behind it - NOT because the delta itself moved the host's list
+      // revision. A bind replay re-emits rows without moving that counter, so
+      // the stamp argument alone would be false for it.
       //
-      // One producer escapes the bound today: a BIND REPLAY re-emits rows
-      // without incrementing the counter, so a carried-forward facet it
-      // refreshes nothing for can outlive a poll. It is the pre-`@1.4` path
-      // that is exposed - a `@1.4` replay states the facet outright - and the
-      // host-side counter fix is in flight. Until it lands, treat the bound as
-      // a property of live writes.
-      const facet =
-        delta.sessionFacet ??
-        table.retainedRow(
-          ownerScopedRowKey(delta.record.ownerUserId, delta.record.tuiAgentId),
-        );
+      // What actually bounds it is IDEMPOTENCE with respect to the facet: the
+      // carry-forward writes the value the table already holds, so a delta
+      // can only fail to improve the facet, never regress it. A row that is
+      // already stated stays stated through any number of replays, and one
+      // that is not is owed exactly one answer. That property is load-bearing
+      // and stamping `null` here would destroy it - which is the whole reason
+      // this is a carry-forward rather than a copy of the frame.
+      const held = table.retainedRow(
+        ownerScopedRowKey(delta.record.ownerUserId, delta.record.tuiAgentId),
+      );
+      // A stated facet wins over the held one; `??` picks the authority.
+      const facet = delta.sessionFacet ?? held;
       return published(
-        table.applyUpsert({
-          ...delta.record,
-          sessionState: facet === null ? null : facet.sessionState,
-          lastExit: facet === null ? null : facet.lastExit,
-        }),
+        table.applyUpsert(
+          {
+            ...delta.record,
+            sessionState: facet === null ? null : facet.sessionState,
+            lastExit: facet === null ? null : facet.lastExit,
+          },
+          // The terminal twin of the chat table's unknown home, and the
+          // distinction `TuiAgentSessionFacet` exists to make. A `@1.4` frame
+          // STATED the facet - `sessionFacet !== null` - and a `null` inside
+          // it means "the serving host cannot know", which is an answer and
+          // not a gap; re-reading the list would return the same `null`. Only
+          // a frame with no field for it at all, introducing a row nothing
+          // can be carried forward from, leaves this table unable to say -
+          // and that row renders as ABSENT rather than asleep-and-resumable,
+          // which is the symptom this epic exists to fix.
+          held === null && delta.sessionFacet === null
+            ? "introduces-unstated"
+            : "complete",
+        ),
       );
     },
 

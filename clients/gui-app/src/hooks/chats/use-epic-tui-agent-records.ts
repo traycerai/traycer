@@ -3,6 +3,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
+  useProjectedRecordCounter,
   useRecordListStamp,
   useRecordListStreamStamp,
 } from "@/hooks/chats/use-record-list-stamp";
@@ -148,6 +149,20 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
     () => store?.getState().tuiAgentSnapshotIncompleteSeq ?? null,
     [store],
   );
+  // The DELTA half - see the chat twin. Reactive, because a move in it drives
+  // the gap rule and there is no dispatch for it to be read at.
+  const subscribeToStore = useCallback(
+    (onChange: () => void) => store?.subscribe(onChange) ?? (() => undefined),
+    [store],
+  );
+  const readTuiAgentDeltaIncompleteSeq = useCallback(
+    () => store?.getState().tuiAgentDeltaIncompleteSeq ?? null,
+    [store],
+  );
+  const tuiAgentDeltaIncompleteSeq = useProjectedRecordCounter(
+    subscribeToStore,
+    readTuiAgentDeltaIncompleteSeq,
+  );
   // Keyed on the same four facts the cache entry is, so the stamp dies with
   // the row set it describes - see {@link useRecordListStamp}.
   const stamp = useRecordListStamp({
@@ -217,7 +232,10 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
   // every applied delta for the epic, INCLUDING a chat one: both lists are
   // answered from the same per-(viewer, epic) composite, so a chat write moves
   // this list's revision even though no terminal-agent row changed.
-  useRecordListStreamStamp(epicId, stamp, query.refetch);
+  useRecordListStreamStamp(epicId, stamp, query.refetch, {
+    deltaIncompleteSeq: tuiAgentDeltaIncompleteSeq,
+    listIsFetching: query.isFetching,
+  });
 
   const answer = query.data ?? null;
   useEffect(() => {

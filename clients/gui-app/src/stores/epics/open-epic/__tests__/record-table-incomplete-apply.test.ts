@@ -217,26 +217,29 @@ describe("the terminal twin: a racing tuiUpsert marks the apply incomplete (I2)"
     expect(table.current().allIds).toContain("a1");
     expect(table.current().byId.a1.sessionState).toBeNull();
 
-    // The repair the declined stamp buys, and the LIMIT on it.
+    // AND THE REPAIR LANDS, at the SAME revision the delta seeded.
     //
-    // Re-serving the same revision does NOT land the facet:
-    // `tuiAgentRowSupersedes` is `candidate.revision > held.revision` for two
-    // local rows and this plane has no unknown-facet waiver - unlike the chat
-    // twin, whose `chatRowSupersedesOnSnapshot` waives the test outright while
-    // the held home is `null`, for this exact shape of race.
+    // Which takes both halves. This clause forces the snapshot; the facet
+    // waiver in `tuiAgentRowSupersedes` is what stops rule 2 rejecting it
+    // when it arrives. The two reads are of one registry row, so the answer
+    // carries revision 5 exactly as the delta did, and `5 > 5` is false -
+    // without the waiver this snapshot is requested and then thrown away,
+    // and since the agent is ASLEEP nothing will ever write it to a higher
+    // revision to carry the repair later. See
+    // `record-table-incomplete-delta.test.ts`'s D3.
     table.applyRecords(
-      [tuiRow({ tuiAgentId: "a1", revision: 5, sessionState: "sleeping" })],
-      table.ingestSeq(),
-    );
-    expect(table.current().byId.a1.sessionState).toBeNull();
-
-    // It lands once the row's revision actually moves, which is what any
-    // subsequent write to the agent produces.
-    table.applyRecords(
-      [tuiRow({ tuiAgentId: "a1", revision: 6, sessionState: "sleeping" })],
+      [
+        tuiRow({
+          tuiAgentId: "a1",
+          revision: 5,
+          sessionState: "sleeping",
+          lastExit: "reaped",
+        }),
+      ],
       table.ingestSeq(),
     );
     expect(table.current().byId.a1.sessionState).toBe("sleeping");
+    expect(table.current().byId.a1.lastExit).toBe("reaped");
   });
 });
 
