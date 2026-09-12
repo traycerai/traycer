@@ -67,10 +67,19 @@ import {
   cleanup,
   fireEvent,
   render,
+  type RenderResult,
   screen,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { cloneElement, type ReactNode } from "react";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OfficeAutoChip } from "@/components/epic-canvas/comm-graph/office/office-auto-chip";
@@ -107,6 +116,7 @@ import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
+import { OfficeStaticLayer } from "@/components/epic-canvas/comm-graph/office/office-static-layer";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
 
@@ -1935,7 +1945,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
   function renderWithWalker(args: {
     readonly view: OfficeView;
     readonly camera: CommGraphTileViewState;
-  }): ReturnType<typeof render> {
+  }): RenderResult {
     const { camera, view } = args;
     const rendered = render(
       withQueryClient(
@@ -2555,10 +2565,16 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * inserted into the document - so counting every call would drown the
      * one this suite cares about in bakes that have nothing to do with the
      * render loop restarting. Only a CONNECTED canvas is the one the loop's
-     * own `get2dContext` opened on mount, once per effect activation.
+     * own `get2dContext` opened on mount, once per effect activation - a
+     * START. A restart is a START of a new loop AND a RELEASE of the old
+     * layer's bitmap, so `OfficeStaticLayer.prototype.release` is spied on
+     * too: a case that only checked one of the two could not tell "the loop
+     * never restarted" from "the loop restarted without releasing anything",
+     * which is its own way of losing a floor's memory.
      */
     let mainCanvasContextCalls = 0;
     let restoreMainCanvasGetContext: (() => void) | null = null;
+    let releaseSpy: MockInstance<() => void>;
 
     beforeEach(() => {
       mainCanvasContextCalls = 0;
@@ -2568,17 +2584,19 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
           return createRecordingContext(calls);
         },
       );
+      releaseSpy = vi.spyOn(OfficeStaticLayer.prototype, "release");
     });
 
     afterEach(() => {
       restoreMainCanvasGetContext?.();
       restoreMainCanvasGetContext = null;
+      vi.useRealTimers();
     });
 
     const RESTART_VIEW: CommGraphTileViewState = { ...FIXED_CAMERA_VIEW };
 
-    function renderLoop(): {
-      readonly result: ReturnType<typeof render>;
+    function renderLoop(overrides: Partial<CommGraphOfficeCanvasProps> = {}): {
+      readonly result: RenderResult;
       readonly officeView: OfficeView;
     } {
       const officeView = walkInView();
@@ -2588,7 +2606,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
             officeView,
             new Set(["host", "worker"]),
             [HOST_AGENT, WALKER_AGENT],
-            { view: RESTART_VIEW },
+            { view: RESTART_VIEW, ...overrides },
           ),
         ),
       );
@@ -2597,66 +2615,103 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // The mount itself opened the canvas's one context; only what happens
       // AFTER this point is an "interaction" for the cases below.
       mainCanvasContextCalls = 0;
+      releaseSpy.mockClear();
       return { result, officeView };
     }
 
+    /**
+     * A native wheel WITHOUT a modifier key pans; the camera it moves lives
+     * on `runtime`, a `useState` initial value the render loop's effect does
+     * not depend on, so this is a case where the real interaction and the
+     * question "did the loop restart" are provably about two different
+     * things - unlike a `view` prop rerender, which changes nothing the
+     * component actually reads for panning and would only ever measure
+     * itself.
+     */
     it("a pan does not restart the loop", () => {
-      const { result, officeView } = renderLoop();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const onCameraChange = vi.fn();
+      renderLoop({ onCameraChange });
+      const surface = screen.getByTestId("comm-graph-office-canvas");
+
+      fireEvent.wheel(surface, { deltaX: 40, deltaY: 25 });
       act(() => {
-        result.rerender(
-          withQueryClient(
-            officeElementWithView(
-              officeView,
-              new Set(["host", "worker"]),
-              [HOST_AGENT, WALKER_AGENT],
-              { view: { ...RESTART_VIEW, x: 400, y: 120 } },
-            ),
-          ),
-        );
+        vi.advanceTimersByTime(150);
       });
 
+      // Precondition: the camera actually moved. `panBy` subtracts the wheel
+      // delta from the mounted view's (5, 0).
+      expect(onCameraChange).toHaveBeenCalledWith({ x: -35, y: -25, zoom: 1 });
+
       expect(mainCanvasContextCalls).toBe(0);
+      expect(releaseSpy).not.toHaveBeenCalled();
     });
 
+    /**
+     * A native wheel WITH a modifier key zooms about the cursor, and
+     * `zoomAbout` calls `syncLodBand` synchronously - so the chip is the
+     * precondition, not a flushed frame.
+     */
     it("a lod-band change does not restart the loop", () => {
-      const { result, officeView } = renderLoop();
-      // Crosses OFFICE_LOD_OFFICE_ZOOM (0.7) down into overview.
-      act(() => {
-        result.rerender(
-          withQueryClient(
-            officeElementWithView(
-              officeView,
-              new Set(["host", "worker"]),
-              [HOST_AGENT, WALKER_AGENT],
-              { view: { ...RESTART_VIEW, zoom: 0.5 } },
-            ),
-          ),
-        );
+      renderLoop();
+      const surface = screen.getByTestId("comm-graph-office-canvas");
+      const chip = screen.getByTestId("comm-graph-office-lod-chip");
+      expect(chip.textContent).toBe("Office");
+
+      // factor = exp(-300 / 300) = exp(-1) ≈ 0.368, below the 0.7 floor.
+      fireEvent.wheel(surface, {
+        deltaY: 300,
+        ctrlKey: true,
+        clientX: 0,
+        clientY: 0,
       });
-      // Crosses OFFICE_LOD_CLOSEUP_ZOOM (1.6) up into close-up.
-      act(() => {
-        result.rerender(
-          withQueryClient(
-            officeElementWithView(
-              officeView,
-              new Set(["host", "worker"]),
-              [HOST_AGENT, WALKER_AGENT],
-              { view: { ...RESTART_VIEW, zoom: 2 } },
-            ),
-          ),
-        );
+      expect(chip.textContent).toBe("Overview");
+
+      // factor = exp(600 / 300) = exp(2) ≈ 7.39; 0.368 * 7.39 ≈ 2.72, above
+      // the 1.6 ceiling.
+      fireEvent.wheel(surface, {
+        deltaY: -600,
+        ctrlKey: true,
+        clientX: 0,
+        clientY: 0,
       });
+      expect(chip.textContent).toBe("Close-up");
 
       expect(mainCanvasContextCalls).toBe(0);
+      expect(releaseSpy).not.toHaveBeenCalled();
     });
 
+    /**
+     * `applyCanvasSize` reads the CONTAINER's measured rect, so the real
+     * trigger is that rect actually reporting a new size before the resize
+     * listener runs - the stubbed `getBoundingClientRect` this whole describe
+     * installs never changes on its own, which is exactly why a bare
+     * `dispatchEvent` proves nothing without it.
+     */
     it("a resize does not restart the loop", () => {
       renderLoop();
+      const canvas = document.querySelector("canvas");
+      if (canvas === null) throw new Error("canvas did not render");
+      expect(canvas.width).toBe(1200);
+      expect(canvas.height).toBe(800);
+
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+        ...BOUNDING_RECT_STUB,
+        width: 1600,
+        height: 900,
+        right: 1600,
+        bottom: 900,
+      });
       act(() => {
         window.dispatchEvent(new Event("resize"));
       });
 
+      // Precondition: the bitmap actually resized.
+      expect(canvas.width).toBe(1600);
+      expect(canvas.height).toBe(900);
+
       expect(mainCanvasContextCalls).toBe(0);
+      expect(releaseSpy).not.toHaveBeenCalled();
     });
 
     it("a view pick restarts the loop exactly once", () => {
@@ -2677,6 +2732,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       });
 
       expect(mainCanvasContextCalls).toBe(1);
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
     });
 
     it("a theme flip restarts the loop exactly once", () => {
@@ -2696,6 +2752,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       });
 
       expect(mainCanvasContextCalls).toBe(1);
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
     });
 
     /**
@@ -2796,6 +2853,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // The mount itself opened the canvas's one context; only what happens
       // AFTER this point is an "interaction" for the case below.
       mainCanvasContextCalls = 0;
+      releaseSpy.mockClear();
 
       useOtherLayout();
       act(() => {
@@ -2814,6 +2872,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       });
 
       expect(mainCanvasContextCalls).toBe(1);
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
     });
   });
 });
