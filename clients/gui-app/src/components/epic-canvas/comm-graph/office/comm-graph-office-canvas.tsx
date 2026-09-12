@@ -409,6 +409,14 @@ interface OfficeRuntime {
   readonly enableAutoPan: () => void;
   readonly isAutoFitEnabled: () => boolean;
   /**
+   * Pressing Fit is the person ASKING for the fitted framing, so the tile goes
+   * back to keeping it: until the camera is taken again, a floor or a viewport
+   * that changes re-frames exactly as an unframed tile's does. Without this a
+   * Fit after any zoom or pan is a one-off, and the next resize crops the
+   * framing the person just asked for.
+   */
+  readonly enableAutoFit: () => void;
+  /**
    * A person took the camera: stop following the action until the next Play,
    * stop re-fitting for good, and abandon any move in flight rather than
    * fighting it. A find gesture counts - it is the user aiming the camera.
@@ -571,6 +579,9 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
       autoPanEnabled = true;
     },
     isAutoFitEnabled: () => autoFitEnabled,
+    enableAutoFit: () => {
+      autoFitEnabled = true;
+    },
     getSceneInput: () => sceneInput,
     setSceneInput: (next) => {
       sceneInput = next;
@@ -2679,6 +2690,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.getCamera().zoom = fitted.zoom;
     syncLodBand(fitted.zoom);
     fittedRef.current = { floor: size, viewport };
+    // AFTER the camera, and after the `takeManualControl` every caller makes
+    // on the way in - that call is what abandons a playback pan in flight, and
+    // re-arming here rather than at the call site is what keeps it from also
+    // throwing away the framing the person just asked for. `fittedRef` above
+    // is the floor and viewport this framing was for, so the re-fit waits for
+    // one of them to actually change.
+    runtime.enableAutoFit();
     runtime.invalidateFrame();
     persistView();
   }, [peekScene, persistView, runtime, syncLodBand]);
