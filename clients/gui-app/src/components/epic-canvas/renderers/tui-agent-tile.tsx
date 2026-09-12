@@ -42,7 +42,7 @@ import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-laun
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
-import { wasTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
+import { useTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
 import type {
   TerminalDataWriter,
   TerminalSessionStoreHandle,
@@ -513,12 +513,21 @@ function TuiAgentTileLive(
   // host does report a running PTY.
   const isCloudReplica = agent?.origin === "cloud";
   // A tile this session did not ask for: the persisted layout restored it.
-  // Read ONCE, at mount, as the seed of the local latch below - not on every
-  // render - so the answer cannot change under a tile that has already decided
-  // what to render. See `tile-open-provenance.ts`.
-  const [startRequested, setStartRequested] = useState(() =>
-    wasTileOpenRequested(instanceId),
-  );
+  //
+  // Read LIVE, not once at mount. The open that matters most lands on a tile
+  // that is already mounted - the seam mints a fresh instance id, dedupe
+  // routes it onto this one, and a pinned terminal body is not remounted by
+  // focus - so a `useState` initializer would answer for the restore forever
+  // and the user's explicit Open would do nothing visible. The registry only
+  // grows, so this can go false -> true and never back. See
+  // `tile-open-provenance.ts`.
+  const openRequested = useTileOpenRequested(instanceId);
+  // The in-tile revive (`reviveAfterReap`), kept SEPARATE from the registry
+  // above: that one records what the open seam was asked for, and is written
+  // from the seam alone. Clicking Open inside an already-open tile is not an
+  // open, so it latches here instead.
+  const [revivedInTile, setRevivedInTile] = useState(false);
+  const startRequested = openRequested || revivedInTile;
   const isSleepingUnrequested = sleepsUntilRequested({
     agent,
     isCloudReplica,
@@ -641,7 +650,7 @@ function TuiAgentTileLive(
     // the record `sleeping`, and on a restored tile that stamp would hold
     // `adoptOnly` true through the retry below and leave the tile waiting for
     // a session nothing is going to create. Asking to revive IS the request.
-    setStartRequested(true);
+    setRevivedInTile(true);
     armRestartSuppression();
     retryTerminal();
   }, [armRestartSuppression, isCloudReplica, retryTerminal]);
@@ -665,6 +674,23 @@ function TuiAgentTileLive(
     // the two should not be able to drift apart. `pendingRestartRef` is set
     // only below this line, so the deferred path cannot arm either.
     if (!mayRestartAfterWorkspaceBindingChange(agent?.origin ?? null)) return;
+    // A RESTART IS A REQUEST, and the latch has to be set here - above the
+    // branch - because both arms below end in the same create.
+    //
+    // The restart kills the PTY and relies on the bootstrap to make a new one.
+    // On a RESTORED tile (`startRequested: false`) the facet can turn
+    // `sleeping` before the retry's `terminal.list` settles - the kill is
+    // exactly what makes the host say so - and `adoptOnly` would then arm on
+    // that stamp and shut the very create this function exists to cause. The
+    // user asked for a rebind and got a stopped agent.
+    //
+    // `reviveAfterReap` sets the same latch for the same reason; this is the
+    // second entry point that means "somebody asked for this session", and the
+    // sleeping gate is only ever meant to hold back a tile nobody asked for.
+    // Set BEFORE the branch rather than beside the immediate kill: the
+    // deferred path below fires its kill from an effect a round trip later,
+    // which is strictly more of the window in which the facet can move.
+    setRevivedInTile(true);
     if (hostHasSession === true) {
       performRestartKill();
       return;

@@ -1361,8 +1361,15 @@ function ResourceMonitorPanel(props: {
     () => projection.entries.map((entry) => entry.epicId),
     [projection.entries],
   );
-  const agentSessionsByEpicId =
-    useRegisteredEpicAgentSessionCounts(projectedEpicIds);
+  // Scoped to the host this panel is READING, the same one
+  // `attributedProjection` empties the process list for when it disagrees.
+  // The session behind a count belongs to whichever host its epic is open on,
+  // so without this an epic open elsewhere printed that machine's numbers in
+  // this host's section header.
+  const agentSessionsByEpicId = useRegisteredEpicAgentSessionCounts(
+    projectedEpicIds,
+    scope.hostId,
+  );
   const taskRows = useMemo(
     () =>
       buildTaskRows({

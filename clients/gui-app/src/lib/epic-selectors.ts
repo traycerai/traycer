@@ -1565,6 +1565,21 @@ export function useRegisteredEpicLiveAgents(
  * Epics this window has not mounted are absent from the map rather than zero -
  * "we hold no session for it" and "it has no agents" are different answers,
  * and the caller renders nothing for the first.
+ *
+ * ## Scoped to `hostId`, which is not optional
+ *
+ * A count of running and sleeping agents is a fact about one MACHINE, and the
+ * session this window holds for an epic belongs to whichever host that epic
+ * is open on - which need not be the host the caller is reading under. The
+ * Resource Manager is the caller and has its own picker, so an epic open on
+ * host A and viewed under host B printed A's numbers in B's section header,
+ * beside a process list correctly attributed to B.
+ *
+ * So the session's host must MATCH, the row's host must match, and anything
+ * unattributed is refused. Every refusal omits the epic rather than reporting
+ * zero, which the paragraph above already gives the caller a rendering for.
+ * A count that is absent is a count the user does not read; a count that is
+ * wrong is one they act on.
  */
 export interface EpicAgentSessionCounts {
   readonly running: number;
@@ -1573,11 +1588,12 @@ export interface EpicAgentSessionCounts {
 
 export function useRegisteredEpicAgentSessionCounts(
   epicIds: readonly string[],
+  hostId: string | null,
 ): ReadonlyMap<string, EpicAgentSessionCounts> {
   const registry = getOpenEpicRegistry();
   const encodedCounts = useSyncExternalStore(
     (listener) => subscribeToRegisteredEpics(registry, epicIds, listener),
-    () => agentSessionCountsSnapshot(registry, epicIds),
+    () => agentSessionCountsSnapshot(registry, epicIds, hostId),
     () => JSON.stringify([]),
   );
   return useMemo(
@@ -1594,16 +1610,38 @@ export function useRegisteredEpicAgentSessionCounts(
 function agentSessionCountsSnapshot(
   registry: OpenEpicSessionRegistry,
   epicIds: readonly string[],
+  hostId: string | null,
 ): string {
+  // No host to attribute the reading to: nothing here is true of anything.
+  if (hostId === null) return JSON.stringify([]);
   return JSON.stringify(
     epicIds.flatMap((epicId): Array<[string, number, number]> => {
       const handle = registry.peek(epicId);
       if (handle === null) return [];
+      // The session must be THIS host's. One window holds one session per
+      // epic, for whichever host that epic is open on - so a caller reading
+      // under a different host is being handed another machine's view, and
+      // "2 running / 3 sleeping" under host B's picker is not a number with
+      // a correct reading. `null` is refused with it: an unattributed handle
+      // is evidence for no host in particular, and counting it under the one
+      // on screen is the same guess by another route.
+      //
+      // Omitted, not zeroed, per this map's contract: absent means "no
+      // session held for it here", which is exactly the situation, and the
+      // caller already renders no count for that.
+      if (getEpicSessionHandleHostId(handle) !== hostId) return [];
       const agents = handle.store.getState().tuiAgents;
       let running = 0;
       let sleeping = 0;
       for (const id of agents.allIds) {
-        const state = agents.byId[id].sessionState;
+        const agent = agents.byId[id];
+        // And the ROW's own host. A session on one host can hold rows for
+        // agents bound elsewhere (a peer-host row, a replica). Their facet is
+        // `null` today, so they already fall out of both branches below -
+        // this makes the count's scope a property of this loop rather than of
+        // the facet staying null for a row this host does not run.
+        if (agent.hostId !== hostId) continue;
+        const state = agent.sessionState;
         if (state === "running") running += 1;
         else if (state === "sleeping") sleeping += 1;
       }

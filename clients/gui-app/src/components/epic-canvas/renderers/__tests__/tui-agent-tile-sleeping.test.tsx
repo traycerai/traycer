@@ -89,10 +89,24 @@ vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: vi.fn(),
 }));
 
+// Rendered as a bare commit button rather than `() => null`, so a test can
+// perform the one gesture this surface exists for: committing a folder change,
+// which is what asks the tile to restart its PTY.
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({
-    HostWorkspaceSelector: () => null,
+    HostWorkspaceSelector: (props: {
+      readonly surface: {
+        readonly onBindingCommitted: (paths: ReadonlyArray<string>) => void;
+      };
+    }) => (
+      <button
+        type="button"
+        onClick={() => props.surface.onBindingCommitted(["/w/next"])}
+      >
+        Commit binding
+      </button>
+    ),
     ActiveHostWorkspaceControls: () => null,
   }),
 );
@@ -218,13 +232,63 @@ vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
 // layout put it back". `markTileOpenRequested` is stubbed too since
 // `reviveAfterReap` calls it via the real module in production; capturing it
 // lets a case assert the click actually flipped the latch.
-const provenanceMocks = vi.hoisted(() => ({ marked: [] as string[] }));
-vi.mock("@/lib/canvas/tile-open/tile-open-provenance", () => ({
-  wasTileOpenRequested: () => tileMocks.wasOpenRequested,
-  markTileOpenRequested: (instanceId: string) => {
-    provenanceMocks.marked.push(instanceId);
-  },
-}));
+//
+// Stateful and NOTIFYING, mirroring the real module: the tile is expected to
+// observe a mark that lands after it mounted (a terminal body is pinned, so
+// focusing it does not remount it), and a mock that could only answer at
+// mount time would make that untestable by construction.
+const provenanceMocks = vi.hoisted(() => {
+  const marked: string[] = [];
+  const listeners = new Map<string, Set<() => void>>();
+  return {
+    marked,
+    listeners,
+    reset: () => {
+      marked.length = 0;
+      listeners.clear();
+    },
+  };
+});
+vi.mock("@/lib/canvas/tile-open/tile-open-provenance", async () => {
+  const { useCallback, useSyncExternalStore } = await import("react");
+  const wasTileOpenRequested = (instanceId: string): boolean =>
+    tileMocks.wasOpenRequested || provenanceMocks.marked.includes(instanceId);
+  const subscribeTileOpenRequested = (
+    instanceId: string,
+    onChange: () => void,
+  ): (() => void) => {
+    const set =
+      provenanceMocks.listeners.get(instanceId) ?? new Set<() => void>();
+    set.add(onChange);
+    provenanceMocks.listeners.set(instanceId, set);
+    return () => set.delete(onChange);
+  };
+  return {
+    wasTileOpenRequested,
+    subscribeTileOpenRequested,
+    markTileOpenRequested: (instanceId: string) => {
+      if (provenanceMocks.marked.includes(instanceId)) return;
+      provenanceMocks.marked.push(instanceId);
+      for (const listener of [
+        ...(provenanceMocks.listeners.get(instanceId) ?? []),
+      ]) {
+        listener();
+      }
+    },
+    useTileOpenRequested: (instanceId: string): boolean => {
+      const subscribe = useCallback(
+        (onChange: () => void) =>
+          subscribeTileOpenRequested(instanceId, onChange),
+        [instanceId],
+      );
+      const read = useCallback(
+        () => wasTileOpenRequested(instanceId),
+        [instanceId],
+      );
+      return useSyncExternalStore(subscribe, read, read);
+    },
+  };
+});
 
 vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", async (importOriginal) => {
   const actual =
@@ -260,6 +324,7 @@ vi.mock("../terminal-agent-fork-dialog", () => ({
   TerminalAgentForkDialog: () => null,
 }));
 
+import { markTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
 import { TuiAgentTile } from "../tui-agent-tile";
 import { TabHostProvider } from "../../tab-host-provider";
 
@@ -319,7 +384,7 @@ describe("<TuiAgentTile /> sleeping, restored", () => {
     tileMocks.killCalls.length = 0;
     tileMocks.prepareCalls.length = 0;
     tileMocks.createCalls.length = 0;
-    provenanceMocks.marked.length = 0;
+    provenanceMocks.reset();
     mockBinding = null;
     mockBindingResolved = true;
   });
@@ -378,6 +443,134 @@ describe("<TuiAgentTile /> sleeping, restored", () => {
     expect(tileMocks.adoptOnly).toBe(false);
     expect(screen.queryByTestId("terminal-agent-asleep-tile-1")).toBeNull();
   });
+
+  it("wakes when the open seam marks it AFTER it mounted - the sidebar's dedupe path", async () => {
+    // The shape the sidebar produces: the open mints a fresh uuid, dedupe
+    // resolves it onto THIS already-mounted instance, and the seam marks the
+    // resolved id. No remount happens - a terminal body is pinned, so focus
+    // leaves it mounted - so a latch read only in a `useState` initializer
+    // would never see the mark and the user would have to click Open again
+    // inside the tile, which is exactly the promise the copy breaks.
+    renderTile();
+    await screen.findByTestId("terminal-agent-asleep-tile-1");
+    expect(tileMocks.adoptOnly).toBe(true);
+
+    await act(async () => {
+      markTileOpenRequested("inst-agent-1");
+      await Promise.resolve();
+    });
+
+    // THE CLAIM: the mounted tile observed it, with no rerender of its own.
+    expect(tileMocks.adoptOnly).toBe(false);
+    expect(screen.queryByTestId("terminal-agent-asleep-tile-1")).toBeNull();
+  });
+
+  it("ignores a mark for a DIFFERENT instance", async () => {
+    renderTile();
+    await screen.findByTestId("terminal-agent-asleep-tile-1");
+
+    await act(async () => {
+      markTileOpenRequested("inst-some-other-tile");
+      await Promise.resolve();
+    });
+
+    expect(tileMocks.adoptOnly).toBe(true);
+    expect(screen.queryByTestId("terminal-agent-asleep-tile-1")).not.toBeNull();
+  });
+});
+
+/**
+ * A RESTORED tile is attached to a LIVE PTY, and the user commits a folder
+ * change. That is a deliberate restart, and it must end with a PTY.
+ *
+ * The hazard the sleeping gate introduces: the restart kills the PTY, and the
+ * facet can turn `sleeping` before the retry's list settles. A restored tile
+ * has `startRequested: false`, so `adoptOnly` arms on that stamp and shuts the
+ * create the kill was supposed to be followed by - and only `reviveAfterReap`
+ * ever set the latch. The restart becomes a STOP, on a tile the user was
+ * actively using.
+ */
+describe("<TuiAgentTile /> a restored tile restarting after a workspace rebind", () => {
+  beforeEach(() => {
+    tileMocks.sessionState = "running";
+    tileMocks.lastExit = null;
+    // The premise. Nothing in this session opened this tile.
+    tileMocks.wasOpenRequested = false;
+    tileMocks.hostHasSession = true;
+    tileMocks.adoptOnly = null;
+    tileMocks.retryCalls = 0;
+    tileMocks.killCalls.length = 0;
+    tileMocks.prepareCalls.length = 0;
+    tileMocks.createCalls.length = 0;
+    provenanceMocks.reset();
+    mockBinding = null;
+    mockBindingResolved = true;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("keeps adoptOnly false when the facet turns sleeping mid-restart, so the replacement PTY is still created", async () => {
+    const view = renderTile();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("toolbar", { name: "Terminal agent controls" }),
+      ).toBeDefined();
+    });
+    expect(tileMocks.adoptOnly).toBe(false);
+
+    // The restart: kill, then retry. The immediate path, since the host
+    // reports a live session.
+    fireEvent.click(screen.getByRole("button", { name: "Commit binding" }));
+    expect(tileMocks.killCalls).toEqual([{ sessionId: "agent-1" }]);
+
+    // The kill lands and the host reaps the agent before the retry's
+    // `terminal.list` settles, so the record now says `sleeping`.
+    tileMocks.sessionState = "sleeping";
+    tileMocks.lastExit = "reaped";
+    tileMocks.hostHasSession = false;
+    await act(async () => {
+      view.rerender(withQueryClient(tileElement()));
+      await Promise.resolve();
+    });
+
+    // THE CLAIM. A restart the user asked for is a request, so the gate must
+    // not hold the create shut. Otherwise the tile settles on the asleep
+    // notice and the PTY the rebind exists to produce is never created.
+    expect(tileMocks.adoptOnly).toBe(false);
+    expect(screen.queryByTestId("terminal-agent-asleep-tile-1")).toBeNull();
+  });
+
+  it("sets the latch on the DEFERRED path too - presence unknown at commit time", async () => {
+    // `hostHasSession === null` is `terminal.list` still refetching. The
+    // commit records the intent and the effect fires the kill once presence
+    // settles, so the latch must be set at the entry rather than beside the
+    // immediate kill.
+    tileMocks.hostHasSession = null;
+    const view = renderTile();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("toolbar", { name: "Terminal agent controls" }),
+      ).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Commit binding" }));
+    // Deferred: nothing killed yet, the intent is armed and a refetch asked for.
+    expect(tileMocks.killCalls).toEqual([]);
+    expect(tileMocks.retryCalls).toBe(1);
+
+    tileMocks.sessionState = "sleeping";
+    tileMocks.lastExit = "reaped";
+    tileMocks.hostHasSession = false;
+    await act(async () => {
+      view.rerender(withQueryClient(tileElement()));
+      await Promise.resolve();
+    });
+
+    expect(tileMocks.adoptOnly).toBe(false);
+    expect(screen.queryByTestId("terminal-agent-asleep-tile-1")).toBeNull();
+  });
 });
 
 /**
@@ -395,7 +588,7 @@ describe("<TuiAgentTile /> sleeping, requested", () => {
     tileMocks.killCalls.length = 0;
     tileMocks.prepareCalls.length = 0;
     tileMocks.createCalls.length = 0;
-    provenanceMocks.marked.length = 0;
+    provenanceMocks.reset();
     mockBinding = null;
     mockBindingResolved = true;
   });
@@ -432,7 +625,7 @@ describe("<TuiAgentTile /> the sleeping gate leaves running/unknown agents alone
     tileMocks.killCalls.length = 0;
     tileMocks.prepareCalls.length = 0;
     tileMocks.createCalls.length = 0;
-    provenanceMocks.marked.length = 0;
+    provenanceMocks.reset();
     mockBinding = null;
     mockBindingResolved = true;
   }

@@ -78,6 +78,22 @@ export function openTileWithNavigation(
     // pin this call to a viewport snapshot (C10).
     singleTileViewport: isMobileViewport(),
   });
+  // And the tile the open actually LANDS ON, which for a dedupe hit is not the
+  // one the intent named. Every caller mints a fresh instance id per intent,
+  // so `focus-existing` discards it and focuses a tile already on the canvas
+  // under an id this function has never seen. Marking only the intent's id
+  // records the request against a tile that will never mount, and the tile
+  // that does mount reads `false` - an explicit Open of a sleeping agent that
+  // leaves it asleep.
+  //
+  // Marked IN ADDITION to the line above rather than instead of it: for every
+  // other plan kind the intent's instance is the one that mounts. `noop` (a
+  // BACKGROUND open of an already-open tile) deliberately gets neither - it
+  // changes nothing on the canvas by contract, and waking an agent is a
+  // change.
+  if (plan.kind === "focus-existing") {
+    markTileOpenRequested(plan.instanceId);
+  }
   return executeTileOpen({
     plan,
     node: intent.node,

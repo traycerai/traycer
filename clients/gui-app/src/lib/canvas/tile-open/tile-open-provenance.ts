@@ -1,3 +1,5 @@
+import { useCallback, useSyncExternalStore } from "react";
+
 /**
  * Which tiles on this canvas somebody ASKED for in this session, as opposed to
  * the ones the persisted layout put back.
@@ -36,15 +38,41 @@
  * keeps its instance id and therefore still reads as requested. That is a
  * single stale entry, and it errs toward today's behaviour (start the agent)
  * rather than toward a tile that silently refuses to.
+ *
+ * ## Why it notifies
+ *
+ * The interesting open is of a tile that is ALREADY MOUNTED. The seam mints a
+ * fresh instance id per intent and dedupe routes the open onto the existing
+ * tile, which is not remounted - a terminal body is pinned, so focusing it
+ * re-renders nothing by itself. So a consumer that only read this at mount
+ * would answer for the restore forever and never hear the open, which is the
+ * user clicking Open on a sleeping agent and watching it stay asleep.
+ *
+ * Hence {@link subscribeTileOpenRequested}. The set only ever GROWS, so the
+ * answer for one instance can go `false -> true` and never back: a tile that
+ * has decided to start its agent cannot be un-decided by anything here, which
+ * is the property the mount-time read was originally protecting.
  */
 const requestedInstanceIds = new Set<string>();
+const listenersByInstanceId = new Map<string, Set<() => void>>();
 
 /**
- * Record that this tile instance was opened by a request rather than restored.
- * Called by the open seam; nothing else should.
+ * Record that this tile instance was opened by a request rather than restored,
+ * and tell a mounted tile for that instance. Called by the open seam; nothing
+ * else should.
+ *
+ * Idempotent, and that is load-bearing rather than tidy: the seam marks on
+ * every open, and re-notifying an instance already marked would re-render
+ * every tile watching it for no change.
  */
 export function markTileOpenRequested(instanceId: string): void {
+  if (requestedInstanceIds.has(instanceId)) return;
   requestedInstanceIds.add(instanceId);
+  // Snapshotted, so a listener that unsubscribes while being notified cannot
+  // mutate the set mid-iteration.
+  for (const listener of [...(listenersByInstanceId.get(instanceId) ?? [])]) {
+    listener();
+  }
 }
 
 /**
@@ -54,4 +82,50 @@ export function markTileOpenRequested(instanceId: string): void {
  */
 export function wasTileOpenRequested(instanceId: string): boolean {
   return requestedInstanceIds.has(instanceId);
+}
+
+/**
+ * Watch one instance's answer. Returns the unsubscribe.
+ *
+ * Keyed per instance rather than one global listener list because every
+ * terminal tile on the canvas would otherwise re-render on every open
+ * anywhere, and the answer they would re-read is unchanged for all but one.
+ */
+export function subscribeTileOpenRequested(
+  instanceId: string,
+  onChange: () => void,
+): () => void {
+  const listeners =
+    listenersByInstanceId.get(instanceId) ?? new Set<() => void>();
+  listeners.add(onChange);
+  listenersByInstanceId.set(instanceId, listeners);
+  return () => {
+    listeners.delete(onChange);
+    if (listeners.size === 0) listenersByInstanceId.delete(instanceId);
+  };
+}
+
+/**
+ * {@link wasTileOpenRequested} as a live read: `false` for a restored tile on
+ * its very first render, flipping to `true` if the open seam later marks this
+ * instance.
+ *
+ * `useSyncExternalStore` rather than an effect, so the first render already
+ * has the right answer - a tile that WAS requested must not render one frame
+ * as unrequested and start its agent a tick late.
+ *
+ * Here rather than beside the tile: this is the registry's own read, the two
+ * would have to be edited together, and the tile that consumes it is already
+ * at its complexity budget.
+ */
+export function useTileOpenRequested(instanceId: string): boolean {
+  const subscribe = useCallback(
+    (onChange: () => void) => subscribeTileOpenRequested(instanceId, onChange),
+    [instanceId],
+  );
+  const read = useCallback(
+    () => wasTileOpenRequested(instanceId),
+    [instanceId],
+  );
+  return useSyncExternalStore(subscribe, read, read);
 }
