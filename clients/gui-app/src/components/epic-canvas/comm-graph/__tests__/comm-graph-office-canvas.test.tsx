@@ -2199,6 +2199,8 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       gameRoom: null,
       areaSigns: [],
       amenities: [],
+      civic: [],
+      road: null,
     };
   }
 
@@ -2223,6 +2225,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       ownerAgentId: null,
       hostId: null,
       agentIds: [],
+      civicRoomId: null,
     };
     const layout: OfficeLayout = {
       view: "floor",
@@ -2296,6 +2299,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       roomId: null,
       hostId: null,
       manager: false,
+      civicRoomId: null,
     };
     const layout: OfficeLayout = {
       view: "floor",
@@ -2367,6 +2371,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       roomId: null,
       hostId: null,
       manager: false,
+      civicRoomId: null,
     };
   }
 
@@ -2677,6 +2682,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       ownerAgentId: null,
       hostId: null,
       agentIds: roster,
+      civicRoomId: null,
     };
     const layout: OfficeLayout = {
       view: "floor",
@@ -2736,6 +2742,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       ownerAgentId: null,
       hostId: null,
       agentIds: roster,
+      civicRoomId: null,
     };
     const hqBoard: OfficeSign = {
       kind: "hq-board",
@@ -2745,6 +2752,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       ownerAgentId: null,
       hostId: null,
       agentIds: roster,
+      civicRoomId: null,
     };
     const layout: OfficeLayout = {
       view: "floor",

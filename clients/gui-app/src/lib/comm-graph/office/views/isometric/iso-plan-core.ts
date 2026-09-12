@@ -696,6 +696,9 @@ export function isoFloorOf(args: IsoFloorArgs): OfficeFloor {
     gameRoom: null,
     areaSigns: [build.courtyard.areaSign, build.cafe.areaSign],
     amenities,
+    // K2 plans this view's cabins, hut and benches; K3 its corridor ring.
+    civic: [],
+    road: null,
   };
 }
 
@@ -712,6 +715,7 @@ export function isoHostSign(build: IsoDistrictBuild): OfficeSign {
     ownerAgentId: null,
     hostId: build.hostId,
     agentIds: [],
+    civicRoomId: null,
   };
 }
 

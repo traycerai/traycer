@@ -37,12 +37,15 @@ import type {
   OfficeAmenity,
   OfficeAmenityKind,
   OfficeAreaSign,
+  OfficeCivicKind,
+  OfficeCivicRoom,
   OfficeDesk,
   OfficeErrandSpot,
   OfficeFacing,
   OfficeFloor,
   OfficeLayout,
   OfficeProp,
+  OfficeRoad,
   OfficeRoom,
   OfficePod,
   OfficePodStyle,
@@ -290,6 +293,48 @@ const GYM_MAX_TREADMILLS = 3;
 const GYM_TREADMILL_COL_OFFSET = 1;
 const GYM_TREADMILL_PITCH_TILES = 2;
 
+/**
+ * THE CIVIC ROOMS. Two of them stand in the amenity columns and are sized the
+ * same way every other room there is - one per so many heads, floored and
+ * capped - because a floor of two with eight beds is a ward and a floor of a
+ * thousand with two is a queue.
+ *
+ * The bounds are what the budget rests on rather than the exact rates: the caps
+ * below put at most 24 civic seats on any storey whatever its population, which
+ * is the ceiling on everything this layer ever sets walking.
+ */
+const INFIRMARY_BEDS_PER_AGENT = 25;
+const INFIRMARY_MIN_BEDS = 2;
+const INFIRMARY_MAX_BEDS = 8;
+const LOUNGE_CHAIRS_PER_AGENT = 12;
+const LOUNGE_MIN_CHAIRS = 4;
+const LOUNGE_MAX_CHAIRS = 16;
+
+/**
+ * The infirmary: beds in a grid, laid out exactly as the nap room lays its
+ * bags, with a clear row under every row of them. A bed is two tiles wide and
+ * is LAIN ON, so the row behind it must never be the only way to reach it.
+ */
+const BED_WIDTH_TILES = 2;
+const INFIRMARY_BEDS_PER_ROW = 3;
+const INFIRMARY_BED_COL_OFFSET = 1;
+/** The bed plus one clear column, so two beds never touch. */
+const INFIRMARY_BED_PITCH_TILES = BED_WIDTH_TILES + 1;
+const INFIRMARY_BED_ROW_PITCH = 2;
+
+/**
+ * The lounge: two rows of chairs facing each other across a low table, on the
+ * break room's own row layout. Chairs stand at ODD column offsets on both rows,
+ * which is what the width rule below leans on - a room whose door opened onto a
+ * chair would sit somebody in the doorway.
+ */
+const LOUNGE_CHAIR_COL_OFFSET = 1;
+const LOUNGE_CHAIR_PITCH_TILES = 2;
+const LOW_TABLE_WIDTH_TILES = 2;
+const LOUNGE_TABLE_COL_OFFSET = 2;
+const LOUNGE_TABLE_PITCH_TILES = 4;
+const LOUNGE_CHAIRS_PER_TABLE = 4;
+
 /** Fallback fittings, on a floor with no room for a cafeteria. */
 const CORNER_COFFEE_COL_OFFSET = 3;
 const CORNER_COOLER_COL_OFFSET = 5;
@@ -332,12 +377,15 @@ function scaledCount(
  * reads the same values back - a room that measured itself twice could land
  * outside the wall that was widened for it.
  */
-interface AmenitySpecBase {
-  readonly kind: OfficeAmenityKind;
-  /** Written on the room's sign and carried on `OfficeAmenity`. */
+interface RoomSpecBase {
+  /** Written on the room's sign and carried on its record. */
   readonly name: string;
   readonly cols: number;
   readonly rows: number;
+}
+
+interface AmenitySpecBase extends RoomSpecBase {
+  readonly kind: OfficeAmenityKind;
 }
 
 interface CafeteriaSpec extends AmenitySpecBase {
@@ -382,6 +430,125 @@ type AmenitySpec =
   | LibrarySpec
   | GardenSpec
   | GymSpec;
+
+/**
+ * The two civic rooms that take a column of their own. The help desk is the
+ * reception counter already standing in the lobby and the archive is a door in
+ * the outer wall, so neither is sized or packed here.
+ */
+interface InfirmarySpec extends RoomSpecBase {
+  readonly kind: "infirmary";
+  readonly beds: number;
+}
+
+interface LoungeSpec extends RoomSpecBase {
+  readonly kind: "waiting-room";
+  readonly chairs: number;
+}
+
+type CivicColumnSpec = InfirmarySpec | LoungeSpec;
+
+/**
+ * Anything the column packer stacks. The packer reads only `cols` and `rows`,
+ * which is exactly why an amenity and a civic room can share it: where a room
+ * GOES is a question about its footprint, and what it is for is a question for
+ * the pass that stands its furniture up.
+ */
+type RoomSpec = AmenitySpec | CivicColumnSpec;
+
+/**
+ * How many beds and chairs a floor of this size gets.
+ *
+ * EXPORTED, and the single source for every view: K2 sizes five more offices
+ * from these numbers, and the first live sitting moves them in one place. The
+ * bounds are the contract - two to eight beds, four to sixteen chairs - and the
+ * rates inside them are a proposal.
+ */
+export function civicCapacityFor(agents: number): {
+  readonly beds: number;
+  readonly chairs: number;
+} {
+  return {
+    beds: scaledCount(
+      agents,
+      INFIRMARY_BEDS_PER_AGENT,
+      INFIRMARY_MIN_BEDS,
+      INFIRMARY_MAX_BEDS,
+    ),
+    chairs: scaledCount(
+      agents,
+      LOUNGE_CHAIRS_PER_AGENT,
+      LOUNGE_MIN_CHAIRS,
+      LOUNGE_MAX_CHAIRS,
+    ),
+  };
+}
+
+function infirmarySpecFor(agents: number): InfirmarySpec {
+  const { beds } = civicCapacityFor(agents);
+  const bedRows = Math.ceil(beds / INFIRMARY_BEDS_PER_ROW);
+  const lastBed =
+    pitchedCol(
+      INFIRMARY_BED_COL_OFFSET,
+      INFIRMARY_BED_PITCH_TILES,
+      Math.min(beds, INFIRMARY_BEDS_PER_ROW) - 1,
+    ) +
+    BED_WIDTH_TILES -
+    1;
+  return {
+    kind: "infirmary",
+    name: "Infirmary",
+    beds,
+    cols: colsForLastFixture(lastBed),
+    // The nap room's rule, and for the nap room's reason: a clear row under
+    // every row of beds, the last of them included. It also lands the row
+    // inside the door on a clear one, whatever the bed count.
+    rows: ROOM_FIXTURE_ROW + bedRows * INFIRMARY_BED_ROW_PITCH + 1,
+  };
+}
+
+/** Chairs split evenly between the back row and the front one, tables between. */
+function loungeChairsPerRow(chairs: number): {
+  readonly back: number;
+  readonly front: number;
+} {
+  const back = Math.ceil(chairs / 2);
+  return { back, front: chairs - back };
+}
+
+function loungeTableCount(chairs: number): number {
+  return Math.max(1, Math.ceil(chairs / LOUNGE_CHAIRS_PER_TABLE));
+}
+
+function loungeSpecFor(agents: number): LoungeSpec {
+  const { chairs } = civicCapacityFor(agents);
+  const perRow = loungeChairsPerRow(chairs);
+  const lastChair = pitchedCol(
+    LOUNGE_CHAIR_COL_OFFSET,
+    LOUNGE_CHAIR_PITCH_TILES,
+    perRow.back - 1,
+  );
+  const lastTable =
+    pitchedCol(
+      LOUNGE_TABLE_COL_OFFSET,
+      LOUNGE_TABLE_PITCH_TILES,
+      loungeTableCount(chairs) - 1,
+    ) +
+    LOW_TABLE_WIDTH_TILES -
+    1;
+  const fitted = colsForLastFixture(Math.max(lastChair, lastTable));
+  return {
+    kind: "waiting-room",
+    name: "Lounge",
+    chairs,
+    // ODD, always. The door sits `ROOM_DOOR_RIGHT_OFFSET` short of the right
+    // wall and opens onto the front chair row, and the chairs on that row are
+    // at odd offsets - so an even width would put a chair in the doorway. One
+    // extra column is the whole cost of never having to special-case it.
+    cols: fitted % 2 === 0 ? fitted + 1 : fitted,
+    rows: FURNISHED_ROOM_ROWS,
+  };
+}
 
 /** The width a room needs to hold a run of fixtures, plus its two walls. */
 function colsForLastFixture(lastCol: number): number {
@@ -616,9 +783,25 @@ function amenitySpecsFor(agents: number): ReadonlyArray<AmenitySpec> {
   return specs;
 }
 
+/**
+ * Every room the columns hold, in the order they stack.
+ *
+ * The two civic rooms are UNCONDITIONAL wherever the amenities are, at their
+ * minimum on the smallest floor: an infirmary is not a reward for having enough
+ * agents, it is where a crashed one goes, and a storey that sometimes had one
+ * would be a storey the scene could not rely on. The LOUNGE follows the
+ * cafeteria because it is the break room's neighbour on this view; the
+ * INFIRMARY comes last, which puts it lowest in its column and so nearest the
+ * road its kerb stands on.
+ */
+function roomSpecsFor(agents: number): ReadonlyArray<RoomSpec> {
+  const [cafeteria, ...rest] = amenitySpecsFor(agents);
+  return [cafeteria, loungeSpecFor(agents), ...rest, infirmarySpecFor(agents)];
+}
+
 /** One room's slot in the reserved columns, before the building's width is known. */
-interface AmenityPlacement {
-  readonly spec: AmenitySpec;
+interface RoomPlacement {
+  readonly spec: RoomSpec;
   /** Columns between this room's RIGHT edge and the storey's right interior edge. */
   readonly rightOffset: number;
   /** Absolute row of the room's own cap. */
@@ -626,13 +809,13 @@ interface AmenityPlacement {
 }
 
 interface AmenityPacking {
-  readonly placements: ReadonlyArray<AmenityPlacement>;
+  readonly placements: ReadonlyArray<RoomPlacement>;
   /** Total width the columns claim, gaps between them included. */
   readonly width: number;
 }
 
 /** A run of rooms stacked one under the other, corridor rows included. */
-function stackedHeight(specs: ReadonlyArray<AmenitySpec>): number {
+function stackedHeight(specs: ReadonlyArray<RoomSpec>): number {
   let height = 0;
   for (const spec of specs) height += spec.rows + ROOM_GAP_TILES;
   return Math.max(0, height - ROOM_GAP_TILES);
@@ -652,7 +835,7 @@ function stackedHeight(specs: ReadonlyArray<AmenitySpec>): number {
  * split's second run and fits under the same ceiling - which is what makes one
  * measurement here enough for the packer below.
  */
-function minColumnHeight(specs: ReadonlyArray<AmenitySpec>): number {
+function minColumnHeight(specs: ReadonlyArray<RoomSpec>): number {
   let best = stackedHeight(specs);
   for (let split = 1; split < specs.length; split += 1) {
     const height = Math.max(
@@ -677,12 +860,12 @@ function minColumnHeight(specs: ReadonlyArray<AmenitySpec>): number {
  * stairwell is placed later and checks nothing.
  */
 function packAmenities(
-  specs: ReadonlyArray<AmenitySpec>,
+  specs: ReadonlyArray<RoomSpec>,
   firstRow: number,
   lastRow: number,
   firstColumnLastRow: number,
 ): AmenityPacking {
-  const placements: AmenityPlacement[] = [];
+  const placements: RoomPlacement[] = [];
   let rightOffset = 0;
   let columnCols = 0;
   let row = firstRow;
@@ -764,11 +947,14 @@ interface FloorBuild {
   /** Row this storey's `wall-top` cap lands on in the finished plan. */
   readonly originRow: number;
   /**
-   * This storey's amenity rooms, already packed into their columns. Carried
-   * rather than recomputed: the width reservation and the placement read the
-   * same answer or a room lands outside the wall that was widened for it.
+   * This storey's column rooms - amenities and the two civic ones - already
+   * packed. Carried rather than recomputed: the width reservation and the
+   * placement read the same answer or a room lands outside the wall that was
+   * widened for it.
    */
-  readonly amenities: ReadonlyArray<AmenityPlacement>;
+  readonly rooms: ReadonlyArray<RoomPlacement>;
+  /** How many agents this storey holds; the civic rooms' ids and sizes need it. */
+  readonly agents: number;
 }
 
 /**
@@ -1046,8 +1232,7 @@ function buildFloors(
     // is exactly where an empty floor reads as broken, so the storey is widened
     // AND deepened to fit its rooms whatever the cabins came to. Only the
     // EMPTY-epic room opts out - it has no floor to furnish.
-    const specs =
-      cabins.length === 0 ? [] : amenitySpecsFor(group.agents.length);
+    const specs = cabins.length === 0 ? [] : roomSpecsFor(group.agents.length);
     const localRows =
       cabins.length === 0
         ? EMPTY_ROOM_ROWS
@@ -1083,7 +1268,8 @@ function buildFloors(
       localCols,
       localRows,
       originRow,
-      amenities: packing.placements,
+      rooms: packing.placements,
+      agents: group.agents.length,
     });
     // The storey below reuses this one's bottom wall as its own cap, so the
     // two buildings read as one block rather than as a seam of dead rows.
@@ -1272,6 +1458,14 @@ interface PlacedFloor {
   readonly gameRoom: OfficeTileRect | null;
   readonly areaSigns: ReadonlyArray<OfficeAreaSign>;
   readonly amenities: ReadonlyArray<OfficeAmenity>;
+  readonly civic: ReadonlyArray<OfficeCivicRoom>;
+  /**
+   * The beds and chairs inside this storey's civic rooms. They join
+   * `OfficeLayout.seats` with every other seat, which is the whole reason the
+   * seat book, `locate`, hit-testing and the culling index need no new path.
+   */
+  readonly civicSeats: ReadonlyArray<OfficeSeat>;
+  readonly road: OfficeRoad;
 }
 
 // ---- Fitting out a storey -------------------------------------------- //
@@ -1364,11 +1558,29 @@ function reachableFrom(
  * stands the furniture up and the pass that lays the errand spots over it can
  * only ever be reading the same arithmetic.
  */
-interface AmenityPlan {
-  readonly spec: AmenitySpec;
+interface RoomPlan {
+  readonly spec: RoomSpec;
   readonly bounds: OfficeTileRect;
   readonly doorTile: OfficeTilePos;
   readonly signTile: OfficeTilePos;
+}
+
+/** A placed room that is an AMENITY: the same plan, narrowed by its spec. */
+interface AmenityPlan extends RoomPlan {
+  readonly spec: AmenitySpec;
+}
+
+/** A placed room that is CIVIC: the infirmary or the lounge. */
+interface CivicPlan extends RoomPlan {
+  readonly spec: CivicColumnSpec;
+}
+
+function isCivicPlan(plan: RoomPlan): plan is CivicPlan {
+  return plan.spec.kind === "infirmary" || plan.spec.kind === "waiting-room";
+}
+
+function isAmenityPlan(plan: RoomPlan): plan is AmenityPlan {
+  return !isCivicPlan(plan);
 }
 
 /**
@@ -1389,7 +1601,7 @@ interface CornerFittings {
  * is measured from there rather than from the storey's own width - a narrow
  * storey in a tall building still lines its rooms up with everyone else's.
  */
-function planAmenity(placement: AmenityPlacement, cols: number): AmenityPlan {
+function planRoom(placement: RoomPlacement, cols: number): RoomPlan {
   const { spec } = placement;
   const col = cols - 2 - placement.rightOffset - (spec.cols - 1);
   const bounds: OfficeTileRect = {
@@ -1523,6 +1735,93 @@ function gymTreadmillTiles(
   return pitchedTiles(bounds, ROOM_FIXTURE_ROW, GYM_TREADMILL_COL_OFFSET, {
     count: spec.treadmills,
     pitch: GYM_TREADMILL_PITCH_TILES,
+  });
+}
+
+/**
+ * One civic seat as the plan lays it: the tile its furniture is drawn from and
+ * the way its occupant looks. A bed is two tiles wide and lain on lengthwise; a
+ * lounge chair is one tile and faces the table across the room.
+ */
+interface CivicSeatTile {
+  readonly tile: OfficeTilePos;
+  readonly facing: OfficeFacing;
+}
+
+/**
+ * Beds in rows along the back of the infirmary, laid exactly as the nap room
+ * lays its bags. Somebody in one lies with their head to the wall, so the
+ * facing is `down` - the same way the bed sprite is drawn.
+ */
+function infirmaryBedTiles(
+  spec: InfirmarySpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<CivicSeatTile> {
+  const tiles: CivicSeatTile[] = [];
+  for (let index = 0; index < spec.beds; index += 1) {
+    tiles.push({
+      tile: {
+        col:
+          bounds.col +
+          pitchedCol(
+            INFIRMARY_BED_COL_OFFSET,
+            INFIRMARY_BED_PITCH_TILES,
+            index % INFIRMARY_BEDS_PER_ROW,
+          ),
+        row:
+          bounds.row +
+          ROOM_FIXTURE_ROW +
+          Math.floor(index / INFIRMARY_BEDS_PER_ROW) * INFIRMARY_BED_ROW_PITCH,
+      },
+      facing: "down",
+    });
+  }
+  return tiles;
+}
+
+/**
+ * Two rows of chairs looking at each other across the low table: the back row
+ * on the fixture row facing down, the front row on the seat row facing up.
+ *
+ * BACK ROW FIRST, and the order is the seat order: a floor that seats its
+ * waiting agents in arrival order seats them along one wall before it starts
+ * the other, which reads as a room filling up rather than as a room dealt out.
+ */
+function loungeChairTiles(
+  spec: LoungeSpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<CivicSeatTile> {
+  const perRow = loungeChairsPerRow(spec.chairs);
+  const tiles: CivicSeatTile[] = [];
+  const run = (count: number, row: number, facing: OfficeFacing): void => {
+    for (let index = 0; index < count; index += 1) {
+      tiles.push({
+        tile: {
+          col:
+            bounds.col +
+            pitchedCol(
+              LOUNGE_CHAIR_COL_OFFSET,
+              LOUNGE_CHAIR_PITCH_TILES,
+              index,
+            ),
+          row: bounds.row + row,
+        },
+        facing,
+      });
+    }
+  };
+  run(perRow.back, ROOM_FIXTURE_ROW, "down");
+  run(perRow.front, ROOM_SEAT_ROW, "up");
+  return tiles;
+}
+
+function loungeTableTiles(
+  spec: LoungeSpec,
+  bounds: OfficeTileRect,
+): ReadonlyArray<OfficeTilePos> {
+  return pitchedTiles(bounds, ROOM_TABLE_ROW, LOUNGE_TABLE_COL_OFFSET, {
+    count: loungeTableCount(spec.chairs),
+    pitch: LOUNGE_TABLE_PITCH_TILES,
   });
 }
 
@@ -1725,6 +2024,44 @@ function buildGym(
   }
 }
 
+/**
+ * A civic room's ring and the furniture that is NOT a seat.
+ *
+ * The beds and the lounge chairs are deliberately absent: they are seats, and a
+ * seat's own furniture is drawn by the painter from `layout.seats`, the way
+ * every reserve desk on every other view already is. Standing them up as props
+ * here as well would draw each one twice and would put a seat's art somewhere
+ * the per-seat budget cannot see it.
+ *
+ * Their TILES stay open all the same, which is the half the plan does own: a
+ * bed is lain on and a chair is sat in, so the tile a seat's occupant ends up
+ * on has to be one the floor can route to. Nobody strolls through a civic room
+ * - it owns no errand spots, and `corridorTilesOf` cuts its bounds out of the
+ * stroll tiles - so leaving the grid open there costs nothing.
+ */
+function buildCivicRoom(context: PlanContext, plan: CivicPlan): void {
+  buildRoomShell(context, plan.bounds, plan.doorTile);
+  const { spec } = plan;
+  if (spec.kind === "infirmary") {
+    // The cross over the door tells the room apart from the nap room at a
+    // glance, which is the whole job of a two-tile sign nobody can read yet.
+    addBlockingProp(context, {
+      sprite: { name: "cross-sign" },
+      tile: {
+        col: plan.bounds.col + plan.bounds.cols - 2,
+        row: plan.bounds.row + ROOM_FACE_ROW,
+      },
+    });
+    return;
+  }
+  // The table is furniture you sit AROUND, so it blocks like a cafe table -
+  // and the gaps its pitch leaves are what keep the aisle row joined to the
+  // seat row, and so to the door.
+  for (const tile of loungeTableTiles(spec, plan.bounds)) {
+    addWideProp(context, "low-table", tile, LOW_TABLE_WIDTH_TILES);
+  }
+}
+
 /** The ring every amenity wears, and then whatever that kind stands inside it. */
 function buildAmenity(context: PlanContext, plan: AmenityPlan): void {
   buildRoomShell(context, plan.bounds, plan.doorTile);
@@ -1782,6 +2119,12 @@ interface ErrandSpotRequest {
   readonly lobbyTile: OfficeTilePos;
   readonly blocked: ReadonlySet<string>;
   readonly amenities: ReadonlyArray<AmenityPlan>;
+  /**
+   * The storey's civic rooms. Present ONLY so that no errand spot lands inside
+   * one: a civic room is somewhere a status sends you, never somewhere an idle
+   * agent wanders to, so it contributes no spots of its own.
+   */
+  readonly civic: ReadonlyArray<CivicPlan>;
   readonly corner: CornerFittings | null;
   readonly rooms: ReadonlyArray<PlacedRoom>;
   readonly stairsTile: OfficeTilePos | null;
@@ -2139,10 +2482,13 @@ function addCorridorSpots(
       if (!builder.reachable.has(key)) continue;
       if (request.rooms.some((room) => withinRect(room.bounds, tile))) continue;
       // Inside an amenity you are AT that amenity; a corridor spot in the nap
-      // room would have somebody standing between the beds doing nothing.
+      // room would have somebody standing between the beds doing nothing. A
+      // civic room is worse than pointless: an idle agent loitering in the
+      // infirmary is the one reading the layer exists to prevent.
       if (request.amenities.some((plan) => withinRect(plan.bounds, tile))) {
         continue;
       }
+      if (request.civic.some((plan) => withinRect(plan.bounds, tile))) continue;
       candidates.push(tile);
     }
   }
@@ -2471,6 +2817,8 @@ interface FloorFitRequest {
   readonly doorCol: number;
   readonly multiFloor: boolean;
   readonly rooms: ReadonlyArray<PlacedRoom>;
+  /** This storey's index in the stack; a civic room's id is built from it. */
+  readonly floorIndex: number;
 }
 
 /** The building's own fittings hang on the OUTER wall, clear of every cabin. */
@@ -2500,22 +2848,137 @@ function addWallFittings(
   return clockTile;
 }
 
+/** Stands in a civic room's id for the host a floor does not have. */
+function civicRoomIdOf(
+  hostId: string | null,
+  floorIndex: number,
+  kind: OfficeCivicKind,
+): string {
+  return [hostId ?? SEAT_ID_NONE, floorIndex, "civic", kind].join("/");
+}
+
+/** One civic room and the seats inside it, ready to go onto the storey. */
+interface CivicBuild {
+  readonly room: OfficeCivicRoom;
+  readonly seats: ReadonlyArray<OfficeSeat>;
+}
+
+interface CivicRoomRequest {
+  readonly plan: CivicPlan;
+  readonly hostId: string | null;
+  readonly floorIndex: number;
+  /** The storey's road, so a room on it can name the tile a vehicle stops at. */
+  readonly road: OfficeRoad;
+}
+
+/**
+ * A packed civic room, as the contract carries it: its record, and one seat per
+ * bed or chair.
+ *
+ * The seat ids are `"<roomId>/<i>"` in the order the furniture was laid, which
+ * makes them stable for the same reason a desk's id is - the room is a function
+ * of the storey's agent count, and the n-th bed keeps its number whatever else
+ * moves.
+ */
+function buildCivicRecord(request: CivicRoomRequest): CivicBuild {
+  const { floorIndex, hostId, plan, road } = request;
+  const { spec } = plan;
+  const kind: OfficeCivicKind = spec.kind;
+  const civicRoomId = civicRoomIdOf(hostId, floorIndex, kind);
+  const placed =
+    spec.kind === "infirmary"
+      ? infirmaryBedTiles(spec, plan.bounds)
+      : loungeChairTiles(spec, plan.bounds);
+  const width = spec.kind === "infirmary" ? BED_WIDTH_TILES : 1;
+  const seats = placed.map<OfficeSeat>((seat, index) => ({
+    seatId: `${civicRoomId}/${index}`,
+    kind: spec.kind === "infirmary" ? "bed" : "lounge",
+    deskTile: seat.tile,
+    // A bed is LAIN ON and a lounge chair is SAT IN, so the occupant's own tile
+    // is the furniture's own tile - there is no chair beside it to walk to.
+    chairTile: seat.tile,
+    facing: seat.facing,
+    hitTiles: { width, height: 1 },
+    hitBox: null,
+    floorIndex,
+    // A civic seat belongs to no CABIN: it is the room's, and the room is the
+    // storey's. `roomId` names a cabin everywhere else and would not resolve.
+    roomId: null,
+    hostId,
+    manager: false,
+    civicRoomId,
+  }));
+  return {
+    room: {
+      civicRoomId,
+      kind,
+      bounds: plan.bounds,
+      doorTile: plan.doorTile,
+      signTile: plan.signTile,
+      name: spec.name,
+      seatIds: seats.map((seat) => seat.seatId),
+      floorIndex,
+      hostId,
+      // Nothing drives to the lounge (C6), so it names no kerb. The infirmary
+      // stops a vehicle at the road tile its door opens toward.
+      kerbTile:
+        spec.kind === "infirmary" ? kerbOnRoad(road, plan.doorTile.col) : null,
+    },
+    seats,
+  };
+}
+
+/**
+ * The road tile a room at this column stops a vehicle on.
+ *
+ * The road spans the storey, so the tile in the door's own column is always one
+ * of its own - and on this floor that tile is straight down the aisle the door
+ * opens onto, which is as close as a kerb can be to a door that is in a wall.
+ */
+function kerbOnRoad(road: OfficeRoad, col: number): OfficeTilePos {
+  const found = road.tiles.find((tile) => tile.col === col);
+  return found ?? road.entryTile;
+}
+
+/**
+ * The lane along the building's front: the lobby row, end to end.
+ *
+ * It is the one row of a Floor storey that IS outside everything - the way in,
+ * the counter, and the doors of every room in the bottom of a column all open
+ * onto it - so it is where a vehicle would pull up. Drawn, never searched: the
+ * counter standing on it is furniture a vehicle passes, not a wall it routes
+ * around.
+ */
+function roadAlongLobby(cols: number, row: number): OfficeRoad {
+  const tiles: OfficeTilePos[] = [];
+  for (let col = 0; col < cols; col += 1) tiles.push({ col, row });
+  return {
+    entryTile: tiles[0],
+    tiles,
+    exitTile: tiles[tiles.length - 1],
+  };
+}
+
 function fitFloor(request: FloorFitRequest): PlacedFloor {
-  const { build, context, doorCol } = request;
+  const { build, context, doorCol, floorIndex } = request;
   const bottomRow = build.originRow + build.localRows - 1;
   const doorTile: OfficeTilePos = { col: doorCol, row: bottomRow };
   const lobbyTile: OfficeTilePos = { col: doorCol, row: bottomRow - 1 };
   context.walkable[doorTile.row][doorTile.col] = true;
+  const road = roadAlongLobby(context.cols, lobbyTile.row);
 
   const clockTile = addWallFittings(context, build.originRow + 1);
   // The rooms were sized and packed with the storey; all that is left here is
   // to turn each slot into tiles and stand its furniture up.
-  const amenities = build.amenities.map((placement) =>
-    planAmenity(placement, context.cols),
+  const placed = build.rooms.map((placement) =>
+    planRoom(placement, context.cols),
   );
+  const amenities = placed.filter(isAmenityPlan);
+  const civicPlans = placed.filter(isCivicPlan);
   const corner =
-    amenities.length === 0 ? buildCornerFittings(context, build) : null;
+    placed.length === 0 ? buildCornerFittings(context, build) : null;
   for (const plan of amenities) buildAmenity(context, plan);
+  for (const plan of civicPlans) buildCivicRoom(context, plan);
 
   // Reception stands on the lobby row, one clear tile short of the door so
   // nobody has to squeeze past the counter to get out.
@@ -2550,9 +3013,72 @@ function fitFloor(request: FloorFitRequest): PlacedFloor {
   // The rug is the one prop a character may stand on - it marks the lobby.
   context.props.push({ sprite: { name: "rug" }, tile: lobbyTile });
 
+  // The records door, in the outer wall beside the entrance and on the far
+  // side from the counter, so the way out and the way to the archive are never
+  // the same walk. Walkable like the entrance it stands beside: an archived
+  // agent walks INTO it, and the row below is the next storey's wall face, so
+  // punching it through joins nothing.
+  const archiveCol = Math.min(
+    doorCol + RECEPTION_WIDTH_TILES,
+    context.cols - 2,
+  );
+  const archiveDoor: OfficeTilePos = { col: archiveCol, row: bottomRow };
+  context.walkable[archiveDoor.row][archiveDoor.col] = true;
+  context.props.push({ sprite: { name: "records-door" }, tile: archiveDoor });
+
+  const civicBuilds = civicPlans.map((plan) =>
+    buildCivicRecord({ plan, hostId: build.hostId, floorIndex, road }),
+  );
+  const civic: ReadonlyArray<OfficeCivicRoom> = [
+    ...civicBuilds.map((entry) => entry.room),
+    // THE HELP DESK IS THE RECEPTION (C7). It takes a record of its own so that
+    // its name, its sign and its kerb come from the same place as the other
+    // three rooms' do; the counter, the queue tiles and the queue's facing are
+    // untouched, and it carries no seats because standing at a counter is not
+    // sitting down.
+    {
+      civicRoomId: civicRoomIdOf(build.hostId, floorIndex, "help-desk"),
+      kind: "help-desk",
+      bounds: {
+        col: receptionTile.col,
+        row: receptionTile.row - 1,
+        cols: RECEPTION_WIDTH_TILES,
+        rows: 2,
+      },
+      // Where somebody steps up to the counter: the tile in front of its left
+      // end, which is inside the queue's own standing room.
+      doorTile: { col: receptionTile.col, row: receptionTile.row - 1 },
+      signTile: receptionTile,
+      name: "Front desk",
+      seatIds: [],
+      floorIndex,
+      hostId: build.hostId,
+      // One tile past the counter's right end - the bell end, where the queue
+      // forms - rather than on the counter itself.
+      kerbTile: kerbOnRoad(
+        road,
+        Math.min(receptionTile.col + RECEPTION_WIDTH_TILES, context.cols - 2),
+      ),
+    },
+    {
+      civicRoomId: civicRoomIdOf(build.hostId, floorIndex, "archive"),
+      kind: "archive",
+      bounds: { col: archiveDoor.col, row: archiveDoor.row, cols: 1, rows: 1 },
+      doorTile: archiveDoor,
+      signTile: archiveDoor,
+      name: "Archive",
+      seatIds: [],
+      floorIndex,
+      hostId: build.hostId,
+      // Nothing drives to the archive: nobody is collected from it (C6).
+      kerbTile: null,
+    },
+  ];
+
   const blocked = new Set<string>([
     tileKey(doorTile),
     tileKey(lobbyTile),
+    tileKey(archiveDoor),
     ...queueTiles.map(tileKey),
   ]);
   return {
@@ -2575,6 +3101,7 @@ function fitFloor(request: FloorFitRequest): PlacedFloor {
       lobbyTile,
       blocked,
       amenities,
+      civic: civicPlans,
       corner,
       rooms: request.rooms,
       stairsTile,
@@ -2591,6 +3118,9 @@ function fitFloor(request: FloorFitRequest): PlacedFloor {
       signTile: plan.signTile,
       name: plan.spec.name,
     })),
+    civic,
+    civicSeats: civicBuilds.flatMap((entry) => entry.seats),
+    road,
   };
 }
 
@@ -2717,6 +3247,9 @@ function decorateDesks(
       floorIndex,
       roomId,
       hostId,
+      // A desk belongs to no civic room; the civic seats are made beside the
+      // rooms that own them, in `buildCivicRecord`.
+      civicRoomId: null,
     });
   }
   return desks;
@@ -2876,6 +3409,9 @@ function corridorTilesOf(
       if (floor.amenities.some((room) => withinRect(room.bounds, tile))) {
         continue;
       }
+      // A civic room is somewhere a STATUS puts you; strolling into one is the
+      // reading this layer exists to prevent.
+      if (floor.civic.some((room) => withinRect(room.bounds, tile))) continue;
       tiles.push(tile);
     }
   }
@@ -2928,6 +3464,7 @@ function floorSigns(
       ownerAgentId: room.rootAgentId,
       hostId,
       agentIds: [],
+      civicRoomId: null,
     });
     for (const pod of room.pods) {
       signs.push({
@@ -2938,6 +3475,7 @@ function floorSigns(
         ownerAgentId: pod.leadAgentId,
         hostId,
         agentIds: [],
+        civicRoomId: null,
       });
     }
   }
@@ -2951,6 +3489,22 @@ function floorSigns(
         ownerAgentId: null,
         hostId: floor.hostId,
         agentIds: [],
+        civicRoomId: null,
+      });
+    }
+    // A civic sign names its ROOM rather than an agent, so it is always drawn -
+    // and it carries the room's id so that a counter can be read off the room
+    // at the cursor instead of being baked into the text at plan time.
+    for (const room of floor.civic) {
+      signs.push({
+        kind: "civic",
+        tile: room.signTile,
+        widthTiles: ROOM_SIGN_WIDTH_TILES,
+        text: room.name,
+        ownerAgentId: null,
+        hostId: floor.hostId,
+        agentIds: [],
+        civicRoomId: room.civicRoomId,
       });
     }
   }
@@ -2984,27 +3538,41 @@ function decorateFloorLayout(request: DecorationRequest): OfficeLayout {
   );
   const seats = new Map<string, OfficeSeat>();
   for (const desk of desks.values()) seats.set(desk.seatId, desk);
+  // Beds and lounge chairs are seats like any other: the same registry, the
+  // same ids, the same hit boxes. Nothing downstream learns a second way to
+  // find out where somebody is.
+  for (const floor of request.placedFloors) {
+    for (const seat of floor.civicSeats) seats.set(seat.seatId, seat);
+  }
   const rooms: ReadonlyArray<OfficeRoom> = request.placedRooms.map((room) => ({
     ...room,
     visitTile: visitTileOf(room, desks, walkable),
   }));
   const floors: ReadonlyArray<OfficeFloor> = request.placedFloors.map(
-    (floor, floorIndex) => ({
-      ...floor,
-      queueFacing: FLOOR_QUEUE_FACING,
-      corridorTiles: corridorTilesOf({
-        cols,
-        walkable,
-        rooms: request.placedRooms,
-        floor,
-      }),
-      errandSpots: decorateSpots({
-        spots: floor.errandSpots,
-        props,
-        rooms: request.placedRooms,
-        floorIndex,
-      }),
-    }),
+    (placed, floorIndex) => {
+      // `civicSeats` is the packing's own handover to `layout.seats` above and
+      // is not part of a storey's record, so it is dropped here rather than
+      // riding along as a field nothing reads. The corridor pass still gets
+      // the whole `placed` storey: it asks a `PlacedFloor` for its bounds and
+      // its civic rooms, and the narrowed record is not one.
+      const { civicSeats: _civicSeats, ...floor } = placed;
+      return {
+        ...floor,
+        queueFacing: FLOOR_QUEUE_FACING,
+        corridorTiles: corridorTilesOf({
+          cols,
+          walkable,
+          rooms: request.placedRooms,
+          floor: placed,
+        }),
+        errandSpots: decorateSpots({
+          spots: floor.errandSpots,
+          props,
+          rooms: request.placedRooms,
+          floorIndex,
+        }),
+      };
+    },
   );
   return {
     view: "floor",
@@ -3090,8 +3658,8 @@ export function layoutOffice(
   addCabinBins(context, desks);
 
   const multiFloor = builds.length > 1;
-  const floors = builds.map((build) =>
-    fitFloor({ context, build, doorCol, multiFloor, rooms }),
+  const floors = builds.map((build, floorIndex) =>
+    fitFloor({ context, build, doorCol, multiFloor, rooms, floorIndex }),
   );
 
   return decorateFloorLayout({

@@ -422,6 +422,7 @@ function buildRoom(args: RoomBuildArgs): RoomBuild {
       roomId: plan.roomId,
       hostId,
       manager: agent.id === plan.leadAgentId,
+      civicRoomId: null,
       agentId: agent.id,
     });
     for (let offset = 0; offset < DESK_WIDTH_TILES; offset += 1) {
@@ -497,6 +498,7 @@ function buildRoom(args: RoomBuildArgs): RoomBuild {
       // room's statuses, and carrying a thousand ids on a nameplate is a
       // thousand ids the renderer would never read.
       agentIds: [],
+      civicRoomId: null,
     },
   };
 }
@@ -635,6 +637,7 @@ export function planCampus(input: OfficePlanInput): OfficeLayout {
         ownerAgentId: null,
         hostId: floor.hostId,
         agentIds: [],
+        civicRoomId: null,
       });
     }
   }

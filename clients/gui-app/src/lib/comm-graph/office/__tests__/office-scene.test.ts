@@ -5103,6 +5103,7 @@ function deskSeat(args: {
     roomId: null,
     hostId: null,
     manager: false,
+    civicRoomId: null,
   };
 }
 
@@ -5123,6 +5124,7 @@ function cubbySeat(args: {
     roomId: null,
     hostId: null,
     manager: false,
+    civicRoomId: null,
   };
 }
 
@@ -5150,6 +5152,8 @@ function handBuiltFloor(
     gameRoom: null,
     areaSigns: [],
     amenities: [],
+    civic: [],
+    road: null,
   };
 }
 

@@ -728,8 +728,15 @@ function prop(
 function walk(geometry: Geometry, col: number, row: number): void {
   geometry.walkable[row][col] = true;
 }
-function sign(geometry: Geometry, value: OfficeSign): void {
-  geometry.signs.push(value);
+/**
+ * Every piece of lettering these two views plan names a host, an area, a room
+ * plate or a board - never a civic room, because neither view plans one yet.
+ * K2 gives the plaza's bays their signs and passes the id through then.
+ */
+type ObliqueSign = Omit<OfficeSign, "civicRoomId">;
+
+function sign(geometry: Geometry, value: ObliqueSign): void {
+  geometry.signs.push({ ...value, civicRoomId: null });
 }
 interface SpotPlacement {
   readonly kind: OfficeErrandKind;
@@ -878,6 +885,10 @@ function floorFor(
     gameRoom: null,
     areaSigns: [],
     amenities: [],
+    // No civic rooms and no street here yet: K1 plans them on the Floor only,
+    // and K2 fills these in with the plaza's own bays and the ground row.
+    civic: [],
+    road: null,
   };
 }
 function paintStairs(
@@ -1116,6 +1127,8 @@ function materializeSeats(
       roomId: slot.room,
       hostId: building.hostId,
       manager: slot.manager,
+      // Desks and cubbies only, until K2 plans this view's bays and lounge.
+      civicRoomId: null,
       ...(packing.mode === "building" &&
       slot.room !== null &&
       teamRooms.has(slot.room)
