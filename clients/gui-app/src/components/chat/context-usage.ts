@@ -47,11 +47,45 @@ export function computeEffectiveContextUsage(
  * computed, so the surfaces can't drift in their displayed math.
  */
 export interface ContextUsageRow {
-  readonly key: "used" | "fresh" | "cacheRead" | "cacheWrite" | "output";
+  readonly key: ContextUsageRowKey;
   readonly label: string;
   readonly value: number;
   /** Context-window denominator when the row is a `used / window` pair. */
   readonly total: number | null;
+}
+
+/**
+ * Every row a breakdown can show, in the order the surfaces draw them. This
+ * is the one list the pinned strip's field picker offers, so a row added to
+ * `buildContextUsageRows` has to be added here to be selectable at all.
+ */
+export const CONTEXT_USAGE_ROW_KEYS = [
+  "used",
+  "fresh",
+  "cacheRead",
+  "cacheWrite",
+  "output",
+] as const;
+
+export type ContextUsageRowKey = (typeof CONTEXT_USAGE_ROW_KEYS)[number];
+
+export const CONTEXT_USAGE_ROW_LABELS: Readonly<
+  Record<ContextUsageRowKey, string>
+> = {
+  used: "Used",
+  fresh: "Fresh",
+  cacheRead: "Cache read",
+  cacheWrite: "Cache write",
+  output: "Output",
+};
+
+export function isContextUsageRowKey(
+  value: unknown,
+): value is ContextUsageRowKey {
+  return (
+    typeof value === "string" &&
+    CONTEXT_USAGE_ROW_KEYS.some((key) => key === value)
+  );
 }
 
 /**
@@ -73,15 +107,25 @@ export function buildContextUsageRows(
   const fresh = Math.max(0, used - cacheRead - cacheCreate);
   const hasCache = cacheRead > 0 || cacheCreate > 0;
   const rows: ContextUsageRow[] = [
-    { key: "used", label: "Used", value: used, total: effective.window },
+    {
+      key: "used",
+      label: CONTEXT_USAGE_ROW_LABELS.used,
+      value: used,
+      total: effective.window,
+    },
   ];
   if (hasCache) {
-    rows.push({ key: "fresh", label: "Fresh", value: fresh, total: null });
+    rows.push({
+      key: "fresh",
+      label: CONTEXT_USAGE_ROW_LABELS.fresh,
+      value: fresh,
+      total: null,
+    });
   }
   if (cacheRead > 0) {
     rows.push({
       key: "cacheRead",
-      label: "Cache read",
+      label: CONTEXT_USAGE_ROW_LABELS.cacheRead,
       value: cacheRead,
       total: null,
     });
@@ -89,14 +133,14 @@ export function buildContextUsageRows(
   if (cacheCreate > 0) {
     rows.push({
       key: "cacheWrite",
-      label: "Cache write",
+      label: CONTEXT_USAGE_ROW_LABELS.cacheWrite,
       value: cacheCreate,
       total: null,
     });
   }
   rows.push({
     key: "output",
-    label: "Output",
+    label: CONTEXT_USAGE_ROW_LABELS.output,
     value: usage.outputTokens,
     total: null,
   });
@@ -130,6 +174,13 @@ export function formatContextWindowTokens(value: number): string {
 }
 
 /**
+ * The remaining percentage at or below which the tone turns destructive.
+ * Exported so a surface that wants to change emphasis at the same moment the
+ * colour changes reads the threshold from here rather than restating it.
+ */
+export const DESTRUCTIVE_PERCENT_LEFT = 10;
+
+/**
  * Shared "how much headroom is left" tone scale: `percent` is a LEFT/
  * remaining percentage (0 = exhausted), not a used percentage - low
  * remaining reads as destructive/amber. Reused by the context-window chip
@@ -138,7 +189,7 @@ export function formatContextWindowTokens(value: number): string {
  * share one polarity and one set of thresholds.
  */
 export function contextUsageTone(percent: number): string {
-  if (percent <= 10) return "text-destructive";
+  if (percent <= DESTRUCTIVE_PERCENT_LEFT) return "text-destructive";
   if (percent <= 25) return "text-amber-500 dark:text-amber-400";
   return "text-muted-foreground";
 }

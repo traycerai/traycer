@@ -21,11 +21,13 @@ import {
 } from "@/stores/tabs/layout";
 import {
   discardLegacyTabsSourceActiveSelection,
+  layoutHomeIsActive,
   migrateTabsPersistedState,
   setTabsLocalPersistenceEnabled,
   useTabsStore,
 } from "@/stores/tabs/store";
 import { isRegisteredTabKind } from "@/stores/tabs/registry";
+import { homeRoutePath, isHomePath } from "@/stores/tabs/kinds/home";
 import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import { setTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
@@ -327,6 +329,11 @@ function isProjectionCoherent(
   layout: PersistedTabStripLayout,
 ): boolean {
   if (route === null) return false;
+  // Home holds the selection with no item and no ref, so every ref-backed
+  // check below would call it incoherent - and an incoherent projection is
+  // never scheduled, which would silently stop persisting layout changes for
+  // as long as Home is the surface on screen.
+  if (layoutHomeIsActive(layout)) return isHomePath(routePath(route) ?? "");
   const ref = routeRef(routePath(route));
   if (ref === null)
     return layout.items.length === 0 && routePath(route) === "/";
@@ -374,7 +381,13 @@ function sanitizeDesktopLayout(
       !sourceKeys.has(refKey(ref)),
   );
   const withoutMissing = missing.reduce(removeMissingRef, persisted);
-  return repairLayout(withoutMissing, isRegisteredTabKind);
+  const repaired = repairLayout(withoutMissing, isRegisteredTabKind);
+  // Same distinction `committedLayout` draws: a null active id is a snapshot
+  // that never carried one for `repairLayout`, and a snapshot that was sitting
+  // on Home for us.
+  return layoutHomeIsActive(withoutMissing)
+    ? { ...repaired, activeItemId: null }
+    : repaired;
 }
 
 function removeMissingRef(
@@ -398,12 +411,27 @@ function removeMissingRef(
       ? []
       : [{ kind: "tab", id: tabItemId(survivor), ref: survivor }];
   });
-  const activeItemId = items.some(
-    (candidate) => candidate.id === layout.activeItemId,
-  )
-    ? layout.activeItemId
-    : (items.at(0)?.id ?? null);
-  return { ...layout, items, activeItemId };
+  return {
+    ...layout,
+    items,
+    activeItemId: survivingActiveItemId(layout, items),
+  };
+}
+
+/**
+ * The active item after a removal. Home keeps its null selection - it names no
+ * item, so the membership test below would read it as a stale id and hand the
+ * selection to whichever task tab happens to sit first.
+ */
+function survivingActiveItemId(
+  layout: PersistedTabStripLayout,
+  items: ReadonlyArray<StripItem>,
+): string | null {
+  if (layoutHomeIsActive(layout)) return null;
+  if (items.some((candidate) => candidate.id === layout.activeItemId)) {
+    return layout.activeItemId;
+  }
+  return items.at(0)?.id ?? null;
 }
 
 function legacyDesktopLayout(
@@ -481,6 +509,10 @@ function restoreRoute(
   layout: PersistedTabStripLayout,
   activeRoute: string | null,
 ): string {
+  // Ahead of the persisted route: Home names no item and no ref, so none of the
+  // lookups below can recover it, and a snapshot left on Home would restore
+  // onto whichever task tab happens to sit first in the strip.
+  if (layoutHomeIsActive(layout)) return homeRoutePath();
   const active = activeRoute === null ? null : routeRef(routePath(activeRoute));
   if (
     active !== null &&
@@ -536,6 +568,9 @@ function routeForRef(layout: PersistedTabStripLayout, ref: TabRef): string {
       : `/epics/${encodeURIComponent(tab.epicId)}/${encodeURIComponent(tab.tabId)}`;
   }
   if (ref.kind === "draft") return `/draft/${encodeURIComponent(ref.id)}`;
+  // A `home` ref never reaches here: it is not a layout ref (`validRef` refuses
+  // one) and not a source ref, so nothing this module walks can produce it.
+  if (ref.kind === "home") return "/";
   const lastPath = layout.systemTabs[ref.kind]?.lastPath ?? null;
   if (
     lastPath !== null &&

@@ -1,26 +1,26 @@
 /**
- * Every registered settings section's PATH SEGMENT (the part after
- * `/settings/`), plus `service` - the retired id `settings.service.tsx`
- * still redirects from.
+ * The settings routes a tab path may name, for `store.ts`'s
+ * `isValidSystemTabPath` and `desktop-tabs-persistence.ts`'s
+ * `isSettingsRoutePath` alike. One module because the two validators answering
+ * differently is the failure this shape rules out: they read the same persisted
+ * path, so a section listed for one and not the other is a route that survives a
+ * restart on one surface and is dropped on the other.
  *
- * Hand-maintained, and deliberately NOT derived from `SETTINGS_SECTIONS`
- * (`@/lib/settings-sections`): a persisted path from an older build is
- * exactly the input this guards, so deriving from the live section list
- * would make an old build's persisted route unrecognisable the moment a
- * section were renamed or removed, rather than merely unmapped.
- *
- * Shared by `store.ts` (`migrateTabsPersistedState`'s route recognition) and
- * `desktop-tabs-persistence.ts` (`legacySystemTabs`'s route recognition) -
- * two different consumers reading one allowlist, not two allowlists. It used
- * to be copied verbatim into both files, and the cost of that duplication was
- * real: a new section forgotten in ONE copy silently stopped being recognised
- * as a settings route for that consumer alone. `devices` was missing from
- * both copies for their whole lives, and `app-notifications`/`link-phone`
- * were missing the same way until the `fallback` addition found them - three
- * misses on one duplicated pair, which is the argument for keeping this as
- * ONE hand-maintained set rather than two.
+ * Hand-maintained, and NOT derived from `SETTINGS_SECTIONS`, because it also has
+ * to accept `service`, the retired id that `settings.service.tsx` still
+ * redirects, and because a persisted path from an older build is exactly the
+ * input this guards. The cost of hand-maintaining it is that a new section can
+ * be forgotten here and silently stop being recognised as a settings route -
+ * `devices` was, from the day it was added until `app-diagnostics` arrived and
+ * the omission was noticed next to it; `link-phone` was, until the two copies
+ * of this set were folded into one; and `app-notifications` was, until the set
+ * was finally compared against the section table entry by entry. Three misses,
+ * each found by eye, which is why the comparison is no longer left to one:
+ * `__tests__/settings-kind.test.ts` asserts every `SETTINGS_SECTIONS` id is in
+ * here. Containment only - the `service` alias belongs to no section, so this
+ * set is a superset by construction and equality would fail on it.
  */
-export const SETTINGS_PATHS: ReadonlySet<string> = new Set([
+export const SETTINGS_PATHS = new Set([
   "agents",
   "app-diagnostics",
   "app-notifications",
@@ -31,6 +31,7 @@ export const SETTINGS_PATHS: ReadonlySet<string> = new Set([
   "general",
   "host",
   "keybindings",
+  "layout",
   "link-phone",
   "notifications",
   "opening-behavior",

@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from "./routes/__root";
 import { Route as IndexRouteImport } from "./routes/index";
 import { Route as EpicsRouteImport } from "./routes/epics";
+import { Route as HomeRouteImport } from "./routes/home";
 import { Route as OnboardingRouteImport } from "./routes/onboarding";
 import { Route as SettingsRouteImport } from "./routes/settings";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
@@ -27,6 +28,7 @@ import { Route as SettingsFallbackRouteImport } from "./routes/settings.fallback
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
+import { Route as SettingsLayoutRouteImport } from "./routes/settings.layout";
 import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
@@ -45,6 +47,11 @@ const IndexRoute = IndexRouteImport.update({
 const EpicsRoute = EpicsRouteImport.update({
   id: "/epics",
   path: "/epics",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const HomeRoute = HomeRouteImport.update({
+  id: "/home",
+  path: "/home",
   getParentRoute: () => rootRouteImport,
 } as any);
 const OnboardingRoute = OnboardingRouteImport.update({
@@ -128,6 +135,11 @@ const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   path: "/keybindings",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsLayoutRoute = SettingsLayoutRouteImport.update({
+  id: "/layout",
+  path: "/layout",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsLinkPhoneRoute = SettingsLinkPhoneRouteImport.update({
   id: "/link-phone",
   path: "/link-phone",
@@ -177,6 +189,7 @@ const EpicsEpicIdTabIdRoute = EpicsEpicIdTabIdRouteImport.update({
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
   "/epics": typeof EpicsRouteWithChildren;
+  "/home": typeof HomeRoute;
   "/onboarding": typeof OnboardingRoute;
   "/settings": typeof SettingsRouteWithChildren;
   "/draft/$draftId": typeof DraftDraftIdRoute;
@@ -191,6 +204,7 @@ export interface FileRoutesByFullPath {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
@@ -205,6 +219,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
+  "/home": typeof HomeRoute;
   "/onboarding": typeof OnboardingRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
@@ -218,6 +233,7 @@ export interface FileRoutesByTo {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
@@ -234,6 +250,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/epics": typeof EpicsRouteWithChildren;
+  "/home": typeof HomeRoute;
   "/onboarding": typeof OnboardingRoute;
   "/settings": typeof SettingsRouteWithChildren;
   "/draft/$draftId": typeof DraftDraftIdRoute;
@@ -248,6 +265,7 @@ export interface FileRoutesById {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
@@ -265,6 +283,7 @@ export interface FileRouteTypes {
   fullPaths:
     | "/"
     | "/epics"
+    | "/home"
     | "/onboarding"
     | "/settings"
     | "/draft/$draftId"
@@ -279,6 +298,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
@@ -293,6 +313,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo;
   to:
     | "/"
+    | "/home"
     | "/onboarding"
     | "/draft/$draftId"
     | "/draft/new"
@@ -306,6 +327,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
@@ -321,6 +343,7 @@ export interface FileRouteTypes {
     | "__root__"
     | "/"
     | "/epics"
+    | "/home"
     | "/onboarding"
     | "/settings"
     | "/draft/$draftId"
@@ -335,6 +358,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
@@ -351,6 +375,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute;
   EpicsRoute: typeof EpicsRouteWithChildren;
+  HomeRoute: typeof HomeRoute;
   OnboardingRoute: typeof OnboardingRoute;
   SettingsRoute: typeof SettingsRouteWithChildren;
   DraftDraftIdRoute: typeof DraftDraftIdRoute;
@@ -371,6 +396,13 @@ declare module "@tanstack/react-router" {
       path: "/epics";
       fullPath: "/epics";
       preLoaderRoute: typeof EpicsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/home": {
+      id: "/home";
+      path: "/home";
+      fullPath: "/home";
+      preLoaderRoute: typeof HomeRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/onboarding": {
@@ -485,6 +517,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsKeybindingsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/layout": {
+      id: "/settings/layout";
+      path: "/layout";
+      fullPath: "/settings/layout";
+      preLoaderRoute: typeof SettingsLayoutRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/link-phone": {
       id: "/settings/link-phone";
       path: "/link-phone";
@@ -574,6 +613,7 @@ interface SettingsRouteChildren {
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
+  SettingsLayoutRoute: typeof SettingsLayoutRoute;
   SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
@@ -596,6 +636,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsLayoutRoute: SettingsLayoutRoute,
   SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,
@@ -614,6 +655,7 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   EpicsRoute: EpicsRouteWithChildren,
+  HomeRoute: HomeRoute,
   OnboardingRoute: OnboardingRoute,
   SettingsRoute: SettingsRouteWithChildren,
   DraftDraftIdRoute: DraftDraftIdRoute,

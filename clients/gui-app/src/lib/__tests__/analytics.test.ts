@@ -749,7 +749,17 @@ describe("analytics", () => {
 
       for (const category of ["task", "collaboration", "system"] as const) {
         for (const section of ["attention", "recent"] as const) {
-          for (const surface of ["center", "toast", "native"] as const) {
+          // `home` is the fourth surface and it is a REGRESSION guard, not a
+          // completeness one: Home's prompt rows go through the same
+          // `activationResultHandler`, and while the validator listed only the
+          // other three the whole event failed here and never reached
+          // `posthog.capture` - invisibly, because the TYPE already allowed it.
+          for (const surface of [
+            "center",
+            "toast",
+            "native",
+            "home",
+          ] as const) {
             for (const outcome of ["success", "failure"] as const) {
               expect(
                 sanitizeAnalyticsProperties(
@@ -1184,5 +1194,189 @@ describe("app-surface pass-through in the outbound sanitizer", () => {
     expect(
       sanitizePostHogCaptureResult(capture({ app_surface: "toaster" })),
     ).toBeNull();
+  });
+});
+
+describe("Layout page settings analytics", () => {
+  it("accepts the layout section id in the runtime settings-section allowlist", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.SettingsOpened, {
+        source: "direct_ui",
+        section: "layout",
+      }),
+    ).toEqual({ source: "direct_ui", section: "layout" });
+  });
+
+  it("tracks every layout.statusBar.* setting id through trackSettingChanged", async () => {
+    // Each of these is exercised through the real `trackSettingChanged` (not
+    // `sanitizeAnalyticsProperties` directly), so this also proves the
+    // `AnalyticsSetting` union member reaches `ANALYTICS_SETTINGS` - a value
+    // present in the type but missing from the runtime Set drops the event
+    // silently (`chatTurnMinimapSide` did exactly that before it was added).
+    const posthog = await import("posthog-js");
+    const captureSpy = vi.spyOn(posthog.default, "capture");
+    const { trackSettingChanged } = await import("@/lib/analytics");
+
+    const statusBarSettings = [
+      "layout.statusBar.placement",
+      "layout.statusBar.mobileFooter",
+      "layout.statusBar.rateLimits.enabled",
+      "layout.statusBar.rateLimits.percentMode",
+      "layout.statusBar.rateLimits.provider",
+      "layout.statusBar.rateLimits.providerAutomatic",
+      "layout.statusBar.rateLimits.providerLimits",
+      "layout.statusBar.rateLimits.showBar",
+      "layout.statusBar.rateLimits.showModeWord",
+      "layout.statusBar.rateLimits.showTimer",
+      "layout.statusBar.resources.enabled",
+      "layout.statusBar.resources.metric",
+      "layout.statusBar.resources.scope",
+    ] as const;
+
+    for (const setting of statusBarSettings) {
+      trackSettingChanged("layout", setting);
+    }
+
+    // MODE === "test" disables PostHog entirely (see the top-of-file no-op
+    // test), so this is never about a real capture - it is about
+    // `Analytics.track` returning `true` (accepted, not sanitized away). The
+    // module's local `track()` return isn't exported, so the runtime
+    // allowlist is asserted directly instead, matching the "accepts every
+    // settings section" test above.
+    expect(captureSpy).not.toHaveBeenCalled();
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+    for (const setting of statusBarSettings) {
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "layout",
+          setting,
+        }),
+      ).toEqual({ source: "direct_ui", section: "layout", setting });
+    }
+  });
+
+  it("tracks the relocated layout settings (chat, sidebar, Home tab, resource monitor rows) under the layout section", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    // `homeTabEnabled` is here rather than under `general` because the row
+    // moved to the Layout page; the setting id itself never changed, which is
+    // what keeps its history joinable across the move.
+    const relocatedSettings = [
+      "chatTurnMinimapSide",
+      "homeTabEnabled",
+      "pinContextUsageBreakdown",
+      "showGlobalResourceMonitor",
+      "showNavigatorResourceStats",
+    ] as const;
+
+    for (const setting of relocatedSettings) {
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "layout",
+          setting,
+        }),
+      ).toEqual({ source: "direct_ui", section: "layout", setting });
+    }
+  });
+
+  // Home reported two Layout rows and reports neither now: the view switch
+  // went with the flat reading, and the density segment went because the two
+  // spacings were barely distinguishable (user ruling, 2026-09-12). Nothing
+  // can emit either id - but the runtime allowlist is what a stray emit would
+  // be checked against, so it has to stop ACCEPTING them rather than merely
+  // stop being called. An unallowlisted setting id drops the whole event
+  // rather than the one property.
+  it.each(["layout.home.density", "layout.home.view"])(
+    "has dropped %s from the runtime allowlist",
+    async (setting) => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "layout",
+          setting,
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("tracks the sidebar resource metric picker under the layout section", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    // A NEW id rather than a relocated one, so it takes the Sidebar group's
+    // dotted family name instead of a bare key there is no history to join.
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+        source: "direct_ui",
+        section: "layout",
+        setting: "layout.sidebar.resourceMetrics",
+      }),
+    ).toEqual({
+      source: "direct_ui",
+      section: "layout",
+      setting: "layout.sidebar.resourceMetrics",
+    });
+  });
+
+  it("tracks every layout.sidebar.* setting id through trackSettingChanged", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties, trackSettingChanged } =
+      await import("@/lib/analytics");
+
+    const sidebarSettings = [
+      "layout.sidebar.panelOrder",
+      "layout.sidebar.panelVisibility",
+      "layout.sidebar.resetOrder",
+      "layout.sidebar.resetVisibility",
+      "layout.sidebar.resourceMetrics",
+    ] as const;
+
+    for (const setting of sidebarSettings) {
+      trackSettingChanged("layout", setting);
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "layout",
+          setting,
+        }),
+      ).toEqual({ source: "direct_ui", section: "layout", setting });
+    }
+  });
+
+  it("accepts the general-section setting ids that the runtime allowlist used to omit", async () => {
+    // These three sat in the `AnalyticsSetting` union with no entry in the
+    // runtime allowlist, exactly as `chatTurnMinimapSide` did, so the sanitizer
+    // dropped every one of their events - `general-settings-panel.tsx` emits
+    // `steerOnModEnterEnabled` on each toggle. Building the allowlist from a
+    // `satisfies Record<AnalyticsSetting, true>` is what forced them in and
+    // makes the next omission a compile error; this asserts the runtime half
+    // that a type cannot.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const previouslyMissing = [
+      "steerOnModEnterEnabled",
+      "summonHotkeyChord",
+      "summonHotkeyEnabled",
+    ] as const;
+
+    for (const setting of previouslyMissing) {
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "general",
+          setting,
+        }),
+      ).toEqual({ source: "direct_ui", section: "general", setting });
+    }
   });
 });

@@ -105,7 +105,20 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
   };
 
   return (
-    <div className="mb-3 flex min-h-0 flex-col gap-2">
+    // A flex child of the rail's scrolling column must not give way to the
+    // section list below it: the section blocks keep `min-height: auto`, so a
+    // shrinkable box here is the only thing that collapses once the list is
+    // taller than the aside, and its `h-8` input then paints over the first
+    // group header. `min-h-0` belongs only to the branch that scrolls - while
+    // results are up they replace the section list, and letting this box
+    // shrink is what keeps the input pinned above them.
+    <div
+      className={cn(
+        "mb-3 flex flex-col gap-2",
+        active ? "min-h-0" : "shrink-0",
+      )}
+      data-settings-search-box
+    >
       <InputGroup className="h-8 w-full">
         <InputGroupAddon align="inline-start">
           <Search className="size-3.5" aria-hidden />

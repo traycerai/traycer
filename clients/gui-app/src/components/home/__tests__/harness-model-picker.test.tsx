@@ -673,6 +673,10 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import {
+  DEFAULT_COMPOSER_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
@@ -1144,6 +1148,7 @@ describe("<HarnessModelPicker />", () => {
     // seeded record can't leak between tests.
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
+    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
   });
 
   afterEach(() => {
@@ -1251,6 +1256,84 @@ describe("<HarnessModelPicker />", () => {
     expect(tooltipText).toContain("Work");
     expect(tooltipText).toContain("Shortcut");
     expect(tooltipText).toContain(shortcut);
+  });
+
+  // Layout ▸ Composer ▸ Reasoning level. The picker reads it and both chips
+  // that mount this picker follow, so the setting is proven where it is read
+  // rather than only on the trigger in isolation.
+  it("draws the effort as bars, and spells the position out in the tooltip, when the layout setting asks for bars", async () => {
+    useLayoutStore.getState().setComposerReasoningIndicator("bars");
+    renderPicker({
+      selection: {
+        harnessId: "codex",
+        modelSlug: "gpt-5.5",
+        profileId: null,
+      },
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "minimal", label: "Minimal", description: null },
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+            { id: "max", label: "Max", description: null },
+          ],
+        }),
+      ],
+    });
+
+    const glyph = screen.getByRole("img", { name: "Thinking: High (3 of 4)" });
+    expect(
+      Array.from(glyph.querySelectorAll("rect")).map((bar) =>
+        bar.getAttribute("data-filled"),
+      ),
+    ).toEqual(["true", "true", "true", "false"]);
+
+    const trigger = screen.getByRole("button", {
+      name: "GPT-5.5, Thinking High",
+    });
+    expect(trigger.textContent).not.toContain("High");
+    fireEvent.focus(trigger);
+
+    const tooltipText = (await screen.findByRole("tooltip")).textContent;
+    expect(tooltipText).toContain("Effort");
+    expect(tooltipText).toContain("High (3 of 4)");
+  });
+
+  it("draws no glyph, and the bare effort in the tooltip, on the default text setting", async () => {
+    renderPicker({
+      selection: {
+        harnessId: "codex",
+        modelSlug: "gpt-5.5",
+        profileId: null,
+      },
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "minimal", label: "Minimal", description: null },
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+            { id: "max", label: "Max", description: null },
+          ],
+        }),
+      ],
+    });
+
+    expect(screen.queryByRole("img")).toBeNull();
+    const trigger = screen.getByRole("button", {
+      name: "GPT-5.5, Thinking High",
+    });
+    expect(trigger.textContent).toContain("High");
+    fireEvent.focus(trigger);
+
+    const tooltipText = (await screen.findByRole("tooltip")).textContent;
+    expect(tooltipText).toContain("Effort");
+    expect(tooltipText).not.toContain("3 of 4");
   });
 
   // Seed the per-harness memory so a switch / pick restores a known record.
@@ -3854,7 +3937,36 @@ describe("<HarnessModelPicker />", () => {
     expect(selections.at(-1)?.harnessId).toBe("claude");
   });
 
-  it("renders thinking effort controls in the picker footer", async () => {
+  it("renders the thinking-effort slider in the picker footer", async () => {
+    const { reasoningChanges } = renderPicker({
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+
+    expect(
+      screen.getByRole("group", { name: "Thinking effort" }),
+    ).not.toBeNull();
+    const slider = screen.getByRole("slider", { name: "Thinking effort" });
+    expect(slider.getAttribute("aria-valuetext")).toBe("High");
+
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+
+    expect(reasoningChanges).toEqual(["low"]);
+  });
+
+  it("renders thinking effort buttons in the picker footer under the list setting", async () => {
+    useLayoutStore.getState().setComposerReasoningFooterControl("list");
     const { reasoningChanges } = renderPicker({
       reasoning: "high",
       storeModels: [
@@ -4036,6 +4148,64 @@ describe("<HarnessModelPicker />", () => {
     });
 
     expect(reasoningChanges).toEqual(["high"]);
+  });
+
+  it("blooms the slider's last stop when the sub-leader digit lands on it", async () => {
+    // The ⌥-digit chord reaches the level through `usePickerLeaderScope`,
+    // never touching the slider - so this is the route that proves the cue
+    // hangs off the picker's one acknowledgement path rather than off a
+    // handler inside the strip.
+    renderPicker({
+      reasoning: "low",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    expect(screen.queryByTestId("model-reasoning-max-bloom")).toBeNull();
+
+    act(() => {
+      fireLeaderDigit(2, "alt");
+    });
+
+    const slider = screen.getByTestId("model-reasoning-slider");
+    expect(slider.getAttribute("data-max")).toBe("true");
+    expect(slider.getAttribute("data-open")).toBe("true");
+    expect(screen.getByTestId("model-reasoning-max-bloom")).not.toBeNull();
+  });
+
+  it("leaves the slider static when the sub-leader digit lands short of the last stop", async () => {
+    renderPicker({
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(1, "alt");
+    });
+
+    expect(
+      screen.getByTestId("model-reasoning-slider").getAttribute("data-max"),
+    ).toBeNull();
+    expect(screen.queryByTestId("model-reasoning-max-bloom")).toBeNull();
   });
 
   it("sets the thinking level on the now-committed model after a rail switch", async () => {

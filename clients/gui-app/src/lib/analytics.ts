@@ -94,6 +94,7 @@ export type AnalyticsSettingsSection =
   | "general"
   | "host"
   | "keybindings"
+  | "layout"
   | "link-phone"
   | "notifications"
   | "opening-behavior"
@@ -177,7 +178,11 @@ export type AnalyticsNotificationFilter =
 
 export type AnalyticsNotificationSection = "attention" | "recent";
 
-export type AnalyticsNotificationSurface = "center" | "toast" | "native";
+export type AnalyticsNotificationSurface =
+  | "center"
+  | "toast"
+  | "native"
+  | "home";
 
 export type AnalyticsNotificationAcknowledgmentSource =
   | "explicit_action"
@@ -274,6 +279,7 @@ export type AnalyticsSetting =
   | "codeFontFamily"
   | "codeFontSize"
   | "composerMode"
+  | "contextIndicatorStyle"
   | "defaultEditor"
   | "defaultPermission"
   | "defaultReasoning"
@@ -281,8 +287,48 @@ export type AnalyticsSetting =
   | "defaultServiceTier"
   | "diffViewerPreferences"
   | "glassOpacity"
+  | "homeTabEnabled"
+  // The Layout page's own controls. Dotted rather than camel-cased because
+  // they name a path into one persisted store's slice, not a flat
+  // `settings-store` key: the surface is the middle segment, so a second
+  // surface's rows read as siblings instead of colliding on a verb.
+  // One id per preset rather than one `layout.preset` carrying the choice as a
+  // property: `setting_changed` has a fixed payload (`source`, `section`,
+  // `setting`), and every id here already names what changed rather than what
+  // it became. Reset reports under `default`, which is what it applies.
+  | "layout.preset.compact"
+  | "layout.preset.default"
+  | "layout.preset.detailed"
+  | "layout.sidebar.panelOrder"
+  | "layout.sidebar.panelVisibility"
+  | "layout.sidebar.resetOrder"
+  | "layout.sidebar.resetVisibility"
+  | "layout.statusBar.placement"
+  | "layout.statusBar.mobileFooter"
+  | "layout.statusBar.rateLimits.enabled"
+  | "layout.statusBar.rateLimits.percentMode"
+  | "layout.statusBar.rateLimits.provider"
+  | "layout.statusBar.rateLimits.providerAutomatic"
+  | "layout.statusBar.rateLimits.providerLimits"
+  | "layout.statusBar.rateLimits.showBar"
+  | "layout.statusBar.rateLimits.showModeWord"
+  | "layout.statusBar.rateLimits.showTimer"
+  | "layout.statusBar.resources.enabled"
+  | "layout.statusBar.resources.metric"
+  | "layout.statusBar.resources.scope"
+  | "layout.composer.filesChanged"
+  | "layout.composer.activeAgents"
+  | "layout.composer.background"
+  | "layout.composer.attachImage"
+  | "layout.composer.access"
+  | "layout.composer.mic"
+  | "layout.composer.compactButton"
+  | "layout.composer.reasoningIndicator"
+  | "layout.composer.reasoningFooterControl"
+  | "layout.sidebar.resourceMetrics"
   | "linkOpen"
   | "pinContextUsageBreakdown"
+  | "pinnedContextBreakdownFields"
   | "pointerCursors"
   | "preventSleepWhileRunning"
   | "quoteReplyEnabled"
@@ -1133,6 +1179,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     general: true,
     host: true,
     keybindings: true,
+    layout: true,
     "link-phone": true,
     notifications: true,
     "opening-behavior": true,
@@ -1143,45 +1190,94 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
   } satisfies Record<AnalyticsSettingsSection, true>),
 );
 
-const ANALYTICS_SETTINGS = new Set<string>([
-  "agentTabSurfacing",
-  "allowPrereleaseUpdates",
-  "artifactIconColorMode",
-  "artifactIconColors",
-  "codeFontFamily",
-  "codeFontSize",
-  "composerMode",
-  "defaultEditor",
-  "defaultPermission",
-  "defaultReasoning",
-  "defaultSelection",
-  "defaultServiceTier",
-  "diffViewerPreferences",
-  "glassOpacity",
-  "linkOpen",
-  "pinContextUsageBreakdown",
-  "pointerCursors",
-  "preventSleepWhileRunning",
-  "quoteReplyEnabled",
-  "showGlobalResourceMonitor",
-  "showGreeting",
-  "showNavigatorResourceStats",
-  "showRecentHistory",
-  "startPageWallpaper",
-  "startPageWallpaperCurated",
-  "startPageWallpaperTint",
-  "terminalCursorBlink",
-  "terminalCursorStyle",
-  "terminalFontFamily",
-  "terminalFontSize",
-  "theme",
-  "themePreset",
-  "tilePlacement",
-  "uiFontFamily",
-  "uiFontSize",
-  "voiceInputEnabled",
-  "voiceLanguage",
-]);
+/**
+ * Built from a `satisfies Record<AnalyticsSetting, true>` for the same reason
+ * `ANALYTICS_SETTINGS_SECTIONS` is: this set is what
+ * `sanitizeAnalyticsProperties` validates `setting` against, so a union member
+ * missing here drops every one of its `setting_changed` events silently.
+ * `chatTurnMinimapSide` went missing that way from the day its control
+ * shipped, and `steerOnModEnterEnabled`, `summonHotkeyChord` and
+ * `summonHotkeyEnabled` were missing alongside it. The `satisfies` makes the
+ * next such omission a COMPILE error.
+ */
+const ANALYTICS_SETTINGS = new Set<string>(
+  Object.keys({
+    agentTabSurfacing: true,
+    allowPrereleaseUpdates: true,
+    artifactIconColorMode: true,
+    artifactIconColors: true,
+    chatTurnMinimapSide: true,
+    codeFontFamily: true,
+    codeFontSize: true,
+    composerMode: true,
+    contextIndicatorStyle: true,
+    defaultEditor: true,
+    defaultPermission: true,
+    defaultReasoning: true,
+    defaultSelection: true,
+    defaultServiceTier: true,
+    diffViewerPreferences: true,
+    glassOpacity: true,
+    homeTabEnabled: true,
+    "layout.preset.compact": true,
+    "layout.preset.default": true,
+    "layout.preset.detailed": true,
+    "layout.sidebar.panelOrder": true,
+    "layout.sidebar.panelVisibility": true,
+    "layout.sidebar.resetOrder": true,
+    "layout.sidebar.resetVisibility": true,
+    "layout.statusBar.placement": true,
+    "layout.statusBar.mobileFooter": true,
+    "layout.statusBar.rateLimits.enabled": true,
+    "layout.statusBar.rateLimits.percentMode": true,
+    "layout.statusBar.rateLimits.provider": true,
+    "layout.statusBar.rateLimits.providerAutomatic": true,
+    "layout.statusBar.rateLimits.providerLimits": true,
+    "layout.statusBar.rateLimits.showBar": true,
+    "layout.statusBar.rateLimits.showModeWord": true,
+    "layout.statusBar.rateLimits.showTimer": true,
+    "layout.statusBar.resources.enabled": true,
+    "layout.statusBar.resources.metric": true,
+    "layout.statusBar.resources.scope": true,
+    "layout.composer.filesChanged": true,
+    "layout.composer.activeAgents": true,
+    "layout.composer.background": true,
+    "layout.composer.attachImage": true,
+    "layout.composer.access": true,
+    "layout.composer.mic": true,
+    "layout.composer.compactButton": true,
+    "layout.composer.reasoningIndicator": true,
+    "layout.composer.reasoningFooterControl": true,
+    "layout.sidebar.resourceMetrics": true,
+    linkOpen: true,
+    pinContextUsageBreakdown: true,
+    pinnedContextBreakdownFields: true,
+    pointerCursors: true,
+    preventSleepWhileRunning: true,
+    quoteReplyEnabled: true,
+    showGlobalResourceMonitor: true,
+    showGreeting: true,
+    showNavigatorResourceStats: true,
+    showRecentHistory: true,
+    startPageWallpaper: true,
+    startPageWallpaperCurated: true,
+    startPageWallpaperTint: true,
+    steerOnModEnterEnabled: true,
+    summonHotkeyChord: true,
+    summonHotkeyEnabled: true,
+    terminalCursorBlink: true,
+    terminalCursorStyle: true,
+    terminalFontFamily: true,
+    terminalFontSize: true,
+    theme: true,
+    themePreset: true,
+    tilePlacement: true,
+    uiFontFamily: true,
+    uiFontSize: true,
+    voiceInputEnabled: true,
+    voiceLanguage: true,
+  } satisfies Record<AnalyticsSetting, true>),
+);
 
 const ANALYTICS_THEMES = new Set<string>([
   "mode:dark",
@@ -1765,7 +1861,12 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
     [AnalyticsEvent.NotificationActivationCompleted],
     "surface",
-    new Set(["center", "toast", "native"]),
+    // `home` is the fourth, and it is not optional: Home's prompt rows activate
+    // through the same `activationResultHandler` and pass it. Left out here the
+    // whole event failed validation and never reached `posthog.capture`, so
+    // every activation from Home was silently unrecorded while the TYPE
+    // (`AnalyticsNotificationSurface`) said it was a legal value.
+    new Set(["center", "toast", "native", "home"]),
   ),
   ...eventValueEntries(
     [AnalyticsEvent.SessionImportStarted],
