@@ -1,4 +1,5 @@
 import type { BrowserWindowConstructorOptions, WebContents } from "electron";
+import type { BrowserFaviconFetcher } from "./manager/browser-favicon-source";
 import type {
   BrowserCdpCommand,
   BrowserCdpTarget,
@@ -188,7 +189,13 @@ export interface BrowserViewPopupWindow {
 
 export interface BrowserViewWebContents {
   readonly id: number;
-  readonly session: BrowserStorageSession;
+  /**
+   * Two capabilities on one object because Electron puts them there, but kept as
+   * separate ports: the storage half is a cookie jar, and the fetch half is the
+   * network. A path that wants to read an icon must not thereby be handed the
+   * jar, and the reverse matters more.
+   */
+  readonly session: BrowserStorageSession & BrowserFaviconFetcher;
   readonly debugger: BrowserViewDebugger;
   readonly navigationHistory: BrowserViewNavigationHistory | undefined;
   loadURL(url: string): Promise<unknown>;
@@ -199,6 +206,15 @@ export interface BrowserViewWebContents {
   isDestroyed(): boolean;
   close(): void;
   reload(): void;
+  /**
+   * Reload with the HTTP cache bypassed, for the `hardReload` action. Separate
+   * from {@link reload} at the port because they are separate Chromium calls -
+   * a hard reload implemented as a reload is the defect this exists to make
+   * impossible to write by accident.
+   */
+  reloadIgnoringCache(): void;
+  setAudioMuted(muted: boolean): void;
+  isAudioMuted(): boolean;
   findInPage(text: string, options: BrowserViewFindInPageOptions): number;
   stopFindInPage(action: "clearSelection"): void;
   getZoomFactor(): number;

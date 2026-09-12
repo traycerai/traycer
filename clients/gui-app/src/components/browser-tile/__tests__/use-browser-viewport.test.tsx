@@ -140,6 +140,7 @@ function ViewportProbe(): ReactElement {
     disabled: false,
     pageZoom: 1,
     native: true,
+    emulateDevice: null,
   });
   const controller = presentation.controller;
   if (controller === null) {
@@ -207,6 +208,7 @@ function ToolbarProbe(): ReactElement {
     disabled: false,
     pageZoom: 1,
     native: false,
+    emulateDevice: null,
   });
   return (
     <>
@@ -258,6 +260,7 @@ function MeasuredViewportProbe(
     disabled: false,
     pageZoom: input.pageZoom,
     native: true,
+    emulateDevice: null,
   });
   if (controller === null) {
     return <output data-testid="missing">missing</output>;
@@ -326,6 +329,7 @@ function ReadOnlyViewportProbe(): ReactElement {
     disabled: true,
     pageZoom: 1,
     native: false,
+    emulateDevice: null,
   });
   if (controller === null) {
     return <output data-testid="missing">missing</output>;
@@ -399,6 +403,7 @@ function PreviewScaleProbe(): ReactElement {
       disabled: false,
       pageZoom: 1,
       native: true,
+      emulateDevice: null,
     });
   if (controller === null) {
     return <output data-testid="missing">missing</output>;
@@ -480,6 +485,7 @@ function InteractionProbe(): ReactElement {
     disabled: false,
     pageZoom: 1,
     native: false,
+    emulateDevice: null,
   });
   if (controller === null) {
     return <output data-testid="missing">missing</output>;

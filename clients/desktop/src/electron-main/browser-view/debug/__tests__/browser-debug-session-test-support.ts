@@ -182,6 +182,13 @@ export class FakeWebContents
       set: () => Promise.resolve(),
       flushStore: () => Promise.resolve(),
     },
+    fetch: () =>
+      Promise.resolve({
+        ok: false,
+        status: 404,
+        headers: { get: () => null },
+        body: null,
+      }),
   };
   readonly navigationHistory = undefined;
   readonly qualities: number[] = [];
@@ -235,6 +242,14 @@ export class FakeWebContents
   close(): void {}
 
   reload(): void {}
+
+  reloadIgnoringCache(): void {}
+
+  setAudioMuted(_muted: boolean): void {}
+
+  isAudioMuted(): boolean {
+    return false;
+  }
 
   findInPage(_text: string, _options: BrowserViewFindInPageOptions): number {
     return 0;

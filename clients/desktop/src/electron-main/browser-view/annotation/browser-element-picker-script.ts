@@ -3,6 +3,7 @@ import type {
   BrowserViewElementCapture,
   BrowserViewElementStyle,
 } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserElementComponentHint } from "./browser-element-component-hint";
 import {
   boundedString,
   boundedStringOrNull,
@@ -28,6 +29,8 @@ export const ELEMENT_PICKER_LIMITS = {
   ariaRole: 64,
   accessibleName: 300,
   tagName: 40,
+  componentName: 120,
+  sourceFile: 400,
 } as const;
 
 export const ELEMENT_PICKER_STYLE_PROPS: readonly string[] = [
@@ -75,9 +78,31 @@ export const ELEMENT_PICKER_STYLE_PROPS: readonly string[] = [
   "cursor",
 ];
 
+/**
+ * A sanitized element capture PLUS this desktop's component hint.
+ *
+ * The hint is deliberately not part of `BrowserViewElementCapture`, which is a
+ * released wire and persistence contract: `chat.subscribe` has shipped at 1.7
+ * and 1.8, and the compatibility guard classifies a new property on a
+ * host->client slot at a released version as breaking, because a peer running
+ * the shipped line never sends the key while a consumer that assumes it is
+ * populated reads `undefined`. Adding it there would require a new protocol
+ * major and downgrade bridges.
+ *
+ * So it rides beside the contract instead, on this process's own IPC type. Zod
+ * strips unmodeled keys, so a capture that reaches a host frame arrives as the
+ * exact released shape with the hint dropped - the wire is unchanged by
+ * construction rather than by remembering to strip it. Surfacing the hint to an
+ * agent is therefore a separate question from capturing it, and belongs either
+ * in the message body (free-form content, no schema change) or in the next
+ * protocol major.
+ */
+export type BrowserAnnotationElementCapture = BrowserViewElementCapture &
+  BrowserElementComponentHint;
+
 export function sanitizeElementCapture(
   value: unknown,
-): BrowserViewElementCapture | null {
+): BrowserAnnotationElementCapture | null {
   if (!isRecord(value)) return null;
   return {
     selector: boundedString(value.selector, ELEMENT_PICKER_LIMITS.selector, ""),
@@ -107,9 +132,28 @@ export function sanitizeElementCapture(
       value.accessibleName,
       ELEMENT_PICKER_LIMITS.accessibleName,
     ),
+    componentName: boundedStringOrNull(
+      value.componentName,
+      ELEMENT_PICKER_LIMITS.componentName,
+    ),
+    sourceFile: boundedStringOrNull(
+      value.sourceFile,
+      ELEMENT_PICKER_LIMITS.sourceFile,
+    ),
+    sourceLine: sanitizeSourceLine(value.sourceLine),
     boundingBox: sanitizeBoundingBox(value.boundingBox),
     computedStyles: sanitizeStyles(value.computedStyles),
   };
+}
+
+/**
+ * A source line is a positive integer or nothing. It reaches a prompt, so a
+ * float or a negative from a page-defined getter must not travel as one.
+ */
+function sanitizeSourceLine(value: unknown): number | null {
+  if (typeof value !== "number") return null;
+  if (!Number.isFinite(value) || value < 1) return null;
+  return Math.floor(value);
 }
 
 const ELEMENT_PICKER_STYLE_PROP_SET = new Set<string>(

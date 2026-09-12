@@ -9,6 +9,7 @@ import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
 import type {
   BrowserViewAttachSurface,
   BrowserViewCapturePageResult,
+  BrowserViewSaveCaptureResult,
   BrowserViewCertificateErrorChange,
   BrowserViewDebugSnapshot,
   BrowserViewDebugSnapshotData,
@@ -24,6 +25,15 @@ import type {
 import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
 import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log } from "../app/logger";
+import { safelyOpenExternal } from "../app/security";
+import { saveBrowserCapture } from "./storage/browser-capture-store";
+import {
+  createBrowserPreviewWindow,
+  type BrowserPreviewWindowHandle,
+} from "./manager/browser-preview-window";
+import { BrowserPageRecording } from "./recording/browser-page-recording";
+import { partitionForProfile } from "./browser-session";
+import { BrowserPageEmulation } from "./emulation/browser-page-emulation";
 import {
   isAllowedGuestNavigationUrl,
   isAllowedHostInitiatedNavigationUrl,
@@ -476,6 +486,29 @@ export class BrowserViewManager {
       case "openDevTools":
         this.openEntryDevTools(entry, windowId);
         return true;
+      case "hardReload":
+        this.reloadEntryIgnoringCache(entry);
+        return true;
+      case "openInSystemBrowser":
+        return await this.openEntryExternally(entry);
+      case "setZoomFactor":
+        // Awaited like every other zoom action: returning before it settles left
+        // a rejection with nobody to hear it, and told the caller the zoom had
+        // been applied while it might still fail.
+        await this.trySetEntryZoom(entry, action.factor);
+        return true;
+      case "setColorSchemePreference":
+        await this.emulationFor(entry).setColorScheme(action.preference);
+        return true;
+      case "setDeviceProfile":
+        await this.emulationFor(entry).setDeviceProfile(action.profile);
+        return true;
+      case "setAudioMuted":
+        return this.setEntryAudioMuted(entry, action.muted);
+      case "clearCache":
+        return await this.emulationFor(entry).clearCache();
+      case "togglePreviewWindow":
+        return this.toggleEntryPreviewWindow(entry);
     }
   }
 
@@ -555,6 +588,120 @@ export class BrowserViewManager {
   }
 
   /**
+   * Captures this tile and writes the PNG where main can later reveal it.
+   *
+   * Separate from {@link capturePage}, which hands bytes back for something the
+   * renderer paints. This one is the "save a screenshot" gesture: the file is
+   * the artifact, so the renderer receives only its path and never chooses it.
+   */
+  async saveCapture(
+    windowId: string,
+    input: BrowserViewTileKey,
+  ): Promise<BrowserViewSaveCaptureResult> {
+    // Read the identity BEFORE the capture and the write. Both await, and a tile
+    // can detach or close while they run: looking it up afterwards either throws
+    // - after the PNG is already on disk, so the user has a file and an error -
+    // or answers with whatever surface has since taken this key, labelling the
+    // screenshot as another tile's.
+    const tile = toTileKey(requireSurface(this.requireTile(windowId, input)));
+    const captured = await this.capturePage(windowId, input);
+    const saved = await saveBrowserCapture({
+      bytes: Buffer.from(captured.base64, "base64"),
+      capturedAt: captured.capturedAt,
+    });
+    return {
+      ...tile,
+      path: saved.path,
+      byteLength: saved.byteLength,
+      capturedAt: captured.capturedAt,
+    };
+  }
+
+  /**
+   * Starts recording this tile's page, streaming JPEG frames to the window that
+   * asked. The renderer encodes them: main has no encoder, and the renderer
+   * already has `MediaRecorder`.
+   */
+  startRecording(windowId: string, input: BrowserViewTileKey): boolean {
+    const entry = this.entries.getTile(windowId, input);
+    if (entry === undefined) return false;
+    const recording = this.recordingFor(entry);
+    const startedOn = requireSurface(entry);
+    const startedKeyId = entryKeyId(startedOn);
+    const tile = toTileKey(startedOn);
+    // A recording is a stream addressed to ONE surface in ONE window, fixed when
+    // it started. The entry underneath can detach, move to another window, or be
+    // rebound to a different tile key while it runs, and every frame after that
+    // would be delivered to a surface that did not ask for it - either a tile
+    // now showing something else, or a key no renderer is listening on.
+    const stillOnStartingSurface = (): boolean => {
+      if (!this.entries.isCurrent(entry)) return false;
+      const surface = entry.surface;
+      return surface !== null && entryKeyId(surface) === startedKeyId;
+    };
+    return recording.start(
+      {
+        quality: BROWSER_RECORDING_FRAME_QUALITY,
+        onFrame: (frame) => {
+          if (!stillOnStartingSurface()) {
+            // Stopping rather than dropping the frame: the surface this
+            // recording belongs to is gone, so there is nothing for the
+            // remaining frames to become. `stop` fires `onStopped`, which is
+            // what lets the renderer close the file it has been building.
+            entry.recording?.stop("page-gone");
+            return;
+          }
+          this.send(windowId, RunnerHostEvent.browserViewRecordingFrame, {
+            ...tile,
+            sequence: frame.sequence,
+            width: frame.width,
+            height: frame.height,
+            capturedAtMs: frame.capturedAtMs,
+            jpegBase64: Buffer.from(frame.jpegBytes).toString("base64"),
+          });
+        },
+        onStopped: (reason) => {
+          // Sent to the ORIGINAL window and tile unconditionally, including when
+          // the surface has moved on: this is the event the renderer's encoder
+          // is waiting for, and withholding it leaks the encoder and loses a
+          // recording the user made.
+          this.send(windowId, RunnerHostEvent.browserViewRecordingStopped, {
+            ...tile,
+            reason,
+          });
+        },
+      },
+      Date.now(),
+    );
+  }
+
+  stopRecording(windowId: string, input: BrowserViewTileKey): boolean {
+    const entry = this.entries.getTile(windowId, input);
+    if (entry === undefined) return false;
+    if (entry.recording === null || !entry.recording.isRecording()) return false;
+    entry.recording.stop("requested");
+    return true;
+  }
+
+  private recordingFor(entry: BrowserViewEntry): BrowserPageRecording {
+    if (entry.recording !== null) return entry.recording;
+    const recording = new BrowserPageRecording(entry.webContents);
+    entry.recording = recording;
+    return recording;
+  }
+
+  private requireTile(
+    windowId: string,
+    input: BrowserViewTileKey,
+  ): BrowserViewEntry {
+    const entry = this.entries.getTile(windowId, input);
+    if (entry === undefined) {
+      throw new Error("Browser view tile is not available for capture");
+    }
+    return entry;
+  }
+
+  /**
    * What "clear cookies for this site" would clear for one tile: the
    * registrable domain of the page it is on. `null` refuses the action, for
    * the three reasons it must be refused - the tile is gone, it is not on an
@@ -574,21 +721,17 @@ export class BrowserViewManager {
     return registrableDomainForUrl(entry.currentUrl);
   }
 
-  getDebugSnapshot(
+  async getDebugSnapshot(
     windowId: string,
     input: BrowserViewTileKey,
-  ): BrowserViewDebugSnapshot {
+  ): Promise<BrowserViewDebugSnapshot> {
     const entry = this.entries.getTile(windowId, input);
     if (entry === undefined) {
-      return {
-        ...input,
-        consoleEntries: [],
-        networkEntries: [],
-      };
+      return { ...input, ...EMPTY_DEBUG_SNAPSHOT_DATA };
     }
     return {
       ...toTileKey(requireSurface(entry)),
-      ...this.readDebugSnapshot(entry),
+      ...(await this.readDebugSnapshot(entry)),
     };
   }
 
@@ -801,6 +944,110 @@ export class BrowserViewManager {
     entry.webContents.reload();
   }
 
+  /**
+   * The `hardReload` action. Status moves to `loading` exactly as an ordinary
+   * reload does - what differs is on the wire, not in the tile.
+   */
+  private reloadEntryIgnoringCache(entry: BrowserViewEntry): void {
+    this.setStatus(entry, "loading", null);
+    entry.webContents.reloadIgnoringCache();
+  }
+
+  /**
+   * Hands the tile's CURRENT address to the OS browser, read from the guest
+   * rather than taken from the caller: the renderer's copy of the URL lags a
+   * redirect, and the address the user is looking at is the one they mean.
+   *
+   * Routed through the external-open gate so the scheme allow-list applies -
+   * a guest can navigate itself somewhere no `shell.openExternal` should go.
+   */
+  private async openEntryExternally(entry: BrowserViewEntry): Promise<boolean> {
+    const url = this.readEntryUrl(entry) ?? entry.requestedUrl;
+    if (url.length === 0) return false;
+    return await safelyOpenExternal(url);
+  }
+
+  /**
+   * Opens the always-on-top window on this tile's page, or closes the one that
+   * is already up. Toggling in main is what keeps the menu row and the window's
+   * own close button from disagreeing about whether one exists.
+   */
+  private toggleEntryPreviewWindow(entry: BrowserViewEntry): boolean {
+    const existing = entry.previewWindow;
+    if (existing !== null && !existing.isDestroyed()) {
+      existing.close();
+      entry.previewWindow = null;
+      this.emitStatus(entry);
+      return true;
+    }
+    const url = this.readEntryUrl(entry) ?? entry.requestedUrl;
+    if (!isPreviewableUrl(url)) return false;
+    // Declared before the call so the callback can recognise its OWN window.
+    // `closed` arrives from the platform after `close()` returns, so a user who
+    // closes and immediately reopens has a live replacement by the time the old
+    // window's event lands - and a callback that cleared the field
+    // unconditionally cleared the REPLACEMENT, leaving a window on screen that
+    // the manager could no longer toggle, close, or tear down with the entry.
+    let opened: BrowserPreviewWindowHandle | null = null;
+    opened = createBrowserPreviewWindow({
+      url,
+      // Resolved rather than stored so the window lands in exactly the jar
+      // its tile is using, private sessions included.
+      partition: partitionForProfile(entry.profile, entry.identity.key.sessionId),
+      onClosed: () => {
+        // The window can go without us: its own close button, or the app
+        // quitting. Clearing the handle here is what lets the next toggle open
+        // a fresh one rather than calling into a destroyed window.
+        if (entry.previewWindow === opened) entry.previewWindow = null;
+        this.emitStatus(entry);
+      },
+    });
+    entry.previewWindow = opened;
+    this.emitStatus(entry);
+    return true;
+  }
+
+  private setEntryAudioMuted(
+    entry: BrowserViewEntry,
+    muted: boolean,
+  ): boolean {
+    try {
+      entry.webContents.setAudioMuted(muted);
+    } catch (error) {
+      log.warn("[browser-view] audio mute failed", describeLogError(error));
+      return false;
+    }
+    this.emitStatus(entry);
+    return true;
+  }
+
+  private readEntryUrl(entry: BrowserViewEntry): string | null {
+    try {
+      const url = entry.webContents.getURL();
+      return url.length === 0 ? null : url;
+    } catch (error) {
+      log.debug("[browser-view] guest URL unreadable", describeLogError(error));
+      return null;
+    }
+  }
+
+  /**
+   * This tile's emulation projection, minted on first use.
+   *
+   * Sends through the entry's debug session so emulation shares the one CDP
+   * attachment the tile already has - a second debugger on the same guest is
+   * not available to take, and the annotation host and agent dispatch are
+   * already on that one.
+   */
+  private emulationFor(entry: BrowserViewEntry): BrowserPageEmulation {
+    if (entry.emulation !== null) return entry.emulation;
+    const emulation = new BrowserPageEmulation((method, params) =>
+      this.debugSessions.ensure(entry).sendCommand(method, params, undefined),
+    );
+    entry.emulation = emulation;
+    return emulation;
+  }
+
   private moveEntryInHistory(
     entry: BrowserViewEntry,
     direction: "back" | "forward",
@@ -949,14 +1196,11 @@ export class BrowserViewManager {
     if (this.pip.isCapturing(entry)) this.pip.stop();
   }
 
-  private readDebugSnapshot(
+  private async readDebugSnapshot(
     entry: BrowserViewEntry,
-  ): BrowserViewDebugSnapshotData {
+  ): Promise<BrowserViewDebugSnapshotData> {
     return (
-      entry.debugSession?.snapshot() ?? {
-        consoleEntries: [],
-        networkEntries: [],
-      }
+      (await entry.debugSession?.snapshot()) ?? EMPTY_DEBUG_SNAPSHOT_DATA
     );
   }
 
@@ -988,6 +1232,7 @@ export class BrowserViewManager {
       registrationId: entry.identity.registrationId,
       url: entry.currentUrl,
       title: entry.currentTitle === "" ? null : entry.currentTitle,
+      faviconUrl: entry.currentFaviconUrl,
       status: entry.status,
       reason: entry.statusReason,
       canGoBack: readings.canGoBack,
@@ -1100,6 +1345,17 @@ export class BrowserViewManager {
     entry.annotationSession?.dispose("tile-close");
     entry.annotationSession = null;
     this.pip.forget(entry);
+    // A recording is a timer holding this entry's webContents. Stopping it here
+    // rather than letting it fault on the next frame gives the renderer's
+    // encoder a terminal event it can finish a file from.
+    entry.recording?.stop("page-gone");
+    entry.recording = null;
+    // The preview window is a SEPARATE always-on-top window on this entry's
+    // page. Nothing else closes it, and once the entry is gone the manager has
+    // no handle left to toggle it with, so it would outlive its tile as a window
+    // pinned above everything with no way to reach it but its own close button.
+    entry.previewWindow?.close();
+    entry.previewWindow = null;
     entry.debugSession?.dispose();
     entry.debugSession = null;
     this.releaseRendererGuest(
@@ -1182,6 +1438,36 @@ function readNavigationReadings(webContents: BrowserViewWebContents): {
  * URL or a `file://` tile has no site whose logins could be cleared.
  */
 function isHttpBrowserUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Quantizer for a recorded frame. Higher than the live mirror's: a recording is
+ * watched afterwards and often scrubbed, where compression artifacts on text are
+ * exactly what someone is trying to read.
+ */
+const BROWSER_RECORDING_FRAME_QUALITY = 88;
+
+/** What a tile with no debug session has to report. */
+const EMPTY_DEBUG_SNAPSHOT_DATA: BrowserViewDebugSnapshotData = {
+  consoleEntries: [],
+  networkEntries: [],
+  accessibilityNodes: [],
+};
+
+/**
+ * Whether an address is worth opening a second window on.
+ *
+ * `about:blank` and the internal start page are the two a tile legitimately
+ * sits on with nothing to preview, and a non-web scheme in a window with no
+ * chrome would be a dead end the user cannot navigate out of.
+ */
+function isPreviewableUrl(url: string): boolean {
   try {
     const protocol = new URL(url).protocol;
     return protocol === "http:" || protocol === "https:";

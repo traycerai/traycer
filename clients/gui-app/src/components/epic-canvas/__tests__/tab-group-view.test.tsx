@@ -2176,6 +2176,7 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     sessionId: "sess-1",
     tabId: "browser-tab-1",
     viewportPreset: "responsive",
+    zoomFactor: 1,
   };
 
   it("writes a reveal request and switches to the Files panel for a workspace-file tab", () => {

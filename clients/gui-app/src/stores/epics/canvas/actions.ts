@@ -19,6 +19,7 @@
  * `instanceId`; dedup and rename key on the payload's content `id`.
  */
 import { v4 as uuidv4 } from "uuid";
+import { readBrowserZoomFactor } from "@/lib/browser-view/browser-tile-defaults";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import type {
@@ -1536,6 +1537,33 @@ export function updateBrowserTileViewportPreset(
     tilesByInstanceId: {
       ...state.tilesByInstanceId,
       [tileInstanceId]: { ...current, viewportPreset },
+    },
+  };
+}
+
+/**
+ * Records the zoom a browser tile was left at.
+ *
+ * Clamped on the way in through the same reader the persisted document is
+ * parsed with, so a value written here and a value read back can never
+ * disagree, and a caller cannot store a factor main would refuse.
+ */
+export function updateBrowserTileZoomFactor(
+  state: EpicCanvasState,
+  tileInstanceId: string,
+  zoomFactor: number,
+): EpicCanvasState {
+  const current = state.tilesByInstanceId[tileInstanceId];
+  if (current === undefined || !isBrowserSessionTileRef(current)) {
+    return state;
+  }
+  const next = readBrowserZoomFactor(zoomFactor);
+  if (current.zoomFactor === next) return state;
+  return {
+    ...state,
+    tilesByInstanceId: {
+      ...state.tilesByInstanceId,
+      [tileInstanceId]: { ...current, zoomFactor: next },
     },
   };
 }

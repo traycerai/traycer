@@ -1,6 +1,7 @@
 import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
 import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
-import { log } from "../../app/logger";
+import { describeLogError, log } from "../../app/logger";
+import { readFaviconDataUrl } from "./browser-favicon-source";
 import { guestNavigationGuards } from "../browser-guest-navigation";
 import type { BrowserViewWebContents } from "../browser-view-port";
 import type { BrowserSessionProfile } from "../browser-session";
@@ -102,6 +103,9 @@ export class BrowserViewEntryFactory {
       guestKey: nativeGuestKey(identity.key),
       identity,
       profile,
+      emulation: null,
+      previewWindow: null,
+      recording: null,
       webContents,
       listeners: {
         "before-input-event": (event: Event, input: Input): void => {
@@ -143,6 +147,13 @@ export class BrowserViewEntryFactory {
           entry.currentTitle = entry.webContents.getTitle();
           this.emitStatus(entry);
         },
+        "page-favicon-updated": (_event: Event, urls: string[]): void => {
+          if (entry.internalNavigation) return;
+          const next = firstWebFaviconUrl(urls);
+          if (next === entry.declaredFaviconUrl) return;
+          entry.declaredFaviconUrl = next;
+          this.adoptFavicon(entry, next);
+        },
         "render-process-gone": (
           _event: Event,
           details: RenderProcessGoneDetails,
@@ -157,6 +168,8 @@ export class BrowserViewEntryFactory {
       requestedUrl,
       currentUrl: requestedUrl,
       currentTitle: "",
+      currentFaviconUrl: null,
+      declaredFaviconUrl: null,
       status: "loading",
       statusReason: null,
       findState: {
@@ -195,6 +208,30 @@ export class BrowserViewEntryFactory {
     return entry;
   }
 
+  /**
+   * Reads the page's declared icon into a `data:` URL and publishes it.
+   *
+   * The read happens in the guest's own session, so the request carries the
+   * page's authority rather than the app's; see `readFaviconDataUrl`. It races
+   * navigation by nature, so the result is dropped unless the page still wants
+   * the same icon - otherwise a slow read for a document already replaced would
+   * land on top of the current one's.
+   */
+  private adoptFavicon(entry: BrowserViewEntry, url: string | null): void {
+    if (url === null) {
+      entry.currentFaviconUrl = null;
+      this.emitStatus(entry);
+      return;
+    }
+    void readFaviconDataUrl({ session: entry.webContents.session, url }).then(
+      (dataUrl) => {
+        if (entry.declaredFaviconUrl !== url) return;
+        entry.currentFaviconUrl = dataUrl;
+        this.emitStatus(entry);
+      },
+    );
+  }
+
   private handleViewStartNavigation(
     entry: BrowserViewEntry,
     isInPlace: boolean,
@@ -221,6 +258,10 @@ export class BrowserViewEntryFactory {
     entry.currentUrl = url;
     entry.requestedUrl = url;
     entry.currentTitle = entry.webContents.getTitle();
+    // A new document has not declared its icon yet, and may never; keeping the
+    // previous one would read as a tile that navigated nowhere.
+    entry.currentFaviconUrl = null;
+    entry.declaredFaviconUrl = null;
     this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     entry.certificateError = null;
     this.setStatus(entry, "ready", null);
@@ -229,6 +270,19 @@ export class BrowserViewEntryFactory {
       .ensure(entry)
       .enableAfterCommit()
       .catch(() => undefined);
+    // A cross-document navigation may have taken the tile's overrides with it
+    // (Chromium scopes them to the renderer), so a tile that HAS emulation
+    // intent restates it here. A tile with none has no session to disturb, and
+    // is deliberately left alone rather than attached to.
+    void entry.emulation?.reapply().catch((error: unknown) => {
+      // The CDP session can be gone by the time this lands - a tile closed or
+      // crashed during the commit - and the override dies with it either way.
+      // Logged rather than rethrown: the navigation itself succeeded, and an
+      // unhandled rejection here would fault a path the user completed.
+      log.debug("[browser-view] emulation reapply after commit failed", {
+        ...describeLogError(error),
+      });
+    });
   }
 
   private handleInPageNavigation(
@@ -335,3 +389,29 @@ function browserZoomStepForKey(key: string): 1 | -1 | 0 | null {
 const BROWSER_ZOOM_FACTORS: readonly number[] = [
   0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2,
 ];
+
+/**
+ * The first icon a page declared that is safe to hand a renderer `<img>`.
+ *
+ * A page controls this list, so the scheme is checked rather than assumed:
+ * `data:` and `javascript:` have no business reaching an image element in the
+ * app's own document, and a bounded length keeps a pathological URL out of the
+ * status frame.
+ */
+export function firstWebFaviconUrl(urls: readonly string[]): string | null {
+  for (const candidate of urls) {
+    if (typeof candidate !== "string") continue;
+    if (candidate.length > MAX_FAVICON_URL_LENGTH) continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      continue;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
+    return candidate;
+  }
+  return null;
+}
+
+const MAX_FAVICON_URL_LENGTH = 2_048;

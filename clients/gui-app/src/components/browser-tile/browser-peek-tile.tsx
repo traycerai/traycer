@@ -175,6 +175,8 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     disabled: client === null || readOnly,
     pageZoom: 1,
     native: false,
+    // No local guest to emulate: this placement mirrors a page from elsewhere.
+    emulateDevice: null,
     registrationId: null,
   });
   const { tileRef, viewportRef } = session.refs;

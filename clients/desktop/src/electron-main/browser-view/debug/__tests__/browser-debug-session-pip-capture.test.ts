@@ -23,6 +23,7 @@ function startCapture(
     maxWidth: CAPTURE_MAX_WIDTH,
     maxHeight: CAPTURE_MAX_HEIGHT,
     quality: CAPTURE_QUALITY,
+    deviceScaleFactor: 2,
     onFrame: (payload) => {
       frames.push(payload);
     },
@@ -36,7 +37,7 @@ function startedPayload(): PipCaptureIpcPayload {
       hasBinaryPayload: false,
       frameWidth: CAPTURE_MAX_WIDTH,
       frameHeight: CAPTURE_MAX_HEIGHT,
-      deviceScaleFactor: 1,
+      deviceScaleFactor: 2,
     },
     jpegBytes: null,
   };
@@ -75,7 +76,7 @@ describe("BrowserDebugSession PiP capture", () => {
     harness.session.stopPipCapture();
   });
 
-  it("captures a fresh JPEG on the next polling interval", async () => {
+  it("captures a fresh JPEG on the next measured interval", async () => {
     vi.useFakeTimers();
     const harness = createHarness();
     try {
@@ -83,7 +84,10 @@ describe("BrowserDebugSession PiP capture", () => {
       await Promise.resolve();
       harness.webContents.setCaptureBytes(Uint8Array.from([4, 5, 6]));
 
-      await vi.advanceTimersByTimeAsync(200);
+      // The cadence is measured now rather than fixed: a capture that costs
+      // nothing under fake timers is paced at the floor, so advancing by the
+      // floor is what produces exactly one more frame.
+      await vi.advanceTimersByTimeAsync(40);
 
       expect(harness.webContents.captureCount).toBe(2);
       expect(harness.frames[2]).toEqual({

@@ -4,7 +4,10 @@ import type {
   BrowserCdpResult,
   BrowserCdpTarget,
 } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserViewDebugSnapshotData } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserViewAccessibilityNode,
+  BrowserViewDebugSnapshotData,
+} from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserViewDebugger,
   BrowserViewWebContents,
@@ -14,6 +17,10 @@ import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch"
 import { BrowserDebugTelemetry } from "./browser-debug-telemetry";
 import { BrowserFrameRoutes } from "./browser-frame-routes";
 import { BrowserPipCapture } from "./browser-pip-capture";
+import {
+  ACCESSIBILITY_TREE_REQUEST_DEPTH,
+  projectAccessibilityTree,
+} from "./browser-accessibility-snapshot";
 import type { BrowserPipCaptureStartInput } from "./browser-pip-capture";
 import { isRecord, recordValue } from "../guards";
 
@@ -258,8 +265,67 @@ export class BrowserDebugSession {
     return this.pipCapture.isCapturing();
   }
 
-  snapshot(): BrowserViewDebugSnapshotData {
-    return this.telemetry.snapshot();
+  /**
+   * Console, network and the page's interactive shape in one answer.
+   *
+   * The accessibility read is best-effort and is folded in rather than awaited
+   * as a precondition: a detached debugger or a page mid-navigation should cost
+   * the caller the tree, not the console and network entries it already has.
+   */
+  async snapshot(): Promise<BrowserViewDebugSnapshotData> {
+    const observed = this.telemetry.snapshot();
+    return {
+      ...observed,
+      accessibilityNodes: await this.readAccessibilityNodes(),
+    };
+  }
+
+  private async readAccessibilityNodes(): Promise<
+    readonly BrowserViewAccessibilityNode[]
+  > {
+    if (!this.isReady()) return [];
+    let enabled = false;
+    try {
+      // `Accessibility.enable` is idempotent and required before a tree read.
+      await this.sendCommand("Accessibility.enable", {}, undefined);
+      enabled = true;
+      const tree = await this.sendCommand(
+        "Accessibility.getFullAXTree",
+        // Bounded at the REQUEST. Without a depth the whole tree is built and
+        // serialized across the debugger boundary before the projection can
+        // discard it, so a large document pays for every node to produce the two
+        // hundred that are kept. The bound is well past what is reported, since
+        // the nodes between are mostly scaffolding the projection drops.
+        { depth: ACCESSIBILITY_TREE_REQUEST_DEPTH },
+        undefined,
+      );
+      return projectAccessibilityTree(tree);
+    } catch (error) {
+      log.debug("[browser-view] accessibility tree unavailable", {
+        ...describeLogError(error),
+      });
+      return [];
+    } finally {
+      // Turned back off. While the domain is on, Blink builds and MAINTAINS a
+      // full accessibility tree for every page change - a standing cost on a
+      // page the user is still using, charged for a snapshot already taken.
+      if (enabled) await this.disableAccessibilityDomain();
+    }
+  }
+
+  /**
+   * Its own method so the `finally` above stays a single statement, and because a
+   * failure here must not replace the snapshot's own outcome: the read has
+   * already succeeded or failed on its own terms by this point.
+   */
+  private async disableAccessibilityDomain(): Promise<void> {
+    try {
+      await this.sendCommand("Accessibility.disable", {}, undefined);
+    } catch (error) {
+      log.debug("[browser-view] accessibility disable failed", {
+        ...describeLogError(error),
+      });
+    }
   }
 
   dispose(): void {

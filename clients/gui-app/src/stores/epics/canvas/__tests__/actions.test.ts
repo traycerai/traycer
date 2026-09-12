@@ -1098,6 +1098,7 @@ describe("updateBrowserTileViewportPreset", () => {
       sessionId: "s",
       tabId: "t",
       viewportPreset: "responsive",
+      zoomFactor: 1,
     };
     const state = openPinned(createEmptyCanvas(), pointer);
     const next = updateBrowserTileViewportPreset(

@@ -3,7 +3,11 @@ import {
   BROWSER_VIEW_VIEWPORT_PRESET_IDS,
   type BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
-import { DEFAULT_BROWSER_VIEWPORT_PRESET } from "@/lib/browser-view/browser-tile-defaults";
+import {
+  DEFAULT_BROWSER_VIEWPORT_PRESET,
+  DEFAULT_BROWSER_ZOOM_FACTOR,
+  readBrowserZoomFactor,
+} from "@/lib/browser-view/browser-tile-defaults";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { TILE_KIND_BROWSER_SESSION } from "../tile-kinds";
 import type { BrowserSessionTileRef } from "../types";
@@ -60,6 +64,7 @@ export function makeBrowserSessionTileRef(args: {
     sessionId: args.sessionId,
     tabId: args.tabId,
     viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
+    zoomFactor: DEFAULT_BROWSER_ZOOM_FACTOR,
   };
 }
 
@@ -86,6 +91,9 @@ function parseBrowserSessionTileRef(
     sessionId: value.sessionId,
     tabId: value.tabId,
     viewportPreset: value.viewportPreset,
+    // Absent on a tile persisted before zoom was remembered, which reads as
+    // "never zoomed" rather than as an unparseable ref.
+    zoomFactor: readBrowserZoomFactor(value.zoomFactor),
   };
 }
 
@@ -101,6 +109,7 @@ function serializeBrowserSessionTileRef(
     sessionId: ref.sessionId,
     tabId: ref.tabId,
     viewportPreset: ref.viewportPreset,
+    zoomFactor: ref.zoomFactor,
   };
 }
 

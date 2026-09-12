@@ -27,6 +27,8 @@ import type {
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
+  BrowserViewRecordingFrame,
+  BrowserViewRecordingStopped,
 } from "@traycer-clients/shared/platform/browser-view";
 
 /**
@@ -94,6 +96,78 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
+  saveCapture(
+    input: BrowserViewTileKey,
+  ): Promise<import("@traycer-clients/shared/platform/browser-view").BrowserViewSaveCaptureResult> {
+    return Promise.resolve({
+      ...input,
+      path: "/captures/page.png",
+      byteLength: 0,
+      capturedAt: 0,
+    });
+  }
+
+  revealCapture(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  /**
+   * The recording listeners, kept rather than dropped.
+   *
+   * The GUI finishes its encoder when `onRecordingStopped` fires, so a fake that
+   * discarded the listener could not reach that path at all: a test could start
+   * and stop a recording and never observe the only step that produces a file.
+   */
+  readonly recordingFrameListeners = new Set<
+    (frame: BrowserViewRecordingFrame) => void
+  >();
+  readonly recordingStoppedListeners = new Set<
+    (change: BrowserViewRecordingStopped) => void
+  >();
+  readonly recordingCalls: Array<"start" | "stop"> = [];
+
+  startRecording(): Promise<boolean> {
+    this.recordingCalls.push("start");
+    return Promise.resolve(true);
+  }
+
+  stopRecording(): Promise<boolean> {
+    this.recordingCalls.push("stop");
+    return Promise.resolve(true);
+  }
+
+  onRecordingFrame(
+    listener: (frame: BrowserViewRecordingFrame) => void,
+  ): { dispose: () => void } {
+    this.recordingFrameListeners.add(listener);
+    return {
+      dispose: () => {
+        this.recordingFrameListeners.delete(listener);
+      },
+    };
+  }
+
+  onRecordingStopped(
+    listener: (change: BrowserViewRecordingStopped) => void,
+  ): { dispose: () => void } {
+    this.recordingStoppedListeners.add(listener);
+    return {
+      dispose: () => {
+        this.recordingStoppedListeners.delete(listener);
+      },
+    };
+  }
+
+  /** Delivers one frame, as main would. */
+  emitRecordingFrame(frame: BrowserViewRecordingFrame): void {
+    for (const listener of [...this.recordingFrameListeners]) listener(frame);
+  }
+
+  /** Ends the recording, which is what makes the GUI close its file. */
+  emitRecordingStopped(change: BrowserViewRecordingStopped): void {
+    for (const listener of [...this.recordingStoppedListeners]) listener(change);
+  }
+
   capturePage(
     input: BrowserViewTileKey,
   ): Promise<BrowserViewCapturePageResult> {
@@ -114,6 +188,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
       ...input,
       consoleEntries: [],
       networkEntries: [],
+      accessibilityNodes: [],
     });
   }
 

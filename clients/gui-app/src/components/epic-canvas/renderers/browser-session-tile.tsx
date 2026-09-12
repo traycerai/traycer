@@ -57,6 +57,9 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
   const persistViewportPresetInTab = useEpicCanvasStore(
     (state) => state.updateBrowserTileViewportPresetInTab,
   );
+  const persistZoomFactorInTab = useEpicCanvasStore(
+    (state) => state.updateBrowserTileZoomFactorInTab,
+  );
 
   // `placement` and `node` must keep a stable identity across renders: the
   // native surface memoizes its tile key and binding id on them, and the tile
@@ -78,6 +81,7 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
       sessionId: props.node.sessionId,
       tabId: props.node.tabId,
       viewportPreset: props.node.viewportPreset,
+      zoomFactor: props.node.zoomFactor,
     }),
     [
       props.node.instanceId,
@@ -85,6 +89,7 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
       props.node.sessionId,
       props.node.tabId,
       props.node.viewportPreset,
+      props.node.zoomFactor,
     ],
   );
 
@@ -97,6 +102,13 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
       );
     },
     [persistViewportPresetInTab, props.viewTabId, props.node.instanceId],
+  );
+
+  const persistZoomFactor = useCallback(
+    (factor: number) => {
+      persistZoomFactorInTab(props.viewTabId, props.node.instanceId, factor);
+    },
+    [persistZoomFactorInTab, props.viewTabId, props.node.instanceId],
   );
 
   /** Open a tab in this tile's session and place it beside this tile. */
@@ -198,6 +210,7 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
       pageSessionId={pageSessionIdForCanvasTile(props.node.id)}
       onRequestClose={closeCanvasTile}
       persistViewportPreset={persistViewportPreset}
+      persistZoomFactor={persistZoomFactor}
       onOpenLinkInNewTile={onOpenLinkInNewTile}
       // The canvas has no answer of its own to "new tab" beyond opening one
       // beside this tile, which is what the link path already does.

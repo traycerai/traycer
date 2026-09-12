@@ -7,6 +7,7 @@ import type {
   BrowserSessionsStreamEventEnvelope,
   BrowserViewBridge,
   BrowserViewCapturePageResult,
+  BrowserViewSaveCaptureResult,
   BrowserViewCertificateErrorChange,
   BrowserViewDebugSnapshot,
   BrowserViewDownloadChange,
@@ -101,6 +102,29 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewCapturePage,
           input,
         ) as Promise<BrowserViewCapturePageResult>,
+      saveCapture: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewSaveCapture,
+          input,
+        ) as Promise<BrowserViewSaveCaptureResult>,
+      revealCapture: (path) =>
+        ipcRenderer.invoke(RunnerHostInvoke.browserViewRevealCapture, {
+          path,
+        }) as Promise<boolean>,
+      startRecording: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewStartRecording,
+          input,
+        ) as Promise<boolean>,
+      stopRecording: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewStopRecording,
+          input,
+        ) as Promise<boolean>,
+      onRecordingFrame: (listener) =>
+        subscribe(RunnerHostEvent.browserViewRecordingFrame, listener),
+      onRecordingStopped: (listener) =>
+        subscribe(RunnerHostEvent.browserViewRecordingStopped, listener),
       getDebugSnapshot: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewGetDebugSnapshot,

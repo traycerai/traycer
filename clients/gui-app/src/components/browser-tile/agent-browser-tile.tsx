@@ -57,6 +57,7 @@ interface ElectronTabSurfaceNode {
   readonly sessionId: string;
   readonly url: string;
   readonly viewportPreset: BrowserViewViewportPresetId;
+  readonly zoomFactor: number;
 }
 
 interface ElectronTabSurfaceProps {
@@ -70,6 +71,12 @@ interface ElectronTabSurfaceProps {
   readonly persistViewportPreset:
     | ((preset: BrowserViewViewportPresetId) => void)
     | null;
+  /**
+   * Writer for this tile's remembered zoom, or `null` for a placement that
+   * remembers nothing (the landing panel). The chrome still applies zoom for
+   * the tile's life either way.
+   */
+  readonly persistZoomFactor: ((factor: number) => void) | null;
   readonly onOpenLinkInNewTile:
     | ((url: string, disposition: "foreground" | "background") => void)
     | null;
@@ -150,6 +157,16 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
+  /**
+   * How many zoom reports main has sent for this tile.
+   *
+   * A count, not a flag: the 100 above is a placeholder that reads as a real
+   * value, and a REPLACED guest reports its own default before the remembered
+   * zoom reaches it, so the persist gate has to be able to tell a fresh report
+   * from a repeated value.
+   */
+  const [zoomReports, setZoomReports] = useState(0);
+  const [faviconUrl, setFaviconUrl] = useState<string | null>(null);
   const viewport = useBrowserViewport({
     hostId,
     sessionId: props.node.sessionId,
@@ -160,6 +177,13 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     pageZoom: zoomPercent / 100,
     native: true,
     registrationId: props.binding.registrationId,
+    // Picking a named device should make the page BELIEVE it is that device, not
+    // merely be that wide. Routed through the tile because the desktop control
+    // channel lives here.
+    // Returns the promise rather than swallowing it: the caller records what the
+    // guest has been told, and it must only record what actually landed.
+    emulateDevice: (profile) =>
+      props.binding.control({ kind: "setDeviceProfile", profile }),
   });
   const claimViewport = viewport.claim;
   const [surfaceAttachment, setSurfaceAttachment] =
@@ -258,7 +282,14 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       if (
         change.hostId !== props.binding.hostId ||
         change.sessionId !== props.binding.sessionId ||
-        change.tabId !== props.binding.tabId
+        change.tabId !== props.binding.tabId ||
+        // The REGISTRATION too, not just the tab. A report already in flight when
+        // a guest is replaced still names the tab it belonged to, so the tab
+        // identity alone lets a dead guest's last word land as the new one's
+        // state - its zoom counted as a fresh report, its favicon adopted, and
+        // with the new guest's persistence gate open its default zoom written
+        // over the value being restored.
+        change.registrationId !== props.binding.registrationId
       ) {
         return;
       }
@@ -270,6 +301,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         setCanGoBack(change.canGoBack);
         setCanGoForward(change.canGoForward);
         setZoomPercent(change.zoomPercent);
+        setZoomReports((count) => count + 1);
+        setFaviconUrl(change.faviconUrl);
       }
       // Every fresh loading report is progress: rearm the stall clock.
       if (change.status === "loading") {
@@ -290,6 +323,10 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     props.binding.hostId,
     props.binding.sessionId,
     props.binding.tabId,
+    // Re-subscribes when the guest is replaced, so the guard compares against the
+    // registration this tile actually holds rather than the one it was mounted
+    // with.
+    props.binding.registrationId,
   ]);
 
   /**
@@ -362,6 +399,13 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     canGoBack,
     canGoForward,
     zoomPercent,
+    zoomReports,
+    faviconUrl,
+    persistZoomFactor: (factor) => {
+      props.persistZoomFactor?.(factor);
+    },
+    initialZoomFactor: props.node.zoomFactor,
+    registrationId: props.binding.registrationId,
     onAttemptedUrl: latchAttemptedUrl,
   });
 
