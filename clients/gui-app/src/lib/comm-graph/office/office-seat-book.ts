@@ -36,6 +36,31 @@ import {
 } from "@/lib/comm-graph/office/office-types";
 import type { OfficeProjector } from "@/lib/comm-graph/office/views/office-view";
 
+/**
+ * WHETHER THE BOOK IS TAKING UP A NEW LAYOUT OR A NEW OFFICE.
+ *
+ * `"keep"` is every ordinary adoption: the plan was handed this book's
+ * occupancy and honoured it, so the book honours the plan back and nobody is
+ * moved out of a seat that still exists.
+ *
+ * `"fresh"` is for a plan that was made with no `previous`, no `occupancy` and
+ * no shortfall - today that is the one the scene makes when the event feed
+ * finally settles under a floor drawn without it. Keeping seats against such a
+ * plan is not stability, it is disagreement: the office was re-planned
+ * precisely because the assignment it grew from was provisional, and the quiet
+ * stack's cubby ids outlive a re-plan, so `"keep"` left the whole population
+ * sitting in cubbies the new plan had given nobody while `layout.desks` said
+ * desk. Everything downstream - `effectiveSeat`, `whereabouts`, the character
+ * positions, the directory - reads the book, so the book was the office and
+ * the plan was decoration. Worse, the woken lead then claimed a reserve, its
+ * shortfall reached `needsCapacity`, and the next sync planned the floor a
+ * third time.
+ *
+ * A required parameter rather than a default, so every call site says which
+ * kind of adoption it is making.
+ */
+export type OfficeSeatAdoption = "keep" | "fresh";
+
 /** Where a waking agent would LIKE to sit: beside its team, on its own floor. */
 export interface OfficeSeatPreference {
   readonly roomId: string | null;
@@ -104,10 +129,15 @@ export class OfficeSeatBook {
    * An UNSTABLE layout is the exception: Floor and Campus re-pack from
    * scratch, so `layout.desks` is the truth for everybody and the return value
    * is whoever has to get up and walk to a new chair.
+   *
+   * `"fresh"` is the other exception, and it is about the PLAN rather than the
+   * view: a layout that was made from scratch has nothing to be stable
+   * against, so the book takes it whole. See the note on the mode.
    */
   adopt(
     layout: OfficeLayout,
     agentIds: ReadonlyArray<string>,
+    mode: OfficeSeatAdoption,
   ): ReadonlyArray<string> {
     const wanted = new Set(agentIds);
     const before = new Map<string, OfficeTilePos>();
@@ -116,6 +146,20 @@ export class OfficeSeatBook {
       if (seat !== null) before.set(agentId, seat.chairTile);
     }
     this.forgetAllBut(wanted);
+    // BEFORE `reassign`, which is the whole of it: with nothing assigned,
+    // nothing claimed and nobody owed a seat, the stable branch below finds no
+    // seat to keep for anyone and every agent takes the desk this plan gave
+    // it. Read against `layout.stable` and not instead of it - a stable view
+    // planned from scratch still has stable GEOMETRY, and the next ordinary
+    // adoption goes on honouring it.
+    //
+    // The chairs `before` are already captured above, so the caller still
+    // learns who moved and its characters still walk.
+    if (mode === "fresh") {
+      this.seatIdOf.clear();
+      this.claims.clear();
+      this.claimShortfall.clear();
+    }
     this.layout = layout;
     this.seatIdsInOrder = Array.from(layout.seats.keys()).sort(compareIds);
     this.known = [...agentIds].sort(compareIds);

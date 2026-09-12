@@ -2616,10 +2616,12 @@ export class OfficeScene {
         this.installLayout(relettered);
         // The book holds the layout it last adopted, and a re-lettering is a
         // new object with the same seats - so it takes this one up too rather
-        // than answering out of a plan that no longer exists.
+        // than answering out of a plan that no longer exists. `"keep"`, of
+        // course: nothing moved, only the lettering changed.
         this.seats.adopt(
           relettered,
           agents.map((agent) => agent.id),
+          "keep",
         );
       }
       this.nameSignature = names;
@@ -2667,9 +2669,17 @@ export class OfficeScene {
     const projectorBefore = this.projectorOrNull;
     this.installLayout(planned);
     this.applyShift(planned.shiftFromPrevious, projectorBefore);
+    // FRESH on the settle, for the same reason the plan above was made from
+    // scratch: a book that kept its seats against a plan made without them
+    // would be the office, and the plan decoration. The quiet stack's cubby
+    // ids outlive a re-plan, so `"keep"` left agents sitting in cubbies this
+    // plan gave nobody - and the seats it did give them went unclaimed, which
+    // put their owners in the shortfall and planned the floor again on every
+    // sync after.
     const moved = this.seats.adopt(
       planned,
       agents.map((agent) => agent.id),
+      settling ? "fresh" : "keep",
     );
     // Before reconciling, so a newly spawned walker is not immediately
     // re-pathed to the destination it was just given. On a STABLE layout the
