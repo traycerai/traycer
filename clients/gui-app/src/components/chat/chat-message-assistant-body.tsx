@@ -1,5 +1,6 @@
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
 import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
+import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
 import {
   WorkingVerbContext,
   pickWorkingVerb,
@@ -199,42 +200,44 @@ export function AssistantMessageBody({
         }
         if (item.kind === "promoted_subagent") {
           return (
-            <SubagentSegment
-              key={item.id}
-              id={item.id}
-              name={item.segment.name}
-              agentType={item.segment.agentType}
-              task={item.segment.task}
-              progressUpdates={item.segment.progressUpdates}
-              result={item.segment.result}
-              isStreaming={item.segment.isStreaming}
-              endState={item.segment.endState}
-              stopped={item.segment.stopped}
-              startedAt={item.segment.startedAt}
-              durationMs={item.segment.durationMs}
-              workflowMeta={item.segment.workflowMeta}
-              nested={item.segment.children}
-              variant="promoted"
-            />
+            <ChatBlockNavigationAnchor key={item.id} blockId={item.segment.id}>
+              <SubagentSegment
+                id={item.id}
+                name={item.segment.name}
+                agentType={item.segment.agentType}
+                task={item.segment.task}
+                progressUpdates={item.segment.progressUpdates}
+                result={item.segment.result}
+                isStreaming={item.segment.isStreaming}
+                endState={item.segment.endState}
+                stopped={item.segment.stopped}
+                startedAt={item.segment.startedAt}
+                durationMs={item.segment.durationMs}
+                workflowMeta={item.segment.workflowMeta}
+                nested={item.segment.children}
+                variant="promoted"
+              />
+            </ChatBlockNavigationAnchor>
           );
         }
         return (
-          <AssistantSegment
-            key={item.id}
-            id={item.id}
-            segment={item.segment}
-            backgroundToolBlockIds={backgroundToolBlockIds}
-            nextStepActions={nextStepActions}
-            forkAction={forkAction}
-            interviewDeliveryRetry={interviewDeliveryRetry}
-            // The turn's OWN harness, for an error row that offers to open that
-            // provider's settings. Taken from the row rather than from ambient
-            // app state so the link points at the provider that actually failed,
-            // even when the transcript is scrolled back to a turn from a harness
-            // the chat has since switched away from. `null` on legacy turns with
-            // no metadata; the affordance then falls back to the section root.
-            harnessId={meta?.provider ?? null}
-          />
+          <ChatBlockNavigationAnchor key={item.id} blockId={item.id}>
+            <AssistantSegment
+              id={item.id}
+              segment={item.segment}
+              backgroundToolBlockIds={backgroundToolBlockIds}
+              nextStepActions={nextStepActions}
+              forkAction={forkAction}
+              interviewDeliveryRetry={interviewDeliveryRetry}
+              // The turn's OWN harness, for an error row that offers to open that
+              // provider's settings. Taken from the row rather than from ambient
+              // app state so the link points at the provider that actually failed,
+              // even when the transcript is scrolled back to a turn from a harness
+              // the chat has since switched away from. `null` on legacy turns with
+              // no metadata; the affordance then falls back to the section root.
+              harnessId={meta?.provider ?? null}
+            />
+          </ChatBlockNavigationAnchor>
         );
       })}
       {/* Trailing indicator keeps the in-progress cue visible for the whole

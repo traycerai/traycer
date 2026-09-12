@@ -15,8 +15,10 @@ export {
 } from "./create-remote-transport";
 export {
   RemoteSession,
+  HOST_STATUS_LIVENESS_PROBE,
   type RemoteSessionOptions,
   type IRemoteSession,
+  type SessionLivenessProbe,
 } from "./remote-session";
 export { RemoteHostMessenger } from "./remote-host-messenger";
 export { RemoteStreamClient } from "./remote-stream-client";

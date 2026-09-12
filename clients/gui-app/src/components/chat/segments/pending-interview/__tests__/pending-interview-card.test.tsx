@@ -456,6 +456,7 @@ function renderCardFor(args: {
         onSubmit={args.onSubmit}
         onSkip={args.onSkip}
         onFork={args.onFork}
+        navigationHighlighted={false}
       />
     </TooltipProvider>,
   );
@@ -491,6 +492,7 @@ function cardElement(args: {
       onSubmit={args.onSubmit}
       onSkip={args.onSkip}
       onFork={args.onFork}
+      navigationHighlighted={false}
     />
   );
 }
@@ -509,6 +511,68 @@ function proceedButton(): HTMLButtonElement {
     name: /^(Submit|Next)$/,
   });
 }
+
+describe("PendingInterviewCard navigation highlight", () => {
+  afterEach(() => {
+    cleanup();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+    setMobileApp(false);
+  });
+
+  it("stamps data-navigation-highlighted on the card when flashing", () => {
+    render(
+      <TooltipProvider>
+        <PendingInterviewCard
+          chatId="chat-1"
+          blockId="interview-1"
+          questions={[singleSelect("q", "Question?", ["Alpha"])]}
+          isActive={false}
+          isBusy={false}
+          onSubmit={vi.fn()}
+          onSkip={null}
+          onFork={null}
+          navigationHighlighted
+        />
+      </TooltipProvider>,
+    );
+
+    const card = screen.getByTestId("interview-card");
+    expect(card.getAttribute("data-block-id")).toBe("interview-1");
+    expect(card.getAttribute("data-navigation-highlighted")).toBe("true");
+  });
+
+  it("stamps a new highlight generation on a repeated flash of the same card", () => {
+    const ui = (generation: number) => (
+      <TooltipProvider>
+        <PendingInterviewCard
+          chatId="chat-1"
+          blockId="interview-1"
+          questions={[singleSelect("q", "Question?", ["Alpha"])]}
+          isActive={false}
+          isBusy={false}
+          onSubmit={vi.fn()}
+          onSkip={null}
+          onFork={null}
+          navigationHighlighted
+          highlightGeneration={generation}
+        />
+      </TooltipProvider>
+    );
+    const { rerender } = render(ui(1));
+    expect(
+      screen
+        .getByTestId("interview-card")
+        .getAttribute("data-navigation-highlight-generation"),
+    ).toBe("1");
+    rerender(ui(2));
+    expect(
+      screen
+        .getByTestId("interview-card")
+        .getAttribute("data-navigation-highlight-generation"),
+    ).toBe("2");
+  });
+});
 
 describe("PendingInterviewCard keyboard navigation", () => {
   afterEach(() => {
@@ -2465,6 +2529,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
           onSubmit={vi.fn()}
           onSkip={null}
           onFork={null}
+          navigationHighlighted={false}
         />
       </TooltipProvider>,
     );
@@ -2486,6 +2551,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
           onSubmit={vi.fn()}
           onSkip={null}
           onFork={null}
+          navigationHighlighted={false}
         />
       </TooltipProvider>,
     );
@@ -2516,6 +2582,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
             onSubmit={vi.fn()}
             onSkip={null}
             onFork={null}
+            navigationHighlighted={false}
           />
         </TooltipProvider>
       </PaneSurfaceActivityContext.Provider>,
@@ -2543,6 +2610,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
             onSubmit={vi.fn()}
             onSkip={null}
             onFork={null}
+            navigationHighlighted={false}
           />
         </TooltipProvider>
       </PaneSurfaceActivityContext.Provider>,
@@ -2577,6 +2645,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
             onSubmit={vi.fn()}
             onSkip={null}
             onFork={null}
+            navigationHighlighted={false}
           />
         </TooltipProvider>
       </PaneFocusProbeContext.Provider>,

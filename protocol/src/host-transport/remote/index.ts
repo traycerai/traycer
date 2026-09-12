@@ -4,6 +4,7 @@ export {
   type IRemoteSession,
   type RemoteSessionEvidence,
   type RemoteSessionOptions,
+  type SessionLivenessProbe,
 } from "./session";
 export type { WakeProbeTuning } from "./session-client-params";
 export type {
