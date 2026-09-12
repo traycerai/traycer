@@ -17,7 +17,6 @@ interface DeleteTasksDialogProps {
   readonly onOpenChange: (open: boolean) => void;
   readonly title: string;
   readonly description: string;
-  readonly isPending: boolean;
   readonly isCheckingWorktrees: boolean;
   readonly onConfirm: () => void;
   /**
@@ -32,7 +31,10 @@ interface DeleteTasksDialogProps {
 
 /**
  * The Task-delete confirmation. It keeps the irreversible action, optional
- * local cleanup, and confirmation controls in distinct visual regions. The
+ * local cleanup, and confirmation controls in distinct visual regions.
+ * Confirming closes it at once: the deletion runs in the background off the
+ * mutation cache (as a worktree Sweep does), so there is no pending hold here
+ * and an in-flight delete never locks a freshly opened dialog. The
  * cleanup checklist appears only when the deleted Task(s) exclusively own
  * worktrees on this host. Copy is deliberately "no longer used by any other
  * Task" - never "orphaned", which the Settings tab reserves for
@@ -44,7 +46,6 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
     onOpenChange,
     title,
     description,
-    isPending,
     isCheckingWorktrees,
     onConfirm,
     candidates,
@@ -53,7 +54,7 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
   } = props;
 
   return (
-    <Dialog open={open} onOpenChange={isPending ? undefined : onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
         className="flex max-h-[min(90dvh,40rem)] w-[min(92vw,32rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
@@ -99,7 +100,6 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
                   key={candidate.worktreePath}
                   candidate={candidate}
                   checked={isPathChecked(candidate.worktreePath)}
-                  disabled={isPending}
                   onToggle={onTogglePath}
                 />
               ))}
@@ -113,7 +113,6 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
             variant="ghost"
             size="sm"
             className="w-full sm:w-auto"
-            disabled={isPending}
             onClick={() => {
               onOpenChange(false);
             }}
@@ -126,11 +125,11 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
             variant="destructive"
             size="sm"
             className="w-full sm:w-auto"
-            disabled={isPending || isCheckingWorktrees}
+            disabled={isCheckingWorktrees}
             onClick={onConfirm}
             data-testid="delete-tasks-confirm"
           >
-            {isPending || isCheckingWorktrees ? (
+            {isCheckingWorktrees ? (
               <AgentSpinningDots
                 className={undefined}
                 testId={undefined}
@@ -148,10 +147,9 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
 function WorktreeCleanupRow(props: {
   readonly candidate: TaskDeleteWorktreeCandidate;
   readonly checked: boolean;
-  readonly disabled: boolean;
   readonly onToggle: (worktreePath: string, checked: boolean) => void;
 }) {
-  const { candidate, checked, disabled, onToggle } = props;
+  const { candidate, checked, onToggle } = props;
   const branch = candidate.branch ?? "detached HEAD";
   // Per-row loss/uncertainty hint. Dirty rows name the concrete uncommitted
   // loss; clean rows with local-only commits name that concrete loss; clean rows
@@ -213,10 +211,9 @@ function WorktreeCleanupRow(props: {
   }
   return (
     <li className="min-w-0">
-      <label className="flex min-w-0 cursor-pointer items-start gap-3 rounded-md px-2.5 py-2 transition-colors hover:bg-accent/40 has-disabled:cursor-not-allowed has-disabled:opacity-60">
+      <label className="flex min-w-0 cursor-pointer items-start gap-3 rounded-md px-2.5 py-2 transition-colors hover:bg-accent/40">
         <Checkbox
           checked={checked}
-          disabled={disabled}
           onCheckedChange={(value) =>
             onToggle(candidate.worktreePath, value === true)
           }

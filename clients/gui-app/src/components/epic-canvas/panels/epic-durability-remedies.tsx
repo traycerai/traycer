@@ -1,7 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
-import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import {
   useEpicArtifactRecords,
   useEpicDurabilityPauseReason,
@@ -9,8 +8,6 @@ import {
   useEpicSnapshotMeta,
 } from "@/lib/epic-selectors";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import type { EpicDurabilityPauseReasonV15 } from "@traycer/protocol/host/epic/subscribe";
 import { viewStatus } from "./epic-durability-plane";
 
@@ -28,21 +25,17 @@ export function EpicDurabilityRemedies() {
   const view = useEpicDurabilityView();
   const pauseReason = useEpicDurabilityPauseReason();
   // The status is decided BEFORE any provider-bound hook runs: the child
-  // below reads the runner host and the export mutation, which exist only
-  // under the app shell, and every status row renders this component. The
-  // old badge reached those hooks only on its paused arm, and so does this.
+  // below reads the export mutation, which exists only under the app shell,
+  // and every status row renders this component. The old badge reached that
+  // hook only on its paused arm, and so does this.
   if (viewStatus(view) !== "paused") return null;
-  if (pauseReason !== "entitlement-lapsed" && !exportIsTheRemedy(pauseReason)) {
+  if (!exportIsTheRemedy(pauseReason)) {
     return null;
   }
-  return <PausedRemedies pauseReason={pauseReason} />;
+  return <PausedRemedies />;
 }
 
-function PausedRemedies(props: {
-  readonly pauseReason: EpicDurabilityPauseReasonV15 | null;
-}) {
-  const { pauseReason } = props;
-  const runnerHost = useRunnerHost();
+function PausedRemedies() {
   const exportArtifacts = useEpicExportArtifacts();
   const records = useEpicArtifactRecords();
   const meta = useEpicSnapshotMeta();
@@ -60,18 +53,11 @@ function PausedRemedies(props: {
     });
   };
   return (
-    <>
-      {pauseReason === "entitlement-lapsed" ? (
-        <UpgradeAction signInUrl={runnerHost.signInUrl} />
-      ) : null}
-      {exportIsTheRemedy(pauseReason) ? (
-        <ExportArtifactsAction
-          disabled={artifacts.length === 0 || exportArtifacts.isPending}
-          pending={exportArtifacts.isPending}
-          onExport={exportLocalArtifacts}
-        />
-      ) : null}
-    </>
+    <ExportArtifactsAction
+      disabled={artifacts.length === 0 || exportArtifacts.isPending}
+      pending={exportArtifacts.isPending}
+      onExport={exportLocalArtifacts}
+    />
   );
 }
 
@@ -83,29 +69,6 @@ function RemedyActionSpinner() {
       testId={undefined}
       variant={undefined}
     />
-  );
-}
-
-/**
- * The link goes through `useRunnerOpenExternalLink` rather than the bridge
- * directly: the mutation owns the shared query key and the runner-error toast,
- * so a rejected `openExternalLink` is reported instead of silently dropped.
- */
-function UpgradeAction(props: { readonly signInUrl: string }) {
-  const { isPending, openLink } = useOpenLinkWithPending();
-  return (
-    <button
-      type="button"
-      className="text-ui-xs font-medium underline underline-offset-2"
-      data-testid="epic-durability-upgrade"
-      disabled={isPending}
-      onClick={() => {
-        void openLink(resolvePlatformBaseUrl(props.signInUrl), "auth", null);
-      }}
-    >
-      Upgrade
-      {isPending ? <RemedyActionSpinner /> : null}
-    </button>
   );
 }
 
@@ -141,9 +104,9 @@ function ExportArtifactsAction(props: {
  * so the person can take them somewhere. Reaching a preserved epic and finding
  * nothing to do with it would be the dark archive with a nicer label.
  *
- * The other three paused reasons are deliberately absent: an entitlement lapse
- * has an Upgrade path, and the two delete-bookkeeping reasons are transient
- * states of an epic that is not going anywhere.
+ * The other two paused reasons are deliberately absent: the two
+ * delete-bookkeeping reasons are transient states of an epic that is not going
+ * anywhere.
  */
 function exportIsTheRemedy(
   pauseReason: EpicDurabilityPauseReasonV15 | null,
