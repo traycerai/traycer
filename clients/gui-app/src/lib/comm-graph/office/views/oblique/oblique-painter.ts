@@ -21,7 +21,7 @@ import type {
   OfficeProjector,
 } from "../office-view";
 
-import { obliquePropsIn } from "./oblique-plan";
+import { obliqueIsPlaza, obliquePropsIn } from "./oblique-plan";
 
 const STATIC_PROPS: ReadonlySet<OfficeSpriteName> = new Set([
   "face",
@@ -131,9 +131,12 @@ function overviewBlocks(
         tiles,
       ),
     );
-  const storeys = layout.floors.flatMap((floor) =>
+  const storeys = layout.floors.flatMap((floor, floorIndex) =>
     clippedBlock(
-      { ...floor.bounds, fill: floor.bounds.rows === 5 ? "plaza" : "storey" },
+      {
+        ...floor.bounds,
+        fill: obliqueIsPlaza(layout, floorIndex) ? "plaza" : "storey",
+      },
       tiles,
     ),
   );

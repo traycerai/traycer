@@ -32,6 +32,7 @@ import {
   BUILDING_VIEW,
   measureBuilding,
   measureTowers,
+  obliqueIsPlaza,
   planBuilding,
   planTowers,
   TOWERS_VIEW,
@@ -208,11 +209,28 @@ function assertRooms(layout: OfficeLayout): void {
         true,
       );
     }
-    for (const floor of layout.floors) {
-      for (const tile of floor.corridorTiles)
-        expect(withinRect(room.bounds, tile)).toBe(false);
+  }
+  const corridorViolations: Array<{
+    readonly roomId: string;
+    readonly floorIndex: number;
+    readonly col: number;
+    readonly row: number;
+  }> = [];
+  for (const room of layout.rooms) {
+    for (const [floorIndex, floor] of layout.floors.entries()) {
+      for (const tile of floor.corridorTiles) {
+        if (withinRect(room.bounds, tile)) {
+          corridorViolations.push({
+            roomId: room.rootAgentId,
+            floorIndex,
+            col: tile.col,
+            row: tile.row,
+          });
+        }
+      }
     }
   }
+  expect(corridorViolations).toEqual([]);
 }
 
 function assertSigns(
@@ -866,6 +884,67 @@ describe("Building packing", () => {
 });
 
 describe("oblique painters", () => {
+  it("classifies overview floors by their plan kind rather than row count", () => {
+    for (const view of [TOWERS_VIEW, BUILDING_VIEW]) {
+      const layout = view.plan(
+        initialInput(
+          makeTestEpic("triage", 309, 1),
+          canvasViewport(VIEWPORTS[0]),
+        ),
+      );
+      const plazaIndex = layout.floors.findIndex((_, index) =>
+        obliqueIsPlaza(layout, index),
+      );
+      expect(plazaIndex).toBeGreaterThanOrEqual(0);
+      if (plazaIndex < 0) throw new Error("expected a canonical plaza floor");
+      const storeyIndex = layout.floors.findIndex(
+        (floor, index) => index !== plazaIndex && floor.bounds.rows === 4,
+      );
+      expect(storeyIndex).toBeGreaterThan(0);
+      if (storeyIndex <= 0) throw new Error("expected a storey floor");
+      const plaza = layout.floors[plazaIndex];
+      const storey = layout.floors[storeyIndex];
+      const resized = {
+        ...layout,
+        floors: layout.floors.map((floor, index) => {
+          if (index === plazaIndex) {
+            return { ...floor, bounds: { ...floor.bounds, rows: 4 } };
+          }
+          if (index === storeyIndex) {
+            return { ...floor, bounds: { ...floor.bounds, rows: 5 } };
+          }
+          return floor;
+        }),
+      };
+      const plazaBlocks = view.painter
+        .floor(resized, { ...plaza.bounds, rows: 4 }, 0)
+        .filter(
+          (drawable) =>
+            drawable.kind === "block" &&
+            drawable.x === plaza.bounds.col * OFFICE_TILE &&
+            drawable.y === plaza.bounds.row * OFFICE_TILE &&
+            drawable.width === plaza.bounds.cols * OFFICE_TILE &&
+            drawable.height === 4 * OFFICE_TILE,
+        );
+      const storeyBlocks = view.painter
+        .floor(resized, { ...storey.bounds, rows: 5 }, 0)
+        .filter(
+          (drawable) =>
+            drawable.kind === "block" &&
+            drawable.x === storey.bounds.col * OFFICE_TILE &&
+            drawable.y === storey.bounds.row * OFFICE_TILE &&
+            drawable.width === storey.bounds.cols * OFFICE_TILE &&
+            drawable.height === 5 * OFFICE_TILE,
+        );
+      expect(plazaBlocks).toEqual(
+        expect.arrayContaining([expect.objectContaining({ fill: "plaza" })]),
+      );
+      expect(storeyBlocks).toEqual(
+        expect.arrayContaining([expect.objectContaining({ fill: "storey" })]),
+      );
+    }
+  });
+
   for (const view of [TOWERS_VIEW, BUILDING_VIEW]) {
     it(`${view.id} bounds repeated visible fixture reads to the viewport`, () => {
       const epic = makeTestEpic("triage", 1000, 1);

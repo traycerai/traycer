@@ -469,66 +469,136 @@ function growLive(packing: ObliquePacking): void {
   }
   packing.shift += 4;
 }
-function availableSeats(
-  packing: ObliquePacking,
-  input: OfficePlanInput,
-  buildingIndex: number,
-): Slot[] {
-  const assigned = new Set(packing.assignment.values());
-  return packing.storeys
-    .filter(
-      (storey) =>
-        storey.building === buildingIndex &&
-        (storey.kind === "live" || storey.kind === "hq"),
-    )
-    .flatMap((storey) => storey.slots)
-    .filter((slot) => !assigned.has(slot.id) && !input.occupancy.has(slot.id));
+interface ArrivalSeat {
+  readonly storey: Storey;
+  readonly slotIndex: number;
+  readonly slot: Slot;
+  taken: boolean;
 }
-function seatArrival(
-  packing: ObliquePacking,
-  input: OfficePlanInput,
-  buildingIndex: number,
-  member: OfficePopulationMember,
-): void {
-  let free = availableSeats(packing, input, buildingIndex);
-  if (free.length === 0) {
-    growLive(packing);
-    free = availableSeats(packing, input, buildingIndex);
+
+/** Queues retain packing order; removing a seat from another queue is lazy. */
+class ArrivalSeatQueue {
+  private readonly seats: ArrivalSeat[] = [];
+  private cursor = 0;
+
+  add(seat: ArrivalSeat): void {
+    this.seats.push(seat);
   }
-  const matchingRooms = new Set(
-    packing.storeys
-      .flatMap((storey) => storey.rooms)
-      .filter((room) => room.lead === member.teamId)
-      .map((room) => room.id),
-  );
-  const seat =
-    free.find((slot) => slot.room !== null && matchingRooms.has(slot.room)) ??
-    free.find((slot) => slot.room === null) ??
-    free.at(0);
-  if (seat !== undefined) assignArrival(packing, member, seat);
+
+  take(): ArrivalSeat | undefined {
+    while (this.cursor < this.seats.length) {
+      const seat = this.seats[this.cursor];
+      this.cursor += 1;
+      if (!seat.taken) return seat;
+    }
+    return undefined;
+  }
 }
-function assignArrival(
-  packing: ObliquePacking,
-  member: OfficePopulationMember,
-  seat: Slot,
-): void {
-  packing.assignment.set(member.agentId, seat.id);
-  if (seat.room !== null) return;
-  const storey = packing.storeys.find((item) =>
-    item.slots.some((slot) => slot.id === seat.id),
-  );
-  if (storey === undefined) return;
-  const room: RoomRun = {
-    id: `${seat.id}/arrival`,
-    lead: member.teamId ?? member.agentId,
-    solo: member.agentClass === "solo",
-    agents: [member.agentId],
-    capacity: 1,
-  };
-  storey.rooms.push(room);
-  const slotIndex = storey.slots.findIndex((slot) => slot.id === seat.id);
-  storey.slots[slotIndex] = { ...seat, room: room.id };
+
+/** Transient batch indexes: nothing here is retained in the frozen recipe. */
+class ArrivalSeats {
+  private readonly packing: ObliquePacking;
+  private readonly occupancy: ReadonlyMap<string, string>;
+  private readonly buildingIndex: number;
+  private readonly assigned: Set<string>;
+  private readonly leadsByRoom = new Map<string, Set<string | null>>();
+  private readonly byLead = new Map<string | null, ArrivalSeatQueue>();
+  private readonly all = new ArrivalSeatQueue();
+  private readonly plain = new ArrivalSeatQueue();
+  private nextStorey = 0;
+  private freeCount = 0;
+
+  constructor(
+    packing: ObliquePacking,
+    input: OfficePlanInput,
+    buildingIndex: number,
+  ) {
+    this.packing = packing;
+    this.occupancy = input.occupancy;
+    this.buildingIndex = buildingIndex;
+    this.assigned = new Set(packing.assignment.values());
+    for (const storey of packing.storeys) {
+      for (const room of storey.rooms) this.indexRoom(room);
+    }
+    this.indexNewStoreys();
+  }
+
+  get availableCount(): number {
+    return this.freeCount;
+  }
+
+  grow(): void {
+    growLive(this.packing);
+    this.indexNewStoreys();
+  }
+
+  assign(member: OfficePopulationMember): void {
+    if (this.freeCount === 0) this.grow();
+    const seat =
+      this.byLead.get(member.teamId)?.take() ??
+      this.plain.take() ??
+      this.all.take();
+    if (seat === undefined) return;
+    seat.taken = true;
+    this.freeCount -= 1;
+    this.assigned.add(seat.slot.id);
+    this.packing.assignment.set(member.agentId, seat.slot.id);
+    if (seat.slot.room !== null) return;
+    const room: RoomRun = {
+      id: `${seat.slot.id}/arrival`,
+      lead: member.teamId ?? member.agentId,
+      solo: member.agentClass === "solo",
+      agents: [member.agentId],
+      capacity: 1,
+    };
+    seat.storey.rooms.push(room);
+    seat.storey.slots[seat.slotIndex] = { ...seat.slot, room: room.id };
+    // This new room contains only the seat just taken, so no free queue gains it.
+    this.indexRoom(room);
+  }
+
+  private indexRoom(room: RoomRun): void {
+    const leads = this.leadsByRoom.get(room.id);
+    if (leads === undefined)
+      this.leadsByRoom.set(room.id, new Set([room.lead]));
+    else leads.add(room.lead);
+  }
+
+  private indexNewStoreys(): void {
+    while (this.nextStorey < this.packing.storeys.length) {
+      const storey = this.packing.storeys[this.nextStorey];
+      this.nextStorey += 1;
+      if (
+        storey.building !== this.buildingIndex ||
+        (storey.kind !== "live" && storey.kind !== "hq")
+      )
+        continue;
+      for (const [slotIndex, slot] of storey.slots.entries()) {
+        this.indexSlot(storey, slotIndex, slot);
+      }
+    }
+  }
+
+  private indexSlot(storey: Storey, slotIndex: number, slot: Slot): void {
+    if (this.assigned.has(slot.id) || this.occupancy.has(slot.id)) return;
+    const seat: ArrivalSeat = { storey, slotIndex, slot, taken: false };
+    this.all.add(seat);
+    this.freeCount += 1;
+    if (slot.room === null) {
+      this.plain.add(seat);
+      return;
+    }
+    for (const lead of this.leadsByRoom.get(slot.room) ?? []) {
+      let queue = this.byLead.get(lead);
+      if (queue === undefined) {
+        queue = new ArrivalSeatQueue();
+        this.byLead.set(lead, queue);
+      }
+      queue.add(seat);
+    }
+  }
 }
+
 function growPacking(packing: ObliquePacking, input: OfficePlanInput): void {
   const present = new Set(input.agents.map((agent) => agent.id));
   for (const id of packing.assignment.keys()) {
@@ -574,6 +644,7 @@ function growHost(
         (!team.memberAgentIds.some((id) => packing.cubby.has(id)) && team.live),
     ]),
   );
+  const arrivals = new ArrivalSeats(packing, input, index);
   const ordered = [
     host.hqAgentId,
     ...host.teams.flatMap((team) => team.memberAgentIds),
@@ -589,13 +660,12 @@ function growHost(
       addQuietAgent(packing, index, id);
       continue;
     }
-    seatArrival(packing, input, index, member);
+    arrivals.assign(member);
   }
   const shortage = input.needsCapacity.filter(
     (id) => input.partition.members.get(id)?.hostId === host.hostId,
   ).length;
-  while (availableSeats(packing, input, index).length < shortage)
-    growLive(packing);
+  while (arrivals.availableCount < shortage) arrivals.grow();
 }
 function recipe(input: OfficePlanInput, mode: ObliqueMode): ObliquePacking {
   const previous = input.previous?.frozen;
@@ -1301,3 +1371,15 @@ export const BUILDING_VIEW: OfficeView = {
   measure: measureBuilding,
   painter: OBLIQUE_PAINTER,
 };
+
+/** Storey identity comes from the recipe, independently of its painted bounds. */
+export function obliqueIsPlaza(
+  layout: OfficeLayout,
+  floorIndex: number,
+): boolean {
+  const packing = layout.frozen;
+  return (
+    packing instanceof ObliquePacking &&
+    packing.storeys.at(floorIndex)?.kind === "plaza"
+  );
+}
