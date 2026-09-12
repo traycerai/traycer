@@ -2112,10 +2112,14 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     expect(painted).toContain("Alpha Sitter");
   });
 
-  it("F11: names all five of an eight-tile HQ board's hottest, inside the board's own pixels", () => {
-    // The reviewer's own fixture: ordinary two-word names, and a board wide
-    // enough that a character budget called four of them a comfortable fit
-    // while the plate they actually needed was 356px across a 128px board.
+  it("F11 fixup 7: names all five of a wide HQ board's hottest, spelt out rather than lettered to initials", () => {
+    // The reviewer's own fixture: ordinary two-word names. Fixup 7 removes
+    // the initials rung this case used to land on ("AB BQ GS DA ED" at eight
+    // tiles) - below the first-names rung the HQ board now counts instead of
+    // lettering, so pinning "all five named, none dropped" needs a board
+    // wide enough for a name rung to actually fit. Forty-eight tiles is
+    // 768px; the widest rung, the five names written out in full, is
+    // sixty-six characters - 66 * 6.8 + 8 = 456.8px - comfortably inside it.
     const roster = ["a", "b", "c", "d", "e", "f"];
     const names = [
       "Alpha Build",
@@ -2128,7 +2132,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     const hqBoard: OfficeSign = {
       kind: "hq-board",
       tile: { col: 2, row: 2 },
-      widthTiles: 8,
+      widthTiles: 48,
       text: "",
       ownerAgentId: null,
       hostId: null,
@@ -2136,8 +2140,8 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     };
     const layout: OfficeLayout = {
       view: "floor",
-      cols: 16,
-      rows: 16,
+      cols: 64,
+      rows: 64,
       desks: new Map(),
       seats: new Map(),
       signs: [hqBoard],
@@ -2146,7 +2150,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       doorTile: { col: 0, row: 0 },
       lobbyTile: { col: 0, row: 1 },
       props: [],
-      walkable: allWalkable(16, 16),
+      walkable: allWalkable(64, 64),
       frozen: null,
       shiftFromPrevious: null,
       stable: true,
@@ -2160,19 +2164,22 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     setIntersecting(true);
     flushRaf(3);
 
-    // Found by the second-hottest either way, so a failure prints the plate
-    // that WAS painted rather than `undefined`.
-    const plate = paintedText().find(
-      (text) => text.includes("AB") || text.includes("ALPHA"),
+    // Found by the first word either way, so a failure prints the plate that
+    // WAS painted rather than `undefined`.
+    const plate = paintedText().find((text) => text.includes("ALPHA"));
+    // FIVE ENTRIES, spelt out in full and uppercased (`signPlateText` upper-
+    // cases every plate). The sixth (Zeta Idle) is outside the five hottest
+    // and stays off; the fifth is the one the old character budget used to
+    // drop, and the one the old ladder's initials rung used to letter away.
+    expect(plate).toBe(
+      "ALPHA BUILD · BETA QUEUE · GAMMA STORE · DELTA AUTH · EPSILON DOCS",
     );
-    // FIVE ENTRIES. The sixth (Zeta Idle) is outside the five hottest and
-    // stays off; the fifth is the one the old character budget dropped.
-    expect(plate).toBe("AB BQ GS DA ED");
     // And it fits. This canvas answers `measureText` in the face the caller
-    // set, so a tracked bold 10px plate advances 6.8px a character: the plate
-    // is 14*6.8 + 8 = 103.2px on a board 8 tiles * 16px * zoom 1 = 128px wide.
+    // set, so a tracked bold 10px plate advances 6.8px a character: the
+    // plate is 66*6.8 + 8 = 456.8px on a board 48 tiles * 16px * zoom 1 =
+    // 768px wide.
     const measured = (plate?.length ?? 0) * 6.8 + 8;
-    expect(measured).toBeLessThanOrEqual(8 * OFFICE_TILE);
+    expect(measured).toBeLessThanOrEqual(48 * OFFICE_TILE);
   });
 
   it("F11: gives an HQ board a different summary than an ordinary board over the same roster", () => {

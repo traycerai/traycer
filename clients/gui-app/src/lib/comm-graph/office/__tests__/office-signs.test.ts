@@ -16,6 +16,7 @@ import {
   OFFICE_SIGN_PADDING_X,
   OFFICE_SIGN_PLATE_MAX_CHARS,
   officeBoardText,
+  officeBoardWidthPx,
   officeFloorSignsToDraw,
   officePlateWidthPx,
   officeSignCenterX,
@@ -61,6 +62,84 @@ function measure(text: string): number {
 /** A board's own width on screen at zoom 1: sixteen pixels a tile. */
 function boardWidthPx(widthTiles: number): number {
   return widthTiles * OFFICE_TILE;
+}
+
+/**
+ * FIXUP 7's OWN INVARIANT, shared between the sweep (below) and the real
+ * 309 Building case: the HQ board's ladder no longer has a rung of
+ * manufactured initials, because the third `nameRungs` element it used to
+ * letter with is gone. The ticket wrote down two regexes for this and both
+ * are approximations - narrowed here to what the ladder is actually allowed
+ * to produce:
+ *
+ * - `\w` matches digits as well as letters, so the ticket's
+ *   `/^(\w( |$))+$/` also matches the legitimate bare-total rung ("5",
+ *   "309"). Narrowed to `[A-Za-z]` so a digit can never trip it.
+ * - `/^\w{2,5}$/` likewise matches "309". Narrowed to `[A-Za-z]{2,5}`.
+ * - Neither regex catches the removed ` · `-joined shape ("R · T · L"), so
+ *   that gets its own check: every ` · `-separated part is a single letter.
+ * - "No isolated single letters" cannot be taken literally either - the
+ *   required COUNTS rung IS "2D · 3W · 0I", whose D/W/I are isolated
+ *   letters that must stay legal. The honest rule is narrower: a letter may
+ *   stand alone only when a digit is attached to it. `ISOLATED_LETTER`
+ *   encodes exactly that - a letter neither preceded by a digit nor part of
+ *   a longer letter-run trips it.
+ */
+const ALL_SINGLE_LETTERS_SPACED = /^([A-Za-z]( |$))+$/;
+const ALL_SINGLE_LETTERS_RUN = /^[A-Za-z]{2,5}$/;
+const ISOLATED_LETTER = /(?:^|[^0-9A-Za-z])[A-Za-z](?![A-Za-z])/;
+
+function isAllDotSeparatedSingleLetters(text: string): boolean {
+  const parts = text.split(" · ");
+  return parts.length > 1 && parts.every((part) => /^[A-Za-z]$/.test(part));
+}
+
+/**
+ * `null` when `text` is not a manufactured-initials shape; a message quoting
+ * `text` and naming which shape it took otherwise. Returning the message
+ * rather than a bare boolean is the point: `expect(x).toBe(false)` prints
+ * only "expected true to be false", which names neither the width that broke
+ * nor the string the board actually produced, while `expect(offense).toBeNull()`
+ * prints the message - the offending text and the rule it broke - straight
+ * into the failure.
+ */
+function manufacturedInitialsOffense(text: string): string | null {
+  if (ALL_SINGLE_LETTERS_SPACED.test(text)) {
+    return `"${text}" is single letters separated by spaces`;
+  }
+  if (ALL_SINGLE_LETTERS_RUN.test(text)) {
+    return `"${text}" is single letters run together`;
+  }
+  if (isAllDotSeparatedSingleLetters(text)) {
+    return `"${text}" is single letters separated by " · "`;
+  }
+  if (ISOLATED_LETTER.test(text)) {
+    return `"${text}" has a letter standing alone with no digit attached`;
+  }
+  return null;
+}
+
+/** A run of letters this long is a name, never an abbreviation. */
+const NAME_LETTER_RUN = /[A-Za-z]{3,}/;
+
+/**
+ * THE POSITIVE INVARIANT, as an offender message rather than a boolean for
+ * the same reason as `manufacturedInitialsOffense` above: every rung the new
+ * ladder can produce either spells a name (a letter-run of three or more
+ * characters), or says a number (a digit, from the counts or the bare-total
+ * tail), or is the overflow glyph or the empty string the tail always ends
+ * on. `null` when `text` satisfies that; a message quoting `text` otherwise.
+ */
+function unacceptableBoardRungReason(text: string): string | null {
+  if (
+    text === "" ||
+    text === "…" ||
+    NAME_LETTER_RUN.test(text) ||
+    /\d/.test(text)
+  ) {
+    return null;
+  }
+  return `"${text}" is neither a name, a number, the overflow glyph, nor empty`;
 }
 
 /** A projector that shifts every projected x by +2048px - the review's own F5 recipe. */
@@ -246,12 +325,14 @@ describe("officeBoardText - F11 roster filtering and width", () => {
     expect(text).toBe("1D · 0W · 0I");
   });
 
-  it("gives an HQ board a names ranking instead of the doing/waiting/idle counts", () => {
-    // EIGHT TILES, the width a real HQ board has. This used to be two, which
-    // is thirty-two pixels and holds three characters: below the last name
-    // rung both boards fall to a bare total, and "5" is a true thing to say
-    // about five agents whether or not they are named. The distinction this
-    // case is about only exists at a width some name rung survives.
+  it("fixup 7: agrees with an ordinary board's counts at the board's own eight tiles, and only differs once a name rung fits", () => {
+    // EIGHT TILES, the width a real HQ board has. `nameRungs` no longer has
+    // an initials rung to fall to, so these one-word names give the SAME two
+    // name rungs twice over - "Alpha · Beta · Gamma · Delta · Epsilon"
+    // (38 chars, 266.4px) as both written and first names - and neither fits
+    // 128px. The ladder falls straight to the roster's counts, which is
+    // exactly what an ordinary `board` over the same roster would say: this
+    // is the fixup's own point, not a coincidence.
     const sign = boardSign({
       kind: "hq-board",
       agentIds: ["a", "b", "c", "d", "e"],
@@ -271,30 +352,52 @@ describe("officeBoardText - F11 roster filtering and width", () => {
       ["d", "Delta"],
       ["e", "Epsilon"],
     ]);
-    const ordinaryEquivalent = officeBoardText({
+    const visibleAgentIds = new Set(["a", "b", "c", "d", "e"]);
+    const writtenNamesJoined = "Alpha · Beta · Gamma · Delta · Epsilon";
+
+    const ordinaryAtEight = officeBoardText({
       sign: { ...sign, kind: "board" },
       statusById,
-      visibleAgentIds: new Set(["a", "b", "c", "d", "e"]),
+      visibleAgentIds,
       nameById,
       available: boardWidthPx(8),
       measure,
     });
-    const hqText = officeBoardText({
+    const hqAtEight = officeBoardText({
       sign,
       statusById,
-      visibleAgentIds: new Set(["a", "b", "c", "d", "e"]),
+      visibleAgentIds,
       nameById,
       available: boardWidthPx(8),
       measure,
     });
-    expect(hqText).not.toBe(ordinaryEquivalent);
-    // And what each of them actually says. The HQ board keeps all five
-    // identities by cutting every one-word name to its initial - the exemption
-    // that used to hold those words whole had no rung left to take and ran
-    // 212.61px across these 128.
-    expect(hqText).toBe("A · B · G · D · E");
-    expect(ordinaryEquivalent).toBe("1D · 1W · 3I");
-    expect(measure(hqText)).toBeLessThanOrEqual(boardWidthPx(8));
+    expect(hqAtEight).toBe("1D · 1W · 3I");
+    expect(hqAtEight).toBe(ordinaryAtEight);
+    expect(measure(writtenNamesJoined)).toBeGreaterThan(boardWidthPx(8));
+
+    // GIVEN THE PIXELS FOR NAMES the two boards diverge again: the written
+    // names' own rung fits at seventeen tiles (272px against its 266.4px;
+    // sixteen tiles' 256px does not), and only the HQ board uses it - an
+    // ordinary `board` never letters names at any width.
+    const wideTiles = Math.ceil(measure(writtenNamesJoined) / OFFICE_TILE);
+    const ordinaryAtWide = officeBoardText({
+      sign: { ...sign, kind: "board", widthTiles: wideTiles },
+      statusById,
+      visibleAgentIds,
+      nameById,
+      available: boardWidthPx(wideTiles),
+      measure,
+    });
+    const hqAtWide = officeBoardText({
+      sign: { ...sign, widthTiles: wideTiles },
+      statusById,
+      visibleAgentIds,
+      nameById,
+      available: boardWidthPx(wideTiles),
+      measure,
+    });
+    expect(hqAtWide).toBe(writtenNamesJoined);
+    expect(ordinaryAtWide).not.toBe(hqAtWide);
   });
 });
 
@@ -318,13 +421,20 @@ describe("officeBoardText - F11 five HQ names, laid out to the board", () => {
     ["f", "Zeta Idle"],
   ]);
 
-  it("names all five hottest agents on an eight-tile board, shortened to fit", () => {
+  it("fixup 7: names all five hottest agents once the first-names rung fits, never dropping the fifth", () => {
+    // EIGHT TILES no longer letters these five names - the ladder falls to
+    // the roster's counts there instead (see the "agrees ... at the board's
+    // own eight tiles" case above). This pins the other half of the fixup's
+    // promise: at a width wide enough for the FIRST-NAMES rung, all five are
+    // still named, never four-plus-a-drop.
+    const firstNamesJoined = "Alpha · Beta · Gamma · Delta · Epsilon";
+    const wideTiles = Math.ceil(measure(firstNamesJoined) / OFFICE_TILE);
     const sign = boardSign({
       kind: "hq-board",
       agentIds: ROSTER,
-      widthTiles: 8,
+      widthTiles: wideTiles,
     });
-    const available = boardWidthPx(8);
+    const available = boardWidthPx(wideTiles);
     const text = officeBoardText({
       sign,
       statusById: STATUS_BY_ID,
@@ -337,9 +447,9 @@ describe("officeBoardText - F11 five HQ names, laid out to the board", () => {
     // FIVE ENTRIES. The fifth-hottest used to be dropped whole because adding
     // its name overran a character budget; a board that omits an agent has
     // failed at the one thing it is for.
-    expect(text.split(" ")).toEqual(["AB", "BQ", "GS", "DA", "ED"]);
+    expect(text).toBe(firstNamesJoined);
     // Zeta Idle is sixth and stays off, which is the ranking working.
-    expect(text).not.toContain("ZI");
+    expect(text).not.toContain("Zeta");
     // And the chosen rung actually fits the room it names.
     expect(measure(text)).toBeLessThanOrEqual(available);
   });
@@ -513,7 +623,7 @@ for (const viewId of ["towers", "building"] as const) {
       expect(measure(short)).toBeGreaterThan(widths[2]);
     });
 
-    it("ranks the five hottest agents on a real HQ board, in the pixels that board actually has", () => {
+    it("fixup 7: counts a real HQ board at its own pixels, and ranks the five hottest by name once a name rung fits", () => {
       const { epic, layout, names, statusById } = realObliqueSigns(viewId);
       const hq = layout.signs.find((sign) => sign.kind === "hq-board");
       if (hq === undefined) throw new Error("expected a real HQ board");
@@ -523,8 +633,9 @@ for (const viewId of ["towers", "building"] as const) {
       const hqNames = new Map(names);
       for (const agentId of hq.agentIds) statuses.set(agentId, "idle");
       // Coolest first, so the ranking has to REVERSE this to be right: an
-      // implementation that kept roster order would read "PR MW ID OH LF"
-      // backwards, and one that sorted by id would not produce it at all.
+      // implementation that kept roster order would read the names
+      // backwards, and one that sorted by id would not produce this order at
+      // all.
       const heat: ReadonlyArray<OfficeAgentStatus> = [
         "background",
         "awaiting",
@@ -532,10 +643,9 @@ for (const viewId of ["towers", "building"] as const) {
         "failure",
         "attention",
       ];
-      // NAMES OF ORDINARY LENGTH. Two-letter seeds fit at every rung, so they
-      // can only show that five things were listed - never that the board
-      // chose a reading for the room it had. These are the lengths a real
-      // roster carries, and at this board's width they do not fit spelt out.
+      // NAMES OF ORDINARY LENGTH - the lengths a real roster carries, and at
+      // this board's own width they do not fit as first names, let alone
+      // written out.
       const written: ReadonlyArray<string> = [
         "Lena Fischer",
         "Omar Haddad",
@@ -547,12 +657,16 @@ for (const viewId of ["towers", "building"] as const) {
         statuses.set(hottest[index], heat[index]);
         hqNames.set(hottest[index], written[index]);
       }
-      // The board's OWN width, off the real plan - not a width reverse-derived
-      // from the answer, which would make any rung the right one.
+      const visibleAgentIds = new Set(epic.agents.map((person) => person.id));
+      // THE BOARD'S OWN WIDTH, off the real plan - not a width reverse-derived
+      // from the answer, which would make any rung the right one. Neither
+      // name rung fits it, so the ladder falls to the roster's counts rather
+      // than lettering initials - "PR MW ID OH LF" was the removed initials
+      // rung this case used to pin.
       const available = boardWidthPx(hq.widthTiles);
-      const drawn = officeSignsToDraw({
+      const drawnAtOwnWidth = officeSignsToDraw({
         signs: [hq],
-        visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
+        visibleAgentIds,
         statusById: statuses,
         nameById: hqNames,
         hostNameById: new Map(),
@@ -562,20 +676,30 @@ for (const viewId of ["towers", "building"] as const) {
         projector: OFFICE_VIEWS[viewId].painter.projector(layout),
         lod: 1,
       });
-      expect(drawn).toHaveLength(1);
-      // Hottest first, all five, at the only rung this board has the room for.
-      expect(drawn[0].text).toBe("PR MW ID OH LF");
-      // And it is the WIDEST that fits, not merely one that does: the plate
-      // the resolver chose is inside the board, and the rung above it is not.
-      expect(measure(drawn[0].text)).toBeLessThanOrEqual(available);
-      expect(measure("PR · MW · ID · OH · LF")).toBeGreaterThan(available);
-      expect(measure("Priya · Marcus · Ines · Omar · Lena")).toBeGreaterThan(
-        available,
-      );
-      // Every one of the five is still named, and named in descending heat -
-      // the point of an HQ board is WHO needs the lead, so shortening may cost
-      // letters and must never cost an identity.
-      expect(drawn[0].text.split(" ")).toEqual(["PR", "MW", "ID", "OH", "LF"]);
+      expect(drawnAtOwnWidth).toHaveLength(1);
+      expect(drawnAtOwnWidth[0].text).toMatch(/\d/);
+      expect(manufacturedInitialsOffense(drawnAtOwnWidth[0].text)).toBeNull();
+      expect(measure(drawnAtOwnWidth[0].text)).toBeLessThanOrEqual(available);
+      const firstNamesJoined = "Priya · Marcus · Ines · Omar · Lena";
+      expect(measure(firstNamesJoined)).toBeGreaterThan(available);
+
+      // GIVEN THE PIXELS FOR FIRST NAMES the same roster still ranks hottest
+      // first and keeps all five identities - the point of an HQ board.
+      const wideTiles = Math.ceil(measure(firstNamesJoined) / OFFICE_TILE);
+      const drawnWide = officeSignsToDraw({
+        signs: [{ ...hq, widthTiles: wideTiles }],
+        visibleAgentIds,
+        statusById: statuses,
+        nameById: hqNames,
+        hostNameById: new Map(),
+        roleClaims: {},
+        zoom: 1,
+        measure,
+        projector: OFFICE_VIEWS[viewId].painter.projector(layout),
+        lod: 1,
+      });
+      expect(drawnWide).toHaveLength(1);
+      expect(drawnWide[0].text).toBe(firstNamesJoined);
     });
   });
 }
@@ -652,7 +776,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
    * three rungs, so the separators were the only width it could give back, and
    * the widest reading was also the narrowest: 212.61px against 128.
    */
-  it("cuts single-word names to initials rather than overflowing an eight-tile board", () => {
+  it("fixup 7: counts rather than lettering initials when five single-word names don't fit an eight-tile board", () => {
     const sign = boardSign({
       kind: "hq-board",
       agentIds: FIVE,
@@ -681,11 +805,14 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
       available,
       measure,
     });
-    // All five still named, hottest first, at the widest rung that fits.
-    expect(text).toBe("A · B · G · D · E");
+    // Both name rungs are the SAME string for one-word names - "Alpha · Beta
+    // · Gamma · Delta · Epsilon", 266.4px against these 128 - so neither
+    // fits and the ladder falls straight to the roster's counts: doing (c,
+    // e), waiting (a, b, d), none idle. The removed third rung this case
+    // used to pin, "A · B · G · D · E", is gone.
+    expect(text).toBe("2D · 3W · 0I");
     expect(measure(text)).toBeLessThanOrEqual(available);
-    // The reading the exemption used to force, and what it measured.
-    expect(measure("Alpha Beta Gamma Delta Epsilon")).toBeGreaterThan(
+    expect(measure("Alpha · Beta · Gamma · Delta · Epsilon")).toBeGreaterThan(
       available,
     );
   });
@@ -723,7 +850,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
     expect(measure("1D 1W 1I 1A")).toBeGreaterThan(available);
   });
 
-  it("steps a five-name HQ board below its last rung at the 0.7 zoom boundary", () => {
+  it("fixup 7: steps a five-name HQ board to its counts rung at the 0.7 zoom boundary", () => {
     const sign = boardSign({
       kind: "hq-board",
       agentIds: FIVE,
@@ -752,10 +879,16 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
       available,
       measure,
     });
-    // All five identities survive the step down; only the spacing goes.
-    expect(text).toBe("PRMWIDOHLF");
+    // Neither name rung fits at these 89.6px - the first-names rung alone,
+    // "Priya · Marcus · Ines · Omar · Lena", measures well over twice that -
+    // so the ladder falls to the roster's counts: doing (c, e), waiting (a,
+    // b, d), none idle. The old last rung here, "PRMWIDOHLF" (ten initials
+    // run together), is gone along with the rung it came from.
+    expect(text).toBe("2D · 3W · 0I");
     expect(measure(text)).toBeLessThanOrEqual(available);
-    expect(measure("PR MW ID OH LF")).toBeGreaterThan(available);
+    expect(measure("Priya · Marcus · Ines · Omar · Lena")).toBeGreaterThan(
+      available,
+    );
   });
 
   /**
@@ -788,6 +921,195 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
     // rather than painting over the room next door.
     expect(measure(text)).toBeLessThanOrEqual(available);
     expect(text.length).toBeLessThanOrEqual(2);
+  });
+});
+
+/**
+ * Fixup 7 (finding L2): the HQ board used to letter its way down PAST the
+ * first-names rung into manufactured initials - " · "-joined, then spaced,
+ * then run together - and a real HQ board is eight tiles, which at office
+ * zoom (0.92x) is well under the first-names rung's own width for any real
+ * roster. The live sitting read `R R R R R` / `T T T T L` off the top
+ * storey, which names nobody and reads as a rendering fault. The fix drops
+ * that rung entirely: below first names the ladder falls to the roster's
+ * COUNTS, `boardRenderings(countRoster(roster, statusById))` - the same
+ * reading, over the same roster, that an ordinary `board` already gives.
+ */
+describe("officeBoardText - fixup 7: the HQ board never letters manufactured initials", () => {
+  const ROSTER = ["a", "b", "c", "d", "e", "f"];
+  const STATUS_BY_ID = new Map<string, OfficeAgentStatus>([
+    ["a", "attention"],
+    ["b", "failure"],
+    ["c", "working"],
+    ["d", "awaiting"],
+    ["e", "background"],
+    ["f", "idle"],
+  ]);
+  const NAME_BY_ID = new Map([
+    ["a", "Alpha Build"],
+    ["b", "Beta Queue"],
+    ["c", "Gamma Store"],
+    ["d", "Delta Auth"],
+    ["e", "Epsilon Docs"],
+    ["f", "Zeta Idle"],
+  ]);
+  const visible = new Set(ROSTER);
+
+  /**
+   * THE SWEEP. `hqBoardText`'s ladder used to hand a too-narrow board four
+   * rungs in a row that name nobody - " · "-joined initials, spaced
+   * initials, run-together initials - between the first-names rung and the
+   * bare total. Those rungs are gone: the ladder is now written names, first
+   * names, then straight to the roster's counts. Sweeping every width from
+   * the written names' own pixels down to nothing crosses every width the
+   * old ladder used to answer with initials (roughly 90px-260px for this
+   * five-name fixture), and none of the strings this ladder returns may take
+   * that shape.
+   */
+  it("never emits a manufactured-initials rung, at any width from the written names down to zero", () => {
+    const sign = boardSign({
+      kind: "hq-board",
+      agentIds: ROSTER,
+      widthTiles: 8,
+    });
+    // The top five by heat (a-e; f is sixth and stays off), written out in
+    // full and " · "-joined - the widest rung the ladder has.
+    const writtenNamesJoined =
+      "Alpha Build · Beta Queue · Gamma Store · Delta Auth · Epsilon Docs";
+    const widestPx = measure(writtenNamesJoined);
+    const seen = new Set<string>();
+    // COLLECTED RATHER THAN ASSERTED IN THE LOOP, the way this directory's
+    // `office-board-fit.test.ts` collects its overflow offenders: a bare
+    // `expect(...).toBe(false)` inside a sweep prints "expected true to be
+    // false" and names neither the width that broke nor what the board said
+    // there, which leaves the next reader to re-derive the whole sweep by
+    // hand. Each offender carries its own width and reading instead.
+    const offenders: string[] = [];
+    for (let available = widestPx; available >= 0; available -= 4) {
+      const text = officeBoardText({
+        sign,
+        statusById: STATUS_BY_ID,
+        visibleAgentIds: visible,
+        nameById: NAME_BY_ID,
+        available,
+        measure,
+      });
+      seen.add(text);
+      const reason =
+        manufacturedInitialsOffense(text) ?? unacceptableBoardRungReason(text);
+      if (reason !== null)
+        offenders.push(`at ${available}px available: ${reason}`);
+    }
+    expect(offenders).toEqual([]);
+    // THE SWEEP WAS NOT VACUOUS: it actually crossed a rung change, and both
+    // a name rung and a counts rung appeared among what it saw.
+    expect(seen.size).toBeGreaterThan(1);
+    expect([...seen].some((text) => NAME_LETTER_RUN.test(text))).toBe(true);
+    expect([...seen].some((text) => /\d/.test(text))).toBe(true);
+  });
+
+  /**
+   * The real 309 Building plan, at Office zoom - the exact shape the live
+   * sitting found the finding in. `realObliqueSigns` names every agent
+   * `Name <id>`, so the first-names rung is five copies of the literal word
+   * "Name"; even that measures wider than the board's own pixels at 0.92,
+   * so the fall to counts here is not an artifact of unusually long names.
+   */
+  it("never letters initials on the real 309 Building's HQ board at Office zoom, and its first-names rung genuinely doesn't fit", () => {
+    const { epic, layout, names, statusById } = realObliqueSigns("building");
+    const hq = layout.signs.find((sign) => sign.kind === "hq-board");
+    if (hq === undefined) throw new Error("expected a real HQ board");
+    const drawn = officeSignsToDraw({
+      signs: [hq],
+      visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
+      statusById,
+      nameById: names,
+      hostNameById: new Map(),
+      roleClaims: {},
+      projector: OFFICE_VIEWS.building.painter.projector(layout),
+      lod: 1,
+      zoom: 0.92,
+      measure,
+    });
+    expect(drawn).toHaveLength(1);
+    const text = drawn[0].text;
+    // A digit: the counts rung this width falls to, over a real 309-agent
+    // roster. Asserted with `toMatch` rather than on a boolean so a failure
+    // prints the reading the board actually drew at Office zoom.
+    expect(text).toMatch(/\d/);
+    expect(manufacturedInitialsOffense(text)).toBeNull();
+
+    // IT HAD TO STEP, not merely landed on a rung that happens to have a
+    // digit in it.
+    const firstNamesJoined = "Name · Name · Name · Name · Name";
+    const available = officeBoardWidthPx(hq, 0.92);
+    expect(measure(firstNamesJoined)).toBeGreaterThan(available);
+  });
+
+  /**
+   * Rule 1 says the counts are over the board's WHOLE cursor-filtered
+   * roster, not over the five-or-fewer named agents - "the same ids an
+   * ordinary `board` counts". Every other case in this file happens to use a
+   * roster where all five hottest are also all the agents on the board, so
+   * roster and named coincide and an implementation that counted only the
+   * five names would still pass them. This fixture's sixth agent, "f", is
+   * what tells the two apart: idle, sixth-hottest, never named on this
+   * board - but still ON it.
+   */
+  it("counts the whole roster, not just the five agents it names", () => {
+    const sign = boardSign({
+      kind: "hq-board",
+      agentIds: ROSTER,
+      widthTiles: 8,
+    });
+    const available = boardWidthPx(8);
+    const text = officeBoardText({
+      sign,
+      statusById: STATUS_BY_ID,
+      visibleAgentIds: visible,
+      nameById: NAME_BY_ID,
+      available,
+      measure,
+    });
+    // Written names (456.8px) and first names (266.4px) both overflow these
+    // 128px, so the ladder falls to counts. Counting only the five named
+    // agents (a-e) would give "2D · 3W · 0I" - "f"'s idle status never
+    // counted. Counting the whole roster (a-f), the rule this case pins,
+    // gives "2D · 3W · 1I" instead: doing (c, e), waiting (a, b, d), idle
+    // (f).
+    expect(text).toBe("2D · 3W · 1I");
+    expect(measure(text)).toBeLessThanOrEqual(available);
+  });
+
+  /**
+   * The same distinction at the ladder's own tail. The removed rung used to
+   * end `lastResortRungs(named.length)` - always the number of NAMES, "5"
+   * here whatever the roster held. `boardRenderings`'s own tail counts the
+   * roster `hqBoardText` counts with instead - six, not five - because a
+   * rung whose whole job is "how many are on this board" must not undercount
+   * the one member it never got a chance to name.
+   */
+  it("the bare-total tail says the roster's total, not the number of names", () => {
+    const sign = boardSign({
+      kind: "hq-board",
+      agentIds: ROSTER,
+      widthTiles: 8,
+    });
+    // Narrow enough that only the bare total fits - the run-together counts
+    // rung "2D3W1I" measures 48.8px and a lone digit measures 14.8px, so
+    // 20px sits between the two.
+    const available = 20;
+    const text = officeBoardText({
+      sign,
+      statusById: STATUS_BY_ID,
+      visibleAgentIds: visible,
+      nameById: NAME_BY_ID,
+      available,
+      measure,
+    });
+    expect(text).toBe("6");
+    expect(measure(text)).toBeLessThanOrEqual(available);
+    expect(measure("2D3W1I")).toBeGreaterThan(available);
   });
 });
 
