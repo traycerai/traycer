@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   chatImportedMetadataSchema,
   type ChatEvent,
@@ -210,10 +211,82 @@ export function importedChatMarkerRowSource(
   return parsed.success ? parsed.data : null;
 }
 
+/**
+ * The ONE gate on the unattended-refusal row, and it is deliberately narrow.
+ *
+ * A judge refusal in a chat nobody was watching is journaled as an ordinary
+ * `approval.denied`, and so are the human denials that have always been there.
+ * Only the `agent-created` attendance reason draws a row, so:
+ *
+ *  - every `approval.denied` already on disk carries no `attendanceReason` at
+ *    all and keeps drawing nothing, which means no existing transcript's
+ *    ordinals move;
+ *  - a host that has not yet shipped the attendance fact writes no such value
+ *    either, so a new client against an old host renders exactly what it
+ *    rendered before this row existed;
+ *  - the other two reasons name chats a human WAS given a card for
+ *    (`human-subscribed`) or is expected to answer (`human-away-parked`) - the
+ *    card is the record there, and a transcript line beside it would be the
+ *    same fact twice.
+ *
+ * `rule` / `reason` are carried, not gated on: the row exists because of the
+ * attendance fact alone, and the renderer appends their sentence only when
+ * both are present. Gating on three fields would be three ways to silently
+ * draw nothing where the host meant to say something.
+ */
+const autoJudgeUnattendedDenialMetadataSchema = z.object({
+  autoJudge: z.object({
+    attendanceReason: z.literal("agent-created"),
+    // `.catch(null)` rather than a required string: a half-written bag must
+    // cost the SENTENCE, never the row, because the row's existence is what an
+    // ordinal is numbered from. `.catch` covers `undefined` too - an absent key
+    // is a failed parse of a non-optional schema - so no `.default` beside it.
+    // `.min(1)` is the same empty-string rule `renderableMetadataString`
+    // enforces above: `""` reads as absent, here as there.
+    rule: z.string().min(1).nullable().catch(null),
+    reason: z.string().min(1).nullable().catch(null),
+  }),
+});
+
+/** What an unattended auto-mode refusal row renders. */
+export interface AutoJudgeUnattendedDenialRowSource {
+  /** The rule the judge matched, when the journal recorded one. */
+  readonly rule: string | null;
+  /** The judge's own reasoning, when the journal recorded it. */
+  readonly reason: string | null;
+}
+
+/**
+ * The unattended auto-mode refusal row's content, or `null` when this event
+ * draws no row.
+ *
+ * Under the attendance rule a chat running for another agent gets a tool error
+ * instead of a card: the model learns why, and a human who opens that chat
+ * tomorrow is the only other reader it will ever have - and today they get
+ * nothing that distinguishes "refused without asking anyone" from "a judge
+ * simply refused". This is that row. Shaped like
+ * {@link forkedChatLinkRowSource} for the same reason: the renderer filters on
+ * this rather than on a copy of it.
+ */
+export function autoJudgeUnattendedDenialRowSource(
+  event: ChatEvent,
+): AutoJudgeUnattendedDenialRowSource | null {
+  if (event.type !== "approval.denied") return null;
+  const parsed = autoJudgeUnattendedDenialMetadataSchema.safeParse(
+    event.metadata,
+  );
+  if (!parsed.success) return null;
+  return {
+    rule: parsed.data.autoJudge.rule,
+    reason: parsed.data.autoJudge.reason,
+  };
+}
+
 export function eventMaterializesTranscriptRow(event: ChatEvent): boolean {
   return (
     forkedChatLinkRowSource(event) !== null ||
     notificationAnchorRowSource(event) !== null ||
-    importedChatMarkerRowSource(event) !== null
+    importedChatMarkerRowSource(event) !== null ||
+    autoJudgeUnattendedDenialRowSource(event) !== null
   );
 }

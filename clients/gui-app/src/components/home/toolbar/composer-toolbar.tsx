@@ -1,6 +1,8 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { useStore } from "zustand";
 
+import { catalogSupportedPermissionModes } from "@/components/home/data/landing-options";
+import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { ComposerToolbarLeft } from "@/components/home/toolbar/composer-toolbar-left";
 import { ComposerToolbarRight } from "@/components/home/toolbar/composer-toolbar-right";
 import { DictationRecordingBar } from "@/components/home/toolbar/dictation-recording-bar";
@@ -75,6 +77,17 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
   );
   const harnessLabel = useStore(store, (s) => s.harnessLabel);
   const setPermission = useStore(store, (s) => s.setPermission);
+  // The union across the WHOLE catalog, so the picker can tell "this host
+  // predates `auto`" from "this provider declines it". Memoized on the
+  // catalog's own array identity - the store keeps that reference stable
+  // across unrelated state changes, so this recomputes only when the host's
+  // harness list actually moves.
+  const harnesses = useStore(store, (s) => s.catalog.harnesses);
+  const catalogSupportedModes = useMemo(
+    () => catalogSupportedPermissionModes(harnesses),
+    [harnesses],
+  );
+  const judgeBilling = useAutoJudgeBilling(runTargetHostId);
 
   // While dictation is active the whole bottom row becomes the recording strip
   // (Codex-style) - the model/permission/send controls return on stop.
@@ -103,6 +116,12 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             onPermissionChange={setPermission}
             supportedPermissionModes={supportedPermissionModes}
             harnessLabel={harnessLabel}
+            catalogSupportedModes={catalogSupportedModes}
+            // A turn the user can still switch a mode underneath. The flip is
+            // honoured from the NEXT message, which is exactly what the row's
+            // notice says; `settingsLocked` surfaces cannot flip at all.
+            turnActive={activeTurnStatus !== null && !settingsLocked}
+            judgeBilling={judgeBilling}
             showNextTurnPermissionNote={
               showNextTurnPermissionNote ? !settingsLocked : false
             }

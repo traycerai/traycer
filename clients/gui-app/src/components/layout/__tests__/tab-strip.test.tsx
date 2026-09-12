@@ -1514,6 +1514,8 @@ describe("<TabStrip />", () => {
           planId: null,
           actions: [],
           requestedAt: 1,
+          reason: null,
+          reviewing: null,
         },
       ],
     });

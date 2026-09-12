@@ -288,6 +288,23 @@ export interface SettingsState {
   notificationChimeSounds: NotificationChimeSoundsByEvent;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
+  /**
+   * The permission mode a NEW conversation starts under when nothing more
+   * specific applies.
+   *
+   * Deliberately NOT the only input to a new chat: a composer prefers the last
+   * mode that host ran with (`composer-run-settings-store`, bucketed per host),
+   * so this is the install's default - what a fresh host, or a fresh window with
+   * no history, opens on. Session import reads the same ladder
+   * (`newChatPermissionModeFor`) so an imported chat is no stricter and no
+   * looser than one the user creates.
+   *
+   * Unclamped on write: this value is harness-agnostic, and the clamp against a
+   * given harness's `supportedPermissionModes` belongs to the surface that
+   * resolves one (`normalizePermissionMode`). Clamping here would let whichever
+   * provider happened to be selected narrow an install-wide preference.
+   */
+  setDefaultPermission: (mode: PermissionMode) => void;
   setComposerMode: (mode: ComposerMode) => void;
   setPreventSleepWhileRunning: (value: boolean) => void;
   setShowGlobalResourceMonitor: (value: boolean) => void;
@@ -497,6 +514,7 @@ export const useSettingsStore = create<SettingsState>()(
         if (useThemeLibraryStore.getState().clearSelection())
           set({ themePreset });
       },
+      setDefaultPermission: makeSetter(set, "defaultPermission"),
       setComposerMode: makeSetter(set, "composerMode"),
       setPreventSleepWhileRunning: makeSetter(set, "preventSleepWhileRunning"),
       setShowGlobalResourceMonitor: makeSetter(

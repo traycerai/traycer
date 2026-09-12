@@ -1444,7 +1444,13 @@ export const epicGetChatRunSettingsDowngradeV20ToV10 = defineDowngradePath<
     // already renders the record row's harness mark when the read fails, which
     // is exactly the documented degrade for a host that predates the method.
     //
-    // The message names no harness, so it stays honest as the enum grows.
+    // The message names no harness, so it stays honest as the enum grows -
+    // and it has since had to, in a second dimension: `permissionMode` on the
+    // frozen 1.0 tuple is pinned pre-`auto`, so an `auto` chat refuses here on
+    // exactly the same path a Reasonix chat does, with no code change. That is
+    // the intended behaviour, not a gap: projecting `auto` down to
+    // `auto_accept_edits` for a 1.0 reader would be the same false claim in a
+    // quieter form.
     const parsed = getChatRunSettingsResponseSchemaV10.safeParse(response);
     if (!parsed.success) {
       return {

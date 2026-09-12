@@ -4,6 +4,7 @@ import type {
   ChatEventType,
 } from "@traycer/protocol/persistence/epic/chat-events";
 import {
+  autoJudgeUnattendedDenialRowSource,
   compareCanonicalRowOrder,
   eventMaterializesTranscriptRow,
   importedChatMarkerRowSource,
@@ -323,5 +324,165 @@ describe("importedChatMarkerRowSource", () => {
       metadata: wellFormed,
     });
     expect(importedChatMarkerRowSource(event)).toBeNull();
+  });
+});
+
+describe("autoJudgeUnattendedDenialRowSource", () => {
+  it("returns the rule and reason for an approval.denied with attendanceReason: agent-created", () => {
+    const event = makeChatEvent({
+      eventId: "e-denial",
+      type: "approval.denied",
+      timestamp: 1,
+      message: null,
+      metadata: {
+        autoJudge: {
+          attendanceReason: "agent-created",
+          rule: "Force push",
+          reason: "This rewrites remote history.",
+        },
+      },
+    });
+
+    expect(autoJudgeUnattendedDenialRowSource(event)).toEqual({
+      rule: "Force push",
+      reason: "This rewrites remote history.",
+    });
+    expect(eventMaterializesTranscriptRow(event)).toBe(true);
+  });
+
+  it("returns {rule: null, reason: null} when the journal recorded neither", () => {
+    const event = makeChatEvent({
+      eventId: "e-denial-bare",
+      type: "approval.denied",
+      timestamp: 1,
+      message: null,
+      metadata: {
+        autoJudge: {
+          attendanceReason: "agent-created",
+          rule: null,
+          reason: null,
+        },
+      },
+    });
+
+    expect(autoJudgeUnattendedDenialRowSource(event)).toEqual({
+      rule: null,
+      reason: null,
+    });
+    expect(eventMaterializesTranscriptRow(event)).toBe(true);
+  });
+
+  it("returns {rule: null, reason: null} when rule/reason are absent from the bag entirely", () => {
+    const event = makeChatEvent({
+      eventId: "e-denial-absent",
+      type: "approval.denied",
+      timestamp: 1,
+      message: null,
+      metadata: {
+        autoJudge: { attendanceReason: "agent-created" },
+      },
+    });
+
+    expect(autoJudgeUnattendedDenialRowSource(event)).toEqual({
+      rule: null,
+      reason: null,
+    });
+    expect(eventMaterializesTranscriptRow(event)).toBe(true);
+  });
+
+  it("returns null for an unrelated event type carrying the same metadata", () => {
+    const event = makeChatEvent({
+      eventId: "e-other-type",
+      type: "chat.forked",
+      timestamp: 1,
+      message: null,
+      metadata: {
+        autoJudge: {
+          attendanceReason: "agent-created",
+          rule: null,
+          reason: null,
+        },
+      },
+    });
+
+    expect(autoJudgeUnattendedDenialRowSource(event)).toBeNull();
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+
+  it("returns null for approval.denied with metadata: null", () => {
+    const event = makeChatEvent({
+      eventId: "e-null-metadata",
+      type: "approval.denied",
+      timestamp: 1,
+      message: null,
+      metadata: null,
+    });
+
+    expect(autoJudgeUnattendedDenialRowSource(event)).toBeNull();
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+
+  it("returns null for approval.denied with no autoJudge key at all", () => {
+    const event = makeChatEvent({
+      eventId: "e-no-autojudge",
+      type: "approval.denied",
+      timestamp: 1,
+      message: null,
+      metadata: {},
+    });
+
+    expect(autoJudgeUnattendedDenialRowSource(event)).toBeNull();
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+
+  it("returns null for attendanceReason: human-away-parked", () => {
+    const event = makeChatEvent({
+      eventId: "e-parked",
+      type: "approval.denied",
+      timestamp: 1,
+      message: null,
+      metadata: {
+        autoJudge: {
+          attendanceReason: "human-away-parked",
+          rule: "Force push",
+          reason: "This rewrites remote history.",
+        },
+      },
+    });
+
+    expect(autoJudgeUnattendedDenialRowSource(event)).toBeNull();
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+
+  it("returns null for attendanceReason: human-subscribed", () => {
+    const event = makeChatEvent({
+      eventId: "e-subscribed",
+      type: "approval.denied",
+      timestamp: 1,
+      message: null,
+      metadata: {
+        autoJudge: {
+          attendanceReason: "human-subscribed",
+          rule: "Force push",
+          reason: "This rewrites remote history.",
+        },
+      },
+    });
+
+    expect(autoJudgeUnattendedDenialRowSource(event)).toBeNull();
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+
+  it("returns null for an ordinary approval.denied with no attendance concept - every existing transcript's shape", () => {
+    const event = makeChatEvent({
+      eventId: "e-ordinary-denial",
+      type: "approval.denied",
+      timestamp: 1,
+      message: "Denied by the user",
+      metadata: { rule: "Force push" },
+    });
+
+    expect(autoJudgeUnattendedDenialRowSource(event)).toBeNull();
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
   });
 });

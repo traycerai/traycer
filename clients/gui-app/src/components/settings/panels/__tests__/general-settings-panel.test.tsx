@@ -731,6 +731,37 @@ describe("GeneralSettingsPanel", () => {
     expect(documentPosition(danger, snapshots)).toBe("before");
   });
 
+  it("renders the Default permission mode row and writes 'auto' when Auto is chosen", () => {
+    useSettingsStore.setState({ defaultPermission: "full_access" });
+    renderPanel();
+
+    // Radix opens the dropdown on pointerdown, not click - firing only
+    // `click` leaves the menu shut and the following query finds nothing.
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Full access" }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    // Querying by the "Auto" option's own description text rather than its
+    // label: the label "Auto" is a substring of the sibling "Auto-accept
+    // edits" option, and this menu's DropdownMenuRadioItem concatenates the
+    // label AND description into one accessible name, so a name matcher of
+    // "Auto" or /Auto/ ambiguously matches both radio items.
+    // Spelled out rather than imported from `PERMISSION_OPTIONS`: this is the
+    // sentence a user reads before turning the mode on, and the previous
+    // wording ("asks you only when unsure") was wrong three ways over - a
+    // block cards, an unavailable judge cards, and the mode spends money. An
+    // assertion derived from the option registry would have followed that
+    // copy fix silently instead of making someone re-read it.
+    fireEvent.click(
+      screen.getByRole("menuitemradio", {
+        name: /Auto-approve edits\. A judge reviews each command and asks you whenever it can't clearly approve — risky, unsure, or unavailable\./,
+      }),
+    );
+
+    expect(useSettingsStore.getState().defaultPermission).toBe("auto");
+  });
+
   it("renders the Worktree branch prefix editor (moved from Worktrees)", () => {
     renderPanel();
 

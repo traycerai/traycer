@@ -18,6 +18,7 @@ import {
 
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import {
+  autoJudgeUnattendedDenialRowSource,
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
   importedChatMarkerRowSource,
@@ -201,6 +202,10 @@ export type TranscriptRowSource =
   | { readonly kind: "notification-anchor"; readonly eventId: string }
   | { readonly kind: "imported-chat-marker"; readonly eventId: string }
   | {
+      readonly kind: "auto-judge-unattended-denial";
+      readonly eventId: string;
+    }
+  | {
       readonly kind: "setup-card";
       readonly windowIndex: number;
       readonly eventIds: readonly string[];
@@ -300,6 +305,10 @@ export function forkedChatLinkRowId(eventId: string): string {
 
 export function importedChatMarkerRowId(eventId: string): string {
   return `imported-chat-marker:${eventId}`;
+}
+
+export function autoJudgeUnattendedDenialRowId(eventId: string): string {
+  return `auto-judge-unattended-denial:${eventId}`;
 }
 
 export function setupCardRowId(
@@ -874,10 +883,12 @@ export function projectTranscriptRows(
     });
   }
 
-  // Event rows are appended in two passes, all fork links before all
-  // notification anchors, because that is the renderer's `baseRows` order. For
-  // two events sharing a timestamp the resulting tie order differs from the
-  // event log's own order - matching that exactly is the point.
+  // Event rows are appended in passes - all fork links, then all notification
+  // anchors, then all unattended-refusal lines - because that is the
+  // renderer's `baseRows` order. For two events sharing a timestamp the
+  // resulting tie order differs from the event log's own order; matching that
+  // exactly is the point, so a pass added here must be added there in the same
+  // position.
   for (const event of input.events) {
     if (forkedChatLinkRowSource(event) === null) continue;
     base.push({
@@ -893,6 +904,18 @@ export function projectTranscriptRows(
       rowId: chatTranscriptEventRowId(event.eventId),
       createdAt: event.timestamp,
       source: { kind: "notification-anchor", eventId: event.eventId },
+      context: EMPTY_ROW_CONTEXT,
+    });
+  }
+  for (const event of input.events) {
+    if (autoJudgeUnattendedDenialRowSource(event) === null) continue;
+    base.push({
+      rowId: autoJudgeUnattendedDenialRowId(event.eventId),
+      createdAt: event.timestamp,
+      source: {
+        kind: "auto-judge-unattended-denial",
+        eventId: event.eventId,
+      },
       context: EMPTY_ROW_CONTEXT,
     });
   }

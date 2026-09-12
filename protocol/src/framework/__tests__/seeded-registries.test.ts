@@ -8,6 +8,7 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";
+import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 
 /**
  * Smoke test that every seeded protocol registry survives the structural
@@ -100,12 +101,18 @@ describe("seeded protocol registries", () => {
     // A shard embeds the sub-schemas the head's core is built from, so every
     // change that moves one moves the other. Bound to the SAME constant object,
     // not two equal literals - see `chat-sync/version.ts`.
+    // Indexed by the pinned constant rather than a hard-coded minor: this
+    // assertion is about the two records sharing ONE version object, and a
+    // literal here would have to be edited on every chat-sync bump - turning a
+    // green run into a chore instead of a check.
     expect(
-      persistenceRecordRegistry["chat-head"][1].versions[4].contract
-        .schemaVersion,
+      persistenceRecordRegistry["chat-head"][1].versions[
+        CHAT_SYNC_SCHEMA_VERSION.minor
+      ].contract.schemaVersion,
     ).toBe(
-      persistenceRecordRegistry["chat-shard"][1].versions[4].contract
-        .schemaVersion,
+      persistenceRecordRegistry["chat-shard"][1].versions[
+        CHAT_SYNC_SCHEMA_VERSION.minor
+      ].contract.schemaVersion,
     );
   });
 

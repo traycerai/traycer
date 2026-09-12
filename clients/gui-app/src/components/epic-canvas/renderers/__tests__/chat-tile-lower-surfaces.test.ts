@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   composerHasBlockingApprovals,
+  humanActionableApprovals,
   visibleComposerApprovals,
 } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 
@@ -38,6 +39,68 @@ describe("composerHasBlockingApprovals", () => {
     expect(
       composerHasBlockingApprovals([approval("plan-approval", "plan")], 1),
     ).toBe(true);
+  });
+
+  it("does not block composer submit for a tool approval a judge is still reviewing", () => {
+    expect(
+      composerHasBlockingApprovals(
+        [approval("judging-approval", "tool", { reviewing: "reviewing" })],
+        0,
+      ),
+    ).toBe(false);
+  });
+
+  it("still blocks composer submit for a pending file-edit approval while a judge reviews a tool approval", () => {
+    expect(
+      composerHasBlockingApprovals(
+        [approval("judging-approval", "tool", { reviewing: "checking" })],
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("blocks composer submit for an actionable tool approval that is no longer under a judge", () => {
+    expect(
+      composerHasBlockingApprovals(
+        [approval("tool-approval", "tool", { reviewing: null })],
+        0,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("humanActionableApprovals", () => {
+  it("drops plan approvals", () => {
+    expect(
+      humanActionableApprovals([approval("plan-approval", "plan")]),
+    ).toEqual([]);
+  });
+
+  it("drops approvals currently under a judge", () => {
+    expect(
+      humanActionableApprovals([
+        approval("judging-approval", "tool", { reviewing: "reviewing" }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps a non-plan approval that is not under a judge", () => {
+    const toolApproval = approval("tool-approval", "tool", {
+      reviewing: null,
+    });
+    expect(humanActionableApprovals([toolApproval])).toEqual([toolApproval]);
+  });
+
+  it("keeps only the actionable rows out of a mixed queue", () => {
+    const judging = approval("judging-approval", "tool", {
+      reviewing: "checking",
+    });
+    const plan = approval("plan-approval", "plan");
+    const actionable = approval("tool-approval", "tool", { reviewing: null });
+
+    expect(humanActionableApprovals([judging, plan, actionable])).toEqual([
+      actionable,
+    ]);
   });
 });
 
@@ -100,6 +163,7 @@ describe("chat-tile lowerSurfacesHeight → composerOverlayHeight (ticket 18 rid
 function approval(
   approvalId: string,
   kind: ChatApprovalState["kind"],
+  overrides: Partial<Pick<ChatApprovalState, "reviewing" | "reason">> = {},
 ): ChatApprovalState {
   return {
     approvalId,
@@ -107,8 +171,11 @@ function approval(
     description: "approval",
     input: null,
     requestedAt: 1,
+    reason: null,
+    reviewing: null,
     kind,
     planId: kind === "plan" ? "plan-1" : null,
     actions: [],
+    ...overrides,
   };
 }

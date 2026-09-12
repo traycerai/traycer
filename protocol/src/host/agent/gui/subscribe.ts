@@ -29,6 +29,7 @@ import {
   chatEventSchemaPreInReplyTo,
   chatEventSchemaPreReasonix,
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreAuto,
   chatRunSettingsSchemaPreReasonix,
   chatSchema,
   chatSchemaV18,
@@ -547,6 +548,28 @@ export const chatQueueStateSchema = z.object({
 });
 export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
 
+/**
+ * Wire-freeze queue for `chat.subscribe@1.7` / `@1.8`, whose only delta from
+ * the live one is the queued turn's `permissionMode`. Both lines shipped in
+ * `cli-v1.3.0`, so an `auto` queued turn must not reach either.
+ */
+const chatQueuedPromptItemSchemaPreAuto = chatQueuedPromptItemSchema.extend({
+  settings: chatRunSettingsSchemaPreAuto,
+});
+// A plain `z.union`, managed-command arm FIRST - mirroring
+// `chatQueuedItemSchema` exactly. A `z.discriminatedUnion` here rejects the
+// legacy payload that carries no `kind` (see that schema's comment), and it
+// renders as `oneOf` rather than `anyOf`, which moves every field path the
+// released-line narrowing guard compares against the baseline.
+const chatQueuedItemSchemaPreAuto = z.union([
+  chatQueuedManagedCommandItemSchema,
+  chatQueuedPromptItemSchemaPreAuto,
+]);
+const chatQueueStateSchemaPreAuto = z.object({
+  status: z.enum(["idle", "running", "paused"]),
+  items: z.array(chatQueuedItemSchemaPreAuto),
+});
+
 // Wire-freeze copies with the queue item's `sender` swapped for its
 // pre-`inReplyTo` freeze. Bound to the released `chat.subscribe@1.0–1.3`
 // snapshot + `queueChanged` serverFrames. `message` reuses the live
@@ -695,7 +718,38 @@ export const chatActiveTurnSchema = chatActiveTurnSchemaPreReasonix.extend({
 });
 export type ChatActiveTurn = z.infer<typeof chatActiveTurnSchema>;
 
-export const chatApprovalStateSchema = z.object({
+/**
+ * Why a judge verdict rides the approval card.
+ *
+ * Under the `auto` permission mode a host-side judge answers most approvals
+ * without the human ever seeing them; the ones it blocks, or cannot decide,
+ * are released onto this card. A card that says only "approve this?" after a
+ * judge already refused it is strictly worse than one that never ran a judge,
+ * because the user cannot tell WHY they are being asked. So the verdict travels
+ * with the request.
+ */
+export const chatApprovalReasonSchema = z.object({
+  /** The rule the judge matched, as a short label ("Force push"). */
+  rule: z.string(),
+  /** One or two sentences of the judge's own reasoning. */
+  text: z.string(),
+});
+export type ChatApprovalReason = z.infer<typeof chatApprovalReasonSchema>;
+
+/**
+ * Frozen approval card as the released `chat.subscribe@1.0–1.6` lines ship it.
+ *
+ * The judge fields below are additive and defaulted, which is exactly the shape
+ * that LOOKS safe to let a released line track live - and is not. A key a
+ * released host never emits, on a host→client slot, leaves every consumer of
+ * that line reading `undefined` from a field its own types say is always
+ * present; `released-baseline-compat.test.ts` classifies that as breaking, and
+ * it caught this addition on all seven released minors before it shipped.
+ *
+ * Do NOT add fields here. Add them to `chatApprovalStateSchema` below, which
+ * only the unreleased `1.7`+ lines bind.
+ */
+export const chatApprovalStateSchemaPreAuto = z.object({
   approvalId: z.string(),
   toolName: z.string(),
   description: z.string(),
@@ -704,6 +758,35 @@ export const chatApprovalStateSchema = z.object({
   kind: z.enum(["tool", "plan"]).default("tool"),
   planId: z.string().nullable().default(null),
   actions: z.array(runtimePlanActionSchema).default([]),
+});
+export type ChatApprovalStatePreAuto = z.infer<
+  typeof chatApprovalStateSchemaPreAuto
+>;
+
+export const chatApprovalStateSchema = chatApprovalStateSchemaPreAuto.extend({
+  /**
+   * Why this call reached a human, when a judge decided it should. `null` for
+   * every approval that was never judged - a supervised chat, a provider-native
+   * classifier's own denial, or a judge that was never consulted.
+   *
+   * Defaulted rather than optional: absent and "not judged" are the same fact
+   * for every consumer, and a host too old to send it ran no judge at all.
+   */
+  reason: chatApprovalReasonSchema.nullable().default(null),
+  /**
+   * The judge stage currently running, for the transient "Reviewing…" state on
+   * the tool card (plan decision 7/19). `"checking"` is the fast one-shot pass,
+   * `"reviewing"` the deep transcript-reading pass; `null` means no judge is
+   * running, which is every approval a human is genuinely parked on.
+   *
+   * **This field rides the FRAME, not the journal.** The judging state is
+   * deliberately not durable: it is a property of a turn in flight, and a card
+   * restored from history must never come back claiming a judge is still
+   * thinking about it. It is also why the card carries no buttons while this is
+   * non-null - there is no human override during a judge run, and the stage-2
+   * cap is what bounds the wait instead.
+   */
+  reviewing: z.enum(["checking", "reviewing"]).nullable().default(null),
 });
 export type ChatApprovalState = z.infer<typeof chatApprovalStateSchema>;
 
@@ -740,12 +823,12 @@ export type ChatAccess = z.infer<typeof chatAccessSchema>;
 const chatSnapshotSchemaV17 = z.object({
   chat: chatSchemaV18,
   access: chatAccessSchema,
-  queue: chatQueueStateSchema,
+  queue: chatQueueStateSchemaPreAuto,
   // Authoritative in-progress state (see `chatRunStatusSchema`). The GUI's
   // in-progress indicators read this, not `activeTurn`.
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchema.nullable(),
-  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   // Local-only worktree binding projected from host SQLite at subscribe
   // time. `null` means the binding has not been decided for this owner yet.
@@ -816,6 +899,10 @@ const chatSnapshotSchemaV17 = z.object({
 });
 export const chatSnapshotSchema = chatSnapshotSchemaV17.extend({
   chat: chatSchema,
+  // Re-widened for the same reason `chatSchema` re-widens `settings`: the V17
+  // base is pre-`auto` because 1.7 and 1.8 embed it.
+  queue: chatQueueStateSchema,
+  pendingApprovals: z.array(chatApprovalStateSchema),
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
@@ -1051,6 +1138,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   QueueSchema extends z.ZodType,
   EventSchema extends z.ZodType,
   ActionSchema extends z.ZodType,
+  ApprovalSchema extends z.ZodType,
   InterviewAnsweredSchema extends z.ZodType,
   InterviewErroredSchema extends z.ZodType,
 >(schemas: {
@@ -1058,6 +1146,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   readonly queue: QueueSchema;
   readonly event: EventSchema;
   readonly action: ActionSchema;
+  readonly approval: ApprovalSchema;
   readonly interviewAnswered: InterviewAnsweredSchema;
   readonly interviewErrored: InterviewErroredSchema;
 }) {
@@ -1094,7 +1183,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
       kind: z.literal("approvalRequested"),
       ...textFrameFields,
       ...chatReferenceFields,
-      approval: chatApprovalStateSchema,
+      approval: schemas.approval,
     }),
     z.object({
       kind: z.literal("approvalResolved"),
@@ -1177,12 +1266,27 @@ function buildChatSubscribeCommonServerFrameSchemas<
   ];
 }
 
+// Frozen for `chat.subscribe@1.7` / `@1.8`: pre-`auto` on both leaves the mode
+// reaches - the queued turn's settings and the approval card's judge fields.
 const chatSubscribeCommonServerFrameSchemasV18 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchemaV18,
+    queue: chatQueueStateSchemaPreAuto,
+    event: chatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchemaPreAuto,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+  });
+
+// The live set, bound only by `1.9`+ (neither of which is released).
+const chatSubscribeCommonServerFrameSchemasLive =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
     queue: chatQueueStateSchema,
     event: chatEventSchema,
     action: chatActionSchema,
+    approval: chatApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
   });
@@ -1194,6 +1298,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     queue: chatQueueStateSchemaPreInReplyTo,
     event: chatEventSchemaPreInReplyTo,
     action: chatActionSchemaV15,
+    approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
   });
@@ -1212,6 +1317,7 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
     // neither the new harness nor the new event type.
     event: chatEventSchemaPreReasonix,
     action: chatActionSchemaV15,
+    approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
   });
@@ -1229,7 +1335,8 @@ const chatSubscribeSharedServerFrameSchemasV18 = [
   blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
-  ...chatSubscribeSharedServerFrameSchemasV18,
+  ...chatSubscribeCommonServerFrameSchemasLive,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
 
 // Frozen live-shape shared frames for `chat.subscribe@1.3` (workflow-bearing
@@ -1745,7 +1852,7 @@ const chatSnapshotSchemaV10 = z.object({
   queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreV15.nullable(),
-  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
   missingWorktreePaths: z.array(z.string()),
@@ -1799,7 +1906,7 @@ const chatSubscribeServerFrameSchemaV10 = z.discriminatedUnion("kind", [
     kind: z.literal("approvalRequested"),
     ...textFrameFields,
     ...chatReferenceFields,
-    approval: chatApprovalStateSchema,
+    approval: chatApprovalStateSchemaPreAuto,
   }),
   z.object({
     kind: z.literal("approvalResolved"),
@@ -2050,7 +2157,7 @@ const chatSnapshotSchemaV11 = z.object({
   queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreV15.nullable(),
-  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
   missingWorktreePaths: z.array(z.string()),
@@ -2109,7 +2216,7 @@ const chatSnapshotSchemaV12 = z.object({
   queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreV15.nullable(),
-  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
   missingWorktreePaths: z.array(z.string()),
@@ -2166,7 +2273,7 @@ const chatSnapshotSchemaV13 = z.object({
   queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreV15.nullable(),
-  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
   missingWorktreePaths: z.array(z.string()),
@@ -2228,7 +2335,7 @@ const chatSnapshotSchemaV14 = z.object({
   queue: chatQueueStateSchemaPreManagedCommand,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreV15.nullable(),
-  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
   missingWorktreePaths: z.array(z.string()),
@@ -2292,7 +2399,7 @@ const chatSnapshotSchemaV15 = z.object({
   queue: chatQueueStateSchemaPreManagedCommand,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreReasonix.nullable(),
-  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
   missingWorktreePaths: z.array(z.string()),
@@ -2440,7 +2547,7 @@ const chatSnapshotSchemaV16 = z.object({
   queue: chatQueueStateSchemaV16,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreReasonix.nullable(),
-  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
   missingWorktreePaths: z.array(z.string()),
@@ -2480,6 +2587,7 @@ const chatSubscribeCommonServerFrameSchemasV16 =
     queue: chatQueueStateSchemaV16,
     event: chatEventSchemaPreReasonix,
     action: chatActionSchemaV16,
+    approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
   });
@@ -2695,10 +2803,10 @@ const chatWindowedSnapshotSchemaV18 = z.object({
   /** The chat record WITHOUT `messages` / `events` — see `chatRecordSchema`. */
   chat: chatSchemaV18.omit({ messages: true, events: true }),
   access: chatAccessSchema,
-  queue: chatQueueStateSchema,
+  queue: chatQueueStateSchemaPreAuto,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchema.nullable(),
-  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingApprovals: z.array(chatApprovalStateSchemaPreAuto),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
   missingWorktreePaths: z.array(z.string()),
@@ -2758,6 +2866,10 @@ const chatWindowedSnapshotSchemaV18 = z.object({
 export const chatWindowedSnapshotSchema = chatWindowedSnapshotSchemaV18.extend({
   chat: chatRecordSchema,
   tail: chatTranscriptWindowSchema,
+  // Re-widened: the V18 base is pre-`auto` because `1.8` binds it and `1.8`
+  // shipped in `cli-v1.3.0`.
+  queue: chatQueueStateSchema,
+  pendingApprovals: z.array(chatApprovalStateSchema),
 });
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
 
@@ -2999,6 +3111,32 @@ export const chatSubscribeV18 = defineStreamRpcContract({
 export const chatSubscribeV19 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 9 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The `auto` permission-mode line.
+ *
+ * `1.10` is the first minor a host may serve an `auto` chat on, and the version
+ * the host's floor gate keys off: a chat whose run settings say `auto` is
+ * REFUSED to a subscriber below this minor, exactly as an Antigravity chat is
+ * refused below `1.9` (`HARNESS_MINIMUM_CHAT_SUBSCRIBE_MINOR` /
+ * `CHAT_HARNESS_REQUIRES_NEWER_CLIENT`). Refusal, not projection: a projected
+ * `auto_accept_edits` would come straight back as the old client's next
+ * whole-tuple settings replace (`chatRunSettingsStrictSchema`'s WYSIWYG note)
+ * and silently end auto on a chat the user set to it.
+ *
+ * Unlike `1.9`, whose delta is one anchor arm, this line's delta is spread
+ * across every frame that carries run settings or an approval card - so `1.8`
+ * and `1.9` bind the `PreAuto` frame set below and only this line binds live.
+ * The two freezes compose: `1.8` is pre-Antigravity AND pre-auto, `1.9` is
+ * pre-auto alone.
+ */
+export const chatSubscribeV110 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 10 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

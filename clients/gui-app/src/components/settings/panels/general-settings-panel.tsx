@@ -7,6 +7,7 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
+import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
@@ -40,6 +41,8 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 export function GeneralSettingsPanel() {
   const navigate = useNavigate();
   const restartOnboarding = useOnboardingStore((s) => s.restart);
+  const defaultPermission = useSettingsStore((s) => s.defaultPermission);
+  const setDefaultPermission = useSettingsStore((s) => s.setDefaultPermission);
   const showGlobalResourceMonitor = useSettingsStore(
     (s) => s.showGlobalResourceMonitor,
   );
@@ -87,6 +90,33 @@ export function GeneralSettingsPanel() {
           dataTestId={undefined}
           fill={false}
         >
+          <SettingsRow
+            row={GENERAL.definitions.defaultPermission}
+            control={
+              <PermissionsPicker
+                value={defaultPermission}
+                disabled={false}
+                onChange={(next) => {
+                  trackGeneralSetting("defaultPermission");
+                  setDefaultPermission(next);
+                }}
+                // No harness scope: the default is install-wide and every
+                // option stays enabled. A provider that does not honour the
+                // chosen mode narrows it in the composer, where a harness is
+                // actually selected.
+                supportedPermissionModes={null}
+                harnessLabel={null}
+                // Install-wide and harness-agnostic, so there is no catalog to
+                // union, no turn to be mid-way through, and no one host whose
+                // judge this row could name: all three stay at the values that
+                // render exactly what this row rendered before them.
+                catalogSupportedModes={null}
+                turnActive={false}
+                judgeBilling={null}
+                closeFocus="trigger"
+              />
+            }
+          />
           <VoiceSettingsSection />
           <SettingsRow
             row={GENERAL.definitions.quoteReply}

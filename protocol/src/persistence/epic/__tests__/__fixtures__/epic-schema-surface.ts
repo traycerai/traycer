@@ -100,6 +100,7 @@ export const epicSchemaSurfaceBaseline = {
                       "enum": [
                         "supervised",
                         "auto_accept_edits",
+                        "auto",
                         "full_access"
                       ]
                     },
@@ -8544,6 +8545,7 @@ export const epicSchemaSurfaceBaseline = {
                       "enum": [
                         "supervised",
                         "auto_accept_edits",
+                        "auto",
                         "full_access"
                       ]
                     },

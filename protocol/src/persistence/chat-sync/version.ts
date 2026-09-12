@@ -58,7 +58,20 @@ import { z } from "zod";
 // publisher losslessly - `CHAT_SYNC_1_1_READER_FLOOR` stays where it is.
 // 1.4 adds autonomous_resume.deliveryPlacement, defaulting to unknown for
 // old data. It is presentation metadata; the minimum reader does not change.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 4 } as const;
+//
+// 1.5 reopens `core.settings.permissionMode` from a closed enum to a checked
+// string, so the `auto` mode (and whatever follows it) does not make a
+// published chat unreadable to shipped readers - the same reopening
+// `noticeKind` got, for the same reason (`open-harness.ts`). Widening a leaf
+// from enum to string is additive for a reader: every value a 1.4 record can
+// carry still parses, and the reverse direction is what the reopening exists
+// to survive. `CHAT_SYNC_1_1_READER_FLOOR` is NOT raised and a 1.5 head still
+// stamps `minReaderVersion: null` - a 1.1 reader meeting an `auto` chat is
+// exactly the case this change fixes, and §2/§3's `raw` re-emission and
+// residual capture keep its re-publication lossless.
+// (Renumbered from 1.4 on the merge to main, which had taken that minor for
+// the delivery-placement field above.)
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 5 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

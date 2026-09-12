@@ -242,6 +242,7 @@ import {
   agentGuiListHarnessesUpgradeV70ToV71,
   agentGuiListHarnessesUpgradeV71ToV80,
   agentGuiListHarnessesUpgradeV80ToV90,
+  agentGuiListHarnessesUpgradeV90ToV91,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
@@ -253,6 +254,7 @@ import {
   agentGuiListHarnessesV71,
   agentGuiListHarnessesV80,
   agentGuiListHarnessesV90,
+  agentGuiListHarnessesV91,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -264,6 +266,7 @@ import {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -749,8 +752,16 @@ import {
   sessionImportScanV12,
 } from "@traycer/protocol/host/session-import/scan";
 import {
+  autoJudgeGetV10,
+  autoJudgeSetV10,
+  autoPolicyGetV10,
+  autoPolicySetV10,
+  providersSetAutoJudgeV10,
+} from "@traycer/protocol/host/auto-mode/contracts";
+import {
   sessionImportRunV10,
   sessionImportRunV11,
+  sessionImportRunV12,
 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import {
@@ -942,6 +953,8 @@ import {
   // shape.
   providersListRequestSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV80,
+  providersListResponseSchemaV90,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -950,7 +963,6 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
-  providersListResponseSchemaV80,
   isProfileEnabled,
   providersListModelProvidersRequestSchema,
   providersListModelProvidersResponseSchema,
@@ -2195,7 +2207,9 @@ export const providersListV90 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 9, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  // Frozen at the pre-`autoJudge` provider state when 9.1 opened, exactly as
+  // 8.0 froze when 9.0 opened. See `providersListResponseSchemaV90`.
+  responseSchema: providersListResponseSchemaV90,
 });
 
 export const providersListUpgradeV80ToV90 = defineUpgradePath<
@@ -2208,6 +2222,43 @@ export const providersListUpgradeV80ToV90 = defineUpgradePath<
   // `.optional()` precisely so "this host has no per-profile key method" stays
   // distinguishable from a concrete state, and a v8.0 host IS such a host.
   upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `providers.list@9.1` - publishes the per-provider auto-mode judge.
+ *
+ * `providers.setAutoJudge` writes the value; nothing read it back, so the
+ * Providers > General switch could not show its own stored state after a
+ * reload. This is the read half, and `providers.list` is its only possible
+ * carrier: the `providers.set*` state ECHOES are pinned to frozen shapes on
+ * purpose (`providerMutationCliStateSchemaV21`'s note - "add them to the live
+ * `providerCliStateBaseShape` and let `providers.list` publish them"), and an
+ * echo cannot answer a question the caller did not just ask anyway.
+ *
+ * A MINOR, with no `responseGrowthProjectionGated`: `autoJudge` is a new KEY,
+ * which a within-major re-parse strips for a 9.0 peer. Only a new ENUM MEMBER
+ * needs the emission-gated annotation, which is why
+ * `agent.gui.listHarnesses@9.1` carries one and this does not.
+ */
+export const providersListV91 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 9, minor: 1 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV90ToV91 = defineUpgradePath<
+  typeof providersListV90,
+  typeof providersListV91
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 9, minor: 1 },
+  upgradeRequest: (request) => request,
+  // Nothing to fill: `autoJudge` is optional on 9.1, and a 9.0 host genuinely
+  // has no judge preference to report. Absent stays absent, and the reader's
+  // `?? "traycer"` supplies the documented default - which is the whole reason
+  // the field is `.optional()` rather than defaulted.
   upgradeResponse: (response) => response,
 });
 
@@ -2577,10 +2628,10 @@ function enabledProviderProfilesOnly(
 }
 
 export const providersListDowngradeV9ToV8 = defineDowngradePath<
-  typeof providersListV90,
+  typeof providersListV91,
   typeof providersListV80
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2597,10 +2648,10 @@ export const providersListDowngradeV9ToV8 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV7 = defineDowngradePath<
-  typeof providersListV90,
+  typeof providersListV91,
   typeof providersListV70
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2616,10 +2667,10 @@ export const providersListDowngradeV9ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV6 = defineDowngradePath<
-  typeof providersListV90,
+  typeof providersListV91,
   typeof providersListV60
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2636,10 +2687,10 @@ export const providersListDowngradeV9ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV5 = defineDowngradePath<
-  typeof providersListV90,
+  typeof providersListV91,
   typeof providersListV50
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2656,10 +2707,10 @@ export const providersListDowngradeV9ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV4 = defineDowngradePath<
-  typeof providersListV90,
+  typeof providersListV91,
   typeof providersListV40
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2676,10 +2727,10 @@ export const providersListDowngradeV9ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV3 = defineDowngradePath<
-  typeof providersListV90,
+  typeof providersListV91,
   typeof providersListV30
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2696,10 +2747,10 @@ export const providersListDowngradeV9ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV2 = defineDowngradePath<
-  typeof providersListV90,
+  typeof providersListV91,
   typeof providersListV20
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2716,10 +2767,10 @@ export const providersListDowngradeV9ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV1 = defineDowngradePath<
-  typeof providersListV90,
+  typeof providersListV91,
   typeof providersListV10
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4611,6 +4662,63 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // released method floor, so a peer that predates them advertises neither
   // handler nor capability; clients feature-detect and render their explicit
   // unsupported state rather than making the whole connection incompatible.
+  // The `auto` permission mode's two host-scoped settings, plus the
+  // per-provider judge switch. All optional-capability methods with an
+  // `unsupported` degrade - see `auto-mode/contracts.ts` for why none of them
+  // may enter `RELEASED_FLOOR_METHOD_NAMES`, and why neither setting could live
+  // in the CLI config's `features` block.
+  "autoJudge.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: autoJudgeGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "autoJudge.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: autoJudgeSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "autoPolicy.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: autoPolicyGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "autoPolicy.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: autoPolicySetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "config.shell.get": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5740,11 +5848,24 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
     },
     9: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentGuiListHarnessesV90,
           upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV80ToV90,
+        },
+        1: {
+          contract: agentGuiListHarnessesV91,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV90ToV91,
+          // `supportedPermissionModes` gains `auto` over 9.0, which is response
+          // VALUE growth - refused by default, because a response value is
+          // normally decided by shared state and would poison every 9.0 peer's
+          // projection with no opt-out. Here it is genuinely emission-gated:
+          // the host resolves the catalog against the negotiated minor and
+          // serves a 9.0 peer the pre-`auto` array. The row's other addition,
+          // `nativeAutoJudge`, needs no annotation - a new KEY is stripped by
+          // the within-major re-parse.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {
@@ -9352,11 +9473,15 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
     },
     9: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersListV90,
           upgradeFromPreviousVersion: providersListUpgradeV80ToV90,
+        },
+        1: {
+          contract: providersListV91,
+          upgradeFromPreviousVersion: providersListUpgradeV90ToV91,
         },
       },
       downgradePathsFromLatest: {
@@ -9866,6 +9991,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {
         1: providersClearApiKeyDowngradeV21ToV10,
       },
+    },
+  },
+  "providers.setAutoJudge": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetAutoJudgeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
   },
   "providers.setTerminalAgentArgs": {
@@ -10956,13 +11094,20 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "sessionImport.run": {
     1: {
-      latestMinor: 1,
+      // 1.1 is mainline's (Antigravity). 1.2 carries no shape delta over it -
+      // it is the negotiable fact that the host understands `auto` in the open
+      // request's `permissionMode`. See the contract's own note for why a
+      // shape cannot say that.
+      latestMinor: 2,
       versions: {
         0: {
           contract: sessionImportRunV10,
         },
         1: {
           contract: sessionImportRunV11,
+        },
+        2: {
+          contract: sessionImportRunV12,
         },
       },
     },
@@ -11082,7 +11227,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 9,
+      latestMinor: 10,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11117,6 +11262,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // subscriber rather than sending a frame it cannot decode.
         9: {
           contract: chatSubscribeV19,
+        },
+        10: {
+          contract: chatSubscribeV110,
         },
       },
     },

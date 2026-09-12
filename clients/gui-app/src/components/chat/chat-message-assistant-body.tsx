@@ -1146,6 +1146,10 @@ function AssistantSegment({
       // Import provenance, same as the fork link above: synthesized system row
       // only. Listed here so the exhaustive switch stays complete.
       return null;
+    case "auto-judge-unattended-denial":
+      // An auto-mode refusal nobody was asked about: synthesized system row
+      // only, like the two above. Listed here so the switch stays exhaustive.
+      return null;
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;

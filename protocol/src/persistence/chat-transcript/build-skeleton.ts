@@ -174,6 +174,7 @@ function rowRole(source: TranscriptRowSource): RowSkeletonEntry["role"] {
       return "assistant";
     case "forked-chat-link":
     case "imported-chat-marker":
+    case "auto-judge-unattended-denial":
     case "setup-card":
       return "system";
   }
@@ -505,6 +506,7 @@ function rowBodyFingerprint(
     case "forked-chat-link":
     case "notification-anchor":
     case "imported-chat-marker":
+    case "auto-judge-unattended-denial":
       absorbRecord(lookup.eventsById.get(source.eventId));
       break;
     case "setup-card":

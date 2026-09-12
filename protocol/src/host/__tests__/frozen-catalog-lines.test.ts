@@ -20,6 +20,8 @@ import {
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV70,
   listGuiHarnessesResponseSchemaV71,
+  listGuiHarnessesResponseSchemaV80,
+  listGuiHarnessesResponseSchemaV90,
   listGuiHarnessesResponseSchema,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -27,6 +29,8 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV90,
+  providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -37,6 +41,7 @@ import {
 import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
+  getChatRunSettingsResponseSchemaV20,
 } from "@traycer/protocol/host/epic/chat-records";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -73,8 +78,15 @@ const LIVE_FROZEN_EXPORTS = {
   // of major 7 from growing the id enum (`versioned-rpc.ts` refuses it), so
   // 7.1 could not absorb the id even though no tag has shipped 7.1 itself.
   "agent.gui.listHarnesses@7.1": listGuiHarnessesResponseSchemaV71,
-  // The head line, pinned for the same reason `providers.list@8.0` is.
-  "agent.gui.listHarnesses@8.0": listGuiHarnessesResponseSchema,
+  // 8.0 froze when 8.1 opened for the `auto` permission mode and the
+  // `nativeAutoJudge` row field. Same response as when it was head - it names
+  // the frozen schema now and its dump is unchanged, so this row was NOT
+  // regenerated.
+  "agent.gui.listHarnesses@8.0": listGuiHarnessesResponseSchemaV80,
+  // The head line, holding 8.0's old job: it names the LIVE schema, so the next
+  // attempt to grow the row fails here first.
+  "agent.gui.listHarnesses@9.0": listGuiHarnessesResponseSchemaV90,
+  "agent.gui.listHarnesses@9.1": listGuiHarnessesResponseSchema,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "agent.list@3.0": listAgentsResponseSchemaV30,
@@ -131,13 +143,28 @@ const LIVE_FROZEN_EXPORTS = {
   // list and the snapshot's key set are held equal below, so deleting a row
   // here without deleting the fixture (or the reverse) fails rather than
   // silently narrowing what is guarded.
-  "providers.list@8.0": providersListResponseSchema,
+  // 8.0 froze when 8.1 opened to publish the per-provider `autoJudge`. Same
+  // response as when it was head - it names the frozen schema now and its dump
+  // is unchanged, so this row was NOT regenerated.
+  "providers.list@8.0": providersListResponseSchemaV80,
+  // The head line, holding 8.0's old job: it names the LIVE schema, so the next
+  // attempt to grow the provider state fails here first.
+  "providers.list@9.0": providersListResponseSchemaV90,
+  "providers.list@9.1": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate
   // noticed.
   "epic.getChatRunSettings@1.0": getChatRunSettingsResponseSchemaV10,
-  "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchema,
+  // The head line, and the one row here that WAS regenerated for `auto`. 2.0 is
+  // unreleased (the newest baseline carries this method at 1.0 only), so it
+  // widens in place under the "an unreleased line widens in place" rule rather
+  // than freezing and opening 2.1. What protects the released 1.0 reader is the
+  // pre-`auto` pin on `chatRunSettingsSchemaV10` plus the V2->V1 bridge's
+  // existing `DOWNGRADE_UNSUPPORTED` refusal, which now covers the mode
+  // dimension for free.
+  "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchemaV20,
+  "epic.getChatRunSettings@3.0": getChatRunSettingsResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
 } as const;

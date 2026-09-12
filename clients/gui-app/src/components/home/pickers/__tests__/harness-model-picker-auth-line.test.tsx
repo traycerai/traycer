@@ -134,6 +134,7 @@ function harnessOption(
       "auto_accept_edits",
       "full_access",
     ],
+    nativeAutoJudge: false,
     availabilityPending: false,
     authStatus,
     models: [],

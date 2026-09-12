@@ -87,8 +87,30 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 }));
 
 const invalidateQueriesMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+/**
+ * Stands in for the query cache's `getQueryData` read the `auto` gate makes
+ * (`hostUnderstandsAutoPermissionMode`). The real module is mocked wholesale
+ * below for `invalidateQueries` already, so this is a second mocked member on
+ * the same seam rather than a real `QueryClient`.
+ *
+ * `value` is answered to EVERY read regardless of key, which on its own would
+ * make the one failure that matters invisible: a gate reading the wrong cache
+ * slot finds nothing, demotes every `auto`, and leaves every assertion in this
+ * file green. So each key is recorded too, and the cached-row test asserts the
+ * exact slot `useHostQuery` writes for `agent.gui.listHarnesses`.
+ */
+const queryDataHarness = vi.hoisted(() => ({
+  value: undefined as unknown,
+  keys: [] as unknown[],
+}));
 vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({ invalidateQueries: invalidateQueriesMock }),
+  useQueryClient: () => ({
+    invalidateQueries: invalidateQueriesMock,
+    getQueryData: (queryKey: unknown) => {
+      queryDataHarness.keys.push(queryKey);
+      return queryDataHarness.value;
+    },
+  }),
 }));
 
 import { SessionImportRunController } from "@/components/session-import/session-import-run-controller";
@@ -103,7 +125,10 @@ import {
   useSessionImportRunStore,
   type SessionImportRunState,
 } from "@/stores/session-import/session-import-run-store";
-import { sessionImportQueryKeys } from "@/lib/query-keys";
+import { hostQueryKeys, sessionImportQueryKeys } from "@/lib/query-keys";
+import type { HostRpcRegistry } from "@/lib/host";
+import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
+import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
 
 const SELECTION: SessionImportSelection = {
   harness: "claude",
@@ -156,9 +181,32 @@ function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
 }
 
 function createStreamBinding(hostId: string): StreamBindingRecord {
+  return createStreamBindingWithWsClient(hostId, fakeWsStreamClient());
+}
+
+/**
+ * A stream binding whose `sessionImport.run` negotiated version is
+ * `version` rather than the honest-stub's always-`null` - the OTHER of the
+ * two facts `hostUnderstandsAutoPermissionMode` can read off, alongside the
+ * cached `agent.gui.listHarnesses` row `queryDataHarness` stands in for.
+ */
+function createStreamBindingWithSchemaVersion(
+  hostId: string,
+  version: { readonly major: number; readonly minor: number },
+): StreamBindingRecord {
+  return createStreamBindingWithWsClient(hostId, {
+    ...fakeWsStreamClient(),
+    getMethodSchemaVersion: () => version,
+  });
+}
+
+function createStreamBindingWithWsClient(
+  hostId: string,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
+): StreamBindingRecord {
   const releases: Array<Mock<() => void>> = [];
   const binding: StreamRuntimeBinding = {
-    wsStreamClient: fakeWsStreamClient(),
+    wsStreamClient,
     hostId,
     retain: () => {
       const release = vi.fn<() => void>();
@@ -221,6 +269,8 @@ beforeEach(() => {
   streamBinding.current = createStreamBinding("host-a");
   runClientHarness.instances = [];
   invalidateQueriesMock.mockClear();
+  queryDataHarness.value = undefined;
+  queryDataHarness.keys = [];
   useSessionImportRunStore.setState({ runs: new Map() });
 });
 
@@ -774,5 +824,213 @@ describe("<SessionImportRunController />", () => {
 
     expect(probe.close).toHaveBeenCalledTimes(1);
     expect(requireRelease(currentBindingRecord(), 0)).toHaveBeenCalledTimes(1);
+  });
+
+  describe("the auto permission-mode gate", () => {
+    it("demotes a sticky auto default to auto_accept_edits when the host has proven nothing", () => {
+      streamBinding.current = createStreamBinding("host-auto-unproven");
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+    });
+
+    it("sends auto unchanged when the negotiated sessionImport.run version proves the host knows it", () => {
+      streamBinding.current = createStreamBindingWithSchemaVersion(
+        "host-auto-negotiated",
+        sessionImportRunV12.schemaVersion,
+      );
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto");
+    });
+
+    it("sends auto unchanged when the cached agent.gui.listHarnesses row advertises it", () => {
+      streamBinding.current = createStreamBinding("host-auto-cached");
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      const response: ListGuiHarnessesResponse = {
+        harnesses: [
+          {
+            id: "claude",
+            label: "Claude Code",
+            enabled: true,
+            available: true,
+            error: null,
+            modes: ["gui", "tui"],
+            requiresApiKey: false,
+            supportedPermissionModes: [
+              "supervised",
+              "auto_accept_edits",
+              "auto",
+              "full_access",
+            ],
+            nativeAutoJudge: false,
+            availabilityPending: false,
+          },
+        ],
+      };
+      queryDataHarness.value = response;
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto");
+      // The seeded answer above is key-blind, so the slot the gate actually
+      // read is asserted separately. Reading the wrong one is not a loud
+      // failure - it finds nothing, demotes every `auto`, and leaves the rest
+      // of this file green - so it has to be pinned to the exact key
+      // `useHostQuery` writes for this method (`cacheKeyIdentity: undefined`
+      // and `params: {}`, hence the bare `{}`).
+      expect(queryDataHarness.keys).toContainEqual(
+        hostQueryKeys.method<HostRpcRegistry, "agent.gui.listHarnesses">(
+          "host-auto-cached",
+          "agent.gui.listHarnesses",
+          {},
+        ),
+      );
+    });
+
+    // `session-import-wizard.tsx` mounts `useGuiHarnessesQueryForClient` for
+    // the import TARGET host, warming the `agent.gui.listHarnesses` cache slot
+    // this gate reads - specifically so a REMOTE host (one whose
+    // `sessionImport.run` schema version this window has never negotiated, so
+    // `getMethodSchemaVersion` answers `null`) can still prove it understands
+    // `auto` off that cached row instead of the schema-version fact. These two
+    // cases pin the read side of that fix: same gate, same mechanism as the
+    // "host-auto-cached" / "host-auto-unproven" cases above, but for a host
+    // shaped like the wizard's remote import target rather than the ambient
+    // one this controller otherwise runs against.
+    it("opens with permissionMode 'auto' for a remote-shaped host whose cached listHarnesses row advertises it", () => {
+      streamBinding.current = createStreamBinding("host-remote-import-target");
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      const response: ListGuiHarnessesResponse = {
+        harnesses: [
+          {
+            id: "claude",
+            label: "Claude Code",
+            enabled: true,
+            available: true,
+            error: null,
+            modes: ["gui", "tui"],
+            requiresApiKey: false,
+            supportedPermissionModes: [
+              "supervised",
+              "auto_accept_edits",
+              "auto",
+              "full_access",
+            ],
+            nativeAutoJudge: false,
+            availabilityPending: false,
+          },
+        ],
+      };
+      queryDataHarness.value = response;
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto");
+    });
+
+    it("demotes to 'auto_accept_edits' for a remote-shaped host with an empty listHarnesses cache slot", () => {
+      streamBinding.current = createStreamBinding(
+        "host-remote-import-target-empty",
+      );
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      // No `queryDataHarness.value` seeded - the warm-up query never landed a
+      // row for this host, the same as a host too old to answer it at all.
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+    });
+
+    it("never touches a non-auto default even when the host has proven nothing", () => {
+      streamBinding.current = createStreamBinding("host-auto-not-relevant");
+      useSettingsStore.setState({ defaultPermission: "full_access" });
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("full_access");
+    });
   });
 });

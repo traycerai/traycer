@@ -16,7 +16,10 @@ import {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
   createImageResolutionUpdatedFrame,
+  chatApprovalStateSchema,
+  chatApprovalStateSchemaPreAuto,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   guiAgentModelCapabilitiesSchema,
@@ -2279,14 +2282,78 @@ describe("chat.subscribe registry membership", () => {
     // negotiates to the highest the peers share, so that line flipping to `8`
     // was the moment `1.8`-capable peers started exchanging windowed frames.
     // `9` is windowed too - it differs from `8` only in the session-anchor
-    // union reachable through `rowContext`.
-    expect(entry[1].latestMinor).toBe(9);
+    // union reachable through `rowContext`. `10` does not switch anything
+    // either: it is the auto-mode line, and what it switches is the host's
+    // willingness to SERVE an `auto` chat at all.
+    expect(entry[1].latestMinor).toBe(10);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
     expect(entry[1].versions[9].contract).toBe(chatSubscribeV19);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
+    expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
+    expect(entry[1].versions[10].contract).toBe(chatSubscribeV110);
+    expect(chatSubscribeV110.schemaVersion).toEqual({ major: 1, minor: 10 });
+  });
+
+  it("keeps the judge fields off every RELEASED chat.subscribe line", () => {
+    // `reason` / `reviewing` are additive and defaulted, which is exactly the
+    // shape that looks safe to let a released line track live and is not: a key
+    // a released host never emits leaves that line's consumers reading
+    // `undefined` from a field their types call present.
+    // `released-baseline-compat.test.ts` is the gate; this is the local,
+    // readable statement of what the gate protects, keyed to the schema
+    // objects rather than to a JSON dump.
+    expect(Object.keys(chatApprovalStateSchemaPreAuto.shape)).not.toContain(
+      "reason",
+    );
+    expect(Object.keys(chatApprovalStateSchemaPreAuto.shape)).not.toContain(
+      "reviewing",
+    );
+    expect(Object.keys(chatApprovalStateSchema.shape)).toContain("reason");
+    expect(Object.keys(chatApprovalStateSchema.shape)).toContain("reviewing");
+
+    // Absent on the wire parses as "no judge ran", never as a missing key.
+    const parsed = chatApprovalStateSchema.parse({
+      approvalId: "a1",
+      toolName: "Bash",
+      description: "run tests",
+      input: null,
+      requestedAt: 1,
+    });
+    expect(parsed.reason).toBeNull();
+    expect(parsed.reviewing).toBeNull();
+  });
+
+  it("carries a judge verdict and a transient stage on the live card", () => {
+    const parsed = chatApprovalStateSchema.parse({
+      approvalId: "a1",
+      toolName: "Bash",
+      description: "git push --force",
+      input: null,
+      requestedAt: 1,
+      reason: { rule: "Force push", text: "Rewrites published history." },
+      reviewing: "reviewing",
+    });
+    expect(parsed.reason).toEqual({
+      rule: "Force push",
+      text: "Rewrites published history.",
+    });
+    expect(parsed.reviewing).toBe("reviewing");
+
+    // The stage vocabulary is closed: an unknown stage is a bug in the emitter,
+    // not something a card should try to render.
+    expect(() =>
+      chatApprovalStateSchema.parse({
+        approvalId: "a1",
+        toolName: "Bash",
+        description: "x",
+        input: null,
+        requestedAt: 1,
+        reviewing: "thinking",
+      }),
+    ).toThrow();
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
   });
 

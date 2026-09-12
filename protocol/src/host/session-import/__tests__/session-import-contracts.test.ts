@@ -11,6 +11,7 @@ import {
   sessionImportRunServerFrameSchema,
   sessionImportRunV10,
   sessionImportRunV11,
+  sessionImportRunV12,
 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import { sessionImportFailureReasonSchema } from "@traycer/protocol/host/session-import/candidate";
@@ -617,7 +618,7 @@ describe("sessionImport.status@1.0", () => {
  * feature the wire cannot carry, and nothing else in the suite would notice.
  */
 describe("sessionImport.* registry membership", () => {
-  it("registers scan at minors 0-2, retaining the older contracts for older hosts", () => {
+  it("registers scan at minors 0-2 and run at 0-2, retaining the older contracts for older hosts", () => {
     const scan = hostStreamRpcRegistry["sessionImport.scan"];
     expect(scan).toBeDefined();
     expect(scan[1].latestMinor).toBe(2);
@@ -628,13 +629,21 @@ describe("sessionImport.* registry membership", () => {
     expect(sessionImportScanV11.schemaVersion).toEqual({ major: 1, minor: 1 });
     expect(sessionImportScanV12.schemaVersion).toEqual({ major: 1, minor: 2 });
 
+    // `run@1.1` carries no shape delta over 1.0 - it exists so a client can
+    // detect a host that understands the `auto` permission mode in the open
+    // request, which no shape can express. Both minors stay reachable, so this
+    // asserts the pair rather than just the head.
     const run = hostStreamRpcRegistry["sessionImport.run"];
     expect(run).toBeDefined();
-    expect(run[1].latestMinor).toBe(1);
+    expect(run[1].latestMinor).toBe(2);
     expect(run[1].versions[0].contract).toBe(sessionImportRunV10);
     expect(run[1].versions[1].contract).toBe(sessionImportRunV11);
     expect(sessionImportRunV10.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(sessionImportRunV11.schemaVersion).toEqual({ major: 1, minor: 1 });
+    // 1.2 carries no shape delta over 1.1 - it is the negotiable fact that
+    // the host understands `auto` in the open request's `permissionMode`.
+    expect(run[1].versions[2].contract).toBe(sessionImportRunV12);
+    expect(sessionImportRunV12.schemaVersion).toEqual({ major: 1, minor: 2 });
   });
 
   // `@1.0`/`@1.1` are frozen at the twenty harness ids `cli-v1.3.0` shipped;

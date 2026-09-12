@@ -21,6 +21,7 @@ import {
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV71,
   listGuiHarnessesResponseSchemaV80,
+  listGuiHarnessesResponseSchemaV90,
   listGuiHarnessesResponseSchemaV70,
   guiHarnessOptionSchemaV10,
   guiHarnessOptionSchemaV21,
@@ -30,6 +31,7 @@ import {
   guiHarnessOptionSchemaV60,
   guiHarnessOptionSchemaV71,
   guiHarnessOptionSchemaV80,
+  type GuiHarnessOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   chatSubscribeV10,
@@ -42,6 +44,7 @@ import {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
@@ -549,6 +552,74 @@ export const agentGuiListHarnessesUpgradeV71ToV80 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+/**
+ * `agent.gui.listHarnesses@8.1` - the `auto` permission mode and the
+ * `nativeAutoJudge` row field.
+ *
+ * A MINOR rather than a major, for the reason 7.1 was: both changes are
+ * additive to the row, and `versioned-rpc.ts` rejects a major bump that carries
+ * no breaking change. It is the one minor in this method's history that has to
+ * declare `responseGrowthProjectionGated` in the registry, because
+ * `supportedPermissionModes` GROWS a response enum over 8.0 and a within-major
+ * re-parse rejects an unknown member instead of stripping it. That annotation
+ * is a reviewed claim about the EMITTER: the host must filter `auto` out of
+ * what it serves any peer below 8.1 (ticket 02's resolver work), and the
+ * annotation is load-bearing - the validator refuses it if the growth is ever
+ * removed.
+ */
+export const agentGuiListHarnessesV91 = defineRpcContract({
+  method: "agent.gui.listHarnesses",
+  schemaVersion: { major: 9, minor: 1 } as const,
+  requestSchema: listGuiHarnessesRequestSchema,
+  responseSchema: listGuiHarnessesResponseSchema,
+});
+
+export const agentGuiListHarnessesUpgradeV90ToV91 = defineUpgradePath<
+  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91
+>({
+  from: { major: 9, minor: 0 },
+  to: { major: 9, minor: 1 },
+  upgradeRequest: (request) => request,
+  // A pre-`auto` mode array is already a valid 8.1 array, so only the new key
+  // needs filling. `false` is the pre-feature reading, not a guess: a host that
+  // predates 9.1 has no native-judge concept at all, so no row it returns has
+  // one. Filled explicitly rather than left to the schema default - an upgrade
+  // path returns the OUTPUT type, where a defaulted key is required.
+  upgradeResponse: (response) => ({
+    harnesses: response.harnesses.map((harness) => ({
+      ...harness,
+      nativeAutoJudge: false,
+    })),
+  }),
+});
+
+/**
+ * Strip everything 8.1 added from one catalog row, for the cross-major
+ * downgrade bridges below.
+ *
+ * The two additions degrade differently and only one of them degrades on its
+ * own. Dropping `nativeAutoJudge` is what the older lines' schemas would do
+ * anyway; removing `auto` from `supportedPermissionModes` is NOT, because the
+ * bridges below filter by `safeParse().success` and an `auto` member would make
+ * every row fail that check - so a fleet-wide "no harnesses at all" picker,
+ * rather than the one dropped mode. The mode is removed rather than mapped:
+ * projecting it onto `auto_accept_edits` would advertise a capability the older
+ * peer would then send back as a settings write, which is the WYSIWYG
+ * whole-tuple replace that silently ends auto (see `foundation.ts`).
+ */
+function projectHarnessRowPreAuto(
+  harness: GuiHarnessOption,
+): Record<string, unknown> {
+  const { nativeAutoJudge: _nativeAutoJudge, ...rest } = harness;
+  return {
+    ...rest,
+    supportedPermissionModes: harness.supportedPermissionModes.filter(
+      (mode) => mode !== "auto",
+    ),
+  };
+}
+
 export const agentGuiListHarnessesDowngradeV8ToV7 = defineDowngradePath<
   typeof agentGuiListHarnessesV80,
   typeof agentGuiListHarnessesV71
@@ -689,7 +760,9 @@ export const agentGuiListHarnessesV90 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 9, minor: 0 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  responseSchema: listGuiHarnessesResponseSchema,
+  // Frozen at the pre-`auto` row when 9.1 opened, exactly as 8.0 froze when
+  // 9.0 opened. See `listGuiHarnessesResponseSchemaV90`.
+  responseSchema: listGuiHarnessesResponseSchemaV90,
 });
 
 export const agentGuiListHarnessesUpgradeV80ToV90 = defineUpgradePath<
@@ -705,10 +778,10 @@ export const agentGuiListHarnessesUpgradeV80ToV90 = defineUpgradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV8 = defineDowngradePath<
-  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV80
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop Antigravity so an already-shipped major-8 client's strict decode
@@ -716,18 +789,20 @@ export const agentGuiListHarnessesDowngradeV9ToV8 = defineDowngradePath<
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV80.parse({
-      harnesses: response.harnesses.filter(
-        (harness) => guiHarnessOptionSchemaV80.safeParse(harness).success,
-      ),
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV80.safeParse(harness).success,
+        ),
     }),
   }),
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV7 = defineDowngradePath<
-  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV71
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   // Lands on 7.1, major 7's latest installed minor; a frozen-7.0 caller's own
   // contract parse then strips the 7.1-only `authStatus` key.
   to: { major: 7, minor: 1 },
@@ -735,86 +810,96 @@ export const agentGuiListHarnessesDowngradeV9ToV7 = defineDowngradePath<
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV71.parse({
-      harnesses: response.harnesses.filter(
-        (harness) => guiHarnessOptionSchemaV71.safeParse(harness).success,
-      ),
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV71.safeParse(harness).success,
+        ),
     }),
   }),
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV6 = defineDowngradePath<
-  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV60
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV60.parse({
-      harnesses: response.harnesses.filter(
-        (harness) => guiHarnessOptionSchemaV60.safeParse(harness).success,
-      ),
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV60.safeParse(harness).success,
+        ),
     }),
   }),
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV5 = defineDowngradePath<
-  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV50
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV50.parse({
-      harnesses: response.harnesses.filter(
-        (harness) => guiHarnessOptionSchemaV50.safeParse(harness).success,
-      ),
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV50.safeParse(harness).success,
+        ),
     }),
   }),
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV4 = defineDowngradePath<
-  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV40
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV40.parse({
-      harnesses: response.harnesses.filter(
-        (harness) => guiHarnessOptionSchemaV40.safeParse(harness).success,
-      ),
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV40.safeParse(harness).success,
+        ),
     }),
   }),
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV3 = defineDowngradePath<
-  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV30
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV30.parse({
-      harnesses: response.harnesses.filter(
-        (harness) => guiHarnessOptionSchemaV30.safeParse(harness).success,
-      ),
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV30.safeParse(harness).success,
+        ),
     }),
   }),
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV2 = defineDowngradePath<
-  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV21
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   // Lands on 2.1, major 2's latest installed minor; a frozen-2.0 caller's
   // contract parse then strips the 2.1-only `enabled` field.
   to: { major: 2, minor: 1 },
@@ -822,26 +907,30 @@ export const agentGuiListHarnessesDowngradeV9ToV2 = defineDowngradePath<
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV21.parse({
-      harnesses: response.harnesses.filter(
-        (harness) => guiHarnessOptionSchemaV21.safeParse(harness).success,
-      ),
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV21.safeParse(harness).success,
+        ),
     }),
   }),
 });
 
 export const agentGuiListHarnessesDowngradeV9ToV1 = defineDowngradePath<
-  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV10
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV10.parse({
-      harnesses: response.harnesses.filter(
-        (harness) => guiHarnessOptionSchemaV10.safeParse(harness).success,
-      ),
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV10.safeParse(harness).success,
+        ),
     }),
   }),
 });
@@ -1005,4 +1094,5 @@ export {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
 };

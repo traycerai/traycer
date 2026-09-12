@@ -52,6 +52,13 @@ import {
   agentGuiListHarnessesDowngradeV6ToV3,
   agentGuiListHarnessesDowngradeV6ToV4,
   agentGuiListHarnessesDowngradeV6ToV5,
+  agentGuiListHarnessesDowngradeV8ToV1,
+  agentGuiListHarnessesDowngradeV8ToV2,
+  agentGuiListHarnessesDowngradeV8ToV3,
+  agentGuiListHarnessesDowngradeV8ToV4,
+  agentGuiListHarnessesDowngradeV8ToV5,
+  agentGuiListHarnessesDowngradeV8ToV6,
+  agentGuiListHarnessesDowngradeV8ToV7,
   agentGuiListHarnessesDowngradeV9ToV1,
   agentGuiListHarnessesDowngradeV9ToV2,
   agentGuiListHarnessesDowngradeV9ToV3,
@@ -60,6 +67,7 @@ import {
   agentGuiListHarnessesDowngradeV9ToV6,
   agentGuiListHarnessesDowngradeV9ToV7,
   agentGuiListHarnessesDowngradeV9ToV8,
+  agentGuiListHarnessesUpgradeV90ToV91,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   guiHarnessOptionSchema,
@@ -73,6 +81,7 @@ import {
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV71,
   listGuiHarnessesResponseSchemaV80,
+  listGuiHarnessesResponseSchemaV90,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   PROVIDER_AUTH_STATUS_SCHEMA,
@@ -119,6 +128,13 @@ import {
   providersSetApiKeyDowngradeV21ToV10,
 } from "@traycer/protocol/host/registry";
 
+// States `supportedPermissionModes` explicitly rather than taking the live
+// schema default, which now includes `auto`. Several tests below feed these
+// rows STRAIGHT into an older line's schema (not through a bridge) to build the
+// "what a v2.1/v3.0 host returned" input, and a live default would put a mode
+// on those rows that the older line's frozen enum rejects. The `auto`-bearing
+// case has its own test at the bottom of this file, where the bridge that
+// strips it is the subject.
 function harnessOption(id: string) {
   return guiHarnessOptionSchema.parse({
     id,
@@ -127,6 +143,11 @@ function harnessOption(id: string) {
     error: null,
     modes: ["gui"],
     requiresApiKey: false,
+    supportedPermissionModes: [
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+    ],
   });
 }
 
@@ -666,7 +687,7 @@ describe("post-v6.0 Hugging Face/Reasonix/Antigravity non-breaking downgrade bri
       "reasonix",
     ]);
     expect(() =>
-      listGuiHarnessesResponseSchemaV80.parse(toV8.value),
+      listGuiHarnessesResponseSchemaV90.parse(toV8.value),
     ).not.toThrow();
 
     // Major 7 shipped with Hugging Face, so it keeps it and loses Reasonix
@@ -1038,5 +1059,96 @@ describe("post-v6.0 Hugging Face/Reasonix/Antigravity non-breaking downgrade bri
     expect(() =>
       providersListResponseSchemaV10.parse(toV1.value),
     ).not.toThrow();
+  });
+});
+
+/**
+ * The `auto` permission mode and the `nativeAutoJudge` row field ride
+ * `agent.gui.listHarnesses@9.1`. Everything below 8.1 has to lose both, and the
+ * two lose them by different mechanisms - which is the whole reason this has
+ * its own suite rather than an extra assertion on the Reasonix one.
+ */
+describe("agent.gui.listHarnesses@9.1 auto-mode downgrades", () => {
+  function autoHarnessOption(id: string) {
+    return guiHarnessOptionSchema.parse({
+      id,
+      label: id,
+      available: true,
+      error: null,
+      modes: ["gui"],
+      requiresApiKey: false,
+      supportedPermissionModes: [
+        "supervised",
+        "auto_accept_edits",
+        "auto",
+        "full_access",
+      ],
+      nativeAutoJudge: true,
+    });
+  }
+
+  const v91Response = listGuiHarnessesResponseSchema.parse({
+    harnesses: [autoHarnessOption("claude"), autoHarnessOption("reasonix")],
+  });
+
+  it("keeps auto and nativeAutoJudge on the head line", () => {
+    expect(v91Response.harnesses[0].supportedPermissionModes).toContain("auto");
+    expect(v91Response.harnesses[0].nativeAutoJudge).toBe(true);
+  });
+
+  it("strips auto and nativeAutoJudge for an 8.0 caller, keeping the row", () => {
+    // The row must SURVIVE, minus the mode. The bridges filter by
+    // `safeParse().success`, so an unstripped `auto` would not degrade the one
+    // field - it would drop every row and empty the caller's picker.
+    const toV8 =
+      agentGuiListHarnessesDowngradeV9ToV8.downgradeResponse(v91Response);
+    expect(toV8.ok).toBe(true);
+    if (!toV8.ok) return;
+
+    // BOTH rows survive: major 8's id enum is the pre-Antigravity twenty, so
+    // `reasonix` is in it. This bridge drops ids, and the only id major 9 added
+    // is `antigravity` - the modes and the judge flag are what it strips here.
+    expect(toV8.value.harnesses.map((harness) => harness.id)).toEqual([
+      "claude",
+      "reasonix",
+    ]);
+    expect(toV8.value.harnesses[0].supportedPermissionModes).toEqual([
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+    ]);
+    expect(Object.hasOwn(toV8.value.harnesses[0], "nativeAutoJudge")).toBe(
+      false,
+    );
+    expect(() =>
+      listGuiHarnessesResponseSchemaV80.parse(toV8.value),
+    ).not.toThrow();
+  });
+
+  it("strips auto all the way down to the frozen 1.0 row", () => {
+    const toV1 =
+      agentGuiListHarnessesDowngradeV9ToV1.downgradeResponse(v91Response);
+    expect(toV1.ok).toBe(true);
+    if (!toV1.ok) return;
+    expect(toV1.value.harnesses[0].supportedPermissionModes).toEqual([
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+    ]);
+    expect(() =>
+      listGuiHarnessesResponseSchemaV10.parse(toV1.value),
+    ).not.toThrow();
+  });
+
+  it("upgrades a 9.0 row by filling nativeAutoJudge false", () => {
+    // A host that predates 8.1 has no native-judge concept, so `false` is the
+    // pre-feature reading rather than a guess.
+    const v90Response = listGuiHarnessesResponseSchemaV90.parse({
+      harnesses: [harnessOption("claude")],
+    });
+    const upgraded =
+      agentGuiListHarnessesUpgradeV90ToV91.upgradeResponse(v90Response);
+    expect(upgraded.harnesses[0].nativeAutoJudge).toBe(false);
+    expect(() => listGuiHarnessesResponseSchema.parse(upgraded)).not.toThrow();
   });
 });

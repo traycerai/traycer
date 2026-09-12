@@ -42,6 +42,31 @@ export const GENERAL = defineSettingsSection("general", {
     availableWhen: alwaysAvailable,
     keywords: ["prompt", "input", "message box", "editor"],
   },
+  // Application scope, deliberately: this is one preference for this app, not
+  // per machine, so it belongs here rather than under the sidebar's host picker
+  // (SETTINGS.md, "Scope: the organising idea"). The Auto-mode judge it pairs
+  // with IS per machine and lives on the host-scoped Agent selection page for
+  // the same reason.
+  defaultPermission: {
+    kind: "row",
+    group: "chatComposer",
+    search: { anchor: "general-default-permission-mode" },
+    label: "Default permission mode",
+    description:
+      "What a new conversation starts under. A machine you have already run agents on reuses the mode it last ran with; this is what a fresh one opens on, and any chat can still change its own.",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "permissions",
+      "approval",
+      "approve",
+      "auto mode",
+      "plan mode",
+      "accept edits",
+      "full access",
+      "supervised",
+      "new chat",
+    ],
+  },
   voiceInput: {
     kind: "row",
     group: "chatComposer",

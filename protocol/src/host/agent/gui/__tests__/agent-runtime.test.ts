@@ -6,14 +6,19 @@ import {
   runtimeEventSchemaV12,
   runtimePermissionModeSchema,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
+import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 
 describe("agent runtime stream schema", () => {
-  it("accepts the three runtime permission modes", () => {
+  it("carries every persisted permission mode, `auto` included", () => {
+    // Asserted against the persisted enum rather than a restated tuple, which
+    // is the point of the change this replaces: a hand-written copy here fell
+    // silently behind when `auto` was added, leaving the mode unrepresentable
+    // at the seam every adapter reads it from. Comparing to the source of truth
+    // is what makes the next addition impossible to miss.
     expect(runtimePermissionModeSchema.options).toEqual([
-      "supervised",
-      "auto_accept_edits",
-      "full_access",
+      ...ALL_PERMISSION_MODES,
     ]);
+    expect(runtimePermissionModeSchema.options).toContain("auto");
     expect(() => runtimePermissionModeSchema.parse("ask_user")).toThrow();
   });
 

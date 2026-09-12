@@ -198,3 +198,28 @@ export const sessionImportRunV11 = defineStreamRpcContract({
   serverFrameSchema: sessionImportRunServerFrameSchema,
   clientFrameSchema: sessionImportRunClientFrameSchema,
 });
+
+/**
+ * `sessionImport.run@1.2` - the `auto` permission mode, and NOTHING ELSE.
+ *
+ * Every shape here is `1.1`'s, by reference. The open request's
+ * `permissionMode` is a client→host slot bound to the LIVE enum, so `auto`
+ * became expressible on `1.0` the moment that enum was widened - and that is
+ * precisely the problem this minor solves. A client cannot detect from a shape
+ * whether the host on the other end knows the value it is about to send; a
+ * `1.0` host would take an `auto` import and reject it as a validation error
+ * mid-wizard, after the user picked the sessions.
+ *
+ * So the minor carries no delta and is not meant to: it is the negotiable fact
+ * that the host understands the mode. A client that negotiates below `1.2` clamps a
+ * sticky or imported `auto` down to `auto_accept_edits` before opening the run
+ * (NOT to the safest mode - today's clamp walks to `supervised`, which would
+ * silently make an import stricter than the user's own default).
+ */
+export const sessionImportRunV12 = defineStreamRpcContract({
+  method: "sessionImport.run",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: sessionImportRunOpenRequestSchema,
+  serverFrameSchema: sessionImportRunServerFrameSchema,
+  clientFrameSchema: sessionImportRunClientFrameSchema,
+});

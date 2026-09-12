@@ -110,6 +110,7 @@ function response(
           "auto_accept_edits",
           "full_access",
         ],
+        nativeAutoJudge: false,
         availabilityPending,
       },
     ],
@@ -167,6 +168,7 @@ function harnesses(
     modes: ["gui"],
     requiresApiKey: false,
     supportedPermissionModes: ["supervised"],
+    nativeAutoJudge: false,
     availabilityPending: false,
   }));
 }

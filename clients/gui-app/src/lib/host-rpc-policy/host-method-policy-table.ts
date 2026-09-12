@@ -1644,6 +1644,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Choosing a provider's auto-mode judge changes persisted provider
+  // configuration - it lands in `provider-overrides.json` beside
+  // `terminalAgentArgs`, so it takes that neighbour's policy exactly.
+  "providers.setAutoJudge": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Setting an environment override changes persisted provider configuration.
   "providers.setEnvOverride": {
     mode: "fifo",
@@ -1864,6 +1872,30 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.logLevels.get": { ...LATEST_SCHEDULING, poll: null },
   "config.logLevels.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Auto mode's two host-scoped settings. Both are get/set pairs over a host
+  // config file, so they take the `config.logLevels.*` shape above: a bounded
+  // read that may coalesce, and a write that may not.
+  //
+  // Neither read polls. `autoJudge.get` answers from a file only this GUI
+  // writes, and `autoPolicy.get` proxies an account record whose staleness the
+  // panel handles with the `updatedAt` it returns rather than by refetching on
+  // a timer - a cadence here would have every open settings tab waking the
+  // host, and through it the cloud, for a record that changes when a person
+  // edits it.
+  "autoJudge.get": { ...LATEST_SCHEDULING, poll: null },
+  "autoJudge.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "autoPolicy.get": { ...LATEST_SCHEDULING, poll: null },
+  // Last-write-wins on the server, so ordering is the client's job: rapid
+  // saves must reach the host in the order the user made them.
+  "autoPolicy.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

@@ -766,6 +766,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                     key={terminalForkModelPickerKey(target)}
                     store={toolbarStore}
                     withServiceTier={false}
+                    withReasoning
                     tuiOnly
                     lockedHarnessId={target?.sourceAgent.harnessId ?? null}
                     disabled={busy}

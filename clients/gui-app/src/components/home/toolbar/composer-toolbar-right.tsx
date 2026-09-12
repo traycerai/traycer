@@ -70,6 +70,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
         labelDisplay="responsive"
         store={store}
         withServiceTier
+        withReasoning
         tuiOnly={false}
         lockedHarnessId={null}
         disabled={settingsLocked}

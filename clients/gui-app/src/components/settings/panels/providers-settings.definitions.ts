@@ -20,6 +20,12 @@ export const PROVIDERS = defineSettingsSection("providers", {
       "auth",
       "login",
       "agent",
+      // The per-provider "Who reviews <provider>'s commands" select on the
+      // general tab has no region group of its own, and it is the switch that
+      // wins over the Agents-page judge; these land that search on this page.
+      "auto mode judge",
+      "classifier",
+      "who reviews commands",
     ],
   },
   apiKey: {

@@ -687,6 +687,7 @@ const CODEX_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -699,6 +700,7 @@ const CLAUDE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -711,6 +713,7 @@ const OPENCODE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -723,6 +726,7 @@ const OPENROUTER_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: true,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -735,6 +739,7 @@ const DROID_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -747,6 +752,7 @@ const CURSOR_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -976,6 +982,7 @@ interface RenderPickerInput {
    */
   readonly storeModels?: ReadonlyArray<ModelOption>;
   readonly withServiceTier?: boolean;
+  readonly withReasoning?: boolean;
   readonly tuiOnly?: boolean;
   readonly lockedHarnessId?: ProviderId | null;
   readonly disabled?: boolean;
@@ -1049,6 +1056,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           labelDisplay="responsive"
           store={store}
           withServiceTier={resolvedInput.withServiceTier ?? false}
+          withReasoning={resolvedInput.withReasoning ?? true}
           tuiOnly={resolvedInput.tuiOnly ?? false}
           lockedHarnessId={resolvedInput.lockedHarnessId ?? null}
           disabled={disabled}
