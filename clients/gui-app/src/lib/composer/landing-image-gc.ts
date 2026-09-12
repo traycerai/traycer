@@ -1,8 +1,3 @@
-import {
-  useTabRecoveryHistory,
-  persistedRecoveryImageRootHashes,
-  recoveryHistoryGeneration,
-} from "@/lib/tab-recovery/history";
 /**
  * Garbage collection for the landing / new-epic composer's content-addressed
  * image bytes (`landing-image-store`). Reclaims IndexedDB bytes + session
@@ -142,24 +137,14 @@ export function landingDraftsReady(): boolean {
  * empty and every unreferenced byte is collected in one pass).
  */
 export async function reconcile(): Promise<void> {
-  if (!draftsReady || !useTabRecoveryHistory.getState().ready) return;
+  if (!draftsReady) return;
   // Read the persisted keys FIRST, then snapshot the roots. Both root reads are
   // synchronous, so capturing them AFTER the `await` means a paste that completed
   // DURING the IndexedDB read — writing its bytes and (per `putImage`) seeding the
   // session before that write — is reflected in `liveRoots`/`sessionKeys` and is
   // not mistaken for an orphan and deleted. [C2: the paste↔reconcile-await race]
-  const generation = recoveryHistoryGeneration();
-  const [stored, persistedRoots] = await Promise.all([
-    imageHashKeys(),
-    persistedRecoveryImageRootHashes(),
-  ]);
-  if (
-    !useTabRecoveryHistory.getState().ready ||
-    generation !== recoveryHistoryGeneration()
-  )
-    return;
+  const stored = await imageHashKeys();
   const liveRoots = landingLiveImageRootHashes();
-  for (const hash of persistedRoots) liveRoots.add(hash);
   const sessionKeys = sessionHashKeys();
   const protectedFromDelete = new Set(sessionKeys);
   const orphans = stored.filter(
@@ -199,11 +184,7 @@ export function scheduleLandingImageReconcile(): void {
   if (reconcileTimer !== null) clearTimeout(reconcileTimer);
   reconcileTimer = setTimeout(() => {
     reconcileTimer = null;
-    void reconcile().catch((error: unknown) => {
-      appLogger.warn("[landing-image-gc] reconcile failed", {
-        error: describeLogError(error),
-      });
-    });
+    void reconcile();
   }, RECONCILE_DEBOUNCE_MS);
 }
 

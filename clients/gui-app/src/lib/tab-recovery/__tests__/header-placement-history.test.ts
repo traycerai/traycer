@@ -52,7 +52,7 @@ afterEach(async () => {
 });
 
 describe("closed header placement history", () => {
-  it("leaves ordinary legacy-style entries free of placement metadata", () => {
+  it("leaves ordinary tab entries free of placement metadata", () => {
     const item: ClosedHeaderTab = {
       kind: "epic",
       tab: { epicId: "plain-epic", tabId: "plain-tab", name: "Plain" },

@@ -3,7 +3,6 @@ import { del as idbDel, get as idbGet, set as idbSet } from "idb-keyval";
 
 import { attachBrowserAnnotation } from "@/lib/browser-view/annotation/browser-annotation-attach";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
-import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { createStubBrowserAnnotationPayloadFor } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
@@ -131,9 +130,6 @@ beforeEach(async () => {
   installIdbWorking(idbData, idbGet, idbSet, idbDel);
   window.localStorage.clear();
   useComposerDraftStore.setState({ drafts: {} });
-  // Landing-image GC now waits for tab-recovery history to finish hydrating;
-  // this store-only fixture has no recovery persistence to load.
-  useTabRecoveryHistory.setState({ entries: [], ready: true });
   markLandingDraftsReady();
 });
 
@@ -141,7 +137,6 @@ afterEach(async () => {
   await drainImages();
   window.localStorage.clear();
   useComposerDraftStore.setState({ drafts: {} });
-  useTabRecoveryHistory.setState({ entries: [], ready: false });
 });
 
 describe("composer draft store browserAnnotations", () => {

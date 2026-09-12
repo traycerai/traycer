@@ -4,7 +4,7 @@
 context menus share `reopenClosedTab`. History is per account and desktop
 window and persists in IndexedDB. Application-window closes and landing
 terminals never enter this history. Empty Start Pages and blank inner picker
-tabs are excluded at capture and when loading older journals. Text and
+tabs are excluded at capture. Text and
 image-only drafts remain recoverable; task tabs remain recoverable even when
 their canvases are empty.
 
@@ -46,8 +46,8 @@ split metadata never resurrects a missing or permanently deleted partner.
 
 Recovered tabs regain their color/icon and group membership. A removed group's
 name, color and collapsed state are restored; an existing group's newer state
-wins. The normal single/bulk navigation rules still decide selection. Older
-journal entries without placement metadata retain standalone recovery, and
+wins. The normal single/bulk navigation rules still decide selection. Plain
+tabs without placement metadata retain standalone recovery, and
 invalid optional placement metadata does not discard recoverable content.
 
 `restore-canvas.ts` reconstructs the smallest recognizable changed region of
@@ -80,13 +80,12 @@ recovery action, while permanent draft deletion prunes it. Bulk recovery keeps
 the surviving draft selection. History's Drafts list and Cmd/Ctrl+Shift+T reuse
 the same saved rows.
 
-Old snapshot journals are read for compatibility only. If no saved draft exists,
-the legacy snapshot is imported once as a closed saved draft, including pending
-paste bytes. It never overwrites a newer saved row. Legacy image contents from
-all accounts in the window count toward the existing image budget and remain GC
-roots until imported or expired; new reference-only entries own no images. Inline
-legacy images reserve capacity as a batch before storage writes. Admission never
-evicts recovery entries: a rejected paste or restore leaves history intact.
+Recovery supports only the current reference-based journal format. It neither
+stores editor snapshots nor imports drafts from older recovery formats. Saved
+drafts own image retention and budgeting; recovery does not scan journals for
+image roots or participate in image garbage collection. Loading a missing
+host-backed draft still validates its image hashes and reserves image capacity
+before writing the downloaded bytes.
 
 The journal retains at most 50 closing actions with a 32 MiB approximate JSON
 budget (the newest action is always kept). Pruning retains unchanged entry

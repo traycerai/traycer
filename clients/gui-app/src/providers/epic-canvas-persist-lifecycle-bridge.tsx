@@ -4,7 +4,6 @@ import {
   isBrowserCanvasHydrated,
 } from "@/lib/tab-sync/browser-canvas-hydration";
 import { configureTabRecoveryHistory } from "@/lib/tab-recovery/history";
-import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { useCallback, useEffect, type ReactNode } from "react";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -41,7 +40,7 @@ export function EpicCanvasPersistLifecycleBridge(
     (transition: AuthIdentityTransition) => {
       void configureTabRecoveryHistory(
         transition.kind === "signedOut" ? null : transition.userId,
-      ).then(scheduleLandingImageReconcile);
+      );
       if (windowsBridge !== null) return;
       hydrateBrowserCanvas(transition, legacyEmail);
     },
@@ -60,7 +59,7 @@ export function EpicCanvasPersistLifecycleBridge(
       isBrowserCanvasHydrated()
     )
       return;
-    void configureTabRecoveryHistory(null).then(scheduleLandingImageReconcile);
+    void configureTabRecoveryHistory(null);
     markBrowserCanvasHydrated();
   }, [status, windowsBridge]);
 

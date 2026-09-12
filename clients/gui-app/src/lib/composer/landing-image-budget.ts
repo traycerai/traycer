@@ -65,7 +65,6 @@ export function registerLandingDraftRootSource(
  */
 export interface ExtraImageRootSource {
   hashes(): ReadonlyArray<string>;
-  contents?: () => ReadonlyArray<JsonContent>;
 }
 
 const extraRootSources: ExtraImageRootSource[] = [];
@@ -141,15 +140,16 @@ function referencedImageBytes(drafts: ReadonlyArray<LandingDraftTab>): number {
   // per-image 5 MB paste cap bounds the untracked slack, so the soft budget stays
   // meaningful.
   const sizeByHash = new Map<string, number>();
-  const contents = [
-    ...drafts.map((draft) => draft.content),
-    ...draftRuntimeRegistry.liveContents(),
-    ...extraRootSources.flatMap((source) => source.contents?.() ?? []),
-  ];
-  for (const content of contents) {
+  for (const draft of drafts) {
+    for (const atom of collectImageAtoms(draft.content)) {
+      if (atom.hash === null) continue;
+      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
+    }
+  }
+  for (const content of draftRuntimeRegistry.liveContents()) {
     for (const atom of collectImageAtoms(content)) {
-      if (atom.hash !== null && !sizeByHash.has(atom.hash))
-        sizeByHash.set(atom.hash, atom.size ?? 0);
+      if (atom.hash === null) continue;
+      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
     }
   }
   let total = 0;

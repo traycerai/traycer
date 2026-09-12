@@ -42,7 +42,6 @@ import {
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
-import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   freshLandingMirrorState,
@@ -144,7 +143,6 @@ vi.mock("idb-keyval", () => {
       return Promise.resolve();
     }),
     keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
-    entries: vi.fn(() => Promise.resolve([])),
   };
 });
 
@@ -416,7 +414,6 @@ beforeEach(async () => {
   mocks.capturedHandle.current = null;
   window.localStorage.clear();
   setLandingDraftDesktopProjectionBridge(null);
-  useTabRecoveryHistory.setState({ entries: [], ready: true });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   draftRuntimeRegistry.resetForTesting();
   resetLandingImageBudgetReservationsForTesting();
@@ -442,7 +439,6 @@ afterEach(() => {
   draftRuntimeRegistry.resetForTesting();
   resetLandingImageBudgetReservationsForTesting();
   setLandingDraftDesktopProjectionBridge(null);
-  useTabRecoveryHistory.setState({ entries: [], ready: false });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   vi.useRealTimers();
 });

@@ -1,29 +1,14 @@
-import {
-  findStripItemForRef,
-  type PersistedTabStripLayout,
-} from "@/stores/tabs/layout";
+import type { PersistedTabStripLayout } from "@/stores/tabs/layout";
 import {
   captureHeaderLocation,
   closedHeaderPlacementSchema,
   type ClosedHeaderPlacement,
 } from "./header-layout";
-import type { LandingDraftTab } from "@/stores/home/landing-draft-store";
-import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { create } from "zustand";
-import {
-  createStore,
-  get,
-  set,
-  del,
-  entries as databaseEntries,
-} from "idb-keyval";
+import { createStore, get, set, del } from "idb-keyval";
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
-import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
-import { taskRepoIdentifierSchema } from "@traycer/protocol/host/epic/unary-schemas";
-import { isJsonContent } from "@/lib/editor/prosemirror-json";
-import type { JsonContent } from "@traycer/protocol/common/registry";
 import { parseEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
 import type {
   EpicCanvasState,
@@ -31,8 +16,6 @@ import type {
   EpicViewTab,
 } from "@/stores/epics/canvas/types";
 
-import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
-import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { landingImagePartition } from "@/lib/composer/landing-image-store";
 import { tabRecoveryKey, persistKey } from "@/lib/persist/keys";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -54,37 +37,6 @@ const tabSchema = z.object({
     ])
     .optional(),
 });
-const draftSchema = z.object({
-  id: z.string(),
-  content: z.custom<JsonContent>((value) => isJsonContent(value, 0)),
-  selection: z.object({ from: z.number(), to: z.number() }).nullable(),
-  lastTouchedAt: z.number(),
-  settings: chatRunSettingsSchema.nullable(),
-  composerMode: z.enum(["chat", "terminal"]),
-  workspace: z.object({
-    folders: z.array(z.string()),
-    primaryPath: z.string().nullable(),
-    folderInfoByPath: z.record(
-      z.string(),
-      z.object({
-        path: z.string(),
-        name: z.string(),
-        repoIdentifier: taskRepoIdentifierSchema.nullable(),
-        hostId: z.string().nullable(),
-      }),
-    ),
-  }),
-});
-export type LegacyRecoveryDraft = Pick<
-  LandingDraftTab,
-  | "id"
-  | "content"
-  | "selection"
-  | "lastTouchedAt"
-  | "settings"
-  | "composerMode"
-  | "workspace"
->;
 const headerSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("epic"),
@@ -97,12 +49,11 @@ const headerSchema = z.discriminatedUnion("kind", [
     kind: z.literal("draft"),
     draftId: z.string(),
     hostId: z.string().nullable(),
-    legacyDraft: draftSchema.optional(),
     index: z.number().int().nonnegative(),
     placement: closedHeaderPlacementSchema.optional().catch(undefined),
   }),
 ]);
-const currentEntrySchema = z.discriminatedUnion("kind", [
+const entrySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("header"),
     id: z.string(),
@@ -120,31 +71,6 @@ const currentEntrySchema = z.discriminatedUnion("kind", [
     bulk: z.boolean(),
   }),
 ]);
-const entrySchema = z.preprocess((value) => {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("items" in value) ||
-    !Array.isArray(value.items)
-  )
-    return value;
-  return {
-    ...value,
-    items: value.items.map((item: unknown) => {
-      if (typeof item !== "object" || item === null || !("draft" in item))
-        return item;
-      const legacy = draftSchema.safeParse(item.draft);
-      return legacy.success
-        ? {
-            ...item,
-            draftId: legacy.data.id,
-            hostId: null,
-            legacyDraft: legacy.data,
-          }
-        : item;
-    }),
-  };
-}, currentEntrySchema);
 export type ClosedHeaderTab =
   | {
       readonly kind: "epic";
@@ -157,8 +83,6 @@ export type ClosedHeaderTab =
       readonly kind: "draft";
       readonly draftId: string;
       readonly hostId: string | null;
-      /** Present only when reading a journal written before saved drafts. */
-      readonly legacyDraft?: LegacyRecoveryDraft;
       readonly index: number;
       readonly placement?: ClosedHeaderPlacement;
     };
@@ -193,14 +117,13 @@ export const useTabRecoveryHistory = create<RecoveryHistoryState>(() => ({
 let bucket: string | null = null;
 let generation = 0;
 let suppressed = 0;
-let batch: ClosedHeaderTab[] | null = null;
-let batchLayout: PersistedTabStripLayout | null = null;
+let batch: {
+  readonly items: ClosedHeaderTab[];
+  readonly layout: PersistedTabStripLayout;
+} | null = null;
 let writes: Promise<void> = Promise.resolve();
 const pendingEpicPrunes = new Set<string>();
 const pendingDraftPrunes = new Set<string>();
-// Compatibility only: new recovery entries contain no draft content. Legacy
-// journals in OTHER accounts still own image bytes until imported or expired.
-const persistedHistories = new Map<string, readonly TabRecoveryEntry[]>();
 let pendingTilePrunes: Array<
   (tile: EpicCanvasTileRef, epicId: string) => boolean
 > = [];
@@ -261,15 +184,7 @@ function database() {
 }
 function meaningfulEntry(entry: TabRecoveryEntry): TabRecoveryEntry[] {
   if (entry.kind === "header") {
-    const items = entry.items.filter(
-      (item) =>
-        item.kind === "epic" ||
-        item.legacyDraft === undefined ||
-        !isEmptyLandingDraftContent(item.legacyDraft.content),
-    );
-    return items.length === 0
-      ? []
-      : [items.length === entry.items.length ? entry : { ...entry, items }];
+    return entry.items.length === 0 ? [] : [entry];
   }
   const instanceIds = entry.instanceIds.filter((id) => {
     const tile = entry.before.tilesByInstanceId[id];
@@ -318,7 +233,6 @@ function persistHistory(): void {
   const key = bucket;
   if (key === null || !useTabRecoveryHistory.getState().ready) return;
   const entries = useTabRecoveryHistory.getState().entries;
-  persistedHistories.set(key, entries);
   writes = writes
     .then(() => set(key, { version: 2, entries }, database()))
     .catch((error: unknown) => {
@@ -351,7 +265,8 @@ async function readRecoveryJournal(
   for (let attempt = 0; ; attempt += 1) {
     if (token !== generation) return undefined;
     try {
-      await persistedRecoveryImageRootHashes();
+      // Account switches may return to a bucket whose last write is queued.
+      await writes;
       if (token !== generation) return undefined;
       return await get(key, database());
     } catch (error) {
@@ -380,7 +295,6 @@ export async function configureTabRecoveryHistory(
   activateRecoveryBucket(previous, next);
   if (next === null) {
     if (previous !== null) {
-      persistedHistories.delete(previous);
       writes = writes
         .then(() => del(previous, database()))
         .catch(() => undefined);
@@ -392,7 +306,7 @@ export async function configureTabRecoveryHistory(
     const raw = await readRecoveryJournal(next, token);
     const envelope = z
       .object({
-        version: z.union([z.literal(1), z.literal(2)]),
+        version: z.literal(2),
         entries: z.array(z.unknown()),
       })
       .safeParse(raw);
@@ -435,20 +349,18 @@ export function withoutTabRecovery<T>(run: () => T): T {
 }
 export function batchHeaderTabRecovery(
   run: () => void,
-  layout: PersistedTabStripLayout | null,
+  layout: PersistedTabStripLayout,
 ): void {
   if (batch !== null) {
     run();
     return;
   }
-  batch = [];
-  batchLayout = layout;
+  batch = { items: [], layout };
   try {
     run();
   } finally {
-    const items = batch;
+    const { items } = batch;
     batch = null;
-    batchLayout = null;
     if (items.length > 0)
       append({ kind: "header", id: uuidv4(), items, bulk: true });
   }
@@ -466,22 +378,10 @@ export function recordClosedHeaderTab(item: ClosedHeaderTab): void {
       item.kind === "epic"
         ? { kind: "epic" as const, id: item.tab.tabId }
         : { kind: "draft" as const, id: item.draftId };
-    if (
-      batchLayout !== null &&
-      findStripItemForRef(batchLayout, ref) !== null
-    ) {
-      batch.push({
-        ...item,
-        ...captureHeaderLocation(batchLayout, ref, item.index),
-      });
-      return;
-    }
-    // Legacy/source-only callers can have no coordinated layout to capture.
-    let index = item.index;
-    for (const earlier of batch.toSorted((a, b) => a.index - b.index)) {
-      if (earlier.index <= index) index += 1;
-    }
-    batch.push({ ...item, index });
+    batch.items.push({
+      ...item,
+      ...captureHeaderLocation(batch.layout, ref, item.index),
+    });
   } else append({ kind: "header", id: uuidv4(), items: [item], bulk: false });
 }
 export function recordClosedCanvas(
@@ -696,107 +596,6 @@ export function recoveryDraftIds(): ReadonlySet<string> {
       ),
   );
 }
-export function recoveryDrafts(): readonly LegacyRecoveryDraft[] {
-  return useTabRecoveryHistory
-    .getState()
-    .entries.flatMap((entry) =>
-      entry.kind === "header"
-        ? entry.items.flatMap((item) =>
-            item.kind === "draft" && item.legacyDraft !== undefined
-              ? [item.legacyDraft]
-              : [],
-          )
-        : [],
-    );
-}
-function recoveryEntryImageHashes(entry: TabRecoveryEntry): readonly string[] {
-  if (entry.kind !== "header") return [];
-  return entry.items.flatMap((item) =>
-    item.kind === "draft" && item.legacyDraft !== undefined
-      ? collectImageAtoms(item.legacyDraft.content).flatMap((atom) =>
-          atom.hash === null ? [] : [atom.hash],
-        )
-      : [],
-  );
-}
-
-/** Image bytes are window-scoped, so inactive accounts remain deletion roots.
- * Read from disk on each sweep to cover a fresh renderer as well as account switches.
- * A failed read must reject: collecting with an incomplete root set loses drafts.
- */
-export async function persistedRecoveryImageRootHashes(): Promise<
-  readonly string[]
-> {
-  const pendingWrites = writes;
-  await pendingWrites;
-  const records = await databaseEntries<IDBValidKey, unknown>(database());
-  const suffix = `:${landingImagePartition()}`;
-  const loaded = new Map<string, readonly TabRecoveryEntry[]>();
-  for (const [key, raw] of records) {
-    if (typeof key !== "string" || !key.endsWith(suffix)) continue;
-    const envelope = z
-      .object({
-        version: z.union([z.literal(1), z.literal(2)]),
-        entries: z.array(z.unknown()),
-      })
-      .safeParse(raw);
-    if (!envelope.success) continue;
-    loaded.set(
-      key,
-      envelope.data.entries.flatMap((value) => {
-        const parsed = entrySchema.safeParse(value);
-        return parsed.success ? [parsed.data] : [];
-      }),
-    );
-  }
-  // A history update during the read already updated our cache synchronously.
-  // Never replace that newer view with the older disk snapshot.
-  if (writes === pendingWrites) {
-    persistedHistories.clear();
-    for (const [key, entries] of loaded) persistedHistories.set(key, entries);
-  }
-  return [
-    ...new Set(
-      [...loaded.values()].flatMap((entries) =>
-        entries.flatMap(recoveryEntryImageHashes),
-      ),
-    ),
-  ];
-}
-
-function legacyRecoveryHistories(): ReadonlyMap<
-  string,
-  readonly TabRecoveryEntry[]
-> {
-  const histories = new Map(persistedHistories);
-  if (bucket !== null)
-    histories.set(bucket, useTabRecoveryHistory.getState().entries);
-  else histories.set("", useTabRecoveryHistory.getState().entries);
-  return histories;
-}
-function legacyRecoveryContents(): readonly JsonContent[] {
-  return [...legacyRecoveryHistories().values()].flatMap((entries) =>
-    entries.flatMap((entry) =>
-      entry.kind !== "header"
-        ? []
-        : entry.items.flatMap((item) =>
-            item.kind === "draft" && item.legacyDraft !== undefined
-              ? [item.legacyDraft.content]
-              : [],
-          ),
-    ),
-  );
-}
-registerExtraImageRootSource({
-  hashes: () =>
-    legacyRecoveryContents().flatMap((content) =>
-      collectImageAtoms(content).flatMap((atom) =>
-        atom.hash === null ? [] : [atom.hash],
-      ),
-    ),
-  contents: legacyRecoveryContents,
-});
-
 export function discardRecoveryTab(tabId: string): void {
   replaceEntries(
     useTabRecoveryHistory
@@ -836,7 +635,6 @@ export function recoveryTiles(): ReadonlyArray<{
 
 /** Drain queued writes before the app deletes local databases and reloads. */
 export async function resetTabRecoveryHistory(): Promise<void> {
-  persistedHistories.clear();
   suspendedHistoryWork.clear();
   pendingDraftPrunes.clear();
   bucket = null;

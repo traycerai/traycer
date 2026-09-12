@@ -28,10 +28,7 @@ import {
 } from "@/lib/composer/landing-image-store";
 import { queryClient } from "@/lib/query-client";
 import { prepareSavedDraft } from "@/lib/tab-recovery/saved-draft";
-import type {
-  ClosedHeaderTab,
-  LegacyRecoveryDraft,
-} from "@/lib/tab-recovery/history";
+import type { ClosedHeaderTab } from "@/lib/tab-recovery/history";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import {
   emptyLandingDraftWorkspaceSnapshot,
@@ -172,23 +169,6 @@ function imageDocumentWithSize(
   };
 }
 
-function sizedImageDocument(hash: string, size: number): JsonContent {
-  return {
-    type: "doc",
-    content: [
-      {
-        type: "paragraph",
-        content: [
-          {
-            type: "imageAttachment",
-            attrs: { id: "capacity-image", fileName: "image.png", hash, size },
-          },
-        ],
-      },
-    ],
-  };
-}
-
 function landingDocument(
   draftId: string,
   content: JsonContent,
@@ -245,29 +225,12 @@ function listResponse(
 function recoveryItem(
   draftId: string,
   hostId: string | null,
-  legacyDraft: LegacyRecoveryDraft | undefined,
 ): Extract<ClosedHeaderTab, { kind: "draft" }> {
   return {
     kind: "draft",
     draftId,
     hostId,
-    ...(legacyDraft === undefined ? {} : { legacyDraft }),
     index: 0,
-  };
-}
-
-function legacyDraft(
-  draftId: string,
-  content: JsonContent,
-): LegacyRecoveryDraft {
-  return {
-    id: draftId,
-    content,
-    selection: null,
-    lastTouchedAt: 1,
-    settings: null,
-    composerMode: "chat",
-    workspace: emptyLandingDraftWorkspaceSnapshot(),
   };
 }
 
@@ -350,203 +313,9 @@ describe("prepareSavedDraft", () => {
     resetLandingImageBudgetReservationsForTesting();
   });
 
-  it("reuses a retained local draft and does not overwrite it with legacy content", async () => {
-    const draftId = "retained-draft";
-    const currentContent = textDocument("newer local content");
-    const oldContent = textDocument("old recovery content");
-    useLandingDraftStore.setState({
-      drafts: [localDraft(draftId, currentContent)],
-      activeDraftId: null,
-    });
-
-    const result = await prepareSavedDraft(
-      recoveryItem(draftId, null, legacyDraft(draftId, oldContent)),
-      () => true,
-    );
-
-    expect(result).toBe(true);
-    expect(useLandingDraftStore.getState().drafts[0]?.content).toEqual(
-      currentContent,
-    );
-  });
-
-  it("imports a legacy draft and materializes inline image bytes", async () => {
-    const draftId = "legacy-draft";
-    const inlineContent: JsonContent = {
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [
-            {
-              type: "imageAttachment",
-              attrs: {
-                id: "inline-image",
-                fileName: "paste.png",
-                b64content: bytesToBase64(IMAGE_BYTES),
-              },
-            },
-          ],
-        },
-      ],
-    };
-    const expectedHash = await sha256Hex(IMAGE_BYTES);
-
-    const result = await prepareSavedDraft(
-      recoveryItem(draftId, null, legacyDraft(draftId, inlineContent)),
-      () => true,
-    );
-
-    expect(result).toBe(true);
-    const restored = useLandingDraftStore.getState().drafts[0];
-    expect(restored.content).toEqual({
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [
-            {
-              type: "imageAttachment",
-              attrs: {
-                id: "inline-image",
-                fileName: "paste.png",
-                hash: expectedHash,
-                size: IMAGE_BYTES.byteLength,
-              },
-            },
-          ],
-        },
-      ],
-    });
-    expect(restored.adoption).toEqual({ state: "unadopted" });
-  });
-
-  it("rejects an oversized legacy image without writing or evicting its history", async () => {
-    const capacityDraftId = "capacity-draft";
-    const capacityHash = "f".repeat(64);
-    useLandingDraftStore.setState({
-      drafts: [
-        localDraft(
-          capacityDraftId,
-          sizedImageDocument(capacityHash, LANDING_IMAGE_BUDGET_BYTES),
-        ),
-      ],
-      activeDraftId: null,
-    });
-    const item = recoveryItem(
-      "oversized-legacy-draft",
-      null,
-      legacyDraft("oversized-legacy-draft", {
-        type: "doc",
-        content: [
-          {
-            type: "paragraph",
-            content: [
-              {
-                type: "imageAttachment",
-                attrs: {
-                  id: "oversized-inline-image",
-                  fileName: "too-large.png",
-                  b64content: bytesToBase64(IMAGE_BYTES),
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    );
-    useTabRecoveryHistory.setState({
-      ready: true,
-      entries: [
-        {
-          kind: "header",
-          id: "oversized-history-entry",
-          items: [item],
-          bulk: false,
-        },
-      ],
-    });
-
-    await expect(prepareSavedDraft(item, () => true)).rejects.toThrow(
-      "not enough image capacity",
-    );
-
-    expect(idbData.size).toBe(0);
-    expect(
-      useLandingDraftStore.getState().drafts.map((draft) => draft.id),
-    ).toEqual([capacityDraftId]);
-    expect(useTabRecoveryHistory.getState().entries).toEqual([
-      {
-        kind: "header",
-        id: "oversized-history-entry",
-        items: [item],
-        bulk: false,
-      },
-    ]);
-  });
-
-  it("decodes a legacy image batch atomically before any write or history change", async () => {
-    const item = recoveryItem(
-      "invalid-legacy-batch",
-      null,
-      legacyDraft("invalid-legacy-batch", {
-        type: "doc",
-        content: [
-          {
-            type: "paragraph",
-            content: [
-              {
-                type: "imageAttachment",
-                attrs: {
-                  id: "valid-inline-image",
-                  fileName: "valid.png",
-                  b64content: bytesToBase64(IMAGE_BYTES),
-                },
-              },
-              {
-                type: "imageAttachment",
-                attrs: {
-                  id: "invalid-inline-image",
-                  fileName: "invalid.png",
-                  b64content: "%%%invalid-base64%%%",
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    );
-    useTabRecoveryHistory.setState({
-      ready: true,
-      entries: [
-        {
-          kind: "header",
-          id: "invalid-history-entry",
-          items: [item],
-          bulk: false,
-        },
-      ],
-    });
-
-    await expect(prepareSavedDraft(item, () => true)).rejects.toThrow(
-      "could not be decoded",
-    );
-
-    expect(idbData.size).toBe(0);
-    expect(useLandingDraftStore.getState().drafts).toEqual([]);
-    expect(useTabRecoveryHistory.getState().entries).toEqual([
-      {
-        kind: "header",
-        id: "invalid-history-entry",
-        items: [item],
-        bulk: false,
-      },
-    ]);
-  });
-
   it("returns false for an unadopted recovery item with no local row", async () => {
     const result = await prepareSavedDraft(
-      recoveryItem("missing-local-draft", null, undefined),
+      recoveryItem("missing-local-draft", null),
       () => true,
     );
 
@@ -565,7 +334,7 @@ describe("prepareSavedDraft", () => {
     mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
 
     const result = await prepareSavedDraft(
-      recoveryItem("deleted-draft", HOST_ID, undefined),
+      recoveryItem("deleted-draft", HOST_ID),
       () => true,
     );
 
@@ -582,7 +351,7 @@ describe("prepareSavedDraft", () => {
 
     await expect(
       prepareSavedDraft(
-        recoveryItem("temporarily-missing-draft", HOST_ID, undefined),
+        recoveryItem("temporarily-missing-draft", HOST_ID),
         () => true,
       ),
     ).rejects.toThrow();
@@ -606,7 +375,7 @@ describe("prepareSavedDraft", () => {
     mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
 
     const result = await prepareSavedDraft(
-      recoveryItem(draftId, HOST_ID, undefined),
+      recoveryItem(draftId, HOST_ID),
       () => true,
     );
 
@@ -638,7 +407,7 @@ describe("prepareSavedDraft", () => {
     mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
 
     await expect(
-      prepareSavedDraft(recoveryItem(draftId, HOST_ID, undefined), () => true),
+      prepareSavedDraft(recoveryItem(draftId, HOST_ID), () => true),
     ).resolves.toBe(true);
 
     const restored = useLandingDraftStore.getState().drafts[0];
@@ -660,7 +429,7 @@ describe("prepareSavedDraft", () => {
       [hash],
       false,
     );
-    const item = recoveryItem(draftId, HOST_ID, undefined);
+    const item = recoveryItem(draftId, HOST_ID);
     useTabRecoveryHistory.setState({
       entries: [
         {
@@ -720,7 +489,7 @@ describe("prepareSavedDraft", () => {
     mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
 
     await expect(
-      prepareSavedDraft(recoveryItem(draftId, HOST_ID, undefined), () => true),
+      prepareSavedDraft(recoveryItem(draftId, HOST_ID), () => true),
     ).resolves.toBe(true);
 
     const restored = useLandingDraftStore.getState().drafts[0];
@@ -746,7 +515,7 @@ describe("prepareSavedDraft", () => {
     mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
 
     const pending = prepareSavedDraft(
-      recoveryItem(draftId, HOST_ID, undefined),
+      recoveryItem(draftId, HOST_ID),
       () => true,
     );
     await vi.waitFor(() => {
@@ -776,10 +545,7 @@ describe("prepareSavedDraft", () => {
     mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
 
     await expect(
-      prepareSavedDraft(
-        recoveryItem("rpc-failure", HOST_ID, undefined),
-        () => true,
-      ),
+      prepareSavedDraft(recoveryItem("rpc-failure", HOST_ID), () => true),
     ).rejects.toThrow("temporary host transport failure");
   });
 
@@ -799,7 +565,7 @@ describe("prepareSavedDraft", () => {
     mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
 
     await expect(
-      prepareSavedDraft(recoveryItem(draftId, HOST_ID, undefined), () => true),
+      prepareSavedDraft(recoveryItem(draftId, HOST_ID), () => true),
     ).rejects.toThrow("The draft's images are not available yet.");
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
   });
@@ -815,7 +581,7 @@ describe("prepareSavedDraft", () => {
     let current = true;
 
     const pending = prepareSavedDraft(
-      recoveryItem(draftId, HOST_ID, undefined),
+      recoveryItem(draftId, HOST_ID),
       () => current,
     );
     await vi.waitFor(() => {
@@ -845,7 +611,7 @@ describe("prepareSavedDraft", () => {
     let current = true;
 
     const pending = prepareSavedDraft(
-      recoveryItem(draftId, HOST_ID, undefined),
+      recoveryItem(draftId, HOST_ID),
       () => current,
     );
     await vi.waitFor(() => {

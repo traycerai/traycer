@@ -279,7 +279,6 @@ describe("tab recovery through the command coordinator", () => {
       hostId: null,
     });
     expect(recoveredDraft).not.toHaveProperty("draft");
-    expect(recoveredDraft).not.toHaveProperty("legacyDraft");
     // The draft is at live index 1 after Task B is removed; batching maps it
     // back to its original strip position 2 so reopening preserves order.
     expect(entry.items.map((item) => item.index)).toEqual([1, 2]);

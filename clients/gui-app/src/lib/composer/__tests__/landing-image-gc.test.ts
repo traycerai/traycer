@@ -1,19 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { LegacyRecoveryDraft } from "@/lib/tab-recovery/history";
 
 // In-memory stand-in for idb-keyval, mirroring landing-image-store.test. Keyed by
 // string hash; the store argument is ignored. The Map is hoisted so tests can
 // reinstall a working `set` after a rejecting override without losing the body.
 const idbData = vi.hoisted(() => new Map<string, unknown>());
-const recoveryData = vi.hoisted(() => new Map<string, unknown>());
-const imageStoreToken = vi.hoisted(() => ({}));
-const recoveryStoreToken = vi.hoisted(() => ({}));
-
-function dataForStore(store: unknown): Map<string, unknown> {
-  return store === recoveryStoreToken ? recoveryData : idbData;
-}
 
 function idbStringKey(key: IDBValidKey): string {
   if (typeof key !== "string") {
@@ -23,27 +15,19 @@ function idbStringKey(key: IDBValidKey): string {
 }
 
 vi.mock("idb-keyval", () => {
+  const dummyStore = () => Promise.reject(new Error("unused"));
   return {
-    createStore: vi.fn((name: string) =>
-      name.endsWith(":landing-images") ? imageStoreToken : recoveryStoreToken,
-    ),
-    get: vi.fn((key: string, store: unknown) =>
-      Promise.resolve(dataForStore(store).get(key)),
-    ),
-    set: vi.fn((key: string, value: unknown, store: unknown) => {
-      dataForStore(store).set(key, value);
+    createStore: vi.fn(() => dummyStore),
+    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
+    set: vi.fn((key: string, value: unknown) => {
+      idbData.set(key, value);
       return Promise.resolve();
     }),
-    del: vi.fn((key: string, store: unknown) => {
-      dataForStore(store).delete(key);
+    del: vi.fn((key: string) => {
+      idbData.delete(key);
       return Promise.resolve();
     }),
-    keys: vi.fn((store: unknown) =>
-      Promise.resolve(Array.from(dataForStore(store).keys())),
-    ),
-    entries: vi.fn((store: unknown) =>
-      Promise.resolve(Array.from(dataForStore(store).entries())),
-    ),
+    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
   };
 });
 
@@ -54,6 +38,8 @@ vi.mock("sonner", () => ({
 }));
 
 let urlCounter = 0;
+let originalCreateObjectURLDescriptor: PropertyDescriptor | undefined;
+let originalRevokeObjectURLDescriptor: PropertyDescriptor | undefined;
 
 function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
   return new Uint8Array(values);
@@ -98,23 +84,17 @@ async function flush(): Promise<void> {
 
 type Modules = {
   readonly gc: typeof import("@/lib/composer/landing-image-gc");
-  readonly budget: typeof import("@/lib/composer/landing-image-budget");
   readonly store: typeof import("@/lib/composer/landing-image-store");
   readonly draft: typeof import("@/stores/home/landing-draft-store");
   readonly runtime: typeof import("@/stores/home/draft-runtime-registry");
-  readonly recovery: typeof import("@/lib/tab-recovery/history");
   readonly idb: typeof import("idb-keyval");
 };
 
 async function loadModules(opts: {
   readonly desktop: boolean;
-  readonly clearData?: boolean;
 }): Promise<Modules> {
   vi.resetModules();
-  if (opts.clearData !== false) {
-    idbData.clear();
-    recoveryData.clear();
-  }
+  idbData.clear();
   if (opts.desktop) {
     Reflect.set(globalThis, "runnerHost", {
       windows: { windowId: "win-test" },
@@ -125,33 +105,27 @@ async function loadModules(opts: {
   const idb = await import("idb-keyval");
   // Always reinstall a working set after reset - prior tests may have left a
   // rejecting mockImplementation on the shared idb-keyval mock module.
-  vi.mocked(idb.set).mockImplementation((key, value, store) => {
-    dataForStore(store).set(idbStringKey(key), value);
+  vi.mocked(idb.set).mockImplementation((key, value) => {
+    idbData.set(idbStringKey(key), value);
     return Promise.resolve();
   });
-  vi.mocked(idb.get).mockImplementation((key, store) =>
-    Promise.resolve(dataForStore(store).get(idbStringKey(key))),
+  vi.mocked(idb.get).mockImplementation((key) =>
+    Promise.resolve(idbData.get(idbStringKey(key))),
   );
-  vi.mocked(idb.del).mockImplementation((key, store) => {
-    dataForStore(store).delete(idbStringKey(key));
+  vi.mocked(idb.del).mockImplementation((key) => {
+    idbData.delete(idbStringKey(key));
     return Promise.resolve();
   });
-  vi.mocked(idb.keys).mockImplementation((store) =>
-    Promise.resolve(Array.from(dataForStore(store).keys())),
-  );
-  vi.mocked(idb.entries).mockImplementation((store) =>
-    Promise.resolve(Array.from(dataForStore(store).entries())),
+  vi.mocked(idb.keys).mockImplementation(() =>
+    Promise.resolve(Array.from(idbData.keys())),
   );
   const store = await import("@/lib/composer/landing-image-store");
-  const budget = await import("@/lib/composer/landing-image-budget");
   const gc = await import("@/lib/composer/landing-image-gc");
-  const recovery = await import("@/lib/tab-recovery/history");
   const draft = await import("@/stores/home/landing-draft-store");
   const runtime = await import("@/stores/home/draft-runtime-registry");
-  recovery.useTabRecoveryHistory.setState({ entries: [], ready: true });
   draft.useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   runtime.draftRuntimeRegistry.resetForTesting();
-  return { gc, budget, store, draft, runtime, recovery, idb };
+  return { gc, store, draft, runtime, idb };
 }
 
 function makeDraft(
@@ -174,31 +148,35 @@ function makeDraft(
   };
 }
 
-function makeLegacyDraft(
-  m: Modules,
-  input: {
-    readonly id: string;
-    readonly content: JsonContent;
-    readonly lastTouchedAt: number;
-  },
-): LegacyRecoveryDraft {
-  const draft = makeDraft(m, input);
-  return {
-    id: draft.id,
-    content: draft.content,
-    selection: draft.selection,
-    lastTouchedAt: draft.lastTouchedAt,
-    settings: draft.settings,
-    composerMode: draft.composerMode,
-    workspace: draft.workspace,
-  };
-}
-
 describe("landing-image-gc", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
-    URL.revokeObjectURL = vi.fn();
+    originalCreateObjectURLDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "createObjectURL",
+    );
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => `blob:mock/${++urlCounter}`,
+      });
+    }
+    vi.spyOn(URL, "createObjectURL").mockImplementation(
+      () => `blob:mock/${++urlCounter}`,
+    );
+    originalRevokeObjectURLDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "revokeObjectURL",
+    );
+    if (typeof URL.revokeObjectURL !== "function") {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => undefined,
+      });
+    }
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     toastInfo.mockClear();
     toastError.mockClear();
     window.localStorage.clear();
@@ -207,6 +185,25 @@ describe("landing-image-gc", () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    if (originalCreateObjectURLDescriptor === undefined)
+      Reflect.deleteProperty(URL, "createObjectURL");
+    else
+      Object.defineProperty(
+        URL,
+        "createObjectURL",
+        originalCreateObjectURLDescriptor,
+      );
+    if (originalRevokeObjectURLDescriptor === undefined)
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    else
+      Object.defineProperty(
+        URL,
+        "revokeObjectURL",
+        originalRevokeObjectURLDescriptor,
+      );
+    originalCreateObjectURLDescriptor = undefined;
+    originalRevokeObjectURLDescriptor = undefined;
     Reflect.deleteProperty(globalThis, "runnerHost");
   });
 
@@ -308,130 +305,6 @@ describe("landing-image-gc", () => {
     const keys = await m.store.imageHashKeys();
     expect(keys).toContain("restored-keep");
     expect(keys).not.toContain("restored-orphan");
-  });
-
-  it("keeps a recovered draft image until its recovery entry is removed", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingEditorMounted();
-    const hash = "recovered-draft-image";
-    await m.idb.set(hash, bytesOf([13, 14, 15]), m.store.imageStore());
-
-    m.recovery.useTabRecoveryHistory.setState({
-      entries: [
-        {
-          id: "recovery-entry",
-          kind: "header",
-          bulk: false,
-          items: [
-            {
-              kind: "draft",
-              draftId: "recovered-draft",
-              hostId: null,
-              index: 0,
-              legacyDraft: makeLegacyDraft(m, {
-                id: "recovered-draft",
-                content: docWithImages(imageNode(hash, 3)),
-                lastTouchedAt: 1,
-              }),
-            },
-          ],
-        },
-      ],
-      ready: true,
-    });
-
-    await m.gc.reconcile();
-    await flush();
-    expect(await m.store.imageHashKeys()).toContain(hash);
-
-    m.recovery.removeRecoveryEntry("recovery-entry");
-    await m.gc.reconcile();
-    await flush();
-    expect(await m.store.imageHashKeys()).not.toContain(hash);
-  });
-
-  it("preserves recovery images for an inactive account after a switch and reload", async () => {
-    const first = await loadModules({ desktop: true });
-    const hash = "account-a-recovery-image";
-    await first.idb.set(hash, bytesOf([16, 17, 18]), first.store.imageStore());
-    await first.recovery.configureTabRecoveryHistory("account-a");
-    first.recovery.recordClosedHeaderTab({
-      kind: "draft",
-      draftId: "account-a-draft",
-      hostId: null,
-      legacyDraft: makeLegacyDraft(first, {
-        id: "account-a-draft",
-        content: docWithImages(imageNode(hash, 3)),
-        lastTouchedAt: 1,
-      }),
-      index: 0,
-    });
-    await first.recovery.flushTabRecoveryHistory();
-
-    // The active account changes, so the in-memory recovery list no longer
-    // includes A's draft. Its persisted bucket remains a root for this window.
-    await first.recovery.configureTabRecoveryHistory("account-b");
-    expect(first.recovery.useTabRecoveryHistory.getState().entries).toEqual([]);
-
-    // A renderer reload drops the in-memory history and image session cache,
-    // while the two IndexedDB stores survive.
-    const reloaded = await loadModules({ desktop: true, clearData: false });
-    await reloaded.recovery.configureTabRecoveryHistory("account-b");
-    reloaded.gc.markLandingEditorMounted();
-    reloaded.gc.markLandingDraftsReady();
-    await reloaded.gc.reconcile();
-    await flush();
-
-    expect(await reloaded.store.imageHashKeys()).toContain(hash);
-  });
-
-  it("refuses admission while a persisted inactive legacy history fills the budget", async () => {
-    const m = await loadModules({ desktop: true });
-    const legacyHash = "account-a-budget-image";
-    await m.recovery.configureTabRecoveryHistory("account-a");
-    m.recovery.recordClosedHeaderTab({
-      kind: "draft",
-      draftId: "account-a-budget-draft",
-      hostId: null,
-      legacyDraft: makeLegacyDraft(m, {
-        id: "account-a-budget-draft",
-        content: docWithImages(
-          imageNode(legacyHash, m.budget.LANDING_IMAGE_BUDGET_BYTES - 1),
-        ),
-        lastTouchedAt: 1,
-      }),
-      index: 0,
-    });
-    await m.recovery.flushTabRecoveryHistory();
-
-    const canonicalDraft = makeDraft(m, {
-      id: "canonical-saved-draft",
-      content: docWithImages(imageNode("canonical-image", 3)),
-      lastTouchedAt: 2,
-    });
-    m.draft.useLandingDraftStore.setState({
-      drafts: [canonicalDraft],
-      activeDraftId: null,
-    });
-    await m.recovery.configureTabRecoveryHistory("account-b");
-
-    const reservation = m.budget.reserveLandingImageBudget("account-b-draft", [
-      { hash: "new-image", bytes: 2 },
-    ]);
-    expect(reservation).toBeNull();
-    await m.recovery.flushTabRecoveryHistory();
-
-    await m.recovery.configureTabRecoveryHistory("account-a");
-    const accountAEntries = m.recovery.useTabRecoveryHistory.getState().entries;
-    expect(accountAEntries).toHaveLength(1);
-    expect(accountAEntries[0]).toMatchObject({
-      kind: "header",
-      items: [{ kind: "draft", draftId: "account-a-budget-draft" }],
-    });
-    expect(m.draft.useLandingDraftStore.getState().drafts).toHaveLength(1);
-    expect(m.draft.useLandingDraftStore.getState().drafts[0]?.id).toBe(
-      "canonical-saved-draft",
-    );
   });
 
   it("[C2] a just-pasted hash in the live editor survives a reconcile from an unrelated close", async () => {

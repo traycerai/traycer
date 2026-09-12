@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as idbKeyval from "idb-keyval";
 import { createStore, get as idbGet, set } from "idb-keyval";
-import type { JsonContent } from "@traycer/protocol/common/registry";
-import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import { closeTab } from "@/stores/epics/canvas/actions";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
@@ -13,6 +11,8 @@ import {
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import { persistKey, tabRecoveryKey } from "@/lib/persist/keys";
+import { tabItemId, type PersistedTabStripLayout } from "@/stores/tabs/layout";
+import type { TabRef } from "@/stores/tabs/types";
 import {
   batchHeaderTabRecovery,
   configureTabRecoveryHistory,
@@ -22,14 +22,11 @@ import {
   pruneRecoveryTiles,
   recordClosedCanvas,
   recordClosedHeaderTab,
-  recoveryDrafts,
-  removeRecoveryEntry,
   flushTabRecoveryHistory,
   resetTabRecoveryHistory,
   useTabRecoveryHistory,
   withoutTabRecovery,
   type ClosedHeaderTab,
-  type LegacyRecoveryDraft,
   type TabRecoveryEntry,
 } from "../history";
 
@@ -50,51 +47,22 @@ function setWindow(windowId: string): void {
   Reflect.set(globalThis, "runnerHost", { windows: { windowId } });
 }
 
-function draft(
-  id: string,
-  _content: JsonContent,
-): Extract<ClosedHeaderTab, { kind: "draft" }> {
+function layoutForRefs(refs: ReadonlyArray<TabRef>): PersistedTabStripLayout {
+  const first = refs.at(0);
+  return {
+    version: 2,
+    items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+    activeItemId: first === undefined ? null : tabItemId(first),
+    systemTabs: { history: null, settings: null },
+    activationHistory: [],
+  };
+}
+
+function draft(id: string): Extract<ClosedHeaderTab, { kind: "draft" }> {
   return {
     kind: "draft",
     draftId: id,
     hostId: null,
-    index: 0,
-  };
-}
-
-function legacyDraft(id: string, content: JsonContent): LegacyRecoveryDraft {
-  return {
-    id,
-    content,
-    selection: null,
-    lastTouchedAt: 1,
-    settings: null,
-    composerMode: "chat",
-    workspace: {
-      folders: [],
-      primaryPath: null,
-      folderInfoByPath: {},
-    },
-  };
-}
-
-function legacyDraftItem(
-  id: string,
-  content: JsonContent,
-  index = 0,
-): Record<string, unknown> {
-  return { kind: "draft", draft: legacyDraft(id, content), index };
-}
-
-function legacyDraftRef(
-  id: string,
-  content: JsonContent,
-): Extract<ClosedHeaderTab, { kind: "draft" }> {
-  return {
-    kind: "draft",
-    draftId: id,
-    hostId: null,
-    legacyDraft: legacyDraft(id, content),
     index: 0,
   };
 }
@@ -124,41 +92,6 @@ function emptyCanvas(): EpicCanvasState {
   };
 }
 
-function textContent(text: string): JsonContent {
-  return {
-    type: "doc",
-    content: [
-      {
-        type: "paragraph",
-        content: [{ type: "text", text }],
-      },
-    ],
-  };
-}
-
-function imageContent(hash: string): JsonContent {
-  return {
-    type: "doc",
-    content: [
-      {
-        type: "paragraph",
-        content: [
-          {
-            type: "imageAttachment",
-            attrs: {
-              id: hash,
-              fileName: "image.png",
-              hash,
-              mimeType: "image/png",
-              size: 3,
-            },
-          },
-        ],
-      },
-    ],
-  };
-}
-
 function canvasWithBlankAndSpec(): {
   readonly canvas: EpicCanvasState;
   readonly blankInstanceId: string;
@@ -179,14 +112,14 @@ function canvasWithBlankAndSpec(): {
 }
 
 async function seedPersistedEntries(
-  entries: readonly unknown[],
+  entries: readonly TabRecoveryEntry[],
 ): Promise<void> {
   await configureTabRecoveryHistory(null);
   await flushTabRecoveryHistory();
   const store = createStore(persistKey("tab-recovery"), "history");
   await set(
     tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
-    { version: 1, entries },
+    { version: 2, entries },
     store,
   );
   setWindow(WINDOW_ONE);
@@ -212,8 +145,8 @@ afterEach(() => {
 
 describe("tab recovery history", () => {
   it("keeps the persisted journal intact across a failed same-identity hydration retry", async () => {
-    const persistedOne = draft("persisted-one", textContent("keep one"));
-    const persistedTwo = draft("persisted-two", textContent("delete later"));
+    const persistedOne = draft("persisted-one");
+    const persistedTwo = draft("persisted-two");
     recordClosedHeaderTab(persistedOne);
     recordClosedHeaderTab(persistedTwo);
     await flushTabRecoveryHistory();
@@ -233,7 +166,7 @@ describe("tab recovery history", () => {
 
     expect(useTabRecoveryHistory.getState().ready).toBe(false);
 
-    const pending = draft("pending-after-failure", textContent("keep pending"));
+    const pending = draft("pending-after-failure");
     recordClosedHeaderTab(pending);
     pruneRecoveryDraft(persistedTwo.draftId);
 
@@ -270,7 +203,7 @@ describe("tab recovery history", () => {
   });
 
   it("automatically succeeds after one transient storage read failure", async () => {
-    const recovered = draft("automatic-retry", textContent("automatic"));
+    const recovered = draft("automatic-retry");
     const store = createStore(persistKey("tab-recovery"), "history");
     await set(
       tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
@@ -301,7 +234,7 @@ describe("tab recovery history", () => {
   });
 
   it("does not publish a queued retry after switching accounts", async () => {
-    const oldEntry = draft("old-account-entry", textContent("old"));
+    const oldEntry = draft("old-account-entry");
     const store = createStore(persistKey("tab-recovery"), "history");
     await set(
       tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
@@ -323,7 +256,7 @@ describe("tab recovery history", () => {
     await vi.waitFor(() => expect(get).toHaveBeenCalled());
 
     await configureTabRecoveryHistory(ACCOUNT_TWO);
-    const newEntry = draft("new-account-entry", textContent("new"));
+    const newEntry = draft("new-account-entry");
     recordClosedHeaderTab(newEntry);
     await oldAccountHydration;
 
@@ -337,7 +270,7 @@ describe("tab recovery history", () => {
   });
 
   it("retains pending closes and prunes for an unread account across an account switch", async () => {
-    const deleted = draft("persisted-before-failure", textContent("delete"));
+    const deleted = draft("persisted-before-failure");
     recordClosedHeaderTab(deleted);
     await flushTabRecoveryHistory();
 
@@ -357,7 +290,7 @@ describe("tab recovery history", () => {
     await configureTabRecoveryHistory(ACCOUNT_ONE);
     expect(useTabRecoveryHistory.getState().ready).toBe(false);
 
-    const fresh = draft("pending-during-failure", textContent("keep"));
+    const fresh = draft("pending-during-failure");
     recordClosedHeaderTab(fresh);
     pruneRecoveryDraft(deleted.draftId);
     expect(await idbGet<unknown>(key, store)).toEqual(diskBeforeFailure);
@@ -389,16 +322,22 @@ describe("tab recovery history", () => {
   });
 
   it("batches header closes into one bulk entry and suppresses internal closes", () => {
-    const one = draft("draft-one", textContent("one"));
-    const two = draft("draft-two", textContent("two"));
-    const three = draft("draft-three", textContent("three"));
+    const one = draft("draft-one");
+    const two = draft("draft-two");
+    const three = draft("draft-three");
+    const oneRef: TabRef = { kind: "draft", id: one.draftId };
+    const twoRef: TabRef = { kind: "draft", id: two.draftId };
+    const threeRef: TabRef = { kind: "draft", id: three.draftId };
 
     recordClosedHeaderTab(one);
     withoutTabRecovery(() => recordClosedHeaderTab(two));
-    batchHeaderTabRecovery(() => {
-      recordClosedHeaderTab(two);
-      withoutTabRecovery(() => recordClosedHeaderTab(three));
-    }, null);
+    batchHeaderTabRecovery(
+      () => {
+        recordClosedHeaderTab(two);
+        withoutTabRecovery(() => recordClosedHeaderTab(three));
+      },
+      layoutForRefs([oneRef, twoRef, threeRef]),
+    );
 
     const entries = useTabRecoveryHistory.getState().entries;
     expect(entries).toHaveLength(2);
@@ -406,30 +345,31 @@ describe("tab recovery history", () => {
     expect(entries[1]).toMatchObject({
       kind: "header",
       bulk: true,
-      items: [two],
+      items: [{ ...two, index: 1 }],
     });
   });
 
   it("prunes deleted epics from mixed header entries and canvas entries", () => {
-    const draftItem = draft("draft-survivor", textContent("survivor"));
-    batchHeaderTabRecovery(() => {
-      recordClosedHeaderTab({
-        kind: "epic",
-        tab: epicTab("epic-deleted", "tab-epic-deleted"),
-        canvas: canvasWithTwoTiles(),
-        index: 0,
-      });
-      recordClosedHeaderTab(draftItem);
-    }, null);
+    const draftItem = draft("draft-survivor");
+    const deletedTab = epicTab("epic-deleted", "tab-epic-deleted");
+    const deletedRef: TabRef = { kind: "epic", id: deletedTab.tabId };
+    const draftRef: TabRef = { kind: "draft", id: draftItem.draftId };
+    batchHeaderTabRecovery(
+      () => {
+        recordClosedHeaderTab({
+          kind: "epic",
+          tab: deletedTab,
+          canvas: canvasWithTwoTiles(),
+          index: 0,
+        });
+        recordClosedHeaderTab(draftItem);
+      },
+      layoutForRefs([deletedRef, draftRef]),
+    );
     const before = canvasWithTwoTiles();
     const afterA = closeTab(before, "p1", SPEC_A.instanceId);
     const after = closeTab(afterA, "p1", SPEC_B.instanceId);
-    recordClosedCanvas(
-      epicTab("epic-deleted", "tab-epic-deleted"),
-      before,
-      after,
-      false,
-    );
+    recordClosedCanvas(deletedTab, before, after, false);
 
     const beforePrune = useTabRecoveryHistory.getState().entries.at(0);
     if (beforePrune === undefined || beforePrune.kind !== "header") {
@@ -482,10 +422,7 @@ describe("tab recovery history", () => {
   });
 
   it("records saved drafts as references without an editor snapshot", () => {
-    const item = draft(
-      "saved-draft",
-      textContent("latest content lives in the store"),
-    );
+    const item = draft("saved-draft");
     recordClosedHeaderTab(item);
 
     const entry = useTabRecoveryHistory.getState().entries.at(0);
@@ -513,18 +450,63 @@ describe("tab recovery history", () => {
     expect(entry.instanceIds).toEqual([SPEC_A.instanceId]);
   });
 
-  it("caps meaningful recovery actions while ignoring blank Start Pages", () => {
+  it("retains an empty task recovery entry in the v2 journal", async () => {
+    const task: TabRecoveryEntry = {
+      kind: "header",
+      id: "empty-task-header",
+      bulk: false,
+      items: [
+        {
+          kind: "epic",
+          tab: epicTab("empty-task", "empty-task-tab"),
+          canvas: emptyCanvas(),
+          index: 0,
+        },
+      ],
+    };
+
+    await seedPersistedEntries([task]);
+
+    expect(useTabRecoveryHistory.getState().entries).toEqual([task]);
+  });
+
+  it("ignores version 1 snapshot journals", async () => {
+    await configureTabRecoveryHistory(null);
+    await flushTabRecoveryHistory();
+    const store = createStore(persistKey("tab-recovery"), "history");
+    await set(
+      tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
+      {
+        version: 1,
+        entries: [
+          {
+            kind: "header",
+            id: "old-snapshot",
+            bulk: false,
+            items: [
+              {
+                kind: "draft",
+                draftId: "old-snapshot-draft",
+                hostId: null,
+                index: 0,
+              },
+            ],
+          },
+        ],
+      },
+      store,
+    );
+    setWindow(WINDOW_ONE);
+
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+
+    expect(useTabRecoveryHistory.getState().ready).toBe(true);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+  });
+
+  it("caps recovery actions at the newest 50 entries", () => {
     for (let index = 0; index < MAX_RECOVERY_ACTIONS + 5; index += 1)
-      recordClosedHeaderTab(
-        draft(`meaningful-${String(index)}`, textContent(String(index))),
-      );
-    for (let index = 0; index < 5; index += 1)
-      recordClosedHeaderTab(
-        legacyDraftRef(`blank-${String(index)}`, {
-          type: "doc",
-          content: [{ type: "paragraph" }],
-        }),
-      );
+      recordClosedHeaderTab(draft(`meaningful-${String(index)}`));
 
     const entries = useTabRecoveryHistory.getState().entries;
     expect(entries).toHaveLength(MAX_RECOVERY_ACTIONS);
@@ -542,112 +524,13 @@ describe("tab recovery history", () => {
     );
   });
 
-  it("cleans blank legacy entries while retaining mixed content and empty tasks", async () => {
-    const blank = legacyDraftItem("legacy-blank", {
-      type: "doc",
-      content: [{ type: "paragraph" }],
-    });
-    const whitespace = legacyDraftItem(
-      "legacy-whitespace",
-      textContent("  \n\t"),
-      1,
-    );
-    const text = legacyDraftItem("legacy-text", textContent("persist me"), 2);
-    const image = legacyDraftItem(
-      "legacy-image",
-      imageContent("legacy-image-hash"),
-      3,
-    );
-    const task: ClosedHeaderTab = {
-      kind: "epic",
-      tab: epicTab("legacy-empty-task", "legacy-task-tab"),
-      canvas: emptyCanvas(),
-      index: 4,
-    };
-    const { canvas: canvasWithBlank, blankInstanceId } =
-      canvasWithBlankAndSpec();
-    const blankCanvasEntry: TabRecoveryEntry = {
-      kind: "canvas",
-      id: "legacy-blank-canvas",
-      tab: epicTab("legacy-blank-canvas", "legacy-blank-canvas-tab"),
-      before: canvasWithBlank,
-      after: emptyCanvas(),
-      instanceIds: [blankInstanceId],
-      bulk: false,
-    };
-    const mixedCanvasEntry: TabRecoveryEntry = {
-      kind: "canvas",
-      id: "legacy-mixed-canvas",
-      tab: epicTab("legacy-mixed-canvas", "legacy-mixed-canvas-tab"),
-      before: canvasWithBlank,
-      after: emptyCanvas(),
-      instanceIds: [blankInstanceId, SPEC_A.instanceId],
-      bulk: false,
-    };
-    await seedPersistedEntries([
-      {
-        kind: "header",
-        id: "legacy-empty-header",
-        bulk: false,
-        items: [blank],
-      },
-      {
-        kind: "header",
-        id: "legacy-mixed-header",
-        bulk: true,
-        items: [blank, whitespace, text, image, task],
-      },
-      blankCanvasEntry,
-      mixedCanvasEntry,
-      {
-        kind: "header",
-        id: "legacy-empty-task-header",
-        bulk: false,
-        items: [task],
-      },
-    ]);
-
-    const entries = useTabRecoveryHistory.getState().entries;
-    expect(entries.map((entry) => entry.id)).toEqual([
-      "legacy-mixed-header",
-      "legacy-mixed-canvas",
-      "legacy-empty-task-header",
-    ]);
-    const mixedHeader = entries.at(0);
-    if (mixedHeader === undefined || mixedHeader.kind !== "header") {
-      throw new Error("expected the mixed header entry");
-    }
-    expect(
-      mixedHeader.items.map((item) =>
-        item.kind === "draft" ? item.draftId : item.tab.tabId,
-      ),
-    ).toEqual(["legacy-text", "legacy-image", "legacy-task-tab"]);
-    expect(mixedHeader.items.map((item) => item.index)).toEqual([2, 3, 4]);
-    const mixedCanvas = entries.at(1);
-    if (mixedCanvas === undefined || mixedCanvas.kind !== "canvas") {
-      throw new Error("expected the mixed canvas entry");
-    }
-    expect(mixedCanvas.instanceIds).toEqual([SPEC_A.instanceId]);
-    const emptyTaskHeader = entries.at(2);
-    if (emptyTaskHeader === undefined || emptyTaskHeader.kind !== "header") {
-      throw new Error("expected the empty task header entry");
-    }
-    const emptyTask = emptyTaskHeader.items.at(0);
-    expect(emptyTaskHeader.items).toHaveLength(1);
-    expect(emptyTask).toMatchObject({
-      kind: "epic",
-      tab: { tabId: "legacy-task-tab" },
-      canvas: emptyCanvas(),
-    });
-  });
-
   it("persists separately by account and desktop window", async () => {
-    recordClosedHeaderTab(draft("window-one-draft", textContent("window one")));
+    recordClosedHeaderTab(draft("window-one-draft"));
 
     setWindow(WINDOW_TWO);
     await configureTabRecoveryHistory(ACCOUNT_ONE);
     expect(useTabRecoveryHistory.getState().entries).toEqual([]);
-    recordClosedHeaderTab(draft("window-two-draft", textContent("window two")));
+    recordClosedHeaderTab(draft("window-two-draft"));
 
     setWindow(WINDOW_ONE);
     await configureTabRecoveryHistory(ACCOUNT_ONE);
@@ -663,32 +546,9 @@ describe("tab recovery history", () => {
     expect(useTabRecoveryHistory.getState().entries).toEqual([]);
   });
 
-  it("does not treat a saved draft reference as an image ownership root", () => {
-    const item = draft("draft-with-image", imageContent("image-hash"));
-    recordClosedHeaderTab(item);
-
-    expect(recoveryDrafts()).toEqual([]);
-    expect(landingLiveImageRootHashes()).toEqual(new Set());
-
-    const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined) throw new Error("expected recovery entry");
-    removeRecoveryEntry(entry.id);
-    expect(recoveryDrafts()).toEqual([]);
-    expect(landingLiveImageRootHashes()).toEqual(new Set());
-  });
-
-  it("keeps image hashes for a legacy snapshot during migration", () => {
-    const hash = "a".repeat(64);
-    const item = legacyDraftRef("legacy-image-draft", imageContent(hash));
-    recordClosedHeaderTab(item);
-
-    expect(recoveryDrafts()).toEqual([item.legacyDraft]);
-    expect(landingLiveImageRootHashes()).toEqual(new Set([hash]));
-  });
-
   it("prunes a permanently deleted draft from recovery references", () => {
-    recordClosedHeaderTab(draft("draft-to-delete", textContent("remove me")));
-    recordClosedHeaderTab(draft("draft-to-keep", textContent("keep me")));
+    recordClosedHeaderTab(draft("draft-to-delete"));
+    recordClosedHeaderTab(draft("draft-to-keep"));
 
     pruneRecoveryDraft("draft-to-delete");
 

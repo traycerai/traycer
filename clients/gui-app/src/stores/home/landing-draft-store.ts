@@ -1,7 +1,6 @@
 import {
   pruneRecoveryDraft,
   recoveryDraftIds,
-  type LegacyRecoveryDraft,
 } from "@/lib/tab-recovery/history";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -152,10 +151,13 @@ interface LandingDraftStoreState {
    * and default settings; non-null settings are an explicit caller override.
    */
   createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
-  /** Import an old recovery journal's draft once into the saved-draft store. */
-  importLegacyDraftForRecovery: (draft: LegacyRecoveryDraft) => void;
-  /** Close retains nonempty drafts; empty drafts are deleted. */
-
+  /**
+   * Put a start-task draft away. A non-empty draft is retained (`closed:
+   * true`) and leaves the tab strip; an empty one is deleted so stray Cmd-N
+   * tabs do not accumulate. If it was the active draft, clears
+   * `activeDraftId`; strip-neighbor navigation in the close-flow handles
+   * where the user lands.
+   */
   closeDraft: (id: string) => void;
   /**
    * Explicit destroy — local row plus host delete when adopted. T11
@@ -579,25 +581,6 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         return next.id;
       },
 
-      importLegacyDraftForRecovery: (draft) => {
-        // Never overwrite a newer saved copy with the historical snapshot.
-        if (get().drafts.some((item) => item.id === draft.id)) return;
-        const restored: LandingDraftTab = {
-          ...draft,
-          adoption: UNADOPTED_LANDING_DRAFT,
-          hostRevision: 0,
-          generation: 1,
-          syncedGeneration: 0,
-          ownerHostId: null,
-          origin: null,
-          publication: null,
-          confirmedHostBlobHashes: [],
-          closed: true,
-        };
-        set((state) => ({ drafts: [...state.drafts, restored] }));
-        notifyDraftLocalEdit(draft.id);
-        notifyDraftLocalFlush(draft.id);
-      },
       closeDraft: (id) => {
         if (!get().drafts.some((d) => d.id === id)) return;
         // Flush pending runtime writes first so emptiness is judged on the

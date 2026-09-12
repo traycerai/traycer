@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { PrepareNestedFocusTarget } from "@/lib/epic-nested-focus-navigation";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
@@ -12,7 +11,6 @@ import {
   pruneRecoveryTiles,
   useTabRecoveryHistory,
   type ClosedHeaderTab,
-  type LegacyRecoveryDraft,
   type TabRecoveryEntry,
 } from "@/lib/tab-recovery/history";
 import { reopenClosedTab } from "@/lib/tab-recovery/reopen";
@@ -216,31 +214,13 @@ function canvasEntry(input: {
   };
 }
 
-function draft(content: JsonContent): LegacyRecoveryDraft {
-  return {
-    id: "draft-1",
-    content,
-    selection: null,
-    lastTouchedAt: 1,
-    settings: null,
-    composerMode: "chat",
-    workspace: {
-      folders: [],
-      primaryPath: null,
-      folderInfoByPath: {},
-    },
-  };
-}
-
 function draftRef(
-  content: JsonContent,
   draftId = "draft-1",
 ): Extract<ClosedHeaderTab, { kind: "draft" }> {
   return {
     kind: "draft",
     draftId,
-    hostId: null,
-    legacyDraft: { ...draft(content), id: draftId },
+    hostId: "host-1",
     index: 0,
   };
 }
@@ -346,7 +326,6 @@ describe("reopenClosedTab", () => {
       expect.any(Function),
     );
     expect(mocks.restoreClosedHeaderTabs).toHaveBeenCalledWith([item], null);
-    expect(item).not.toHaveProperty("legacyDraft");
     expect(useTabRecoveryHistory.getState().entries).toHaveLength(0);
   });
 
@@ -384,16 +363,13 @@ describe("reopenClosedTab", () => {
     });
   });
 
-  it("keeps the recovery entry when a draft image cannot be restored", async () => {
-    const image: JsonContent = {
-      type: "imageAttachment",
-      attrs: { b64content: "not-decodable" },
-    };
+  it("keeps the recovery entry when a draft cannot be restored", async () => {
+    const item = draftRef();
     const entry: TabRecoveryEntry = {
       id: "entry-1",
       kind: "header",
       bulk: false,
-      items: [draftRef(image)],
+      items: [item],
     };
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
     mocks.prepareSavedDraft.mockRejectedValue(new Error("host unavailable"));
@@ -417,18 +393,14 @@ describe("reopenClosedTab", () => {
   });
 
   it("restores available bulk items and retains only the failed draft", async () => {
-    const image: JsonContent = {
-      type: "imageAttachment",
-      attrs: { b64content: "not-decodable" },
-    };
-    const failedDraft = draftRef(image);
+    const failedDraft = draftRef();
     const entry: TabRecoveryEntry = {
       id: "entry-1",
       kind: "header",
       bulk: true,
       items: [
         ...epicEntry({ id: "entry-1", bulk: true }).items,
-        { ...draftRef(image, "draft-1"), index: 1 },
+        { ...draftRef(), index: 1 },
       ],
     };
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
@@ -675,16 +647,13 @@ describe("reopenClosedTab", () => {
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 
-  it("does not restore a draft removed while its image is being prepared", async () => {
-    const image: JsonContent = {
-      type: "imageAttachment",
-      attrs: { b64content: "pending" },
-    };
+  it("does not restore a draft removed while it is being prepared", async () => {
+    const item = draftRef();
     const entry: Extract<TabRecoveryEntry, { kind: "header" }> = {
       id: "entry-1",
       kind: "header",
       bulk: false,
-      items: [draftRef(image)],
+      items: [item],
     };
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
     let resolveDraft: (ready: boolean) => void = () => undefined;

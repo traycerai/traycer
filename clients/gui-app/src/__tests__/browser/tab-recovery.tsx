@@ -214,7 +214,7 @@ function entrySummary() {
               ? {}
               : { placement: item.placement }),
             ...(item.kind === "draft"
-              ? { hasSnapshot: item.legacyDraft !== undefined }
+              ? { hasSnapshot: "content" in item || "draft" in item }
               : {}),
           }))
         : {

@@ -13,7 +13,6 @@ import {
 import { preservedTileRecordIsLive } from "@/lib/commands/actions/history-navigation";
 import { rejectClosedPlainTerminalRestore } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import { queryClient } from "@/lib/query-client";
-import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { parseEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
 import type {
   EpicCanvasState,
@@ -119,13 +118,7 @@ async function prepareHeaderItem(
 ): Promise<ClosedHeaderTab | null> {
   if (item.kind === "draft") {
     if (!(await prepareSavedDraft(item, stillCurrent))) return null;
-    return {
-      kind: "draft",
-      draftId: item.draftId,
-      hostId: item.hostId,
-      index: item.index,
-      ...(item.placement === undefined ? {} : { placement: item.placement }),
-    };
+    return item;
   }
   const canvas =
     useEpicCanvasStore.getState().canvasByTabId[item.tab.tabId] ?? item.canvas;
@@ -353,7 +346,6 @@ export async function reopenClosedTab(router: KeybindingRouter): Promise<void> {
           : { restored: restoreCanvas(entry, router), retained: false };
       if (generation !== recoveryHistoryGeneration()) return;
       if (!outcome.retained) removeRecoveryEntry(entry.id);
-      scheduleLandingImageReconcile();
       if (outcome.restored || outcome.retained) return;
     }
   } catch {
