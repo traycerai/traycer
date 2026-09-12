@@ -483,6 +483,7 @@ function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
     openRequestsByReceiver: new Map(),
     playing: false,
     reducedMotion: false,
+    feedSettled: false,
   };
   // The first sync MATERIALIZES the floor and never replays its row, so the
   // envelope only exists after a second sync carrying a new key - exactly the
@@ -933,6 +934,7 @@ describe("CommGraphOfficeCanvas", () => {
       openRequestsByReceiver: new Map(),
       playing: false,
       reducedMotion: false,
+      feedSettled: false,
     });
 
     const pips = scene.frame(0, WHOLE_WORLD).actors;
@@ -2040,6 +2042,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
         openRequestsByReceiver: new Map(),
         playing: args.playing,
         reducedMotion: false,
+        feedSettled: false,
       };
     }
     scene.sync(
@@ -3287,6 +3290,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
       openRequestsByReceiver: new Map(),
       playing: false,
       reducedMotion: false,
+      feedSettled: false,
     });
     const focus = scene.locate(ORCHESTRATOR.id);
     if (focus === null) throw new Error("expected a real Towers character");

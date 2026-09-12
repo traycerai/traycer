@@ -2103,9 +2103,10 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    * on the tile, or resolved from the Settings default - is ready as soon as
    * the agent snapshot and the box are there, because that is everything a
    * plan reads; `initialHistoryCaughtUp` arrives separately and says who among
-   * those agents is busy. The two readiness rules that still hold the feed as
-   * an input are Auto's measurement (in the tile, which owns it) and the
-   * partition commit below.
+   * those agents is busy. Three rules still hold the feed as an input: Auto's
+   * measurement (in the tile, which owns it), the partition commit below, and
+   * the one-shot re-plan the scene owes when the feed finally settles under a
+   * floor planned without it.
    */
   readonly ready: boolean;
   /**
@@ -2432,16 +2433,24 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // alone does not help - this commit happens first and poisons the input
     // the sync later reads.
     //
-    // THE FEED IS STILL PART OF "REAL" HERE, and only here. Drawing an
-    // explicit view no longer waits for it: an office is a drawing of the
-    // agent list, and the events only decide who among them is busy. But a
-    // CLASSIFICATION is frozen for the life of the mount, so a partition
-    // taken while the feed is behind would make "not busy yet" permanent for
-    // everyone the replay had not reached. So the office draws from the
-    // uncommitted partition - recomputed from scratch, `previous` still null,
-    // while the feed catches up - and the first one committed is the first
-    // one taken from a settled feed. The re-plan that follows is the same
-    // population change any arrival causes.
+    // THE FEED IS STILL PART OF "REAL" HERE. Drawing an explicit view no
+    // longer waits for it: an office is a drawing of the agent list, and the
+    // events only decide who among them is busy. But a CLASSIFICATION is
+    // frozen for the life of the mount, so a partition taken while the feed
+    // is behind would make "not busy yet" permanent for everyone the replay
+    // had not reached. So the office draws from the uncommitted partition -
+    // recomputed from scratch, `previous` still null, while the feed catches
+    // up - and the first one committed is the first one taken from a settled
+    // feed.
+    //
+    // THE PLAN THAT SETTLING OWES is the scene's, asked for by the
+    // `feedSettled` flag on the sync input below rather than by anything here.
+    // This comment once read "the re-plan that follows is the same population
+    // change any arrival causes", which was wrong and is the cold reviewer's
+    // P2: an arrival changes the agent set and re-plans, while settling
+    // changes only statuses, which deliberately never re-plans on its own - so
+    // the provisional floor, cold teams and quiet cubbies and all, stayed on
+    // screen for the life of the mount.
     if (!ready || !initialHistoryCaughtUp) return;
     runtime.setPartition(partition);
   }, [initialHistoryCaughtUp, partition, ready, runtime]);
@@ -2522,10 +2531,17 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       openRequestsByReceiver,
       playing,
       reducedMotion,
+      // The one input the scene reads as a TRANSITION rather than a value: it
+      // going true under a floor planned without it is what makes the scene
+      // re-plan once from the settled partition. Carried in the input so that
+      // the sync which brings the settled statuses is the same sync that
+      // reports the settling.
+      feedSettled: initialHistoryCaughtUp,
     }),
     [
       activityById,
       agentIds,
+      initialHistoryCaughtUp,
       officeAgents,
       partition,
       playing,

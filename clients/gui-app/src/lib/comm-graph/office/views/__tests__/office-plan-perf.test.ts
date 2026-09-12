@@ -176,6 +176,7 @@ function sceneInputFor(args: {
     clockMs: 0,
     playing: false,
     reducedMotion: true,
+    feedSettled: false,
   };
 }
 

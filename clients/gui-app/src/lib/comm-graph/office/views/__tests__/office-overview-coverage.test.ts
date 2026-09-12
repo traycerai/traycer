@@ -92,6 +92,7 @@ function sceneInputFor(
     clockMs: 0,
     playing: false,
     reducedMotion: true,
+    feedSettled: false,
   };
 }
 

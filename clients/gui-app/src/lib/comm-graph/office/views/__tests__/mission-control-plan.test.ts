@@ -669,6 +669,7 @@ function sceneInputFor(input: OfficePlanInput): OfficeSceneInput {
     clockMs: 0,
     playing: false,
     reducedMotion: false,
+    feedSettled: false,
   };
 }
 

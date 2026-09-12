@@ -190,6 +190,11 @@ function sceneInput(
   const agents = overrides.agents;
   const statusById =
     overrides.statusById ?? new Map<string, OfficeAgentStatus>();
+  // Resolved up here like `statusById`, and written back AFTER the spread
+  // below: `Partial<OfficeSceneInput>` makes every field optional, and
+  // spreading an optional over a concrete one leaves the result optional -
+  // which `OfficeSceneInput` does not accept for a required boolean.
+  const feedSettled = overrides.feedSettled ?? false;
   return {
     statusById,
     partition: partitionOfficePopulation({
@@ -209,6 +214,7 @@ function sceneInput(
     playing: false,
     reducedMotion: false,
     ...overrides,
+    feedSettled,
   };
 }
 

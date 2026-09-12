@@ -270,6 +270,7 @@ function input(
     clockMs: 0,
     playing: false,
     reducedMotion,
+    feedSettled: false,
   };
 }
 

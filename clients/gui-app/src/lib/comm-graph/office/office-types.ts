@@ -796,6 +796,24 @@ export interface OfficeSceneInput {
   readonly playing: boolean;
   /** `prefers-reduced-motion`: no walking, no flight; state changes apply instantly. */
   readonly reducedMotion: boolean;
+  /**
+   * WHETHER THE EVENT FEED HAS FINISHED REPLAYING - the snapshot's
+   * `initialHistoryCaughtUp`, carried here rather than asked for by a call of
+   * its own.
+   *
+   * An explicit view draws before this is true, because an office is a drawing
+   * of the agent list and the events only say who among them is busy. What it
+   * draws meanwhile is provisional: every status is the one the epic already
+   * knew, so teams read cold and their members are planned into the quiet
+   * cubbies. The scene watches this go true and re-plans once from the settled
+   * partition (`adoptLayout`'s third trigger), because the agent set has not
+   * changed and a status flip alone deliberately never re-plans.
+   *
+   * An INPUT and not a method: a transition the scene reads for itself, beside
+   * the cursor rewind and the motion change, cannot be called in the wrong
+   * order relative to the sync it belongs to.
+   */
+  readonly feedSettled: boolean;
 }
 
 // ---- Scene output --------------------------------------------------- //

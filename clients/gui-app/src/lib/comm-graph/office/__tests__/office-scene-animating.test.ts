@@ -82,6 +82,7 @@ function input(overrides: Partial<OfficeSceneInput>): OfficeSceneInput {
     openRequestsByReceiver: new Map(),
     playing: false,
     reducedMotion: false,
+    feedSettled: false,
     ...overrides,
   };
 }

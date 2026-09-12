@@ -347,6 +347,7 @@ function sceneInputFor(
     // true, since playback makes every agent idle between its own rows.
     playing: false,
     reducedMotion: false,
+    feedSettled: false,
   };
 }
 

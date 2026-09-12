@@ -95,6 +95,7 @@ function sceneInput(
     clockMs: 0,
     playing: false,
     reducedMotion: false,
+    feedSettled: false,
     ...overrides,
   };
 }

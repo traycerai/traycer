@@ -1252,6 +1252,9 @@ const NO_AWAY_IDS: ReadonlySet<string> = new Set<string>();
 /** Nobody. Shared so a sync that rehomes no one allocates nothing. */
 const NO_IDS: ReadonlyArray<string> = [];
 
+/** Nobody spoken for, which is what a plan made from scratch is told. */
+const NO_OCCUPANCY: ReadonlyMap<string, string> = new Map();
+
 /**
  * What a painter is told about a reserve seat standing empty. Shared rather
  * than rebuilt per frame: it is the same answer for every empty seat in the
@@ -1402,6 +1405,30 @@ export class OfficeScene {
   >();
   private agentSignature: string | null = null;
   private nameSignature = "";
+  /**
+   * WHETHER THE FEED HAS EVER SAID IT WAS DONE REPLAYING. A latch, not an
+   * edge: it is set by the first settled sync and never cleared.
+   *
+   * An explicit view draws before the feed settles - it is a drawing of the
+   * agent list, and waiting for the events left the office blank for as long
+   * as the feed was down. What it draws meanwhile is a partition of statuses
+   * that are still arriving, so nobody is busy yet: teams read cold, their
+   * members are planned into the quiet cubbies, and the rooms a live team
+   * would have had are not there. Once the feed settles, that plan draws a
+   * floor that no longer exists, and no OTHER trigger will replace it - the
+   * agent set did not change, and a status flip on its own deliberately never
+   * re-plans.
+   *
+   * So settling is a trigger of its own (see `adoptLayout`), and it fires at
+   * most ONCE per scene. A latch rather than an edge because the question is
+   * "has this office ever been planned from a settled feed", which a
+   * reconnect's second replay does not re-open: re-shuffling a settled office
+   * because the transport blinked would be the same defect in reverse. A
+   * scene whose FIRST sync is already settled needs nothing extra - its
+   * ordinary first plan is the settled one - so the latch sets and no second
+   * plan is owed.
+   */
+  private feedSettled = false;
   private pulse: CommGraphPulse | null = null;
   private lastPulseKey: string | null = null;
   private playing = false;
@@ -1574,10 +1601,14 @@ export class OfficeScene {
     this.statusById = input.statusById;
     this.openRequestsByReceiver = input.openRequestsByReceiver;
     this.playing = input.playing;
-    // Both transitions are read BEFORE the new values are stored, and neither
-    // fires on the first sync, where there is nothing in flight to end.
+    // All three transitions are read BEFORE the new values are stored, and
+    // none fires on the first sync: there is nothing in flight to end, and no
+    // provisional floor to replace - the first plan is made from whatever this
+    // input carries, settled or not.
     const motionJustReduced = input.reducedMotion && !this.reducedMotion;
     const rewound = this.cursorRewoundBy(input);
+    const settling = input.feedSettled && !this.feedSettled && !firstSync;
+    this.feedSettled = this.feedSettled || input.feedSettled;
     this.reducedMotion = input.reducedMotion;
     this.stepMs = input.stepMs;
     this.cursorMs = input.cursorMs;
@@ -1596,18 +1627,16 @@ export class OfficeScene {
       if (rewound) this.dropTransientMotion();
     }
 
-    this.adoptLayout(input.agents);
+    this.adoptLayout(input.agents, settling);
     let reclaimed: ReadonlyArray<string> = NO_IDS;
-    if (rewound) {
-      // A scrub back cannot replay the walks that led to today's claims, so it
-      // does not try: they are re-derived from the statuses as of the cursor,
-      // the same treatment the rest of the in-flight state gets.
-      const seatsBefore = this.seatIdsOfKnown();
-      // Transient motion is dropped on a scrub, and an open handover is
-      // transient motion: the claims below are re-derived from scratch.
-      this.handover.clear();
-      this.seats.recomputeClaims(input.statusById, this.seats.knownAgentIds());
-      reclaimed = this.changedSeats(seatsBefore);
+    // A scrub back cannot replay the walks that led to today's claims, so it
+    // does not try. A SETTLE cannot trust them: a wake claim made while the
+    // feed was behind was made from a status that had not arrived yet, which
+    // is the same untrustworthy input the provisional plan was made from. Both
+    // re-derive the claims from the statuses in hand; only the scrub also
+    // forgets what is in flight.
+    if (rewound || settling) {
+      reclaimed = this.recomputeClaimsFromStatuses(input, rewound);
     }
     this.applyArchivalTransitions(input, firstSync);
     this.reconcileCharacters(input, firstSync);
@@ -2546,8 +2575,9 @@ export class OfficeScene {
   }
 
   /**
-   * Re-plans the floor when the agent SET changed, and only re-letters it
-   * when only names did.
+   * Re-plans the floor when the agent SET changed, when a seat could not be
+   * found, or when the feed has just settled under a provisional plan - and
+   * only re-letters it when only names did.
    *
    * A rename is the one agent change that does NOT restack the floor - a
    * re-layout sends every errand-goer back to its chair - but the cabin signs
@@ -2555,18 +2585,27 @@ export class OfficeScene {
    * in place and the floor's version moves, which is what makes the cached
    * floor and the static layer pick the new lettering up.
    */
-  private adoptLayout(agents: ReadonlyArray<OfficeAgentInput>): void {
+  private adoptLayout(
+    agents: ReadonlyArray<OfficeAgentInput>,
+    settling: boolean,
+  ): void {
     const signature = agentSetSignature(agents);
     const names = agentNameSignature(agents);
-    // TWO triggers and no others. The agent SET, as it always has been; and a
+    // THREE triggers and no others. The agent SET, as it always has been; a
     // non-empty shortfall, because an agent the book could not seat is a
-    // question only the next plan can answer. Never a status flip, a viewport
-    // change or an activity change: each of those moves lights, not desks.
+    // question only the next plan can answer; and the feed settling under a
+    // provisional floor, once per scene, because that floor was planned from
+    // statuses that were still arriving and nothing else would ever replace
+    // it. Never a status flip on its own, a viewport change or an activity
+    // change: each of those moves lights, not desks - and the third trigger is
+    // no way back in for them, because `sync` latches it on the one transition
+    // the feed has to report and never opens it again.
     const shortfall = this.seats.needsCapacity();
     const replan =
       signature !== this.agentSignature ||
       this.layoutOrNull === null ||
-      shortfall.length > 0;
+      shortfall.length > 0 ||
+      settling;
     this.agentSignature = signature;
     if (!replan) {
       if (names !== this.nameSignature) {
@@ -2587,15 +2626,39 @@ export class OfficeScene {
       return;
     }
     this.nameSignature = names;
-    const previous = this.layoutOrNull;
+    // A SETTLE IS A FIRST PLAN, and every other re-plan is not. Stability is
+    // the whole job of `previous`, `occupancy` and `needsCapacity` - the
+    // contract is that a status flip planned with the previous layout
+    // preserves seats - so a settle that passed them would ask the planner to
+    // preserve the very floor it exists to discard, and the planner would
+    // oblige: the woken team's members stay in the cubbies a cold team was
+    // given, in the one room a cold team needed. Nothing is lost by discarding
+    // it. A floor planned from statuses that had not arrived is a first draft,
+    // nobody has been promised its seats, and the chip has been saying
+    // `Catching up…` over it the whole time.
+    //
+    // What that costs is a real re-layout: the seat book reports everyone the
+    // new plan seats elsewhere and `rehomeCharacters` walks them there, which
+    // is the office filling in while the chip is still up. What it does NOT
+    // cost is the camera - the settled office is the provisional one grown,
+    // not moved (measured: same projected origin, taller extent), which is the
+    // growth case the camera already handles.
     const planned = this.view.plan({
       agents,
       partition: this.requirePartition(),
-      occupancy: this.seats.occupancy(),
-      needsCapacity: shortfall,
       activityById: this.activityById,
       viewport: this.viewport,
-      previous,
+      // THE THREE STABILITY INPUTS, and a settle passes none of them -
+      // together they are exactly a first sync's input from the settled
+      // partition. All three matter: every view has its own layer that
+      // honours what it is handed (the oblique recipe copies the previous
+      // packing's assignments and skips whoever is already placed, City
+      // honours `previous.seatIdByAgentId`, Mission control pins the previous
+      // desks), so a settle that let any one of them through would re-derive
+      // the provisional floor it exists to discard.
+      occupancy: settling ? NO_OCCUPANCY : this.seats.occupancy(),
+      needsCapacity: settling ? NO_IDS : shortfall,
+      previous: settling ? null : this.layoutOrNull,
     });
     // Both captured against the layout still in force: the chairs so a uniform
     // shift can be subtracted back out below, and the projector so a growth
@@ -2614,6 +2677,26 @@ export class OfficeScene {
     this.rehomeCharacters(
       this.movedBeyondShift(moved, chairsBefore, planned.shiftFromPrevious),
     );
+  }
+
+  /**
+   * Re-derives every seat claim from the statuses in hand, and answers with
+   * whoever's effective seat that moved.
+   *
+   * `forgetInFlight` is the scrub's half and the scrub's only: transient
+   * motion is dropped on a seek, and an open handover is transient motion, so
+   * the claims are rebuilt with nothing owed. A settle keeps them - the walks
+   * on screen are real walks by real agents, and the feed catching up is no
+   * reason to cancel one mid-corridor.
+   */
+  private recomputeClaimsFromStatuses(
+    input: OfficeSceneInput,
+    forgetInFlight: boolean,
+  ): ReadonlyArray<string> {
+    const seatsBefore = this.seatIdsOfKnown();
+    if (forgetInFlight) this.handover.clear();
+    this.seats.recomputeClaims(input.statusById, this.seats.knownAgentIds());
+    return this.changedSeats(seatsBefore);
   }
 
   /** Every known agent's effective seat id, or `null` where it has none. */
