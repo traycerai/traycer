@@ -289,6 +289,7 @@ export type AnalyticsSetting =
   | "showNavigatorResourceStats"
   | "showRecentHistory"
   | "startPageWallpaper"
+  | "startPageWallpaperCurated"
   | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
   | "summonHotkeyChord"
@@ -1163,6 +1164,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "showNavigatorResourceStats",
   "showRecentHistory",
   "startPageWallpaper",
+  "startPageWallpaperCurated",
   "startPageWallpaperTint",
   "terminalCursorBlink",
   "terminalCursorStyle",

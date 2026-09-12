@@ -6,6 +6,8 @@ import {
 } from "@/lib/themes/theme-import";
 
 const API = "https://open-vsx.org/api";
+const OPEN_VSX_TOO_LARGE =
+  "The Open VSX response exceeds the import size limit.";
 const identitySchema = z
   .string()
   .min(1)
@@ -60,21 +62,29 @@ async function readResponse(
     credentials: "omit",
     referrerPolicy: "no-referrer",
   });
-  return readCappedResponse(response, maxBytes);
+  return readCappedResponse(response, maxBytes, OPEN_VSX_TOO_LARGE);
 }
 
-async function readCappedResponse(
+/**
+ * Exported for `lib/appearance/curated-wallpapers.ts`, which streams its
+ * downloads under the same discipline. `tooLargeMessage` is the user-facing
+ * text for a body past `maxBytes`; callers outside Open VSX check
+ * `response.ok` themselves so the Open-VSX-worded failure below never reaches
+ * their users.
+ */
+export async function readCappedResponse(
   response: Response,
   maxBytes: number,
+  tooLargeMessage: string,
 ): Promise<Uint8Array> {
   if (!response.ok)
     throw new Error(`Open VSX request failed (${response.status}).`);
   if (Number(response.headers.get("content-length")) > maxBytes) {
     await response.body?.cancel();
-    throw new Error("The Open VSX response exceeds the import size limit.");
+    throw new Error(tooLargeMessage);
   }
   const reader = response.body?.getReader();
-  if (!reader) throw new Error("Open VSX returned an empty response.");
+  if (!reader) throw new Error("The server returned an empty response.");
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -84,8 +94,7 @@ async function readCappedResponse(
       result = await reader.read()
     ) {
       size += result.value.byteLength;
-      if (size > maxBytes)
-        throw new Error("The Open VSX response exceeds the import size limit.");
+      if (size > maxBytes) throw new Error(tooLargeMessage);
       chunks.push(result.value);
     }
   } finally {
@@ -134,7 +143,11 @@ async function lookupOpenVsxIdentity(
       await detail.body?.cancel();
       return null;
     }
-    const bytes = await readCappedResponse(detail, 512 * 1024);
+    const bytes = await readCappedResponse(
+      detail,
+      512 * 1024,
+      OPEN_VSX_TOO_LARGE,
+    );
     return parseExtension(JSON.parse(new TextDecoder().decode(bytes)));
   } catch {
     signal.throwIfAborted();

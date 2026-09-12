@@ -100,6 +100,15 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     availableWhen: alwaysAvailable,
     keywords: ["background image", "backdrop", "photo"],
   },
+  curatedWallpapers: {
+    kind: "row",
+    group: "startPage",
+    search: { anchor: "appearance-start-page-curated" },
+    label: "Traycer team curated wallpapers",
+    description: "Downloads when you apply one.",
+    availableWhen: alwaysAvailable,
+    keywords: ["gallery", "preset", "built in", "download", "art"],
+  },
   // The effect rows exist only once a wallpaper is chosen, and each only for
   // the effects it adjusts.
   wallpaperEffect: {
