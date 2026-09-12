@@ -18,17 +18,23 @@ import {
   useLandingDraftStore,
   emptyLandingDraftWorkspaceSnapshot,
 } from "@/stores/home/landing-draft-store";
+import {
+  recordClosedHeaderTab,
+  useTabRecoveryHistory,
+} from "@/lib/tab-recovery/history";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
 import { tabSourceRefs } from "@/stores/tabs/source-refs";
 
 describe("landing draft host-mirror bookkeeping", () => {
   beforeEach(() => {
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabRecoveryHistory.setState({ entries: [], ready: true });
     resetDraftMirrorCoordinatorForTests();
   });
 
   afterEach(() => {
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabRecoveryHistory.setState({ entries: [], ready: true });
     resetDraftMirrorCoordinatorForTests();
   });
 
@@ -203,6 +209,82 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(pinned?.content).toEqual(imageContent);
   });
 
+  it("does not LRU-evict an adopted mirror still referenced by recovery", () => {
+    const referencedId = "recovery-draft";
+    useLandingDraftStore.setState({
+      drafts: [
+        {
+          id: referencedId,
+          content: EMPTY_LANDING_DRAFT_CONTENT,
+          selection: null,
+          lastTouchedAt: 0,
+          settings: null,
+          composerMode: "chat",
+          workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
+          adoption: { state: "adopted", hostId: "host-a" },
+        },
+      ],
+      activeDraftId: null,
+    });
+    recordClosedHeaderTab({
+      kind: "draft",
+      draftId: referencedId,
+      hostId: "host-a",
+      index: 0,
+    });
+    for (let index = 0; index < MAX_LOCAL_ADOPTED_LANDING_MIRRORS; index += 1) {
+      useLandingDraftStore.setState((state) => ({
+        drafts: [
+          ...state.drafts,
+          {
+            id: `adopted-${index}`,
+            content: EMPTY_LANDING_DRAFT_CONTENT,
+            selection: null,
+            lastTouchedAt: index + 1,
+            settings: null,
+            composerMode: "chat",
+            workspace: emptyLandingDraftWorkspaceSnapshot(),
+            ...freshLandingMirrorState(),
+            adoption: { state: "adopted", hostId: "host-a" },
+          },
+        ],
+      }));
+    }
+    const incoming: DraftDocument = {
+      draftId: "from-host",
+      kind: "landing",
+      target: { epicId: null, chatId: null, blockId: null },
+      revision: 1,
+      lastTouchedAt: 99,
+      workspace: null,
+      ownerHostId: "host-a",
+      origin: "own",
+      adoption: { state: "adopted", hostId: "host-a" },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: EMPTY_LANDING_DRAFT_CONTENT,
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    };
+
+    applyLandingHostDocument(incoming, EMPTY_LANDING_DRAFT_CONTENT);
+
+    const ids = useLandingDraftStore.getState().drafts.map((draft) => draft.id);
+    expect(ids).toContain(referencedId);
+    expect(ids).toContain("from-host");
+    expect(ids).not.toContain("adopted-0");
+  });
+
   it("LRU-evicts an adopted image draft once its hashes are confirmed on the host", () => {
     const hash = "cd".repeat(32);
     const imageContent = {
@@ -358,6 +440,34 @@ describe("landing draft host-mirror bookkeeping", () => {
       expect(deletes).toEqual([id]);
     });
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("keeps recovery when deleteDraft has no local mirror to destroy", () => {
+    const id = "missing-local-draft";
+    recordClosedHeaderTab({
+      kind: "draft",
+      draftId: id,
+      hostId: "host-a",
+      index: 0,
+    });
+
+    useLandingDraftStore.getState().deleteDraft(id);
+
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+  });
+
+  it("prunes recovery when an authoritative host tombstone has no local mirror", () => {
+    const id = "host-deleted-draft";
+    recordClosedHeaderTab({
+      kind: "draft",
+      draftId: id,
+      hostId: "host-a",
+      index: 0,
+    });
+
+    useLandingDraftStore.getState().applyHostDelete(id);
+
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
   });
 
   it("inbound closed:true hides the draft locally and clears activeDraftId", () => {

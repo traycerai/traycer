@@ -1,3 +1,4 @@
+import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useCallback, useState } from "react";
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -111,12 +112,12 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
     else if (kind === "terminal-agent")
       deleteTuiAgent.mutate(
         { epicId, tuiAgentId: nodeId },
-        { onSuccess: closeOpenTile },
+        { onSuccess: () => withoutTabRecovery(closeOpenTile) },
       );
     else if (kind === "artifact")
       deleteArtifact.mutate(
         { epicId, artifactId: nodeId },
-        { onSuccess: closeOpenTile },
+        { onSuccess: () => withoutTabRecovery(closeOpenTile) },
       );
     setConfirmOpen(false);
   }, [

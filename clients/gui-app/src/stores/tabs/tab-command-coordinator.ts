@@ -1,3 +1,16 @@
+import {
+  captureHeaderLocation,
+  restoreHeaderLayout,
+} from "@/lib/tab-recovery/header-layout";
+import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
+import {
+  recordClosedHeaderTab,
+  pruneRecoveryEpics,
+  withoutTabRecovery,
+  type ClosedHeaderTab,
+} from "@/lib/tab-recovery/history";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { releaseOpenEpicSessionIfUnused } from "@/lib/registries/epic-session-registry";
@@ -27,6 +40,7 @@ import {
   createLayoutItem,
   findStripItemForRef,
   flattenLayoutRefs,
+  flattenStripItemRefs,
   focusLayoutRef,
   focusSplitSide,
   pairLayoutRefs,
@@ -1309,6 +1323,108 @@ export class TabCommandCoordinator {
     );
   }
 
+  restoreClosedHeaderTabs(
+    items: readonly ClosedHeaderTab[],
+    replaceEmptyDraftId: string | null,
+  ): void {
+    if (items.length === 0) return;
+    const previousLayout = currentLayout();
+    const previousActiveDraftId = useLandingDraftStore.getState().activeDraftId;
+    let replacement: TabRef | null = null;
+    if (replaceEmptyDraftId !== null) {
+      const ref: TabRef = { kind: "draft", id: replaceEmptyDraftId };
+      const item = findStripItemForRef(previousLayout, ref);
+      const isSplitPartner = items.some(
+        (closed) =>
+          closed.placement?.split !== undefined &&
+          flattenStripItemRefs(closed.placement.split).some(
+            (partner) => tabRefKey(partner) === tabRefKey(ref),
+          ),
+      );
+      draftRuntimeRegistry.flush(replaceEmptyDraftId);
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((candidate) => candidate.id === replaceEmptyDraftId);
+      // A standalone blank landing page is the fallback after the last tab
+      // closes. Keep deliberate split slots and drafts containing user work.
+      if (
+        item?.kind === "tab" &&
+        !isSplitPartner &&
+        previousLayout.activeItemId === item.id &&
+        !isTabCloseLocked(ref) &&
+        draft !== undefined &&
+        isEmptyLandingDraftContent(draft.content)
+      )
+        replacement = ref;
+    }
+    const replacedItem =
+      replacement === null
+        ? null
+        : findStripItemForRef(previousLayout, replacement);
+    const survivingActiveItemId =
+      previousLayout.activeItemId === replacedItem?.id
+        ? null
+        : previousLayout.activeItemId;
+    const refs: TabRef[] = items.map((item) =>
+      item.kind === "epic"
+        ? { kind: "epic", id: item.tab.tabId }
+        : { kind: "draft", id: item.draftId },
+    );
+    this.execute({
+      layout: () => {
+        const base =
+          replacement === null
+            ? currentLayout()
+            : layoutWithRemovedRef(currentLayout(), replacement);
+        const layout = restoreHeaderLayout(
+          base,
+          items.map((item) => ({
+            ...item,
+            ref:
+              item.kind === "epic"
+                ? { kind: "epic" as const, id: item.tab.tabId }
+                : { kind: "draft" as const, id: item.draftId },
+          })),
+          canSplitRef,
+        );
+        if (survivingActiveItemId === null) return layout;
+        if (layout.items.some((item) => item.id === survivingActiveItemId))
+          return { ...layout, activeItemId: survivingActiveItemId };
+        // Reconstructing a split changes its item's id. Keep the same surviving
+        // view selected; single recovery's navigation selects the reopened side.
+        const survivor = focusedRef(previousLayout);
+        if (survivor === null) return layout;
+        return {
+          ...focusLayoutRef(layout, survivor),
+          activationHistory: layout.activationHistory,
+          groups: layout.groups,
+        };
+      },
+      reservedAdditions: refs,
+      pendingRemovals: replacement === null ? [] : [replacement],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        for (const item of items) {
+          if (item.kind === "epic")
+            useEpicCanvasStore
+              .getState()
+              .restoreTabForRecovery(item.tab, item.canvas);
+          else useLandingDraftStore.getState().openDraft(item.draftId);
+        }
+        if (
+          previousActiveDraftId !== null &&
+          previousActiveDraftId !== replaceEmptyDraftId
+        )
+          useLandingDraftStore.getState().setActiveDraft(previousActiveDraftId);
+        else useLandingDraftStore.getState().clearActiveDraft();
+      },
+      applyRemovals: () => {
+        if (replacement !== null)
+          withoutTabRecovery(() => this.removeSourceRef(replacement));
+      },
+    });
+  }
+
   closeRef(ref: TabRef): boolean {
     return this.closeRefAfterConfirmed(ref);
   }
@@ -1318,6 +1434,28 @@ export class TabCommandCoordinator {
     const layout = currentLayout();
     if (findStripItemForRef(layout, ref) === null) return false;
     const next = layoutWithRemovedRef(layout, ref);
+    const location = captureHeaderLocation(layout, ref, 0);
+    let recovery: ClosedHeaderTab | null = null;
+    if (ref.kind === "draft") {
+      draftRuntimeRegistry.flush(ref.id);
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((candidate) => candidate.id === ref.id);
+      if (draft !== undefined && !isEmptyLandingDraftContent(draft.content))
+        recovery = {
+          kind: "draft",
+          draftId: draft.id,
+          hostId:
+            draft.adoption.state === "adopted" ? draft.adoption.hostId : null,
+          ...location,
+        };
+    } else if (ref.kind === "epic") {
+      const state = useEpicCanvasStore.getState();
+      const tab = state.tabsById[ref.id];
+      const canvas = state.canvasByTabId[ref.id] ?? EMPTY_CANVAS;
+      if (tab !== undefined)
+        recovery = { kind: "epic", tab, canvas, ...location };
+    }
     this.execute({
       layout: next,
       reservedAdditions: [],
@@ -1325,12 +1463,14 @@ export class TabCommandCoordinator {
         ref.kind === "history" || ref.kind === "settings" ? [] : [ref],
       projectSourceCompatibility: true,
       applySources: () => undefined,
-      applyRemovals: () => this.removeSourceRef(ref),
+      applyRemovals: () => withoutTabRecovery(() => this.removeSourceRef(ref)),
     });
+    if (recovery !== null) recordClosedHeaderTab(recovery);
     return true;
   }
 
   handleEpicAccessLoss(epicIds: ReadonlyArray<string>): void {
+    pruneRecoveryEpics(epicIds);
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
     // Ticket 15 (decision #29): drop every durable chat-key entry under

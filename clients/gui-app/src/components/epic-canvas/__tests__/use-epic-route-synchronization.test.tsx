@@ -17,6 +17,7 @@ import {
 import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import type {
   EpicCanvasTileRef,
+  EpicCanvasState,
   TileLayoutNode,
 } from "@/stores/epics/canvas/types";
 import type { EpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -30,6 +31,10 @@ import {
   requestNestedRoutePrimaryEditorFocus,
   resetNestedRouteDomFocusForTests,
 } from "@/lib/nested-route-dom-focus";
+import {
+  recordClosedCanvas,
+  useTabRecoveryHistory,
+} from "@/lib/tab-recovery/history";
 import {
   beginNestedFocusNavigation,
   resetNestedFocusNavigationIntentsForTests,
@@ -49,6 +54,7 @@ type CanvasStoreSlice = Pick<
   | "renameTab"
   | "applyNestedRouteFocus"
   | "closeCanvasTab"
+  | "closedTilePayloadsByTabId"
   | "pendingCreateArtifactIds"
 >;
 
@@ -116,6 +122,7 @@ const testState = vi.hoisted<TestState>(() => ({
     renameTab: vi.fn(),
     applyNestedRouteFocus: vi.fn(),
     closeCanvasTab: vi.fn(),
+    closedTilePayloadsByTabId: {},
     pendingCreateArtifactIds: new Set<string>(),
   },
   openEpicState: {
@@ -179,6 +186,18 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/stores/epics/canvas/store")>();
+  const useEpicCanvasStore = Object.assign(
+    <T,>(selector: (store: CanvasStoreSlice) => T): T =>
+      testState.useRealCanvasStore
+        ? selector(actual.useEpicCanvasStore.getState())
+        : selector(testState.canvasStore),
+    {
+      getState: () =>
+        testState.useRealCanvasStore
+          ? actual.useEpicCanvasStore.getState()
+          : testState.canvasStore,
+    },
+  );
   return {
     ...actual,
     useActiveEpicArtifactId: (tabId: string) =>
@@ -194,10 +213,7 @@ vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
             tilesByInstanceId: testState.canvasTiles,
             sizesByGroupId: {},
           },
-    useEpicCanvasStore: <T,>(selector: (store: CanvasStoreSlice) => T): T =>
-      testState.useRealCanvasStore
-        ? actual.useEpicCanvasStore(selector)
-        : selector(testState.canvasStore),
+    useEpicCanvasStore,
     useEpicTab: (tabId: string) =>
       testState.useRealCanvasStore ? actual.useEpicTab(tabId) : null,
   };
@@ -388,8 +404,13 @@ function resetStores(): void {
   testState.routerPathname = `/epics/${EPIC_ID}/${TAB_ID}`;
   vi.mocked(testState.canvasStore.applyNestedRouteFocus).mockClear();
   vi.mocked(testState.canvasStore.closeCanvasTab).mockClear();
+  Object.assign(testState.canvasStore, {
+    closedTilePayloadsByTabId: {},
+    pendingCreateArtifactIds: new Set<string>(),
+  });
   testState.openEpicState.setLastFocusedArtifactId.mockClear();
   testState.openEpicState.setLastFocusedThreadId.mockClear();
+  useTabRecoveryHistory.setState({ entries: [], ready: true });
 }
 
 function PaneActivationOriginBoundary(props: { readonly children: ReactNode }) {
@@ -439,6 +460,22 @@ function setSinglePaneCanvas(
   testState.canvasTiles = Object.fromEntries(
     tabs.map((tab) => [tab.instanceId, tab]),
   );
+}
+
+function canvasWithSingleTile(tile: EpicCanvasTileRef): EpicCanvasState {
+  return {
+    root: {
+      kind: "pane",
+      id: "recovery-pane",
+      tabInstanceIds: [tile.instanceId],
+      activeTabId: tile.instanceId,
+      previewTabId: null,
+      activationHistory: [tile.instanceId],
+    },
+    activePaneId: "recovery-pane",
+    tilesByInstanceId: { [tile.instanceId]: tile },
+    sizesByGroupId: {},
+  };
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -1209,6 +1246,183 @@ describe("useEpicRouteSynchronization", () => {
       "group-1",
       "removed-chat",
     );
+  });
+
+  it("prunes an older closed instance after its record is authoritatively removed", async () => {
+    testState.autoOpenTarget = null;
+    const oldInstance = specTile(
+      "deleted-artifact",
+      "inst-deleted-artifact-old",
+      "Deleted artifact",
+    );
+    const reopenedInstance = specTile(
+      "deleted-artifact",
+      "inst-deleted-artifact-reopened",
+      "Deleted artifact",
+    );
+    const before = canvasWithSingleTile(oldInstance);
+    const after: EpicCanvasState = {
+      ...before,
+      root: null,
+      activePaneId: null,
+      tilesByInstanceId: {},
+    };
+
+    // Simulate the first close having left an older instance in recovery,
+    // followed by a manual reopen that created a distinct live instance.
+    recordClosedCanvas(
+      { epicId: EPIC_ID, tabId: TAB_ID, name: EPIC_ID },
+      before,
+      after,
+      false,
+    );
+    testState.records = [{ id: oldInstance.id }];
+    setSinglePaneCanvas(
+      "reopened-pane",
+      [reopenedInstance],
+      reopenedInstance.instanceId,
+    );
+
+    const hook = renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+    });
+
+    // The authoritative record disappears remotely. The current reopened
+    // instance closes, and the older recovery instance is removed as well.
+    testState.records = [];
+    hook.rerender({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    });
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "reopened-pane",
+        reopenedInstance.instanceId,
+      );
+      expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+    });
+  });
+
+  it("prunes historical tiles with no open canvas while preserving other Epic and host scope", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [];
+    const deletedArtifact = specTile(
+      "deleted-artifact-rootless",
+      "inst-deleted-artifact-rootless",
+      "Deleted artifact",
+    );
+    const sameIdOtherEpic = specTile(
+      deletedArtifact.id,
+      "inst-deleted-artifact-other-epic",
+      "Same artifact in another Epic",
+    );
+    const pendingClosedArtifact = specTile(
+      "pending-closed-artifact",
+      "inst-pending-closed-artifact",
+      "Pending closed artifact",
+    );
+    const otherHostChat: EpicCanvasTileRef = {
+      id: "other-host-chat",
+      instanceId: "inst-other-host-chat",
+      type: "chat",
+      name: "Chat on another host",
+      hostId: "host-2",
+    };
+    const emptyCanvas: EpicCanvasState = {
+      root: null,
+      activePaneId: null,
+      tilesByInstanceId: {},
+      sizesByGroupId: {},
+    };
+
+    recordClosedCanvas(
+      { epicId: EPIC_ID, tabId: TAB_ID, name: EPIC_ID },
+      canvasWithSingleTile(deletedArtifact),
+      emptyCanvas,
+      false,
+    );
+    recordClosedCanvas(
+      { epicId: EPIC_ID, tabId: TAB_ID, name: EPIC_ID },
+      canvasWithSingleTile(pendingClosedArtifact),
+      emptyCanvas,
+      false,
+    );
+    recordClosedCanvas(
+      { epicId: "other-epic", tabId: "other-tab", name: "Other Epic" },
+      canvasWithSingleTile(sameIdOtherEpic),
+      emptyCanvas,
+      false,
+    );
+    Object.assign(testState.canvasStore, {
+      closedTilePayloadsByTabId: {
+        [TAB_ID]: {
+          [pendingClosedArtifact.instanceId]: {
+            node: pendingClosedArtifact,
+            pendingCreate: true,
+          },
+        },
+      },
+    });
+    recordClosedCanvas(
+      { epicId: EPIC_ID, tabId: "other-host-tab", name: EPIC_ID },
+      canvasWithSingleTile(otherHostChat),
+      emptyCanvas,
+      false,
+    );
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      const entries = useTabRecoveryHistory.getState().entries;
+      expect(entries).toHaveLength(3);
+      expect(
+        entries.flatMap((entry) =>
+          entry.kind === "canvas"
+            ? entry.before.tilesByInstanceId[entry.instanceIds[0] ?? ""]
+                ?.instanceId
+            : [],
+        ),
+      ).toEqual([
+        pendingClosedArtifact.instanceId,
+        sameIdOtherEpic.instanceId,
+        otherHostChat.instanceId,
+      ]);
+    });
   });
 
   it("does not close a same-host chat until the local record list is authoritative", async () => {
