@@ -2224,6 +2224,179 @@ describe("CommGraphTile", () => {
     });
   });
 
+  describe("a mode switch releases the camera witness it was never meant to satisfy (fixup 12)", () => {
+    // FINDING A. `nextArmedOn` releases the witness once TWO things are both
+    // true: some writer has replaced the stored view object, AND the record
+    // already names the arriving view. A mode switch satisfies the first
+    // half for free (`handleModeChange` writes `{ ...node.view, mode }`, a
+    // NEW object) and, whenever the record already happened to name the
+    // view the default just moved TO, the second half is satisfied too -
+    // with no office writer having framed anything. The module's own
+    // comment says this must not happen: the witness has to survive any
+    // write that is not itself the office's camera settling.
+    //
+    // Every case below seeds the same tile: GRAPH mode (the mode switch
+    // that matters is the one still ahead), `officeView: null` and
+    // `officeAutoView: null` (a followed default, nothing pinned), a
+    // camera that has never addressed "towers" at all
+    // (`{ x: -10000, y: -20000, zoom: 4 }`), and - the detail that makes
+    // this the Graph-mode variant of the finding - `officeCameraView:
+    // "towers"` ALREADY on the record, for reasons that have nothing to do
+    // with the move about to happen (the tile could have been saved under
+    // a Settings default of Towers long before Auto was ever picked).
+    function seededTile(): CommGraphTileViewState {
+      return {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        mode: "graph",
+        officeView: null,
+        officeAutoView: null,
+        officeCameraView: "towers",
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
+      };
+    }
+
+    it("keeps the witness armed through a mode switch when the record already names the arriving view", async () => {
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      await renderSeededOffice(seededTile());
+      expect(storedView()?.mode).toBe("graph");
+
+      // THE ARMING MOVE: the default moves auto -> towers while Graph is
+      // still up. Both reset effects return early outside office mode, so
+      // this writes NOTHING to the store - the only trace it leaves is the
+      // witness, which arms on the stored view object as it stands right
+      // now (`officeCameraView: "towers"` already, camera still the stale
+      // one seeded above).
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+      );
+
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+      // THE RELEASING WRITE: a plain mode switch. `handleModeChange` writes
+      // a new view object carrying the SAME `officeCameraView: "towers"` it
+      // already had - which is exactly the pre-existing match the release
+      // predicate mistakes for a writer that has just spoken FOR "towers".
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+        await Promise.resolve();
+      });
+
+      // ASSERTION 1: the office runtime has to be BUILT neutral. A released
+      // witness hands the canvas the stale `{-10000, -20000, 4}` on its
+      // very first render - the camera never had anything to do with
+      // Towers, and `createOfficeRuntime` only ever reads this once.
+      expect(lastCanvasCamera(office)).toMatchObject({ x: 0, y: 0, zoom: 1 });
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // ASSERTION 2: THE STORE IS SETTLED TOO. Reset effect 1 declines to
+      // fire because the record already names "towers" - so today the
+      // projection would be neutral (once assertion 1 holds) while the
+      // STORE keeps the stale camera, and a reload before the office
+      // happens to pan hands it straight back with the record still
+      // vouching for it.
+      expect(storedView()).toMatchObject({
+        officeCamera: null,
+        officeCameraView: "towers",
+      });
+    });
+
+    it("keeps the witness armed through an ordinary Graph write - a write on its own can be about something else", async () => {
+      // THE VARIANT the design comment names explicitly: "a write on its
+      // own can be about something else (a Graph pan while the move waits
+      // for the office to come back)". A camera pan through the Graph's
+      // own writer touches only `x`/`y`/`zoom` - fields the office does not
+      // read - and must not be read as a writer having spoken FOR the
+      // arriving office view, any more than the mode switch above should
+      // have been.
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      await renderSeededOffice(seededTile());
+      expect(storedView()?.mode).toBe("graph");
+
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+      );
+
+      // THE GRAPH PAN, between the arming move and the mode switch.
+      act(() => {
+        useEpicCanvasStore
+          .getState()
+          .updateCommGraphTileCameraInTab(
+            AUTO_TAB_ID,
+            commGraphTileId(EPIC_ID),
+            { x: 900, y: -400, zoom: 1.5 },
+          );
+      });
+      expect(storedView()).toMatchObject({
+        mode: "graph",
+        x: 900,
+        y: -400,
+        zoom: 1.5,
+      });
+
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+        await Promise.resolve();
+      });
+
+      // Same two assertions as the headline case...
+      expect(lastCanvasCamera(office)).toMatchObject({ x: 0, y: 0, zoom: 1 });
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(storedView()).toMatchObject({
+        officeCamera: null,
+        officeCameraView: "towers",
+        // ...plus the Graph's own camera has to have survived the whole
+        // detour untouched - it is a different field entirely since D68,
+        // and the office's own settling write touches only `officeCamera`
+        // / `officeCameraView`.
+        x: 900,
+        y: -400,
+        zoom: 1.5,
+      });
+    });
+
+    it("a mode switch with no default move keeps the office camera exactly (N10 guard - what D68 exists for)", async () => {
+      // THE GUARD. No Settings default move happens anywhere in this case:
+      // the resolved view is already "towers" when the tile mounts and
+      // stays "towers" throughout, so the witness never arms in the first
+      // place - there is nothing here for the fix above to release
+      // wrongly, or to hold rightly. This is exactly the case D68 added a
+      // per-renderer camera to protect (a mode switch is not a camera
+      // event), and the fix for the finding above must leave it alone:
+      // expected GREEN both before this fixup and after it.
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      await renderSeededOffice(seededTile());
+      expect(storedView()?.mode).toBe("graph");
+
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+        await Promise.resolve();
+      });
+
+      expect(lastCanvasCamera(office)).toMatchObject({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+      });
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(storedView()).toMatchObject({
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
+        officeCameraView: "towers",
+      });
+    });
+  });
+
   describe("restored Auto outcome (persisted, no re-measurement)", () => {
     it("reads a restored Building outcome from persistence without deciding again", async () => {
       const decide = vi.spyOn(officeAutoModule, "decideOfficeView");

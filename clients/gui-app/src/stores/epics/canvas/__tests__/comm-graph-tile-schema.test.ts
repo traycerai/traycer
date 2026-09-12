@@ -576,6 +576,53 @@ describe("comm-graph tile schema", () => {
       expect(parsed.view.officeCamera).toBeNull();
     });
 
+    it("keeps a Graph-mode camera when the office record is stale - x/y/zoom are the Graph's since D68, not the office's to zero (fixup 12, Finding B)", () => {
+      // The case above seeds GRAPH-NEUTRAL coordinates (`x: 0, y: 0, zoom:
+      // 1`) alongside its stale id, so it cannot see this defect at all:
+      // zeroing a camera that already reads as zero is invisible. This one
+      // seeds the Graph's own NON-NEUTRAL framing instead - the reviewer's
+      // own reproduction - so the zeroing actually shows up as a lost pan
+      // rather than a no-op.
+      //
+      // `stale` here degrades from an unknown `officeView` ("atrium" ships
+      // in no build), which is unrelated to the mode this record is in: a
+      // GRAPH-mode tile has never had an office view of its own, so a
+      // degraded `officeView` says nothing about whether this tile's
+      // camera is trustworthy. Before D68 the shared x/y/zoom were the
+      // OFFICE's, so wiping them on any staleness was correct; after D68
+      // they are the Graph's alone, and a stale office field has no claim
+      // on them.
+      const parsed = parseTileRef({
+        id: commGraphTileId(EPIC_ID),
+        instanceId: "inst-1",
+        type: "comm-graph",
+        name: "Agent office",
+        hostId: UNKNOWN_HOST_PLACEHOLDER,
+        epicId: EPIC_ID,
+        view: {
+          x: 155,
+          y: 266,
+          zoom: 2,
+          mode: "graph",
+          officeView: "atrium",
+          officeCamera: null,
+        },
+      });
+      expect(parsed?.type).toBe("comm-graph");
+      if (parsed === null || parsed.type !== "comm-graph") return;
+      // THE CLAIM: the Graph's own framing survives an unrelated stale
+      // OFFICE record untouched. Red at `2240afa89` by exactly the
+      // zeroing the `stale` branch still applies unconditionally.
+      expect(parsed.view.x).toBe(155);
+      expect(parsed.view.y).toBe(266);
+      expect(parsed.view.zoom).toBe(2);
+      // The office's own fields still retire exactly as the stale branch
+      // always meant them to - this half of the claim is unchanged by the
+      // fix and stays green throughout.
+      expect(parsed.view.officeView).toBeNull();
+      expect(parsed.view.officeCamera).toBeNull();
+    });
+
     it("refuses a persisted officeCamera with a zoom of 0 - a half-usable camera is worse than none", () => {
       const parsed = parseTileRef({
         id: commGraphTileId(EPIC_ID),
