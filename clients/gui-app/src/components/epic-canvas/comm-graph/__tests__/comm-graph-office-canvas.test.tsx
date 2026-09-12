@@ -3328,3 +3328,73 @@ describe("CommGraphOfficeCanvas fixup 5 - the directory's quiet tally", () => {
     );
   });
 });
+
+describe("CommGraphOfficeCanvas fixup 8 - the caught-up feed is not an input to the canvas's own first plan (H1)", () => {
+  it("plans its first scene while ready and the feed is behind - the flag never reaches this seam", () => {
+    // `officeElement`'s own defaults already carry `ready` and an
+    // uncaught-up feed (`initialHistoryCaughtUp={false}`) - passed
+    // explicitly here so the case reads as the fact under test rather than
+    // an accident of the helper's defaults. Before fixup 8 the canvas
+    // itself gated its first plan on `ready`, which the TILE computed from
+    // `inputsReady` (feed included); this seam proves the canvas's own plan
+    // no longer needs the feed at all, only `ready` and eligibility.
+    const plan = vi.spyOn(OFFICE_VIEWS.floor, "plan");
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          ready: true,
+          initialHistoryCaughtUp: false,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    setCanvasSize({ width: 1040, height: 700 });
+
+    expect(plan).toHaveBeenCalled();
+  });
+
+  it("shows the catching-up chip while ready and the feed is behind", () => {
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          ready: true,
+          initialHistoryCaughtUp: false,
+        }),
+      ),
+    );
+
+    expect(
+      screen.getByTestId("comm-graph-office-catching-up-chip"),
+    ).toBeDefined();
+  });
+
+  it("hides the catching-up chip once the feed has caught up", () => {
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          ready: true,
+          initialHistoryCaughtUp: true,
+        }),
+      ),
+    );
+
+    expect(
+      screen.queryByTestId("comm-graph-office-catching-up-chip"),
+    ).toBeNull();
+  });
+
+  it("hides the catching-up chip while not ready, even with the feed behind", () => {
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          ready: false,
+          initialHistoryCaughtUp: false,
+        }),
+      ),
+    );
+
+    expect(
+      screen.queryByTestId("comm-graph-office-catching-up-chip"),
+    ).toBeNull();
+  });
+});

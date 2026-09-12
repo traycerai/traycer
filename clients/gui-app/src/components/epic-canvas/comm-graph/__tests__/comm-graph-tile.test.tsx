@@ -124,6 +124,7 @@ import * as Y from "yjs";
 import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
 import * as commGraphCanvasModule from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
 import * as officeCanvasModule from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
+import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import * as officeAutoModule from "@/lib/comm-graph/office/office-auto";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
@@ -615,6 +616,22 @@ function lastCanvasCamera(spy: SpiedCalls): TileCamera | null {
 }
 
 /**
+ * The `ready` prop most recently handed to a spied-on canvas component - the
+ * fixup 8 fact under test, read the same way `lastCanvasCamera` reads `view`:
+ * off what the canvas was actually GIVEN, not off a side effect of what it
+ * did with it. Typed directly against `CommGraphOfficeCanvasProps` through
+ * the spy's own `MockInstance` generic, rather than the untyped-call-args
+ * shape `lastCanvasCamera` has to narrow at runtime.
+ */
+function lastCanvasReady(
+  spy: MockInstance<typeof officeCanvasModule.CommGraphOfficeCanvas>,
+): boolean | null {
+  const props: CommGraphOfficeCanvasProps | undefined =
+    spy.mock.calls.at(-1)?.[0];
+  return props === undefined ? null : props.ready;
+}
+
+/**
  * The most recent real frame the runtime drew, and the bounds of the view it
  * drew - both from the ACTUAL scene, not the store. R1 is exactly the gap
  * between what the store says and what the runtime already framed on its
@@ -644,7 +661,7 @@ function lastFrameAndBounds(
  * "unmounted" reproduction entirely - the effect that resets the camera
  * closes over an empty `node.view` update cycle no differently, but the
  * render-time decision this fixup added reads `agents.length` nowhere, so
- * the real risk is a probe that never reaches a truthful `inputsReady`
+ * the real risk is a probe that never reaches a truthful `drawReady`
  * because the office canvas measured before agents existed. Loading first is
  * what the reviewer's own probe does to rule that out.
  */
@@ -2077,8 +2094,8 @@ describe("CommGraphTile", () => {
     });
   });
 
-  describe("readiness classification (F3)", () => {
-    it("does not plan a restored Building before replay is ready, and classifies its cold arrival as hot once replay confirms it awaiting", async () => {
+  describe("readiness classification (F3, revised by fixup 8/H1)", () => {
+    it("plans a restored Building before replay is ready (fixup 8 draws it), and still classifies its cold arrival as hot once replay confirms it awaiting", async () => {
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
       const plan = vi.spyOn(OFFICE_VIEWS.building, "plan");
       await renderSeededOffice({
@@ -2087,9 +2104,12 @@ describe("CommGraphTile", () => {
       });
       setOfficeCanvasSize({ width: 1040, height: 700 });
       setIntersecting(true);
-      // Neither replay nor measurement alone is enough: `ready` gates on
-      // both, so the planner must not have run yet.
-      expect(plan).not.toHaveBeenCalled();
+      // F3 asserted the planner had NOT run here; fixup 8/H1 is exactly the
+      // reversal of that gate for an explicit view - the caught-up feed is
+      // no longer an input to the first plan, only to what gets classified
+      // and committed as the settled partition (proven below via
+      // `hotAtArrival`). Measurement and eligibility alone are enough.
+      expect(plan).toHaveBeenCalled();
 
       const event: CommGraphEvent = {
         id: 1,
@@ -2138,6 +2158,120 @@ describe("CommGraphTile", () => {
         fresh.members.get(ARCHIVED_CHAT_ID)?.hotAtArrival,
       );
       expect(actual?.hotAtArrival).toBe(true);
+    });
+  });
+
+  describe("an explicit view draws while the feed is behind (fixup 8, H1)", () => {
+    it("hands the canvas ready:true and lets the real Towers planner run before the feed catches up", async () => {
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+      const plan = vi.spyOn(OFFICE_VIEWS.towers, "plan");
+      await renderSeededOffice({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeView: "towers",
+      });
+      setIntersecting(true);
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      // Deliberately no `caughtUp()` here - this IS the H1 reproduction: the
+      // local server lost its database mid-sitting and the feed never
+      // caught up, and an explicit Towers tile drew nothing for 25 minutes
+      // while the Graph beside it drew every node from the same snapshot.
+      // This is a standalone assertion on purpose, reachable only through
+      // the prop the canvas was actually HANDED - a suite that only checked
+      // the planner ran (below) could still be fooled by a `ready` wired to
+      // something other than what fixup 8 changed.
+      expect(lastCanvasReady(office)).toBe(true);
+      // And the canvas acted on it for real: the actual Towers planner ran
+      // against the loaded snapshot, not merely a prop nobody consumed.
+      expect(plan).toHaveBeenCalled();
+    });
+
+    it("still waits for Auto: ready stays false and no decision runs until the feed catches up, and the chip keeps reading measuring", async () => {
+      // The tile's OWN gate for a drawable office loosened in fixup 8, but
+      // Auto's gate is a different one and the plan explicitly keeps it: a
+      // partition measured off a half-replayed feed could pick the wrong
+      // view and PERSIST that choice, so nothing here is meant to change
+      // for Auto. This is the `ready` half of that guarantee - the existing
+      // "does not run while the snapshot is a partial one" case only ever
+      // read the store's `officeAutoView` and the decide spy, never what
+      // the canvas itself was handed.
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
+      await renderOfficeTile();
+      await waitFor(() => {
+        expect(Array.from(openedByHost.keys()).sort()).toEqual([
+          HOST_A,
+          HOST_B,
+        ]);
+      });
+      setIntersecting(true);
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(lastCanvasReady(office)).toBe(false);
+      expect(decide).not.toHaveBeenCalled();
+      expect(
+        screen.getByTestId("comm-graph-office-auto-chip").textContent,
+      ).toBe("Auto · measuring…");
+
+      caughtUp();
+      await waitFor(() => {
+        expect(storedView()?.officeAutoView).not.toBeNull();
+      });
+      // The decision remounts the canvas onto its now-resolved view - a NEW
+      // container element with no measurement of its own yet, same as any
+      // other view change in this file (see `pickView`) - so it needs the
+      // same eligibility and size signals given again before it can report
+      // a probe and become ready.
+      setIntersecting(true);
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      await waitFor(() => {
+        expect(lastCanvasReady(office)).toBe(true);
+      });
+    });
+
+    it("shows the catching-up chip while the explicit Towers tile draws behind the feed, and clears it once caught up", async () => {
+      // The population between "who is here" and "who is busy" is real, and
+      // this is where a person is told about it: not a spinner over an
+      // office that is already drawn, just a line that goes away once the
+      // feed says the statuses on screen are settled.
+      await renderSeededOffice({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeView: "towers",
+      });
+      setIntersecting(true);
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      expect(
+        screen.getByTestId("comm-graph-office-catching-up-chip").textContent,
+      ).toContain("Catching up");
+
+      caughtUp();
+      expect(
+        screen.queryByTestId("comm-graph-office-catching-up-chip"),
+      ).toBeNull();
+    });
+
+    it("does not show the catching-up chip while Auto is only measuring - one chip for one wait", async () => {
+      // Auto's own wait already has its own chip (`Auto · measuring…`,
+      // pinned above); the catching-up chip is about a DRAWN office whose
+      // statuses may lag, which is not what an undecided Auto tile is
+      // showing at all. Two chips claiming the same wait would be
+      // confusing even if neither were wrong on its own.
+      await renderOfficeTile();
+      await waitFor(() => {
+        expect(Array.from(openedByHost.keys()).sort()).toEqual([
+          HOST_A,
+          HOST_B,
+        ]);
+      });
+      setIntersecting(true);
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        screen.queryByTestId("comm-graph-office-catching-up-chip"),
+      ).toBeNull();
     });
   });
 
