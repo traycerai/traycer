@@ -2660,18 +2660,39 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * measures straight after mount is measuring the settling frames, not a
      * parked office.
      *
-     * The trailing `expect` is the point: an extra frame that draws NOTHING is
-     * what "parked" means, and it is the precondition every case below rests
-     * on. Without it a fixture that quietly kept animating would make those
-     * cases pass while proving nothing.
+     * "Draws nothing" has to mean the DRAW PATH did not run, not merely that
+     * nothing got ALLOCATED: a frame built from an already-cached bitmap and
+     * already-cached sprites allocates zero canvases either way, so
+     * `totalCanvasContextCalls` alone cannot tell "refused" from "drew, had
+     * nothing new to bake." `OfficeScene.prototype.frame` is the proxy for an
+     * actual drawn frame - this suite's own `lastFramedRect` already commits
+     * to that reading ("the world rect of the most recent frame, or `null` if
+     * NONE WAS DRAWN"), and the call site sits at the one spot between the
+     * gate's refusal and every downstream draw call that nothing skips: the
+     * gate's `if (!draw) { … return; }` returns before camera work, shift,
+     * auto-fit, `advanceCamera`, `trackLodBand` and `worldRectOf` - all of
+     * which run unconditionally on a drawn frame, ending in this one call.
+     * `scene.isAnimating` is NOT this proxy: it is read as an argument to
+     * `shouldDraw` itself, so it runs on a REFUSED frame too.
+     *
+     * The spy is the CALLER's, not this helper's: a shared helper that owned
+     * its own spy would need either a fresh one per call (restored how?) or
+     * one that outlives the office it was taken on, and a caller comparing
+     * against the wrong office's call count would never know. Passed in, the
+     * caller reads a `calls.length` DELTA across exactly the frames it cares
+     * about - which is also why the returned allocation count is a courtesy
+     * for callers that still want it, never a thing this helper asserts on
+     * its own: mount already drew and baked before this runs.
      */
-    function settleUntilParked(): number {
+    function settleUntilParked(frames: SpiedCalls): number {
       for (let settle = 0; settle < 8; settle += 1) {
         flushRaf(1);
       }
       const parked = totalCanvasContextCalls;
+      const drawnBeforeSettling = frames.mock.calls.length;
       flushRaf(1);
       expect(totalCanvasContextCalls).toBe(parked);
+      expect(frames.mock.calls.length - drawnBeforeSettling).toBe(0);
       return parked;
     }
 
@@ -2966,7 +2987,9 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      */
     it("a custom-theme change rebuilds the layer exactly once and leaves the loop alone", () => {
       renderLoop({});
-      const totalBefore = settleUntilParked();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const totalBefore = settleUntilParked(frames);
+      const drawnBefore = frames.mock.calls.length;
 
       act(() => {
         // In the schema's own range (70-130), so this is a contrast a user
@@ -2980,6 +3003,11 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // mode change - `resolvedTheme` stays mocked to "light" throughout.
       expect(resolvedThemeMock.current).toBe("light");
       expect(totalCanvasContextCalls - totalBefore).toBe(1);
+      // The draw path itself ran exactly once for the bump - the allocation
+      // count alone cannot distinguish "drew and rebuilt" from "drew and had
+      // nothing to rebuild", and a gate defeated into always drawing would
+      // still show a delta of 1 on the allocation count here by coincidence.
+      expect(frames.mock.calls.length - drawnBefore).toBe(1);
       expect(mainCanvasContextCalls).toBe(0);
       expect(releaseSpy).not.toHaveBeenCalled();
     });
@@ -2991,14 +3019,23 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * buy any: if a parked office drew even one frame per rAF without a reason,
      * the case above would pass for the wrong reason and the tile would be
      * burning a bake a frame forever. Deliberately several flushes, not one.
+     *
+     * The allocation assertion is kept alongside the draw-path one, not in
+     * place of it: a gate planted to always draw still allocates nothing once
+     * the bitmap and sprites are cached, so the allocation count alone cannot
+     * fail here even though the defect it is meant to guard would be live -
+     * the draw-path delta is the one that actually carries this case.
      */
     it("an idle office draws nothing while the revision holds still", () => {
       renderLoop({});
-      const parked = settleUntilParked();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const parked = settleUntilParked(frames);
+      const drawnAtPark = frames.mock.calls.length;
 
       flushRaf(6);
 
       expect(totalCanvasContextCalls).toBe(parked);
+      expect(frames.mock.calls.length - drawnAtPark).toBe(0);
       expect(mainCanvasContextCalls).toBe(0);
       expect(releaseSpy).not.toHaveBeenCalled();
     });
