@@ -211,6 +211,7 @@ describe("reconcileServedTurnMembership", () => {
 
     // Retired from the ledger too, not merely unreferenced by a span.
     expect(after.records.messages.has("ghost")).toBe(false);
+    expect(after.hydratedBytes).toBe(transcriptWindowChargedBytes(after));
   });
 
   it("keeps a legitimate non-empty prefix the serve's membership still lists", () => {
@@ -308,6 +309,9 @@ describe("reconcileServedTurnMembership", () => {
     );
     expect(hydratedIds).not.toContain("ghost");
     expect(hydratedIds).toContain("real");
+    // The stored charge is re-derived after the live tail shrinks - the
+    // ghost's bytes leave the figure the budget reads, not only the tail.
+    expect(after.hydratedBytes).toBe(transcriptWindowChargedBytes(after));
   });
 
   it("never reconciles an unplaced live ghost of the active turn", () => {
