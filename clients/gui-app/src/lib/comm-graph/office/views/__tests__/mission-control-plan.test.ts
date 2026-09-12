@@ -905,12 +905,8 @@ class CountingSeatMap extends Map<string, OfficeSeat> {
   }
 
   override forEach(
-    callback: (
-      value: OfficeSeat,
-      key: string,
-      map: Map<string, OfficeSeat>,
-    ) => void,
-    thisArg?: object,
+    callback: Parameters<Map<string, OfficeSeat>["forEach"]>[0],
+    thisArg: Parameters<Map<string, OfficeSeat>["forEach"]>[1],
   ): void {
     for (const [key, seat] of this.entries()) {
       callback.call(thisArg, seat, key, this);
@@ -1207,9 +1203,12 @@ describe("mission-control cold-review findings", () => {
       VIEWPORT_WIDE,
     ).layout;
     let visits = 0;
-    const seats = new CountingSeatMap(layout.seats, () => {
-      visits += 1;
-    });
+    const seats: Map<string, OfficeSeat> = new CountingSeatMap(
+      layout.seats,
+      () => {
+        visits += 1;
+      },
+    );
     const expected = layout.seats.size;
 
     visits = 0;
