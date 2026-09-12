@@ -55,7 +55,18 @@ export const FALLBACK_RUNG_COPY: Record<FallbackRungKind, FallbackRungCopy> = {
     // where "Always" belongs, and it already says it only in the `enabled`
     // branch; saying it here too put the claim beside its own contradiction,
     // which `fallback-ladder-editor.tsx` documents at its `FixedStepControl`.
-    description: "Runs at the end of the plan, once the steps above are spent.",
+    //
+    // And NOT "Runs at the end of the plan" either - the same defect one step
+    // further out. The editor maps `displayOrder` verbatim and this step is
+    // fixed but not RELOCATED, so an externally authored early `notify` draws
+    // this line with a step visibly below it, the copy claiming an end the
+    // list on screen contradicts. What holds in every stored order is that the
+    // walk STOPS here, and that is also the one fact the early case needs
+    // stated, since the steps below it will never run. So this asserts
+    // termination, which the engine guarantees, rather than position, which
+    // only the ladders this panel itself writes happen to have.
+    description:
+      "Ends the plan: it runs once the steps above are spent, and no step below it runs.",
     chipLabel: "notify",
   },
 };
