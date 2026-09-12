@@ -7727,6 +7727,12 @@ describe("OfficeScene fixup 8c - the plan the settled feed owes (P2)", () => {
       .flatMap((host) => host.teams)
       .find((candidate) => candidate.leadAgentId === woken);
     if (team === undefined) throw new Error("the woken lead leads no team");
+    // WHERE THE BOOK SAYS THEY ARE, before the settle: the quiet stack, which
+    // is what the hover card would print and the directory would pan to.
+    const whereaboutsOf = (): ReadonlyArray<string | null> =>
+      team.memberAgentIds.map((id) => scene.whereabouts(id));
+    expect(whereaboutsOf()).toEqual(["Quiet stack", "Quiet stack"]);
+
     scene.sync(settled);
     const after = layoutOf(scene);
 
@@ -7752,6 +7758,15 @@ describe("OfficeScene fixup 8c - the plan the settled feed owes (P2)", () => {
     expect(kindsOf(after)).toEqual(kindsOf(fresh));
     expect(after.rooms.length).toBe(fresh.rooms.length);
     expect(after.rooms.length).toBe(2);
+
+    // AND THE BOOK MOVED WITH THE PLAN, which the equality above cannot say:
+    // `layout.desks` said desk while the book still said cubby, and the book
+    // is what everything downstream reads. Neither member is in the quiet
+    // stack any more - each is either at the desk it was given or walking to
+    // it, both of which are answers the cold floor could not produce.
+    for (const where of whereaboutsOf()) {
+      expect(where).not.toBe("Quiet stack");
+    }
   });
 });
 
@@ -7965,7 +7980,9 @@ describe("OfficeScene fixup 8c - the settle plan walks people, it does not pop t
     scene.sync(
       sceneInput({ agents, visibleAgentIds, statusById: idle, reducedMotion }),
     );
-    const provisional = layoutOf(scene);
+    // The provisional floor exists; where anybody actually IS comes off the
+    // book below, not off this.
+    layoutOf(scene);
 
     const woken = "team-0-lead";
     if (!idle.has(woken)) throw new Error("fixture has no team-0-lead");
@@ -7982,16 +7999,24 @@ describe("OfficeScene fixup 8c - the settle plan walks people, it does not pop t
       .flatMap((host) => host.teams)
       .find((candidate) => candidate.leadAgentId === woken);
     if (team === undefined) throw new Error("the woken lead leads no team");
+    // THE PREMISE READ OFF THE BOOK, not the plan. `layout.desks` is where
+    // the plan put somebody; `whereabouts` is where the scene says they are,
+    // and the two disagreeing for a whole settled office is the finding this
+    // fixup's second half exists for - a premise taken from the plan would
+    // have been satisfied by a floor nobody was standing on.
     const moved = team.memberAgentIds.find(
-      (id) => provisional.desks.get(id)?.kind === "cubby",
+      (id) => scene.whereabouts(id) === "Quiet stack",
     );
     if (moved === undefined) {
-      throw new Error("no team member started in a cubby to move out of");
+      throw new Error(
+        "no team member started in the quiet stack to move out of",
+      );
     }
 
     scene.sync(settled);
-    const after = layoutOf(scene);
-    if (after.desks.get(moved)?.kind === "cubby") {
+    // Asserts the layout exists at all, which every read below assumes.
+    layoutOf(scene);
+    if (scene.whereabouts(moved) === "Quiet stack") {
       throw new Error("expected the settle to move this member off its cubby");
     }
     return { scene, movedId: moved };
@@ -8012,5 +8037,169 @@ describe("OfficeScene fixup 8c - the settle plan walks people, it does not pop t
   it("with reduced motion, the settle lands the moved agent on its new chair immediately", () => {
     const { scene, movedId } = settledScene(true);
     expect(frameOf(scene).awayAgentIds.has(movedId)).toBe(false);
+  });
+});
+
+describe("OfficeScene fixup 8c - the book settles with the plan (D66)", () => {
+  /**
+   * The fixture the cold reviewer's second finding was reproduced on, and the
+   * two things every case here needs: the provisional input, and the settled
+   * one that follows it.
+   */
+  function triageInputs(): {
+    readonly agents: ReadonlyArray<OfficeAgentInput>;
+    readonly provisional: OfficeSceneInput;
+    readonly settled: OfficeSceneInput;
+  } {
+    const fixture = makeTestEpic("triage", 40, 1);
+    const agents = fixture.agents;
+    const visibleAgentIds = new Set(agents.map((one) => one.id));
+    const idle = new Map<string, OfficeAgentStatus>(
+      agents.map((one) => [one.id, "idle" as const]),
+    );
+    const woken = "team-0-lead";
+    if (!idle.has(woken)) throw new Error("fixture has no team-0-lead");
+    const settledStatuses = new Map(idle);
+    settledStatuses.set(woken, "awaiting");
+    return {
+      agents,
+      provisional: sceneInput({ agents, visibleAgentIds, statusById: idle }),
+      settled: sceneInput({
+        agents,
+        visibleAgentIds,
+        statusById: settledStatuses,
+        feedSettled: true,
+      }),
+    };
+  }
+
+  /**
+   * ONE PLAN PER SETTLE, and the shortfall is why this is not already pinned
+   * by the latch cases above.
+   *
+   * The latch only stops the SETTLE from firing twice. What planned the floor
+   * again and again was trigger 2: the book kept seventeen cubby ids the
+   * settle plan had given to other people, so the seventeen agents it gave
+   * them to had no seat at all, went into `needsCapacity`, and asked the
+   * planner for room the office already had - on every sync, for the life of
+   * the mount. Six syncs, two plans: any third plan here is that shortfall
+   * coming back.
+   */
+  it("plans twice across six syncs, because the settle leaves nobody owed a seat", () => {
+    const { provisional, settled } = triageInputs();
+    let calls = 0;
+    const countingView: OfficeView = {
+      ...OFFICE_VIEWS.building,
+      plan: (input) => {
+        calls += 1;
+        return OFFICE_VIEWS.building.plan(input);
+      },
+    };
+    const scene = new OfficeScene(countingView, null);
+    scene.sync(provisional);
+    expect(calls).toBe(1);
+    for (let round = 0; round < 5; round += 1) {
+      scene.sync(settled);
+    }
+    expect(calls).toBe(2);
+  });
+
+  /**
+   * WHAT THE BOOK SAYS IS WHERE PEOPLE ARE, so the settle has to reach it.
+   *
+   * `layout.desks` said desk while the book still said cubby, and the book is
+   * what `effectiveSeat`, `whereabouts`, the characters and the directory
+   * read - so the plan-side equality the R2 case asserts was true of an office
+   * nobody was looking at. The book is private to the scene, so this reads it
+   * through the two public carriers that project it: `locate`, which the
+   * directory pans by, and `whereabouts`, which the hover card prints.
+   *
+   * Every agent, not the woken team: on this fixture the team-0 members did
+   * get their desks and the damage was elsewhere - seventeen agents keeping
+   * cubby ids the settle plan had reassigned, and the seventeen it reassigned
+   * them to left with no seat at all. `team-1-lead` holding nothing while
+   * `leaf-8` kept `unattributed/4/cubby/0` is the reviewer's own example.
+   *
+   * UNDER REDUCED MOTION, and that is not a dodge. `locate` and `whereabouts`
+   * answer from the CHARACTER while it is out of its chair, which is what the
+   * settle deliberately sets thirty-nine of these agents doing - so with
+   * motion on this would compare walkers against a reference office where
+   * nobody ever walked, and fail on the walk this fixup wants. Reduced motion
+   * collapses the walk into sitting down, which leaves exactly the question
+   * being asked: did the book take up the settled plan. The walking half is
+   * pinned by the R4 cases, and the case below asserts the shortfall's own
+   * symptom with motion on.
+   */
+  it("puts every agent where a scene that had waited for the feed would have put them", () => {
+    const fixture = makeTestEpic("triage", 40, 1);
+    const agents = fixture.agents;
+    const visibleAgentIds = new Set(agents.map((one) => one.id));
+    const idle = new Map<string, OfficeAgentStatus>(
+      agents.map((one) => [one.id, "idle" as const]),
+    );
+    const settledStatuses = new Map(idle);
+    settledStatuses.set("team-0-lead", "awaiting");
+    const still = { agents, visibleAgentIds, reducedMotion: true };
+    const scene = new OfficeScene(OFFICE_VIEWS.building, null);
+    scene.sync(sceneInput({ ...still, statusById: idle }));
+    scene.sync(
+      sceneInput({ ...still, statusById: settledStatuses, feedSettled: true }),
+    );
+
+    // The office the same input builds with no provisional floor behind it -
+    // the standard every agent below is held to.
+    const reference = new OfficeScene(OFFICE_VIEWS.building, null);
+    reference.sync(
+      sceneInput({ ...still, statusById: settledStatuses, feedSettled: true }),
+    );
+
+    const misplaced: string[] = [];
+    const differentWhereabouts: string[] = [];
+    for (const agent of agents) {
+      const here = scene.locate(agent.id);
+      const there = reference.locate(agent.id);
+      if (JSON.stringify(here) !== JSON.stringify(there)) {
+        misplaced.push(agent.id);
+      }
+      if (scene.whereabouts(agent.id) !== reference.whereabouts(agent.id)) {
+        differentWhereabouts.push(agent.id);
+      }
+    }
+    // Named in the messages because these two are the reviewer's example: the
+    // lead left with no seat, and the leaf holding the cubby that had been
+    // reassigned to it.
+    expect(
+      misplaced,
+      `agents the settle left where a settled scene would not have put them (team-1-lead and leaf-8 are the reviewer's example): ${misplaced.join(", ")}`,
+    ).toEqual([]);
+    expect(
+      differentWhereabouts,
+      `agents whose hover card would read differently: ${differentWhereabouts.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  /**
+   * THE SHORTFALL'S OWN SYMPTOM, with motion on and nothing collapsed: an
+   * agent the book could not seat has no seat to project, so the directory
+   * cannot pan to it and the hover card has nothing to say. Seventeen agents
+   * were in that state on every sync for the life of the mount.
+   *
+   * `locate` answers a walker from its own box, so this holds whether or not
+   * the settle set somebody walking - which is what makes it the half of the
+   * comparison above that does not need motion stilled.
+   */
+  it("leaves nobody unlocatable after the settle, walkers included", () => {
+    const { agents, provisional, settled } = triageInputs();
+    const scene = new OfficeScene(OFFICE_VIEWS.building, null);
+    scene.sync(provisional);
+    scene.sync(settled);
+
+    const unlocatable = agents
+      .map((agent) => agent.id)
+      .filter((id) => scene.locate(id) === null);
+    expect(
+      unlocatable,
+      `agents with no seat at all (team-1-lead and leaf-8 are the reviewer's example): ${unlocatable.join(", ")}`,
+    ).toEqual([]);
   });
 });

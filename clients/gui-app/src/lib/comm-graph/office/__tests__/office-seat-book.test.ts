@@ -1538,3 +1538,140 @@ describe("OfficeSeatBook", () => {
     assertNoDoubleBooking(book);
   });
 });
+
+describe("OfficeSeatBook fixup 8c - a fresh adoption (D66)", () => {
+  /**
+   * THE BOOK IS WHAT THE OFFICE IS, which is why a plan made from scratch has
+   * to be taken up from scratch.
+   *
+   * `"keep"` exists because the plan is handed this book's occupancy and
+   * honours it, so the book honours the plan back. The settle plan is handed
+   * none of it - no previous, no occupancy, no shortfall - so there is nothing
+   * to honour, and keeping seats against it is not stability but
+   * disagreement: cubby ids outlive a re-plan, so the agent that held one
+   * keeps sitting in a cubby the new plan gave nobody, while the agent the
+   * new plan gave it to gets no seat at all and lands in the shortfall. That
+   * is the cold reviewer's second finding, and it is this one call away.
+   */
+  it("takes a stable layout's own desks wholesale, leaving nobody in the shortfall", () => {
+    const kept = "kept-cubby";
+    const desk = "real-desk";
+    const first = buildLayout({
+      stable: true,
+      seats: [
+        {
+          seatId: kept,
+          kind: "cubby",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(1, 1),
+        },
+        {
+          seatId: desk,
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(4, 1),
+        },
+      ],
+      desks: new Map([["A", kept]]),
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(first, ["A", "B"], "keep");
+    // The provisional shape of the defect: A lives in the cubby, and the desk
+    // the next plan means for it belongs to nobody yet.
+    expect(book.assignedSeat("A")?.seatId).toBe(kept);
+
+    // The settle plan: the same two seats still exist - that is exactly why
+    // `"keep"` failed - but A is now meant to be at the desk and B in the
+    // cubby.
+    const settled = buildLayout({
+      stable: true,
+      seats: [
+        {
+          seatId: kept,
+          kind: "cubby",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(1, 1),
+        },
+        {
+          seatId: desk,
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(4, 1),
+        },
+      ],
+      desks: new Map([
+        ["A", desk],
+        ["B", kept],
+      ]),
+    });
+
+    const keepMoved = new OfficeSeatBook();
+    keepMoved.adopt(first, ["A", "B"], "keep");
+    keepMoved.adopt(settled, ["A", "B"], "keep");
+    // The finding itself, pinned so the fix below is a change: A holds the
+    // cubby the plan gave B, B is left with nothing, and B is owed capacity
+    // the office already has.
+    expect(keepMoved.assignedSeat("A")?.seatId).toBe(kept);
+    expect(keepMoved.assignedSeat("B")).toBeNull();
+    expect(keepMoved.needsCapacity()).toEqual(["B"]);
+
+    const moved = book.adopt(settled, ["A", "B"], "fresh");
+    expect(book.assignedSeat("A")?.seatId).toBe(desk);
+    expect(book.assignedSeat("B")?.seatId).toBe(kept);
+    expect(book.needsCapacity()).toEqual([]);
+    // And the caller still learns who has to walk: A's chair moved, B had no
+    // chair to move from.
+    expect(moved).toEqual(["A"]);
+    assertNoDoubleBooking(book);
+  });
+
+  /**
+   * A fresh adoption drops the claims with the assignment - a reserve taken
+   * while the feed was behind was taken from a status that had not arrived,
+   * and the scene re-derives every claim from the settled statuses on the
+   * next line. What must not survive is a claim pointing into the office the
+   * settle just replaced.
+   */
+  it("drops the claims and the shortfall it was carrying", () => {
+    const cubby = "c-0";
+    const reserve = "r-0";
+    const layout = buildLayout({
+      stable: true,
+      seats: [
+        {
+          seatId: cubby,
+          kind: "cubby",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(1, 1),
+        },
+        {
+          // A reserve is a seat the plan draws and nobody is assigned to, not
+          // a kind of its own - and it must not be a cubby, which is the one
+          // kind a claim will never take.
+          seatId: reserve,
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(6, 1),
+        },
+      ],
+      desks: new Map([["A", cubby]]),
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A"], "keep");
+    const claimed = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    expect(claimed?.seatId).toBe(reserve);
+    expect(book.effectiveSeat("A")?.seatId).toBe(reserve);
+
+    book.adopt(layout, ["A"], "fresh");
+    // Back to what the plan says, with no claim overriding it.
+    expect(book.effectiveSeat("A")?.seatId).toBe(cubby);
+    expect(book.needsCapacity()).toEqual([]);
+    assertNoDoubleBooking(book);
+  });
+});
