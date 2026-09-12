@@ -2697,6 +2697,124 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
 
       expect(mainCanvasContextCalls).toBe(1);
     });
+
+    /**
+     * `peekScene` closes over `epicId` alone, so an `epicId` change is the
+     * one thing that makes it return null for what `ensureScene` then treats
+     * as a fresh epic - and that is exactly the case the render loop must
+     * restart for: a scene swapped out from under a stale bitmap, with
+     * nothing else about the effect's own dependencies moving.
+     *
+     * ONE `OfficeView` object, reused for both renders - its `plan` reads a
+     * mutable flag rather than closing over a fixed layout, so `officeView`
+     * keeps one identity across the swap. `officeView` is already, correctly,
+     * a dependency of the render loop's effect; if the case handed it a new
+     * object per epic (the obvious way to get a "different roster"), a
+     * restart would prove nothing about `epicId` - the officeView change
+     * alone would explain it, on the buggy code same as the fixed one.
+     */
+    function inPlaceEpicSwapView(): {
+      readonly officeView: OfficeView;
+      readonly useOtherLayout: () => void;
+    } {
+      const firstHost = seatAt({ seatId: "h/0/first-host", col: 2, row: 2 });
+      const firstWorker = seatAt({
+        seatId: "h/0/first-worker",
+        col: 12,
+        row: 12,
+      });
+      const firstLayout: OfficeLayout = {
+        view: "floor",
+        cols: 16,
+        rows: 16,
+        desks: new Map([
+          ["host", { ...firstHost, agentId: "host" }],
+          ["worker", { ...firstWorker, agentId: "worker" }],
+        ]),
+        seats: new Map([
+          ["h/0/first-host", firstHost],
+          ["h/0/first-worker", firstWorker],
+        ]),
+        signs: [],
+        rooms: [],
+        floors: [emptyFloor()],
+        doorTile: { col: 0, row: 0 },
+        lobbyTile: { col: 0, row: 1 },
+        props: [],
+        walkable: allWalkable(16, 16),
+        frozen: null,
+        shiftFromPrevious: null,
+        stable: true,
+      };
+      const otherHost = seatAt({ seatId: "h/0/other-host", col: 6, row: 6 });
+      const otherWorker = seatAt({
+        seatId: "h/0/other-worker",
+        col: 10,
+        row: 10,
+      });
+      // A DIFFERENT roster of the same size, seated at different tiles - the
+      // floor drawables genuinely differ, so this is a stale bitmap that
+      // would otherwise survive the swap, not an empty scene that would hide
+      // the bug either way.
+      const otherLayout: OfficeLayout = {
+        ...firstLayout,
+        desks: new Map([
+          ["other-host", { ...otherHost, agentId: "other-host" }],
+          ["other-worker", { ...otherWorker, agentId: "other-worker" }],
+        ]),
+        seats: new Map([
+          ["h/0/other-host", otherHost],
+          ["h/0/other-worker", otherWorker],
+        ]),
+      };
+      let layout = firstLayout;
+      return {
+        officeView: { ...OFFICE_VIEWS.floor, plan: () => layout },
+        useOtherLayout: () => {
+          layout = otherLayout;
+        },
+      };
+    }
+
+    const OTHER_EPIC_HOST = agent("other-host", "Beta Sitter");
+    const OTHER_EPIC_WORKER = agent("other-worker", "Beta Walker");
+
+    it("an in-place epicId change restarts the loop exactly once", () => {
+      const { officeView, useOtherLayout } = inPlaceEpicSwapView();
+      const result = render(
+        withQueryClient(
+          officeElementWithView(
+            officeView,
+            new Set(["host", "worker"]),
+            [HOST_AGENT, WALKER_AGENT],
+            { view: RESTART_VIEW },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      flushRaf(1);
+      // The mount itself opened the canvas's one context; only what happens
+      // AFTER this point is an "interaction" for the case below.
+      mainCanvasContextCalls = 0;
+
+      useOtherLayout();
+      act(() => {
+        result.rerender(
+          withQueryClient(
+            // Same `officeView` object as the mount - only `epicId` and the
+            // roster move.
+            officeElementWithView(
+              officeView,
+              new Set(["other-host", "other-worker"]),
+              [OTHER_EPIC_HOST, OTHER_EPIC_WORKER],
+              { view: RESTART_VIEW, epicId: "epic-2" },
+            ),
+          ),
+        );
+      });
+
+      expect(mainCanvasContextCalls).toBe(1);
+    });
   });
 });
 

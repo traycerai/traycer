@@ -2707,6 +2707,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
    * hazard: any of those three gaining a dependency that moves would have
    * turned a callback's re-creation into a dropped bitmap, silently and at a
    * distance from the line that caused it.
+   *
+   * What it must NOT remove is `epicId`. `peekScene` closes over it, so the
+   * old array carried it by accident; the array below names it deliberately,
+   * because the bitmap this loop owns is one epic's floor.
    */
   const readScene = useEffectEvent((): OfficeScene | null => peekScene());
   const resizeCanvas = useEffectEvent((): void => {
@@ -3100,7 +3104,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // A floor's worth of pixels is real memory; it goes with the tile.
       staticLayer.release();
     };
-  }, [officeView, resolvedTheme, runtime]);
+    // `epicId` IS a reactive input, and naming it is the point of this array.
+    // The loop's whole closure belongs to one epic's scene - the gate, the
+    // listeners, and the static layer holding that epic's baked floor - so an
+    // epic switched in place has to rebuild it. It used to arrive here only
+    // because `peekScene` closes over `epicId` and was listed; dropping that
+    // callback dropped the reactivity with it, and a canvas switched from one
+    // epic to another kept painting the new office on the old floor.
+  }, [epicId, officeView, resolvedTheme, runtime]);
 
   /** A client position in container screen pixels. */
   const toScreenPoint = useCallback(
