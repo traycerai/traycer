@@ -186,24 +186,6 @@ const CLOSE_UP_WORKING: OfficeDeskState = {
   accentId: null,
 };
 
-/**
- * Counts `layout.cols` reads. `buildProjector` reads `cols` (and `rows`) and
- * nothing else on the seat path does - measured, not assumed.
- */
-function installColsReadCounter(layout: OfficeLayout): { reads: number } {
-  const counts = { reads: 0 };
-  const cols = layout.cols;
-  Object.defineProperty(layout, "cols", {
-    configurable: true,
-    enumerable: true,
-    get(): number {
-      counts.reads += 1;
-      return cols;
-    },
-  });
-  return counts;
-}
-
 function paintAllSeats(layout: OfficeLayout): void {
   for (const seat of layout.seats.values()) {
     ISO_PAINTER.seatProps(layout, seat, CLOSE_UP_WORKING, 2);
@@ -895,6 +877,15 @@ describe("planCampus", () => {
     expect([...deltas]).toEqual([`${16 * k},0`]);
   });
 
+  it("returns the same projector object for a spread that keeps cols, rows and frozen", () => {
+    // The miss above grows `rows`. This spread changes nothing the projector
+    // is built from - same `cols`, `rows`, same frozen - so the memo hits
+    // even though the layout object is new. A layout-identity key would miss.
+    const layout = planCampus(inputFor("triage", 60, VIEWPORT_1280));
+    const first = ISO_PAINTER.projector(layout);
+    expect(ISO_PAINTER.projector({ ...layout })).toBe(first);
+  });
+
   describe("the painter's projector memo", () => {
     it("returns the same projector object for the same layout", () => {
       const layout = planCampus(inputFor("triage", 60, VIEWPORT_1280));
@@ -903,15 +894,16 @@ describe("planCampus", () => {
     });
 
     it("builds one projector for every seat on the same layout, not one per seat", () => {
+      // A value-keyed memo must read `layout.cols` (and `rows`) on every
+      // call, hits included - that is the price of not holding a layout
+      // reference on `frozen`. The observable is the BUILD: if any seat
+      // missed the memo it wrote a new projector, and the final call
+      // hands that new object back instead of `before`.
       const layout = planCampus(inputFor("triage", 60, VIEWPORT_1280));
-      const counts = installColsReadCounter(layout);
-      paintAllSeats(layout);
-      // Measured: 1 `cols` read with the memo, 60 without (one per seat on
-      // this `triage(60)` fixture; unfixed red: `expected 60 to be less
-      // than 8`). `buildProjector` is the only seat-path reader of `cols`.
       expect(layout.seats.size).toBeGreaterThan(20);
-      expect(counts.reads).toBeLessThan(8);
-      expect(layout.seats.size).toBeGreaterThan(counts.reads * 10);
+      const before = ISO_PAINTER.projector(layout);
+      paintAllSeats(layout);
+      expect(ISO_PAINTER.projector(layout)).toBe(before);
     });
 
     it("moves every painted seat by exactly the origin delta when rows grow", () => {

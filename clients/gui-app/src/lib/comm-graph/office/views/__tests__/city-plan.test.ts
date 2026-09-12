@@ -40,6 +40,7 @@ import {
   isoRoomsIn,
   isoRectsOverlap,
   readCityFrozen,
+  readIsoIndex,
 } from "@/lib/comm-graph/office/views/isometric/iso-plan-core";
 import {
   ISO_HALF_HEIGHT,
@@ -177,24 +178,6 @@ const CLOSE_UP_WORKING: OfficeDeskState = {
   modelTier: "large",
   accentId: null,
 };
-
-/**
- * Counts `layout.cols` reads. `buildProjector` reads `cols` (and `rows`) and
- * nothing else on the seat path does - measured, not assumed.
- */
-function installColsReadCounter(layout: OfficeLayout): { reads: number } {
-  const counts = { reads: 0 };
-  const cols = layout.cols;
-  Object.defineProperty(layout, "cols", {
-    configurable: true,
-    enumerable: true,
-    get(): number {
-      counts.reads += 1;
-      return cols;
-    },
-  });
-  return counts;
-}
 
 function paintAllSeats(layout: OfficeLayout): void {
   for (const seat of layout.seats.values()) {
@@ -936,16 +919,16 @@ describe("planCity", () => {
     });
 
     it("builds one projector for every seat on the same layout, not one per seat", () => {
+      // A value-keyed memo must read `layout.cols` (and `rows`) on every
+      // call, hits included - that is the price of not holding a layout
+      // reference on `frozen`. The observable is the BUILD: if any seat
+      // missed the memo it wrote a new projector, and the final call
+      // hands that new object back instead of `before`.
       const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
-      const counts = installColsReadCounter(layout);
-      paintAllSeats(layout);
-      // Measured: 1 `cols` read with the memo, 82 without (one per seat on
-      // this `triage(60)` fixture, reserves included; unfixed red:
-      // `expected 82 to be less than 8`). `buildProjector` is the only
-      // seat-path reader of `cols`.
       expect(layout.seats.size).toBeGreaterThan(20);
-      expect(counts.reads).toBeLessThan(8);
-      expect(layout.seats.size).toBeGreaterThan(counts.reads * 10);
+      const before = ISO_PAINTER.projector(layout);
+      paintAllSeats(layout);
+      expect(ISO_PAINTER.projector(layout)).toBe(before);
     });
 
     it("moves every projected point by exactly the origin delta when rows grow", () => {
@@ -964,6 +947,15 @@ describe("planCity", () => {
       expect([...deltas]).toEqual([`${ISO_HALF_WIDTH * k},0`]);
     });
 
+    it("returns the same projector object for a spread that keeps cols, rows and frozen", () => {
+      // The miss above grows `rows`. This spread changes nothing the
+      // projector is built from - same `cols`, `rows`, same frozen - so
+      // the memo hits even though the layout object is new.
+      const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+      const first = ISO_PAINTER.projector(layout);
+      expect(ISO_PAINTER.projector({ ...layout })).toBe(first);
+    });
+
     it("moves every painted seat by exactly the origin delta when rows grow", () => {
       const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
       const k = 3;
@@ -974,6 +966,58 @@ describe("planCity", () => {
       expect(before.length).toBeGreaterThan(0);
       expect(after).toHaveLength(before.length);
       expect(spriteDeltas(before, after)).toEqual([`${ISO_HALF_WIDTH * k},0`]);
+    });
+
+    it("misses the memo when a frozen spread raises stackHeight, and projects the new H", () => {
+      // Same IsoPlanIndex, taller world: growth that raises the stack
+      // without changing cols or rows. The memo is keyed on `stackHeight`
+      // because `H` is captured at build time.
+      const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+      const frozen = readCityFrozen(layout);
+      if (frozen === null) throw new Error("expected City's frozen packing");
+      const before = ISO_PAINTER.projector(layout);
+      const raised = frozen.stackHeight + 8;
+      const taller: OfficeLayout = {
+        ...layout,
+        frozen: { ...frozen, stackHeight: raised },
+      };
+      expect(readIsoIndex(taller)).toBe(readIsoIndex(layout));
+      const after = ISO_PAINTER.projector(taller);
+      expect(after).not.toBe(before);
+      expect(after.bounds.height).toBe(before.bounds.height + 8);
+      const deltas = new Set<string>();
+      for (let col = 0; col <= layout.cols; col += 7) {
+        for (let row = 0; row <= layout.rows; row += 5) {
+          const p = before.project(col, row);
+          const q = after.project(col, row);
+          deltas.add(`${q.x - p.x},${q.y - p.y}`);
+        }
+      }
+      expect([...deltas]).toEqual(["0,8"]);
+    });
+
+    it("misses the memo when a frozen spread replaces storeysBySeatId, and seatLift answers the new map", () => {
+      // Same index, a different storeys map. Identity of the map is the
+      // key: the projector reads through it on every `seatLift`, so a map
+      // mutated in place would still answer for itself - a copy with one
+      // seat raised must miss.
+      const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+      const frozen = readCityFrozen(layout);
+      if (frozen === null) throw new Error("expected City's frozen packing");
+      const seat = [...layout.seats.values()][0];
+      const previous = frozen.storeysBySeatId.get(seat.seatId) ?? 1;
+      const storeys = new Map(frozen.storeysBySeatId);
+      storeys.set(seat.seatId, previous + 1);
+      const before = ISO_PAINTER.projector(layout);
+      const shifted: OfficeLayout = {
+        ...layout,
+        frozen: { ...frozen, storeysBySeatId: storeys },
+      };
+      expect(readIsoIndex(shifted)).toBe(readIsoIndex(layout));
+      const after = ISO_PAINTER.projector(shifted);
+      expect(after).not.toBe(before);
+      expect(after.seatLift(seat)).toBe(cityRoofLift(previous + 1));
+      expect(before.seatLift(seat)).toBe(cityRoofLift(previous));
     });
 
     it("paints the same drawables after the memo is cleared as before", () => {

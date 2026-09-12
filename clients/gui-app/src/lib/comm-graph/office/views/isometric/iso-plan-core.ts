@@ -843,17 +843,80 @@ interface IsoIndexedRoom {
 }
 
 /**
- * A built projector and the layout it answers for, keyed BY THAT LAYOUT.
+ * EVERYTHING A PROJECTOR IS BUILT FROM, as one value.
  *
- * The key is the layout object and not the index holding it, because the two
- * are not the same thing: `{ ...layout, rows: layout.rows + 3 }` is a second
- * layout over the SAME frozen index, and it projects to a different origin -
- * that is exactly what "growth moves the origin" means. A memo that assumed
- * one index meant one layout would hand the grown world the old world's
- * projector and move nothing, which is the one defect this seam can have.
+ * This exists so that "the projector is a function of these and nothing else"
+ * is structural rather than a claim in a comment: the painter builds from an
+ * `IsoProjectorInputs` and cannot reach past it, so the memo below can key on
+ * the same record and be complete by construction.
+ *
+ * The two halves come from different places, and a memo that confused them
+ * would be wrong:
+ *
+ * - `cols` and `rows` are the LAYOUT's, and a spread that grows either is a
+ *   second layout over the same frozen - `{ ...layout, rows: rows + 3 }`
+ *   projects to a different origin, which is what "growth moves the origin"
+ *   means;
+ * - `stackHeight` and `storeys` are the CITY PACKING's, read off the frozen
+ *   that owns the index rather than off the index, so an index reaching a
+ *   second frozen is the same hazard one step down.
+ *
+ * `storeys` is a REFERENCE and `stackHeight` a NUMBER on purpose, because the
+ * projector treats them differently: `stackHeight` is captured when the
+ * projector is built, so a changed one leaves a stale projector; the storeys
+ * map is read through on every `seatLift` call, so only its identity matters
+ * and a map mutated in place still answers for itself.
+ */
+export interface IsoProjectorInputs {
+  readonly cols: number;
+  readonly rows: number;
+  /** `H`: Campus's one constant, or the City packing's tallest stack. */
+  readonly stackHeight: number;
+  /** City's roof heights; `null` on Campus, which lifts nothing off the floor. */
+  readonly storeys: ReadonlyMap<string, number> | null;
+}
+
+export function isoProjectorInputsOf(layout: OfficeLayout): IsoProjectorInputs {
+  const frozen = readCityFrozen(layout);
+  if (frozen === null) {
+    return {
+      cols: layout.cols,
+      rows: layout.rows,
+      stackHeight: ISO_CAMPUS_STACK_HEIGHT,
+      storeys: null,
+    };
+  }
+  return {
+    cols: layout.cols,
+    rows: layout.rows,
+    stackHeight: frozen.stackHeight,
+    storeys: frozen.storeysBySeatId,
+  };
+}
+
+export function isoSameProjectorInputs(
+  left: IsoProjectorInputs,
+  right: IsoProjectorInputs,
+): boolean {
+  return (
+    left.cols === right.cols &&
+    left.rows === right.rows &&
+    left.stackHeight === right.stackHeight &&
+    left.storeys === right.storeys
+  );
+}
+
+/**
+ * A built projector and the inputs it was built from.
+ *
+ * Deliberately NOT the layout it was built for. A memo on `frozen` holding a
+ * layout keeps that whole layout - its seats, floors, rooms and signs - alive
+ * for as long as the frozen lives, and `frozen` is exactly what the next plan
+ * carries forward, so the previous world would outlive its own replacement.
+ * Three numbers and a map that the projector already holds retain nothing.
  */
 export interface IsoProjectorMemo {
-  readonly layout: OfficeLayout;
+  readonly inputs: IsoProjectorInputs;
   readonly projector: OfficeProjector;
 }
 
@@ -870,8 +933,8 @@ export class IsoPlanIndex {
   /** The widest and tallest sprite indexed, in TILES, rounded up. */
   propMargin: number;
   /**
-   * The last projector the painter built through this index, and the layout it
-   * was built for. A memo, filled on first use rather than at build time,
+   * The last projector the painter built through this index, with the inputs
+   * it was built from. A memo, filled on first use rather than at build time,
    * because a plan has no projector to hand and the painter does.
    *
    * `null` is a complete answer - nothing reads this that cannot build one -
