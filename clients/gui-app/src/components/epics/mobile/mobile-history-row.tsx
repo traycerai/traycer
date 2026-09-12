@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { Link } from "@tanstack/react-router";
+import { usePendingDeleteEpicIds } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { Check, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import {
   canDeleteHistoryItem,
@@ -118,7 +119,11 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
   // delete: the tray's delete dispatches the same cloud-backed
   // `epic.batchDelete` the desktop row does, so the two surfaces admit on one
   // rule or the class survives at whichever of them was left out.
-  const canDelete = canDeleteHistoryItem(item, cloudAuthorized);
+  // And refused while its own deletion is still in flight: the confirm closes
+  // at kickoff, so this row is back on screen before the host has answered.
+  const isDeleteInFlight = usePendingDeleteEpicIds().has(item.epicId);
+  const canDelete =
+    canDeleteHistoryItem(item, cloudAuthorized) && !isDeleteInFlight;
   const canRename = canEditHistoryItemTitle(item, cloudAuthorized);
   // `null` for the same reason as the desktop row, and it dispatches through
   // that row's handler: History's local-home readings come from the window's
