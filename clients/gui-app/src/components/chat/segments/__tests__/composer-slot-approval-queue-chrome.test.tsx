@@ -36,6 +36,7 @@ describe("<ComposerSlotApprovalQueue /> chrome", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -50,6 +51,7 @@ describe("<ComposerSlotApprovalQueue /> chrome", () => {
         approvals={[approval({ approvalId: "a", reviewing: null })]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -67,6 +69,7 @@ describe("<ComposerSlotApprovalQueue /> chrome", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 

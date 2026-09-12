@@ -1,426 +1,248 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
-import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
-import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
-import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import { useDeadlineReached } from "@/hooks/use-deadline-reached";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import {
-  createReportIssueContext,
-  type ReportIssueContext,
-} from "@/lib/report-issue-context";
+import { resolvedHostLabel } from "@/hooks/agent/use-host-reachability";
+import { useHostLease } from "@/hooks/host/use-host-lease";
+import { useDeadlineReached } from "@/hooks/use-deadline-reached";
 import {
   hostIsBehindClient,
   HOST_UPDATE_SKEW_COPY,
 } from "@/lib/host/version-skew-copy";
+import {
+  buildReportIssueDraftContext,
+  type ReportIssueDraftContext,
+} from "@/lib/report-issue-draft-context";
 import type { PreSnapshotRetryEvidence } from "@/stores/chats/chat-session-store";
 import {
-  useChatTileHostUpdate,
-  type ChatTileHostUpdate,
-} from "./use-chat-tile-host-update";
+  CHAT_LOAD_DEADLINE_MS,
+  chatLoadAttemptsThisWait,
+  chatLoadWaitBeganAt,
+  chatPreContentElapsed,
+  chatPreContentReport,
+  describeChatPreContent,
+  STALLED_CHAT_LOAD_ELAPSED_MS,
+  type ChatPreContentInput,
+  type ChatPreContentView,
+  type ChatTileFatalDetails,
+  type ChatTilePreContentFrame,
+} from "./chat-pre-content";
+import { useChatTileHostUpdate } from "./use-chat-tile-host-update";
 
-// The chat tile's pre-snapshot states - loading, stalled-but-still-retrying,
-// and fatal-close error - and the gate that picks between them. Kept separate
-// from chat-tile.tsx so Fast Refresh stays intact (components only here; the
-// host-update affordance the panes share is a hook in its own module).
+// The chat tile's body before it has a transcript. Kept separate from
+// chat-tile.tsx so Fast Refresh stays intact: components only here. The arms
+// and their words are pure functions in `chat-pre-content.ts`, and the
+// host-update affordance is a hook in its own module.
 
-/**
- * How many failed attempts before the tile stops presenting the load as
- * ordinary.
- *
- * Three, because two is one retry - the shape of a host restart or a
- * sleep-wake redial, both of which recover on their own - and telling the
- * reader something is wrong there would be wrong more often than right. The
- * third failure is the first one that is a pattern.
- */
-export const STALLED_CHAT_LOAD_ATTEMPTS = 3;
-
-/**
- * ...and how long the wait itself may run before the same pane is shown
- * anyway, counted from when the wait began rather than from any failure.
- *
- * The count alone is not enough, for two different reasons. The reconnect
- * ladder backs off, so a host that refuses slowly - or a dial that hangs
- * before failing - can spend a long time on attempt one. And a host that acks
- * `chat.subscribe` and then goes silent never produces an attempt to count at
- * all, which is the case that would otherwise spin forever.
- *
- * 20s is deliberately more patient than `TILE_CONTENT_BUDGET_MS` (15s): this
- * pane is not terminal and the load may still land on its own, so the cost of
- * waiting slightly longer is a few more seconds of spinner where it was about
- * to succeed.
- */
-export const STALLED_CHAT_LOAD_ELAPSED_MS = 20_000;
-
-/**
- * The fatal-close fields these panes read. A structural subset of
- * `FatalErrorDetails` rather than the type itself: it names exactly what the
- * presentation depends on, so a caller can hand over a whole close and the
- * compiler still holds this component to the three fields it renders.
- */
-export interface ChatTileFatalDetails {
-  readonly code: string;
-  readonly reason: string;
-  readonly upgradeGuidance: IncompatibilityUpgradeGuidance | null;
-}
-
-/**
- * Which pre-snapshot state the tile is in, and the only place that decides.
- *
- * The three arms are ordered by how much they know: a fatal close is the
- * host's own verdict on this attempt, a stall is our own observation - either
- * a streak of attempts the host never answered or simply a wait that has run
- * too long - and the spinner is what remains when the load is still ordinary.
- * Mounted only while `snapshotLoaded` is false, so a tile showing a transcript
- * pays for none of it.
- *
- * It needs a ROUTER above it, which the pre-snapshot path did not before:
- * `useChatTileHostUpdate` reaches `useRouter()` through
- * `useSystemTabModalActions` to offer the Settings jump. Every suite that
- * mounts a real `<ChatTile>` already wraps in `TestRouterProvider`; a new one
- * that renders the loading state without a router fails here, on a hook it
- * never asked for, so it is named rather than left to be rediscovered.
- */
-export function ChatTilePreSnapshotGate(props: {
+/** The session's side of the wait, for a tile that has a handle. */
+export interface ChatTilePreContentSession {
   readonly fatalClose: ChatTileFatalDetails | null;
+  readonly connectionStatus: StreamConnectionStatus;
   readonly retries: PreSnapshotRetryEvidence | null;
+  /**
+   * The store's `preSnapshotReloadStartedAt`: when an automatic `retry()` last
+   * put this session's loaded transcript back into a wait. See
+   * `chatLoadWaitBeganAt`.
+   */
+  readonly reloadStartedAt: number | null;
+  /**
+   * A person's retry: the store's `retryFromUser`, never the automatic
+   * `retry` (see `onChatRetryFromUser` in `chat-tile.tsx`). It can throw. The
+   * store rethrows a stream factory's failure after restoring a `closed`
+   * status, and this body then reads that status as nothing retrying.
+   */
   readonly onRetry: () => void;
-}): ReactNode {
-  const hostUpdate = useChatTileHostUpdate();
-  // The wait starts when this gate first renders for this session (or when
-  // the reader asks for a retry, below), NOT at the first failure - that
-  // distinction is the whole deadline.
-  //
-  // A host can ack `chat.subscribe` and then send neither a snapshot nor a
-  // close, with heartbeat pongs keeping the socket alive underneath. Nothing
-  // ever transitions to `reconnecting`, so `retries` stays null forever, and a
-  // budget anchored on the first failure never arms at all: the tile spins
-  // until the tab is closed. Invariant 6 asks for a deadline on every
-  // host-dependent loading state, and "no evidence yet" is precisely the state
-  // that needs one most, because it is the one nothing else can end.
-  const [waitStartedAt, setWaitStartedAt] = useState(() => Date.now());
-  // A retry from the fatal pane begins a NEW wait. The gate stays mounted
-  // across it (a fatal close before the first snapshot never flips
-  // `snapshotLoaded`, so there is no remount to restart the anchor), and the
-  // time the reader spent looking at the error was not loading time - without
-  // this reset the fresh attempt would be declared stalled on sight once the
-  // error pane had been open for the budget. The streak's own start still
-  // wins below where it is earlier: the store keeps it across a click on
-  // purpose, because the failures are evidence about the host.
-  const handleRetry = (): void => {
-    setWaitStartedAt(Date.now());
-    props.onRetry();
-  };
-  // The streak's own start still wins where it is EARLIER, so a tile mounting
-  // into a stall that is already old inherits it instead of restarting the
-  // budget. `Math.min` rather than a preference for one or the other: whichever
-  // came first is when this wait actually began, and a failure that lands after
-  // this gate mounted does not restart it.
-  const waitBeganAt =
-    props.retries === null
-      ? waitStartedAt
-      : Math.min(props.retries.firstAt, waitStartedAt);
-  // Evaluated HERE rather than in the session store, which records the instant
-  // and never reads a clock to compare against it.
-  const stalledLongEnough = useDeadlineReached(
-    waitBeganAt + STALLED_CHAT_LOAD_ELAPSED_MS,
-  );
-  if (props.fatalClose !== null) {
-    return (
-      <ChatTileError
-        details={props.fatalClose}
-        hostUpdate={hostUpdate}
-        onRetry={handleRetry}
-      />
-    );
-  }
-  // Either arm alone is enough, and the elapsed one no longer requires a
-  // failure to have happened: a wait long enough to give up presenting as
-  // ordinary is a wait long enough whether the host refused three times or
-  // said nothing at all.
-  if (
-    stalledLongEnough ||
-    (props.retries !== null &&
-      props.retries.count >= STALLED_CHAT_LOAD_ATTEMPTS)
-  ) {
-    return (
-      <ChatTileStillTrying
-        retries={props.retries}
-        hostUpdate={hostUpdate}
-        onRetry={handleRetry}
-      />
-    );
-  }
-  return <ChatTileLoading />;
-}
-
-export function ChatTileLoading(): ReactNode {
-  return (
-    <div
-      data-testid="chat-tile-loading"
-      role="status"
-      aria-label="Loading agent"
-      aria-live="polite"
-      className="flex w-full flex-1 items-center justify-center px-6 py-8"
-    >
-      <MutedAgentSpinner />
-      <span className="sr-only">Loading agent</span>
-    </div>
-  );
 }
 
 /**
- * Shown when the host terminates `chat.subscribe` with a fatal error before
- * any snapshot - the chat will never load on this attempt, so we surface the
- * reason and a retry instead of spinning forever. The wire collapses
- * CHAT_INVALID / CHAT_NOT_VISIBLE / etc. into one UNAUTHORIZED code; the
- * human-readable `reason` carries the real cause, so we drop the redundant
- * `CODE: ` prefix for display.
+ * The chat tile's body until its first transcript lands, in both places that
+ * wait is shown: `ChatTile`'s handle-pending branch (`session` is null) and
+ * the session view before the first snapshot. `classifyChatPreContent` picks
+ * the arm, from the one wait `ChatTile` records above both (`frame`), so the
+ * handle arriving restarts no deadline.
  *
- * `HOST_OLDER_THAN_DATA` is the one code with a remedy the reader can act on:
- * the host is serving a chat store a NEWER host wrote, so no retry can help
- * and the only fix is updating that host. It gets the host-update copy and the
- * update jump; every other code keeps the generic failure copy. See
- * {@link describeFatalCopy} for why that is decided from the code and not from
- * the two app versions.
+ * It needs a ROUTER above it: `useChatTileHostUpdate` reaches `useRouter()`
+ * through `useSystemTabModalActions` to offer the Settings jump. Every suite
+ * that mounts a real `<ChatTile>` already wraps in `TestRouterProvider`; a new
+ * one that renders this without a router fails here, on a hook it never asked
+ * for, so it is named rather than left to be rediscovered.
  */
-export function ChatTileError(props: {
-  readonly details: ChatTileFatalDetails;
-  readonly hostUpdate: ChatTileHostUpdate;
-  readonly onRetry: () => void;
-}): ReactNode {
-  const detail = props.details.reason.replace(/^[A-Z_]+:\s*/, "");
-  const copy = describeFatalCopy(props.details);
-  return (
-    <ChatTilePane
-      testId="chat-tile-error"
-      errorCode={props.details.code}
-      settled
-      title={copy.paneTitle}
-      body={detail}
-      hostUpdateLabel={copy.hostUpdateLabel}
-      hostUpdate={props.hostUpdate}
-      onRetry={props.onRetry}
-      reportContext={createReportIssueContext({
-        title: copy.reportTitle,
-        message: "The agent could not be opened.",
-        code: props.details.code,
-        source: "Chat",
-      })}
-    />
-  );
-}
-
-interface ChatTileFatalCopy {
-  readonly paneTitle: string;
-  readonly reportTitle: string;
-  /** The host-update affordance's label, or `null` for no such offer. */
-  readonly hostUpdateLabel: string | null;
-}
-
-/**
- * What a fatal close tells the reader to DO.
- *
- * The host-update arm is decided by the host's own statements and never by
- * relative versions, which is the whole point: `HOST_OLDER_THAN_DATA` says a
- * store on that machine was written by a build newer than the one serving it,
- * so an app at 1.3 talking to a host at 1.4 still needs the HOST to move.
- * Routing this through `describeVersionSkew` answered "Your app is too old"
- * for exactly that case and hid the only action that could help.
- *
- * `CHAT_STORE_UNUSABLE` is the neighbouring code and is deliberately NOT here.
- * The host emits it for a malformed stamp, a shape that disagrees with its
- * stamp, or failed integrity verification, and says so at the emitting site:
- * "the remedy differs - this one needs a repair or a support report, not a
- * host update". Its pane is the generic one, whose Report issue is that
- * report.
- */
-function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
-  if (fatalRemedyIsHostUpdate(details)) {
-    return {
-      paneTitle: HOST_UPDATE_SKEW_COPY.title,
-      reportTitle: HOST_UPDATE_SKEW_COPY.title,
-      hostUpdateLabel: HOST_UPDATE_SKEW_COPY.action,
-    };
-  }
-  return {
-    paneTitle: "This agent could not be opened.",
-    reportTitle: "This agent could not be opened",
-    hostUpdateLabel: null,
-  };
-}
-
-/**
- * Whether the host has said, one way or the other, that IT is the leg that has
- * to move. The code is the authoritative form; the guidance is the general
- * one, and covers a future code this build has never heard of whose host still
- * marked the direction. Neither is a version comparison.
- */
-function fatalRemedyIsHostUpdate(details: ChatTileFatalDetails): boolean {
-  if (details.code === HOST_OLDER_THAN_DATA_FATAL_CODE) return true;
-  const guidance = details.upgradeGuidance;
-  if (guidance === null) return false;
-  return guidance.hostShouldUpgrade && !guidance.clientShouldUpgrade;
-}
-
-/**
- * Shown when the stream keeps failing before the first snapshot ever lands
- * (invariant 6: every host-dependent loading state carries a deadline AND a
- * terminal presentation - this is the deadline for the one wait that has no
- * terminal close to trigger the pane above).
- *
- * NOT a terminal state: the stream is still live or still reconnecting
- * underneath, and a snapshot that finally arrives replaces this with the
- * transcript on its own. A retryable fatal - the shape a host too old for its
- * own chat store answers `chat.subscribe` with, forever - is handled inside
- * the transport as an ordinary drop, so there is no close for this pane to
- * quote. It says what it can see instead: how many attempts have failed, and,
- * when the versions prove the bound host is behind this app, the update that
- * ends it.
- *
- * `retries` is nullable because the two ways a load stalls do not look alike.
- * A host that refuses produces a streak to count; a host that acks and then
- * goes quiet produces NO evidence at all, and that silence is the case the
- * elapsed deadline exists for. The body says only what is true in each.
- */
-export function ChatTileStillTrying(props: {
-  readonly retries: PreSnapshotRetryEvidence | null;
-  readonly hostUpdate: ChatTileHostUpdate;
-  readonly onRetry: () => void;
-}): ReactNode {
-  // Versions are the ONLY evidence available here: there is no close to read a
-  // code or a guidance off, which is what separates this pane from the fatal
-  // one. The predicate answers from the two versions alone, where
-  // `describeVersionSkew`'s own fallback would warn and default to host-update
-  // copy on versions it cannot compare - and a stalled load is not yet an
-  // attributed skew. The WORDS are the shared constant either way, so this pane
-  // and the fatal one above name the remedy identically.
-  const hostIsBehind = hostIsBehindClient({
-    hostAppVersion: props.hostUpdate.hostAppVersion,
-    clientAppVersion: props.hostUpdate.clientAppVersion,
-  });
-  return (
-    <ChatTilePane
-      testId="chat-tile-still-trying"
-      errorCode={props.retries?.code ?? null}
-      // The reconnects continue underneath, so this keeps the spinner it
-      // replaced - and the spinner's live region, so a reader who was told the
-      // agent was loading is told when that stops being the whole story.
-      settled={false}
-      title={
-        hostIsBehind ? HOST_UPDATE_SKEW_COPY.title : "Still opening this agent"
-      }
-      body={describeStall(props.retries)}
-      hostUpdateLabel={hostIsBehind ? HOST_UPDATE_SKEW_COPY.action : null}
-      hostUpdate={props.hostUpdate}
-      onRetry={props.onRetry}
-      reportContext={createReportIssueContext({
-        title: "This agent has not opened",
-        message: "The agent's stream has not delivered this agent's history.",
-        // Null unless the transport surfaced the host's own code, which is
-        // exactly why it is worth carrying into a report when it is there.
-        code: props.retries?.code ?? null,
-        source: "Chat",
-      })}
-    />
-  );
-}
-
-/**
- * The shared body of both panes above. One component because they differ only
- * in their words and their liveness: the same title/detail/actions block,
- * where a wrong-shaped copy of it would be the second place a host-update
- * offer could quietly stop matching the first.
- */
-function ChatTilePane(props: {
+export function ChatTilePreContent(props: {
   readonly testId: string;
-  readonly errorCode: string | null;
-  /**
-   * Whether this attempt is OVER. It decides the two things that follow from
-   * that one fact and must not disagree: a settled failure is announced once
-   * under a warning mark, while a wait still running keeps the spinner and the
-   * spinner's live region so a reader hears the state change.
-   */
-  readonly settled: boolean;
-  readonly title: string;
-  readonly body: string;
-  /**
-   * The host-update affordance's label, or `null` for no such offer. Each
-   * caller decides from its own evidence, and only ever for a HOST that has to
-   * move: "update the app" is a different remedy on a different surface (the
-   * app updater), and this jump would send that reader to a host page with
-   * nothing to fix.
-   */
-  readonly hostUpdateLabel: string | null;
-  readonly hostUpdate: ChatTileHostUpdate;
-  readonly onRetry: () => void;
-  readonly reportContext: ReportIssueContext;
+  readonly frame: ChatTilePreContentFrame;
+  /** `null` while the tile has no session handle: no store, nothing to retry. */
+  readonly session: ChatTilePreContentSession | null;
 }): ReactNode {
+  const { frame, session } = props;
+  const tabHostId = useTabHostId();
+  const lease = useHostLease(tabHostId);
+  const hostUpdate = useChatTileHostUpdate();
+  const retries = session?.retries ?? null;
+  const reloadStartedAt = session?.reloadStartedAt ?? null;
+  const waitBeganAt = chatLoadWaitBeganAt(frame.wait, retries, reloadStartedAt);
+  // Both deadlines hang off the one anchor. They are evaluated here rather
+  // than in the session store, which records instants and never reads a clock
+  // to compare against them.
+  const slow = useDeadlineReached(waitBeganAt + STALLED_CHAT_LOAD_ELAPSED_MS);
+  const overdue = useDeadlineReached(waitBeganAt + CHAT_LOAD_DEADLINE_MS);
+  const input: ChatPreContentInput = {
+    session:
+      session === null
+        ? null
+        : {
+            fatalClose: session.fatalClose,
+            connectionStatus: session.connectionStatus,
+            retries,
+            attemptsThisWait: chatLoadAttemptsThisWait(
+              frame.wait,
+              retries,
+              reloadStartedAt,
+            ),
+          },
+    lease,
+    reachabilityStatus: frame.reachability.status,
+    hostKind: frame.reachability.hostKind,
+    hostLabel: resolvedHostLabel(frame.reachability),
+    // The versions are the only skew evidence a wait has: there is no close
+    // to read a code or a guidance off. The predicate answers from the two
+    // alone, where `describeVersionSkew`'s fallback would warn and offer a
+    // host update on versions it cannot compare - and a slow load is not yet
+    // an attributed skew.
+    hostBehindClient: hostIsBehindClient({
+      hostAppVersion: hostUpdate.hostAppVersion,
+      clientAppVersion: hostUpdate.clientAppVersion,
+    }),
+    elapsed: chatPreContentElapsed(slow, overdue),
+  };
+  const view = describeChatPreContent(input);
+  const onTryAgain =
+    session === null || !view.offersTryAgain
+      ? null
+      : () => {
+          // The new wait first, because the retry can throw. Time spent
+          // reading this body was not loading time.
+          frame.restartWait(retries?.count ?? 0);
+          session.onRetry();
+        };
+  // Built at click time: the elapsed time is only true then, and the draft's
+  // private diagnostics read a support registry that trails render.
+  const report = (): ReportIssueDraftContext =>
+    buildReportIssueDraftContext(
+      chatPreContentReport(input, Date.now() - waitBeganAt),
+      null,
+    );
+  const spinner = view.spinner ? (
+    <AgentSpinningDots
+      className="shrink-0 text-muted-foreground"
+      testId={`${props.testId}-spinner`}
+      variant={undefined}
+    />
+  ) : null;
+  const detail =
+    view.detail === null ? null : (
+      <p className="max-w-md text-ui-sm text-muted-foreground">{view.detail}</p>
+    );
+  const actions = (
+    <ChatTilePreContentActions
+      view={view}
+      onOpenHostUpdate={hostUpdate.openHostUpdate}
+      onTryAgain={onTryAgain}
+      report={report}
+    />
+  );
   return (
     <div
       data-testid={props.testId}
-      data-error-code={props.errorCode === null ? undefined : props.errorCode}
-      role={props.settled ? undefined : "status"}
-      aria-live={props.settled ? undefined : "polite"}
-      className="flex w-full flex-1 items-center justify-center px-6 py-8"
+      data-arm={view.kind}
+      data-has-handle={session === null ? "false" : "true"}
+      data-wait-began-at={waitBeganAt}
+      data-error-code={view.code ?? undefined}
+      // The wait and the verdict share this one element, so it has to stay a
+      // live region ACROSS the swap: dropping the attributes at the moment the
+      // content changes is the one arrangement in which a reader hears
+      // nothing. Escalated rather than kept polite, because a settled failure
+      // is the end of the attempt and there is nothing further to wait for.
+      role={view.settled ? "alert" : "status"}
+      aria-live={view.settled ? "assertive" : "polite"}
+      className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-3 px-6 py-8 text-center"
     >
-      <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-md border border-canvas-border/70 bg-canvas p-4 text-center">
-        <div className="flex items-center gap-2 text-ui-sm font-medium text-foreground">
-          {props.settled ? (
-            <AlertTriangle className="size-4 text-destructive" aria-hidden />
-          ) : (
-            <MutedAgentSpinner />
-          )}
-          <span>{props.title}</span>
+      {view.layout === "card" ? (
+        <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-md border border-canvas-border/70 bg-canvas p-4">
+          <div className="flex items-center gap-2 text-ui-sm font-medium text-foreground">
+            {view.settled ? (
+              <AlertTriangle className="size-4 text-destructive" aria-hidden />
+            ) : (
+              spinner
+            )}
+            <span>{view.headline}</span>
+          </div>
+          {detail}
+          {actions}
         </div>
-        <p className="text-ui-sm text-muted-foreground">{props.body}</p>
-        <div className="flex flex-wrap justify-center gap-2">
-          {props.hostUpdateLabel !== null ? (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              data-testid="chat-tile-host-update"
-              onClick={props.hostUpdate.openHostUpdate}
-            >
-              {props.hostUpdateLabel}
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={props.onRetry}
-          >
-            Retry
-          </Button>
-          <ReportIssueAction
-            context={props.reportContext}
-            presentation="text"
-            className={undefined}
-          />
-        </div>
-      </div>
+      ) : (
+        <>
+          {spinner}
+          <p className="max-w-md text-ui-sm text-muted-foreground">
+            {view.headline}
+          </p>
+          {detail}
+          {actions}
+        </>
+      )}
     </div>
   );
 }
 
-/**
- * What this pane can honestly say happened.
- *
- * With a streak it counts it. Without one there is nothing to count - the
- * stream never dropped - so it reports the silence itself rather than
- * inventing a "0 attempts", which would read as a failure that never occurred
- * and send a reader looking for one.
- */
-function describeStall(retries: PreSnapshotRetryEvidence | null): string {
-  if (retries === null) {
-    return "The host has not sent this agent's messages yet.";
+function ChatTilePreContentActions(props: {
+  readonly view: ChatPreContentView;
+  readonly onOpenHostUpdate: () => void;
+  readonly onTryAgain: (() => void) | null;
+  readonly report: () => ReportIssueDraftContext;
+}): ReactNode {
+  const { view } = props;
+  if (
+    !view.offersHostUpdate &&
+    props.onTryAgain === null &&
+    !view.offersReport
+  ) {
+    return null;
   }
-  return `The host has not opened this agent after ${describeAttempts(retries.count)}.`;
-}
-
-function describeAttempts(count: number): string {
-  return count === 1 ? "1 attempt" : `${count} attempts`;
+  return (
+    <div className="flex flex-wrap justify-center gap-2">
+      {/* Offered only for a HOST that has to move. "Update the app" is a
+          different remedy on a different surface (the app updater), and this
+          jump would send that reader to a host page with nothing to fix. */}
+      {view.offersHostUpdate ? (
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          data-testid="chat-tile-host-update"
+          onClick={props.onOpenHostUpdate}
+        >
+          {HOST_UPDATE_SKEW_COPY.action}
+        </Button>
+      ) : null}
+      {props.onTryAgain === null ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.onTryAgain}
+        >
+          Try again
+        </Button>
+      )}
+      {view.offersReport ? (
+        <ReportIssueAction
+          context={props.report}
+          presentation="text"
+          className={undefined}
+        />
+      ) : null}
+    </div>
+  );
 }

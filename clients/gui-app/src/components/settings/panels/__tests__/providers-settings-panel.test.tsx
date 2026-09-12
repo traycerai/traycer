@@ -3858,10 +3858,8 @@ describe("<ProvidersSettingsPanel />", () => {
     // The browser is the primary path and code paste is a visible fallback,
     // never a numbered second step.
     expect(screen.getByText("Didn't return automatically?")).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: "Open browser again" }),
-    ).toBeDefined();
-    fireEvent.click(screen.getByRole("button", { name: "Open browser again" }));
+    expect(screen.getByRole("button", { name: /Open browser/ })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /Open browser/ }));
     expect(providerMocks.openLink).toHaveBeenCalledWith(
       "https://login.example.test",
       "auth",
@@ -4040,9 +4038,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // waiting on the browser.
     expect(screen.getByText("Checking approval…")).toBeDefined();
     expect(input).toHaveProperty("readOnly", true);
-    expect(
-      screen.queryByRole("button", { name: "Open browser again" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open browser/ })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Cancel sign-in" }),
     ).toHaveProperty("disabled", true);

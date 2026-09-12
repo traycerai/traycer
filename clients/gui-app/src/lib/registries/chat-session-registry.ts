@@ -9,13 +9,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { HostKind } from "@traycer-clients/shared/host-client/host-directory";
 import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostLease } from "@/hooks/host/use-host-lease";
 import {
   authenticatedHostStreamKey,
   authenticatedOwnerIdentityKey,
 } from "@/hooks/host/use-host-stream-client-for";
+import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
@@ -191,6 +194,7 @@ export function useChatSessionHandle(
 ): ChatSessionStoreHandle | null {
   const epicId = useOpenEpicId();
   const hostEntry = useHostDirectoryEntry(hostId);
+  const lease = useHostLease(hostId);
   // Chat is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
   // session store for the session's warm lifetime, NOT by this tile, so closing
   // the tab (tile unmount) no longer `.close()`s the socket and strands the warm
@@ -204,26 +208,38 @@ export function useChatSessionHandle(
   const openTransport = useDurableStreamTransportFactory();
   const queryClient = useQueryClient();
 
-  // Transport identity for the scope key + readiness gate. The test seam is a
-  // clearly separate top-level branch; the production identity is derived by the
-  // shared `authenticatedHostStreamKey` ONLY when the factory is not
+  // Dialability, for the gate below and never for the scope: null with no
+  // request context, no websocket URL, or a CONFIRMED refusal. The test seam
+  // is a clearly separate top-level branch; the production value is derived by
+  // the shared `authenticatedHostStreamKey` ONLY when the factory is not
   // overridden, so tests drive the stream through the override and never touch
   // the real request context.
   const transportKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
       : authenticatedHostStreamKey(globalClient, hostEntry);
-  // Owner-identity discriminator (R-1): `transportKey` deliberately omits a
-  // remote host's public key (dialability, not identity), so a same-host
-  // remote public-key rotation would otherwise leave this session pinned to
-  // a `ChatStreamClient` built against the stale key. Folded into the scope
-  // key alongside `transportKey`, not in place of it, so every existing
-  // rebuild trigger (host swap, user switch, endpoint dialability) is
-  // preserved unchanged.
+  // Owner identity (R-1), which with the host's kind is the whole of the
+  // session's scope: `hostId + userId` for a local host, plus the public key
+  // and relay attach URL for a remote one, so a remote public-key rotation
+  // still rebuilds. Null with no request context or no directory entry.
   const ownerIdentityKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
       : authenticatedOwnerIdentityKey(globalClient, hostEntry);
+  const hostKind = hostEntry?.kind ?? null;
+  // Whether this chat may hold its session. A dialable host may. So may a host
+  // that is coming back, which is what keeps the store and its transcript
+  // through a restart while the owned transport re-dials underneath (it reads
+  // the endpoint live on every dial): this machine's host in its booting
+  // shape, and any host whose lease says `restarting-expected`, a hold the
+  // lease's own bounds end. Everything else that nulls `transportKey` still
+  // releases: identity loss, a missing entry, and a confirmed refusal with no
+  // restart episode vouching for the host.
+  const sessionAllowed =
+    ownerIdentityKey !== null &&
+    (transportKey !== null ||
+      isLocalHostBootingEntry(hostEntry) ||
+      lease?.status === "restarting-expected");
 
   const [handle, setHandle] = useReducer(
     (
@@ -246,21 +262,24 @@ export function useChatSessionHandle(
       setHandle(null);
       return;
     }
-    // `transportKey` is null until there is an authenticated request context and
-    // a dialable host endpoint (or "test-..." when the factory is overridden).
-    // `ownerIdentityKey` is null under that same gate (both derive from the
-    // same `globalClient` + `hostEntry`), so this never masks a ready session
-    // behind a not-yet-known identity.
-    if (transportKey === null || ownerIdentityKey === null) {
+    // See `sessionAllowed`, which also narrows `ownerIdentityKey` to non-null
+    // for the scope below.
+    if (!sessionAllowed) {
       setHandle(null);
       return;
     }
+    // Identity only. The websocket URL and the host version stay out: both
+    // change when a host restarts, and a scope that moved with them disposed
+    // the store and its transcript on every restart (the "Still opening this
+    // agent" incident). A version change is safe to keep a store across: the
+    // transport renegotiates on every subscribe, and a legacy snapshot resets
+    // windowed state atomically.
     const scopeKey = chatSessionScopeKey({
       epicId,
       chatId,
       userId,
       hostId,
-      transportKey,
+      hostKind,
       ownerIdentityKey,
     });
 
@@ -363,6 +382,14 @@ export function useChatSessionHandle(
               wakeProbe: null,
             });
           },
+          // The same socket the wake above reaches, asked instead whether it
+          // is worth waking. `?? false` covers both "no transport of ours"
+          // (the `streamClientFactoryOverride` path never assigns
+          // `boundStreamClient`) and "this transport does not measure
+          // silence" (the local `WsStreamClient` leaves the member absent):
+          // neither is evidence of a dead session, so neither escalates.
+          transportSilentFor: (ms) =>
+            boundStreamClient?.isSilentFor?.(ms) ?? false,
         }),
     );
     acquiredHandle = next;
@@ -374,16 +401,17 @@ export function useChatSessionHandle(
     };
     // `openTransport` is referentially stable and reads its deps (auth, runner
     // host, credential source, directory) live, so the recovery wiring is never
-    // a stale-capture risk and does not belong in this array. `transportKey`
-    // already encodes user + host + endpoint identity; `ownerIdentityKey`
-    // additionally discriminates a remote host's public-key rotation (R-1).
-    // `queryClient` is the stable TanStack client used by the
-    // provider-reauth invalidation.
+    // a stale-capture risk and does not belong in this array. `transportKey` is
+    // deliberately absent: it moves with the endpoint, and only its share of
+    // `sessionAllowed` may end the session. `ownerIdentityKey` discriminates a
+    // remote host's public-key rotation (R-1). `queryClient` is the stable
+    // TanStack client used by the provider-reauth invalidation.
   }, [
     chatId,
     hostId,
+    hostKind,
     epicId,
-    transportKey,
+    sessionAllowed,
     ownerIdentityKey,
     userId,
     enabled,
@@ -457,7 +485,7 @@ function chatSessionScopeKey(input: {
   readonly chatId: string;
   readonly userId: string | null;
   readonly hostId: string;
-  readonly transportKey: string;
+  readonly hostKind: HostKind | null;
   readonly ownerIdentityKey: string;
 }): string {
   return [
@@ -465,7 +493,8 @@ function chatSessionScopeKey(input: {
     input.chatId,
     input.userId ?? "anonymous",
     input.hostId,
-    input.transportKey,
+    // `null` only on the test-factory seam, which binds no directory entry.
+    input.hostKind ?? "none",
     input.ownerIdentityKey,
   ].join(CHAT_SESSION_SCOPE_SEPARATOR);
 }

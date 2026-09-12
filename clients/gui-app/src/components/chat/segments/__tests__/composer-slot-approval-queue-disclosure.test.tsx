@@ -41,6 +41,7 @@ describe("<ComposerSlotApprovalQueue /> disclosure ladder", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 

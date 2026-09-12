@@ -35,6 +35,7 @@ describe("<ComposerSlotApprovalQueue /> attended wait line", () => {
         approvals={[approval({ reviewing: null, requestedAt })]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -49,6 +50,7 @@ describe("<ComposerSlotApprovalQueue /> attended wait line", () => {
         approvals={[approval({ reviewing: null, requestedAt: Date.now() })]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -63,6 +65,7 @@ describe("<ComposerSlotApprovalQueue /> attended wait line", () => {
         approvals={[approval({ reviewing: "reviewing", requestedAt })]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 

@@ -159,6 +159,14 @@ export interface StartPageWallpaper {
    * image that is gone.
    */
   readonly name: string | null;
+  /**
+   * The curated catalog id this image came from, or `null` for a file the
+   * user chose themselves. Only the gallery reads it - to ring the tile the
+   * stored image came from - so an id whose entry has since left the manifest
+   * simply rings nothing, and `name` keeps showing the title it was applied
+   * under.
+   */
+  readonly curatedId: string | null;
 }
 
 export interface SettingsState {
@@ -714,6 +722,8 @@ function parseStartPageWallpaper(value: unknown): StartPageWallpaper | null {
     // Untrusted input (a chosen file's name): cap its length the way theme
     // names and other user-authored strings are capped elsewhere.
     name: typeof value.name === "string" ? value.name.slice(0, 256) : null,
+    curatedId:
+      typeof value.curatedId === "string" ? value.curatedId.slice(0, 64) : null,
   };
 }
 

@@ -3,7 +3,12 @@ import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transc
 import {
   coldJumpOrdinal,
   hostLocatorForJumpTarget,
+  isComposerPendingApproval,
+  isStreamingInterviewBlock,
+  landingBlockIdForJumpTarget,
+  planSegmentIdForApproval,
   receiptAnchorBlockId,
+  resolveApprovalJumpLanding,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import type {
   ChatMessage,
@@ -81,6 +86,10 @@ function renderedRow(input: {
 function toolSegment(input: {
   readonly id: string;
   readonly agentMessageReceipt: { readonly messageId: string } | null;
+  readonly agentMessageSend?: {
+    readonly receiverAgentId: string;
+    readonly message: string;
+  };
 }): ToolSegment {
   return {
     id: input.id,
@@ -90,7 +99,15 @@ function toolSegment(input: {
     inputDetail: null,
     taskTodoItems: null,
     error: null,
-    agentMessageSend: null,
+    agentMessageSend:
+      input.agentMessageSend === undefined
+        ? null
+        : {
+            receiverAgentId: input.agentMessageSend.receiverAgentId,
+            message: input.agentMessageSend.message,
+            responseId: null,
+            expectReply: false,
+          },
     managedCommand: null,
     agentMessageReceipt:
       input.agentMessageReceipt === null
@@ -163,6 +180,298 @@ function messageWithSegments(
   };
 }
 
+describe("isStreamingInterviewBlock", () => {
+  it("is true only for a streaming interview with that block id", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        {
+          id: "q1:interview",
+          kind: "interview",
+          status: "streaming",
+          toolName: "AskUserQuestion",
+          questions: [],
+          answers: [],
+          draftAnswers: [],
+          outcome: null,
+          settlement: null,
+          error: null,
+          delivery: null,
+          forkedWithoutAnswer: false,
+        },
+      ]),
+    ];
+
+    expect(isStreamingInterviewBlock(messages, "q1:interview")).toBe(true);
+    expect(isStreamingInterviewBlock(messages, "other")).toBe(false);
+  });
+});
+
+describe("hostLocatorForJumpTarget: a pending-interview `block` target", () => {
+  it("does not ask the host when the composer already holds that interview", () => {
+    const locator = hostLocatorForJumpTarget({
+      target: { kind: "block", blockId: "q1:interview" },
+      transcriptWindow: windowNaming(["assistant:turn-1"]),
+      messages: [],
+      pendingInterviewBlockId: "q1:interview",
+    });
+
+    expect(locator).toBeNull();
+  });
+
+  it("does not ask the host when the block is a streaming interview segment", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        {
+          id: "q1:interview",
+          kind: "interview",
+          status: "streaming",
+          toolName: "AskUserQuestion",
+          questions: [],
+          answers: [],
+          draftAnswers: [],
+          outcome: null,
+          settlement: null,
+          error: null,
+          delivery: null,
+          forkedWithoutAnswer: false,
+        },
+      ]),
+    ];
+
+    const locator = hostLocatorForJumpTarget({
+      target: { kind: "block", blockId: "q1:interview" },
+      transcriptWindow: windowNaming(["m-1"]),
+      messages,
+      pendingInterviewBlockId: null,
+    });
+
+    expect(locator).toBeNull();
+  });
+
+  it("asks the host for a cold non-interview block", () => {
+    const locator = hostLocatorForJumpTarget({
+      target: { kind: "block", blockId: "tool-1" },
+      transcriptWindow: windowNaming(["assistant:turn-1"]),
+      messages: [],
+      pendingInterviewBlockId: "q1:interview",
+    });
+
+    expect(locator).toEqual({ kind: "block", blockId: "tool-1" });
+  });
+});
+
+describe("isComposerPendingApproval", () => {
+  it("matches tool approvals in the composer queue and ignores plan approvals", () => {
+    const tool = {
+      approvalId: "tool-1",
+      toolName: "Bash",
+      description: "run",
+      input: null,
+      requestedAt: 1,
+      kind: "tool" as const,
+      planId: null,
+      actions: [],
+      reason: null,
+      reviewing: null,
+    };
+    const plan = {
+      approvalId: "plan-1",
+      toolName: "plan",
+      description: "implement",
+      input: null,
+      requestedAt: 1,
+      kind: "plan" as const,
+      planId: "p1",
+      actions: [],
+      reason: null,
+      reviewing: null,
+    };
+    expect(isComposerPendingApproval([tool, plan], [], "tool-1")).toBe(true);
+    expect(isComposerPendingApproval([tool, plan], [], "plan-1")).toBe(false);
+  });
+
+  it("matches a pending file-edit approval", () => {
+    const fileEdit = {
+      approvalId: "file-1",
+      toolName: "Edit",
+      description: "edit",
+      paths: ["a.ts"],
+      operation: "edit" as const,
+      input: null,
+      requestedAt: 1,
+    };
+    expect(isComposerPendingApproval([], [fileEdit], "file-1")).toBe(true);
+    expect(isComposerPendingApproval([], [fileEdit], "missing")).toBe(false);
+  });
+});
+
+describe("planSegmentIdForApproval", () => {
+  it("returns the plan segment id that carries the approval", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        {
+          id: "plan-block",
+          kind: "plan",
+          planId: "p1",
+          planStatus: "awaiting_approval",
+          harnessId: "claude",
+          source: {
+            harnessId: "claude",
+            sessionId: "s1",
+            turnId: "t1",
+            kind: "approval-plan",
+          },
+          title: "Plan",
+          summary: null,
+          markdownPreview: "",
+          fullContentRef: null,
+          steps: [],
+          actions: [],
+          approvalId: "approval-plan",
+          supersededByPlanId: null,
+          isStreaming: false,
+          contentIdentity: "id",
+        },
+      ]),
+    ];
+    expect(planSegmentIdForApproval(messages, "approval-plan")).toBe(
+      "plan-block",
+    );
+    expect(planSegmentIdForApproval(messages, "other")).toBeNull();
+  });
+});
+
+describe("resolveApprovalJumpLanding", () => {
+  const toolApproval = {
+    approvalId: "tool-1",
+    toolName: "Bash",
+    description: "run",
+    input: null,
+    requestedAt: 1,
+    kind: "tool" as const,
+    planId: null,
+    actions: [],
+    reason: null,
+    reviewing: null,
+  };
+  const fileEdit = {
+    approvalId: "file-1",
+    toolName: "Edit",
+    description: "edit",
+    paths: ["a.ts"],
+    operation: "edit" as const,
+    input: null,
+    requestedAt: 1,
+  };
+
+  it("lands on the composer for a visible tool or file-edit approval", () => {
+    expect(
+      resolveApprovalJumpLanding({
+        approvalId: "tool-1",
+        pendingApprovals: [toolApproval],
+        pendingFileEditApprovals: [],
+        messages: [],
+      }),
+    ).toEqual({ kind: "composer", approvalId: "tool-1" });
+    expect(
+      resolveApprovalJumpLanding({
+        approvalId: "file-1",
+        pendingApprovals: [],
+        pendingFileEditApprovals: [fileEdit],
+        messages: [],
+      }),
+    ).toEqual({ kind: "composer", approvalId: "file-1" });
+  });
+
+  it("lands on the inline plan card when the approval is not in the composer queue", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        {
+          id: "plan-block",
+          kind: "plan",
+          planId: "p1",
+          planStatus: "awaiting_approval",
+          harnessId: "claude",
+          source: {
+            harnessId: "claude",
+            sessionId: "s1",
+            turnId: "t1",
+            kind: "approval-plan",
+          },
+          title: "Plan",
+          summary: null,
+          markdownPreview: "",
+          fullContentRef: null,
+          steps: [],
+          actions: [],
+          approvalId: "approval-plan",
+          supersededByPlanId: null,
+          isStreaming: false,
+          contentIdentity: "id",
+        },
+      ]),
+    ];
+    expect(
+      resolveApprovalJumpLanding({
+        approvalId: "approval-plan",
+        pendingApprovals: [
+          {
+            approvalId: "approval-plan",
+            toolName: "plan",
+            description: "implement",
+            input: null,
+            requestedAt: 1,
+            kind: "plan",
+            planId: "p1",
+            actions: [],
+            reason: null,
+            reviewing: null,
+          },
+        ],
+        pendingFileEditApprovals: [],
+        messages,
+      }),
+    ).toEqual({ kind: "plan", blockId: "plan-block" });
+  });
+
+  it("holds when the approval is not in the composer queue and no plan card exists", () => {
+    expect(
+      resolveApprovalJumpLanding({
+        approvalId: "missing",
+        pendingApprovals: [toolApproval],
+        pendingFileEditApprovals: [],
+        messages: [],
+      }),
+    ).toEqual({ kind: "hold" });
+  });
+});
+
+describe("landingBlockIdForJumpTarget: sent-message", () => {
+  it("resolves the send tool's block id from receiver and verbatim text", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        toolSegment({
+          id: "send-block",
+          agentMessageReceipt: null,
+          agentMessageSend: {
+            receiverAgentId: "receiver-1",
+            message: "hello there",
+          },
+        }),
+      ]),
+    ];
+
+    expect(
+      landingBlockIdForJumpTarget(messages, {
+        kind: "sent-message",
+        receiverAgentId: "receiver-1",
+        messageText: "hello there",
+        timestamp: 0,
+      }),
+    ).toBe("send-block");
+  });
+});
+
 describe("receiptAnchorBlockId", () => {
   it("finds a top-level tool segment whose receipt names the message", () => {
     const messages = [
@@ -216,6 +525,7 @@ describe("hostLocatorForJumpTarget: a `receipt` target", () => {
       target: { kind: "receipt", messageId: "m-received" },
       transcriptWindow: windowNaming(["m-1"]),
       messages: [],
+      pendingInterviewBlockId: null,
     });
 
     expect(locator).toEqual({ kind: "receipt", messageId: "m-received" });
@@ -235,6 +545,7 @@ describe("hostLocatorForJumpTarget: a `receipt` target", () => {
       target: { kind: "receipt", messageId: "m-received" },
       transcriptWindow: windowNaming(["m-1"]),
       messages,
+      pendingInterviewBlockId: null,
     });
 
     expect(locator).toBeNull();
@@ -245,9 +556,96 @@ describe("hostLocatorForJumpTarget: a `receipt` target", () => {
       target: { kind: "receipt", messageId: "m-received" },
       transcriptWindow: null,
       messages: [],
+      pendingInterviewBlockId: null,
     });
 
     expect(locator).toBeNull();
+  });
+});
+
+describe("an `approval` jump target", () => {
+  it("does not ask the host when the approval is already in the composer queue", () => {
+    expect(
+      hostLocatorForJumpTarget({
+        target: { kind: "approval", approvalId: "tool-1" },
+        transcriptWindow: windowNaming(["m-1"]),
+        messages: [],
+        pendingInterviewBlockId: null,
+        pendingApprovals: [
+          {
+            approvalId: "tool-1",
+            toolName: "Bash",
+            description: "run",
+            input: null,
+            requestedAt: 1,
+            kind: "tool",
+            planId: null,
+            actions: [],
+            reason: null,
+            reviewing: null,
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("does not ask the host when the inline plan card is already rendered", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        {
+          id: "plan-block",
+          kind: "plan",
+          planId: "p1",
+          planStatus: "awaiting_approval",
+          harnessId: "claude",
+          source: {
+            harnessId: "claude",
+            sessionId: "s1",
+            turnId: "t1",
+            kind: "approval-plan",
+          },
+          title: "Plan",
+          summary: null,
+          markdownPreview: "",
+          fullContentRef: null,
+          steps: [],
+          actions: [],
+          approvalId: "approval-plan",
+          supersededByPlanId: null,
+          isStreaming: false,
+          contentIdentity: "id",
+        },
+      ]),
+    ];
+    expect(
+      hostLocatorForJumpTarget({
+        target: { kind: "approval", approvalId: "approval-plan" },
+        transcriptWindow: windowNaming(["m-1"]),
+        messages,
+        pendingInterviewBlockId: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("asks the host to locate a cold inline plan approval", () => {
+    expect(
+      hostLocatorForJumpTarget({
+        target: { kind: "approval", approvalId: "approval-plan" },
+        transcriptWindow: windowNaming(["m-1"]),
+        messages: [],
+        pendingInterviewBlockId: null,
+      }),
+    ).toEqual({ kind: "approval", approvalId: "approval-plan" });
+  });
+
+  it("uses the host's ordinal for a cold plan card", () => {
+    expect(
+      coldJumpOrdinal(
+        windowNaming(["m-1"]),
+        { kind: "approval", approvalId: "a-1" },
+        4,
+      ),
+    ).toBe(4);
   });
 });
 
@@ -279,6 +677,7 @@ describe("hostLocatorForJumpTarget: a `message` target", () => {
       target: { kind: "message", messageId: "m-turn" },
       transcriptWindow: windowNaming(["m-1", "assistant:turn-1"]),
       messages: [],
+      pendingInterviewBlockId: null,
     });
 
     expect(locator).toEqual({ kind: "message", messageId: "m-turn" });
@@ -291,6 +690,7 @@ describe("hostLocatorForJumpTarget: a `message` target", () => {
       target: { kind: "message", messageId: "m-1" },
       transcriptWindow: windowNaming(["m-1", "assistant:turn-1"]),
       messages: [],
+      pendingInterviewBlockId: null,
     });
 
     expect(locator).toBeNull();
@@ -303,6 +703,7 @@ describe("hostLocatorForJumpTarget: a `message` target", () => {
       messages: [
         renderedRow({ id: "assistant:turn-1", persistentMessageId: "m-turn" }),
       ],
+      pendingInterviewBlockId: null,
     });
 
     expect(locator).toBeNull();
@@ -313,6 +714,7 @@ describe("hostLocatorForJumpTarget: a `message` target", () => {
       target: { kind: "message", messageId: "m-turn" },
       transcriptWindow: null,
       messages: [],
+      pendingInterviewBlockId: null,
     });
 
     expect(locator).toBeNull();

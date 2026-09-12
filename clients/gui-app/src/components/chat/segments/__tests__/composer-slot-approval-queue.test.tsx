@@ -36,6 +36,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
         approvals={[approval({ reviewing: "checking" })]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -51,6 +52,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
         approvals={[approval({ reviewing: "reviewing" })]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -69,6 +71,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
         approvals={[approval({ reviewing: null })]}
         canAct
         onDecision={onDecision}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -94,6 +97,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -116,6 +120,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -146,6 +151,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
         approvals={[reviewing, actionableA, actionableB]}
         canAct
         onDecision={onDecision}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -168,6 +174,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -185,6 +192,7 @@ describe("<ComposerSlotApprovalQueue />", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -201,11 +209,74 @@ describe("<ComposerSlotApprovalQueue />", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
     expect(screen.queryByText(/pending$/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Approve all/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Deny all/ })).toBeNull();
+  });
+});
+
+describe("ComposerSlotApprovalQueue navigation highlight", () => {
+  it("flashes only the matching pending approval row", () => {
+    render(
+      <ComposerSlotApprovalQueue
+        approvals={[
+          approval({ approvalId: "approval-a" }),
+          approval({ approvalId: "approval-b" }),
+        ]}
+        canAct
+        onDecision={vi.fn()}
+        highlightedApprovalId="approval-b"
+      />,
+    );
+
+    expect(
+      screen
+        .getByTestId("approval-prompt")
+        .querySelector('[data-approval-id="approval-a"]')
+        ?.getAttribute("data-navigation-highlighted"),
+    ).toBeNull();
+    expect(
+      screen
+        .getByTestId("approval-prompt")
+        .querySelector('[data-approval-id="approval-b"]')
+        ?.getAttribute("data-navigation-highlighted"),
+    ).toBe("true");
+  });
+
+  it("stamps a new highlight generation on a repeated flash of the same row", () => {
+    const { rerender } = render(
+      <ComposerSlotApprovalQueue
+        approvals={[approval({ approvalId: "approval-a" })]}
+        canAct
+        onDecision={vi.fn()}
+        highlightedApprovalId="approval-a"
+        highlightedGeneration={1}
+      />,
+    );
+    expect(
+      screen
+        .getByTestId("approval-prompt")
+        .querySelector('[data-approval-id="approval-a"]')
+        ?.getAttribute("data-navigation-highlight-generation"),
+    ).toBe("1");
+    rerender(
+      <ComposerSlotApprovalQueue
+        approvals={[approval({ approvalId: "approval-a" })]}
+        canAct
+        onDecision={vi.fn()}
+        highlightedApprovalId="approval-a"
+        highlightedGeneration={2}
+      />,
+    );
+    expect(
+      screen
+        .getByTestId("approval-prompt")
+        .querySelector('[data-approval-id="approval-a"]')
+        ?.getAttribute("data-navigation-highlight-generation"),
+    ).toBe("2");
   });
 });

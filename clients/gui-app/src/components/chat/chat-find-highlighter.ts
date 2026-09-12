@@ -44,6 +44,33 @@ export function queryMountedChatFindUnit(
   return null;
 }
 
+/**
+ * Resolve a mounted transcript row by comparing `dataset.messageId`, not an
+ * attribute selector: persisted ids can carry quotes/brackets that would
+ * break interpolation, and jsdom does not implement `CSS.escape`.
+ */
+export function queryMountedChatMessageRoot(
+  scroller: ParentNode,
+  messageId: string,
+): HTMLElement | null {
+  for (const row of scroller.querySelectorAll<HTMLElement>(
+    "[data-message-id]",
+  )) {
+    if (row.dataset.messageId === messageId) return row;
+  }
+  return null;
+}
+
+export function queryMountedChatBlock(
+  root: ParentNode,
+  blockId: string,
+): HTMLElement | null {
+  for (const element of root.querySelectorAll<HTMLElement>("[data-block-id]")) {
+    if (element.dataset.blockId === blockId) return element;
+  }
+  return null;
+}
+
 export class ChatFindHighlighter {
   private readonly names: HighlightNames;
   private styleElement: HTMLStyleElement | null = null;

@@ -41,6 +41,7 @@ describe("<ComposerSlotApprovalQueue /> judge-unavailable human line", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 
@@ -66,6 +67,7 @@ describe("<ComposerSlotApprovalQueue /> judge-unavailable human line", () => {
         ]}
         canAct
         onDecision={vi.fn()}
+        highlightedApprovalId={null}
       />,
     );
 

@@ -48,7 +48,7 @@ export class FakeStreamSession implements IStreamSession {
    */
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
-    if (this.status === "open") handler("open", null);
+    if (this.status === "open") handler("open", null, null);
   }
 
   requestReconnect(): void {}
@@ -63,21 +63,25 @@ export class FakeStreamSession implements IStreamSession {
 
   emitStatus(status: StreamStatus): void {
     this.status = status;
-    this.statusHandler?.(status, null);
+    this.statusHandler?.(status, null, null);
   }
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
   emitFatal(reason: string): void {
     this.status = "closed";
-    this.statusHandler?.("closed", {
-      kind: "fatalError",
-      details: {
-        code: "UNAUTHORIZED",
-        reason,
-        incompatibleMethods: null,
-        upgradeGuidance: null,
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
       },
-    });
+      null,
+    );
   }
 
   /**
@@ -222,6 +226,17 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
 
   isReady(): boolean {
     return true;
+  }
+
+  /**
+   * What {@link isSilentFor} answers. Mutable so a suite can drive BOTH arms of
+   * a silence gate off one fake - the escalation and the plain path - without
+   * a second client class.
+   */
+  silentFor = false;
+
+  isSilentFor(): boolean {
+    return this.silentFor;
   }
 
   getMethodSupport(): "unknown" {

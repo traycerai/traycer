@@ -68,7 +68,12 @@ import {
 import { RecordingTransportEvidence } from "../../host-selection/__tests__/recording-transport-evidence";
 import { HOST_RESTARTING_FATAL_CODE } from "@traycer/protocol/framework/index";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
-import { STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE } from "@traycer/protocol/framework/stream-ws-protocol";
+import {
+  SESSION_CLOSED_FATAL_CODE,
+  SESSION_NOT_READY_FATAL_CODE,
+  STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
+} from "@traycer/protocol/framework/stream-ws-protocol";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 
 /**
  * StubWebSocket - fully scriptable `StreamWebSocketLike` mirror of the
@@ -2220,6 +2225,8 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(2);
     completeHandshake(sockets[1].socket);
     expect(recovered).toHaveBeenCalledTimes(1);
+    // A new socket: the host may have restarted behind it.
+    expect(recovered).toHaveBeenCalledWith("reconnect");
 
     session.close();
     vi.useRealTimers();
@@ -2259,6 +2266,8 @@ describe("WsStreamClient", () => {
     vi.advanceTimersByTime(10_000);
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).toHaveBeenCalledTimes(1);
+    // The socket survived, so the same process answered: a stall.
+    expect(recovered).toHaveBeenCalledWith("stall");
     expect(socket.closed).toBeNull();
 
     session.close();
@@ -2336,6 +2345,7 @@ describe("WsStreamClient", () => {
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
 
     expect(recovered).toHaveBeenCalledTimes(1);
+    expect(recovered).toHaveBeenCalledWith("stall");
     expect(socket.closed).toBeNull();
 
     session.close();
@@ -3680,6 +3690,149 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(sockets).toHaveLength(2);
     session.close();
   });
+
+  /**
+   * The frame a host released before the chat session's lifecycle codes were
+   * flagged sends: a plain fatal, no `retryable`. The incident's Try again
+   * produced exactly this (`SESSION_NOT_READY` on a subscribe that had joined
+   * a session the host then tore down), and the client went terminal on a
+   * chat its next attempt would have opened.
+   */
+  function lifecycleRefusal(code: string): FatalErrorDetails {
+    return {
+      code,
+      reason: `${code}: Chat session is not ready`,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+  }
+
+  interface RecordedTransition {
+    readonly status: StreamConnectionStatus;
+    readonly reason: StreamCloseReason | null;
+    readonly retryCause: FatalErrorDetails | null;
+  }
+
+  it.each([
+    {
+      label: SESSION_NOT_READY_FATAL_CODE,
+      details: lifecycleRefusal(SESSION_NOT_READY_FATAL_CODE),
+    },
+    {
+      label: SESSION_CLOSED_FATAL_CODE,
+      details: lifecycleRefusal(SESSION_CLOSED_FATAL_CODE),
+    },
+    {
+      label: "a retryable CHAT_OPEN_FAILED",
+      details: {
+        code: "CHAT_OPEN_FAILED",
+        reason: "CHAT_OPEN_FAILED: host refused to open this chat",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    },
+  ])(
+    "reconnects chat.subscribe on $label, handing the host's details to the listener as the retry cause",
+    async ({ details }) => {
+      const { factory, sockets } = makeFactory();
+      const revalidator = makeAuthRevalidator(["rotated"]);
+      const client = makeAuthClient(factory, revalidator.auth, 5);
+      const transitions: RecordedTransition[] = [];
+      const session = client.subscribe("chat.subscribe", {
+        epicId: "epic-1",
+        chatId: "chat-1",
+      });
+      session.onStatusChange((status, reason, retryCause) => {
+        transitions.push({ status, reason, retryCause });
+      });
+
+      await flush();
+      completeHandshake(sockets[0].socket);
+      sockets[0].socket.fireText({ kind: "fatalError", details });
+      await nthSocket(sockets, 1);
+
+      // A reconnect, never a close, and credential recovery never engaged.
+      // No `connecting`: the session dials from its constructor, before a
+      // listener can attach.
+      expect(revalidator.calls.count).toBe(0);
+      expect(transitions.map((transition) => transition.status)).toEqual([
+        "open",
+        "reconnecting",
+      ]);
+      // The details ride the reconnect as its retry cause, and its close
+      // reason stays null: a reader that checks `reason.kind` without the
+      // status sees exactly what it saw before.
+      expect(transitions[1]).toEqual({
+        status: "reconnecting",
+        reason: null,
+        retryCause: details,
+      });
+      session.close();
+    },
+  );
+
+  it("gives a two-parameter listener the same transitions, with no close reason on the reconnect", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeAuthRevalidator(["rotated"]);
+    const client = makeAuthClient(factory, revalidator.auth, 5);
+    const seen: Array<
+      readonly [StreamConnectionStatus, StreamCloseReason | null]
+    > = [];
+    const session = client.subscribe("chat.subscribe", {
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    // Written the way every listener before `retryCause` was.
+    session.onStatusChange((status, reason) => {
+      seen.push([status, reason]);
+    });
+
+    await flush();
+    completeHandshake(sockets[0].socket);
+    sockets[0].socket.fireText({
+      kind: "fatalError",
+      details: lifecycleRefusal(SESSION_NOT_READY_FATAL_CODE),
+    });
+    await nthSocket(sockets, 1);
+
+    expect(seen).toEqual([
+      ["open", null],
+      ["reconnecting", null],
+    ]);
+    session.close();
+  });
+
+  it.each([SESSION_NOT_READY_FATAL_CODE, SESSION_CLOSED_FATAL_CODE])(
+    "keeps %s terminal on a method other than chat.subscribe",
+    async (code) => {
+      const { factory, sockets } = makeFactory();
+      const revalidator = makeAuthRevalidator(["rotated"]);
+      const client = makeAuthClient(factory, revalidator.auth, 5);
+      const transitions: RecordedTransition[] = [];
+      const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+      session.onStatusChange((status, reason, retryCause) => {
+        transitions.push({ status, reason, retryCause });
+      });
+
+      await flush();
+      completeHandshake(sockets[0].socket);
+      sockets[0].socket.fireText({
+        kind: "fatalError",
+        details: lifecycleRefusal(code),
+      });
+      // Elapsed time is the assertion: nothing redials a terminal close.
+      await wait(50);
+
+      expect(sockets).toHaveLength(1);
+      expect(transitions.at(-1)).toEqual({
+        status: "closed",
+        reason: { kind: "fatalError", details: lifecycleRefusal(code) },
+        retryCause: null,
+      });
+      session.close();
+    },
+  );
 
   it("proves the real host.notifications.feed.subscribe retry sequence: retryable snapshot failure skips auth recovery, redials, and accepts the replacement snapshot", async () => {
     const { factory, sockets } = makeFactory();
@@ -5735,6 +5888,8 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
 
     stub.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).toHaveBeenCalledTimes(1);
+    // The probe went out on the socket that survived the sleep: a stall.
+    expect(recovered).toHaveBeenCalledWith("stall");
     expect(stub.closed).toBeNull();
 
     // Healthy-cadence pongs after the probe settled stay silent.

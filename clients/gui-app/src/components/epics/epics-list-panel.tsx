@@ -50,7 +50,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import {
+  useEpicBatchDelete,
+  usePendingDeleteEpicIds,
+} from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
@@ -162,6 +165,7 @@ const PRESERVED_ORPHAN_DELETE_TOOLTIP =
 // credential, which no amount of waiting fixes - only signing in again does.
 // "Once it is" covers both the transient recovery and the re-sign-in without
 // promising either.
+const DELETE_IN_FLIGHT_TOOLTIP = "This task is being deleted.";
 const UNVERIFIED_SESSION_DELETE_TOOLTIP =
   "Your sign-in couldn't be confirmed. Deleting this task will work again once it is.";
 const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
@@ -525,12 +529,22 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     return item === undefined ? null : historyItemDisplayTitle(item);
   }, [items, sweepEpicIds]);
+  // A Task whose deletion is still in flight is not deletable AGAIN: the
+  // dialog closes at kickoff, so its row renders with its controls back while
+  // the host is still working, and nothing on the wire deduplicates a second
+  // `epic.batchDelete` for the same id. Excluded here so the row action, the
+  // bulk selection and the confirm re-filter all refuse it from one set.
+  const pendingDeleteEpicIds = usePendingDeleteEpicIds();
   const selectableItemIds = useMemo(
     () =>
       items
-        .filter((item) => canDeleteHistoryItem(item, cloudAuthorized))
+        .filter(
+          (item) =>
+            canDeleteHistoryItem(item, cloudAuthorized) &&
+            !pendingDeleteEpicIds.has(item.epicId),
+        )
         .map((item) => item.epicId),
-    [cloudAuthorized, items],
+    [cloudAuthorized, items, pendingDeleteEpicIds],
   );
   const selectableIdSet = useMemo(
     () => new Set(selectableItemIds),
@@ -605,11 +619,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const handleConfirmDelete = () => {
     if (pendingDeleteIds === null) return;
     // The host-wide census is asynchronous. Confirming before it settles lets
-    // the Task deletion start with zero approved worktrees; its rows can then
-    // arrive during the mutation and flash briefly before success closes the
-    // dialog. Hold confirmation until the choices the person is approving are
-    // stable. A disabled query (host unavailable) is not fetching, so cleanup
-    // remains additive and never blocks Task deletion indefinitely.
+    // the Task deletion start with zero approved worktrees, silently skipping
+    // rows that were about to be offered. Hold confirmation until the choices
+    // the person is approving are stable. A disabled query (host unavailable)
+    // is not fetching, so cleanup remains additive and never blocks Task
+    // deletion indefinitely.
     if (worktreeCandidatesFetching) return;
     // The verdict is re-read HERE, from the store, rather than trusted from the
     // render that opened this dialog. A confirmation is an unbounded pause with
@@ -630,6 +644,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     const itemsByEpicId = new Map(items.map((item) => [item.epicId, item]));
     const ids = pendingDeleteIds.filter((id) => {
+      if (pendingDeleteEpicIds.has(id)) return false;
       const item = itemsByEpicId.get(id);
       if (item === undefined) return authorizedNow;
       return canDeleteHistoryItem(item, authorizedNow);
@@ -644,30 +659,29 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         worktreePath: candidate.worktreePath,
         ownerEpicIds: candidate.ownerEpicIds,
       }));
-    deleteMutation.mutate(
-      {
-        ids: [...ids],
-        worktreeCleanup:
-          approvedWorktrees.length > 0
-            ? { candidates: approvedWorktrees }
-            : null,
-      },
-      {
-        onSuccess: () => {
-          setSelectedIds((prev) => {
-            let next: Set<string> | null = null;
-            for (const id of ids) {
-              if (!prev.has(id)) continue;
-              if (next === null) next = new Set(prev);
-              next.delete(id);
-            }
-            return next ?? prev;
-          });
-          setSelectionMode(false);
-          closeDeleteDialog();
-        },
-      },
-    );
+    deleteMutation.mutate({
+      ids: [...ids],
+      worktreeCleanup:
+        approvedWorktrees.length > 0 ? { candidates: approvedWorktrees } : null,
+    });
+    // The mutation cache owns the deletion after kickoff, exactly as the
+    // Sweep flow's kickoff does. Do not hold the person in the modal while the
+    // host deletes the Task(s) and streams the approved worktree cleanup: the
+    // hook's own `onSuccess` / `onError` toast the outcome and prune the rows
+    // wherever they are by then. No per-call callbacks either - TanStack
+    // drops `mutate(vars, { onSuccess })` callbacks on unmount, and this
+    // panel can be left before the host answers.
+    setSelectedIds((prev) => {
+      let next: Set<string> | null = null;
+      for (const id of ids) {
+        if (!prev.has(id)) continue;
+        if (next === null) next = new Set(prev);
+        next.delete(id);
+      }
+      return next ?? prev;
+    });
+    setSelectionMode(false);
+    closeDeleteDialog();
   };
 
   const hasActiveFilters = hasActiveHistoryFilters(search);
@@ -830,7 +844,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         }}
         title={describeDeleteTitle(pendingDeleteIds, items)}
         description="This action cannot be undone."
-        isPending={deleteMutation.isPending}
         isCheckingWorktrees={worktreeCandidatesFetching}
         onConfirm={handleConfirmDelete}
         candidates={worktreeCandidates}
@@ -1655,14 +1668,13 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     authorizesCloudCapability(state.status),
   );
   const canEditTitle = canEditHistoryItemTitle(item, cloudAuthorized);
-  const canDeleteItem = canDeleteHistoryItem(item, cloudAuthorized);
+  const { canDeleteItem, deleteDisabledTooltip } = useHistoryRowDeleteGate(
+    item,
+    cloudAuthorized,
+  );
   const selectionDisabled = historySelectionDisabled(
     selectionMode,
     canDeleteItem,
-  );
-  const deleteDisabledTooltip = historyDeleteDisabledTooltip(
-    item,
-    cloudAuthorized,
   );
   const { mutate: renameEpicTitle, isPending: isRenamePending } =
     useEpicUpdateTitle();
@@ -2179,6 +2191,33 @@ function historySelectionDisabled(
   canDeleteItem: boolean,
 ): boolean {
   return selectionMode && !canDeleteItem;
+}
+
+/**
+ * The row's delete admission plus the reason shown when it is refused. The
+ * in-flight arm sits ahead of the static verdict: deletion runs in the
+ * background and the dialog closes at kickoff, so this row is back on screen
+ * before the host has answered, and a second `epic.batchDelete` for the same
+ * id is not deduplicated anywhere on the wire.
+ */
+function useHistoryRowDeleteGate(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): {
+  readonly canDeleteItem: boolean;
+  readonly deleteDisabledTooltip: string;
+} {
+  const isDeleteInFlight = usePendingDeleteEpicIds().has(item.epicId);
+  if (isDeleteInFlight) {
+    return {
+      canDeleteItem: false,
+      deleteDisabledTooltip: DELETE_IN_FLIGHT_TOOLTIP,
+    };
+  }
+  return {
+    canDeleteItem: canDeleteHistoryItem(item, cloudAuthorized),
+    deleteDisabledTooltip: historyDeleteDisabledTooltip(item, cloudAuthorized),
+  };
 }
 
 function historyDeleteDisabledTooltip(

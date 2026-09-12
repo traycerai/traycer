@@ -4,6 +4,7 @@ import type {
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IStreamClient } from "./i-stream-client";
 import type { StreamMethodSupport } from "./ws-stream-client";
+import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
 
 /**
  * The stream-client lifecycle surface the app-wide/durable provider tree
@@ -115,6 +116,25 @@ export interface IHostStreamClient<
    */
   isReady(): boolean;
   /**
+   * Whether the connection behind this client is READY and has heard nothing
+   * from the host for at least `ms` - the transport's own verdict, read by the
+   * human Retry paths so a person's click can escalate from "re-subscribe" to
+   * "drop the socket and re-dial" when, and only when, the session is provably
+   * dead.
+   *
+   * OPTIONAL, in the shape `subscribeAtVersion?` already uses on
+   * `IStreamClient`: this interface is implemented structurally by two
+   * production classes, two `implements` test classes and a couple of dozen
+   * object literals, and a required member would be a sweep of all of them to
+   * express "not measured". ABSENT MEANS NOT MEASURED, never "silent" - every
+   * caller reads `?.(ms) ?? false`, so a transport with no answer never
+   * escalates anything.
+   *
+   * `WsStreamClient` deliberately leaves it absent: a local socket's failure
+   * modes are its own and nothing above it escalates on local silence.
+   */
+  isSilentFor?(ms: number): boolean;
+  /**
    * Learned per-method compatibility with the connected host, keyed by stream
    * method name. `"unknown"` until capability evidence is available:
    * `WsStreamClient` learns it from its handshake and `RemoteStreamClient`
@@ -138,14 +158,17 @@ export interface IHostStreamClient<
    * Positive host-recovery evidence: fires when a session (re)opens after a
    * drop or a stall-length silent gap - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
-   * points. Consumers drive `HostClient.notifyHostAvailabilityRecovered(hostId)`
-   * off it so stranded unary queries refetch. `RemoteStreamClient` delegates to
+   * points and the kind each reports. Consumers drive
+   * `HostClient.notifyHostAvailabilityRecovered(hostId, kind)` off it so
+   * stranded unary queries refetch. `RemoteStreamClient` delegates to
    * `RemoteSession.subscribeAvailabilityRecovered`, which fires at EVERY
    * ready boundary - including the clean first open, because a remote
    * session's first dial races (and strands) the very queries that created
-   * it.
+   * it - and reports each one as a `"reconnect"`.
    */
-  subscribeAvailabilityRecovered(listener: () => void): () => void;
+  subscribeAvailabilityRecovered(
+    listener: (kind: AvailabilityRecoveryKind) => void,
+  ): () => void;
 }
 
 /**

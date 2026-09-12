@@ -2757,25 +2757,26 @@ function seatSnapshotTailSpan(input: {
     completeBase.spans,
     tailSpan,
   );
-  return retireCoveredStaleSpans(
-    pruneSupersededLiveRecords(
-      {
-        ...completeBase,
-        records,
-        spans,
-        hydratedBytes: chargedWindowBytes(
+  const servedRowIds = declaredCompleteTailRowIds(tail);
+  return reconcileServedTurnMembership(
+    retireCoveredStaleSpans(
+      pruneSupersededLiveRecords(
+        {
+          ...completeBase,
           records,
           spans,
-          completeBase.liveMessages,
-          completeBase.liveEvents,
-        ),
-      },
-      servedAssistantTurns(
-        declaredCompleteTailRowIds(tail),
-        messages,
-        tail.events,
+          hydratedBytes: chargedWindowBytes(
+            records,
+            spans,
+            completeBase.liveMessages,
+            completeBase.liveEvents,
+          ),
+        },
+        servedAssistantTurns(servedRowIds, messages, tail.events),
       ),
     ),
+    servedTurnMembership(servedRowIds, messages, tail.events),
+    input.activeTurnId,
   );
 }
 
@@ -3791,6 +3792,149 @@ function retireCoveredStaleSpans(window: TranscriptWindow): TranscriptWindow {
   return unchanged
     ? window
     : pruneUnreferencedRecords({ ...window, staleSpans: bounded });
+}
+
+/**
+ * The complete record membership of every turn a serve is authority on.
+ *
+ * A row the host serves COMPLETE (not in `incompleteRowIds`) comes with every
+ * record of its turn - `rowRecordIds` hands an assistant slice the whole turn's
+ * `messageIds`, and the host marks the row incomplete when any of them is
+ * missing from its lookup. So for each turn one of those rows belongs to, the
+ * served assistant records ARE the turn: a record of that turn the serve does
+ * not carry is one the host no longer holds.
+ *
+ * Keyed by turn key, valued by the served assistant record ids. Turns reached
+ * only through an incomplete row are absent, because an incomplete serve says
+ * nothing about what the turn does not contain.
+ */
+function servedTurnMembership(
+  rowIds: readonly string[],
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const membership = new Map<string, Set<string>>();
+  for (const turnKey of assistantTurnKeysForServedRows(
+    rowIds,
+    messages,
+    events,
+  )) {
+    membership.set(turnKey, new Set());
+  }
+  if (membership.size === 0) return membership;
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    membership.get(assistantTurnKey(message))?.add(message.messageId);
+  }
+  return membership;
+}
+
+/**
+ * Drop the records of a served turn that the serve proves gone.
+ *
+ * ## The gap this closes
+ *
+ * A steer that lands before the model has written anything makes the host
+ * COLLAPSE the turn's original assistant row and continue the turn in a row
+ * under a fresh `messageId` (`chat-session-manager.ts`, the steered user
+ * split). Nothing on the wire retracts the original: the snapshot that follows
+ * describes rows, and the original had already been served to this client
+ * under the provisional live row it occupied. It then sits in the ledger with
+ * the turn's `turnId`, receives the deltas routed to the turn while it is the
+ * last record carrying that id, and is carried into the stale tier by the next
+ * rebase.
+ *
+ * {@link retireCoveredStaleSpans} cannot reach it. That pass keeps a span for
+ * its surviving rows, and a carry that mixes the collapsed row with rows the
+ * fresh tier has not re-served yet is kept whole - records and all. Meanwhile
+ * {@link hydratedRecords} merges the stale tier into `messages`, the renderer
+ * folds every record sharing a `turnId` into one turn, the steer block splits
+ * the merged list, and the turn's real content lands in a `part:1` row the
+ * skeleton never names. Once the real record is span-seated and no longer
+ * live-backed, the row merger drops that row, and the turn renders as its
+ * collapsed prefix alone: no final text, no answered interview.
+ *
+ * ## Why membership, and not "a newer record with the same turn id"
+ *
+ * A non-empty original row legitimately survives a split as the turn's prefix
+ * (the host keeps a row the model wrote to), so two records per turn is a
+ * valid shape and record age proves nothing. The skeleton cannot arbitrate
+ * either: it carries row ids, never record ids. What CAN decide is a complete
+ * serve of the turn - see {@link servedTurnMembership} - which lists exactly
+ * the records the host still holds for it. A record of that turn the client
+ * holds outside the fresh tier, and the serve does not list, is retired.
+ *
+ * ## Scope
+ *
+ * - Only records the FRESH tier does not reference. A fresh reference is a
+ *   serve too, and the two agree by construction.
+ * - Never the active turn. A range is sliced before it is delivered, and the
+ *   host mints the continuation row DURING the turn, so a serve of the
+ *   streaming turn can predate the very record it would otherwise retire.
+ *   Everything this repairs is visible only after the turn settles, so waiting
+ *   for that costs nothing.
+ * - Stale-span references and unplaced live records alike: the host pushes a
+ *   record whole before the index places it, and a collapsed row can be held
+ *   in either home.
+ *
+ * Runs after {@link retireCoveredStaleSpans}, on both seat paths (a range and
+ * the snapshot tail), because those are the only two places a complete serve
+ * enters the window.
+ */
+function reconcileServedTurnMembership(
+  window: TranscriptWindow,
+  membership: ReadonlyMap<string, ReadonlySet<string>>,
+  activeTurnId: string | null,
+): TranscriptWindow {
+  if (membership.size === 0) return window;
+  if (window.staleSpans.length === 0 && window.liveMessages.length === 0) {
+    return window;
+  }
+  const freshReferenced = referencedRecordIds([window.spans]).messageIds;
+  const retired = (message: Message): boolean => {
+    if (message.role !== "assistant") return false;
+    if (freshReferenced.has(message.messageId)) return false;
+    const turnKey = assistantTurnKey(message);
+    if (turnKey === activeTurnId) return false;
+    const served = membership.get(turnKey);
+    // A served turn with no served record is not evidence of an empty turn -
+    // a complete assistant row always carries at least the record it
+    // projects from - so it decides nothing rather than everything.
+    if (served === undefined || served.size === 0) return false;
+    return !served.has(message.messageId);
+  };
+  let changed = false;
+  const staleSpans = window.staleSpans.map((span) => {
+    const messageIds = span.messageIds.filter((messageId) => {
+      const entry = window.records.messages.get(messageId);
+      return entry === undefined || !retired(entry.record);
+    });
+    if (messageIds.length === span.messageIds.length) return span;
+    changed = true;
+    return { ...span, messageIds };
+  });
+  const liveMessages = window.liveMessages.filter(
+    (message) => !retired(message),
+  );
+  if (liveMessages.length !== window.liveMessages.length) changed = true;
+  if (!changed) return window;
+  // A membership change on both tiers. The ledger releases what no span
+  // references any more (and bumps the revision the row-backing memos key
+  // on); the charge is re-derived because the live tail is a term of it.
+  const pruned = pruneUnreferencedRecords({
+    ...window,
+    staleSpans,
+    liveMessages,
+  });
+  return {
+    ...pruned,
+    hydratedBytes: chargedWindowBytes(
+      pruned.records,
+      pruned.spans,
+      liveMessages,
+      pruned.liveEvents,
+    ),
+  };
 }
 
 /**
@@ -4912,26 +5056,30 @@ export function applyRangeResponse(
     completeWindow.spans,
     span,
   );
-  return retireCoveredStaleSpans(
-    pruneSupersededLiveRecords(
-      {
-        ...completeWindow,
-        records,
-        spans,
-        hydratedBytes: chargedWindowBytes(
+  const servedRowIds = completeServedRowIds(
+    response.rowIds,
+    response.incompleteRowIds,
+  );
+  return reconcileServedTurnMembership(
+    retireCoveredStaleSpans(
+      pruneSupersededLiveRecords(
+        {
+          ...completeWindow,
           records,
           spans,
-          completeWindow.liveMessages,
-          completeWindow.liveEvents,
-        ),
-        clock,
-      },
-      servedAssistantTurns(
-        completeServedRowIds(response.rowIds, response.incompleteRowIds),
-        messages,
-        response.events,
+          hydratedBytes: chargedWindowBytes(
+            records,
+            spans,
+            completeWindow.liveMessages,
+            completeWindow.liveEvents,
+          ),
+          clock,
+        },
+        servedAssistantTurns(servedRowIds, messages, response.events),
       ),
     ),
+    servedTurnMembership(servedRowIds, messages, response.events),
+    activeTurnId,
   );
 }
 

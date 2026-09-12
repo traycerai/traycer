@@ -5,6 +5,7 @@ import {
   RemoteSession as ProtocolRemoteSession,
   type IRemoteSession,
   type RemoteSessionOptions as ProtocolRemoteSessionOptions,
+  type SessionLivenessProbe,
 } from "@traycer/protocol/host-transport/remote/session";
 import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
 import { extractBearerForOpenFrame } from "../ws-rpc-client";
@@ -12,8 +13,27 @@ import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
 import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import { UNARY_RESPONSE_TIMEOUT_MS } from "./config";
 
-export type { IRemoteSession };
+export type { IRemoteSession, SessionLivenessProbe };
 export { PLAN_RESTRICTED_FATAL_CODE } from "@traycer/protocol/host-transport/remote/session";
+
+/**
+ * The desktop client's liveness probe: the method a silence candidate sends to
+ * find out whether the host is still answering anything at all.
+ *
+ * `host.status` because it is (a) a RELEASED FLOOR method, so every host
+ * negotiates it and the probe can never be refused pre-send in the field, and
+ * (b) an ordinary domain resolver on the host's own event loop rather than a
+ * transport-layer echo - so an answer proves the host is running, not merely
+ * that its socket layer is. Its v1.0 request is `{}`.
+ *
+ * Lives here, in the client adapter, rather than in the protocol session: the
+ * session is generic over an RPC registry it must not name, and every
+ * composition root above this adapter is generic too.
+ */
+export const HOST_STATUS_LIVENESS_PROBE: SessionLivenessProbe = {
+  method: "host.status",
+  params: {},
+};
 
 export interface RemoteSessionOptions<
   RpcRegistry extends
