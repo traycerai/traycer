@@ -1,3 +1,4 @@
+import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -91,7 +92,14 @@ export function useEpicDeleteTuiAgent() {
     mapVariables: (variables) => variables,
     options: {
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_data, _variables, ctx) => {
+      onSuccess: (_data, variables, ctx) => {
+        pruneRecoveryTiles(
+          (tile, epicId) =>
+            epicId === variables.epicId &&
+            tile.type === "terminal-agent" &&
+            tile.id === variables.tuiAgentId &&
+            tile.hostId === ctx.hostId,
+        );
         // The deletion is a registry fact on a migrated host; without this the
         // row would linger in the tree until the next poll tick.
         invalidateEpicTuiAgentRecords(queryClient, ctx.hostId);

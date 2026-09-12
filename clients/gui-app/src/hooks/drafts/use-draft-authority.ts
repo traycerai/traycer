@@ -4,6 +4,7 @@ import type { DraftPublication } from "@traycer/protocol/host";
 import type { HostRpcRegistry } from "@/lib/host";
 import { draftRequiresClaim } from "@/lib/drafts/draft-authority";
 import { applyIncomingDraftDocument } from "@/lib/drafts/draft-mirror-coordinator";
+import { useHostLabel } from "@/hooks/host/use-host-label";
 import { draftClaimUserMessage, useDraftClaim } from "./use-draft-claim";
 import { draftPublicationLabel } from "@/lib/drafts/draft-publication-label";
 
@@ -28,7 +29,11 @@ export function useDraftAuthorityControl(args: {
     args.client,
   );
   const [claimError, setClaimError] = useState<string | null>(null);
-  const ownerLabel = args.ownerHostId ?? "another host";
+  // The banner is the one place the user meets the owning host, so it names
+  // the machine the way every other surface does. A host this directory does
+  // not list (removed from the account, or not fetched yet) has no name to
+  // give - and a raw host id is a UUID, not an answer.
+  const ownerLabel = useHostLabel(args.ownerHostId) ?? "another device";
   const readOnly =
     args.tabHostId !== null &&
     args.draftId !== null &&

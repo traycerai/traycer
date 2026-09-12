@@ -1129,6 +1129,10 @@ vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
       "terminal-agent": undefined,
     },
     tilePlacement: actual.DEFAULT_TILE_PLACEMENT_SETTINGS,
+    // The chat tree reads this to decide whether a row carries a resource
+    // chip at all. The mock is a hand-built state, so a key the tree starts
+    // reading has to be added here or every row throws on it.
+    navigatorResourceMetrics: actual.DEFAULT_NAVIGATOR_RESOURCE_METRICS,
   };
   return {
     ...actual,

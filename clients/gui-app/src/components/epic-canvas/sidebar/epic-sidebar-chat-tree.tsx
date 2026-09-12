@@ -1,3 +1,4 @@
+import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
@@ -1965,10 +1966,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       const found = findOpenTileInTab(tabId, openRef());
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
-          prepareCloseCanvasTabFocusTarget(
-            tabId,
-            found.paneId,
-            found.instanceId,
+          withoutTabRecovery(() =>
+            prepareCloseCanvasTabFocusTarget(
+              tabId,
+              found.paneId,
+              found.instanceId,
+            ),
           ),
         );
       }
@@ -3263,8 +3266,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
     },
     [onToggle],
   );
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
+  const navigatorResourceMetrics = useSettingsStore(
+    (state) => state.navigatorResourceMetrics,
   );
   const ownerKind = useEpicNodeOwnerKind(nodeId);
 
@@ -3428,12 +3431,14 @@ function ChatRowButton(props: ChatRowButtonProps) {
             ownerKind={resourceOwnerKind}
             claims={roleClaims}
           />
-          {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
+          {resourceOwnerKind === null ||
+          navigatorResourceMetrics.length === 0 ? null : (
             <OwnerResourceChip
               epicId={epicId}
               kind={resourceOwnerKind}
               ownerId={nodeId}
               hostId={null}
+              metrics={navigatorResourceMetrics}
               className={undefined}
             />
           )}

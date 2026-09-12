@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
-import { cloudDraftsDirectoryIsVisible } from "@/lib/drafts/cloud-drafts-visibility";
+import type { DraftKind } from "@traycer/protocol/host";
+import type {
+  CloudChatIdentity,
+  CloudChatSummary,
+} from "@traycer/protocol/host/epic/cloud-chat";
+import { cloudDraftIdentityKey } from "@/lib/drafts/cloud-draft-kinds";
+import {
+  cloudDraftsDirectoryIsVisible,
+  openableCloudDrafts,
+} from "@/lib/drafts/cloud-drafts-visibility";
 
 function error(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -80,5 +89,108 @@ describe("cloudDraftsDirectoryIsVisible", () => {
         isSuccess: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("openableCloudDrafts", () => {
+  const identityA: CloudChatIdentity = {
+    taskId: "task-1",
+    chatId: "chat-a",
+    ownerUserId: "user-1",
+  };
+  const identityB: CloudChatIdentity = {
+    taskId: "task-1",
+    chatId: "chat-b",
+    ownerUserId: "user-1",
+  };
+
+  function chat(input: {
+    readonly identity: CloudChatIdentity;
+    readonly ownerHostId: string;
+  }): CloudChatSummary {
+    return {
+      identity: input.identity,
+      ownerHostId: input.ownerHostId,
+      createdAt: 0,
+      visibility: "private",
+      title: null,
+      isTitleEditedByUser: false,
+      parentChatId: null,
+      isArchived: false,
+      runSettingsSummary: null,
+      metadataUpdatedAt: 0,
+      headSha256: null,
+      publishedAt: null,
+      throughRecordSeq: null,
+      isOwnedByViewer: true,
+    };
+  }
+
+  it("excludes a row owned by the calling hostId", () => {
+    const row = chat({ identity: identityA, ownerHostId: "host-b" });
+    const kinds = new Map<string, DraftKind>([
+      [cloudDraftIdentityKey(row), "landing"],
+    ]);
+
+    expect(
+      openableCloudDrafts({ chats: [row], hostId: "host-b", kinds }),
+    ).toEqual([]);
+  });
+
+  it("excludes a chat-composer row and an interview row", () => {
+    const composerRow = chat({ identity: identityA, ownerHostId: "host-a" });
+    const interviewRow = chat({ identity: identityB, ownerHostId: "host-a" });
+    const kinds = new Map<string, DraftKind>([
+      [cloudDraftIdentityKey(composerRow), "chat-composer"],
+      [cloudDraftIdentityKey(interviewRow), "interview"],
+    ]);
+
+    expect(
+      openableCloudDrafts({
+        chats: [composerRow, interviewRow],
+        hostId: "host-b",
+        kinds,
+      }),
+    ).toEqual([]);
+  });
+
+  it("includes a landing row and a new-chat row", () => {
+    const landingRow = chat({ identity: identityA, ownerHostId: "host-a" });
+    const newChatRow = chat({ identity: identityB, ownerHostId: "host-a" });
+    const kinds = new Map<string, DraftKind>([
+      [cloudDraftIdentityKey(landingRow), "landing"],
+      [cloudDraftIdentityKey(newChatRow), "new-chat"],
+    ]);
+
+    expect(
+      openableCloudDrafts({
+        chats: [landingRow, newChatRow],
+        hostId: "host-b",
+        kinds,
+      }),
+    ).toEqual([landingRow, newChatRow]);
+  });
+
+  it("excludes a row whose kind has not been recorded yet (head not read)", () => {
+    const row = chat({ identity: identityA, ownerHostId: "host-a" });
+
+    expect(
+      openableCloudDrafts({
+        chats: [row],
+        hostId: "host-b",
+        kinds: new Map(),
+      }),
+    ).toEqual([]);
+  });
+
+  it("returns an empty list when hostId is null", () => {
+    const row = chat({ identity: identityA, ownerHostId: "host-a" });
+    const kinds = new Map<string, DraftKind>([
+      [cloudDraftIdentityKey(row), "landing"],
+    ]);
+
+    expect(openableCloudDrafts({ chats: [row], hostId: null, kinds })).toEqual(
+      [],
+    );
   });
 });

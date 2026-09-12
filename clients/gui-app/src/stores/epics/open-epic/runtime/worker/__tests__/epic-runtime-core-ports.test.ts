@@ -414,6 +414,40 @@ describe("commands.apply", () => {
 
     expect(begun).toEqual([pending]);
   });
+
+  it("routes each record-touch arm to its OWN plane, so a transposed pair cannot pass", () => {
+    // The two arms take the same payload shape and differ only in which
+    // plane they reach, which is exactly the pair a copy-paste transposes.
+    // Distinct patches per plane are what makes the swap observable: asserting
+    // only that each method was called once survives it, and so does asserting
+    // a shared fixture landed somewhere.
+    const chatTouches: unknown[] = [];
+    const tuiTouches: unknown[] = [];
+    const ports = buildPorts(
+      createSource({
+        applyChatRecordTouches: (patches) => chatTouches.push(patches),
+        applyTuiAgentRecordTouches: (patches) => tuiTouches.push(patches),
+      }),
+    );
+    const chatTouched = [
+      { id: "chat-1", ownerUserId: "user-1", updatedAt: 40, revision: 4 },
+    ];
+    const tuiTouched = [
+      { id: "agent-1", ownerUserId: "user-1", updatedAt: 70, revision: 7 },
+    ];
+
+    ports.commands.apply({
+      kind: "apply-chat-record-touches",
+      payload: { touched: chatTouched },
+    });
+    ports.commands.apply({
+      kind: "apply-tui-agent-record-touches",
+      payload: { touched: tuiTouched },
+    });
+
+    expect(chatTouches).toEqual([chatTouched]);
+    expect(tuiTouches).toEqual([tuiTouched]);
+  });
 });
 
 describe("bodies.materialize — the lease it stands on", () => {

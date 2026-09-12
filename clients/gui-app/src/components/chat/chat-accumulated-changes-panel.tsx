@@ -21,13 +21,18 @@ import {
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
-import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
+import {
+  accumulatedDiffTotals,
+  type AccumulatedChangeRow,
+} from "@/lib/chat/accumulated-change-rows";
 import {
   useChatSnapshotDiffOpener,
   type ChatSnapshotDiffOpener,
   type DiffRowClickHandlers,
 } from "@/components/chat/chat-diff-target";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
+import { useChatDockSectionRevealed } from "@/components/chat/chat-dock-compact-context";
+import { DiffLineDeltas } from "@/components/chat/diff-line-deltas";
 import { FileChangeHeader } from "@/components/chat/segments/file-change-segment";
 import { RevertArtifactsCheckbox } from "@/components/chat/segments/revert-artifacts-checkbox";
 import { useArtifactRowDisplay } from "@/components/chat/segments/use-artifact-row-display";
@@ -51,7 +56,8 @@ interface DiffCounts {
 
 /**
  * Pinned summary of every file changed across the chat (first-in-chat
- * snapshot → current). Collapsed by default. Per-row Undo (on hover) and the
+ * snapshot → current). Collapsed by default, and open on arrival when a
+ * compact chip is what put it back in the dock. Per-row Undo (on hover) and the
  * header's Undo all revert files to their first snapshot. The list is
  * host-computed, so reverted files drop off.
  */
@@ -61,7 +67,9 @@ export function ChatAccumulatedChangesPanel(
   const { restore } = props;
   const changes = restore.accumulatedFileChanges;
   const opener = useChatSnapshotDiffOpener();
-  const [open, setOpen] = useState(false);
+  // Open on arrival when a chip click is what put this row back in the dock.
+  const revealedByChip = useChatDockSectionRevealed("filesChanged");
+  const [open, setOpen] = useState(revealedByChip);
   const [confirmUndoAll, setConfirmUndoAll] = useState(false);
   const gate = useMemo(() => revertGate(restore), [restore]);
   // CONTENT-BEARING rows only. A `hasContents: false` summary has no
@@ -115,7 +123,7 @@ export function ChatAccumulatedChangesPanel(
   // pre-windowed line, host-computed on the windowed one, and summed per-edit
   // for a file the active turn is still writing. The panel used to diff two
   // file bodies per row per render to get here.
-  const totals = useMemo(() => aggregateCounts(changes), [changes]);
+  const totals = useMemo(() => accumulatedDiffTotals(changes), [changes]);
   // The header counts what "Undo all" would touch, which is the host's whole
   // set - not the prefix of it that has arrived. The rows below fill in as
   // their summaries land.
@@ -175,16 +183,7 @@ export function ChatAccumulatedChangesPanel(
             <span className="min-w-0 truncate text-ui-xs font-medium text-foreground/85">
               {fileCount} {fileCount === 1 ? "file changed" : "files changed"}
             </span>
-            <span className="flex shrink-0 items-center gap-1.5 font-mono text-code-xs">
-              {totals.additions > 0 ? (
-                <span className="text-emerald-600 dark:text-emerald-400">
-                  +{totals.additions}
-                </span>
-              ) : null}
-              {totals.deletions > 0 ? (
-                <span className="text-destructive">−{totals.deletions}</span>
-              ) : null}
-            </span>
+            <DiffLineDeltas counts={totals} className={undefined} />
             <span aria-hidden className="flex-1" />
           </CollapsibleTrigger>
           <div className="flex shrink-0 items-center gap-1 pr-1.5">
@@ -488,16 +487,10 @@ function ArtifactAccumulatedHeader(props: {
           {display.title}
         </StartTruncatedText>
       )}
-      <span className="@max-[28rem]:hidden flex shrink-0 items-center gap-1.5 font-mono text-code-xs">
-        {additions > 0 ? (
-          <span className="text-emerald-600 dark:text-emerald-400">
-            +{additions}
-          </span>
-        ) : null}
-        {deletions > 0 ? (
-          <span className="text-destructive">−{deletions}</span>
-        ) : null}
-      </span>
+      <DiffLineDeltas
+        counts={{ additions, deletions }}
+        className="@max-[28rem]:hidden"
+      />
     </>
   );
 }
@@ -553,23 +546,4 @@ function revertGate(restore: ChatRestoreContextValue): RevertGate {
     return { enabled: false, tooltip: "Revert in progress." };
   }
   return { enabled: true, tooltip: "Revert to the first snapshot." };
-}
-
-/**
- * The collapsed header's totals.
- *
- * A `null` count contributes nothing, which is the right reading: it means the
- * row has no diff to count (`diffSource: "none"`), not that it counted zero.
- */
-function aggregateCounts(
-  rows: ReadonlyArray<AccumulatedChangeRow>,
-): DiffCounts {
-  let additions = 0;
-  let deletions = 0;
-  for (const row of rows) {
-    if (row.counts === null) continue;
-    additions += row.counts.additions;
-    deletions += row.counts.deletions;
-  }
-  return { additions, deletions };
 }

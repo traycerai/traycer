@@ -1,3 +1,7 @@
+import {
+  pruneRecoveryDraft,
+  recoveryDraftIds,
+} from "@/lib/tab-recovery/history";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -473,6 +477,10 @@ function destroyLandingDraft(
 ): void {
   const { drafts, activeDraftId } = get();
   const closing = drafts.find((d) => d.id === id);
+  // A local delete needs a row to route its host request. A host tombstone is
+  // already authoritative even when its local mirror was evicted.
+  if (closing === undefined && routeHostDelete) return;
+  pruneRecoveryDraft(id);
   if (closing === undefined) return;
   draftRuntimeRegistry.close(id);
   // Route the host delete while the row still exists: `routeLocalDelete`
@@ -1777,8 +1785,10 @@ function evictAdoptedLandingMirrors(
   );
   const overflow = adopted.length - MAX_LOCAL_ADOPTED_LANDING_MIRRORS;
   if (overflow <= 0) return drafts;
+  const recoveryIds = recoveryDraftIds();
   const evictable = adopted.filter(
-    (draft) => !landingDraftPinsLocalImageBytes(draft),
+    (draft) =>
+      !recoveryIds.has(draft.id) && !landingDraftPinsLocalImageBytes(draft),
   );
   const evictIds = new Set(
     [...evictable]

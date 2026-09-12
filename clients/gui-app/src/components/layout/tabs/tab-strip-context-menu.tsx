@@ -1,5 +1,8 @@
 import { TabAppearanceMenu } from "./tab-appearance-menu";
 import { useCallback, useSyncExternalStore } from "react";
+import { useTabRecovery } from "@/lib/tab-recovery/use-tab-recovery";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import {
   ArrowLeftRight,
   CopyPlus,
@@ -272,6 +275,9 @@ function EpicTabMenuItems(props: {
 export function TabContextMenuContent(
   props: TabContextMenuContentProps,
 ): React.ReactNode {
+  const recovery = useTabRecovery();
+  const reopenChord = useBindingForAction("tab.reopen");
+  const duplicateChord = useBindingForAction("epic.duplicate-tab");
   const {
     tab,
     canCloseOtherTabs,
@@ -328,11 +334,13 @@ export function TabContextMenuContent(
         >
           <CopyPlus />
           Duplicate Tab
-          <ShortcutHint>
-            <span className="ml-auto text-ui-xs text-muted-foreground">
-              ⌘⇧K
-            </span>
-          </ShortcutHint>
+          {duplicateChord === null ? null : (
+            <ShortcutHint>
+              <span className="ml-auto text-ui-xs text-muted-foreground">
+                {formatChordForDisplay(duplicateChord)}
+              </span>
+            </ShortcutHint>
+          )}
         </ContextMenuItem>
       ) : null}
       {showDuplicate ? <ContextMenuSeparator /> : null}
@@ -356,6 +364,23 @@ export function TabContextMenuContent(
       >
         <X />
         Close Other Tabs
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        disabled={!recovery.available}
+        data-testid="tab-reopen-closed"
+        onSelect={() => {
+          void recovery.reopen();
+        }}
+      >
+        Reopen Closed Tab
+        {reopenChord === null ? null : (
+          <ShortcutHint>
+            <span className="ml-auto text-ui-xs text-muted-foreground">
+              {formatChordForDisplay(reopenChord)}
+            </span>
+          </ShortcutHint>
+        )}
       </ContextMenuItem>
     </ContextMenuContent>
   );

@@ -1,8 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { setMobileApp } from "@/lib/mobile-app";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -49,6 +59,13 @@ const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
   canDuplicate: false,
   canOpenInNewWindow: false,
   appearance: null,
+};
+
+const DUPLICATABLE_TAB: Extract<HeaderTab, { kind: "epic" }> = {
+  ...EPIC_TAB,
+  id: "epic-duplicate",
+  epicId: "epic-duplicate",
+  canDuplicate: true,
 };
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
@@ -124,6 +141,8 @@ function renderPinMenu(
 describe("TabContextMenuContent preserved-orphan pin guard", () => {
   afterEach(() => {
     cleanup();
+    setMobileApp(false);
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
     __getOpenEpicRegistryForTests().disposeAll();
     vi.restoreAllMocks();
     pinSupportState.supportedByHostId.clear();
@@ -171,6 +190,91 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
     expect(item.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(item);
     expect(onSetTaskPinned).not.toHaveBeenCalled();
+  });
+
+  it("renders live non-Mac binding labels for reopen and duplicate actions", () => {
+    setMobileApp(false);
+    render(
+      <ContextMenu open>
+        <ContextMenuTrigger>Open menu</ContextMenuTrigger>
+        <TabContextMenuContent
+          tab={DUPLICATABLE_TAB}
+          canCloseOtherTabs
+          canOpenInNewWindow={false}
+          canEditTitle={false}
+          taskPinnedState={null}
+          isTaskPinPending={false}
+          onCloseOtherTabs={() => undefined}
+          onDuplicateTab={() => undefined}
+          onOpenInNewWindow={() => undefined}
+          onSplitCommand={() => undefined}
+          onEditTitle={() => undefined}
+          onSetTaskPinned={() => undefined}
+        />
+      </ContextMenu>,
+    );
+
+    expect(
+      screen.getByText(formatChordForDisplay("mod+shift+t")),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(formatChordForDisplay("mod+shift+k")),
+    ).not.toBeNull();
+    expect(screen.getByText("Reopen Closed Tab")).not.toBeNull();
+    expect(screen.getByText("Duplicate Tab")).not.toBeNull();
+  });
+
+  it("updates a duplicate hint when rebound, then hides it when cleared while keeping the action", () => {
+    const onDuplicateTab = vi.fn<(tab: HeaderTab) => void>();
+    const view = render(
+      <ContextMenu open>
+        <ContextMenuTrigger>Open menu</ContextMenuTrigger>
+        <TabContextMenuContent
+          tab={DUPLICATABLE_TAB}
+          canCloseOtherTabs
+          canOpenInNewWindow={false}
+          canEditTitle={false}
+          taskPinnedState={null}
+          isTaskPinPending={false}
+          onCloseOtherTabs={() => undefined}
+          onDuplicateTab={onDuplicateTab}
+          onOpenInNewWindow={() => undefined}
+          onSplitCommand={() => undefined}
+          onEditTitle={() => undefined}
+          onSetTaskPinned={() => undefined}
+        />
+      </ContextMenu>,
+    );
+
+    act(() => {
+      useKeybindingStore
+        .getState()
+        .setBinding("epic.duplicate-tab", "mod+alt+k");
+    });
+    expect(screen.getByText(formatChordForDisplay("mod+alt+k"))).not.toBeNull();
+    expect(screen.queryByText(formatChordForDisplay("mod+shift+k"))).toBeNull();
+
+    act(() => {
+      useKeybindingStore.getState().clearBinding("epic.duplicate-tab");
+    });
+    expect(screen.queryByText(formatChordForDisplay("mod+alt+k"))).toBeNull();
+    const item = screen.getByTestId(
+      `tab-duplicate-epic-${DUPLICATABLE_TAB.id}`,
+    );
+    expect(item.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(item);
+    expect(onDuplicateTab).toHaveBeenCalledWith(DUPLICATABLE_TAB);
+
+    act(() => {
+      useKeybindingStore.getState().setBinding("tab.reopen", "mod+alt+r");
+    });
+    expect(screen.getByText(formatChordForDisplay("mod+alt+r"))).not.toBeNull();
+    act(() => {
+      useKeybindingStore.getState().clearBinding("tab.reopen");
+    });
+    expect(screen.queryByText(formatChordForDisplay("mod+alt+r"))).toBeNull();
+    expect(screen.getByTestId("tab-reopen-closed")).not.toBeNull();
+    view.unmount();
   });
 });
 

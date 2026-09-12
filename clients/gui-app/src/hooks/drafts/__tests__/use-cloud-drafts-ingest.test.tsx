@@ -39,6 +39,11 @@ const HOST_ID = "host-a";
 const OWNER_HOST_ID = "host-b";
 const DIGEST_ONE = "a".repeat(64);
 const DIGEST_TWO = "b".repeat(64);
+// Mirrors the retry constants in use-cloud-drafts-ingest.ts. They are not
+// exported, so these tests restate them - keep them in sync if the
+// production values change.
+const MAX_HEAD_READ_ATTEMPTS = 3;
+const HEAD_READ_RETRY_BASE_MS = 2_000;
 
 function summary(headSha256: string): CloudChatSummary {
   return {
@@ -89,6 +94,7 @@ afterEach(() => {
   directoryMock.chats = [];
   readMock.read.mockReset();
   ingestMock.ingest.mockReset();
+  vi.useRealTimers();
 });
 
 describe("useCloudDraftsIngest", () => {
@@ -135,6 +141,93 @@ describe("useCloudDraftsIngest", () => {
     for (const resolve of pending) resolve();
     await Promise.resolve();
     await Promise.resolve();
+    expect(ingestMock.ingest).not.toHaveBeenCalled();
+  });
+
+  it("retries a head read that throws once, then ingests once it succeeds", async () => {
+    vi.useFakeTimers();
+    readMock.read
+      .mockRejectedValueOnce(new Error("transient read failure"))
+      .mockResolvedValueOnce({ kind: "ok", record: HEAD });
+    ingestMock.ingest.mockResolvedValue(undefined);
+    directoryMock.chats = [summary(DIGEST_ONE)];
+
+    renderHook(() => useCloudDraftsIngest(CLIENT as never, HOST_ID));
+
+    // The first read rejects. Let that promise settle so attemptRead's catch
+    // block actually runs and arms the retry timer before the clock moves -
+    // advancing first would jump straight past a timer that does not exist
+    // yet.
+    await vi.waitFor(() => {
+      expect(vi.getTimerCount()).toBe(1);
+    });
+    expect(readMock.read).toHaveBeenCalledTimes(1);
+
+    // Backoff for attempt 0: HEAD_READ_RETRY_BASE_MS * 2 ** 0 = 2s.
+    await vi.advanceTimersByTimeAsync(HEAD_READ_RETRY_BASE_MS);
+
+    await vi.waitFor(() => {
+      expect(ingestMock.ingest).toHaveBeenCalledTimes(1);
+    });
+    expect(readMock.read).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up after MAX_HEAD_READ_ATTEMPTS reads and makes no further attempt", async () => {
+    vi.useFakeTimers();
+    readMock.read.mockRejectedValue(new Error("persistent read failure"));
+    directoryMock.chats = [summary(DIGEST_ONE)];
+
+    renderHook(() => useCloudDraftsIngest(CLIENT as never, HOST_ID));
+
+    // Attempt 0 fails and arms the first retry (2s backoff).
+    await vi.waitFor(() => {
+      expect(vi.getTimerCount()).toBe(1);
+    });
+    expect(readMock.read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(HEAD_READ_RETRY_BASE_MS);
+
+    // Attempt 1 fails and arms the second retry (4s backoff).
+    await vi.waitFor(() => {
+      expect(vi.getTimerCount()).toBe(1);
+    });
+    expect(readMock.read).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(HEAD_READ_RETRY_BASE_MS * 2);
+
+    // Attempt 2 is the last one (MAX_HEAD_READ_ATTEMPTS = 3): it fails and
+    // gives up rather than arming a third timer.
+    await vi.waitFor(() => {
+      expect(readMock.read).toHaveBeenCalledTimes(MAX_HEAD_READ_ATTEMPTS);
+    });
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Advancing well past every backoff makes no further read.
+    await vi.advanceTimersByTimeAsync(HEAD_READ_RETRY_BASE_MS * 100);
+    expect(readMock.read).toHaveBeenCalledTimes(MAX_HEAD_READ_ATTEMPTS);
+    expect(ingestMock.ingest).not.toHaveBeenCalled();
+  });
+
+  it("clears a pending retry timer on unmount, so it never fires a read", async () => {
+    vi.useFakeTimers();
+    readMock.read.mockRejectedValue(new Error("transient read failure"));
+    directoryMock.chats = [summary(DIGEST_ONE)];
+
+    const view = renderHook(() =>
+      useCloudDraftsIngest(CLIENT as never, HOST_ID),
+    );
+
+    // Prove the trigger fired - the first attempt failed and armed a retry -
+    // before asserting that unmounting stops it.
+    await vi.waitFor(() => {
+      expect(vi.getTimerCount()).toBe(1);
+    });
+    expect(readMock.read).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+
+    // The cleanup cleared the timer: letting it lapse reads no further.
+    await vi.advanceTimersByTimeAsync(HEAD_READ_RETRY_BASE_MS * 100);
+    expect(readMock.read).toHaveBeenCalledTimes(1);
     expect(ingestMock.ingest).not.toHaveBeenCalled();
   });
 });
