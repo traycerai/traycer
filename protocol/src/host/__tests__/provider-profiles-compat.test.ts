@@ -500,6 +500,24 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
   });
 });
 
+describe("providers.startLogin@1.2 (device-code userCode / failure)", () => {
+  it("upgrades a v1.1 response to v1.2 with userCode and failure defaulted to null", () => {
+    const upgradedResponse = upgradeResponseToVersion(
+      hostRpcRegistry["providers.startLogin"],
+      { major: 1, minor: 1 },
+      { major: 1, minor: 2 },
+      { url: null, started: true, profileId: "profile-1" },
+    );
+    expect(upgradedResponse).toEqual({
+      url: null,
+      started: true,
+      profileId: "profile-1",
+      userCode: null,
+      failure: null,
+    });
+  });
+});
+
 describe("providers.startLogin@1.1 (create profile / re-login to a profile)", () => {
   it("upgrades a v1.0 request/response to v1.1 with profile fields defaulted to null", () => {
     const upgradedRequest = upgradeRequestToVersion(

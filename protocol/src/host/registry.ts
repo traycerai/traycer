@@ -182,6 +182,7 @@ import {
   agentActivitySubscribeV10,
   agentActivitySubscribeV11,
   agentActivitySubscribeV12,
+  agentActivitySubscribeV13,
 } from "@traycer/protocol/host/agent/activity";
 import {
   agentRolesClaimUpgradeV10ToV11,
@@ -640,7 +641,9 @@ import {
 import {
   browserSavedLoginSitesV10,
   browserScreencastV20,
+  browserScreencastV21,
   browserSessionsV20,
+  browserSessionsV21,
 } from "@traycer/protocol/host/browser/contracts";
 import {
   browserScreencastV10,
@@ -925,6 +928,7 @@ import {
   providersStartLoginRequestSchemaV11,
   providersStartLoginResponseSchemaV10,
   providersStartLoginResponseSchemaV11,
+  providersStartLoginResponseSchemaV12,
   providersSubmitLoginCodeRequestSchema,
   providersSubmitLoginCodeResponseSchema,
   providersTouchLoginRequestSchema,
@@ -3277,6 +3281,27 @@ export const providersStartLoginUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({
     ...response,
     profileId: null,
+  }),
+});
+
+export const providersStartLoginV12 = defineRpcContract({
+  method: "providers.startLogin",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: providersStartLoginRequestSchemaV11,
+  responseSchema: providersStartLoginResponseSchemaV12,
+});
+
+export const providersStartLoginUpgradeV11ToV12 = defineUpgradePath<
+  typeof providersStartLoginV11,
+  typeof providersStartLoginV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    userCode: null,
+    failure: null,
   }),
 });
 
@@ -9445,7 +9470,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   },
   "providers.startLogin": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersStartLoginV10,
@@ -9454,6 +9479,10 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         1: {
           contract: providersStartLoginV11,
           upgradeFromPreviousVersion: providersStartLoginUpgradeV10ToV11,
+        },
+        2: {
+          contract: providersStartLoginV12,
+          upgradeFromPreviousVersion: providersStartLoginUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -10602,10 +10631,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: browserSessionsV20,
+        },
+        1: {
+          contract: browserSessionsV21,
         },
       },
     },
@@ -10620,10 +10652,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: browserScreencastV20,
+        },
+        1: {
+          contract: browserScreencastV21,
         },
       },
     },
@@ -10778,7 +10813,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // registered verbatim so a newer client bridges down to an older host.
   "agent.activity.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: agentActivitySubscribeV10,
@@ -10788,6 +10823,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: agentActivitySubscribeV12,
+        },
+        3: {
+          contract: agentActivitySubscribeV13,
         },
       },
     },

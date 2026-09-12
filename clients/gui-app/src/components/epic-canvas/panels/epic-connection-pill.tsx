@@ -605,7 +605,7 @@ function indicatorForWriteCommandAlert(
  * an outage. The sentence is the hover and the accessible name now, and the
  * dot keeps the pill's palette - red for a stated loss, amber for doubt, the
  * idle pulse for a promotion or reconciliation in flight. A steady reading
- * ("Stored locally") is never selected over the artifact leg's own steady
+ * ("Not synced yet") is never selected over the artifact leg's own steady
  * verdict, which already says the same thing in its tooltip.
  */
 const DURABILITY_DOT_CLASS: Readonly<
@@ -779,9 +779,9 @@ function indicatorFor(
         showAgentSpinner: true,
         pulse: null,
         tooltip:
-          "The cloud connection is down, and some recent changes are still being saved on this device. Keep this window open.",
+          "Offline, and some recent changes are still being saved. Keep this window open.",
         ariaLabel:
-          "Offline. Some recent changes are still being saved on this device. Keep this window open.",
+          "Offline. Some recent changes are still being saved. Keep this window open.",
       };
     case "offlineWithHostPending":
       return {
@@ -791,10 +791,16 @@ function indicatorFor(
         label: "Offline — changes pending",
         showAgentSpinner: false,
         pulse: null,
+        // Names the SERVING HOST, not "Traycer": in this state the window is
+        // no longer the last holder and it is the host's flush that is still
+        // unknown (`use-cloud-link-grace.ts`), so from a phone or a browser
+        // attached to a remote host "keep Traycer running" pointed at the
+        // wrong process - a person could follow it and still shut down the
+        // one machine that must stay up.
         tooltip:
-          "The cloud connection is down. This device is still processing pending changes; keep it running.",
+          "Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
         ariaLabel:
-          "Offline. This device is still processing pending changes; keep it running.",
+          "Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
       };
     // No spinner: nothing is in flight while the host's cloud link is down.
     // The durability claim in this copy is load-bearing and true - the host
@@ -804,19 +810,20 @@ function indicatorFor(
         severity: "warning",
         containerClassName: AMBER_CONTAINER_CLASS,
         dotClassName: "bg-amber-500",
-        label: "Offline — changes saved locally",
+        label: "Offline — changes saved",
         showAgentSpinner: false,
         pulse: null,
         tooltip:
-          "The cloud connection is down. Your changes are saved on this device and sync when it is back.",
+          "Offline. Your changes are saved and sync when the connection is back.",
         ariaLabel:
-          "Offline. Changes are saved on this device and sync when the connection is back.",
+          "Offline. Your changes are saved and sync when the connection is back.",
       };
     // The epic is not in the cloud at all. This used to render as `synced`
-    // — "All changes synced", beside the durability badge's "Stored
-    // locally", about an epic no cloud has ever seen. The copy is now the
-    // true statement, and it agrees with the badge instead of contradicting
-    // it inches away.
+    // — "All changes synced", beside the durability plane's "Not synced
+    // yet", about an epic no cloud has ever seen. The copy is now the true
+    // statement, and it agrees with the plane instead of contradicting it
+    // inches away. Like every clause on that plane it says what the person
+    // sees (saved, not synced), not where the bytes are.
     case "storedLocally":
       return {
         severity: "steady",
@@ -825,8 +832,8 @@ function indicatorFor(
         label: null,
         showAgentSpinner: false,
         pulse: "active",
-        tooltip: "Saved on this device. This epic is not in the cloud yet.",
-        ariaLabel: "Saved on this device. This epic is not in the cloud yet.",
+        tooltip: "Saved. Not synced yet.",
+        ariaLabel: "Saved. Not synced yet.",
       };
     // The one alerting state that is about RISK rather than progress: no
     // local WAL and no cloud link, so an edit made now exists only in memory
@@ -839,13 +846,21 @@ function indicatorFor(
         containerClassName:
           "rounded-md bg-destructive/10 px-2 py-0.5 text-destructive",
         dotClassName: "bg-destructive",
-        label: "Offline — changes not saved",
+        // Prospective AND scoped to new edits in all three strings, on
+        // purpose. Prospective: this state is reached on protection alone
+        // (`epic-sync-pill-state.ts` consults no dirty bit for it), so a
+        // freshly opened task with nothing typed is in it, and "changes not
+        // saved" would be a data-loss alarm about edits that do not exist.
+        // Scoped: `cloudDownState` returns it for a cloud-durable task whose
+        // SESSION is unprotected, so an unqualified "not backed up" would
+        // claim the task's durable copy does not exist either.
+        label: "Offline — new edits not backed up",
         showAgentSpinner: false,
         pulse: null,
         tooltip:
-          "The cloud connection is down and this session has no local backup, so recent changes are only in this window. Reconnect, or copy anything you cannot lose.",
+          "Offline. Anything you edit now is not backed up and exists only in this window. Reconnect, or copy anything you cannot lose.",
         ariaLabel:
-          "Offline and unprotected. Recent changes are only in this window and will be lost if it closes.",
+          "Offline. Anything you edit now is not backed up and exists only in this window; it is lost if the window closes.",
       };
     // The stream is up but this cycle has not supplied enough evidence for a
     // cloud/durability claim. Keep the copy factual and intentionally avoid

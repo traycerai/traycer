@@ -321,7 +321,7 @@ describe("TAB_KINDS surface exhaustiveness", () => {
   it("surface capabilities agree with the built HeaderTab flags", () => {
     const cases = [
       {
-        tab: epicTabModule.build(EPIC_SOURCE),
+        tab: epicTabModule.build({ view: EPIC_SOURCE, hostId: null }),
         surface: epicTabModule.descriptor.surface,
         expectedNewWindow: "move",
       },

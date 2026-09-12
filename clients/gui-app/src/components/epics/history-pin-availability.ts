@@ -12,19 +12,16 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
  * The split is also the honest boundary: the rule below is what every
  * responsive surface must agree on, and it has no rendering in it.
  *
- * ## "the connected device", never "this device"
+ * ## The copy never says where a task lives
  *
- * A local-homed epic lives on the HOST that serves it, and after the mobile /
- * relay work that host is routinely not the machine rendering these strings -
- * a phone reads its Mac's local epics. "Stored on this device" was written
- * when the two were always the same and became false without anyone editing
- * it: a string is a claim about a state space, and a new member invalidates
- * strings nobody touched.
- *
- * "Device" stays the UI word for a host (host identity rule 1: no parallel
- * `deviceId`), so the fix is the ARTICLE, not the vocabulary. The same
- * correction applies to the preserved-orphan pair below, whose "this device's
- * edits" makes the identical claim about the identical machine.
+ * The reason codes below distinguish a local-homed row from a cloud-backed
+ * one because the REMEDIES differ (a host update versus a sign-in), but the
+ * strings name only the remedy. Whether a task's copy is in the cloud or on
+ * the host serving it is not something the person reading the list knows or
+ * cares about - they know their tasks - so no string here, and none in the
+ * list bodies, narrates cloud-versus-device. A row that needs a newer host
+ * says so; a row that was deleted says so; which side of the sync each fact
+ * came from stays out of the sentence.
  */
 
 /** The reason a history row cannot dispatch the cloud-only pin mutation. */
@@ -105,14 +102,14 @@ export function historyPinControlLabel(input: {
   readonly isPinned: boolean;
 }): string {
   if (input.unavailableReason === "preserved-orphan") {
-    return `Pinning ${input.displayTitle} is unavailable; its cloud copy was deleted and only the connected device's edits remain`;
+    return `Pinning ${input.displayTitle} is unavailable; the task was deleted and only its unsynced edits remain`;
   }
   // The remedy is a HOST UPDATE, not sign-in or sync: `local-home` means the
   // serving host has not negotiated `epic.setPinned@1.1` (see
   // `historyPinUnavailableReason`), and copy that sent the user to the cloud
   // named a fix that changes nothing.
   if (input.unavailableReason === "local-home") {
-    return `Pinning ${input.displayTitle} needs a newer host on the connected device; it is stored there`;
+    return `Pinning ${input.displayTitle} needs a newer Traycer host`;
   }
   if (input.unavailableReason === "phase") {
     return `Pinning ${input.displayTitle} is unavailable for phases`;
@@ -129,13 +126,13 @@ export function historyPinUnavailableTooltip(
   reason: HistoryPinUnavailableReason,
 ): string {
   if (reason === "preserved-orphan") {
-    return "This epic's cloud copy was deleted. Only the connected device's edits remain, so it can't be pinned.";
+    return "This task was deleted. Its unsynced edits are kept, but it can't be pinned.";
   }
   if (reason === "local-home") {
-    return "This epic is stored on the connected device. Pinning it needs a newer host version there; update that device's Traycer host.";
+    return "Pinning this task needs a newer Traycer host version. Update the host that serves it.";
   }
   if (reason === "unverified-session") {
-    return "Your sign-in couldn't be confirmed, so cloud changes are paused. Pinning will work again once your sign-in is confirmed.";
+    return "Your sign-in couldn't be confirmed. Pinning will work again once it is.";
   }
   return "Phases cannot be pinned.";
 }

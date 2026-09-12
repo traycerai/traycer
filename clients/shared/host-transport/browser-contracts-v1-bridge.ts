@@ -12,7 +12,6 @@ import type {
   BrowserSessionsServerFrameV10,
   BrowserTabInfoV10,
 } from "@traycer/protocol/host/browser/contracts-v1";
-import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "./host-stream-client";
 import type { IStreamSession } from "./i-stream-session";
@@ -55,12 +54,18 @@ import type { ParamsOf } from "./ws-stream-client";
  */
 export type BrowserSessionsClientFrameV10Projection =
   | { readonly kind: "frame"; readonly frame: BrowserSessionsClientFrameV10 }
-  | { readonly kind: "unsupported"; readonly requestId: string };
+  | { readonly kind: "unsupported"; readonly requestId: string }
+  | { readonly kind: "ignored" };
 
 /** The kinds the client-frame projection hands over untouched. */
 type PassedThroughClientFrameKind = Exclude<
   BrowserSessionsClientFrame["kind"],
-  "attachTab" | "moveTab" | "electronTabLifecycleReady"
+  | "attachTab"
+  | "moveTab"
+  | "electronTabLifecycleReady"
+  | "setViewport"
+  | "reportViewport"
+  | "electronViewportResult"
 >;
 
 /**
@@ -132,44 +137,9 @@ export function isBrowserSessionsV1NoWindowBindingRefusal(
 }
 
 /**
- * The first browser major addressed by a SCOPE rather than by an epic id.
- *
- * Pinned, not negotiated, by the one request `@1` has no way to express: the
- * device's epic-less `independent` inventory. Everything else on these streams
- * degrades - a lift here, a stripped field there - but an `independent`
- * subscription served as `@1` would have to name SOME epic, and there is no
- * honest one to name. Failing the open is the only correct answer, and pinning
- * is what turns it into the ordinary "this host is too old for this method"
- * fatal rather than into an inventory that belongs to somebody else.
- */
-export const BROWSER_SCOPE_ADDRESSED_STREAM_VERSION: SchemaVersion = {
-  major: 2,
-  minor: 0,
-};
-
-/**
- * Opens one of the browser streams pinned to
- * {@link BROWSER_SCOPE_ADDRESSED_STREAM_VERSION}.
- *
- * `subscribeAtVersion` is OPTIONAL on the transport seam, and a transport
- * without it falls back to an ordinary negotiated subscribe rather than
- * throwing. Two reasons, and the second is the load-bearing one:
- *
- *  - The fallback cannot be served the wrong inventory, which is the only
- *    thing the pin actually protects. `{scope}` is not a parseable `@1` open
- *    request - the frozen schema is `.strict()` on `{epicId}` - so a v1.3.0
- *    host refuses the open instead of answering it with some epic's tabs. The
- *    pin moves that refusal client-side and makes it read as `unsupported`
- *    rather than `failed`; it does not create it.
- *  - Throwing here reaches a caller that cannot catch it. The GUI coordinator
- *    constructs this inside its start path with no `try`, so a throw tears the
- *    renderer down through its error boundary - the exact failure
- *    `createInertStreamSession` exists to avoid one layer down. A degraded
- *    open that the host then refuses is strictly better than a crash.
- *
- * Every transport that actually carries a browser stream pins: the local
- * socket and the remote mux both implement it. The fallback is defence, not a
- * supported mode.
+ * Negotiate the current scope-addressed minor, including after reconnect.
+ * A @1 host rejects the strict scope-shaped params rather than opening an
+ * unrelated epic. Pinning 2.0 here would prevent independent tabs using 2.1.
  */
 export function subscribeAtScopeAddressedBrowserVersion<
   Method extends "browser.sessions" | "browser.screencast",
@@ -178,16 +148,7 @@ export function subscribeAtScopeAddressedBrowserVersion<
   method: Method,
   params: ParamsOf<HostStreamRpcRegistry, Method>,
 ): IStreamSession {
-  const subscribeAtVersion = client.subscribeAtVersion;
-  if (subscribeAtVersion === undefined) {
-    return client.subscribe(method, params);
-  }
-  return subscribeAtVersion.call(
-    client,
-    method,
-    BROWSER_SCOPE_ADDRESSED_STREAM_VERSION,
-    params,
-  );
+  return client.subscribeWithParamsProvider(method, () => params);
 }
 
 /** `@1` addresses a session's owner by epic id; the live line by scope. */
@@ -293,6 +254,10 @@ export function projectBrowserSessionsClientFrameToV10(
   frame: BrowserSessionsClientFrame,
 ): BrowserSessionsClientFrameV10Projection {
   switch (frame.kind) {
+    case "reportViewport":
+    case "electronViewportResult":
+      return { kind: "ignored" };
+    case "setViewport":
     case "attachTab":
     case "moveTab":
       return { kind: "unsupported", requestId: frame.requestId };

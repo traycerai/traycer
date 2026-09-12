@@ -317,6 +317,45 @@ export const RESTORE_STALL_LOG_AFTER_MS = 8_000;
 export const REASSEMBLY_PROGRESS_TIMEOUT_MS = 20_000;
 
 /**
+ * How long the WHOLE SESSION must have received no in-channel frame before a
+ * symptom (a timed-out unary, a stalled reassembly, a subscribe with no first
+ * frame) is allowed to become a silence CANDIDATE.
+ *
+ * Deliberately equal to {@link REASSEMBLY_PROGRESS_TIMEOUT_MS} above and to the
+ * chat tile's `STALLED_CHAT_LOAD_ELAPSED_MS` (`chat-tile-runtime-gate.tsx`),
+ * and deliberately a SEPARATE constant: those two bound ONE stream's transfer
+ * and the moment a pane offers a person Retry, while this bounds the session
+ * behind all of them. They answer to different owners and will move
+ * independently; equal today is an intent, not a shared value, and collapsing
+ * them would tie a session-level verdict to a per-stream budget.
+ *
+ * The equality does cost the distinctness this file's other comments ask for
+ * (see {@link RESTORE_STALL_LOG_AFTER_MS}): a suite that identifies timers by
+ * their delay cannot tell a silence candidate's window from a reassembly
+ * watchdog's. That is why the D4 pins assert on the PROBE (a `host.status`
+ * REQUEST on the wire) and on the resulting drop, never on a timer delay.
+ */
+export const SESSION_SILENCE_TIMEOUT_MS = 20_000;
+
+/**
+ * How long a silence candidate's probe is given to produce ANY in-channel
+ * frame before the session is declared dead.
+ *
+ * Short because it is never spent alone: it is added to at least
+ * {@link SESSION_SILENCE_TIMEOUT_MS} of PROVEN silence. The probe the client
+ * sends (`host.status`) is an ordinary domain resolver on the host's event
+ * loop, not a transport-layer echo, so answering it exercises the whole host -
+ * and a host that has answered nothing for 20s and still cannot answer a
+ * trivial call within 5 more has been mute for 25s, longer than any timeout
+ * its callers tolerate.
+ *
+ * The probe's OWN response budget is deliberately longer (twice this), so its
+ * promise can never reject by timeout before the verdict is in; only the
+ * verdict timer decides.
+ */
+export const SESSION_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+
+/**
  * Bounded terminal-stream tombstone frontier, mirroring the host's invariant
  * (R-2 / `r2-host-stream-tombstone`): once a stream fails or closes, its
  * streamId is remembered so a relay-delayed genuine frame for that same

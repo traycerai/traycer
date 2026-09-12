@@ -115,6 +115,16 @@ class ControllableResizeObserver implements ResizeObserver {
   }
 }
 
+function resizeObserverFor(target: Element): ControllableResizeObserver {
+  const observer = controllableResizeObservers.find((candidate) =>
+    candidate.observed.has(target),
+  );
+  if (observer === undefined) {
+    throw new Error("expected resize observer for target");
+  }
+  return observer;
+}
+
 Object.defineProperty(globalThis, "ResizeObserver", {
   configurable: true,
   writable: true,
@@ -957,8 +967,12 @@ describe("BrowserPeekTile", () => {
         />,
       );
       const stream = liveStream();
-      const observer = controllableResizeObservers.at(-1);
-      if (observer === undefined) throw new Error("expected resize observer");
+      const surface = screen.getByRole("button", {
+        name: "Browser screencast controls",
+      });
+      const target = surface.parentElement;
+      if (target === null) throw new Error("expected screencast viewport");
+      const observer = resizeObserverFor(target);
 
       observer.emit(320, 240);
       observer.emit(640, 360);
@@ -1013,8 +1027,12 @@ describe("BrowserPeekTile", () => {
         />,
       );
       const stream = liveStream();
-      const observer = controllableResizeObservers.at(-1);
-      if (observer === undefined) throw new Error("expected resize observer");
+      const surface = screen.getByRole("button", {
+        name: "Browser screencast controls",
+      });
+      const target = surface.parentElement;
+      if (target === null) throw new Error("expected screencast viewport");
+      const observer = resizeObserverFor(target);
 
       observer.emit(1272, 800);
       await act(async () => {

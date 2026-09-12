@@ -138,6 +138,9 @@ function liveSessionsState(hostId: string): BrowserSessionsState {
     canMaterializeElectron: false,
     connectionGeneration: 0,
     items: [],
+    viewports: {},
+    setViewport: () => Promise.reject(new Error("not used")),
+    reportViewport: () => undefined,
     errorMessage: null,
     retry: () => undefined,
     openTab: (_sessionId, url) => {

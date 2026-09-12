@@ -79,14 +79,17 @@ class FakeDebugger implements BrowserViewDebugger {
   failAttach = false;
   holdFrameTree = false;
   holdAddBinding = false;
+  holdPrepareAttach = false;
   failEvaluate = false;
   missingFrame = false;
   missingWorld = false;
+  prepareAttachPayload: unknown = null;
   readonly falseEvaluateExpressions = new Set<string>();
   readonly rejectEvaluateExpressions = new Set<string>();
   private attached: boolean;
   private frameTreeResolve: ((value: unknown) => void) | null = null;
   private addBindingResolve: ((value: unknown) => void) | null = null;
+  private prepareAttachResolve: ((value: unknown) => void) | null = null;
   private readonly events = new EventEmitter();
 
   constructor(attached: boolean) {
@@ -155,6 +158,16 @@ class FakeDebugger implements BrowserViewDebugger {
           exceptionDetails: { text: "inject failed" },
         });
       }
+      if (expression === "globalThis.__traycerAnnotationPrepareAttach?.()") {
+        if (this.holdPrepareAttach) {
+          return new Promise((resolve) => {
+            this.prepareAttachResolve = resolve;
+          });
+        }
+        return Promise.resolve({
+          result: { value: this.prepareAttachPayload },
+        });
+      }
       if (expression.includes("traycerAnnotationViewport")) {
         return Promise.resolve({
           result: { value: { width: 800, height: 600 } },
@@ -189,6 +202,12 @@ class FakeDebugger implements BrowserViewDebugger {
 
   resolveAddBinding(): void {
     this.addBindingResolve?.({});
+  }
+
+  resolvePrepareAttach(): void {
+    this.prepareAttachResolve?.({
+      result: { value: this.prepareAttachPayload },
+    });
   }
 
   listenerCount(event: string): number {
@@ -301,6 +320,13 @@ interface SessionHarness {
 }
 
 function createHarness(attached: boolean): SessionHarness {
+  return createHarnessWith(attached, () => Promise.resolve(true));
+}
+
+function createHarnessWith(
+  attached: boolean,
+  onAttachedResult: (result: AttachedResult) => Promise<boolean>,
+): SessionHarness {
   const webContents = new FakeWebContents(attached);
   const debugSession = createDebugSession(webContents);
   const events: BrowserAnnotationSessionEvent[] = [];
@@ -315,7 +341,7 @@ function createHarness(attached: boolean): SessionHarness {
     },
     onAttached: (result) => {
       attachedEvents.push(result);
-      return Promise.resolve(true);
+      return onAttachedResult(result);
     },
   });
   return {
@@ -367,6 +393,7 @@ const VALID_ATTACH_PAYLOAD = {
         bottom: 22,
         left: 1,
       },
+      computedStyles: [],
     },
   ],
   comment: "look here",
@@ -650,6 +677,142 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     const expressions = evaluateExpressions(webContents.debugger);
     expect(expressions).toContain(ANNOTATION_CAPTURE_FAILED_EXPRESSION);
     expect(expressions).not.toContain(ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION);
+  });
+
+  it("waits for an acknowledged capture before releasing viewport preservation", async () => {
+    const acknowledgement = Promise.withResolvers<boolean>();
+    const harness = createHarnessWith(true, () => acknowledgement.promise);
+    harness.webContents.debugger.prepareAttachPayload = VALID_ATTACH_PAYLOAD;
+    await harness.session.start();
+    emitBinding(
+      harness.webContents.debugger,
+      { type: "stateChanged", mode: "select", markCount: 1 },
+      77,
+    );
+
+    const preserving = harness.session.preserveBeforeViewportChange();
+    await flush();
+    expect(harness.webContents.captureCount).toBe(1);
+    expect(harness.attached).toHaveLength(1);
+
+    let resolved = false;
+    void preserving.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    acknowledgement.resolve(true);
+    await expect(preserving).resolves.toBeUndefined();
+    expect(evaluateExpressions(harness.webContents.debugger)).toContain(
+      ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION,
+    );
+  });
+
+  it("refuses viewport preservation when the capture acknowledgement fails", async () => {
+    const harness = createHarnessWith(true, () => Promise.resolve(false));
+    harness.webContents.debugger.prepareAttachPayload = VALID_ATTACH_PAYLOAD;
+    await harness.session.start();
+    emitBinding(
+      harness.webContents.debugger,
+      { type: "stateChanged", mode: "select", markCount: 1 },
+      77,
+    );
+
+    await expect(
+      harness.session.preserveBeforeViewportChange(),
+    ).rejects.toThrow("Couldn't save the annotation to a chat draft");
+    expect(harness.session.isActive()).toBe(true);
+    const expressions = evaluateExpressions(harness.webContents.debugger);
+    expect(expressions).toContain(ANNOTATION_CAPTURE_FAILED_EXPRESSION);
+    expect(expressions).not.toContain(ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION);
+  });
+
+  it("reports an invalid prepared target, keeps marks, and succeeds on retry", async () => {
+    const harness = createHarnessWith(true, () => Promise.resolve(true));
+    harness.webContents.debugger.prepareAttachPayload = {
+      ...VALID_ATTACH_PAYLOAD,
+      targetChatId: "",
+    };
+    await harness.session.start();
+    emitBinding(
+      harness.webContents.debugger,
+      { type: "stateChanged", mode: "select", markCount: 1 },
+      77,
+    );
+
+    await expect(
+      harness.session.preserveBeforeViewportChange(),
+    ).rejects.toThrow("Couldn't save the annotation to a chat draft");
+    expect(harness.session.isActive()).toBe(true);
+    expect(harness.session.zoomLocked()).toBe(true);
+    expect(harness.webContents.captureCount).toBe(0);
+    expect(evaluateExpressions(harness.webContents.debugger)).toContain(
+      ANNOTATION_CAPTURE_FAILED_EXPRESSION,
+    );
+
+    harness.webContents.debugger.prepareAttachPayload = VALID_ATTACH_PAYLOAD;
+    await expect(
+      harness.session.preserveBeforeViewportChange(),
+    ).resolves.toBeUndefined();
+    expect(harness.webContents.captureCount).toBe(1);
+    expect(harness.session.zoomLocked()).toBe(false);
+  });
+
+  it("refuses a prepared request without a valid union and preserves the marks", async () => {
+    const harness = createHarnessWith(true, () => Promise.resolve(true));
+    harness.webContents.debugger.prepareAttachPayload = {
+      ...VALID_ATTACH_PAYLOAD,
+      unionRect: null,
+    };
+    await harness.session.start();
+    emitBinding(
+      harness.webContents.debugger,
+      { type: "stateChanged", mode: "select", markCount: 1 },
+      77,
+    );
+
+    await expect(
+      harness.session.preserveBeforeViewportChange(),
+    ).rejects.toThrow("Couldn't save the annotation to a chat draft");
+    expect(harness.session.isActive()).toBe(true);
+    expect(harness.session.zoomLocked()).toBe(true);
+    expect(harness.webContents.captureCount).toBe(0);
+    expect(evaluateExpressions(harness.webContents.debugger)).toContain(
+      ANNOTATION_CAPTURE_FAILED_EXPRESSION,
+    );
+  });
+
+  it("keeps a manual capture in flight while a preservation prepare reply is pending", async () => {
+    const acknowledgement = Promise.withResolvers<boolean>();
+    const harness = createHarnessWith(true, () => acknowledgement.promise);
+    harness.webContents.debugger.prepareAttachPayload = VALID_ATTACH_PAYLOAD;
+    harness.webContents.debugger.holdPrepareAttach = true;
+    await harness.session.start();
+    emitBinding(
+      harness.webContents.debugger,
+      { type: "stateChanged", mode: "select", markCount: 1 },
+      77,
+    );
+
+    const preserving = harness.session.preserveBeforeViewportChange();
+    await flush();
+    emitBinding(
+      harness.webContents.debugger,
+      { type: "attachRequested", payload: VALID_ATTACH_PAYLOAD },
+      77,
+    );
+    await flush();
+    expect(harness.webContents.captureCount).toBe(1);
+    expect(harness.attached).toHaveLength(1);
+
+    harness.webContents.debugger.resolvePrepareAttach();
+    await flush();
+    expect(harness.webContents.captureCount).toBe(1);
+
+    acknowledgement.resolve(true);
+    await expect(preserving).resolves.toBeUndefined();
+    expect(harness.webContents.captureCount).toBe(1);
   });
 
   it("sets counts.elements to delivered captures and reports droppedElementCount when marks outnumber captures", async () => {

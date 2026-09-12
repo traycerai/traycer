@@ -1,3 +1,6 @@
+import { AuthBrandSplash } from "@/components/auth/auth-brand-splash";
+import { useAuthSplashCover } from "@/hooks/auth/use-auth-splash-cover";
+import { BRAND_DARK_GROUND_CLASS } from "@/components/auth/brand-surface";
 import { BrandMark, PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { getClientAppVersionLabel } from "@/lib/app-version";
@@ -46,10 +49,20 @@ export function AuthLandingPage(props: {
    */
   readonly refusal: ShellAdmissionRefusal | null;
 }) {
+  // The splash covers only the ordinary signed-out arrival: a refused shell is
+  // on this page to READ something, and an animation in front of that sentence
+  // delays the one thing the screen exists to say.
+  const covered = useAuthSplashCover() && props.refusal === null;
+
   return (
     // min-h-full, not min-h-svh: the standalone shell owns the viewport
     // height and reserves the Windows title-bar band above this page.
-    <main className="relative isolate flex min-h-full flex-1 overflow-hidden bg-zinc-950 text-white">
+    <main
+      className={cn(
+        "relative isolate flex min-h-full flex-1 overflow-hidden text-white",
+        BRAND_DARK_GROUND_CLASS,
+      )}
+    >
       <PhotoBloom />
 
       {/* The content layer of a full-bleed surface: the backdrop above is
@@ -60,7 +73,15 @@ export function AuthLandingPage(props: {
           being generous enough: they are today, by margins small enough that
           retuning one would silently put the sign-in control under the
           housing. */}
-      <section className="relative z-10 mx-auto flex w-full flex-col items-center justify-center pt-[max(clamp(4rem,12vh,8rem),var(--safe-area-inset-top))] pr-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-right))] pb-[clamp(5rem,12vh,8rem)] pl-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-left))] text-center font-heading">
+      {/* `inert` while the splash is opaque, not just `pointer-events: none`
+          on the layer above: hiding a control from the pointer says nothing
+          about the focus order, so a keyboard or a switch could still reach
+          "Sign in" underneath a screen that shows no sign of it. Released when
+          the layer unmounts, which is the frame the fade completes. */}
+      <section
+        inert={covered}
+        className="relative z-10 mx-auto flex w-full flex-col items-center justify-center pt-[max(clamp(4rem,12vh,8rem),var(--safe-area-inset-top))] pr-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-right))] pb-[clamp(5rem,12vh,8rem)] pl-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-left))] text-center font-heading"
+      >
         <div className="flex w-full max-w-[min(88vw,31rem)] flex-col items-center gap-[clamp(1.2rem,2.8vh,2rem)]">
           <BrandMark className="h-auto w-[clamp(3.75rem,8vw,5.4rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]" />
           <h1 className="mb-2 text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-[clamp(2.25rem,5.5vw,3rem)] tracking-tight">
@@ -87,6 +108,10 @@ export function AuthLandingPage(props: {
 
       {/* Pinned to the corner the home indicator shares, and in landscape the
           corner a right-side sensor housing shares too. */}
+      {/* Last child, so it stacks over the page without needing a higher
+          z-index than the surface it covers. */}
+      {covered ? <AuthBrandSplash /> : null}
+
       <footer className="pointer-events-none absolute right-0 bottom-0 z-10 flex items-center justify-end px-[clamp(1.25rem,4vw,4rem)] pr-[max(clamp(1.25rem,4vw,4rem),var(--safe-area-inset-right))] pb-[max(clamp(1rem,3vh,2rem),var(--safe-area-inset-bottom))] font-mono text-overline text-white/[0.42]">
         <span>{getClientAppVersionLabel()}</span>
       </footer>

@@ -363,6 +363,14 @@ export function useChatSessionHandle(
               wakeProbe: null,
             });
           },
+          // The same socket the wake above reaches, asked instead whether it
+          // is worth waking. `?? false` covers both "no transport of ours"
+          // (the `streamClientFactoryOverride` path never assigns
+          // `boundStreamClient`) and "this transport does not measure
+          // silence" (the local `WsStreamClient` leaves the member absent):
+          // neither is evidence of a dead session, so neither escalates.
+          transportSilentFor: (ms) =>
+            boundStreamClient?.isSilentFor?.(ms) ?? false,
         }),
     );
     acquiredHandle = next;

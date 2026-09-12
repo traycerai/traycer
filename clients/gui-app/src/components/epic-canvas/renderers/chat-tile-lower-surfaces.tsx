@@ -157,6 +157,10 @@ export interface ChatLowerInterviewState {
   // Branch the chat at the pending question (see ChatForkMode). null when the
   // pending interview has no stable fork boundary.
   readonly onFork: ((mode: ChatForkMode) => void) | null;
+  /** External jump targeting the pending composer card, or null when none. */
+  readonly highlightedBlockId: string | null;
+  /** Advances on each jump so a repeat to the same card restarts the pulse. */
+  readonly highlightedGeneration?: number;
 }
 
 export interface ChatLowerApprovalsState {
@@ -164,6 +168,10 @@ export interface ChatLowerApprovalsState {
   readonly pendingApprovals: ReadonlyArray<ChatApprovalState>;
   readonly onFileEditDecision: (approvalId: string, approved: boolean) => void;
   readonly onApprovalDecision: (approvalId: string, approved: boolean) => void;
+  /** External jump targeting a pending composer approval row, or null. */
+  readonly highlightedApprovalId: string | null;
+  /** Advances on each jump so a repeat to the same row restarts the pulse. */
+  readonly highlightedGeneration?: number;
 }
 
 export interface ChatLowerQueueState {
@@ -497,6 +505,8 @@ function RuntimeGatedApprovalSurface(props: {
         canAct={model.access.canAct}
         onFileEditDecision={model.approvals.onFileEditDecision}
         onApprovalDecision={model.approvals.onApprovalDecision}
+        highlightedApprovalId={model.approvals.highlightedApprovalId}
+        highlightedGeneration={model.approvals.highlightedGeneration}
       />
     </ComposerSlotShell>
   );
@@ -582,6 +592,11 @@ function ComposerSurface(props: {
             onFork={model.access.canAct ? model.interview.onFork : null}
             epicId={model.composer.currentEpicId}
             hostId={tabHostId}
+            navigationHighlighted={
+              model.interview.highlightedBlockId ===
+              model.interview.pending.blockId
+            }
+            highlightGeneration={model.interview.highlightedGeneration}
           />
         </ComposerSlotShell>
       </>
@@ -646,6 +661,8 @@ function PendingApprovalQueues(props: {
   readonly canAct: boolean;
   readonly onFileEditDecision: (approvalId: string, approved: boolean) => void;
   readonly onApprovalDecision: (approvalId: string, approved: boolean) => void;
+  readonly highlightedApprovalId: string | null;
+  readonly highlightedGeneration?: number;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -653,11 +670,15 @@ function PendingApprovalQueues(props: {
         approvals={props.pendingFileEditApprovals}
         canAct={props.canAct}
         onDecision={props.onFileEditDecision}
+        highlightedApprovalId={props.highlightedApprovalId}
+        highlightedGeneration={props.highlightedGeneration}
       />
       <ComposerSlotApprovalQueue
         approvals={props.pendingApprovals}
         canAct={props.canAct}
         onDecision={props.onApprovalDecision}
+        highlightedApprovalId={props.highlightedApprovalId}
+        highlightedGeneration={props.highlightedGeneration}
       />
     </div>
   );

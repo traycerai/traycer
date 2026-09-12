@@ -33,8 +33,8 @@
    RUNNING but reports no percentage. Plain CSS - no motion runtime, so it
    animates regardless of the LazyMotion provider.
 
-   ONE keyframe, two directions BY DECLARATION. The host-install bars
-   (`local-host-loading`, `update-progress-bar`) run it one-way; the
+   ONE keyframe, two directions BY DECLARATION. The host-update bar
+   (`update-progress-bar`) runs it one-way; the
    stream-syncing strip below runs the same travel with
    `animation-direction: alternate`, so the segment returns instead of wrapping.
    The declaration is where the two differ - do not add a second keyframe for a
@@ -49,8 +49,8 @@
    not a progress claim: it carries no percentage semantics and the word
    "Syncing…" beside it is what the reader is actually reading.)
 
-   `transform` only, so it composites without laying out - this runs for the whole
-   multi-minute extract. */
+   `transform` only, so it composites without laying out - on the host-update bar
+   this runs for minutes. */
 @keyframes host-progress-indeterminate {
   from {
     transform: translateX(-100%);
@@ -61,8 +61,8 @@
 }
 
 /* The stream-syncing strip's travelling segment. A CLASS, not the inline
-   `animation` style the two install bars use, for one reason: an inline style
-   cannot be reached by a `motion-reduce:` variant, so those two do not honour
+   `animation` style the host-update bar uses, for one reason: an inline style
+   cannot be reached by a `motion-reduce:` variant, so that bar does not honour
    reduced motion at all. This one does, below.
 
    The strip drops this class entirely once it escalates, falling back to plain
@@ -76,8 +76,8 @@
      2.8s round trip with nothing on screen at all. On an install bar that runs
      for minutes the gap reads as pacing; on an indicator that lives two to four
      seconds it can be most of what the user sees, and it is what makes the
-     motion read as restarting rather than travelling. The install bars keep the
-     old value through the fallback in the keyframe. */
+     motion read as restarting rather than travelling. The host-update bar keeps
+     the old value through the fallback in the keyframe. */
   --host-progress-sweep-end: 250%;
   animation: host-progress-indeterminate 1.4s ease-in-out infinite alternate;
   /* The one moving element on screen during a reconnect, and a bar this thin
@@ -337,6 +337,20 @@
     padding-top: var(--safe-area-inset-top);
     padding-right: var(--safe-area-inset-right);
     padding-left: var(--safe-area-inset-left);
+  }
+
+  /*
+   * The reservation above is PADDING on `#root`, which means the strips it
+   * reserves belong to `#root` and no descendant can paint them. That is
+   * invisible for every ordinary surface, whose ground matches the app's - but
+   * the mobile boot cover is deliberately the launch image's dark, so those
+   * strips would frame it in a different colour for the length of a launch.
+   *
+   * Scoped to the marker rather than applied to `#root` generally: this is the
+   * pre-binding phase only, and the app's own ground must return with the app.
+   */
+  #root:has(> [data-boot-ground]) {
+    background-color: var(--color-zinc-950);
   }
 
   ::selection {
@@ -896,6 +910,38 @@
   transition-duration: 0s;
 }
 
+@utility task-surface-frame {
+  margin-top: -1px;
+  border-top-left-radius: var(--radius-xl);
+  border-top-right-radius: var(--radius-xl);
+
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    z-index: 30;
+    width: var(--radius-xl);
+    height: var(--radius-xl);
+    pointer-events: none;
+    border-style: solid;
+    border-top-width: 1px;
+    border-color: color-mix(in oklab, var(--color-border) 90%, transparent);
+  }
+
+  &::before {
+    left: 0;
+    border-left-width: 1px;
+    border-top-left-radius: inherit;
+  }
+
+  &::after {
+    right: 0;
+    border-right-width: 1px;
+    border-top-right-radius: inherit;
+  }
+}
+
 /*
  * App chrome that is not a semantically interactive element - list rows, header
  * bars, drawer surfaces, tab strips. On iOS a long press over any of these pops
@@ -1047,8 +1093,8 @@
     opacity: 0;
   }
 
-  /* The close button is inert by default and only becomes clickable once the
-     tab is wide enough and hovered / keyboard-focused. Keep BOTH the `none`
+  /* The close button is inert until keyboard focus, or hover on a wide tab.
+     Keep BOTH the `none`
      default and the `auto` reveal in this same @layer so the reveal wins by
      specificity. Do NOT put a `pointer-events-none` Tailwind utility on the
      button: it lands in Tailwind's `utilities` layer, declared after
@@ -1058,46 +1104,56 @@
     pointer-events: none;
   }
 
-  /* Reveal on hover, or keyboard focus - NOT :focus-within. A mouse-drag reorder
-     focuses the tab div, and dnd-kit swallows the trailing click so the tab is
-     never activated; with :focus-within the reveal (opacity + close button)
-     would stay stuck lit on that inactive tab until focus moved away.
-     Keyboard focus is expressed as :focus-visible (mouse focus doesn't match it,
-     so a drag doesn't stick) across two selectors:
-       - `:focus-visible` for the tab wrapper itself (Tab lands on the tab), and
-       - `:has(:focus-visible)` for a focused descendant - the close button is a
-         SEPARATE tab stop, and when Tab moves onto it the wrapper is no longer
-         :focus-visible, so without this the slot would collapse and hide the
-         very button the user just focused.
-     Keep in sync with the accent chrome's `group-focus-visible/tab` +
-     `group-has-[:focus-visible]/tab` gates in tab-strip-item.tsx.
+  /* Mask only the text so the fade follows its available width without
+     fading the icon, close button or tooltip. */
+  .header-tab-title-text {
+    display: block;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+    white-space: nowrap;
+    mask-image: linear-gradient(
+      to right,
+      #000 calc(100% - 1.25rem),
+      transparent
+    );
+  }
 
-     The width is reserved unconditionally once the tab is wide enough to
-     spare the room - hover/focus only toggle opacity now. The title span
-     (the tooltip anchor, tab-strip-item.tsx) sits in the same flex row and
-     used to shrink every time the slot animated 0 -> 1.25rem on hover;
-     Floating UI's autoUpdate would reposition the tooltip against that
-     resize, the content would land under the cursor, hit-testing would
-     drop off the tab, and the slot would collapse - an infinite loop. A
-     stable width breaks that at the source. Below 7rem the button never
-     reveals at all, so the slot stays width 0 (the base rule above) rather
-     than permanently eating title space on narrow tabs. */
+  /* Only the title's text box shrinks. Its full-width tooltip anchor stays
+     fixed so revealing the close control cannot reposition the tooltip. */
+  .group\/tab:focus-visible .header-tab-title,
+  .group\/tab:has(:focus-visible) .header-tab-title {
+    padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
+  }
+
+  .group\/tab:focus-visible .header-tab-trailing-slot,
+  .group\/tab:has(:focus-visible) .header-tab-trailing-slot {
+    width: 1.25rem;
+    opacity: 1;
+  }
+
+  .group\/tab:focus-visible .header-tab-close-button,
+  .group\/tab:has(:focus-visible) .header-tab-close-button {
+    pointer-events: auto;
+  }
+
   @container (min-width: 7rem) {
-    .header-tab-trailing-slot {
-      width: 1.25rem;
+    .group\/tab:hover .header-tab-title {
+      padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
     }
 
-    .group\/tab:hover .header-tab-trailing-slot,
-    .group\/tab:focus-visible .header-tab-trailing-slot,
-    .group\/tab:has(:focus-visible) .header-tab-trailing-slot {
+    .group\/tab:hover .header-tab-trailing-slot {
+      width: 1.25rem;
       opacity: 1;
     }
 
-    .group\/tab:hover .header-tab-close-button,
-    .group\/tab:focus-visible .header-tab-close-button,
-    .group\/tab:has(:focus-visible) .header-tab-close-button {
+    .group\/tab:hover .header-tab-close-button {
       pointer-events: auto;
     }
+  }
+
+  .header-tab-label[data-leader-visible="true"] .header-tab-title {
+    padding-inline-end: 0;
   }
 
   [data-composer-editor] ul {

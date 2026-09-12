@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { PushPermissionState } from "@traycer-clients/shared/platform/runner-host";
+import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -16,7 +17,7 @@ import {
   usePushPermissionRequestMutation,
   type PushPermissionRequestMutation,
 } from "@/hooks/runner/use-push-permission-request-mutation";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 
 type PushPermissionView =
   | { readonly kind: "loading" }
@@ -47,26 +48,35 @@ const READ_FAILED = "Couldn't read this phone's notification setting.";
  * is the UI word for a HOST (Settings → Devices lists hosts), so "This device"
  * would read as one more host-scoped setting - the exact confusion the row is
  * here to end.
+ *
+ * The gate is the only thing rendered above it: every hook the group uses
+ * reaches the runner host, which throws in a host-less shell, so they live in
+ * the child and run only once the gate has passed.
  */
 export function PushPermissionSection(): ReactNode {
-  const { pushPermission } = useRunnerHost();
+  const availability = useSettingsAvailabilityContext();
+  if (!APP_NOTIFICATIONS.definitions.thisPhone.availableWhen(availability)) {
+    return null;
+  }
+  return <PushPermissionGroup />;
+}
+
+function PushPermissionGroup(): ReactNode {
   const query = usePushPermissionQuery();
   const request = usePushPermissionRequestMutation();
   const openSettings = usePushPermissionOpenSettingsMutation();
-
-  if (pushPermission === null) return null;
-
   const view = pushPermissionView(query);
   return (
     <SettingsGroup
-      title="This phone"
+      group={APP_NOTIFICATIONS.definitions.thisPhone}
+      showTitle
       tone="default"
       dataTestId="push-permission-section"
       fill={false}
     >
       <SettingsRow
-        label="Push notifications"
-        description={viewDescription(view)}
+        row={APP_NOTIFICATIONS.definitions.pushNotifications}
+        status={viewDescription(view)}
         control={
           <div
             data-testid="push-permission-state"
