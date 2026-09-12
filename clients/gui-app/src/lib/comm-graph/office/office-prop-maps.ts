@@ -2128,3 +2128,139 @@ export const SPIRE_MAP: SpriteMap = [
   "..mmMM..",
   "..mmMM..",
 ];
+
+// ---- The civic rooms -------------------------------------------------- //
+//
+// The infirmary's beds and the lounge's chairs are FURNITURE AN AGENT IS ON
+// rather than beside, like the nap room's bags: their tile stays walkable, so
+// the character's own sprite lands on top of the art below.
+
+/** A hospital bed seen from above: pillow at the head end, blanket over the rest. */
+export const BED_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OWOOOOOOOOOOWOOOOOOOOOOOOOOOOOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWOOOOOOOOOOWOOOOOOOOOOOOOOOOOWO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+];
+
+/**
+ * The sheet turned down over an occupied bed, drawn ON the bed art.
+ *
+ * An OVERLAY rather than a second whole bed, because the two are drawn
+ * together and a second full map would be thirty-two columns of duplicated
+ * frame that could drift out of line with the first.
+ */
+export const BED_OCCUPIED_MAP: SpriteMap = [
+  "................................",
+  "................................",
+  "................................",
+  "..............ObbbO.............",
+  ".............ObbbbbO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OOOOOOO............",
+  "................................",
+  "................................",
+];
+
+/**
+ * A padded lounge chair. Deliberately symmetric top to bottom: the lounge
+ * seats two rows facing each other across the table, and one chair that reads
+ * from either side is one sprite rather than a pair that can disagree.
+ */
+export const LOUNGE_CHAIR_MAP: SpriteMap = [
+  "................",
+  "...OOOOOOOOOO...",
+  "...OXXXXXXXXO...",
+  "..OOXXXXXXXXOO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OOOOOOOOOOOO..",
+  "...OXXXXXXXXO...",
+  "...OOOOOOOOOO...",
+  "....OWO..OWO....",
+  "....OOO..OOO....",
+  "................",
+];
+
+/** The lounge's low table, two tiles wide, with something to read on it. */
+export const LOW_TABLE_MAP: SpriteMap = [
+  "................................",
+  "................................",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
+  "..OwwwwwwwwwwwwwwwwwwwwwwwwwwO..",
+  "..OwwwwwwwwwObbbbbbOwwwwwwwwwO..",
+  "..OwwwwwwwwwObbbbbbOwwwwwwwwwO..",
+  "..OwwwwwwwwwOnnnnnnOwwwwwwwwwO..",
+  "..OwwwwwwwwwOOOOOOOOwwwwwwwwwO..",
+  "..OwwwwwwwwwwwwwwwwwwwwwwwwwwO..",
+  "..OWWWWWWWWWWWWWWWWWWWWWWWWWWO..",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
+  "...OWO....................OWO...",
+  "...OWO....................OWO...",
+  "...OOO....................OOO...",
+  "................................",
+  "................................",
+];
+
+/** The archive: a door of filing drawers, in the outer wall beside the entrance. */
+export const RECORDS_DOOR_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOO",
+  "OWWWWWWWWWWWWWWO",
+  "OWOOOOOOOOOOOOWO",
+  "OWOwwwwwwwwwwOWO",
+  "OWOwOOOOOOOOwOWO",
+  "OWOwObbbbbbOwOWO",
+  "OWOwOOOOOOOOwOWO",
+  "OWOwwwwwwwwwwOWO",
+  "OWOwOOOOOOOOwOWO",
+  "OWOwObbbbbbOwOWO",
+  "OWOwOOOOOOOOwOWO",
+  "OWOwwwwwwwwwwOWO",
+  "OWOwwwwwwmmwwOWO",
+  "OWOOOOOOOOOOOOWO",
+  "OWWWWWWWWWWWWWWO",
+  "OOOOOOOOOOOOOOOO",
+];
+
+/** The red cross over the infirmary's door, so the room is read at a glance. */
+export const CROSS_SIGN_MAP: SpriteMap = [
+  "................",
+  "..OOOOOOOOOOOO..",
+  "..ObbbbbbbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbnnnnnnbbO..",
+  "..ObbnnnnnnbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbbbbbbbO..",
+  "..OOOOOOOOOOOO..",
+  "....OMO..OMO....",
+  "....OOO..OOO....",
+  "................",
+];

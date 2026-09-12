@@ -120,6 +120,12 @@ import {
   WALL_ISO_RIGHT_MAP,
   WINDOW_DARK_MAP,
   WINDOW_LIT_MAP,
+  BED_MAP,
+  BED_OCCUPIED_MAP,
+  LOUNGE_CHAIR_MAP,
+  LOW_TABLE_MAP,
+  RECORDS_DOOR_MAP,
+  CROSS_SIGN_MAP,
 } from "@/lib/comm-graph/office/office-prop-maps";
 import {
   isOfficeSeatedPose,
@@ -397,6 +403,13 @@ const SPRITE_SIZES: Readonly<Record<OfficeSpriteName, OfficeSize>> = {
   "window-lit": { width: 8, height: 8 },
   "window-dark": { width: 8, height: 8 },
   spire: { width: 8, height: 24 },
+
+  bed: { width: 32, height: 16 },
+  "bed-occupied": { width: 32, height: 16 },
+  "lounge-chair": { width: 16, height: 16 },
+  "low-table": { width: 32, height: 16 },
+  "records-door": { width: 16, height: 16 },
+  "cross-sign": { width: 16, height: 16 },
 };
 
 const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
@@ -499,6 +512,13 @@ const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   "window-lit": WINDOW_LIT_MAP,
   "window-dark": WINDOW_DARK_MAP,
   spire: SPIRE_MAP,
+
+  bed: BED_MAP,
+  "bed-occupied": BED_OCCUPIED_MAP,
+  "lounge-chair": LOUNGE_CHAIR_MAP,
+  "low-table": LOW_TABLE_MAP,
+  "records-door": RECORDS_DOOR_MAP,
+  "cross-sign": CROSS_SIGN_MAP,
 };
 
 /**

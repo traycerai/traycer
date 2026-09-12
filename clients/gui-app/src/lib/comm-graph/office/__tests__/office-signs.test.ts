@@ -163,6 +163,7 @@ function boardSign(
     text: "",
     ownerAgentId: null,
     hostId: null,
+    civicRoomId: null,
     ...overrides,
   };
 }
@@ -184,6 +185,8 @@ function emptyFloor(overrides: Partial<OfficeFloor>): OfficeFloor {
     gameRoom: null,
     areaSigns: [],
     amenities: [],
+    civic: [],
+    road: null,
     ...overrides,
   };
 }
@@ -1487,6 +1490,7 @@ describe("officeSignsToDraw - fixup 6 rule 3: bullpen and solo plates come down 
         ownerAgentId: null,
         hostId: null,
         agentIds: [],
+        civicRoomId: null,
         rungs,
       };
       const drawn = officeSignsToDraw({

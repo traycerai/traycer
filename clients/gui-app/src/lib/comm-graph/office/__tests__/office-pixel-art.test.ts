@@ -125,6 +125,13 @@ const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
   "window-lit": true,
   "window-dark": true,
   spire: true,
+
+  bed: true,
+  "bed-occupied": true,
+  "lounge-chair": true,
+  "low-table": true,
+  "records-door": true,
+  "cross-sign": true,
 };
 
 function mapNamed(name: OfficeSpriteName): ReadonlyArray<string> {

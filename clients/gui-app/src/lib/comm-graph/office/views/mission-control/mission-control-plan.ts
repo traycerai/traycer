@@ -1615,6 +1615,7 @@ function buildSigns(
     ownerAgentId: packing.hqId,
     hostId: hq === undefined || hq === null ? null : hq.hostId,
     agentIds,
+    civicRoomId: null,
   });
   signs.push({
     kind: "area",
@@ -1624,6 +1625,7 @@ function buildSigns(
     ownerAgentId: null,
     hostId: null,
     agentIds: [],
+    civicRoomId: null,
   });
   // A PLATE IS ITS OWN ARC SEGMENT WIDE, and hangs over it rather than beside
   // it. It used to be one tile at the lead's aisle end, which is a budget no
@@ -1650,6 +1652,7 @@ function buildSigns(
       ownerAgentId: teamId,
       hostId: lead === undefined ? null : lead.hostId,
       agentIds: [],
+      civicRoomId: null,
       // The lead is re-lettered at the cursor, so the ladder is derived from
       // whatever it is called there: `team-26-lead`, `team-26`, `t-26`, `t2l`,
       // and no plate at all where even the initials overflow the run - at
@@ -1676,6 +1679,7 @@ function buildSigns(
       ownerAgentId: null,
       hostId: hosts[i],
       agentIds: [],
+      civicRoomId: null,
     });
   }
   return signs;
@@ -1807,6 +1811,7 @@ function buildDesks(
       roomId: ROOM_ID,
       hostId: hq === undefined ? null : hq.hostId,
       manager: true,
+      civicRoomId: null,
       agentId: packing.hqId,
     };
     desks.set(packing.hqId, seat);
@@ -1825,6 +1830,7 @@ function buildDesks(
       roomId: ROOM_ID,
       hostId: null,
       manager: true,
+      civicRoomId: null,
     };
     seats.set(reserve.seatId, reserve);
   }
@@ -1844,6 +1850,7 @@ function buildDesks(
       roomId: ROOM_ID,
       hostId: fill.hostId,
       manager: false,
+      civicRoomId: null,
     };
     seats.set(base.seatId, base);
     if (fill.agentId === null) continue;
@@ -2036,6 +2043,11 @@ export function planMissionControl(input: OfficePlanInput): OfficeLayout {
     gameRoom: null,
     areaSigns,
     amenities,
+    // K2 gives the amphitheatre its medbay, gallery and records door. The
+    // hall has no street and never will (C6): its medbay sign gets a siren
+    // light instead of an ambulance.
+    civic: [],
+    road: null,
   };
   const hostBands = hostBandsOf(packing);
   const frozen: MissionControlFrozen = {

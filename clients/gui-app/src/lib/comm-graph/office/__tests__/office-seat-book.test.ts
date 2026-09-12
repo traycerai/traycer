@@ -32,6 +32,8 @@ interface SeatSpec {
   readonly deskTile: OfficeTilePos;
   /** Omitted specs default to `null`, the single-host shape most cases want. */
   readonly hostId?: string | null;
+  /** The civic room a bed or a lounge chair belongs to; omitted on a desk. */
+  readonly civicRoomId?: string | null;
 }
 
 function tile(col: number, row: number): OfficeTilePos {
@@ -54,6 +56,7 @@ function makeSeat(spec: SeatSpec): OfficeSeat {
     roomId: spec.roomId,
     hostId: spec.hostId ?? null,
     manager: false,
+    civicRoomId: spec.civicRoomId ?? null,
   };
 }
 
@@ -80,6 +83,8 @@ function makeFloor(hostId: string | null, row: number): OfficeFloor {
     gameRoom: null,
     areaSigns: [],
     amenities: [],
+    civic: [],
+    road: null,
   };
 }
 

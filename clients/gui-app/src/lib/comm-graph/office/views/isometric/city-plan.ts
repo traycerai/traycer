@@ -834,6 +834,7 @@ function buildDistrict(
         roomId: block.blockId,
         hostId: block.hostId,
         manager: block.kind === "hq",
+        civicRoomId: null,
       };
       seats.push(seat);
       const agentId = pack.ledger.ownerOf(seatId);
@@ -872,6 +873,7 @@ function buildDistrict(
         // A plate names its lead. `agentIds` belongs to the BOARDS that
         // summarise a block's statuses, which this ticket does not hang.
         agentIds: [],
+        civicRoomId: null,
       });
     }
   }
@@ -932,6 +934,7 @@ export function planCity(input: OfficePlanInput): OfficeLayout {
         ownerAgentId: null,
         hostId: floor.hostId,
         agentIds: [],
+        civicRoomId: null,
       });
     }
   }

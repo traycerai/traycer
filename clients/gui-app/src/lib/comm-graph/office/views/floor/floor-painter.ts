@@ -526,7 +526,7 @@ function blockMap(
   const blocks: OfficeDrawable[] = [];
   const push = (
     bounds: OfficeTileRect,
-    fill: "storey" | "room" | "pod" | "plaza" | "grass",
+    fill: "storey" | "room" | "pod" | "plaza" | "grass" | "civic",
   ): void => {
     if (!tileRectsOverlap(bounds, tiles)) return;
     blocks.push({
@@ -543,6 +543,10 @@ function blockMap(
     for (const amenity of floor.amenities) {
       push(amenity.bounds, amenity.kind === "garden" ? "grass" : "plaza");
     }
+    // After the amenities, so a civic room that shares a column with one is the
+    // block a reader sees. At this zoom the infirmary and the waiting room are
+    // the two regions worth telling apart from the break room.
+    for (const room of floor.civic) push(room.bounds, "civic");
   }
   for (const room of layout.rooms) {
     push(room.bounds, "room");
@@ -640,6 +644,13 @@ function floorChunk(
         tiles,
       });
     }
+    // The civic rooms wear the same ring. A one-tile room is a DOOR standing
+    // in the outer wall - the archive - and has no ring to draw: its own wall
+    // is the building's, and `records-door` is already a prop on that tile.
+    for (const room of floorPlan.civic) {
+      if (room.bounds.cols < 3 || room.bounds.rows < 3) continue;
+      pushRoomRing(out, layout, room.bounds, { hedge: false, tiles });
+    }
   }
   pushStairwells(out, layout, tiles);
   pushRugs(out, layout, tiles);
@@ -656,6 +667,9 @@ function floorChunk(
 }
 
 // ---- Desks ------------------------------------------------------------ //
+
+/** Shared, so a seat or a spot with no art of its own allocates nothing. */
+const NO_SEAT_PROPS: ReadonlyArray<OfficeWorldDrawable> = [];
 
 function screenArtFor(state: OfficeDeskState): OfficeScreenArt {
   return SCREEN_ART[state.modelTier];
@@ -783,6 +797,43 @@ function seatPropsOf(
   const deskX = seat.deskTile.col * OFFICE_TILE;
   const deskY = seat.deskTile.row * OFFICE_TILE;
   const owner = state.agentId;
+  // A CIVIC SEAT IS FURNITURE LIKE ANY OTHER SEAT: the bed and the lounge
+  // chair are drawn here, from `layout.seats`, exactly as a reserve desk is on
+  // the views that plan reserves. Standing them up as props on the plan
+  // instead would draw a seat's art somewhere the per-seat drawable budget
+  // cannot count it, and `office-plan-perf`'s denominator is that budget.
+  //
+  // A BED ALSO CARRIES THE ONE PIECE THAT CHANGES: the sheet, turned down
+  // while somebody is in it. It rides the desk-state cache key like every
+  // other seat prop, so the ward repaints when a bed is taken and at no other
+  // time.
+  if (seat.kind === "bed" || seat.kind === "lounge") {
+    const civic: OfficeWorldDrawable[] = [
+      {
+        drawable: {
+          kind: "sprite",
+          sprite: { name: seat.kind === "bed" ? "bed" : "lounge-chair" },
+          x: deskX,
+          y: deskY,
+        },
+        depth: deskY,
+        ownerAgentId: owner,
+      },
+    ];
+    if (seat.kind === "bed" && owner !== null) {
+      civic.push({
+        drawable: {
+          kind: "sprite",
+          sprite: { name: "bed-occupied" },
+          x: deskX,
+          y: deskY,
+        },
+        depth: deskY,
+        ownerAgentId: owner,
+      });
+    }
+    return civic;
+  }
   const out: OfficeWorldDrawable[] = [
     {
       drawable: {
@@ -888,9 +939,6 @@ function floorProjector(layout: OfficeLayout): OfficeProjector {
   };
 }
 
-/** Shared, so a frame that walks a floor's spots allocates nothing per spot. */
-const NO_SPOT_PROPS: ReadonlyArray<OfficeWorldDrawable> = [];
-
 export const floorPainter: OfficePainter = {
   // Props then actors, as the office always has: nothing on this floor stands
   // in front of its own occupant.
@@ -907,7 +955,7 @@ export const floorPainter: OfficePainter = {
     _layout: OfficeLayout,
     _spot: OfficeErrandSpot,
     _lod: OfficeLod,
-  ) => NO_SPOT_PROPS,
+  ) => NO_SEAT_PROPS,
   /**
    * NONE. This painter's block is the tile rect itself, scaled by the tile
    * size under an identity projector, so a query tight to the tiles finds

@@ -1382,7 +1382,14 @@ function envelopeEdgeFor(
  * the storey itself, which the later views hang without furniture.
  */
 function signSpriteFor(sign: OfficeSign): "sign" | "pod-plate" | null {
-  if (sign.kind === "room" || sign.kind === "area" || sign.kind === "host") {
+  if (
+    sign.kind === "room" ||
+    sign.kind === "area" ||
+    sign.kind === "host" ||
+    // A civic room's sign hangs on its own wall face exactly where an
+    // amenity's does, so it hangs on the same board.
+    sign.kind === "civic"
+  ) {
     return "sign";
   }
   if (sign.kind === "pod" || sign.kind === "plate") return "pod-plate";
@@ -1570,6 +1577,10 @@ function blockColor(fill: OfficeBlockFill, palette: OfficePalette): string {
   if (fill === "storey") return palette.floorBase;
   if (fill === "building") return palette.wallDark;
   if (fill === "grass") return palette.leafDark;
+  // A civic room reads as neither office nor outdoors, which is the point of
+  // giving it a fill of its own: at overview the infirmary and the waiting
+  // room are the two blocks a reader is looking FOR.
+  if (fill === "civic") return palette.rugBase;
   // `plaza` and `ground` are both open outdoor floor.
   return palette.floorAccent;
 }

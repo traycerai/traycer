@@ -228,7 +228,19 @@ export type OfficeSpriteName =
   | "window-lit"
   | "window-dark"
   /** The mast that marks the HQ tower. */
-  | "spire";
+  | "spire"
+  /** An infirmary bed, two tiles wide; an agent in `failure` lies on it. */
+  | "bed"
+  /** Drawn over a bed whose seat is held, so an occupied ward reads at a glance. */
+  | "bed-occupied"
+  /** A waiting-room chair; symmetric, so one sprite serves both sides of the table. */
+  | "lounge-chair"
+  /** The lounge's low table, two tiles wide. */
+  | "low-table"
+  /** The archive's door of filing drawers, in the outer wall beside the entrance. */
+  | "records-door"
+  /** The red cross that marks the infirmary. */
+  | "cross-sign";
 
 /**
  * Names one rasterized sprite. `facing`, `pose` and `appearance` only apply to
@@ -296,9 +308,26 @@ export type OfficeLod = 0 | 1 | 2;
  * What kind of place an agent sits in. A `desk` is the full workstation every
  * view has had; a `cubby` is the one-tile slot a cold agent waits in with no
  * monitor, nameplate or errands; a `console` is the amphitheatre's two-tile
- * station. The kind is what the scene reads - never the view id.
+ * station. A `bed` and a `lounge` chair are the CIVIC seats: a place a status
+ * puts somebody, held by a claim for as long as that status lasts. The kind is
+ * what the scene reads - never the view id.
  */
-export type OfficeSeatKind = "desk" | "cubby" | "console";
+export type OfficeSeatKind = "desk" | "cubby" | "console" | "bed" | "lounge";
+
+/**
+ * A room an agent's STATE sends it to, as opposed to one its work happens in.
+ *
+ * Four kinds, one per state that has somewhere to be: the infirmary for a
+ * crash, the help desk for an agent that needs a person, the waiting room for
+ * one waiting on a reply, the archive for one that has gone. Every view fills
+ * the same four with its own words and its own geometry, which is what keeps
+ * "where is this agent" one question with one answer across six offices.
+ */
+export type OfficeCivicKind =
+  | "infirmary"
+  | "help-desk"
+  | "waiting-room"
+  | "archive";
 
 /**
  * One place an agent can sit, whether or not anybody sits there. Reserve seats
@@ -342,6 +371,16 @@ export interface OfficeSeat {
   readonly hostId: string | null;
   /** A root agent (no parent on the floor) gets a manager desk with a plant. */
   readonly manager: boolean;
+  /**
+   * The civic room this seat belongs to, or `null` for a desk, cubby or
+   * console.
+   *
+   * Carried on the SEAT rather than looked up by walking the floor's rooms,
+   * because everything that asks - the seat book's preference filter, the
+   * hover card's "where" line, the painter's choice of furniture - has a seat
+   * in hand and no reason to know how a floor stores its rooms.
+   */
+  readonly civicRoomId: string | null;
   /** Alpha of the seated occupant's actor while idle at lod 1 and 2; absent means 1. */
   readonly idleAlpha?: number;
 }
@@ -411,6 +450,64 @@ export interface OfficePod {
 export type OfficePodStyle = "glass" | "planters" | "shelves";
 
 /**
+ * One civic room on one storey: where a state puts an agent.
+ *
+ * Shaped like an amenity on purpose - bounds, a door, a sign, a name - because
+ * a painter that can draw a break room can draw an infirmary, and the two
+ * differ in what sends somebody there rather than in what they look like. What
+ * an amenity has no use for is the rest: the SEATS a claim may take, and the
+ * KERB a vehicle stops at.
+ *
+ * The help desk and the archive carry no seats. The help desk is the view's
+ * existing reception counter wearing this record so that its sign, its name and
+ * its kerb come from the same place as the other three; the archive is a door
+ * with a counter on it, and a room that kept one crate per archived agent would
+ * grow without bound.
+ */
+export interface OfficeCivicRoom {
+  /** Stable across plans: `"<host>/<floor>/civic/<kind>"`. */
+  readonly civicRoomId: string;
+  readonly kind: OfficeCivicKind;
+  /** Outer bounds INCLUDING the room's walls, like an amenity's. */
+  readonly bounds: OfficeTileRect;
+  /** The way in; for the archive, where the walk-out ends. */
+  readonly doorTile: OfficeTilePos;
+  /** Left tile of the room's sign. */
+  readonly signTile: OfficeTilePos;
+  /** The view's own word for this kind: "Infirmary", "Sick bay", "Hospital". */
+  readonly name: string;
+  /** Beds or lounge chairs, in seat-id order; empty for the help desk and the archive. */
+  readonly seatIds: ReadonlyArray<string>;
+  readonly floorIndex: number;
+  readonly hostId: string | null;
+  /**
+   * Where a vehicle stops for this room - a tile of the floor's `road` - or
+   * `null` where nothing drives to it. Carried by the PLAN because the road is
+   * the plan's, and a scene that derived a kerb would be deriving geometry.
+   */
+  readonly kerbTile: OfficeTilePos | null;
+}
+
+/**
+ * The lane vehicles drive along on one storey, as a polyline of tiles.
+ *
+ * DRAWN, NOT SEARCHED. A road is not part of `walkable` and no route is ever
+ * found across it: a vehicle interpolates along `tiles` in order, entering at
+ * `entryTile` and leaving at `exitTile`, and the view's projector maps each
+ * tile to the screen exactly as it does for a walker. That is what lets one
+ * route description work oblique and isometric alike.
+ *
+ * Declared here rather than beside the vehicles so that the plans which emit a
+ * road and the code that eventually drives one share a single shape.
+ */
+export interface OfficeRoad {
+  readonly entryTile: OfficeTilePos;
+  /** In travel order, `entryTile` first and `exitTile` last. */
+  readonly tiles: ReadonlyArray<OfficeTilePos>;
+  readonly exitTile: OfficeTilePos;
+}
+
+/**
  * One building floor per host. A single-host epic has exactly one floor and
  * draws no stairwell or floor sign; several hosts stack floors vertically,
  * each with its own lobby, door and reception. Agents never cross floors:
@@ -476,6 +573,19 @@ export interface OfficeFloor {
    * they are follows the floor's agent count.
    */
   readonly amenities: ReadonlyArray<OfficeAmenity>;
+  /**
+   * The civic rooms on this storey, AT MOST ONE PER KIND. Empty on a view that
+   * plans none.
+   *
+   * Separate from `amenities` rather than folded into it, because the two
+   * answer different questions and every consumer asks only one of them: an
+   * amenity is somewhere an idle agent MAY go, and the errand engine reads the
+   * list to find out where; a civic room is where a status PUTS somebody, and
+   * the errand engine must never send anyone there.
+   */
+  readonly civic: ReadonlyArray<OfficeCivicRoom>;
+  /** The lane vehicles drive along this storey, or `null` where it has no street. */
+  readonly road: OfficeRoad | null;
 }
 
 export type OfficeAmenityKind =
@@ -603,7 +713,9 @@ export type OfficeSignKind =
   | "host"
   | "plate"
   | "board"
-  | "hq-board";
+  | "hq-board"
+  /** A civic room's name, and the one kind of sign that may carry a counter. */
+  | "civic";
 
 /**
  * How a sign's lettering gives way when it is wider than the tiles it names.
@@ -639,6 +751,12 @@ export interface OfficeSign {
   readonly hostId: string | null;
   /** Boards only: whose statuses this sign summarises. */
   readonly agentIds: ReadonlyArray<string>;
+  /**
+   * The civic room this sign names, or `null` for every other kind of
+   * lettering. What lets a counter be read off the room rather than baked into
+   * the text at plan time, which would be a number that stops being true.
+   */
+  readonly civicRoomId: string | null;
   /**
    * What this sign says when its full lettering is wider than `widthTiles`;
    * absent draws the text as written.
@@ -970,7 +1088,9 @@ export type OfficeBlockFill =
   | "building"
   | "plaza"
   | "ground"
-  | "grass";
+  | "grass"
+  /** A civic room: the infirmary, the waiting room, the help desk, the archive. */
+  | "civic";
 
 /**
  * The mark drawn over a pip, so overview state survives colour blindness and a
