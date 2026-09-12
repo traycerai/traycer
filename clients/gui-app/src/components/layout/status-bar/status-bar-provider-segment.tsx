@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { StatusBarMiniBar } from "@/components/layout/status-bar/status-bar-mini-bar";
 import { statusBarSegmentTooltip } from "@/components/layout/status-bar/status-bar-usage-display";
 import {
   statusBarUsageDetailParts,
@@ -13,8 +14,6 @@ import type {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
-  rateLimitWindowFillPercent,
-  rateLimitWindowSeverityBarClassName,
   rateLimitWindowSeverityTextClassName,
   RUNNING_LOW_TEXT_CLASS_NAME,
 } from "@/lib/rate-limits/window-severity";
@@ -161,7 +160,13 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
             about. Gated as ONE decision for the whole segment (`showBar`), so
             a rung that drops bars drops all of them at once rather than
             thinning them one at a time. */}
-          {showBar ? <MiniBar window={window} /> : null}
+          {showBar ? (
+            <StatusBarMiniBar
+              windowKey={window.windowKey}
+              usedPercent={window.usedPercent}
+              severity={window.severity}
+            />
+          ) : null}
           <StatusBarWindowText
             window={window}
             percentMode={props.percentMode}
@@ -185,38 +190,6 @@ function windowsToDraw(
 ): ReadonlyArray<StatusBarRateLimitWindow> {
   if (labelled) return segment.shown;
   return segment.tightest === null ? [] : [segment.tightest];
-}
-
-/**
- * One drawn window as a severity-coloured meter. A gauge rather than a layout
- * surface, so it is sized like the header glyph's bars are.
- *
- * `data-window-key` is what pairs a bar with the reading it belongs to for
- * anything reading the DOM: several bars now sit on one segment, and their
- * ORDER is the only other thing tying them to their numbers.
- */
-function MiniBar(props: {
-  readonly window: StatusBarRateLimitWindow;
-}): ReactNode {
-  return (
-    <span
-      aria-hidden
-      data-testid="status-bar-provider-mini-bar"
-      data-window-key={props.window.windowKey}
-      className="relative h-1 w-8 shrink-0 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
-    >
-      <span
-        data-testid="status-bar-provider-mini-bar-fill"
-        className={cn(
-          "absolute inset-y-0 left-0 rounded-[2px]",
-          rateLimitWindowSeverityBarClassName(props.window.severity),
-        )}
-        style={{
-          width: `${rateLimitWindowFillPercent(props.window.usedPercent)}%`,
-        }}
-      />
-    </span>
-  );
 }
 
 /**

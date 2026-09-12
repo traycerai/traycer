@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
+import type { ProviderRateLimits } from "@traycer/protocol/host";
+import {
+  classifyProviderRateLimitWindow,
+  isProviderRateLimitWindowLive,
+} from "@traycer/protocol/host/rate-limit";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { StatusBarMiniBar } from "@/components/layout/status-bar/status-bar-mini-bar";
 import { LiveSubgroup } from "@/components/settings/panels/layout/live-subgroup";
 import { LiveToggleRow } from "@/components/settings/panels/layout/live-toggle-row";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
@@ -52,8 +58,17 @@ import {
 import {
   isWindowedRateLimitProvider,
   providerWindowEntries,
-  type RateLimitWindowEntry,
 } from "@/lib/rate-limits/rate-limit-window-catalog";
+import {
+  windowPercentText,
+  windowPercentValueText,
+} from "@/lib/rate-limits/status-bar-window-text";
+import { tightestRateLimitWindow } from "@/lib/rate-limits/tightest-window";
+import {
+  rateLimitWindowSeverityTextClassName,
+  type RateLimitWindowSeverity,
+} from "@/lib/rate-limits/window-severity";
+import { useSampledNow } from "@/lib/relative-time";
 import { isStatusBarControlsAvailable } from "@/lib/settings/settings-availability";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
@@ -409,7 +424,36 @@ interface StatusBarProviderRow {
   readonly label: string;
   /** The profile whose reading this row describes, for the row's subtitle. */
   readonly profileLabel: string;
-  readonly windows: ReadonlyArray<RateLimitWindowEntry>;
+  readonly windows: ReadonlyArray<StatusBarProviderLimit>;
+}
+
+/** What this provider's retained reading currently says about one limit. */
+interface StatusBarLimitReading {
+  readonly usedPercent: number;
+  readonly resetsAt: number | null;
+  readonly severity: RateLimitWindowSeverity;
+}
+
+/** One entry of a provider's limits list: what to call it, and what it reads. */
+interface StatusBarProviderLimit {
+  readonly windowKey: string;
+  readonly label: string;
+  /**
+   * `null` for a limit with no CURRENT reading - a provider nothing has been
+   * fetched for, and also a window whose reset instant has passed. Such a row
+   * is drawn as it always was, label alone.
+   */
+  readonly reading: StatusBarLimitReading | null;
+}
+
+/**
+ * A limit and its reading as one value, which is what both the gauge and the
+ * tightest-of comparison want: the gauge needs the key it is drawn under, and
+ * the automatic entry needs the NAME of whichever limit won.
+ */
+interface StatusBarLimitFigure extends StatusBarLimitReading {
+  readonly windowKey: string;
+  readonly label: string;
 }
 
 /**
@@ -576,12 +620,20 @@ function renderedSelection(
  * something the user can see to re-check - and it is the rendered selection
  * that is counted, so "nothing visible is checked" is never a state this list
  * can be in.
+ *
+ * Each entry also carries its limit's current figure (`LimitFigure`), which is
+ * how a list of names becomes a list of readings: whether a limit is worth
+ * showing on the strip is a question about what it says right now.
  */
 function limitItems(
   row: StatusBarProviderRow,
   rendered: StatusBarProviderLimitSelection,
 ): ReadonlyArray<SettingsCheckboxListItem<LimitListEntry>> {
   const checkedCount = rendered.limitKeys.length + (rendered.automatic ? 1 : 0);
+  // The same comparison the strip's segment model makes
+  // (`lib/rate-limits/tightest-window.ts`), so the limit this entry names is
+  // the limit the strip is drawing and not a second opinion about it.
+  const tightest = tightestRateLimitWindow(limitFigures(row.windows));
   return [
     {
       key: "automatic",
@@ -589,18 +641,120 @@ function limitItems(
       label: "Tightest limit (automatic)",
       checked: rendered.automatic,
       disabled: rendered.automatic && checkedCount === 1,
+      // This entry names the limit it is reading, where a limit's own row does
+      // not: WHICH of several is tightest right now is the thing the entry is
+      // for, and a bare percentage here would be the one figure in the list
+      // with nothing saying what it measures.
+      trailing:
+        tightest === null ? null : <LimitFigure figure={tightest} showName />,
+      announcement:
+        tightest === null
+          ? null
+          : `, ${tightest.label}, ${windowPercentText(tightest.usedPercent, "used")}`,
     },
-    ...row.windows.map((window) => {
-      const checked = rendered.limitKeys.includes(window.windowKey);
+    ...row.windows.map((limit) => {
+      const checked = rendered.limitKeys.includes(limit.windowKey);
+      const figure = limitFigure(limit);
       return {
-        key: window.windowKey,
-        value: { kind: "limit" as const, windowKey: window.windowKey },
-        label: window.label,
+        key: limit.windowKey,
+        value: { kind: "limit" as const, windowKey: limit.windowKey },
+        label: limit.label,
         checked,
         disabled: checked && checkedCount === 1,
+        trailing:
+          figure === null ? null : (
+            <LimitFigure figure={figure} showName={false} />
+          ),
+        announcement:
+          figure === null
+            ? null
+            : `, ${windowPercentText(figure.usedPercent, "used")}`,
       };
     }),
   ];
+}
+
+function limitFigure(
+  limit: StatusBarProviderLimit,
+): StatusBarLimitFigure | null {
+  if (limit.reading === null) return null;
+  return { windowKey: limit.windowKey, label: limit.label, ...limit.reading };
+}
+
+function limitFigures(
+  limits: ReadonlyArray<StatusBarProviderLimit>,
+): ReadonlyArray<StatusBarLimitFigure> {
+  return limits.flatMap((limit) => {
+    const figure = limitFigure(limit);
+    return figure === null ? [] : [figure];
+  });
+}
+
+/**
+ * One limit's current reading, drawn at the right edge of its row: the strip's
+ * OWN gauge (`StatusBarMiniBar`) and the percentage beside it.
+ *
+ * The point of a figure in a control is that it is the figure the control
+ * governs, so the gauge is imported rather than drawn again, and the percentage
+ * carries the same severity tone the strip gives it - which is also the only
+ * thing on the row saying `82%` is a different kind of news from `12%`. The
+ * reset countdown is deliberately absent: this is a list of what to show, not a
+ * second status bar, and the strip is where a timer means something.
+ *
+ * `used` rather than the strip's `percentMode`: `Percentage` is a preference
+ * about how the STRIP words a reading, and the preview above it already answers
+ * for it. Here the number's job is how much of this limit is gone, which is the
+ * same question the gauge's fill answers - and a list whose numbers inverted
+ * while their bars did not would be two readings of one fact.
+ *
+ * Both halves are inside the control's `aria-hidden` wrapper; the box's own
+ * name carries the same reading through `announcement`.
+ */
+/**
+ * The one width every percent cell reserves, named so the class the rows share
+ * is one literal - a track whose rows were sized independently is a track only
+ * until one of them disagrees.
+ */
+const LIMIT_PERCENT_CELL_WIDTH_CLASS_NAME = "min-w-[5ch]";
+
+function LimitFigure(props: {
+  readonly figure: StatusBarLimitFigure;
+  readonly showName: boolean;
+}): ReactNode {
+  return (
+    <>
+      {props.showName ? (
+        <span className="truncate text-muted-foreground text-ui-xs">
+          {props.figure.label}
+        </span>
+      ) : null}
+      <StatusBarMiniBar
+        windowKey={props.figure.windowKey}
+        usedPercent={props.figure.usedPercent}
+        severity={props.figure.severity}
+      />
+      {/* A numeral track, not a layout width: `tabular-nums` makes the digits
+        one width and the `ch` floor keeps every row's number ending in the same
+        column, so a column of rows reads as one gauge repeated.
+
+        The floor is sized by the WIDEST READING rather than by digit count.
+        `windowPercentValueText` clamps to `100%`, and `%` advances wider than a
+        tabular digit does, so `100%` is about 4.5ch - a 4ch cell grows for that
+        one row and shifts its gauge left of every other row's, which is the
+        misalignment the track exists to prevent. 5ch clears it with the slack
+        on the left, where a right-aligned number never shows it. */}
+      <span
+        data-testid="layout-limit-percent"
+        className={cn(
+          LIMIT_PERCENT_CELL_WIDTH_CLASS_NAME,
+          "shrink-0 text-right tabular-nums",
+          rateLimitWindowSeverityTextClassName(props.figure.severity),
+        )}
+      >
+        {windowPercentValueText(props.figure.usedPercent, "used")}
+      </span>
+    </>
+  );
 }
 
 function limitsRowDescription(
@@ -644,6 +798,10 @@ function providerRowDescription(row: StatusBarProviderRow): string {
 function useStatusBarProviderRows(): ReadonlyArray<StatusBarProviderRow> {
   const client = useHostClient();
   const profileSelection = useRateLimitProfileSelection();
+  // The same shared 60s clock the strip samples, so a window that expires while
+  // this page is open loses its figure within the minute instead of printing a
+  // period that has already rolled.
+  const now = useSampledNow();
   const visibleProviders = useVisibleRateLimitProviders();
   const providers = sortProviderStatesByProviderOrder(
     visibleProviders.filter((provider) =>
@@ -686,9 +844,38 @@ function useStatusBarProviderRows(): ReadonlyArray<StatusBarProviderRow> {
       providerId: target.provider.providerId,
       label: providerDisplayName(target.provider.providerId),
       profileLabel: profileLabelFor(target.provider, target.profileId),
-      windows: rateLimits === null ? [] : providerWindowEntries(rateLimits),
+      windows: rateLimits === null ? [] : providerLimits(rateLimits, now),
     };
   });
+}
+
+/**
+ * One provider's limits, each carrying whatever its retained reading currently
+ * says about it.
+ *
+ * Every limit the snapshot reports stays in the list - that is what makes a
+ * model-scoped window checkable at all - but a READING is attached only while
+ * the window is live, the same test `liveWindows` applies before the strip draws
+ * one. A window whose reset instant has passed describes a period that has
+ * already rolled, so its percentage is spent usage; the row keeps its checkbox
+ * and simply shows no figure, which is exactly how every row of a provider with
+ * no reading is drawn.
+ */
+function providerLimits(
+  rateLimits: ProviderRateLimits,
+  now: number,
+): ReadonlyArray<StatusBarProviderLimit> {
+  return providerWindowEntries(rateLimits).map((entry) => ({
+    windowKey: entry.windowKey,
+    label: entry.label,
+    reading: isProviderRateLimitWindowLive(entry.window, now)
+      ? {
+          usedPercent: entry.window.usedPercent,
+          resetsAt: entry.window.resetsAt,
+          severity: classifyProviderRateLimitWindow(entry.window),
+        }
+      : null,
+  }));
 }
 
 function profileLabelFor(

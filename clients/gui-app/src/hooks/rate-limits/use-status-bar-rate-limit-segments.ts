@@ -43,6 +43,7 @@ import {
   providerWindowEntries,
   type RateLimitWindowKind,
 } from "@/lib/rate-limits/rate-limit-window-catalog";
+import { tightestRateLimitWindow } from "@/lib/rate-limits/tightest-window";
 import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
 import { useSampledNow } from "@/lib/relative-time";
 import {
@@ -307,40 +308,6 @@ function requestsFor(
   });
 }
 
-/**
- * Whether `candidate` binds this provider harder than `incumbent` does: the
- * higher used percentage, then the sooner reset, then whichever the catalog
- * reported first.
- *
- * A window with no `resetsAt` loses that second comparison to one that has a
- * reset instant, rather than being treated as infinitely far away - "soonest"
- * is a question an unknown reset cannot answer, and preferring the window that
- * CAN answer it is what keeps the compact form informative.
- */
-function isTighterWindow(
-  candidate: StatusBarRateLimitWindow,
-  incumbent: StatusBarRateLimitWindow,
-): boolean {
-  if (candidate.usedPercent !== incumbent.usedPercent) {
-    return candidate.usedPercent > incumbent.usedPercent;
-  }
-  if (candidate.resetsAt === null) return false;
-  if (incumbent.resetsAt === null) return true;
-  return candidate.resetsAt < incumbent.resetsAt;
-}
-
-function tightestWindow(
-  windows: ReadonlyArray<StatusBarRateLimitWindow>,
-): StatusBarRateLimitWindow | null {
-  return windows.reduce<StatusBarRateLimitWindow | null>(
-    (tightest, window) =>
-      tightest === null || isTighterWindow(window, tightest)
-        ? window
-        : tightest,
-    null,
-  );
-}
-
 function segmentState(
   rateLimits: ProviderRateLimits | null,
   envelope: ProviderRateLimitEnvelope | null,
@@ -402,7 +369,7 @@ function shownWindows(
   windows: ReadonlyArray<StatusBarRateLimitWindow>,
   selection: StatusBarProviderLimitSelection,
 ): ReadonlyArray<StatusBarRateLimitWindow> {
-  const tightest = tightestWindow(windows);
+  const tightest = tightestRateLimitWindow(windows);
   const shown = windows.filter(
     (window) =>
       (selection.automatic && window === tightest) ||
@@ -450,7 +417,7 @@ function toSegments(
       ...segmentState(retained, envelope, query.isError),
       windows,
       shown,
-      tightest: tightestWindow(shown),
+      tightest: tightestRateLimitWindow(shown),
     };
   });
 }

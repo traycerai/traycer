@@ -1472,6 +1472,44 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     The group carries `aria-describedby` to its row description
     (`useSettingsRowDescriptionId`), since `disabled` takes the held entry out
     of the tab order and the rule that held it is stated there.
+  - **Every entry of that list carries its limit's current figure**: after the
+    label, at the row's right edge, the strip's OWN gauge
+    (`components/layout/status-bar/status-bar-mini-bar.tsx`, imported by both
+    surfaces rather than drawn twice) and the percentage in that window's
+    severity tone with `tabular-nums`, every row reserving the same cell width
+    (`LIMIT_PERCENT_CELL_WIDTH_CLASS_NAME`) so the gauges form one straight
+    track. That width is sized by the widest READING, not by digit count: `%`
+    advances wider than a tabular digit, so a cell that fits three digits grows
+    for the one row reading `100%` and shifts its gauge out of the column. `Tightest limit (automatic)` shows
+    whichever limit binds hardest right now and NAMES it in muted text
+    (`wk 96%`), because which of several is tightest is the thing that entry is
+    for and a bare number there would be the one figure in the list with no
+    limit attached. The tightest-of comparison is
+    `lib/rate-limits/tightest-window.ts`, shared with
+    `useStatusBarRateLimitSegments`, so the entry can never name one limit
+    while the strip draws another.
+    - A figure exists only where the retained reading has a LIVE window for
+      that limit. A provider nothing has been fetched for renders the list as
+      it always did, labels alone - a control does not show sample figures -
+      and so does a window whose reset instant has passed, which the strip has
+      already dropped (`liveWindows`) and whose percentage is spent usage. The
+      row keeps its checkbox either way: a pick has to survive its window's
+      own cycle. The Settings page samples the same shared 60s clock, so a
+      window expiring while it is open loses its figure within the minute.
+    - The percentage is always `used`, whatever `Percentage` says.
+      Used / remaining is a preference about how the STRIP words a reading -
+      the preview above answers for it - while here the number is the same
+      question the gauge's fill answers, and a list whose numbers inverted
+      while their bars did not would be two readings of one fact. The reset
+      timer is absent for the same reason: this is a list of what to show, not
+      a second status bar.
+    - Both halves sit inside `SettingsCheckboxList`'s `aria-hidden` `trailing`
+      slot, so nothing drawn there can change what a box is called; the same
+      reading reaches a screen reader through the item's `announcement`, which
+      is `sr-only` text extending the name (`5h, 22% used`,
+      `Tightest limit (automatic), wk, 96% used`). Rows are full width so the
+      figures line up as one track; with no figures the labels sit exactly
+      where they did.
   - **One mini bar per DRAWN limit**, immediately before the reading it
     measures (`[bar] 57% used 4h 15m · [bar] 82% used wk`), filled and
     coloured from that window's own severity - so a provider showing three
@@ -1485,7 +1523,10 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     reading two rungs after the bars went. Each bar carries
     `data-window-key`, since order is otherwise the only thing pairing a
     gauge with its number, and every one stays `aria-hidden` - the accessible
-    content is the percentages and the provider tooltip, unchanged.
+    content is the percentages and the provider tooltip, unchanged. The gauge
+    itself is `StatusBarMiniBar`
+    (`components/layout/status-bar/status-bar-mini-bar.tsx`), its own module
+    because the limit list above draws the same one.
   - **Chat** (in `layout-settings-panel.tsx` itself). It opens with a
     **preview** (`panels/layout/context-usage-preview.tsx`), the same
     construction as the status bar's: an `inert` + `aria-hidden` frame and a

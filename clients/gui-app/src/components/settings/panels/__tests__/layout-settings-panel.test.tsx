@@ -205,6 +205,57 @@ function claudeReady(): Extract<
 }
 
 /**
+ * Two live limits on one provider, deliberately in two severity tiers: `5h` at
+ * 22% of a 5-hour window is healthy, `wk` at 96% of a 7-day one is running low
+ * (long windows warn at 95). A figure drawn from the wrong window is therefore
+ * visible in its COLOUR as well as its width.
+ */
+function claudeReadyWithTwoLimits(): Extract<
+  ProviderRateLimits,
+  { provider: "claude-code" }
+> {
+  return {
+    ...claudeReady(),
+    sevenDay: {
+      usedPercent: 96,
+      resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+      durationMinutes: 7 * 24 * 60,
+    },
+  };
+}
+
+/**
+ * The same two limits with the weekly one spent, so the list has to draw `100%`
+ * - the widest reading `windowPercentValueText` can produce - beside a shorter
+ * one.
+ */
+function claudeReadyWithExhaustedWeekly(): Extract<
+  ProviderRateLimits,
+  { provider: "claude-code" }
+> {
+  return {
+    ...claudeReady(),
+    sevenDay: {
+      usedPercent: 100,
+      resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+      durationMinutes: 7 * 24 * 60,
+    },
+  };
+}
+
+/** The same two limits with the 5-hour one already rolled over. */
+function claudeReadyWithExpiredFiveHour(): Extract<
+  ProviderRateLimits,
+  { provider: "claude-code" }
+> {
+  const reading = claudeReadyWithTwoLimits();
+  return {
+    ...reading,
+    fiveHour: { usedPercent: 22, resetsAt: NOW - 1000, durationMinutes: 300 },
+  };
+}
+
+/**
  * A Claude reading carrying a MODEL-SCOPED window, whose key exists only in the
  * payload - the half `fixedProviderWindowKeys` cannot name.
  */
@@ -278,8 +329,45 @@ function limitsGroup(providerLabel: string): HTMLElement {
   return screen.getByRole("group", { name: `${providerLabel} limits` });
 }
 
+/**
+ * A limit entry by its LABEL. The figures beside a limit that has a reading
+ * extend the box's accessible name rather than replacing it (`5h, 4% used`), so
+ * every call site here names the label and nothing else.
+ */
 function limitCheckbox(providerLabel: string, name: string): HTMLElement {
-  return within(limitsGroup(providerLabel)).getByRole("checkbox", { name });
+  return within(limitsGroup(providerLabel)).getByRole("checkbox", {
+    name: (accessibleName: string) =>
+      accessibleName === name || accessibleName.startsWith(`${name},`),
+  });
+}
+
+/** The entry labels a provider's list draws, in list order. */
+function limitLabels(providerLabel: string): ReadonlyArray<string | null> {
+  return within(limitsGroup(providerLabel))
+    .getAllByTestId("settings-checkbox-list-label")
+    .map((label) => label.textContent);
+}
+
+/** One entry's percent cell, whose reserved width is what aligns the gauges. */
+function limitPercentCell(
+  providerLabel: string,
+  name: string,
+): HTMLElement | null {
+  return (
+    limitCheckbox(providerLabel, name)
+      .closest("label")
+      ?.querySelector('[data-testid="layout-limit-percent"]') ?? null
+  );
+}
+
+/** One entry's mini bar, or `null` for an entry drawing no figure. */
+function limitBar(providerLabel: string, name: string): HTMLElement | null {
+  return (
+    limitCheckbox(providerLabel, name)
+      .closest("label")
+      ?.querySelector('[data-testid="status-bar-provider-mini-bar-fill"]') ??
+    null
+  );
 }
 
 const AUTOMATIC = "Tightest limit (automatic)";
@@ -574,13 +662,8 @@ describe("<LayoutSettingsPanel />", () => {
 
     render(<LayoutSettingsPanel />);
 
-    // Read off the wrapping `<label>`, which is where the box's accessible name
-    // comes from - and in list order, so this pins the catalog's ordering too.
-    expect(
-      within(limitsGroup("Claude Code"))
-        .getAllByRole("checkbox")
-        .map((box) => box.closest("label")?.textContent),
-    ).toEqual([AUTOMATIC, "5h", "Fable"]);
+    // In list order, so this pins the catalog's ordering too.
+    expect(limitLabels("Claude Code")).toEqual([AUTOMATIC, "5h", "Fable"]);
 
     fireEvent.click(limitCheckbox("Claude Code", "Fable"));
 
@@ -589,6 +672,138 @@ describe("<LayoutSettingsPanel />", () => {
         automatic: true,
         limitKeys: ["claude-code:model:Fable"],
       },
+    });
+  });
+
+  // ── each entry's own figure ───────────────────────────────────────────────
+
+  it("draws one mini bar and percentage per limit, each filled and toned from its own window", () => {
+    mocks.providers = [configuredProvider("claude-code")];
+    mocks.envelopes = {
+      "claude-code": envelopeFor(claudeReadyWithTwoLimits()),
+    };
+
+    render(<LayoutSettingsPanel />);
+
+    const fiveHour = limitBar("Claude Code", "5h");
+    const weekly = limitBar("Claude Code", "wk");
+    expect(fiveHour?.style.width).toBe("22%");
+    expect(weekly?.style.width).toBe("96%");
+    // Two rows of one provider in two severity tiers: a bar drawn from the
+    // provider's tightest window instead of its own would be amber twice.
+    expect(fiveHour?.className).toContain("bg-blue-500");
+    expect(weekly?.className).toContain("bg-amber-500");
+    expect(within(limitsGroup("Claude Code")).getByText("22%")).toBeTruthy();
+    // The figures are `aria-hidden`; the same reading reaches the box's name.
+    expect(limitCheckbox("Claude Code", "5h")).toBe(
+      within(limitsGroup("Claude Code")).getByRole("checkbox", {
+        name: "5h, 22% used",
+      }),
+    );
+  });
+
+  it("reserves one percent-cell width across every row, wide enough for a 100% reading", () => {
+    // `100%` is the widest reading there is, and its `%` advances wider than a
+    // tabular digit - so a cell sized by digit count grows for that row alone
+    // and shifts its gauge left of every other row's. Every row reserving the
+    // same width is what makes the column a track.
+    mocks.providers = [configuredProvider("claude-code")];
+    mocks.envelopes = {
+      "claude-code": envelopeFor(claudeReadyWithExhaustedWeekly()),
+    };
+
+    render(<LayoutSettingsPanel />);
+
+    expect(limitPercentCell("Claude Code", "wk")?.textContent).toBe("100%");
+    expect(limitPercentCell("Claude Code", "5h")?.textContent).toBe("22%");
+    for (const entry of [AUTOMATIC, "5h", "wk"]) {
+      expect(limitPercentCell("Claude Code", entry)?.className).toContain(
+        "min-w-[5ch]",
+      );
+    }
+  });
+
+  it("shows the tightest limit's figure and short name on the automatic entry", () => {
+    mocks.providers = [configuredProvider("claude-code")];
+    mocks.envelopes = {
+      "claude-code": envelopeFor(claudeReadyWithTwoLimits()),
+    };
+
+    render(<LayoutSettingsPanel />);
+
+    // `wk` at 96% binds harder than `5h` at 22%, so that is what the entry is
+    // reading - and it says which, because a bare percentage on this one row
+    // would be the only figure in the list with nothing naming its limit.
+    const automatic = limitCheckbox("Claude Code", AUTOMATIC);
+    expect(automatic).toBe(
+      within(limitsGroup("Claude Code")).getByRole("checkbox", {
+        name: `${AUTOMATIC}, wk, 96% used`,
+      }),
+    );
+    const row = automatic.closest("label");
+    expect(
+      row
+        ?.querySelector('[data-testid="status-bar-provider-mini-bar"]')
+        ?.getAttribute("data-window-key"),
+    ).toBe("claude-code:sevenDay");
+    expect(row?.textContent).toContain("wk");
+  });
+
+  it("gives a discovered model window its own figure, and reads it when it is the tightest", () => {
+    mocks.providers = [configuredProvider("claude-code")];
+    mocks.envelopes = {
+      "claude-code": envelopeFor(claudeReadyWithModelWindow()),
+    };
+
+    render(<LayoutSettingsPanel />);
+
+    expect(limitBar("Claude Code", "Fable")?.style.width).toBe("57%");
+    const group = within(limitsGroup("Claude Code"));
+    expect(
+      group.getByRole("checkbox", { name: "Fable, 57% used" }),
+    ).toBeTruthy();
+    expect(
+      group.getByRole("checkbox", { name: `${AUTOMATIC}, Fable, 57% used` }),
+    ).toBeTruthy();
+  });
+
+  it("draws no figures at all for a provider with no reading", () => {
+    // Nothing fetched, and this page never fetches - so the list is what it
+    // always was, labels alone. A control does not show sample figures.
+    mocks.providers = [configuredProvider("codex")];
+    mocks.envelopes = {};
+
+    render(<LayoutSettingsPanel />);
+
+    expect(
+      limitsGroup("Codex").querySelectorAll(
+        '[data-testid="status-bar-provider-mini-bar"]',
+      ),
+    ).toHaveLength(0);
+    expect(
+      limitCheckbox("Codex", AUTOMATIC).closest("label")?.textContent,
+    ).toBe(AUTOMATIC);
+  });
+
+  it("keeps an expired window listed and checkable but draws no figure for it", () => {
+    // Its reset instant has passed, so the strip has already dropped it
+    // (`liveWindows`) and its percentage is spent usage. The row stays - the
+    // pick has to survive the window's own cycle - and simply shows nothing.
+    mocks.providers = [configuredProvider("claude-code")];
+    mocks.envelopes = {
+      "claude-code": envelopeFor(claudeReadyWithExpiredFiveHour()),
+    };
+
+    render(<LayoutSettingsPanel />);
+
+    expect(limitLabels("Claude Code")).toEqual([AUTOMATIC, "5h", "wk"]);
+    expect(limitBar("Claude Code", "5h")).toBeNull();
+    expect(limitBar("Claude Code", "wk")?.style.width).toBe("96%");
+
+    fireEvent.click(limitCheckbox("Claude Code", "5h"));
+
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+      "claude-code": { automatic: true, limitKeys: ["claude-code:fiveHour"] },
     });
   });
 

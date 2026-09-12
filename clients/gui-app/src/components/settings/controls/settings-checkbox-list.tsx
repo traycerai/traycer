@@ -21,6 +21,23 @@ export interface SettingsCheckboxListItem<Value> {
    * points `aria-describedby` at for exactly that reason.
    */
   readonly disabled: boolean;
+  /**
+   * A live figure drawn at the row's right edge, or `null` for a row that has
+   * none - a gauge and its percentage, in the surfaces where the thing being
+   * checked has a current reading.
+   *
+   * DECORATIVE by construction: the control wraps it `aria-hidden`, so nothing
+   * a caller draws here can change what the box is called. `announcement` is
+   * how the same fact reaches a screen reader, which is also what keeps the two
+   * from being read out twice.
+   */
+  readonly trailing: ReactNode;
+  /**
+   * Appended to the box's accessible name as `sr-only` text, or `null`. Starts
+   * with its own separator (`, 57% used`) because it is joined to the label
+   * with no space - two inline spans inside one `<label>` are one name.
+   */
+  readonly announcement: string | null;
 }
 
 interface SettingsCheckboxListProps<Value> {
@@ -48,6 +65,12 @@ interface SettingsCheckboxListProps<Value> {
  * opposite call because a chip has a row HINT to keep reachable; here the rule
  * is in the description, and an entry that cannot be clicked should not invite
  * the attempt.
+ *
+ * Rows are full width and their `trailing` figures are pushed to the right
+ * edge, so a column of them reads as one track rather than as a figure trailing
+ * each label at whatever width that label happened to be. That is the only
+ * reason the rows stretch; with no figures the labels sit exactly where
+ * `items-start` used to put them.
  */
 export function SettingsCheckboxList<Value>(
   props: SettingsCheckboxListProps<Value>,
@@ -58,7 +81,7 @@ export function SettingsCheckboxList<Value>(
       role="group"
       aria-label={props.ariaLabel}
       aria-describedby={describedById}
-      className="flex max-w-full flex-col items-start gap-1.5"
+      className="flex max-w-full flex-col gap-1.5"
     >
       {props.items.map((item) => (
         <label
@@ -78,7 +101,21 @@ export function SettingsCheckboxList<Value>(
               props.onToggle(item.value);
             }}
           />
-          <span>{item.label}</span>
+          {/* The label alone, keyed for anything reading the list's entries in
+            order: the box's accessible name and the row's text both carry the
+            figures beside it, so neither is the label any more. */}
+          <span data-testid="settings-checkbox-list-label">{item.label}</span>
+          {item.announcement === null ? null : (
+            <span className="sr-only">{item.announcement}</span>
+          )}
+          {item.trailing === null ? null : (
+            <span
+              aria-hidden
+              className="ml-auto flex min-w-0 items-center gap-1.5 pl-3"
+            >
+              {item.trailing}
+            </span>
+          )}
         </label>
       ))}
     </div>
