@@ -291,7 +291,6 @@ export type AnalyticsSetting =
   // they name a path into one persisted store's slice, not a flat
   // `settings-store` key: the surface is the middle segment, so a second
   // surface's rows read as siblings instead of colliding on a verb.
-  | "layout.home.density"
   // One id per preset rather than one `layout.preset` carrying the choice as a
   // property: `setting_changed` has a fixed payload (`source`, `section`,
   // `setting`), and every id here already names what changed rather than what
@@ -1216,7 +1215,6 @@ const ANALYTICS_SETTINGS = new Set<string>(
     diffViewerPreferences: true,
     glassOpacity: true,
     homeTabEnabled: true,
-    "layout.home.density": true,
     "layout.preset.compact": true,
     "layout.preset.default": true,
     "layout.preset.detailed": true,

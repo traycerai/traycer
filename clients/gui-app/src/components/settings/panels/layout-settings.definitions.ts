@@ -193,16 +193,6 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: alwaysAvailable,
     keywords: ["home", "tab strip", "overview", "focus view", "running"],
   },
-  homeDensity: {
-    kind: "row",
-    group: "tabs",
-    search: { anchor: "layout-home-density" },
-    label: "Home density",
-    description:
-      "Row spacing on the Home tab. Compact keeps touch targets on phones.",
-    availableWhen: alwaysAvailable,
-    keywords: ["home", "density", "compact", "rows"],
-  },
   composer: {
     kind: "group",
     search: { anchor: "layout-composer" },

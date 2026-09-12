@@ -16,7 +16,6 @@ import {
 } from "@/stores/epics/left-panel-store";
 import {
   DEFAULT_COMPOSER_LAYOUT,
-  DEFAULT_HOME_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
@@ -41,7 +40,6 @@ function resetStores(): void {
   useLayoutStore.setState({
     statusBar: DEFAULT_STATUS_BAR_LAYOUT,
     composer: DEFAULT_COMPOSER_LAYOUT,
-    home: DEFAULT_HOME_LAYOUT,
   });
   useSettingsStore.setState({
     pinContextUsageBreakdown: DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
@@ -119,7 +117,6 @@ describe("<PresetsLayoutGroup />", () => {
     expect(useLayoutStore.getState().composer).toEqual(
       LAYOUT_PRESETS.compact.composer,
     );
-    expect(useLayoutStore.getState().home.density).toBe("compact");
     expect(useSettingsStore.getState().contextIndicatorStyle).toBe("ring-only");
     expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
     expect(trackSettingChanged).toHaveBeenCalledWith(

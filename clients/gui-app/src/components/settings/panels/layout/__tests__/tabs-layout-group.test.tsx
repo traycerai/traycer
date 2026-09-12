@@ -1,132 +1,49 @@
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { TabsLayoutGroup } from "@/components/settings/panels/layout/tabs-layout-group";
 import { SETTINGS_SEARCH_ENTRIES } from "@/lib/settings-search/settings-search-entries";
-import {
-  DEFAULT_HOME_LAYOUT,
-  useLayoutStore,
-} from "@/stores/settings/layout-store";
 
-vi.mock("@/lib/analytics", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/analytics")>();
-  return {
-    ...actual,
-    trackSettingChanged: vi.fn(actual.trackSettingChanged),
-  };
-});
+afterEach(cleanup);
 
-function resetLayout(): void {
-  useLayoutStore.setState({ home: DEFAULT_HOME_LAYOUT });
-}
-
-beforeEach(resetLayout);
-
-afterEach(() => {
-  cleanup();
-  resetLayout();
-  vi.clearAllMocks();
-});
-
-// The same two-part proof `composer-layout-group.test.tsx` relies on: the id
-// the click actually fires, through the REAL `trackSettingChanged`, and that
-// id's presence in the runtime `ANALYTICS_SETTINGS` allowlist, which is what
-// `sanitizeAnalyticsProperties` gates. An id that lives only in the
-// `AnalyticsSetting` type drops the event silently.
-async function expectSettingIdAccepted(setting: string): Promise<void> {
-  const { AnalyticsEvent, sanitizeAnalyticsProperties } =
-    await import("@/lib/analytics");
-  expect(
-    sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
-      source: "direct_ui",
-      section: "layout",
-      setting,
-    }),
-  ).toEqual({ source: "direct_ui", section: "layout", setting });
-}
-
-const DENSITY_DESCRIPTION =
-  "Row spacing on the Home tab. Compact keeps touch targets on phones.";
-
-describe("<TabsLayoutGroup /> Home density", () => {
-  it("writes Compact to the store and tracks layout.home.density", async () => {
-    const { trackSettingChanged } = await import("@/lib/analytics");
-    render(<TabsLayoutGroup />);
-
-    const group = screen.getByRole("group", { name: "Home density" });
-    fireEvent.click(within(group).getByRole("button", { name: "Compact" }));
-
-    expect(useLayoutStore.getState().home.density).toBe("compact");
-    expect(trackSettingChanged).toHaveBeenCalledWith(
-      "layout",
-      "layout.home.density",
-    );
-    await expectSettingIdAccepted("layout.home.density");
-  });
-
-  it("starts on Comfortable and returns to it", () => {
-    render(<TabsLayoutGroup />);
-    const group = screen.getByRole("group", { name: "Home density" });
-    expect(
-      within(group)
-        .getByRole("button", { name: "Comfortable" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-
-    fireEvent.click(within(group).getByRole("button", { name: "Compact" }));
-    fireEvent.click(within(group).getByRole("button", { name: "Comfortable" }));
-    expect(useLayoutStore.getState().home.density).toBe("comfortable");
-  });
-
-  it("does not track or write when the already-active option is clicked again", async () => {
-    const { trackSettingChanged } = await import("@/lib/analytics");
-    render(<TabsLayoutGroup />);
-
-    const group = screen.getByRole("group", { name: "Home density" });
-    fireEvent.click(within(group).getByRole("button", { name: "Comfortable" }));
-
-    expect(useLayoutStore.getState().home.density).toBe("comfortable");
-    expect(trackSettingChanged).not.toHaveBeenCalled();
-  });
-
+describe("<TabsLayoutGroup />", () => {
   it("carries the anchor settings search scrolls to, with the row's own copy", () => {
     const { container } = render(<TabsLayoutGroup />);
     const row = container.querySelector(
-      "[data-settings-anchor='layout-home-density']",
+      "[data-settings-anchor='layout-home-tab']",
     );
     expect(row).not.toBeNull();
-    expect(row?.textContent).toContain("Home density");
-    expect(row?.textContent).toContain(DENSITY_DESCRIPTION);
+    expect(row?.textContent).toContain("Home tab");
   });
 
-  // The index is hand-written, so the label and description are what rot -
-  // the anchor half is covered by `settings-search-index.test.ts`.
-  it("is indexed under Tabs with the verbatim label and description", () => {
-    const entry = SETTINGS_SEARCH_ENTRIES.find(
-      (candidate) => candidate.anchor === "layout-home-density",
-    );
-    expect(entry).toBeDefined();
-    expect(entry?.section).toBe("layout");
-    expect(entry?.group).toBe("Tabs");
-    expect(entry?.label).toBe("Home density");
-    expect(entry?.description).toBe(DENSITY_DESCRIPTION);
-    expect(entry?.keywords).toEqual(["home", "density", "compact", "rows"]);
+  // The group and its one row, named rather than counted, so a row added later
+  // has to be admitted here instead of merely bumping a number.
+  it("draws the Home tab switch alone", () => {
+    const { container } = render(<TabsLayoutGroup />);
+    const anchors = [...container.querySelectorAll("[data-settings-anchor]")]
+      .map((node) => node.getAttribute("data-settings-anchor"))
+      .sort();
+    expect(anchors).toEqual(["layout-home-tab", "layout-tabs"]);
   });
+});
 
-  // Home has one reading and no view control of its own any more, so there is
-  // nothing here for a Settings row to answer.
-  it("offers no row for the Home view", () => {
-    render(<TabsLayoutGroup />);
-    expect(screen.queryByRole("group", { name: "Home view" })).toBeNull();
+// Home owned two more rows here and owns neither now: the view switch went
+// with the flat reading, and the density segment went because the two spacings
+// were barely distinguishable (user ruling, 2026-09-12). Both halves are
+// asserted - the RENDER and the search index - because an index entry that
+// outlives its row lands a search result on an anchor nothing draws.
+describe("<TabsLayoutGroup /> the rows Home no longer owns", () => {
+  it.each([
+    { name: "Home density", anchor: "layout-home-density" },
+    { name: "Home view", anchor: "layout-home-view" },
+  ])("offers no $name row and no $anchor entry", ({ name, anchor }) => {
+    const { container } = render(<TabsLayoutGroup />);
+
+    expect(screen.queryByRole("group", { name })).toBeNull();
     expect(
-      SETTINGS_SEARCH_ENTRIES.some(
-        (candidate) => candidate.anchor === "layout-home-view",
-      ),
+      container.querySelector(`[data-settings-anchor='${anchor}']`),
+    ).toBeNull();
+    expect(
+      SETTINGS_SEARCH_ENTRIES.some((candidate) => candidate.anchor === anchor),
     ).toBe(false);
   });
 });

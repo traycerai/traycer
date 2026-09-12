@@ -20,7 +20,6 @@ import {
   ROW_ACTIONS_CELL_CLASS,
   ROW_STATUS_CELL_CLASS,
 } from "@/components/home-focus/home-focus-row-style";
-import { useHomeDensity } from "@/hooks/home-focus/use-home-density";
 import {
   FOCUS_ROW_STATES,
   type FocusRowState,
@@ -114,8 +113,8 @@ export function RowContext(props: {
  *
  * `tabular-nums` keeps a ticking duration from jittering its own width as the
  * digits change; it is not what holds the word still - the track and the left
- * alignment below are. The duration is a separate node so Compact can drop it
- * on a narrow row without touching the word.
+ * alignment below are. The detail is a separate node so the tick repaints it
+ * alone, without the word beside it.
  */
 export function RowStatus(props: {
   readonly state: FocusRowState;
@@ -165,20 +164,15 @@ export function RowStatus(props: {
  * The `· driven by Reviewer` half of a status cell: a fixed fact rather than a
  * ticking one.
  *
- * Hides on a narrow row under Compact exactly as {@link RowStatusDuration}
- * does, and for the same reason - the word is what must survive - but holds no
- * clock, because nothing about it changes between frames.
+ * Truncates rather than hiding on a narrow row, exactly as
+ * {@link RowStatusDuration} does - but holds no clock, because nothing about it
+ * changes between frames.
  */
 export function RowStatusNote(props: { readonly text: string }): ReactNode {
-  const density = useHomeDensity();
   return (
     <span
-      className={cn(
-        "min-w-0 truncate text-muted-foreground",
-        density === "compact" && "@max-sm:hidden",
-      )}
+      className="min-w-0 truncate text-muted-foreground"
       data-testid="home-focus-row-status-note"
-      data-density={density}
     >
       · {props.text}
     </span>
@@ -236,26 +230,19 @@ export function RowActionsCell(props: {
  * Its own leaf for the same reason `NotificationTimestamp` is one: the tick
  * repaints this label and not the row around it.
  *
- * It hides only under COMPACT, and only when the ROW is narrow - a container
- * query on the section, not a viewport one. Both halves are the decision:
- * Comfortable never drops the duration at any width, and a narrow Home tile
- * inside a wide desktop window is exactly the case a viewport breakpoint gets
- * backwards. The word always survives; the duration is the part that goes.
+ * It is never dropped at any width: the row spends the same status track on
+ * every row of every shape, so the duration has room the section has already
+ * reserved for it.
  */
 export function RowStatusDuration(props: {
   readonly startedAtMs: number;
 }): ReactNode {
-  const density = useHomeDensity();
   const now = useSampledNow();
   const elapsed = formatCompactRelativeTime(props.startedAtMs, now);
   return (
     <span
-      className={cn(
-        "shrink-0 text-muted-foreground",
-        density === "compact" && "@max-sm:hidden",
-      )}
+      className="shrink-0 text-muted-foreground"
       data-testid="home-focus-row-status-duration"
-      data-density={density}
     >
       · {elapsed === "now" ? "just now" : elapsed}
     </span>

@@ -126,22 +126,9 @@ export interface ComposerLayoutPreferences {
   readonly reasoningIndicator: ComposerReasoningIndicator;
 }
 
-/**
- * How much room a Home row takes. `compact` tightens the DESKTOP row only - the
- * touch chrome a coarse pointer needs is restored by the row's own
- * `pointer-coarse:` variants, so this is a pointer-precision preference rather
- * than a global shrink.
- */
-export type HomeDensity = "comfortable" | "compact";
-
-export interface HomeLayoutPreferences {
-  readonly density: HomeDensity;
-}
-
 interface LayoutStoreState {
   readonly statusBar: StatusBarLayoutPreferences;
   readonly composer: ComposerLayoutPreferences;
-  readonly home: HomeLayoutPreferences;
   // Setters stay flat and are namespaced by their slice, so a call site names
   // the surface it is configuring and two slices can never collide on a verb.
   /**
@@ -201,7 +188,6 @@ interface LayoutStoreState {
   readonly setComposerReasoningIndicator: (
     indicator: ComposerReasoningIndicator,
   ) => void;
-  readonly setHomeDensity: (density: HomeDensity) => void;
 }
 
 /**
@@ -254,16 +240,6 @@ export const DEFAULT_COMPOSER_LAYOUT: ComposerLayoutPreferences = {
   mic: "visible",
   compactButton: "visible",
   reasoningIndicator: "text",
-};
-
-/**
- * Home as it reads today: the flat Focus page at comfortable spacing. `focus`
- * is also the FIRST PAINT rather than merely the initial value - an install
- * that has never touched the control sees exactly the page it saw before this
- * slice existed.
- */
-export const DEFAULT_HOME_LAYOUT: HomeLayoutPreferences = {
-  density: "comfortable",
 };
 
 const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
@@ -571,33 +547,6 @@ function resolvePersistedComposer(value: unknown): ComposerLayoutPreferences {
   };
 }
 
-// ── home slice ──────────────────────────────────────────────────────────────
-
-function isHomeDensity(value: unknown): value is HomeDensity {
-  return value === "comfortable" || value === "compact";
-}
-
-/**
- * Field by field, like the two slices above - `density` picks a branch on the
- * render path, so an unrecognized one would leave the rows with no spacing
- * class at all.
- *
- * A persisted `view` from the two-reading Home is READ AND DROPPED rather than
- * migrated. Home has one reading now, so there is nothing for the old value to
- * select; naming it here to delete it would only keep a field alive that
- * nothing else in the app can still mean. The key survives in `localStorage`
- * until the next write to this slice rewrites it from `partialize`, which is
- * harmless - an unknown key in a persisted slice has never been an error here.
- */
-function resolvePersistedHome(value: unknown): HomeLayoutPreferences {
-  const stored: Record<string, unknown> = isRecord(value) ? value : {};
-  return {
-    density: isHomeDensity(stored.density)
-      ? stored.density
-      : DEFAULT_HOME_LAYOUT.density,
-  };
-}
-
 function toggledMembership<T>(
   entries: ReadonlyArray<T>,
   entry: T,
@@ -612,7 +561,6 @@ export const useLayoutStore = create<LayoutStoreState>()(
     (set, get) => ({
       statusBar: DEFAULT_STATUS_BAR_LAYOUT,
       composer: DEFAULT_COMPOSER_LAYOUT,
-      home: DEFAULT_HOME_LAYOUT,
       setStatusBarPreferences: (preferences) => {
         set({ statusBar: preferences });
       },
@@ -815,17 +763,20 @@ export const useLayoutStore = create<LayoutStoreState>()(
         if (composer.reasoningIndicator === indicator) return;
         set({ composer: { ...composer, reasoningIndicator: indicator } });
       },
-      setHomeDensity: (density) => {
-        const home = get().home;
-        if (home.density === density) return;
-        set({ home: { ...home, density } });
-      },
     }),
     {
       ...basePersistOptions(LAYOUT_PERSIST_KEY),
       storage: createJSONStorage(() => localStorage),
       // One resolver per slice, composed here. A corrupt slice falls back to
       // its own defaults and cannot reach across into another's.
+      //
+      // A persisted `home` from the Home-density build is READ PAST rather
+      // than migrated: Home has one spacing now, so there is nothing for the
+      // old value to select, and naming the key here to delete it would keep a
+      // slice alive that nothing in the app can still mean. It survives in
+      // `localStorage` until the next write to any layout preference
+      // re-serialises the store from `partialize` without it - harmless, since
+      // an unknown key in a persisted blob has never been an error here.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -834,13 +785,11 @@ export const useLayoutStore = create<LayoutStoreState>()(
           ...currentState,
           statusBar: resolvePersistedStatusBar(persisted.statusBar),
           composer: resolvePersistedComposer(persisted.composer),
-          home: resolvePersistedHome(persisted.home),
         };
       },
       partialize: (state) => ({
         statusBar: state.statusBar,
         composer: state.composer,
-        home: state.home,
       }),
     },
   ),

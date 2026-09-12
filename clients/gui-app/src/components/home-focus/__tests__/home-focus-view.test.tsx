@@ -19,10 +19,6 @@ import type {
   FocusTaskRow,
 } from "@/lib/home-focus/focus-model";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
-import {
-  DEFAULT_HOME_LAYOUT,
-  useLayoutStore,
-} from "@/stores/settings/layout-store";
 import { ROW_CLASS } from "@/components/home-focus/home-focus-row-style";
 
 const modelMock = vi.hoisted(() => ({ value: null as FocusModel | null }));
@@ -255,16 +251,12 @@ beforeEach(() => {
   localHostMock.value = null;
   hostDirectoryEntryMock.value = null;
   modelMock.value = null;
-  useLayoutStore.setState({ home: DEFAULT_HOME_LAYOUT });
   fleetMock.activeHostId = null;
   fleetMock.entries = [];
   vi.clearAllMocks();
 });
 
-afterEach(() => {
-  cleanup();
-  useLayoutStore.setState({ home: DEFAULT_HOME_LAYOUT });
-});
+afterEach(cleanup);
 
 /** Every task group row on the page, in document order. */
 function taskGroups(): HTMLElement[] {
@@ -1540,18 +1532,12 @@ describe("<HomeFocusView /> disclosure", () => {
   });
 });
 
-describe("<HomeFocusView /> density", () => {
-  it("renders the comfortable row class by default", () => {
-    modelMock.value = model({ tasks: [taskRow({ epicId: "epic-1" })] });
-    render(<HomeFocusView />);
-
-    expect(screen.getByTestId("home-focus-task-group-row").className).toBe(
-      ROW_CLASS,
-    );
-  });
-
-  it("tightens the desktop row under compact and restores it under a coarse pointer", () => {
-    useLayoutStore.setState({ home: { density: "compact" } });
+// Home renders ONE spacing - the comfortable one - and the `Home density`
+// setting that bent it is gone (the two were barely distinguishable, user
+// ruling 2026-09-12). So every row shape emits the same class string, and no
+// row carries the `data-density` attribute the preference used to key.
+describe("<HomeFocusView /> row spacing", () => {
+  it("renders the comfortable row class on every row shape, with no density attribute", () => {
     modelMock.value = model({
       tasks: [
         taskRow({
@@ -1570,10 +1556,21 @@ describe("<HomeFocusView /> density", () => {
       "home-focus-task-group-job",
     ]) {
       const row = screen.getByTestId(testId);
-      expect(row.className).toContain("p-2");
-      expect(row.className).toContain("pointer-coarse:p-3");
-      expect(row.getAttribute("data-density")).toBe("compact");
+      expect(row.className).toBe(ROW_CLASS);
+      expect(row.hasAttribute("data-density")).toBe(false);
     }
+  });
+
+  // The half `Compact` was never allowed to touch, and the reason the row
+  // shrinking was a desktop-only question in the first place: Home is a phone
+  // surface, so the row keeps the touch chrome a tap needs.
+  it("keeps the coarse-pointer touch chrome on the row", () => {
+    modelMock.value = model({ tasks: [taskRow({ epicId: "epic-1" })] });
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-focus-task-group-row").className).toContain(
+      "pointer-coarse:touch-chrome",
+    );
   });
 });
 

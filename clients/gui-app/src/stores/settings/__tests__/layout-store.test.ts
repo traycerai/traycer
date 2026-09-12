@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
 import {
   DEFAULT_COMPOSER_LAYOUT,
-  DEFAULT_HOME_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
@@ -13,7 +12,6 @@ function resetStore(): void {
   useLayoutStore.setState({
     statusBar: DEFAULT_STATUS_BAR_LAYOUT,
     composer: DEFAULT_COMPOSER_LAYOUT,
-    home: DEFAULT_HOME_LAYOUT,
   });
   window.localStorage.clear();
 }
@@ -65,7 +63,6 @@ describe("useLayoutStore", () => {
             placement: "status-bar",
           },
           composer: DEFAULT_COMPOSER_LAYOUT,
-          home: DEFAULT_HOME_LAYOUT,
         },
         version: CURRENT_PERSIST_VERSION,
       });
@@ -438,7 +435,6 @@ describe("useLayoutStore", () => {
                 },
               },
               composer: DEFAULT_COMPOSER_LAYOUT,
-              home: DEFAULT_HOME_LAYOUT,
             },
             version: CURRENT_PERSIST_VERSION,
           });
@@ -815,83 +811,44 @@ describe("useLayoutStore", () => {
     });
   });
 
-  describe("home slice", () => {
-    it("starts at comfortable spacing", () => {
-      expect(useLayoutStore.getState().home).toEqual({
-        density: "comfortable",
+  // The `home` slice carried one setting - Home's row density - and that
+  // setting is gone (the two spacings were barely distinguishable, user ruling
+  // 2026-09-12), so the slice went with it rather than staying behind as an
+  // empty object nothing reads.
+  describe("the removed home slice", () => {
+    it("holds no home slice at all", () => {
+      expect(useLayoutStore.getState()).not.toHaveProperty("home");
+      expect(useLayoutStore.getState()).not.toHaveProperty("setHomeDensity");
+    });
+
+    // Read past rather than migrated: one spacing means there is nothing for
+    // the old value to select, and a resolver naming the key to delete it
+    // would keep a slice alive that nothing in the app can still mean.
+    it("ignores a persisted home slice and drops it on the next write", async () => {
+      await rehydrateFrom({
+        home: { density: "compact", view: "tasks" },
+        composer: { filesChanged: "compact" },
       });
-    });
 
-    it("writes and persists the density the Settings row picked", async () => {
-      useLayoutStore.getState().setHomeDensity("compact");
+      expect(useLayoutStore.getState()).not.toHaveProperty("home");
+      // The rest of the blob still resolves - the dead key reaches no
+      // resolver, so it cannot take a live slice down with it.
+      expect(useLayoutStore.getState().composer.filesChanged).toBe("compact");
 
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-      expect(useLayoutStore.getState().home.density).toBe("compact");
-      expect(
-        JSON.parse(window.localStorage.getItem(PERSIST_KEY) ?? "{}"),
-      ).toEqual({
-        state: {
-          statusBar: DEFAULT_STATUS_BAR_LAYOUT,
-          composer: DEFAULT_COMPOSER_LAYOUT,
-          home: { density: "compact" },
-        },
-        version: CURRENT_PERSIST_VERSION,
-      });
-    });
-
-    it("does not mint a new slice when a setter is handed the value it already holds", () => {
-      const before = useLayoutStore.getState().home;
-      useLayoutStore.getState().setHomeDensity("comfortable");
-      expect(useLayoutStore.getState().home).toBe(before);
-    });
-
-    it("restores a persisted slice field by field", async () => {
-      await rehydrateFrom({ home: { density: "compact" } });
-      expect(useLayoutStore.getState().home).toEqual({ density: "compact" });
-    });
-
-    // `density` picks a branch on the render path, so an unrecognized one
-    // falls back rather than reaching a switch with no case for it.
-    it("falls back per field on an unrecognized value", async () => {
-      await rehydrateFrom({ home: { density: 3 } });
-      expect(useLayoutStore.getState().home).toEqual(DEFAULT_HOME_LAYOUT);
-    });
-
-    // Home had a second reading behind an in-page switch, and the choice was
-    // persisted here. The page has one reading now, so a stored `view` selects
-    // nothing: it is read past rather than migrated, and the next write to this
-    // slice drops it.
-    it("ignores a `view` left behind by the two-reading Home", async () => {
-      await rehydrateFrom({ home: { view: "tasks", density: "compact" } });
-      expect(useLayoutStore.getState().home).toEqual({ density: "compact" });
-
-      useLayoutStore.getState().setHomeDensity("comfortable");
+      useLayoutStore.getState().setComposerFilesChanged("visible");
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
       const persisted: unknown = JSON.parse(
         window.localStorage.getItem(PERSIST_KEY) ?? "{}",
       );
-      expect(persisted).toMatchObject({
-        state: { home: { density: "comfortable" } },
+      expect(persisted).toEqual({
+        state: {
+          statusBar: DEFAULT_STATUS_BAR_LAYOUT,
+          composer: DEFAULT_COMPOSER_LAYOUT,
+        },
+        version: CURRENT_PERSIST_VERSION,
       });
-      expect(JSON.stringify(persisted)).not.toContain("tasks");
-    });
-
-    it("takes its own defaults when the slice is not an object at all", async () => {
-      await rehydrateFrom({
-        home: "not an object",
-        composer: { filesChanged: "compact" },
-      });
-      expect(useLayoutStore.getState().home).toEqual(DEFAULT_HOME_LAYOUT);
-      expect(useLayoutStore.getState().composer.filesChanged).toBe("compact");
-    });
-
-    // The slice an existing install has never written: an untouched Home
-    // keeps reading exactly as it did before this slice existed.
-    it("takes its own defaults when a persisted state predates the slice", async () => {
-      await rehydrateFrom({ statusBar: { placement: "status-bar" } });
-      expect(useLayoutStore.getState().home).toEqual(DEFAULT_HOME_LAYOUT);
+      expect(JSON.stringify(persisted)).not.toContain("density");
     });
   });
 });

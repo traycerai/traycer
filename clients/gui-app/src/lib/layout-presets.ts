@@ -5,11 +5,9 @@ import {
 } from "@/stores/epics/left-panel-store";
 import {
   DEFAULT_COMPOSER_LAYOUT,
-  DEFAULT_HOME_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
   type ComposerLayoutPreferences,
-  type HomeDensity,
   type StatusBarProviderLimitSelections,
   type StatusBarRateLimitPreferences,
   type StatusBarResourcePreferences,
@@ -61,11 +59,6 @@ export interface LayoutPresetStatusBarValues {
   readonly resources: StatusBarResourcePreferences;
 }
 
-/** Home's contribution. `view` is deliberately absent - see the bundle docs. */
-export interface LayoutPresetHomeValues {
-  readonly density: HomeDensity;
-}
-
 /** The Chat group's rows, all four of them `settings-store` keys. */
 export interface LayoutPresetChatValues {
   readonly pinContextUsageBreakdown: boolean;
@@ -91,17 +84,16 @@ export interface LayoutPresetSidebarValues {
  * and two presets could then both match at once.
  *
  * **One object per surface, and each surface's object comes from exactly one
- * store** - `statusBar`, `composer` and `home` from `layout-store`, `chat` and
- * `sidebar` from `settings-store`. That split is not cosmetic: this file is
- * cherry-picked onto branches where a slice does not exist yet (the `home`
- * slice is the current one), and a bundle keyed by surface loses that slice by
- * deleting three lines and its entry in the equality, rather than by unpicking
- * fields from a flat object.
+ * store** - `statusBar` and `composer` from `layout-store`, `chat` and
+ * `sidebar` from `settings-store`. That split is not cosmetic, and the `home`
+ * surface is what proved it: it carried Home's density here, and removing that
+ * setting took three lines from each bundle plus its entry in the equality,
+ * rather than unpicking a field from a flat object on every branch this file
+ * is cherry-picked onto.
  */
 export interface LayoutPresetBundle {
   readonly statusBar: LayoutPresetStatusBarValues;
   readonly composer: ComposerLayoutPreferences;
-  readonly home: LayoutPresetHomeValues;
   readonly chat: LayoutPresetChatValues;
   readonly sidebar: LayoutPresetSidebarValues;
 }
@@ -139,7 +131,6 @@ const DEFAULT_PRESET: LayoutPresetBundle = {
     resources: DEFAULT_STATUS_BAR_LAYOUT.resources,
   },
   composer: DEFAULT_COMPOSER_LAYOUT,
-  home: { density: DEFAULT_HOME_LAYOUT.density },
   chat: {
     pinContextUsageBreakdown: DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
     pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
@@ -195,7 +186,6 @@ const COMPACT_PRESET: LayoutPresetBundle = {
     compactButton: "hidden",
     reasoningIndicator: "bars",
   },
-  home: { density: "compact" },
   chat: {
     pinContextUsageBreakdown: false,
     // Kept at the full set even though the strip is unpinned: the fields row
@@ -243,7 +233,6 @@ const DETAILED_PRESET: LayoutPresetBundle = {
     compactButton: "visible",
     reasoningIndicator: "bars-text",
   },
-  home: { density: "comfortable" },
   chat: {
     pinContextUsageBreakdown: true,
     pinnedContextBreakdownFields: CONTEXT_USAGE_ROW_KEYS,
@@ -296,7 +285,6 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
     resources: bundle.statusBar.resources,
   });
   layout.setComposerPreferences(bundle.composer);
-  layout.setHomeDensity(bundle.home.density);
   const settings = useSettingsStore.getState();
   settings.setPinContextUsageBreakdown(bundle.chat.pinContextUsageBreakdown);
   settings.setPinnedContextBreakdownFields(
@@ -358,7 +346,6 @@ function bundlesEqual(
   return (
     statusBarEqual(bundle.statusBar, snapshot.statusBar) &&
     composerEqual(bundle.composer, snapshot.composer) &&
-    bundle.home.density === snapshot.home.density &&
     chatEqual(bundle.chat, snapshot.chat) &&
     listsEqual(
       bundle.sidebar.navigatorResourceMetrics,

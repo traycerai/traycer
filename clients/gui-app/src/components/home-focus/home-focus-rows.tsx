@@ -36,11 +36,10 @@ import {
 } from "@/components/ui/dialog";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
-import { useHomeDensity } from "@/hooks/home-focus/use-home-density";
 import { useHomeHostGrouped } from "@/components/home-focus/home-host-grouped-context";
 import {
-  homeRowClass,
   ROW_BODY_CLASS,
+  ROW_CLASS,
 } from "@/components/home-focus/home-focus-row-style";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
@@ -271,13 +270,8 @@ export function HomeFocusPromptRow(props: {
   readonly showLocation: boolean;
 }): ReactNode {
   const { row, actions } = props;
-  const density = useHomeDensity();
   return (
-    <li
-      className={homeRowClass(density)}
-      data-density={density}
-      data-testid="home-focus-prompt-row"
-    >
+    <li className={ROW_CLASS} data-testid="home-focus-prompt-row">
       <button
         type="button"
         onClick={() => actions.openPrompt(row)}

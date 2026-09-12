@@ -1339,10 +1339,12 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       segment: it is a verdict, not a choice, and an options list that grew a
       member when you touched a switch would read as a glitch.
     - **One object per surface, each from one store** (`statusBar`,
-      `composer`, `home` from `layout-store`; `chat`, `sidebar` from
+      `composer` from `layout-store`; `chat`, `sidebar` from
       `settings-store`). That shape is what lets a branch without a slice drop
-      it - the `home` slice is the live example - rather than unpicking fields
-      from a flat bundle.
+      it, and the `home` surface is what proved it: it carried Home's density
+      until that setting was removed, and it came out as three lines per bundle
+      plus its entry in the equality rather than as a field unpicked from a
+      flat bundle on every branch.
     - **Default is read from the `DEFAULT_*` constants**, never restated, so a
       default that changes carries the preset and the suite's "Default is the
       defaults" assertion with it. `DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN` was
@@ -1356,7 +1358,6 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       | Resource metrics    | CPU/Memory/Processes | CPU                                                                  | all four (adds RAM share)   |
       | Composer rows       | visible              | three docks + access compact, mic & compaction hidden, image VISIBLE | all visible                 |
       | Reasoning           | Text                 | Bars                                                                 | Bars + text                 |
-      | Home density        | Comfortable          | Compact                                                              | Comfortable                 |
       | Pin breakdown       | off                  | off                                                                  | on, all fields              |
       | Context indicator   | Text                 | Ring only                                                            | Text                        |
       | Sidebar chips       | none                 | none                                                                 | CPU/Memory/Processes        |
@@ -1809,10 +1810,10 @@ md:top-0`): positioned against the nearest scrollport - the settings
     pinned child opaque inside a `bg-card/40` pane is what cost the
     model-providers tab its sticky search.
   - **Tabs** (`panels/layout/tabs-layout-group.tsx`) - what the top-level tab
-    strip carries. Two rows: `Home tab`
+    strip carries. One row: `Home tab`
     (`settings-store.homeTabEnabled`, default off), the fixed Home tab and the
-    task list it draws, and `Home density`
-    (`layout-store.home.density`, default `Comfortable`). It is a GROUP rather
+    task list it draws. `Home density` was the second row and is gone, with the
+    whole `layout-store.home` slice behind it. It is a GROUP rather
     than a row inside Status bar,
     because a tab is not part of the footer and the two collapse differently:
     nothing in this group keys on `isMobileApp()`, since that build has no
@@ -2030,10 +2031,11 @@ panel visibility` is enabled there - and reachable only from the rail.
     the viewport hook's own case. Gating on the build instead would hide a
     working list on a tablet running the installed app, which is wide enough to
     draw the rail. The relocated resource-chips row is unaffected either way.
-  - **Home tab behaviour** - NOT a group on this page; the only Settings
-    row Home owns is `Home density` above. Recorded here because this is
-    where a reader goes looking for what that row governs
-    (`components/home-focus/`, `lib/home-focus/`, `layout-store.home`).
+  - **Home tab behaviour** - NOT a group on this page, and Home now owns no
+    Settings row on it at all (`Home tab` above is the switch that draws the
+    tab, not a preference about what is on it). Recorded here because this is
+    still where a reader goes looking for how the page reads
+    (`components/home-focus/`, `lib/home-focus/`).
     - **Home is ONE reading, and it is the task list.** It offered two behind
       an in-page `Focus | Tasks` switch: a flat page of four sections with a
       task column, and the same activity grouped under its tasks. The flat one
@@ -2058,13 +2060,20 @@ panel visibility` is enabled there - and reachable only from the rail.
       and drops it from the others, so a two-host task with one prompt would
       otherwise land in Needs you under one machine and Running under the
       other.
-    - **Density** (`Comfortable` | `Compact`, default `Comfortable`) IS the one
-      row this page owns, because it is a preference about the app's chrome
-      rather than about what is on screen right now. `Compact` tightens the
-      desktop row (`p-3` → `p-2`, chip gap with it); every tightened utility is
-      restored under `pointer-coarse:`, so a phone keeps the hit area H3 sized
-      for a thumb and the `touch-chrome` that goes with it. Comfortable renders
-      the identical class string it did before the slice existed.
+    - **Home has ONE spacing**, the comfortable one, and no setting that bends
+      it. A `Home density` segment offered `Comfortable | Compact` here, where
+      `Compact` tightened the desktop row (`p-3` → `p-2`, chip gap with it) and
+      restored every tightened utility under `pointer-coarse:` so a phone kept
+      the hit area sized for a thumb. The two read almost identically on
+      screen (user ruling, 2026-09-12: "I can hardly see any difference in
+      both. Remove it."), so the row went, and with it the whole
+      `layout-store.home` slice, the `layout.home.density` analytics id, and
+      the `data-density` attribute the rows carried. `ROW_CLASS` /
+      `CHIP_ROW_CLASS` (`home-focus-row-style.ts`) are now plain constants -
+      the same class strings Comfortable emitted. The `pointer-coarse:` touch
+      chrome rode the base class throughout and is untouched. A persisted
+      `home` slice is read past rather than migrated and the next write to any
+      layout preference drops it, exactly as the older `home.view` was.
     - **Nesting is task → chat → the chat's own work, and stops there.** Level
       one under a task is its CHATS - chat agents and terminal agents alike,
       each with its own status cell. Level two is what that chat owns: the

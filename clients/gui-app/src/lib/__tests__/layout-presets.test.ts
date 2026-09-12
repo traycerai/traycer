@@ -15,7 +15,6 @@ import {
 } from "@/stores/epics/left-panel-store";
 import {
   DEFAULT_COMPOSER_LAYOUT,
-  DEFAULT_HOME_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
@@ -40,7 +39,6 @@ function currentSnapshot(): LayoutPresetBundle {
       resources: layout.statusBar.resources,
     },
     composer: layout.composer,
-    home: { density: layout.home.density },
     chat: {
       pinContextUsageBreakdown: settings.pinContextUsageBreakdown,
       pinnedContextBreakdownFields: settings.pinnedContextBreakdownFields,
@@ -57,7 +55,6 @@ function resetStores(): void {
   useLayoutStore.setState({
     statusBar: DEFAULT_STATUS_BAR_LAYOUT,
     composer: DEFAULT_COMPOSER_LAYOUT,
-    home: DEFAULT_HOME_LAYOUT,
   });
   useSettingsStore.setState({
     pinContextUsageBreakdown: DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
@@ -109,7 +106,6 @@ describe("layout presets", () => {
         resources: DEFAULT_STATUS_BAR_LAYOUT.resources,
       },
       composer: DEFAULT_COMPOSER_LAYOUT,
-      home: { density: DEFAULT_HOME_LAYOUT.density },
       chat: {
         pinContextUsageBreakdown: DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
         pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
@@ -236,10 +232,6 @@ describe("layout presets", () => {
         name: "composer: reasoning indicator",
         deviate: () =>
           useLayoutStore.getState().setComposerReasoningIndicator("text"),
-      },
-      {
-        name: "home: density",
-        deviate: () => useLayoutStore.getState().setHomeDensity("compact"),
       },
       {
         name: "chat: the pin",
@@ -429,7 +421,6 @@ describe("layout presets", () => {
     expect(compact.chat.pinContextUsageBreakdown).toBe(false);
     expect(compact.chat.contextIndicatorStyle).toBe("ring-only");
     expect(compact.sidebar.navigatorResourceMetrics).toEqual([]);
-    expect(compact.home.density).toBe("compact");
 
     const detailed = LAYOUT_PRESETS.detailed;
     expect(detailed.statusBar.rateLimits).toMatchObject({
@@ -458,7 +449,17 @@ describe("layout presets", () => {
       "memory",
       "processes",
     ]);
-    expect(detailed.home.density).toBe("comfortable");
+  });
+
+  // Home's row density was this file's `home` surface, and removing the
+  // setting removed the surface. A bundle that grew the key back would make
+  // `matchLayoutPreset` compare a value no store holds, which reads as
+  // `Custom` on a page with nothing on it to change.
+  it("carries no home surface, on any bundle", () => {
+    for (const id of LAYOUT_PRESET_IDS) {
+      expect(LAYOUT_PRESETS[id]).not.toHaveProperty("home");
+    }
+    expect(currentSnapshot()).not.toHaveProperty("home");
   });
 
   it("applies through the stores' setters, so every writer normalizes the same way", () => {

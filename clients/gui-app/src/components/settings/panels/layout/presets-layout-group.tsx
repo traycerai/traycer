@@ -201,7 +201,6 @@ function useLayoutIsFullyDefault(match: LayoutPresetMatch): boolean {
 function useLayoutPresetMatch(): LayoutPresetMatch {
   const statusBar = useLayoutStore((state) => state.statusBar);
   const composer = useLayoutStore((state) => state.composer);
-  const density = useLayoutStore((state) => state.home.density);
   const pinContextUsageBreakdown = useSettingsStore(
     (state) => state.pinContextUsageBreakdown,
   );
@@ -220,7 +219,6 @@ function useLayoutPresetMatch(): LayoutPresetMatch {
   return matchLayoutPreset({
     statusBar,
     composer,
-    home: { density },
     chat: {
       pinContextUsageBreakdown,
       pinnedContextBreakdownFields,

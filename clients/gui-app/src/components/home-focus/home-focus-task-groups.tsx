@@ -51,12 +51,11 @@ import {
   focusTaskState,
 } from "@/lib/home-focus/focus-row-status";
 import {
-  homeChipRowClass,
-  homeRowClass,
+  CHIP_ROW_CLASS,
   ROW_BODY_CLASS,
+  ROW_CLASS,
 } from "@/components/home-focus/home-focus-row-style";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useHomeDensity } from "@/hooks/home-focus/use-home-density";
 import {
   focusAgentDisplayName,
   focusTaskTitleOf,
@@ -122,7 +121,6 @@ function HomeFocusTaskGroupRow(props: {
   readonly stopAllHostLabel: string | null;
 }): ReactNode {
   const { group, actions, expanded } = props;
-  const density = useHomeDensity();
   const title = focusTaskTitleOf(group.taskTitle);
   const body = selectTaskGroupBody(group);
   const hasBody =
@@ -139,8 +137,7 @@ function HomeFocusTaskGroupRow(props: {
       data-epic-id={group.epicId}
     >
       <div
-        className={homeRowClass(density)}
-        data-density={density}
+        className={ROW_CLASS}
         data-testid="home-focus-task-group-row"
         data-cold={group.task !== null && !group.task.mountedHere}
       >
@@ -189,7 +186,7 @@ function HomeFocusTaskGroupRow(props: {
           <TaskGroupGlyph group={group} />
           <RowItemName testId="home-focus-row-name">{title}</RowItemName>
         </button>
-        <div className={homeChipRowClass(density)}>
+        <div className={CHIP_ROW_CLASS}>
           <TaskGroupSummary group={group} />
         </div>
         <RowStatus
@@ -368,7 +365,6 @@ function TaskGroupChatRow(props: {
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
   const { epicId, chat, actions } = props;
-  const density = useHomeDensity();
   const { agent } = chat;
   const hasWork =
     chat.prompts.length > 0 || chat.jobs.length > 0 || chat.browsers.length > 0;
@@ -378,11 +374,7 @@ function TaskGroupChatRow(props: {
       data-testid="home-focus-task-group-chat"
       data-agent-id={agent.agentId}
     >
-      <div
-        className={homeRowClass(density)}
-        data-density={density}
-        data-testid="home-focus-task-group-agent"
-      >
+      <div className={ROW_CLASS} data-testid="home-focus-task-group-agent">
         <button
           type="button"
           onClick={() => actions.openAgent(epicId, agent.agentId)}
@@ -477,13 +469,8 @@ function TaskGroupJobRow(props: {
   readonly showChat: boolean;
 }): ReactNode {
   const { job, actions } = props;
-  const density = useHomeDensity();
   return (
-    <li
-      className={homeRowClass(density)}
-      data-density={density}
-      data-testid="home-focus-task-group-job"
-    >
+    <li className={ROW_CLASS} data-testid="home-focus-task-group-job">
       <button
         type="button"
         onClick={() => actions.openBackground(job)}
@@ -537,11 +524,9 @@ function TaskGroupBrowserRow(props: {
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
   const { browser, actions } = props;
-  const density = useHomeDensity();
   return (
     <li
-      className={homeRowClass(density)}
-      data-density={density}
+      className={ROW_CLASS}
       data-testid="home-focus-task-group-browser"
       data-status={browser.status}
     >
