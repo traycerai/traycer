@@ -580,7 +580,7 @@ describe("ChatRecordsStreamClient", () => {
   describe("the @1.4 stamped frames - one arm per minor, nothing absorbed", () => {
     const listRevision = { epoch: "epoch-1", revision: 12 };
 
-    it("keeps the session facet on a @1.4 tuiUpsert instead of stripping it", () => {
+    it("PARSES a @1.4 tuiUpsert's session facet instead of stripping it at the wire (the delta's own type still stops at @1.2)", () => {
       const h = harness();
       h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
       const record = {
@@ -603,9 +603,15 @@ describe("ChatRecordsStreamClient", () => {
       expect(h.deltas).toHaveLength(1);
       const delta = h.deltas[0];
       if (delta.kind !== "tuiUpsert") throw new Error("expected tuiUpsert");
-      // The row is typed down to `@1.2` here (stage 2 names the facet), so the
-      // assertion reads the parsed object rather than a typed field: what this
-      // pins is that the PARSE kept it, which is the half `@1.3`'s schema lost.
+      // ONE LAYER, named in the title because the finding this sits under is
+      // framed as "silently discarded" and a reader scanning names would
+      // otherwise take this for end-to-end. It is not: `TuiAgentRecordDelta`
+      // types the row down to `@1.2`, and `tui-agent-record-table.ts`'s
+      // `applyDelta` still overwrites the facet with the held one, which is
+      // stage 2's to change. What this pins is the half that was a WIRE defect
+      // - the `@1.3` schema stripping the keys off a `@1.4` frame, before any
+      // consumer could have had them - so the assertion reads the parsed
+      // object rather than a typed field.
       expect(delta.record).toMatchObject({
         sessionState: "sleeping",
         lastExit: "reaped",

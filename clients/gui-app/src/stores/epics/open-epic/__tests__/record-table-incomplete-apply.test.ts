@@ -239,11 +239,43 @@ describe("an omitted row the fence held back counts too (I3)", () => {
 });
 
 describe("only the FENCE marks an apply incomplete (I4)", () => {
-  it("leaves the counter alone for a complete apply", () => {
+  it("leaves the counter alone for a complete apply, on the snapshotFence fallback", () => {
+    // `issuedAtSeq: null` throughout - the dispatch-with-no-session case, where
+    // the fence falls back to where the last SNAPSHOT left it. Its own case
+    // because it is a different comparand from the captured one below, and
+    // because it is what most of this file's other cases happen to use.
     const table = freshChatTable();
     table.applyRecords([chatRow({ chatId: "c1", revision: 1 })], null);
     table.applyRecords([chatRow({ chatId: "c1", revision: 2 })], null);
     table.applyRecords([], null);
+    expect(table.snapshotIncompleteSeq()).toBe(0);
+  });
+
+  it("leaves the counter alone for a complete apply against a CAPTURED fence", () => {
+    // The production path: every answer that reaches a store carries a fence
+    // read from that store at dispatch (`captureRequestContext`), so a case
+    // that only ever passes `null` never exercises the comparand the real poll
+    // uses. Each answer here is dispatched after the previous one landed, which
+    // is the quiet steady state the gating exists to make cheap - nothing
+    // raced it, so nothing may decline its stamp.
+    const table = freshChatTable();
+    table.applyRecords(
+      [chatRow({ chatId: "c1", revision: 1 })],
+      table.ingestSeq(),
+    );
+    table.applyRecords(
+      [chatRow({ chatId: "c1", revision: 2 }), chatRow({ chatId: "c2" })],
+      table.ingestSeq(),
+    );
+    // An answer that RETRACTS by omission is still a complete apply: the fence
+    // admitted the omission, so the rows this table holds are exactly the rows
+    // the answer described.
+    table.applyRecords(
+      [chatRow({ chatId: "c1", revision: 3 })],
+      table.ingestSeq(),
+    );
+
+    expect(table.current().allIds).toEqual(["c1"]);
     expect(table.snapshotIncompleteSeq()).toBe(0);
   });
 

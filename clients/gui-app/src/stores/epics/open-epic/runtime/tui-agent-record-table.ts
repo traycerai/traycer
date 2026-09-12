@@ -285,11 +285,29 @@ export function createTuiAgentRecordTable(
       // snapshot; read by the FULL record identity, not off the published
       // slice, for the reason that twin gives.
       //
-      // Bounded to one poll interval, not to the session: the write that
-      // produced this delta moved the host's list revision, so the next gated
-      // poll cannot answer `unchanged` and the snapshot it answers states the
-      // facet. That is the same guarantee `snapshotIncompleteSeq` restores for
-      // a fence-skipped row - see `record-table.ts`.
+      // Bounded to one poll interval, not to the session, and the two reasons
+      // are worth stating precisely because the obvious one is wrong.
+      //
+      // NOT "the write that produced this delta moved the host's list
+      // revision". Deltas are emitted on paths that move no counter at all -
+      // a bind replay re-emits every existing row through the registry's
+      // change observer - so that premise fails for exactly the frames a
+      // reader would test it against. What holds instead:
+      //
+      //  1. The bound comes from the underlying REGISTRY WRITE, not from this
+      //     delta. A reap moved the list revision when it happened, whether a
+      //     delta was emitted for it, lost, or replayed later - so the next
+      //     gated poll sees that move independently of this stream and answers
+      //     with a snapshot that states the facet.
+      //  2. This carry-forward is IDEMPOTENT with respect to the facet. It
+      //     writes `held.sessionState`, which is the value already held, so a
+      //     delta can never move the facet backwards - only fail to improve it.
+      //     A replayed or duplicated frame therefore introduces no staleness of
+      //     its own, whatever its `listRevision` says.
+      //
+      // (2) is what makes the deferral safe rather than merely bounded, and it
+      // is the half that does not survive stamping `null` here - which is the
+      // other reason not to.
       const held = table.retainedRow(
         ownerScopedRowKey(delta.record.ownerUserId, delta.record.tuiAgentId),
       );
