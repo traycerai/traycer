@@ -22,6 +22,10 @@ import { fixedProviderWindowKeys } from "@/lib/rate-limits/rate-limit-window-cat
  * Which surface owns the usage gauge and the resource monitor. Exactly one is
  * live at a time: the status bar exists only to host these two things, so a
  * separate on/off toggle would express nothing this does not.
+ *
+ * `status-bar` is the default (`DEFAULT_STATUS_BAR_LAYOUT.placement`). Nothing
+ * outside that constant may restate which member that is - the resolver, the
+ * reset and the "is this page default" check all read it.
  */
 export type UsageControlsPlacement = "header" | "status-bar";
 
@@ -237,8 +241,19 @@ const DEFAULT_STATUS_BAR_RESOURCES: StatusBarResourcePreferences = {
   scope: "host-tree",
 };
 
+/**
+ * The footer is where an install that has never chosen lands: the strip is the
+ * surface built for these two subjects, and the header's cluster is the
+ * fallback for a reader who wants the chrome in one band.
+ *
+ * There is deliberately no migration off a persisted `"header"`. The resolver
+ * reaches this constant only when the stored value is absent or unreadable, so
+ * an explicit pick made under the old default survives - it is a choice, and
+ * rewriting it would be the store overruling the user. Reset and the footer
+ * option are the two ways back.
+ */
 export const DEFAULT_STATUS_BAR_LAYOUT: StatusBarLayoutPreferences = {
-  placement: "header",
+  placement: "status-bar",
   rateLimits: DEFAULT_STATUS_BAR_RATE_LIMITS,
   resources: DEFAULT_STATUS_BAR_RESOURCES,
 };

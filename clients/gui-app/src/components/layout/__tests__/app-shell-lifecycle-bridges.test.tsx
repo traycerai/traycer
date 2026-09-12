@@ -249,9 +249,11 @@ describe("<AppShell />", () => {
     useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
-  function selectStatusBarPlacement(): void {
+  // The footer is the default, so the strip-drawing cases need no setup at
+  // all; the HEADER is the placement a test has to ask for now.
+  function selectHeaderPlacement(): void {
     useLayoutStore.setState({
-      statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "status-bar" },
+      statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "header" },
     });
   }
 
@@ -261,7 +263,7 @@ describe("<AppShell />", () => {
     await screen.findByTestId("app-shell-child");
 
     expect(screen.getByTestId("user-menu")).not.toBeNull();
-    expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
+    expect(screen.getByTestId("app-status-bar")).not.toBeNull();
     expect(screen.getByTestId("app-shell-child")).not.toBeNull();
     expect(screen.getByTestId("tile-find-owner-bridge")).not.toBeNull();
     expect(screen.getByTestId("reserved-browser-chords")).not.toBeNull();
@@ -325,7 +327,8 @@ describe("<AppShell />", () => {
       fired = dispatchAction("app.status-bar.toggle", NOOP_ROUTER);
     });
     expect(fired).toBe(true);
-    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+    // Off the default footer, which is where an untouched store starts.
+    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
   });
 
   it("does not register the status-bar placement toggle in the installed mobile app", async () => {
@@ -344,10 +347,13 @@ describe("<AppShell />", () => {
       fired = dispatchAction("app.status-bar.toggle", NOOP_ROUTER);
     });
     expect(fired).toBe(false);
-    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
+    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
   });
 
+  // Under the HEADER placement, since that is the only placement where this
+  // preference has a button to hide - the strip has its own switch.
   it("hides the global resource monitor button when the preference is off", async () => {
+    selectHeaderPlacement();
     useSettingsStore.setState({ showGlobalResourceMonitor: false });
 
     queryClient = renderAppShell();
@@ -357,19 +363,7 @@ describe("<AppShell />", () => {
     expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
   });
 
-  it("keeps the usage controls in the header at the default placement", async () => {
-    queryClient = renderAppShell();
-
-    await screen.findByTestId("app-shell-child");
-
-    expect(screen.queryByTestId("app-status-bar")).toBeNull();
-    expect(screen.getByTestId("rate-limit-header-button")).not.toBeNull();
-    expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
-  });
-
-  it("moves the usage controls to the strip under the status-bar placement", async () => {
-    selectStatusBarPlacement();
-
+  it("draws the usage controls in the strip at the default placement", async () => {
     queryClient = renderAppShell();
 
     await screen.findByTestId("app-shell-child");
@@ -381,9 +375,19 @@ describe("<AppShell />", () => {
     expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
   });
 
-  it("mounts the strip after the content viewport and before the shell's tail", async () => {
-    selectStatusBarPlacement();
+  it("moves the usage controls to the header under the header placement", async () => {
+    selectHeaderPlacement();
 
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    expect(screen.queryByTestId("app-status-bar")).toBeNull();
+    expect(screen.getByTestId("rate-limit-header-button")).not.toBeNull();
+    expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
+  });
+
+  it("mounts the strip after the content viewport and before the shell's tail", async () => {
     queryClient = renderAppShell();
 
     await screen.findByTestId("app-shell-child");
@@ -411,8 +415,8 @@ describe("<AppShell />", () => {
   it("ignores the status-bar placement on a mobile viewport", async () => {
     // Not an `isMobileApp` gate: a narrow DESKTOP window behaves the same, and
     // the mobile header keeps its own controls — so respecting `placement`
-    // here would leave that viewport with neither surface.
-    selectStatusBarPlacement();
+    // here would leave that viewport with neither surface. The store is on the
+    // default `status-bar` placement, which is exactly the one being ignored.
     setViewportWidth(MOBILE_VIEWPORT_WIDTH);
 
     queryClient = renderAppShell();

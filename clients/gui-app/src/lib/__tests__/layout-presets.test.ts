@@ -341,7 +341,9 @@ describe("layout presets", () => {
   it("applies the Default bundle without touching placement or the rail", () => {
     // The Default SEGMENT is the third density bundle, not a reset: a reader
     // asking for default densities has not asked to have their surfaces moved.
-    useLayoutStore.getState().setStatusBarPlacement("status-bar");
+    // Moved OFF the default placement, so a bundle that wrote one would show
+    // up here rather than coincide with it.
+    useLayoutStore.getState().setStatusBarPlacement("header");
     useLeftPanelStore.getState().setPanelVisibilityOverride("terminals", false);
     applyLayoutPreset("compact");
 
@@ -349,14 +351,14 @@ describe("layout presets", () => {
 
     expect(matchLayoutPreset(currentSnapshot())).toBe("default");
     expect(currentSnapshot()).toEqual(LAYOUT_PRESETS.default);
-    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
     expect(
       useLeftPanelStore.getState().panelVisibilityOverrideById.terminals,
     ).toBe(false);
   });
 
   it("resets back to Default from Compact, placement and panels included", () => {
-    useLayoutStore.getState().setStatusBarPlacement("status-bar");
+    useLayoutStore.getState().setStatusBarPlacement("header");
     useLeftPanelStore.getState().setPanelVisibilityOverride("terminals", false);
     useLeftPanelStore
       .getState()
@@ -381,12 +383,26 @@ describe("layout presets", () => {
     );
   });
 
+  // The one place the literal is pinned outside the store's own suite: every
+  // other read here goes through `DEFAULT_STATUS_BAR_LAYOUT`, so without this
+  // the whole file would follow the constant wherever it moved.
+  it("lands the strip in the FOOTER on reset, from either placement", () => {
+    for (const placement of ["header", "status-bar"] as const) {
+      resetStores();
+      useLayoutStore.getState().setStatusBarPlacement(placement);
+
+      resetLayoutToDefaults();
+
+      expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+    }
+  });
+
   it("leaves placement and the rail alone for every preset, and matches on neither", () => {
     // Both are STRUCTURAL - which surface hosts the strip, how the rail is
     // arranged - rather than levels of detail, so no bundle has anything to
-    // say about them, and a Compact install with the strip in the footer and a
+    // say about them, and a Compact install with the strip in the header and a
     // reordered rail is still Compact.
-    useLayoutStore.getState().setStatusBarPlacement("status-bar");
+    useLayoutStore.getState().setStatusBarPlacement("header");
     const arranged = [{ panelIds: ["terminals" as const] }];
     useLeftPanelStore.getState().applyPanelGroups(arranged);
     useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
@@ -394,7 +410,7 @@ describe("layout presets", () => {
     applyLayoutPreset("compact");
 
     expect(matchLayoutPreset(currentSnapshot())).toBe("compact");
-    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
     expect(useLeftPanelStore.getState().panelGroups[0].panelIds).toContain(
       "terminals",
     );
@@ -432,8 +448,8 @@ describe("layout presets", () => {
   });
 
   it("matches a preset wherever the strip lives, and leaves it there", () => {
-    // The rule this encodes: a reader on footer placement who picks a preset
-    // must read that preset, not Custom - and must keep their footer.
+    // The rule this encodes: a reader on header placement who picks a preset
+    // must read that preset, not Custom - and must keep their header.
     for (const placement of ["header", "status-bar"] as const) {
       for (const id of LAYOUT_PRESET_IDS) {
         resetStores();

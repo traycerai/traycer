@@ -48,20 +48,20 @@ afterEach(() => {
 });
 
 describe("<StatusBarKeybindingBridge />", () => {
-  it("registers the toggle handler on mount and flips placement header -> status-bar -> header", () => {
+  it("registers the toggle handler on mount and flips placement status-bar -> header -> status-bar", () => {
     render(<StatusBarKeybindingBridge />);
 
-    expect(placement()).toBe("header");
-
-    act(() => {
-      expect(dispatchAction("app.status-bar.toggle", NOOP_ROUTER)).toBe(true);
-    });
     expect(placement()).toBe("status-bar");
 
     act(() => {
       expect(dispatchAction("app.status-bar.toggle", NOOP_ROUTER)).toBe(true);
     });
     expect(placement()).toBe("header");
+
+    act(() => {
+      expect(dispatchAction("app.status-bar.toggle", NOOP_ROUTER)).toBe(true);
+    });
+    expect(placement()).toBe("status-bar");
   });
 
   it("reads placement at invocation time, not at registration time", () => {
@@ -70,16 +70,16 @@ describe("<StatusBarKeybindingBridge />", () => {
     // Change placement out from under the handler by some other writer (the
     // Layout page, the context menu) between registration and dispatch.
     act(() => {
-      useLayoutStore.getState().setStatusBarPlacement("status-bar");
+      useLayoutStore.getState().setStatusBarPlacement("header");
     });
 
     act(() => {
       dispatchAction("app.status-bar.toggle", NOOP_ROUTER);
     });
-    // Toggling from "status-bar" (the CURRENT value) goes to "header" - if the
-    // handler had captured "header" at registration it would incorrectly
-    // toggle back to "status-bar" here.
-    expect(placement()).toBe("header");
+    // Toggling from "header" (the CURRENT value) goes to "status-bar" - if the
+    // handler had captured "status-bar" at registration it would incorrectly
+    // toggle back to "header" here.
+    expect(placement()).toBe("status-bar");
   });
 
   it("registers nothing in the installed mobile app", () => {
@@ -95,7 +95,7 @@ describe("<StatusBarKeybindingBridge />", () => {
       fired = dispatchAction("app.status-bar.toggle", NOOP_ROUTER);
     });
     expect(fired).toBe(false);
-    expect(placement()).toBe("header");
+    expect(placement()).toBe("status-bar");
   });
 
   it("no-ops the action once the bridge unmounts", () => {
@@ -107,6 +107,6 @@ describe("<StatusBarKeybindingBridge />", () => {
       fired = dispatchAction("app.status-bar.toggle", NOOP_ROUTER);
     });
     expect(fired).toBe(false);
-    expect(placement()).toBe("header");
+    expect(placement()).toBe("status-bar");
   });
 });

@@ -1389,10 +1389,10 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       call). Each answers "which surface hosts this" / "which control offers
       it" / "how is the rail
       arranged" rather than "how much detail", so NO bundle carries them -
-      `Default` included. A reader on footer placement who asks for a density
-      gets that density, not their header back, whichever of the three they
+      `Default` included. A reader on header placement who asks for a density
+      gets that density, not the footer back, whichever of the three they
       pick. They are absent from the match for the same reason: a Compact
-      install with the strip in the footer and a reordered rail is still
+      install with the strip in the header and a reordered rail is still
       **Compact**, and a page on default densities reads **Default** wherever
       its strip lives. That is why `LayoutPresetStatusBarValues` is the slice's
       two subjects rather than the whole `StatusBarLayoutPreferences`.
@@ -1422,7 +1422,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
   - **Status bar** (`panels/layout/status-bar-layout-group.tsx`; one
     `SettingsGroup`, and INSIDE it a `SettingsSubgroup` per subject rather than
     a flat row list - the bar is ONE layout slice, and its subjects nest two
-    deep). Reading down: the **preview**; Placement (Header / Status bar);
+    deep). Reading down: the **preview**; Placement (Status bar / Header, the
+    DEFAULT first - the segment renders no default hint, so order is the only
+    place the page says which one an untouched install is on);
     `Show resource monitor in header`, drawn while placement is `header` **or
     the viewport is below `md`** - in the other placement the group's own
     `Show resource monitor` governs the same thing, but below `md` `AppShell`
@@ -1438,6 +1440,19 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     visible, then one `Limits` checkbox list); and **Resource monitor**
     (subgroup, title switch = `resources.enabled`) holding Scope (Host /
     Desktop app) and a Metrics chip row.
+  - **The default placement is the FOOTER** (`status-bar`), for a fresh store
+    and for `Reset to defaults` alike, in every preset - the bundles carry no
+    `placement` at all, so Default and Compact both mean "footer" for a reader
+    who never chose one. The literal lives in exactly one place,
+    `DEFAULT_STATUS_BAR_LAYOUT.placement` (`stores/settings/layout-store.ts`);
+    the persistence resolver, `resetLayoutToDefaults` and
+    `useLayoutIsFullyDefault` all READ it, and nothing else may restate which
+    member it is. **There is no migration.** An explicitly persisted `"header"`
+    is a choice and survives, so a tester whose store was serialised under the
+    old header default still opens on the header until they Reset or pick
+    `Status bar`. That asymmetry is the point: the resolver falls back to the
+    constant only for a value that is absent or unreadable, which is the one
+    case where nobody has chosen.
   - **Which of a provider's limits the strip draws is ONE checkbox list per
     provider** (`controls/settings-checkbox-list.tsx`): `Tightest limit
 (automatic)` first, then one entry per limit the provider currently

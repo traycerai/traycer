@@ -479,10 +479,10 @@ describe("<KeybindingProvider /> visual leader hints", () => {
       repeat: true,
     });
 
-    // One flip per physical press. Without the repeat guard the OS would walk
-    // the bar between header and footer for as long as the chord is held and
-    // leave it wherever the last repeat landed.
-    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+    // One flip per physical press, off the default footer. Without the repeat
+    // guard the OS would walk the bar between header and footer for as long as
+    // the chord is held and leave it wherever the last repeat landed.
+    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
     expect(first.defaultPrevented).toBe(true);
     expect(repeated.defaultPrevented).toBe(true);
   });

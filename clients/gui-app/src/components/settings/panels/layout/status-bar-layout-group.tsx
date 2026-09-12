@@ -204,9 +204,12 @@ function StatusBarLayoutGroupContent(): ReactNode {
           control={
             <SettingsSegmentedControl
               value={statusBar.placement}
+              // Default first. The segment renders no default hint of its
+              // own, so order is the only place the page can say which one an
+              // untouched install is on.
               options={[
-                { value: "header", label: "Header" },
                 { value: "status-bar", label: "Status bar" },
+                { value: "header", label: "Header" },
               ]}
               onChange={(placement) => {
                 trackLayoutSetting("layout.statusBar.placement");

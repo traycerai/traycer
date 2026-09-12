@@ -29,9 +29,9 @@ describe("useLayoutStore", () => {
   afterEach(resetStore);
 
   describe("status bar slice", () => {
-    it("starts with the usage controls in the header, everything visible", () => {
+    it("starts with the usage controls in the footer, everything visible", () => {
       expect(useLayoutStore.getState().statusBar).toEqual({
-        placement: "header",
+        placement: "status-bar",
         rateLimits: {
           enabled: true,
           hiddenProviders: [],
@@ -49,8 +49,10 @@ describe("useLayoutStore", () => {
       });
     });
 
+    // Moving AWAY from the default, since the default is now the footer and
+    // the setter is a no-op for the value already held.
     it("persists a placement move under the slice", async () => {
-      useLayoutStore.getState().setStatusBarPlacement("status-bar");
+      useLayoutStore.getState().setStatusBarPlacement("header");
 
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -60,12 +62,22 @@ describe("useLayoutStore", () => {
         state: {
           statusBar: {
             ...DEFAULT_STATUS_BAR_LAYOUT,
-            placement: "status-bar",
+            placement: "header",
           },
           composer: DEFAULT_COMPOSER_LAYOUT,
         },
         version: CURRENT_PERSIST_VERSION,
       });
+    });
+
+    // The header is a CHOICE once it is written down, so the new footer
+    // default never reaches a slice that carries one - there is no migration,
+    // and a store serialised under the old default keeps the header until its
+    // owner says otherwise.
+    it("keeps an explicitly persisted header placement", async () => {
+      await rehydrateFrom({ statusBar: { placement: "header" } });
+
+      expect(useLayoutStore.getState().statusBar.placement).toBe("header");
     });
 
     it("rehydrates a fully valid slice verbatim", async () => {
@@ -140,7 +152,7 @@ describe("useLayoutStore", () => {
       });
 
       expect(useLayoutStore.getState().statusBar).toEqual({
-        placement: "header",
+        placement: "status-bar",
         rateLimits: {
           enabled: true,
           hiddenProviders: [],
@@ -176,9 +188,10 @@ describe("useLayoutStore", () => {
     it("keeps every setter reachable after rehydrating a corrupt record", async () => {
       await rehydrateFrom(42);
 
-      useLayoutStore.getState().setStatusBarPlacement("status-bar");
+      // Off the default, so the assertion fails if the setter does nothing.
+      useLayoutStore.getState().setStatusBarPlacement("header");
 
-      expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+      expect(useLayoutStore.getState().statusBar.placement).toBe("header");
     });
 
     it("drops a persisted provider id no build knows and dedupes the rest", async () => {
@@ -413,7 +426,9 @@ describe("useLayoutStore", () => {
               },
             },
           });
-          useLayoutStore.getState().setStatusBarPlacement("status-bar");
+          // Any write forces the persist; the placement move is the cheapest
+          // one, so it moves off the default rather than onto it.
+          useLayoutStore.getState().setStatusBarPlacement("header");
           await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
           const persisted: unknown = JSON.parse(
@@ -423,7 +438,7 @@ describe("useLayoutStore", () => {
             state: {
               statusBar: {
                 ...DEFAULT_STATUS_BAR_LAYOUT,
-                placement: "status-bar",
+                placement: "header",
                 rateLimits: {
                   ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
                   providers: {

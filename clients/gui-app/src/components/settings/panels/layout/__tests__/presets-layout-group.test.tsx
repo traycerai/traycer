@@ -202,7 +202,7 @@ describe("<PresetsLayoutGroup />", () => {
       within(presetGroup()).getByRole("button", { name: "Compact" }),
     );
     act(() => {
-      useLayoutStore.getState().setStatusBarPlacement("status-bar");
+      useLayoutStore.getState().setStatusBarPlacement("header");
       useLeftPanelStore
         .getState()
         .setPanelVisibilityOverride("terminals", false);
@@ -251,13 +251,13 @@ describe("<PresetsLayoutGroup />", () => {
     expect(reset().hasAttribute("disabled")).toBe(true);
 
     act(() => {
-      useLayoutStore.getState().setStatusBarPlacement("status-bar");
+      useLayoutStore.getState().setStatusBarPlacement("header");
     });
     expect(pressed()).toEqual(["Default"]);
     expect(reset().hasAttribute("disabled")).toBe(false);
 
     act(() => {
-      useLayoutStore.getState().setStatusBarPlacement("header");
+      useLayoutStore.getState().setStatusBarPlacement("status-bar");
       useLeftPanelStore
         .getState()
         .setPanelVisibilityOverride("terminals", false);
@@ -269,7 +269,9 @@ describe("<PresetsLayoutGroup />", () => {
     // The segment is the density bundle; only the button is the whole page.
     render(<PresetsLayoutGroup />);
     act(() => {
-      useLayoutStore.getState().setStatusBarPlacement("status-bar");
+      // Off the default placement, so a bundle that wrote one would show up
+      // here rather than coincide with it.
+      useLayoutStore.getState().setStatusBarPlacement("header");
       useLeftPanelStore
         .getState()
         .setPanelVisibilityOverride("terminals", false);
@@ -283,7 +285,7 @@ describe("<PresetsLayoutGroup />", () => {
     );
 
     expect(pressed()).toEqual(["Default"]);
-    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
     expect(
       useLeftPanelStore.getState().panelVisibilityOverrideById.terminals,
     ).toBe(false);

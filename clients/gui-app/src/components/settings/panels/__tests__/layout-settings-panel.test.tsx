@@ -383,11 +383,24 @@ describe("<LayoutSettingsPanel />", () => {
   it("writes the placement setting to the store via the segmented control", () => {
     render(<LayoutSettingsPanel />);
 
-    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
-
-    fireEvent.click(screen.getByRole("button", { name: "Status bar" }));
-
     expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+
+    fireEvent.click(screen.getByRole("button", { name: "Header" }));
+
+    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
+  });
+
+  // The segment renders no default hint, so order is the only place the page
+  // says which option an untouched install is on.
+  it("puts the default placement first in the segmented control", () => {
+    render(<LayoutSettingsPanel />);
+
+    const segment = screen.getByRole("group", { name: "Placement" });
+    const labels = within(segment)
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+
+    expect(labels).toEqual(["Status bar", "Header"]);
   });
 
   it("renders the groups in their fixed order, Presets first and Sidebar last", () => {
@@ -417,15 +430,17 @@ describe("<LayoutSettingsPanel />", () => {
   it("shows the header resource-monitor row only while placement is header", () => {
     render(<LayoutSettingsPanel />);
 
-    expect(
-      screen.getByRole("switch", { name: "Show resource monitor in header" }),
-    ).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Status bar" }));
-
+    // Absent on the default footer placement, where the group's own `Show
+    // resource monitor` governs the same monitor.
     expect(
       screen.queryByRole("switch", { name: "Show resource monitor in header" }),
     ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Header" }));
+
+    expect(
+      screen.getByRole("switch", { name: "Show resource monitor in header" }),
+    ).toBeTruthy();
   });
 
   it("keeps the header resource-monitor row under status-bar placement at a narrow viewport", () => {
@@ -1371,6 +1386,12 @@ describe("<LayoutSettingsPanel />", () => {
     });
 
     it("renders and writes 'Show resource monitor in header' in the Status bar group", () => {
+      // Under the HEADER placement: this row is drawn only while the header is
+      // the surface holding the monitor (or below `md`), and it is the header
+      // half of the relocated preference that is under test here.
+      useLayoutStore.setState({
+        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "header" },
+      });
       render(<LayoutSettingsPanel />);
       const statusBarGroup = screen.getByTestId("layout-status-bar-group");
 

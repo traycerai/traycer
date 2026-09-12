@@ -53,8 +53,8 @@ export const LAYOUT_PRESET_IDS: ReadonlyArray<LayoutPresetId> = [
  * the resource monitor - rather than a level of detail, so it is treated
  * exactly as the sidebar's panel order is: carried by no bundle, `default`
  * included, restored by `resetLayoutToDefaults` alone, and not part of the
- * match. A user who moved the strip to the footer and then asks for a density
- * gets that density, not their header back.
+ * match. A user who moved the strip to the header and then asks for a density
+ * gets that density, not the footer back.
  */
 export interface LayoutPresetStatusBarValues {
   readonly rateLimits: StatusBarRateLimitPreferences;
@@ -346,7 +346,7 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
  *
  * This is where the button and the `Default` segment deliberately part
  * company. The segment answers "which density bundle am I on", so it has to
- * leave a footer strip in the footer - a reader asking for default DENSITIES
+ * leave a header strip in the header - a reader asking for default DENSITIES
  * has not asked to have their surfaces moved, and the segment reading
  * `Default` for that page is the same claim `matchLayoutPreset` makes. The
  * button says "put the whole page back", which plainly includes where the
