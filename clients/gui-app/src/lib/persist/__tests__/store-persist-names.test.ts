@@ -28,6 +28,8 @@ import { useSetupTerminalsStore } from "@/stores/worktree/setup-terminals";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 
 // Call-site regression guard for the full persist-name chain:
 //   catalog leaf (keys.ts) → STORE_KEYS[camelName] → the store's persist call.
@@ -138,6 +140,8 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     useSetupTerminalsStore,
     "traycer-gui-app:setup-terminals",
   ],
+  ["useLayoutStore", useLayoutStore, "traycer-gui-app:layout"],
+  ["useWatchHostStore", useWatchHostStore, "traycer-gui-app:watch-host"],
 
   // ── Scoped singletons (initial `anon` bucket at construction) ─────────────
   [

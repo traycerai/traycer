@@ -3150,8 +3150,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
     },
     [onToggle],
   );
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
+  const navigatorResourceMetrics = useSettingsStore(
+    (state) => state.navigatorResourceMetrics,
   );
   const ownerKind = useEpicNodeOwnerKind(nodeId);
 
@@ -3313,12 +3313,14 @@ function ChatRowButton(props: ChatRowButtonProps) {
             ownerKind={resourceOwnerKind}
             claims={roleClaims}
           />
-          {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
+          {resourceOwnerKind === null ||
+          navigatorResourceMetrics.length === 0 ? null : (
             <OwnerResourceChip
               epicId={epicId}
               kind={resourceOwnerKind}
               ownerId={nodeId}
               hostId={null}
+              metrics={navigatorResourceMetrics}
               className={undefined}
             />
           )}

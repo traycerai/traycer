@@ -1,0 +1,651 @@
+import { describe, expect, it } from "vitest";
+import {
+  focusActivityHostIds,
+  focusHostIds,
+  splitTaskGroupByHost,
+  focusPromptHostId,
+  groupRowsByHost,
+  isUnknownHostId,
+  resolveFocusHostId,
+  shouldGroupByHost,
+  UNKNOWN_HOST_ID,
+} from "@/lib/home-focus/focus-host-groups";
+import type {
+  FocusAgentRow,
+  FocusBackgroundRow,
+  FocusBrowserRow,
+  FocusModel,
+  FocusPromptRow,
+  FocusTaskRow,
+} from "@/lib/home-focus/focus-model";
+import {
+  selectTaskGroupBody,
+  type FocusTaskGroup,
+} from "@/lib/home-focus/focus-task-groups";
+import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+
+let seq = 0;
+function nextId(prefix: string): string {
+  seq += 1;
+  return `${prefix}-${seq}`;
+}
+
+function activation(feedId: string): MergedNotificationRow {
+  return {
+    feedId,
+    source: "host",
+    sourceId: feedId,
+    createdAt: 0,
+    readAt: null,
+    title: "Approve",
+    body: "",
+    payload: null,
+    hostKind: "approval.requested",
+    appLocalKind: null,
+    globalEntry: null,
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    sourceRef: null,
+    originHostId: null,
+    providerPackAttribution: null,
+    category: "task",
+  };
+}
+
+function promptRow(overrides: Partial<FocusPromptRow>): FocusPromptRow {
+  const key = overrides.key ?? nextId("prompt");
+  return {
+    key,
+    kind: "approval",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    taskTitle: "Task",
+    title: "Approve",
+    body: "",
+    createdAt: 0,
+    originHostId: null,
+    browserTabTitle: null,
+    activation: activation(key),
+    ...overrides,
+  };
+}
+
+function agentRow(overrides: Partial<FocusAgentRow>): FocusAgentRow {
+  return {
+    agentId: overrides.agentId ?? nextId("agent"),
+    title: null,
+    surface: "chat",
+    tier: "turn",
+    parentId: null,
+    hostId: null,
+    hostUnattributed: false,
+    stoppable: true,
+    ...overrides,
+  };
+}
+
+function taskRow(overrides: Partial<FocusTaskRow>): FocusTaskRow {
+  return {
+    epicId: overrides.epicId ?? nextId("epic"),
+    taskTitle: "Task",
+    mountedHere: true,
+    agents: [],
+    needsYou: false,
+    stoppable: true,
+    ...overrides,
+  };
+}
+
+function backgroundRow(
+  overrides: Partial<FocusBackgroundRow>,
+): FocusBackgroundRow {
+  return {
+    key: overrides.key ?? nextId("bg"),
+    epicId: "epic-1",
+    chatId: "chat-1",
+    taskTitle: "Task",
+    chatTitle: "Chat",
+    hostId: null,
+    label: "10min heartbeat",
+    kind: "background-item",
+    itemKind: "monitor",
+    startedAtMs: null,
+    stoppable: false,
+    ...overrides,
+  };
+}
+
+function browserRow(overrides: Partial<FocusBrowserRow>): FocusBrowserRow {
+  return {
+    key: nextId("browser"),
+    epicId: "epic-1",
+    taskTitle: "Task",
+    hostId: "host-a",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    title: "Checkout",
+    urlHost: "example.com",
+    url: "https://example.com/checkout",
+    status: "live",
+    drivenByChatId: null,
+    drivenByAgentName: null,
+    ...overrides,
+  };
+}
+
+function groupRow(overrides: Partial<FocusTaskGroup>): FocusTaskGroup {
+  const task = overrides.task === undefined ? taskRow({}) : overrides.task;
+  return {
+    epicId: task?.epicId ?? "epic-1",
+    taskTitle: "Task",
+    task,
+    prompts: [],
+    agents: task?.agents ?? [],
+    jobs: [],
+    browsers: [],
+    backgroundVisible: false,
+    ...overrides,
+  };
+}
+
+function model(overrides: Partial<FocusModel>): FocusModel {
+  return {
+    prompts: [],
+    tasks: [],
+    background: [],
+    browsers: [],
+    coverage: {
+      activity: "live",
+      degradedHostIds: [],
+      notifications: "cloud",
+      backgroundIsMountedOnly: true,
+      browsersAreMountedOnly: true,
+    },
+    badgeCount: 0,
+    ...overrides,
+  };
+}
+
+describe("resolveFocusHostId", () => {
+  // A row with no host of its own is acted on where this client is pointing,
+  // so that is the machine it belongs under. Resolving BEFORE counting is what
+  // keeps a single-host install single-host.
+  it("resolves an unnamed host to the active one", () => {
+    expect(resolveFocusHostId(null, "host-a")).toBe("host-a");
+    expect(resolveFocusHostId("host-b", "host-a")).toBe("host-b");
+  });
+
+  // With no active host there is nothing to resolve TO, and the row still has
+  // to land somewhere: dropping it made a section's heading count disagree
+  // with the rows under it, silently, exactly when the page knows least.
+  it("falls back to the unknown bucket when there is no active host either", () => {
+    const resolved = resolveFocusHostId(null, null);
+    expect(resolved).toBe(UNKNOWN_HOST_ID);
+    expect(isUnknownHostId(resolved)).toBe(true);
+    expect(isUnknownHostId("host-a")).toBe(false);
+  });
+});
+
+describe("splitTaskGroupByHost", () => {
+  // The defect this replaced: an epic is cloud-homed and can be worked from
+  // two machines, so `agents` holds both - and asking for the task's one host
+  // answered `null`, which resolved to whichever machine the user was at.
+  it("splits a task worked from two hosts into one slice each", () => {
+    const slices = splitTaskGroupByHost(
+      groupRow({
+        task: taskRow({
+          epicId: "epic-shared",
+          agents: [
+            agentRow({ agentId: "agent-a", hostId: "host-a" }),
+            agentRow({ agentId: "agent-b", hostId: "host-b" }),
+          ],
+        }),
+      }),
+      { enabled: true, activeHostId: "host-active" },
+    );
+
+    expect(slices.map((slice) => slice.hostId).sort()).toEqual([
+      "host-a",
+      "host-b",
+    ]);
+    for (const slice of slices) {
+      expect(slice.splitAcrossHosts).toBe(true);
+      expect(slice.group.agents).toHaveLength(1);
+      expect(slice.group.agents[0].hostId).toBe(slice.hostId);
+      expect(slice.group.task?.agents).toEqual(slice.group.agents);
+      // Never the active host: the task names two machines and neither is it.
+      expect(slice.hostId).not.toBe("host-active");
+    }
+  });
+
+  it("leaves a single-host task whole, by identity", () => {
+    const group = groupRow({
+      task: taskRow({
+        agents: [
+          agentRow({ hostId: "host-a" }),
+          agentRow({ hostId: "host-a" }),
+        ],
+      }),
+    });
+    const slices = splitTaskGroupByHost(group, {
+      enabled: true,
+      activeHostId: "host-active",
+    });
+
+    expect(slices).toHaveLength(1);
+    expect(slices[0].splitAcrossHosts).toBe(false);
+    expect(slices[0].group).toBe(group);
+  });
+
+  it("files each job under its own chat's host", () => {
+    const slices = splitTaskGroupByHost(
+      groupRow({
+        task: taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ hostId: "host-a" })],
+        }),
+        jobs: [
+          backgroundRow({ key: "a", epicId: "epic-1", hostId: "host-a" }),
+          backgroundRow({ key: "b", epicId: "epic-1", hostId: "host-b" }),
+        ],
+        backgroundVisible: true,
+      }),
+      { enabled: true, activeHostId: "host-active" },
+    );
+
+    const byHost = new Map(slices.map((slice) => [slice.hostId, slice]));
+    expect(byHost.get("host-a")?.group.jobs.map((job) => job.key)).toEqual([
+      "a",
+    ]);
+    expect(byHost.get("host-b")?.group.jobs.map((job) => job.key)).toEqual([
+      "b",
+    ]);
+    // The host that only has a job still gets a slice, with no agents.
+    expect(byHost.get("host-b")?.group.agents).toEqual([]);
+  });
+
+  // A reachable host's row must not inherit an unreachable sibling's refusal.
+  it("re-folds stoppable from the agents that remain", () => {
+    const byHost = new Map(
+      splitTaskGroupByHost(
+        groupRow({
+          task: taskRow({
+            stoppable: false,
+            agents: [
+              agentRow({ agentId: "here", hostId: "host-a", stoppable: true }),
+              agentRow({ agentId: "gone", hostId: "host-b", stoppable: false }),
+            ],
+          }),
+        }),
+        { enabled: true, activeHostId: "host-active" },
+      ).map((slice) => [slice.hostId, slice]),
+    );
+    expect(byHost.get("host-a")?.group.task?.stoppable).toBe(true);
+    expect(byHost.get("host-b")?.group.task?.stoppable).toBe(false);
+  });
+
+  // A single-host page must be byte-identical to the ungrouped one, so the
+  // split does not run at all there - it would re-key rows and re-fold
+  // `stoppable` for a distinction the page is not drawing.
+  it("returns the group untouched when grouping is off", () => {
+    const group = groupRow({
+      task: taskRow({
+        agents: [
+          agentRow({ hostId: "host-a" }),
+          agentRow({ hostId: "host-b" }),
+        ],
+      }),
+    });
+    const slices = splitTaskGroupByHost(group, {
+      enabled: false,
+      activeHostId: "host-active",
+    });
+    expect(slices).toHaveLength(1);
+    expect(slices[0].group).toBe(group);
+    expect(slices[0].splitAcrossHosts).toBe(false);
+  });
+
+  it("resolves an unnamed agent host to the active host", () => {
+    const slices = splitTaskGroupByHost(
+      groupRow({ task: taskRow({ agents: [agentRow({ hostId: null })] }) }),
+      { enabled: true, activeHostId: "host-active" },
+    );
+    expect(slices.map((slice) => slice.hostId)).toEqual(["host-active"]);
+  });
+
+  // A prompt is answered where it was raised, so it belongs to one slice - a
+  // "1 need you" badge under both machines would count one row twice.
+  it("files each prompt under the host it was raised on", () => {
+    const slices = splitTaskGroupByHost(
+      groupRow({
+        task: taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "agent-a", hostId: "host-a" }),
+            agentRow({ agentId: "agent-b", hostId: "host-b" }),
+          ],
+        }),
+        prompts: [
+          promptRow({ key: "p-a", originHostId: "host-a" }),
+          promptRow({ key: "p-b", originHostId: "host-b" }),
+        ],
+      }),
+      { enabled: true, activeHostId: "host-a" },
+    );
+
+    const byHost = new Map(slices.map((slice) => [slice.hostId, slice]));
+    expect(byHost.get("host-a")?.group.prompts.map((row) => row.key)).toEqual([
+      "p-a",
+    ]);
+    expect(byHost.get("host-b")?.group.prompts.map((row) => row.key)).toEqual([
+      "p-b",
+    ]);
+  });
+});
+
+describe("focusHostIds and shouldGroupByHost", () => {
+  it("does not group a page whose rows all resolve to one host", () => {
+    const hostIds = focusHostIds(
+      model({
+        prompts: [promptRow({ originHostId: null })],
+        tasks: [
+          taskRow({
+            epicId: "epic-1",
+            agents: [agentRow({ hostId: "host-a", tier: "turn" })],
+          }),
+        ],
+        background: [backgroundRow({ epicId: "epic-2", hostId: null })],
+      }),
+      "host-a",
+    );
+    expect([...hostIds]).toEqual(["host-a"]);
+    expect(shouldGroupByHost(hostIds)).toBe(false);
+  });
+
+  it("groups once a second host is named anywhere on the page", () => {
+    const hostIds = focusHostIds(
+      model({
+        prompts: [promptRow({ originHostId: "host-b" })],
+        tasks: [
+          taskRow({
+            epicId: "epic-1",
+            agents: [agentRow({ hostId: "host-a", tier: "turn" })],
+          }),
+        ],
+      }),
+      "host-a",
+    );
+    expect([...hostIds].sort()).toEqual(["host-a", "host-b"]);
+    expect(shouldGroupByHost(hostIds)).toBe(true);
+  });
+
+  // Every task the model carries becomes a group now - no presentation rule
+  // hides one - so an idle chat on a second machine is a real row, and the
+  // page names its host like any other.
+  it("counts the host of an idle chat that only hosts a job", () => {
+    const hostIds = focusHostIds(
+      model({
+        tasks: [
+          taskRow({
+            epicId: "epic-idle",
+            agents: [agentRow({ hostId: "host-b", tier: "background" })],
+          }),
+        ],
+        background: [backgroundRow({ epicId: "epic-idle", hostId: "host-a" })],
+      }),
+      "host-a",
+    );
+    expect([...hostIds].sort()).toEqual(["host-a", "host-b"]);
+    expect(shouldGroupByHost(hostIds)).toBe(true);
+  });
+
+  it("names no host on a page with nothing on it", () => {
+    expect(shouldGroupByHost(focusHostIds(model({}), "host-a"))).toBe(false);
+  });
+});
+
+describe("groupRowsByHost", () => {
+  const options = {
+    activeHostId: "host-active",
+    registryOrder: ["host-z", "host-active", "host-m"],
+  };
+
+  it("puts the active host first, then the registry's own order", () => {
+    const rows = [
+      { id: "1", hostId: "host-m" },
+      { id: "2", hostId: "host-active" },
+      { id: "3", hostId: "host-z" },
+    ];
+    expect(
+      groupRowsByHost(rows, (row) => row.hostId, options).map(
+        (group) => group.hostId,
+      ),
+    ).toEqual(["host-active", "host-z", "host-m"]);
+  });
+
+  it("sorts a host the registry has never listed last, by id", () => {
+    const rows = [
+      { id: "1", hostId: "host-unknown-b" },
+      { id: "2", hostId: "host-unknown-a" },
+      { id: "3", hostId: "host-active" },
+    ];
+    expect(
+      groupRowsByHost(rows, (row) => row.hostId, options).map(
+        (group) => group.hostId,
+      ),
+    ).toEqual(["host-active", "host-unknown-a", "host-unknown-b"]);
+  });
+
+  it("folds unnamed hosts into the active host's group", () => {
+    const rows = [
+      { id: "1", hostId: null },
+      { id: "2", hostId: "host-active" },
+    ];
+    const groups = groupRowsByHost(rows, (row) => row.hostId, options);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].rows.map((row) => row.id)).toEqual(["1", "2"]);
+  });
+
+  // Grouping re-arranges rows; it must not re-RANK them. The model already put
+  // attention first, and a group that re-sorted would undo it.
+  it("keeps each group's rows in the order they arrived", () => {
+    const rows = [
+      { id: "first", hostId: "host-active" },
+      { id: "other", hostId: "host-z" },
+      { id: "second", hostId: "host-active" },
+    ];
+    const groups = groupRowsByHost(rows, (row) => row.hostId, options);
+    expect(groups[0].rows.map((row) => row.id)).toEqual(["first", "second"]);
+  });
+
+  it("drops nothing when there is no active host to resolve against", () => {
+    const rows = [{ id: "1", hostId: "host-z" }];
+    const groups = groupRowsByHost(rows, (row) => row.hostId, {
+      activeHostId: null,
+      registryOrder: [],
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].hostId).toBe("host-z");
+  });
+});
+
+describe("groupRowsByHost with no active host", () => {
+  // The case the review found: two named hosts turn grouping on, and the
+  // unresolved row has nothing to resolve to. It must still appear.
+  it("keeps unresolved rows in an unknown group, last, and loses none", () => {
+    const rows = [
+      { id: "a", hostId: "host-a" },
+      { id: "b", hostId: "host-b" },
+      { id: "unresolved", hostId: null },
+    ];
+    const groups = groupRowsByHost(rows, (row) => row.hostId, {
+      activeHostId: null,
+      registryOrder: ["host-a", "host-b"],
+    });
+
+    expect(groups.map((group) => group.hostId)).toEqual([
+      "host-a",
+      "host-b",
+      UNKNOWN_HOST_ID,
+    ]);
+    // Totals reconcile: every row is in exactly one group.
+    expect(groups.flatMap((group) => group.rows)).toHaveLength(rows.length);
+    expect(groups[2].rows.map((row) => row.id)).toEqual(["unresolved"]);
+  });
+
+  it("sorts the unknown bucket after a host the registry never listed", () => {
+    const rows = [
+      { id: "unresolved", hostId: null },
+      { id: "stranger", hostId: "host-unlisted" },
+      { id: "known", hostId: "host-a" },
+    ];
+    const groups = groupRowsByHost(rows, (row) => row.hostId, {
+      activeHostId: null,
+      registryOrder: ["host-a"],
+    });
+    expect(groups.map((group) => group.hostId)).toEqual([
+      "host-a",
+      "host-unlisted",
+      UNKNOWN_HOST_ID,
+    ]);
+  });
+
+  // One unresolved row must not split a page whose named rows share a host:
+  // the bucket is not a machine, so it never turns grouping on by itself.
+  it("does not let the unknown bucket enable grouping", () => {
+    const hostIds = focusHostIds(
+      model({
+        background: [
+          backgroundRow({ key: "named", hostId: "host-a" }),
+          backgroundRow({ key: "unresolved", hostId: null }),
+        ],
+      }),
+      null,
+    );
+    expect([...hostIds]).toEqual(["host-a"]);
+    expect(shouldGroupByHost(hostIds)).toBe(false);
+  });
+});
+
+describe("focusPromptHostId", () => {
+  // Where it was RAISED, not where this window is pointing: an origin-bound
+  // prompt has to be answered on its own machine.
+  it("reads the prompt's origin host", () => {
+    expect(focusPromptHostId(promptRow({ originHostId: "host-b" }))).toBe(
+      "host-b",
+    );
+    expect(focusPromptHostId(promptRow({ originHostId: null }))).toBeNull();
+  });
+});
+
+// A page open on a second machine is a fleet fact the headings report, but
+// it is NOT evidence about the activity plane's coverage.
+describe("focusHostIds and the browser plane", () => {
+  it("groups once a browser names a second host", () => {
+    const hostIds = focusHostIds(
+      model({
+        tasks: [
+          taskRow({
+            epicId: "epic-1",
+            agents: [agentRow({ hostId: "host-a", tier: "turn" })],
+          }),
+        ],
+        browsers: [browserRow({ hostId: "host-b" })],
+      }),
+      "host-a",
+    );
+
+    expect([...hostIds].sort()).toEqual(["host-a", "host-b"]);
+    expect(shouldGroupByHost(hostIds)).toBe(true);
+  });
+
+  it("leaves a browser host out of the ACTIVITY hosts", () => {
+    const pageModel = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ hostId: "host-a", tier: "turn" })],
+        }),
+      ],
+      browsers: [browserRow({ hostId: "host-b" })],
+    });
+
+    // A host whose only rows here are browser tabs has a heading and still
+    // cannot carry "some activity may be missing" - browsers ride their own
+    // stream, so that heading is not evidence either way.
+    expect([...focusActivityHostIds(pageModel, "host-a")]).toEqual(["host-a"]);
+  });
+});
+
+describe("splitTaskGroupByHost and browsers", () => {
+  it("files each tab under the machine its page is open on", () => {
+    const group = groupRow({
+      epicId: "epic-1",
+      task: null,
+      agents: [],
+      jobs: [backgroundRow({ epicId: "epic-1", hostId: "host-a" })],
+      browsers: [
+        browserRow({ hostId: "host-a", tabId: "t1" }),
+        browserRow({ hostId: "host-b", tabId: "t2" }),
+      ],
+      backgroundVisible: true,
+    });
+
+    const slices = splitTaskGroupByHost(group, {
+      enabled: true,
+      activeHostId: "host-a",
+    });
+
+    expect(
+      slices.map((slice) => [
+        slice.hostId,
+        slice.group.browsers.map((row) => row.tabId),
+      ]),
+    ).toEqual([
+      ["host-a", ["t1"]],
+      ["host-b", ["t2"]],
+    ]);
+  });
+
+  // The split is one of the two places the chat set narrows, so a slice must
+  // not be able to nest a tab under a chat that stayed on the other machine.
+  // Placement is resolved at the render site for exactly that reason.
+  it("leaves a remote tab with no chat to hang under", () => {
+    const group = groupRow({
+      epicId: "epic-1",
+      task: taskRow({
+        epicId: "epic-1",
+        agents: [
+          agentRow({ agentId: "chat-1", hostId: "host-a", title: "Reviewer" }),
+        ],
+      }),
+      browsers: [
+        browserRow({
+          hostId: "host-b",
+          tabId: "t-remote",
+          drivenByChatId: "chat-1",
+          drivenByAgentName: "Reviewer",
+        }),
+      ],
+    });
+
+    const slices = splitTaskGroupByHost(group, {
+      enabled: true,
+      activeHostId: "host-a",
+    });
+    const remote = slices.find((slice) => slice.hostId === "host-b");
+
+    // The driver is on A; the page is on B. B's slice has no Reviewer row, so
+    // the tab sits at task level there.
+    expect(remote?.group.agents).toEqual([]);
+    expect(remote?.group.browsers.map((row) => row.tabId)).toEqual([
+      "t-remote",
+    ]);
+    const body = selectTaskGroupBody(
+      remote?.group ?? groupRow({ task: null, agents: [] }),
+    );
+    expect(body.chats).toEqual([]);
+    expect(body.browsers.map((row) => row.tabId)).toEqual(["t-remote"]);
+  });
+});

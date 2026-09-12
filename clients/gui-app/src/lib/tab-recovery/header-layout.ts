@@ -23,9 +23,23 @@ const persistedKinds = {
   epic: "epic",
   draft: "draft",
   history: "history",
+  // Listed so the mapping stays exhaustive over `TabRef["kind"]` - NOT because
+  // Home is ever journaled. Home is a per-window pinned singleton with no close
+  // affordance, and the close path only builds a recovery entry for `draft` and
+  // `epic`, so nothing can record one.
+  home: "home",
   settings: "settings",
 } as const satisfies { [Kind in TabRef["kind"]]: Kind };
-const refSchema = z.object({ kind: z.enum(persistedKinds), id: z.string() });
+
+// What a journal entry may name. Exhaustiveness above is about covering the
+// registry; this is about what may come BACK, and Home must not - a journal
+// that is hand-edited, truncated or corrupt is untrusted input, and a `home`
+// ref reaching `restoreSplit` would install a second Home as a split side,
+// which the singleton has no way to reconcile. Derived by subtraction rather
+// than written out, so a newly registered kind is recoverable by default and
+// only a deliberate exclusion needs a line here.
+const { home: _home, ...recoverableKinds } = persistedKinds;
+const refSchema = z.object({ kind: z.enum(recoverableKinds), id: z.string() });
 const sideSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("tab"), ref: refSchema }),
   z.object({ kind: z.literal("empty") }),
