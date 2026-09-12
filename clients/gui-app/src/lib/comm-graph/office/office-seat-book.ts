@@ -66,6 +66,20 @@ function compareIds(left: string, right: string): number {
 
 export class OfficeSeatBook {
   private layout: OfficeLayout | null = null;
+  /**
+   * `layout.seats` keys in canonical order.
+   *
+   * The two seat scans below have to agree with each other and with themselves
+   * across runs, and the registry is a Map whose iteration order is whatever
+   * the plan happened to build - so the order has to be imposed. Imposing it
+   * per scan meant sorting the WHOLE registry inside a single `claim`, once to
+   * resolve the building and again to find the desk, and `recomputeClaims`
+   * pays that per hot agent: a thousand-seat office replaying a scrub sorted a
+   * thousand ids some ninety times over. It is the same order every time, so
+   * it is computed once, HERE - the one place `this.layout` is written, which
+   * is what keeps the two from drifting apart.
+   */
+  private seatIdsInOrder: ReadonlyArray<string> = [];
   /** Every agent the last `adopt` was told about, in canonical order. */
   private known: ReadonlyArray<string> = [];
   /** Where an agent LIVES: its desk or its cubby. */
@@ -103,6 +117,7 @@ export class OfficeSeatBook {
     }
     this.forgetAllBut(wanted);
     this.layout = layout;
+    this.seatIdsInOrder = Array.from(layout.seats.keys()).sort(compareIds);
     this.known = [...agentIds].sort(compareIds);
     this.reassign(layout);
     this.dropStaleClaims(layout);
@@ -468,7 +483,7 @@ export class OfficeSeatBook {
     }
     // A layout that carries no storey at that index has not said where the
     // wake is happening, so the seats that claim to be there answer instead.
-    for (const seatId of Array.from(layout.seats.keys()).sort(compareIds)) {
+    for (const seatId of this.seatIdsInOrder) {
       const seat = layout.seats.get(seatId);
       if (seat === undefined) continue;
       if (seat.floorIndex !== preference.floorIndex) continue;
@@ -499,7 +514,7 @@ export class OfficeSeatBook {
     if (!owner.resolved) return null;
     const spoken = this.occupancy();
     const free: OfficeSeat[] = [];
-    for (const seatId of Array.from(layout.seats.keys()).sort(compareIds)) {
+    for (const seatId of this.seatIdsInOrder) {
       const seat = layout.seats.get(seatId);
       if (seat === undefined || seat.kind === "cubby") continue;
       if (seat.hostId !== owner.hostId) continue;

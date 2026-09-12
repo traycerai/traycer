@@ -1448,4 +1448,93 @@ describe("OfficeSeatBook", () => {
       height: 2 * OFFICE_TILE,
     });
   });
+
+  it("seats a later wake from the layout just adopted, not from a seat list left over from the last one", () => {
+    // Control, not a fails-before case: this passes on the unfixed tree too,
+    // because the unfixed tree sorts the registry fresh on every claim. What
+    // it has to catch is a cache built on the first adopt and never rebuilt
+    // - after the second adopt both readers of the sorted ids would still
+    // walk layout A's seats, which no longer exist, and the wake would find
+    // nothing.
+    const layoutA = buildLayout({
+      seats: [
+        {
+          seatId: "a-cubby",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+          hostId: "host-a",
+        },
+        {
+          seatId: "a-desk",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+          hostId: "host-a",
+        },
+      ],
+      desks: new Map([["A", "a-cubby"]]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layoutA, ["A", "U"]);
+    const fromA = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    expect(fromA?.seatId).toBe("a-desk");
+    expect(fromA?.hostId).toBe("host-a");
+    assertNoDoubleBooking(book);
+
+    // B's registry shares no ids with A, a different count, and different
+    // hosts and floors. `floors` is omitted so a wake whose preference names
+    // floor 1 has no storey to read and must take owningHostOf's seat-scan
+    // fallback.
+    const layoutB = buildLayout({
+      seats: [
+        {
+          seatId: "b-cubby",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 10),
+          hostId: "host-b",
+        },
+        {
+          seatId: "b-desk",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 10),
+          hostId: "host-b",
+        },
+        {
+          seatId: "b-scan-desk",
+          kind: "desk",
+          roomId: null,
+          floorIndex: 1,
+          deskTile: tile(4, 20),
+          hostId: "host-u",
+        },
+      ],
+      desks: new Map([["A", "b-cubby"]]),
+      stable: true,
+    });
+    book.adopt(layoutB, ["A", "U"]);
+
+    // firstFreeSeat: A is assigned on host-b, so the ordinary claim path
+    // walks the cached ids looking for a free desk there.
+    const fromB = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    expect(fromB?.seatId).toBe("b-desk");
+    expect(fromB?.hostId).toBe("host-b");
+    assertNoDoubleBooking(book);
+
+    // owningHostOf's seat-scan fallback: U has no assignment, and floor 1
+    // is not a storey this layout carries, so the scan has to name host-u
+    // from B's own seats. A stale cache would still be walking A's ids,
+    // find none of them in B, and refuse to resolve a host at all.
+    const scanned = book.claim("U", { roomId: null, floorIndex: 1 });
+    expect(scanned?.seatId).toBe("b-scan-desk");
+    expect(scanned?.hostId).toBe("host-u");
+    assertNoDoubleBooking(book);
+  });
 });

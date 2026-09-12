@@ -619,7 +619,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
     expect(planCalls).toBe(1);
   });
 
-  it("leaves every existing seat's tile unchanged (or uniformly shifted) on a stable layout when an agent is appended", () => {
+  it("leaves every existing seat's tile unchanged (or uniformly shifted) on a stable layout when an agent is appended", (context) => {
     const epic = makeTestEpic("triage", 30, 3);
     const before = view.plan(
       planInputFor({
@@ -628,7 +628,12 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
         overrides: {},
       }),
     );
-    if (!before.stable) return;
+    if (!before.stable) {
+      context.skip(
+        `${view.id}'s triage-30 layout is not stable at this scale - nothing to prove an unchanged seat set against`,
+      );
+      return;
+    }
     const grown = [
       ...epic.agents,
       {
