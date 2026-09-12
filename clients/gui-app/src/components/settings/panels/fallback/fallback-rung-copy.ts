@@ -30,14 +30,20 @@ export const FALLBACK_RUNG_COPY: Record<FallbackRungKind, FallbackRungCopy> = {
   },
   tier: {
     label: "Switch to an equivalent model on another provider",
-    // "the equivalent models below", NOT "the model groups below". A group is
-    // policy STRUCTURE, and the vocabulary table bans naming it for the same
-    // reason it bans "tier", "ladder" and "rung" - this line was the last place
-    // the word survived in shipped copy, and it sat directly above a section
-    // whose own heading is "Equivalent models", so the page named one thing two
-    // ways.
+    // "the equivalent models", NOT "the model groups". A group is policy
+    // STRUCTURE, and the vocabulary table bans naming it for the same reason it
+    // bans "tier", "ladder" and "rung" - this line was the last place the word
+    // survived in shipped copy, and it named what a section headed "Equivalent
+    // models" also names, so the page named one thing two ways.
+    //
+    // "below" went when the tabs arrived: that section is no longer under this
+    // line, it is behind the Equivalent models tab. A direction the reader
+    // cannot follow is worse than none, and the step's own label already says
+    // what it uses. The `wait` step below KEEPS its "the cap below" for the
+    // mirror-image reason - its cap is `Behavior`, which is still on this tab,
+    // still under this list.
     description:
-      "Uses the equivalent models below to find one you have said is interchangeable.",
+      "Uses your equivalent models to find one you have said is interchangeable.",
     chipLabel: "equivalent model",
   },
   wait: {

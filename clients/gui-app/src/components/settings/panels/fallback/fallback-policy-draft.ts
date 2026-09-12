@@ -28,6 +28,13 @@ export type FallbackPolicyField =
   | "ladder"
   | "behavior"
   | "tierGroups"
+  // Allowed destinations used to commit under `tierGroups`, because it sat
+  // directly above that group and the field only decides which group the
+  // status renders under. The tabbed layout put the two on DIFFERENT tabs, so
+  // that shortcut would now render a refusal for this control on a tab the
+  // user is not looking at - the failure the panel's own mount comment
+  // predicted ("if that ever stops being true this mount is wrong").
+  | "allowedDestinations"
   | "overrides"
   // The danger zone is a group like any other for status purposes: a refused
   // reset has to say so under the button that was pressed, not under whichever

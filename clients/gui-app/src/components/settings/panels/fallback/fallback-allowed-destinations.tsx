@@ -9,8 +9,9 @@ import { FALLBACK } from "@/components/settings/panels/fallback-settings.definit
 export function FallbackAllowedDestinations(props: {
   readonly policy: FallbackPolicy;
   readonly onChange: (next: FallbackPolicy) => void;
+  readonly status: ReactNode;
 }): ReactNode {
-  const { policy, onChange } = props;
+  const { policy, onChange, status } = props;
   const members = [
     ...new Set(
       policy.tierGroups.flatMap((group) =>
@@ -26,7 +27,9 @@ export function FallbackAllowedDestinations(props: {
   return (
     <SettingsGroup
       group={FALLBACK.definitions.allowedDestinations}
-      showTitle
+      // The Destinations tab already names this; a title here would be a second
+      // name for one checklist.
+      showTitle={false}
       tone="default"
       fill={false}
       dataTestId="settings-fallback-destinations"
@@ -68,10 +71,12 @@ export function FallbackAllowedDestinations(props: {
         ))}
         {providers.length === 0 ? (
           <p className="text-ui-sm text-muted-foreground">
-            Add equivalent models below to offer a destination.
+            Nothing to allow or deny yet. Add equivalent models on the
+            Equivalent models tab to offer a destination.
           </p>
         ) : null}
       </fieldset>
+      {status}
     </SettingsGroup>
   );
 }

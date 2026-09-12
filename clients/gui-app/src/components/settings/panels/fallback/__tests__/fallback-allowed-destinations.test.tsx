@@ -40,7 +40,13 @@ function renderDestinations(
   value: FallbackPolicy,
   onChange: (next: FallbackPolicy) => void,
 ): void {
-  render(<FallbackAllowedDestinations policy={value} onChange={onChange} />);
+  render(
+    <FallbackAllowedDestinations
+      policy={value}
+      onChange={onChange}
+      status={null}
+    />,
+  );
 }
 
 describe("FallbackAllowedDestinations", () => {

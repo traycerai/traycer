@@ -177,7 +177,8 @@ export function FallbackTierGroupsEditor(
   return (
     <SettingsGroup
       group={FALLBACK.definitions.equivalentModels}
-      showTitle
+      // Same name as its tab; the rail says it once.
+      showTitle={false}
       tone="default"
       dataTestId="settings-fallback-tier-groups"
       fill={false}

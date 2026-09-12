@@ -22,6 +22,13 @@ import {
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DEFAULT_FALLBACK_TAB,
+  FALLBACK_TABS,
+  fallbackTabForField,
+  type FallbackTabKey,
+} from "@/components/settings/panels/fallback/fallback-tabs";
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
@@ -714,6 +721,25 @@ function FallbackPolicyEditor(props: {
 
   const enabledRungs = new Set(state.draft.ladder);
   const saveInFlight = fallbackSaveInFlight(state);
+  const [activeTab, setActiveTab] =
+    useState<FallbackTabKey>(DEFAULT_FALLBACK_TAB);
+  // Which tab the panel's ONE status line is currently rendering on, when it
+  // has something to say. `activeField` decides where that line goes; behind
+  // tabs that place can be a tab the reader is not on, which is how a refused
+  // save becomes invisible rather than merely further down the page. The rail
+  // marks that tab, and only while it is hidden - once you are on it the line
+  // itself is the signal.
+  //
+  // The Providers panel removed a per-tab dot that meant "this tab holds
+  // something", and closed the note with the condition for bringing one back:
+  // split the two meanings and keep them split. This is the other meaning.
+  //
+  // `activeField` null means no group has been acted on, so there is no place
+  // for a line and nothing to point at.
+  const statusTab =
+    state.activeField !== null && fallbackStatusNeedsAttention(state)
+      ? fallbackTabForField(state.activeField)
+      : null;
   const saveStatusFor = (
     field: FallbackPolicyField,
     className: string,
@@ -758,7 +784,11 @@ function FallbackPolicyEditor(props: {
       )}
       <SettingsGroup
         group={FALLBACK.definitions.fallback}
-        showTitle
+        // The page is already titled Fallback. This strip is the master switch
+        // for all four tabs, not a section beside them, so a heading repeating
+        // the page name is the second name `notification-chime-settings-section`
+        // refuses for the same reason.
+        showTitle={false}
         tone="default"
         dataTestId="settings-fallback-group"
         fill={false}
@@ -780,162 +810,238 @@ function FallbackPolicyEditor(props: {
           }
         />
         {saveStatusFor("enabled", "px-5 pb-4")}
-        <div className="border-b border-border/40 px-5 py-4 last:border-b-0">
-          {state.draft.enabled ? null : (
-            <p className="mb-3 text-ui-sm text-muted-foreground">
-              Off - these settings take effect when you turn on automatic
-              fallback.
-            </p>
-          )}
-          <FallbackLadderEditor
-            displayOrder={state.displayOrder}
-            enabled={enabledRungs}
-            onToggle={(rung, next) => {
-              const nextEnabled = new Set(enabledRungs);
-              if (next) {
-                nextEnabled.add(rung);
-              } else {
-                nextEnabled.delete(rung);
-              }
-              // Turning a step ON may have to move it: an externally authored
-              // policy can store `notify` early, and a step sitting after the
-              // terminal step is one that can never run. Disabling deliberately
-              // does NOT move anything, so the row can be below `notify` by the
-              // time it is switched back on.
-              //
-              // That is the only way left for a row to arrive there enabled -
-              // `moveFallbackRung` refuses a move whose ends straddle the fixed
-              // slot, and a hydrated policy is rendered as stored, never
-              // rewritten. It is the only one because that rule exists, not
-              // because a fixed slot implies it: holding `notify` still says
-              // nothing about the other rows crossing it. Same
-              // dispatch-then-commit shape as `onMove`, so what is sent and what
-              // is shown stay the same order.
-              const nextOrder = next
-                ? fallbackDisplayOrderEnabling(state.displayOrder, rung)
-                : state.displayOrder;
-              if (nextOrder !== state.displayOrder) {
-                dispatch({ type: "reordered", displayOrder: nextOrder });
-              }
-              commit(
-                {
-                  ...state.draft,
-                  ladder: [...fallbackLadderFrom(nextOrder, nextEnabled)],
-                },
-                "ladder",
-                null,
-              );
-            }}
-            onMove={(from, to) => {
-              const nextOrder = moveFallbackRung(state.displayOrder, from, to);
-              // The move was refused - an out-of-range index, or one whose ends
-              // straddle the fixed `notify` slot. The arrows are disabled at
-              // that boundary, but a DRAG can still ask, and the answer has to
-              // be nothing rather than a save carrying the order that is
-              // already stored. Same rule and same reason as `undoGroupsChange`.
-              if (nextOrder === state.displayOrder) return;
-              dispatch({ type: "reordered", displayOrder: nextOrder });
-              commit(
-                {
-                  ...state.draft,
-                  ladder: [...fallbackLadderFrom(nextOrder, enabledRungs)],
-                },
-                "ladder",
-                null,
-              );
-            }}
-            profileStepHint={<ProfileStepHint />}
-            // The DRAFT, not the persisted policy, and that is the whole reason
-            // this evaluates client-side: the hint has to answer for what is on
-            // screen, so editing the equivalent models below clears it the
-            // moment the user adds a destination for their own model. A host
-            // call could only answer for what is saved.
-            tierStepHint={<TierStepHint policy={state.draft} />}
-          />
-          {saveStatusFor("ladder", "mt-3")}
-        </div>
+        {/* Off ABOVE the rail, not inside `Plan`: it is true of all four tabs,
+          and on the single page it sat over the ladder where a reader in the
+          tier groups never saw it. */}
+        {state.draft.enabled ? null : (
+          <p className="px-5 pb-4 text-ui-sm text-muted-foreground">
+            Off - these settings take effect when you turn on automatic
+            fallback.
+          </p>
+        )}
       </SettingsGroup>
-      <FallbackBehaviorGroup
-        policy={state.draft}
-        onChange={(next) => {
-          commit(next, "behavior", null);
+      {/* The rail is a pinned SIBLING of the tab body, never its first child -
+          the same shape (and the same reason) as the Providers panel's: the
+          control that selects a section must not scroll away with it. */}
+      <Tabs
+        value={activeTab}
+        onValueChange={(next) => {
+          setActiveTab(next as FallbackTabKey);
         }}
-        status={saveStatusFor("behavior", "px-5 pb-4")}
-      />
-      {/* Lane G3's FC8 surface, mounted here rather than inside the groups
-          editor: it edits `destinationExclusions`, a policy field of its own,
-          and the groups editor owns `tierGroups`. `null` identities are
-          correct BECAUSE of that - the exclusion never adds, removes or
-          reorders a candidate row, so the rows keep the identities they have.
-          If that ever stops being true this mount is wrong and has to carry a
-          keyed list instead. `field: "tierGroups"` only decides which group
-          the panel's one status line renders under, which is the group this
-          control sits above. */}
-      <FallbackAllowedDestinations
-        policy={state.draft}
-        onChange={(next) => {
-          commit(next, "tierGroups", null);
-        }}
-      />
-      <FallbackTierGroupsEditor
-        policy={state.draft}
-        groups={state.keyedTierGroups}
-        // `null` on anything short of an answer - an older host, a read in
-        // flight, a refused read, an invalid draft. It renders no verdict line
-        // at all, which is the honest absence; the alternative is a client-side
-        // guess at what a family resolves to, and the renderer has none of the
-        // inputs that question needs.
-        preview={previewQuery.data?.candidates ?? null}
-        labelFor={profileLabelFor}
-        effortOptions={effortOptions}
-        previewPending={previewQuery.isFetching}
-        // The distinction `preview` cannot make (FC9). `preview` is
-        // data-or-null and a null renders no line, so a FAILED check was
-        // indistinguishable from a host that was never asked - the user got no
-        // answer, no explanation and no way to ask again. `isError` is the one
-        // fact that separates them, and it is false for both of the reasons
-        // this query answers nothing on purpose: a gate that is closed (an
-        // invalid draft, groups the editor is not showing) leaves the query
-        // disabled and `pending`, and an older host that does not advertise the
-        // method never runs it either. So this is exactly "we asked and it
-        // failed", which is exactly the state a retry can fix.
-        previewUnavailable={previewQuery.isError}
-        onRetryPreview={() => {
-          void previewQuery.refetch();
-        }}
-        onChange={(next, groups) => {
-          editDraft(next, "tierGroups", groups);
-        }}
-        onCommit={(next, groups) => {
-          commit(next, "tierGroups", groups);
-        }}
-        onUndo={undoGroupsChange}
-        onRestoreDefaults={restoreDefaultGroups}
-        // Also while an ordinary save is in flight: a restore replaces the whole
-        // list, and starting one on top of an unanswered `set` would leave two
-        // answers about the same rows racing each other into the draft.
-        restorePending={restoreMutation.isPending || saveInFlight}
-        status={saveStatusFor("tierGroups", "mt-3")}
-      />
-      <FallbackOverridesMatrix
-        policy={state.draft}
-        // The editor's four-row order, not the ladder: a step the base ladder
-        // does not contain can still be turned ON for one failure, and it has
-        // to land where the user put it rather than at the end.
-        rungOrder={state.displayOrder}
-        onChange={(next) => {
-          commit(next, "overrides", null);
-        }}
-        status={saveStatusFor("overrides", "mt-3")}
-      />
-      <FallbackDangerZone
-        hostLabel={hostLabel}
-        isPending={saveInFlight}
-        onConfirm={resetAll}
-        focusResetOnMount={returnFocusToReset}
-        onFocusApplied={onFocusReturned}
-        status={saveStatusFor("danger", "px-5 pb-4")}
-      />
+        className="gap-0"
+      >
+        {/* `line`, full width for the BORDER rather than a filled track:
+            these panes are navigation, and a filled slab reads as a segmented
+            control (for re-presenting one dataset). Providers' rail carries
+            the long-form reasoning. Four panes is inside what a rail holds. */}
+        <TabsList
+          variant="line"
+          className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
+        >
+          {FALLBACK_TABS.map((tab) => (
+            <TabsTrigger
+              key={tab.key}
+              value={tab.key}
+              className="flex-none px-3"
+              data-testid={`settings-fallback-tab-${tab.key}`}
+            >
+              {tab.label}
+              {/* Only while the tab is HIDDEN. Once you are on it the status
+                  line itself is the signal, and a dot beside a message that is
+                  already on screen is a second glyph for one fact. */}
+              {statusTab === tab.key && tab.key !== activeTab ? (
+                <>
+                  <span
+                    data-testid={`settings-fallback-tab-status-${tab.key}`}
+                    className="ml-1.5 size-1.5 rounded-full bg-destructive"
+                    aria-hidden
+                  />
+                  <span className="sr-only">
+                    {" "}
+                    - a save here needs attention
+                  </span>
+                </>
+              ) : null}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        <TabsContent value="plan" className="flex flex-col gap-5 pt-5">
+          {/* The editor renders its own "Try these in order" heading, which is
+              also the list's accessible name, so a group title would be a
+              second name for one list. The card is its own because the strip
+              that used to hold it is now above the rail. */}
+          <SettingsGroup
+            group={FALLBACK.definitions.plan}
+            showTitle={false}
+            tone="default"
+            dataTestId="settings-fallback-plan"
+            fill={false}
+          >
+            <div className="px-5 py-4">
+              <FallbackLadderEditor
+                displayOrder={state.displayOrder}
+                enabled={enabledRungs}
+                onToggle={(rung, next) => {
+                  const nextEnabled = new Set(enabledRungs);
+                  if (next) {
+                    nextEnabled.add(rung);
+                  } else {
+                    nextEnabled.delete(rung);
+                  }
+                  // Turning a step ON may have to move it: an externally authored
+                  // policy can store `notify` early, and a step sitting after the
+                  // terminal step is one that can never run. Disabling deliberately
+                  // does NOT move anything, so the row can be below `notify` by the
+                  // time it is switched back on.
+                  //
+                  // That is the only way left for a row to arrive there enabled -
+                  // `moveFallbackRung` refuses a move whose ends straddle the fixed
+                  // slot, and a hydrated policy is rendered as stored, never
+                  // rewritten. It is the only one because that rule exists, not
+                  // because a fixed slot implies it: holding `notify` still says
+                  // nothing about the other rows crossing it. Same
+                  // dispatch-then-commit shape as `onMove`, so what is sent and what
+                  // is shown stay the same order.
+                  const nextOrder = next
+                    ? fallbackDisplayOrderEnabling(state.displayOrder, rung)
+                    : state.displayOrder;
+                  if (nextOrder !== state.displayOrder) {
+                    dispatch({ type: "reordered", displayOrder: nextOrder });
+                  }
+                  commit(
+                    {
+                      ...state.draft,
+                      ladder: [...fallbackLadderFrom(nextOrder, nextEnabled)],
+                    },
+                    "ladder",
+                    null,
+                  );
+                }}
+                onMove={(from, to) => {
+                  const nextOrder = moveFallbackRung(
+                    state.displayOrder,
+                    from,
+                    to,
+                  );
+                  // The move was refused - an out-of-range index, or one whose ends
+                  // straddle the fixed `notify` slot. The arrows are disabled at
+                  // that boundary, but a DRAG can still ask, and the answer has to
+                  // be nothing rather than a save carrying the order that is
+                  // already stored. Same rule and same reason as `undoGroupsChange`.
+                  if (nextOrder === state.displayOrder) return;
+                  dispatch({ type: "reordered", displayOrder: nextOrder });
+                  commit(
+                    {
+                      ...state.draft,
+                      ladder: [...fallbackLadderFrom(nextOrder, enabledRungs)],
+                    },
+                    "ladder",
+                    null,
+                  );
+                }}
+                profileStepHint={<ProfileStepHint />}
+                // The DRAFT, not the persisted policy, and that is the whole reason
+                // this evaluates client-side: the hint has to answer for what is on
+                // screen, so an edit on the Equivalent models tab clears it the
+                // moment the user adds a destination for their own model. A host
+                // call could only answer for what is saved.
+                tierStepHint={<TierStepHint policy={state.draft} />}
+              />
+              {saveStatusFor("ladder", "mt-3")}
+            </div>
+          </SettingsGroup>
+          <FallbackBehaviorGroup
+            policy={state.draft}
+            onChange={(next) => {
+              commit(next, "behavior", null);
+            }}
+            status={saveStatusFor("behavior", "px-5 pb-4")}
+          />
+          <FallbackDangerZone
+            hostLabel={hostLabel}
+            isPending={saveInFlight}
+            onConfirm={resetAll}
+            focusResetOnMount={returnFocusToReset}
+            onFocusApplied={onFocusReturned}
+            status={saveStatusFor("danger", "px-5 pb-4")}
+          />
+        </TabsContent>
+        <TabsContent value="equivalentModels" className="pt-5">
+          <FallbackTierGroupsEditor
+            policy={state.draft}
+            groups={state.keyedTierGroups}
+            // `null` on anything short of an answer - an older host, a read in
+            // flight, a refused read, an invalid draft. It renders no verdict line
+            // at all, which is the honest absence; the alternative is a client-side
+            // guess at what a family resolves to, and the renderer has none of the
+            // inputs that question needs.
+            preview={previewQuery.data?.candidates ?? null}
+            labelFor={profileLabelFor}
+            effortOptions={effortOptions}
+            previewPending={previewQuery.isFetching}
+            // The distinction `preview` cannot make (FC9). `preview` is
+            // data-or-null and a null renders no line, so a FAILED check was
+            // indistinguishable from a host that was never asked - the user got no
+            // answer, no explanation and no way to ask again. `isError` is the one
+            // fact that separates them, and it is false for both of the reasons
+            // this query answers nothing on purpose: a gate that is closed (an
+            // invalid draft, groups the editor is not showing) leaves the query
+            // disabled and `pending`, and an older host that does not advertise the
+            // method never runs it either. So this is exactly "we asked and it
+            // failed", which is exactly the state a retry can fix.
+            previewUnavailable={previewQuery.isError}
+            onRetryPreview={() => {
+              void previewQuery.refetch();
+            }}
+            onChange={(next, groups) => {
+              editDraft(next, "tierGroups", groups);
+            }}
+            onCommit={(next, groups) => {
+              commit(next, "tierGroups", groups);
+            }}
+            onUndo={undoGroupsChange}
+            onRestoreDefaults={restoreDefaultGroups}
+            // Also while an ordinary save is in flight: a restore replaces the whole
+            // list, and starting one on top of an unanswered `set` would leave two
+            // answers about the same rows racing each other into the draft.
+            restorePending={restoreMutation.isPending || saveInFlight}
+            status={saveStatusFor("tierGroups", "mt-3")}
+          />
+        </TabsContent>
+        <TabsContent value="destinations" className="pt-5">
+          {/* Lane G3's FC8 surface, mounted here rather than inside the groups
+            editor: it edits `destinationExclusions`, a policy field of its own,
+            and the groups editor owns `tierGroups`. `null` identities are
+            correct BECAUSE of that - the exclusion never adds, removes or
+            reorders a candidate row, so the rows keep the identities they have.
+            If that ever stops being true this mount is wrong and has to carry a
+            keyed list instead. It used to commit under `tierGroups`, because
+            the field only decides which group the one status line renders
+            under and this sat directly above that group - the tabbed layout
+            put the two on different tabs, so it owns `allowedDestinations`
+            now and renders its own. */}
+          <FallbackAllowedDestinations
+            policy={state.draft}
+            status={saveStatusFor("allowedDestinations", "px-5 pb-4")}
+            onChange={(next) => {
+              commit(next, "allowedDestinations", null);
+            }}
+          />
+        </TabsContent>
+        <TabsContent value="overrides" className="pt-5">
+          <FallbackOverridesMatrix
+            policy={state.draft}
+            // The editor's four-row order, not the ladder: a step the base ladder
+            // does not contain can still be turned ON for one failure, and it has
+            // to land where the user put it rather than at the end.
+            rungOrder={state.displayOrder}
+            onChange={(next) => {
+              commit(next, "overrides", null);
+            }}
+            status={saveStatusFor("overrides", "mt-3")}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
@@ -1138,6 +1244,26 @@ function UnreadablePolicyNotice(): ReactNode {
  * value that is actually in force (restored, because the host refused theirs).
  * Saying only that something failed leaves the control ambiguous.
  */
+/**
+ * Whether the status line has something the reader must ACT on.
+ *
+ * Read by two places that must never disagree: the line itself, and the tab
+ * rail's dot pointing at the tab the line is on. A dot is a claim about what
+ * is behind a tab, and the Providers panel deleted its own per-tab dot for
+ * making a claim it "could not tell the truth about" - so this is a function
+ * rather than the condition written out twice.
+ *
+ * Deliberately NOT `unknownSave`: that field renders no line of its own, it
+ * only adds "Check again" INSIDE the host-error block, so a dot keyed on it
+ * would point at a tab with nothing on it. Deliberately not `saveInFlight`
+ * either - a spinner is not something to act on.
+ */
+function fallbackStatusNeedsAttention(
+  state: FallbackPolicyDraftState,
+): boolean {
+  return state.localError !== null || state.hostError !== null;
+}
+
 function FallbackSaveStatus(props: {
   readonly state: FallbackPolicyDraftState;
   /** Renders only for the group the last edit came from. */
@@ -1195,7 +1321,7 @@ function FallbackSaveStatus(props: {
   // because a rendered claim was keyed on something other than the fact it
   // describes - and it predates the preservation on the `refused-kept` arm,
   // which never wrote `localError` and so could always be masked by one.
-  if (localError !== null || hostError !== null) {
+  if (fallbackStatusNeedsAttention(props.state)) {
     return (
       <div className={cn("space-y-1", props.className)}>
         {localError === null ? null : (

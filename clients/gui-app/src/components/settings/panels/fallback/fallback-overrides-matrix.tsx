@@ -57,7 +57,10 @@ export function FallbackOverridesMatrix(
   return (
     <SettingsGroup
       group={FALLBACK.definitions.advanced}
-      showTitle
+      // Named "Advanced" here and "Overrides" on its tab - one thing, two
+      // names, which is the defect `fallback-rung-copy` documents. The rail's
+      // name is the one that says what is inside, so it is the one kept.
+      showTitle={false}
       tone="default"
       dataTestId="settings-fallback-overrides-group"
       fill={false}
@@ -70,8 +73,8 @@ export function FallbackOverridesMatrix(
           <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
             Which steps may run for each kind of failure. Where you change a
             row, those steps replace your main order for that failure - so a
-            step can run here while it is off above. Dashed steps can&apos;t
-            help with that failure, whatever you prefer.
+            step can run here while it is off on the Plan tab. Dashed steps
+            can&apos;t help with that failure, whatever you prefer.
           </p>
           <Button
             type="button"

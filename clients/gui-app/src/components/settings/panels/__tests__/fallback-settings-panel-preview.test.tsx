@@ -192,7 +192,10 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
-import { renderWithFallbackQueryClient } from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
+import {
+  openFallbackTab,
+  renderWithFallbackQueryClient,
+} from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
 
 const GROUP_ID = "frontier";
 
@@ -322,6 +325,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
       ],
     };
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     const lines = previewLines();
     expect(lines).toHaveLength(4);
@@ -354,6 +358,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
       ],
     };
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     const lines = previewLines();
     // The positive control is inside the same render rather than in a second
@@ -375,6 +380,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
   it("renders no verdict line at all when the host has no answer", () => {
     previewMocks.previewData = undefined;
     renderPanel();
+    openFallbackTab("equivalentModels");
     // Absence, not a client-side guess. Falsification: make the panel pass
     // anything but `null` to the editor when `data` is undefined - a `[]`, a
     // placeholder row - and this assertion must go red. The fixture reaches
@@ -409,6 +415,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
       ],
     };
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     const lines = previewLines();
     expect(lines[0].textContent).toContain("on Work");
@@ -437,6 +444,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
       ],
     };
     renderPanel();
+    openFallbackTab("equivalentModels");
     // "Work" and "Home" are distinct here, so the plain label is what shows.
     // The shared-label branch, which appends a bracketed prefix, is the
     // separate cell below.
@@ -461,6 +469,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
       ],
     };
     renderPanel();
+    openFallbackTab("equivalentModels");
     // Falsification: a resolver that never disambiguates (always the plain
     // label, whatever the roster looks like) passes every OTHER cell in this
     // file unchanged and reddens only here.
@@ -478,6 +487,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     // draft away from the persisted groups. The panel must stop asking: the
     // verdicts pair to rows by position, so an answer computed for a list that
     // is not on screen would put one model's verdict under another.
+    openFallbackTab("equivalentModels");
     fireEvent.change(screen.getAllByLabelText("Model family")[0], {
       target: { value: "opu" },
     });

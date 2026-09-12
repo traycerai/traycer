@@ -292,7 +292,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
-import { renderWithFallbackQueryClient } from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
+import {
+  openFallbackTab,
+  renderWithFallbackQueryClient,
+} from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
 
 function policy(overrides: Partial<FallbackPolicy>): FallbackPolicy {
   return { ...createDefaultFallbackPolicy(), enabled: true, ...overrides };
@@ -717,6 +720,7 @@ describe("FallbackSettingsPanel - a text field commits on blur/Enter, not per ke
     );
     fallbackMocks.setMutateAsync.mockResolvedValue({ policy: policy({}) });
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     const nameInputs = () =>
       screen.getAllByLabelText<HTMLInputElement>("Group name");
@@ -770,6 +774,7 @@ describe("FallbackSettingsPanel - a text field commits on blur/Enter, not per ke
       policy: policy({}),
     });
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     const familyInput = () =>
       screen.getByLabelText<HTMLInputElement>("Model family");
@@ -1251,6 +1256,7 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
       Promise.resolve({ policy: input.policy }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
     await waitFor(() => {
@@ -1258,6 +1264,7 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
     });
     expect(screen.queryByTestId("fallback-tier-group-fast")).toBeNull();
 
+    openFallbackTab("plan");
     openCombobox("Longest wait for a reset");
     chooseOption("1 day");
     await waitFor(() => {
@@ -1302,6 +1309,7 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
       }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
     await screen.findByTestId("fallback-host-error");
@@ -1362,6 +1370,7 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
       )
       .mockImplementation((input) => Promise.resolve({ policy: input.policy }));
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
     await screen.findByTestId("fallback-host-error");
@@ -2022,6 +2031,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // that `edited` moved the revision without sending, which `change` alone
     // produces - the focus was only ever flavour.
     const savesBeforeTyping = fallbackMocks.setMutateAsync.mock.calls.length;
+    openFallbackTab("equivalentModels");
     const familyInput = screen.getByLabelText<HTMLInputElement>("Model family");
     fireEvent.change(familyInput, { target: { value: "opus" } });
     expect(fallbackMocks.setMutateAsync.mock.calls.length).toBe(
@@ -2144,6 +2154,7 @@ describe("FallbackSettingsPanel - F24 a Model family input keeps its identity ac
       }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     const familyInput = screen.getByLabelText<HTMLInputElement>("Model family");
     familyInput.focus();
@@ -2255,6 +2266,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     // C is typed and left uncommitted, which moves the revision past B without
     // sending anything - the only way B's echo can land on the MOVED-ON path
     // with a notice still up, since `edited` clears the notice itself.
+    openFallbackTab("equivalentModels");
     fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
       target: { value: "opus" },
     });
@@ -2359,6 +2371,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     // A (revision 1) goes out, then the user empties the family field: an
     // INVALID draft, kept on screen with its error, and sent nowhere.
     fireEvent.click(automaticFallback());
+    openFallbackTab("equivalentModels");
     fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
       target: { value: "" },
     });
@@ -2655,6 +2668,7 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     fireEvent.click(automaticFallback());
     fireEvent.click(automaticFallback());
     // C is typed into the family field and never committed.
+    openFallbackTab("equivalentModels");
     fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
       target: { value: "opus" },
     });
@@ -3368,6 +3382,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     // An invalid edit: kept on screen, sent nowhere.
     fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
@@ -3382,6 +3397,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       isSuccess: false,
       data: fallbackMocks.queryData,
     });
+    openFallbackTab("plan");
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));
     fireEvent.click(screen.getByTestId("confirm-action"));
     await flushHostReplies();
@@ -3419,6 +3435,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       policy({ enabled: false, graceWindowSeconds: 15, tierGroups: [] }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     fallbackMocks.restoreMutateAsync.mockRejectedValueOnce(lostTheReply());
     fallbackMocks.refetchMock.mockResolvedValue({
@@ -3458,6 +3475,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       policy({ enabled: false, graceWindowSeconds: 15, tierGroups: [] }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     fallbackMocks.restoreMutateAsync.mockRejectedValueOnce(
       new HostRpcError({
@@ -3600,6 +3618,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     fallbackMocks.queryData = respond(groupsPolicy());
     renderPanel();
 
+    openFallbackTab("equivalentModels");
     fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
       target: { value: "" },
     });
@@ -3607,6 +3626,12 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
       (await screen.findByTestId("fallback-local-error")).textContent,
     ).toContain("Model 1 in “fast” needs a family name.");
 
+    // Reset lives on `plan`, and a reset stamps `activeField: "danger"` - so
+    // from here the panel's one status line renders THERE, not beside the
+    // field that is invalid. That is the pre-existing "one status place, under
+    // the group last acted on" rule meeting a tabbed layout; the two facts
+    // this pins are unchanged, they just stopped being on screen together.
+    openFallbackTab("plan");
     fallbackMocks.resetMutateAsync.mockRejectedValueOnce(lostTheReply());
     fallbackMocks.refetchMock.mockResolvedValue({
       isSuccess: false,
@@ -3632,13 +3657,17 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     expect(screen.getByTestId("fallback-local-error").textContent).toContain(
       "Model 1 in “fast” needs a family name.",
     );
-    expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
-      "",
-    );
     const notice = screen.getByTestId("fallback-host-error");
     expect(notice.textContent).toContain("whether the reset went through");
     // The uncertainty is the reset's, so its recovery is on screen too.
     expect(screen.getByTestId("fallback-check-again")).toBeDefined();
+    // And the draft the reset never carried is still in the editor - which
+    // now also proves it survives that tab being unmounted and remounted,
+    // since the value lives in the panel's reducer and not in the input.
+    openFallbackTab("equivalentModels");
+    expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
+      "",
+    );
   });
 
   // The `loaded-unchanged x restore x unknown` cell is pinned by the eighth
@@ -3667,6 +3696,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // second voice and the notice has to carry the claim alone.
     fallbackMocks.queryData = respond(groupsPolicy());
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
       target: { value: "opus" },
@@ -3679,6 +3709,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
       isSuccess: false,
       data: fallbackMocks.queryData,
     });
+    openFallbackTab("plan");
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));
     fireEvent.click(screen.getByTestId("confirm-action"));
     await flushHostReplies();
@@ -3891,12 +3922,16 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
 
     // C: an unsent, INVALID draft. Nothing dispatches it - `commit` returns
     // after `edited` because the new candidate's family is blank.
+    openFallbackTab("equivalentModels");
     fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
     ).toContain("Model 2 in “fast” needs a family name.");
 
-    // The reset is refused. It carried defaults; it never carried C.
+    // The reset is refused. It carried defaults; it never carried C. Reset and
+    // everything the refusal then says are on `plan` (see the sibling MATRIX
+    // pin for why the status moves there).
+    openFallbackTab("plan");
     fallbackMocks.resetMutateAsync.mockRejectedValueOnce(
       refusedByHost("resetting is disabled for this host"),
     );
@@ -3916,12 +3951,13 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // `judgedTheDisplay`. The refused reset marks C, `draftIsRefused` goes
     // true, the read-back adopts over it, and both assertions below fail
     // together - the empty field is gone AND the error that explained it is.
-    expect(
-      screen.getAllByLabelText<HTMLInputElement>("Model family").length,
-    ).toBeGreaterThan(1);
     expect(screen.getByTestId("fallback-local-error").textContent).toContain(
       "Model 2 in “fast” needs a family name.",
     );
+    openFallbackTab("equivalentModels");
+    expect(
+      screen.getAllByLabelText<HTMLInputElement>("Model family").length,
+    ).toBeGreaterThan(1);
   });
 
   it("REACHABILITY: a RESTORE can be unanswered while the display is an unsent edit", async () => {
@@ -3946,6 +3982,7 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
       () => restore.promise,
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Restore the default groups" }),
@@ -4334,6 +4371,7 @@ describe("FallbackSettingsPanel - R-OSS-2: reset completion must not steal focus
     // failed on the fixture rather than on the behaviour. Worse, had that
     // assertion not been there the cell would have gone on to "prove" that the
     // guard preserved a focus the test never established.
+    openFallbackTab("equivalentModels");
     const familyInput = screen.getByLabelText<HTMLInputElement>("Model family");
     familyInput.focus();
     fireEvent.change(familyInput, { target: { value: "son" } });
@@ -4368,4 +4406,133 @@ describe("FallbackSettingsPanel - R-OSS-2: reset completion must not steal focus
   // silent no-op, when the refusal lands). Checked: it is unchanged by this
   // fix and stays green, since its focus is on `document.body` when the
   // refusal lands - the one state the guard still restores from.
+});
+
+describe("the tab rail: what splitting one page into four has to keep true", () => {
+  function refusedByHost(message: string): HostRpcError {
+    return new HostRpcError({
+      code: "RPC_ERROR",
+      message,
+      requestId: "req-tabs-refused",
+      method: "providers.fallbackPolicy.set",
+      fatalDetails: null,
+    });
+  }
+
+  /** One stored candidate, so the allow-list has a provider to offer. */
+  function destinationsPolicy(): FallbackPolicy {
+    return policy({
+      enabled: true,
+      tierGroups: [
+        {
+          id: "fast",
+          candidates: [
+            {
+              harnessId: "claude",
+              modelFamily: "sonnet",
+              reasoningEffort: null,
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  const REFUSAL = "destinations are managed for this host";
+
+  async function refuseADestinationsSave(): Promise<void> {
+    fallbackMocks.queryData = respond(destinationsPolicy());
+    fallbackMocks.setMutateAsync.mockRejectedValueOnce(refusedByHost(REFUSAL));
+    renderPanel();
+
+    openFallbackTab("destinations");
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Never switch to Claude Code" }),
+    );
+    await flushHostReplies();
+  }
+
+  it("opens on Plan, names its four sections in order, and keeps the master switch reachable from every one", () => {
+    fallbackMocks.queryData = respond(destinationsPolicy());
+    renderPanel();
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Plan",
+      "Equivalent models",
+      "Destinations",
+      "Overrides",
+    ]);
+    expect(
+      screen
+        .getByTestId("settings-fallback-tab-plan")
+        .getAttribute("data-state"),
+    ).toBe("active");
+
+    // The master switch makes all four tabs inert, so it cannot live inside
+    // one of them. This is the pin on it staying ABOVE the rail: a control
+    // that governs every section has to be reachable from every section.
+    for (const tab of [
+      "equivalentModels",
+      "destinations",
+      "overrides",
+    ] as const) {
+      openFallbackTab(tab);
+      expect(
+        screen.getByRole("switch", { name: "Automatic fallback" }),
+      ).toBeDefined();
+    }
+  });
+
+  it("renders a refused Allowed-destinations save on Destinations, not under the equivalent models whose field it used to borrow", async () => {
+    // Falsification: give `FallbackAllowedDestinations` back `field:
+    // "tierGroups"` - which was correct while it sat directly above that group
+    // on one page, and which `fallback-settings-panel.tsx` guarded with "if
+    // that ever stops being true this mount is wrong". The refusal then
+    // renders on the Equivalent models tab, and the person who checked a box
+    // on Destinations is told nothing at all.
+    await refuseADestinationsSave();
+
+    expect(screen.getByTestId("fallback-host-error").textContent).toContain(
+      REFUSAL,
+    );
+    openFallbackTab("equivalentModels");
+    expect(screen.queryByTestId("fallback-host-error")).toBeNull();
+  });
+
+  it("marks a HIDDEN tab whose save needs attention, and stops marking it once you are looking at it", async () => {
+    // Falsification: hold `statusTab` at null. Nothing fails on the tab that
+    // owns the refusal - the message is right there - and the rail simply
+    // never mentions it from anywhere else, which is the failure mode tabs
+    // introduce and a single scrolling page could not have.
+    await refuseADestinationsSave();
+
+    // On the tab itself the line IS the signal; a dot beside it would be a
+    // second glyph for one fact.
+    expect(
+      screen.queryByTestId("settings-fallback-tab-status-destinations"),
+    ).toBeNull();
+
+    openFallbackTab("plan");
+    expect(
+      screen.getByTestId("settings-fallback-tab-status-destinations"),
+    ).toBeDefined();
+    // And nowhere else - a dot claims something about ONE tab.
+    expect(
+      screen.queryByTestId("settings-fallback-tab-status-plan"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("settings-fallback-tab-status-equivalentModels"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("settings-fallback-tab-status-overrides"),
+    ).toBeNull();
+
+    openFallbackTab("destinations");
+    expect(
+      screen.queryByTestId("settings-fallback-tab-status-destinations"),
+    ).toBeNull();
+    expect(screen.getByTestId("fallback-host-error").textContent).toContain(
+      REFUSAL,
+    );
+  });
 });

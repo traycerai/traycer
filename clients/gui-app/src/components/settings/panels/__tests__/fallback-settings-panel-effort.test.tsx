@@ -121,7 +121,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
-import { renderWithFallbackQueryClient } from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
+import {
+  openFallbackTab,
+  renderWithFallbackQueryClient,
+} from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
 
 function policy(overrides: Partial<FallbackPolicy>): FallbackPolicy {
   return { ...createDefaultFallbackPolicy(), enabled: true, ...overrides };
@@ -189,6 +192,7 @@ describe("FallbackSettingsPanel - F20 the Effort control", () => {
       }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
     expect(screen.getByRole("combobox", { name: "Effort" })).not.toBeNull();
     openCombobox("Effort");
     expect(screen.getByRole("option", { name: "Any effort" })).not.toBeNull();
@@ -216,6 +220,7 @@ describe("FallbackSettingsPanel - F20 the Effort control", () => {
       }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
     openCombobox("Effort");
     chooseOption("High effort");
     // Falsification: commit `option.label` instead of `option.id` in
@@ -249,6 +254,7 @@ describe("FallbackSettingsPanel - F20 the Effort control", () => {
       }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
     openCombobox("Effort");
     const unsupported = screen.getByTestId("fallback-effort-unsupported");
     expect(unsupported.textContent).toContain("ultra-high");
@@ -275,6 +281,7 @@ describe("FallbackSettingsPanel - F20 the Effort control", () => {
       }),
     );
     renderPanel();
+    openFallbackTab("equivalentModels");
     // Falsification: drop the `options.length === 0` branch in
     // `EffortControl` (`fallback-tier-group-card.tsx`) so it always renders
     // the `Select` - this would then find a combobox instead of a textbox.

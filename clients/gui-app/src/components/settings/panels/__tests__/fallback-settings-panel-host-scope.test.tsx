@@ -139,7 +139,10 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
-import { renderWithFallbackQueryClient } from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
+import {
+  openFallbackTab,
+  renderWithFallbackQueryClient,
+} from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
 
 function groups(modelFamily: string): TierGroup[] {
   return [
@@ -189,6 +192,7 @@ afterEach(() => {
 describe("FallbackSettingsPanel - a draft cannot travel to another host", () => {
   it("drops an uncommitted edit and shows the new host's policy when the scope moves", () => {
     const { rerender } = renderPanel();
+    openFallbackTab("equivalentModels");
     expect(familyInput().value).toBe("opus");
 
     // Typed but NOT committed - no blur, no Enter - so it exists only in this
@@ -208,7 +212,10 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
     );
 
     // The draft did not travel: what is on screen is host B's stored value,
-    // not the text typed against host A.
+    // not the text typed against host A. The host switch remounted the
+    // editor (its `key` carries `scope.hostId`), which reset the tab rail
+    // back to its default - reopen it to reach the family input again.
+    openFallbackTab("equivalentModels");
     expect(familyInput().value).toBe("haiku");
     // And it was not written to either host on the way out. This is the half
     // that matters most - a draft that vanished from the screen but was saved
@@ -226,6 +233,7 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
     // draft on every render - which would be a different bug wearing the same
     // green. The only difference between the two is `scope.hostId`.
     const { rerender } = renderPanel();
+    openFallbackTab("equivalentModels");
     fireEvent.change(familyInput(), { target: { value: "sonnet-typed" } });
 
     scopeMocks.queryData = respond({ tierGroups: groups("haiku") });
