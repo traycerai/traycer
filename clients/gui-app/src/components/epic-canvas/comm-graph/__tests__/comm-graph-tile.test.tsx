@@ -344,6 +344,47 @@ function setOfficeCanvasSize(size: { width: number; height: number }): void {
   fireEvent(window, new Event("resize"));
 }
 
+/**
+ * The tile box every case below stubs when it wants the office drawn at a
+ * workaday size - and, for the cases that read Auto's answer, the box on which
+ * this fixture reaches the Floor.
+ *
+ * GEOMETRY, RE-MEASURED, AND WITH THE MARGIN NAMED. This was `1040x700`, on
+ * which the fixture fit the Floor at **0.717x** against an
+ * `OFFICE_LOD_OFFICE_ZOOM` of `0.7`. That is one tile of height in hand across
+ * the whole stack - this epic's four agents sit on three floors (`host-a` x2,
+ * the unattributed legacy chat, `host-b`), so the Floor's world was 688x976px
+ * and the budget was 1000px - and any change to any plan would have spent it.
+ * The civic rooms spent it: 704x1264px, **0.554x**, and Auto answered Towers.
+ *
+ * At `1040x1000` the same fixture fits at **0.791x**, which is 13% of margin
+ * rather than 2%. Whoever grows the Floor next is spending that, and should
+ * re-measure here rather than discover it as fifteen red cases.
+ *
+ * Deliberately not fixed by making the fixture single-host, which would be
+ * roomier still (704x400, 1.477x): the fifteen cases that read Auto's answer
+ * all gate on BOTH hosts having subscribed, `markHistoryCaughtUp` drives both
+ * snapshots, and "does not run while the snapshot is a partial one" has no
+ * meaning at all with one host to be partial about.
+ */
+const OFFICE_CANVAS = { width: 1040, height: 1000 };
+
+/**
+ * The world box the persisted camera `{x: -10000, y: -20000, zoom: 4}` frames
+ * on an `OFFICE_CANVAS` tile - what the four "the runtime kept the persisted
+ * framing" cases below assert, and the one thing in them that the canvas box
+ * decides. `x`/`y` come from the camera (`10000/4`, `20000/4`); the extent is
+ * the box over the zoom, so it is read off `OFFICE_CANVAS` rather than written
+ * out, and growing that box moves it instead of reddening four cases whose
+ * claim has nothing to do with how big the tile is.
+ */
+const PERSISTED_CAMERA_FRAME = {
+  x: 2500,
+  y: 5000,
+  width: OFFICE_CANVAS.width / 4,
+  height: OFFICE_CANVAS.height / 4,
+};
+
 const AUTO_TAB_ID = "tab-comm-graph-auto";
 
 /**
@@ -391,7 +432,7 @@ async function reachAutoFloor(): Promise<void> {
     expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]);
   });
   setIntersecting(true);
-  setOfficeCanvasSize({ width: 1040, height: 700 });
+  setOfficeCanvasSize(OFFICE_CANVAS);
   act(() => {
     openedByHost.get(HOST_A)?.onSnapshot([], null);
     openedByHost.get(HOST_B)?.onSnapshot([], null);
@@ -415,7 +456,7 @@ async function pickView(viewId: OfficeViewId): Promise<void> {
     await Promise.resolve();
   });
   setIntersecting(true);
-  setOfficeCanvasSize({ width: 1040, height: 700 });
+  setOfficeCanvasSize(OFFICE_CANVAS);
   await act(async () => {
     await Promise.resolve();
   });
@@ -902,7 +943,7 @@ describe("CommGraphTile", () => {
       });
 
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       // Give Auto the same chance to write that the positive case gets - an
       // assertion made the instant after `setOfficeCanvasSize` would pass
       // even if Auto ran on a later tick, since nothing was ever given a
@@ -927,7 +968,7 @@ describe("CommGraphTile", () => {
         ]);
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       expect(storedView()?.officeAutoView).toBeNull();
 
       markHistoryCaughtUp();
@@ -935,8 +976,9 @@ describe("CommGraphTile", () => {
       await waitFor(() => {
         expect(storedView()?.officeAutoView).not.toBeNull();
       });
-      // This fixture's handful of agents fits the Floor comfortably on a
-      // 1040x700 tile.
+      // This fixture's handful of agents fits the Floor on an `OFFICE_CANVAS`
+      // tile - comfortably now, at 0.791x against a 0.7 threshold, which it
+      // was not when that box was 1040x700. See `OFFICE_CANVAS`.
       expect(storedView()?.officeAutoView).toBe("floor");
     });
 
@@ -972,7 +1014,7 @@ describe("CommGraphTile", () => {
       });
 
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       markHistoryCaughtUp();
 
       await waitFor(() => {
@@ -1035,7 +1077,7 @@ describe("CommGraphTile", () => {
         ]);
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       markHistoryCaughtUp();
       await waitFor(() => {
         expect(storedView()?.officeAutoView).toBe("floor");
@@ -1075,7 +1117,7 @@ describe("CommGraphTile", () => {
         ]);
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       markHistoryCaughtUp();
       await waitFor(() => {
         expect(storedView()?.officeAutoView).toBe("floor");
@@ -1097,7 +1139,7 @@ describe("CommGraphTile", () => {
       // the office canvas's `key` and remounts it - a fresh instance with no
       // measured box of its own, so the probe needs feeding again.
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
 
       await waitFor(() => {
         expect(storedView()?.officeAutoView).toBe("floor");
@@ -1172,7 +1214,7 @@ describe("CommGraphTile", () => {
         ]);
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       markHistoryCaughtUp();
       await waitFor(() => {
         expect(storedView()?.officeAutoView).toBe("floor");
@@ -1191,10 +1233,10 @@ describe("CommGraphTile", () => {
       expect(decide).not.toHaveBeenCalled();
 
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
 
       await waitFor(() => expect(decide).toHaveBeenCalled());
-      expect(decide.mock.calls[0]?.[1]).toEqual({ width: 1040, height: 700 });
+      expect(decide.mock.calls[0]?.[1]).toEqual(OFFICE_CANVAS);
       expect(storedView()?.officeAutoView).toBe("floor");
     });
   });
@@ -1330,7 +1372,7 @@ describe("CommGraphTile", () => {
         ]);
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       act(() => {
         openedByHost.get(HOST_A)?.onSnapshot([], null);
         openedByHost.get(HOST_B)?.onSnapshot([], null);
@@ -1379,7 +1421,7 @@ describe("CommGraphTile", () => {
           officeCamera: { x: -10000, y: -20000, zoom: 4 },
           officeCameraView: "floor",
         });
-        setOfficeCanvasSize({ width: 1040, height: 700 });
+        setOfficeCanvasSize(OFFICE_CANVAS);
         setIntersecting(true);
         caughtUp();
         step();
@@ -1389,7 +1431,7 @@ describe("CommGraphTile", () => {
           act(() =>
             useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
           );
-          setOfficeCanvasSize({ width: 1040, height: 700 });
+          setOfficeCanvasSize(OFFICE_CANVAS);
           setIntersecting(true);
           step();
         }
@@ -1444,7 +1486,7 @@ describe("CommGraphTile", () => {
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: "floor",
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -1457,12 +1499,7 @@ describe("CommGraphTile", () => {
       // The runtime kept the persisted framing too - a control against the
       // case above, proving the render-time decision only intervenes when
       // the record actually disagrees.
-      expect(state.frame).toEqual({
-        x: 2500,
-        y: 5000,
-        width: 260,
-        height: 175,
-      });
+      expect(state.frame).toEqual(PERSISTED_CAMERA_FRAME);
     });
   });
 
@@ -1491,7 +1528,7 @@ describe("CommGraphTile", () => {
         // A camera from before this field existed - never framed a view.
         officeCameraView: null,
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -1509,7 +1546,7 @@ describe("CommGraphTile", () => {
       act(() =>
         useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
       );
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       step();
 
@@ -1570,7 +1607,7 @@ describe("CommGraphTile", () => {
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -1580,12 +1617,7 @@ describe("CommGraphTile", () => {
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
-      expect(state.frame).toEqual({
-        x: 2500,
-        y: 5000,
-        width: 260,
-        height: 175,
-      });
+      expect(state.frame).toEqual(PERSISTED_CAMERA_FRAME);
     });
 
     it("keeps a legacy camera when the default already moved before the tile ever mounted (accepted gap, D52)", async () => {
@@ -1608,7 +1640,7 @@ describe("CommGraphTile", () => {
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -1618,12 +1650,7 @@ describe("CommGraphTile", () => {
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
-      expect(state.frame).toEqual({
-        x: 2500,
-        y: 5000,
-        width: 260,
-        height: 175,
-      });
+      expect(state.frame).toEqual(PERSISTED_CAMERA_FRAME);
     });
 
     it("stops overriding the camera it hands the canvas once the reset has landed", async () => {
@@ -1654,7 +1681,7 @@ describe("CommGraphTile", () => {
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -1662,7 +1689,7 @@ describe("CommGraphTile", () => {
       act(() =>
         useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
       );
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       step();
 
@@ -1751,7 +1778,7 @@ describe("CommGraphTile", () => {
           officeCamera: { x: -10000, y: -20000, zoom: 4 },
           officeCameraView: null,
         });
-        setOfficeCanvasSize({ width: 1040, height: 700 });
+        setOfficeCanvasSize(OFFICE_CANVAS);
         setIntersecting(true);
         // Replay still pending - Auto has nothing to decide from, which is
         // what keeps the resolved view at `null` here.
@@ -1764,7 +1791,7 @@ describe("CommGraphTile", () => {
         act(() =>
           useSettingsStore.getState().setAgentOfficeDefaultView(target),
         );
-        setOfficeCanvasSize({ width: 1040, height: 700 });
+        setOfficeCanvasSize(OFFICE_CANVAS);
         setIntersecting(true);
         caughtUp();
         step();
@@ -1821,7 +1848,7 @@ describe("CommGraphTile", () => {
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: "towers",
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       expect(decide).not.toHaveBeenCalled();
       expect(storedView()).toMatchObject({
@@ -1832,7 +1859,7 @@ describe("CommGraphTile", () => {
       act(() =>
         useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
       );
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -1877,7 +1904,7 @@ describe("CommGraphTile", () => {
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       expect(storedView()).toMatchObject({
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
@@ -1895,7 +1922,7 @@ describe("CommGraphTile", () => {
         officeCamera: null,
       });
 
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -1929,7 +1956,7 @@ describe("CommGraphTile", () => {
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -1942,16 +1969,11 @@ describe("CommGraphTile", () => {
       // Auto's decision remounts the canvas (measuring -> floor), and that
       // remount only reports its own eligibility on the frame this `step()`
       // drives - the sync loop it then starts needs one more of its own.
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       step();
       const state = lastFrameAndBounds(frames, sync);
-      expect(state.frame).toEqual({
-        x: 2500,
-        y: 5000,
-        width: 260,
-        height: 175,
-      });
+      expect(state.frame).toEqual(PERSISTED_CAMERA_FRAME);
     });
 
     it("neutralises the camera on a re-pick of Auto - the re-pick's own write did it, not the witness", async () => {
@@ -1965,7 +1987,7 @@ describe("CommGraphTile", () => {
         officeCameraView: "floor",
         officeCamera: { x: 155, y: 266, zoom: 2 },
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -2233,7 +2255,7 @@ describe("CommGraphTile", () => {
         officeAutoView: "building",
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       caughtUp();
 
       expect(decide).not.toHaveBeenCalled();
@@ -2254,7 +2276,7 @@ describe("CommGraphTile", () => {
         ...DEFAULT_COMM_GRAPH_VIEW,
         officeView: "building",
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       // F3 asserted the planner had NOT run here; fixup 8/H1 is exactly the
       // reversal of that gate for an explicit view - the caught-up feed is
@@ -2348,7 +2370,7 @@ describe("CommGraphTile", () => {
         ...DEFAULT_COMM_GRAPH_VIEW,
         officeView: "building",
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       // The draft: drawn, and drawn from a feed that has told nobody
       // anything yet.
@@ -2432,7 +2454,7 @@ describe("CommGraphTile", () => {
         officeView: "towers",
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       // Deliberately no `caughtUp()` here - this IS the H1 reproduction: the
       // local server lost its database mid-sitting and the feed never
       // caught up, and an explicit Towers tile drew nothing for 25 minutes
@@ -2466,7 +2488,7 @@ describe("CommGraphTile", () => {
         ]);
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       await act(async () => {
         await Promise.resolve();
       });
@@ -2486,7 +2508,7 @@ describe("CommGraphTile", () => {
       // same eligibility and size signals given again before it can report
       // a probe and become ready.
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       await waitFor(() => {
         expect(lastCanvasReady(office)).toBe(true);
       });
@@ -2502,7 +2524,7 @@ describe("CommGraphTile", () => {
         officeView: "towers",
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       expect(
         screen.getByTestId("comm-graph-office-catching-up-chip").textContent,
       ).toContain("Catching up");
@@ -2527,7 +2549,7 @@ describe("CommGraphTile", () => {
         ]);
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       await act(async () => {
         await Promise.resolve();
       });
@@ -2610,7 +2632,7 @@ describe("CommGraphTile", () => {
       expect(decideSpy).not.toHaveBeenCalled();
 
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
 
       await waitFor(() => expect(decideSpy).toHaveBeenCalledTimes(1));
       expect(storedView()?.officeAutoView).toBe("floor");
@@ -2649,7 +2671,7 @@ describe("CommGraphTile", () => {
           expect(storedView()).toMatchObject({ x: 0, y: 0, zoom: 1 });
         }
 
-        setOfficeCanvasSize({ width: 1040, height: 700 });
+        setOfficeCanvasSize(OFFICE_CANVAS);
         setIntersecting(true);
         const scene = sync.mock.contexts.at(-1);
         if (!(scene instanceof OfficeScene)) throw new Error("no actual scene");
@@ -2800,7 +2822,7 @@ describe("CommGraphTile", () => {
           expect(screen.getByTestId("comm-graph-office-canvas")).toBeDefined();
         });
         setIntersecting(true);
-        setOfficeCanvasSize({ width: 1040, height: 700 });
+        setOfficeCanvasSize(OFFICE_CANVAS);
         await act(async () => {
           await Promise.resolve();
         });
@@ -2865,7 +2887,7 @@ describe("CommGraphTile", () => {
         ).toBeDefined();
       });
       setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       await act(async () => {
         await Promise.resolve();
       });

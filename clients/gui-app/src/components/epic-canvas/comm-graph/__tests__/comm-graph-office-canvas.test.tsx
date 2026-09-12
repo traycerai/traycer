@@ -417,13 +417,17 @@ function fitCameraLike(
 /**
  * The two-agent fixture's floor (`ORCHESTRATOR` + `REVIEWER`), back-derived
  * from the existing "fits the whole floor to the tile on F" case just above:
- * at a 4200x1900 viewport it expects camera `{x: 36, y: 38, zoom: 6}`, and
+ * at a 4400x2500 viewport it expects camera `{x: 88, y: 50, zoom: 6}`, and
  * that fit is SATURATED (zoom is pinned at `MAX_FIT_ZOOM`), so inverting
  * `fitCameraLike`'s own formula for zoom===6 gives
- * `floor.width = (4200 - 2*36) / 6 = 688` and
- * `floor.height = (1900 - 2*38) / 6 = 304`.
+ * `floor.width = (4400 - 2*88) / 6 = 704` and
+ * `floor.height = (2500 - 2*50) / 6 = 400`.
+ *
+ * GEOMETRY, RE-MEASURED: 688x304 while the Floor planned no civic rooms;
+ * 704x400 now that the infirmary and the lounge stand in its amenity columns,
+ * which widened the storey by one column and deepened it by six rows.
  */
-const TWO_AGENT_FLOOR = { width: 688, height: 304 };
+const TWO_AGENT_FLOOR = { width: 704, height: 400 };
 
 /**
  * Recovers the camera a frame was drawn with, given the viewport it was
@@ -1183,7 +1187,15 @@ describe("CommGraphOfficeCanvas", () => {
     // Big enough that the fit zoom hits its cap (6x) on this fixture's tiny
     // two-agent floor, which makes the expected camera an exact, round number
     // instead of a packing-dependent fraction.
-    setCanvasSize({ width: 4200, height: 1900 });
+    //
+    // GEOMETRY, RE-MEASURED: this was 4200x1900 expecting
+    // `{x: 36, y: 38, zoom: 6}` while the two-agent Floor was 688x304px. The
+    // civic rooms joined that plan's amenity columns and the storey grew to
+    // 704x400px, at which 1900px of height no longer saturates the cap - so
+    // the viewport is enlarged until it does again and the camera is the fit
+    // formula's own answer for the new floor. The claim is unchanged: F fits
+    // the whole floor, and persists after the debounce.
+    setCanvasSize({ width: 4400, height: 2500 });
 
     const surface = screen.getByRole("img", {
       name: "Office view of the communication graph",
@@ -1194,7 +1206,7 @@ describe("CommGraphOfficeCanvas", () => {
       vi.advanceTimersByTime(150);
     });
 
-    expect(onCameraChange).toHaveBeenCalledWith({ x: 36, y: 38, zoom: 6 });
+    expect(onCameraChange).toHaveBeenCalledWith({ x: 88, y: 50, zoom: 6 });
   });
 
   /**
@@ -1220,8 +1232,14 @@ describe("CommGraphOfficeCanvas", () => {
     // `FIT_VIEWPORT`, so a re-fit against it lands at a genuinely different
     // camera - a same-ratio resize would move `x`/`y` by a common scale
     // factor and could pass by coincidence even reading the wrong camera.
-    const FIT_VIEWPORT = { width: 4200, height: 1900 };
-    const RESIZE_VIEWPORT = { width: 4400, height: 2000 };
+    //
+    // GEOMETRY, RE-MEASURED: 4200x1900 and 4400x2000 saturated the cap while
+    // the two-agent Floor was 688x304px; it is 704x400px now that its civic
+    // rooms stand in the amenity columns, and neither old viewport clears
+    // 6x400px of height. Both are enlarged until the cap is saturated again,
+    // and they still differ in aspect ratio.
+    const FIT_VIEWPORT = { width: 4400, height: 2500 };
+    const RESIZE_VIEWPORT = { width: 5000, height: 2600 };
 
     it("re-fits on a resize after Fit, even though a zoom took manual control first", () => {
       const { step } = installCanvas();
