@@ -43,6 +43,13 @@ import {
   ISO_HALF_WIDTH,
 } from "@/lib/comm-graph/office/views/isometric/iso-projector";
 import {
+  overviewBoundingBoxOf,
+  overviewCentreOf,
+  overviewShapeContains,
+  overviewShapeOf,
+  type OverviewShape,
+} from "@/lib/comm-graph/office/views/__tests__/overview-shapes";
+import {
   OFFICE_VIEWS,
   type OfficeDeskState,
   type OfficePlanInput,
@@ -1069,14 +1076,13 @@ describe("planCampus", () => {
     const blocks = ISO_PAINTER.floor(layout, tiles, 0);
     expect(blocks.length).toBeGreaterThan(0);
     for (const drawable of blocks) {
-      expect(drawable.kind).toBe("block");
-      if (drawable.kind !== "block") continue;
-      checkBox("block", {
-        x: drawable.x,
-        y: drawable.y,
-        width: drawable.width,
-        height: drawable.height,
-      });
+      expect(drawable.kind).toBe("quad");
+      const shape = overviewShapeOf(drawable);
+      if (shape === null) continue;
+      // A sheared region has no box of its own, so the bounds check is over
+      // the box its four corners span - which is the tightest rectangle the
+      // projector has to keep inside the world it reports.
+      checkBox("block", overviewBoundingBoxOf(shape));
     }
 
     // And every fixture an errand spot stands up.
@@ -1096,6 +1102,106 @@ describe("planCampus", () => {
     }
 
     expect([...new Set(problems)]).toEqual([]);
+  });
+
+  it("keeps every overview pip inside its own room and inside its district", () => {
+    // THE LIVE FINDING (M4), as a case. At overview a seat is a pip (D27) and
+    // a pip is a projected tile, so the population traces the shape the tiles
+    // project to - a parallelogram. The block map used to answer that with an
+    // axis-aligned rectangle of the same AREA, and on the acceptance pass's
+    // own `officeBenchShape=many-roots` bench at a thousand agents the result
+    // was a grey rectangle with its own people standing outside it at the
+    // left and right corners, three amenities floating above it, and none of
+    // the rooms where the desks were.
+    //
+    // The pip's position is the scene's, not this file's: every pip below is
+    // read off a real `frame(0, ...)`, and the seat it belongs to is found
+    // through `layout.desks`, so nothing here re-derives where a person is
+    // drawn.
+    const epic = makeTestEpic("many-roots", 1000, 1);
+    const scene = new OfficeScene(OFFICE_VIEWS.campus, null);
+    scene.sync(sceneInputFor(epic.agents, epic.statusById));
+    const layout = scene.layout();
+    if (layout === null) throw new Error("expected a layout after sync");
+    // One bullpen for a forest of loners, plus the HQ's own room: the room
+    // under test is the one the whole population sits in.
+    expect(layout.rooms.length).toBe(2);
+
+    const world = scene.worldSize();
+    const frame = scene.frame(0, {
+      x: 0,
+      y: 0,
+      width: world.width,
+      height: world.height,
+    });
+    const projector = ISO_PAINTER.projector(layout);
+    const shapeByCentre = new Map<string, OverviewShape>();
+    for (const drawable of frame.floor) {
+      const shape = overviewShapeOf(drawable);
+      if (shape === null) continue;
+      const centre = overviewCentreOf(shape);
+      shapeByCentre.set(`${centre.x.toFixed(3)},${centre.y.toFixed(3)}`, shape);
+    }
+    // A region's drawable is found by the point BOTH shapes are centred on -
+    // the projection of the region's own centre tile - so this case reads the
+    // same drawable whether the painter answers with a rectangle or with the
+    // four projected corners, and fails on where that drawable reaches rather
+    // than on which one it picked up.
+    const shapeFor = (bounds: OfficeTileRect): OverviewShape | undefined => {
+      const centre = projector.project(
+        bounds.col + bounds.cols / 2,
+        bounds.row + bounds.rows / 2,
+      );
+      return shapeByCentre.get(`${centre.x.toFixed(3)},${centre.y.toFixed(3)}`);
+    };
+
+    const outsideRoom: string[] = [];
+    const outsideDistrict: string[] = [];
+    const unseated: string[] = [];
+    let pips = 0;
+    let checked = 0;
+    for (const drawable of frame.actors) {
+      if (drawable.kind !== "pip") continue;
+      pips += 1;
+      const desk = layout.desks.get(drawable.agentId);
+      if (desk === undefined || desk.roomId === null) {
+        unseated.push(drawable.agentId);
+        continue;
+      }
+      const room = layout.rooms.find(
+        (candidate) => candidate.rootAgentId === desk.roomId,
+      );
+      if (room === undefined) {
+        unseated.push(drawable.agentId);
+        continue;
+      }
+      checked += 1;
+      const point = { x: drawable.x, y: drawable.y };
+      const roomShape = shapeFor(room.bounds);
+      if (roomShape === undefined || !overviewShapeContains(roomShape, point)) {
+        outsideRoom.push(`${drawable.agentId} at ${point.x},${point.y}`);
+      }
+      const district = layout.floors[desk.floorIndex];
+      const districtShape = shapeFor(district.bounds);
+      if (
+        districtShape === undefined ||
+        !overviewShapeContains(districtShape, point)
+      ) {
+        outsideDistrict.push(`${drawable.agentId} at ${point.x},${point.y}`);
+      }
+    }
+
+    // Anti-vacuity: a frame that drew no pips, or a lookup that found no
+    // desks, would satisfy any emptiness below. Every pip resolves to a room
+    // (the 40 of the 1,000 with no pip are the fixture's archived share, who
+    // are not drawn at all), and the population checked is the population.
+    expect(unseated).toEqual([]);
+    expect(checked).toBe(pips);
+    expect(checked).toBeGreaterThan(900);
+    // Measured on the equal-area rectangle: 160 of these pips stood outside
+    // their own room and 122 outside their own district.
+    expect(outsideRoom.slice(0, 5)).toEqual([]);
+    expect(outsideDistrict.slice(0, 5)).toEqual([]);
   });
 
   it("reads only the index's own references at lod 2, never layout.rooms or layout.props whole", () => {

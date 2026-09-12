@@ -194,10 +194,20 @@ function tileDepth(
   return isoDepth(foot.y, tile.col + tile.row, kind);
 }
 
+/**
+ * A sprite drawable, narrowed.
+ *
+ * The floor above overview is made of sprites and nothing else, and it is
+ * sorted by where each one hangs - so the array it is collected in says
+ * sprite, rather than saying drawable and then reading a `y` that the lod-0
+ * `quad` does not have.
+ */
+type IsoSpriteDrawable = Extract<OfficeDrawable, { kind: "sprite" }>;
+
 function diamondAt(
   corner: OfficePoint,
   name: OfficeSpriteName,
-): OfficeDrawable {
+): IsoSpriteDrawable {
   return {
     kind: "sprite",
     sprite: { name },
@@ -239,7 +249,7 @@ function groundSpriteAt(
  * tile in its first column, the top-right edge of every tile in its first row.
  * City blocks have no walls - a building IS its own wall.
  */
-function pushRoomWalls(scan: FloorScan, out: OfficeDrawable[]): void {
+function pushRoomWalls(scan: FloorScan, out: IsoSpriteDrawable[]): void {
   if (scan.layout.view !== "campus") return;
   const { tiles } = scan;
   const lastCol = tiles.col + tiles.cols;
@@ -290,7 +300,7 @@ function pushRoomWalls(scan: FloorScan, out: OfficeDrawable[]): void {
  * this one did - left the hands turning in mid-air. The anchor below is that
  * same expression minus the centring, so the two cannot drift apart.
  */
-function pushClockFaces(scan: FloorScan, out: OfficeDrawable[]): void {
+function pushClockFaces(scan: FloorScan, out: IsoSpriteDrawable[]): void {
   const size = officeSpriteSize({ name: "clock" });
   for (const floor of scan.layout.floors) {
     if (!isoWithinRect(scan.tiles, floor.clockTile)) continue;
@@ -305,7 +315,7 @@ function pushClockFaces(scan: FloorScan, out: OfficeDrawable[]): void {
 }
 
 /** The gate every district is entered through, one per floor. */
-function pushDoors(scan: FloorScan, out: OfficeDrawable[]): void {
+function pushDoors(scan: FloorScan, out: IsoSpriteDrawable[]): void {
   for (const floor of scan.layout.floors) {
     if (!isoWithinRect(scan.tiles, floor.doorTile)) continue;
     const corner = cornerOf(scan.projector, floor.doorTile);
@@ -329,7 +339,7 @@ function pushDoors(scan: FloorScan, out: OfficeDrawable[]): void {
  * filter here and, more to the point, nothing to SCAN: a pan reads the tiles
  * it is asked about and not the thousand props it is not.
  */
-function pushProps(scan: FloorScan, out: OfficeDrawable[]): void {
+function pushProps(scan: FloorScan, out: IsoSpriteDrawable[]): void {
   for (const prop of isoPropsIn(scan.layout, scan.tiles)) {
     const corner = cornerOf(scan.projector, prop.tile);
     const size = officeSpriteSize(prop.sprite);
@@ -352,114 +362,77 @@ function tileRectsOverlap(
 }
 
 /**
- * A tile rect as ONE axis-aligned rectangle, which is what a `block` is.
+ * A tile rect as the shape it actually projects to: its four corners, filled.
  *
- * A tile rect projects to a DIAMOND here, so a rect can only approximate it and
- * the only question is which rect. Not the bounding box: a diamond fills exactly
- * half of its own box, so boxes of two rooms that do not touch overlap by more
- * than half their width and the whole map reads as one slab. Instead the box is
- * shrunk about the diamond's own centre until its AREA is the diamond's, which
- * is `1 / sqrt(2)` on each side. It covers the right amount of ground in the
- * right place, and regions that do not touch mostly do not either.
+ * IT IS NOT A RECTANGLE, and standing one in for it was wrong in both
+ * directions at once. The rect this used to emit had the projected region's
+ * area - the bounding box shrunk by `1 / sqrt(2)` about the diamond's centre,
+ * to stop the boxes of two rooms that do not touch overlapping by more than
+ * half their width - but not its shape, so it painted over ground the region
+ * does not cover and left ground it does cover bare. At overview a seat is a
+ * pip and a pip is a projected tile, so the population formed the diamond
+ * while the floor under it was an axis-aligned slab: on a thousand-agent
+ * Campus the pips spilled out of their own storey at the left and right
+ * corners, the amenities floated above it, and the two districts of a City
+ * read as two overlapping rectangles rather than as the office a person had
+ * just been looking at one zoom step in.
+ *
+ * The four corners are the whole fix. They cost the same as the centre this
+ * used to project, the shape IS the union of the diamonds of the tiles it
+ * stands for - so it covers exactly its own ground and regions that do not
+ * touch cannot overlap at all - and it is what the office looks like at office
+ * zoom, which is the reading the block map exists to preserve.
+ *
+ * Perimeter order, starting at the tile rect's own origin corner: in this
+ * projection that is the top vertex, then the right, the bottom and the left.
  */
-const DIAMOND_TO_RECT = Math.SQRT1_2;
-
-/**
- * How far the widest block on this layout reaches past the tiles it stands for.
- *
- * THE CORNERS ARE THE PROBLEM. The rect above has the projected region's area
- * but not its shape: its corners sit outside the region's slanted sides, so a
- * block paints over pixels that none of the tiles it stands for projects to.
- * The scene finds the floor for a rectangle by running the projection backwards
- * into tiles, and a query tight to the tiles therefore finds no block at all
- * for a corner that is plainly on screen - a storey's lower-right shoulder on a
- * panned Campus, drawn by a whole-world frame and missing from a real one.
- *
- * The distance is geometry, not a guess, and the geometry is a PARALLELOGRAM.
- * A tile rect of `cols × rows` projects to a box `span` wide and `span` tall in
- * tile units, `span` being `cols + rows`; inside that box the region's four
- * edges are the lines `X + Y = narrow` and `X - Y = ±narrow` (and their
- * partners), where `narrow` is the SMALLER of the two tile dimensions. Only
- * when the rect is square is `narrow` half the span and the shape the symmetric
- * diamond it looks like - and a diamond is what this used to assume. City
- * freezes a district's width across appends, so a real district grows steadily
- * narrower against its height and steadily less diamond-like. At 18 × 410 the
- * gap a diamond accounts for is a third of the true one, and a query widened by
- * it still lost six points of a storey that was plainly on screen.
- *
- * So, measured across that box in tile units: the block's far corner puts
- * `X + Y` at `span · SQRT1_2`, the region's own edge puts it at `narrow`, and
- * the difference between the two becomes pixels through the edge's own normal,
- * which is what `ISO_EDGE_TO_PX` is.
- *
- * It scales with the REGION, which is why this is a function of the layout and
- * not a constant: a storey is the widest block a plan draws, and the widest on
- * a thousand-agent Campus overhangs by 372 px where a six-tile cabin overhangs
- * by ten. Squareness is the other half of the scale - that same Campus is
- * 105 × 117 and a diamond was only 12% short of it, where the 18 × 410 district
- * needs 2,037 px against the diamond's 634.
- */
-function isoBlockOverhang(layout: OfficeLayout): number {
-  let worst = 0;
-  for (const floor of layout.floors) {
-    worst = Math.max(worst, cornerOverhangOf(floor.bounds));
-    for (const amenity of floor.amenities) {
-      worst = Math.max(worst, cornerOverhangOf(amenity.bounds));
-    }
-  }
-  for (const room of layout.rooms) {
-    worst = Math.max(worst, cornerOverhangOf(room.bounds));
-  }
-  return worst;
-}
-
-/**
- * A projected edge's offset, in pixels per unit of the tile-unit box.
- *
- * The region's edges are lines of constant `X ± Y` in tile units. Scaling those
- * units to the projection's own half-tile makes the perpendicular distance
- * `offset · halfWidth · halfHeight / hypot(halfWidth, halfHeight)`, and the
- * halves cancel against the box, so the whole conversion is this one ratio.
- */
-const ISO_EDGE_TO_PX =
-  (ISO_HALF_WIDTH * ISO_HALF_HEIGHT) /
-  Math.hypot(ISO_HALF_WIDTH, ISO_HALF_HEIGHT);
-
-function cornerOverhangOf(bounds: OfficeTileRect): number {
-  const span = bounds.cols + bounds.rows;
-  if (span <= 0) return 0;
-  // The NARROW dimension names the near edge. A square rect makes this half the
-  // span and recovers the symmetric-diamond answer exactly; anything flatter
-  // puts an edge closer in, which is the whole finding.
-  const narrow = Math.min(bounds.cols, bounds.rows);
-  return Math.max(0, (Math.SQRT1_2 * span - narrow) * ISO_EDGE_TO_PX);
-}
-
-function blockOf(
+function quadOf(
   projector: OfficeProjector,
   bounds: OfficeTileRect,
   fill: OfficeBlockFill,
 ): OfficeDrawable {
-  const centre = projector.project(
-    bounds.col + bounds.cols / 2,
-    bounds.row + bounds.rows / 2,
-  );
-  const span = bounds.cols + bounds.rows;
-  const width = span * ISO_HALF_WIDTH * DIAMOND_TO_RECT;
-  const height = span * ISO_HALF_HEIGHT * DIAMOND_TO_RECT;
+  const endCol = bounds.col + bounds.cols;
+  const endRow = bounds.row + bounds.rows;
   return {
-    kind: "block",
-    x: centre.x - width / 2,
-    y: centre.y - height / 2,
-    width,
-    height,
+    kind: "quad",
+    points: [
+      projector.project(bounds.col, bounds.row),
+      projector.project(endCol, bounds.row),
+      projector.project(endCol, endRow),
+      projector.project(bounds.col, endRow),
+    ],
     fill,
   };
 }
 
 /**
- * The world at OVERVIEW zoom: one rect per district, amenity and block, and no
- * tiles at all. A few dozen drawables where the tile grid is tens of thousands.
+ * NONE, and the reason is the same one the three identity painters give: the
+ * block IS the tiles.
+ *
+ * D58 exists because an axis-aligned block standing in for a diamond was
+ * painted over pixels none of its own tiles projects to, so the scene's
+ * inverse tile query - which assumes a block is drawn where its tiles are -
+ * found no block for a corner that was plainly on screen, and the painter was
+ * made to declare how far past its tiles it reached. A `quad` reaches nowhere
+ * past them: its corners are the projections of the tile rect's corners, so
+ * every pixel it fills unprojects to one of the tiles the query already asks
+ * for. The declaration stays - it is the contract, and the next painter that
+ * needs it has somewhere to say so - and this one answers zero.
+ *
+ * What went with the rect: `cornerOverhangOf`, the region walk it drove, and
+ * the parallelogram derivation behind it (`(SQRT1_2 · span - min(cols, rows))`
+ * converted through the projected edge normal), which had to grow from 634 px
+ * to 2,037 px on one append-grown 18 × 410 district to stay conservative. None
+ * of it has anything left to measure.
+ */
+function isoBlockOverhang(): number {
+  return 0;
+}
+
+/**
+ * The world at OVERVIEW zoom: one filled shape per district, amenity and block,
+ * and no tiles at all. A few dozen drawables where the tile grid is tens of
+ * thousands.
  *
  * A Campus room is a cabin and a City block is a stand of buildings, which is
  * the one thing the two views disagree about here; `layout.rooms` carries both.
@@ -472,7 +445,7 @@ function blockMap(
   const blocks: OfficeDrawable[] = [];
   const push = (bounds: OfficeTileRect, fill: OfficeBlockFill): void => {
     if (!tileRectsOverlap(bounds, tiles)) return;
-    blocks.push(blockOf(projector, bounds, fill));
+    blocks.push(quadOf(projector, bounds, fill));
   };
   for (const floor of layout.floors) push(floor.bounds, "storey");
   for (const floor of layout.floors) {
@@ -494,8 +467,8 @@ function paintFloor(
   if (lod === 0) return blockMap(layout, tiles);
   const projector = projectorFor(layout);
   const scan: FloorScan = { layout, projector, tiles };
-  const ground: OfficeDrawable[] = [];
-  const standing: OfficeDrawable[] = [];
+  const ground: IsoSpriteDrawable[] = [];
+  const standing: IsoSpriteDrawable[] = [];
   const lastCol = Math.min(tiles.col + tiles.cols, layout.cols);
   const lastRow = Math.min(tiles.row + tiles.rows, layout.rows);
   for (let row = Math.max(0, tiles.row); row < lastRow; row += 1) {

@@ -679,6 +679,23 @@ function frameDrawables(frame: OfficeFrame): ReadonlyArray<OfficeDrawable> {
   return [...frame.floor, ...frame.props, ...frame.actors, ...world];
 }
 
+/**
+ * A drawable narrowed to the one kind that is anchored at a top-left corner.
+ *
+ * Only some of the vocabulary carries `x` and `y` - the lod-0 `quad` carries
+ * four corners instead - so a `find` or a `filter` whose result is read for a
+ * position has to narrow rather than test, which a plain boolean predicate
+ * does not do.
+ */
+type SpriteDrawable = Extract<OfficeDrawable, { kind: "sprite" }>;
+
+function isSpriteNamed(
+  drawable: OfficeDrawable,
+  name: OfficeSpriteName,
+): drawable is SpriteDrawable {
+  return drawable.kind === "sprite" && drawable.sprite.name === name;
+}
+
 function spriteCount(
   draws: ReadonlyArray<OfficeDrawable>,
   name: OfficeSpriteName,
@@ -1089,8 +1106,8 @@ describe("mission-control cold-review findings", () => {
     );
     if (spot === undefined) throw new Error("no read spot");
     const chair = frameDrawables(scene.frame(2, WHOLE_WORLD)).find(
-      (drawable) =>
-        drawable.kind === "sprite" && drawable.sprite.name === "armchair",
+      (drawable): drawable is SpriteDrawable =>
+        isSpriteNamed(drawable, "armchair"),
     );
     expect(chair?.x).toBe(spot.tile.col * OFFICE_TILE);
     expect(chair?.y).toBe(spot.tile.row * OFFICE_TILE);
@@ -1157,9 +1174,8 @@ describe("mission-control cold-review findings", () => {
     });
     const chars = scene
       .frame(2, WHOLE_WORLD)
-      .actors.filter(
-        (drawable) =>
-          drawable.kind === "sprite" && drawable.sprite.name === "character",
+      .actors.filter((drawable): drawable is SpriteDrawable =>
+        isSpriteNamed(drawable, "character"),
       );
     const projector = MISSION_CONTROL_VIEW.painter.projector(
       requireLayout(scene),

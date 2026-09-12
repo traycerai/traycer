@@ -9,14 +9,25 @@
  * from a symmetric diamond, but a NONSQUARE tile rectangle projects to a
  * parallelogram. City freezes a district's width across appends, so a real
  * append-grown district got steadily narrower against its height and the
- * declared overhang stopped being conservative enough. It is measured from the
- * real parallelogram now, and the cases below pin the corners that were missed.
+ * declared overhang stopped being conservative enough.
+ *
+ * THE OVERHANG IS GONE, and with it the arithmetic that kept getting this
+ * wrong: the isometric block map draws each region as the four PROJECTED
+ * corners of its own tile rectangle, so it paints exactly the ground those
+ * tiles project to and reaches nowhere past them (`blockOverhangPx` answers 0,
+ * like the three identity painters). What H1 was actually about survives and
+ * is what the cases below pin: a point on ground a region PAINTS comes back
+ * from a real per-rect `frame(0, ...)` query at it. The grown 18 x 410
+ * district is kept because it is still the hardest geometry the inverse query
+ * meets.
  *
  * H2 - `isoBlockOverhang` walked every floor, amenity and room on EVERY
  * overview frame, before the scene's floor cache was consulted, which
  * reintroduced the full-population work T5's painter index removed. The scene
  * memoises the painter's declared overhang per plan now, and the case below
- * pins the repeat walks at none.
+ * pins the repeat walks at none. The memo and its invalidation are unchanged
+ * by the shape - the scalar it caches is simply zero on these two views now -
+ * so those cases still count the calls they always counted.
  *
  * Both are pinned through a real `OfficeScene` and real plans - a City that
  * actually grew by append, a Campus/City that actually seated `many-roots` -
@@ -33,11 +44,20 @@ import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import type {
   OfficeAgentInput,
   OfficeAgentStatus,
+  OfficeBlockFill,
   OfficeDrawable,
   OfficeLayout,
+  OfficePoint,
   OfficeRect,
   OfficeSceneInput,
 } from "@/lib/comm-graph/office/office-types";
+import {
+  overviewFillOf,
+  overviewSamplePoints,
+  overviewShapeContains,
+  overviewShapesOf,
+  OVERVIEW_FRACTIONS,
+} from "@/lib/comm-graph/office/views/__tests__/overview-shapes";
 import {
   OFFICE_VIEWS,
   type OfficePlanInput,
@@ -75,76 +95,81 @@ function sceneInputFor(
   };
 }
 
-function rectsOverlap(a: OfficeRect, b: OfficeRect): boolean {
-  return (
-    a.x < b.x + b.width &&
-    b.x < a.x + a.width &&
-    a.y < b.y + b.height &&
-    b.y < a.y + a.height
+/** Whole-layout floor at lod 0: the ground truth the sweep below checks a real frame against. */
+function wholeMapFloor(
+  view: OfficeView,
+  layout: OfficeLayout,
+): ReadonlyArray<OfficeDrawable> {
+  return view.painter.floor(
+    layout,
+    { col: 0, row: 0, cols: layout.cols, rows: layout.rows },
+    0,
   );
 }
 
-type BlockDrawable = Extract<OfficeDrawable, { kind: "block" }>;
-
-function isBlockDrawable(drawable: OfficeDrawable): drawable is BlockDrawable {
-  return drawable.kind === "block";
-}
-
-/** Whole-layout floor at lod 0: the ground truth the sweep below checks a real frame against. */
-function wholeMapBlocks(
-  view: OfficeView,
-  layout: OfficeLayout,
-): ReadonlyArray<BlockDrawable> {
-  return view.painter
-    .floor(layout, { col: 0, row: 0, cols: layout.cols, rows: layout.rows }, 0)
-    .filter(isBlockDrawable);
+/** The topmost region painting a point, the way the renderer's own draw order resolves it. */
+function topmostAt(
+  floor: ReadonlyArray<OfficeDrawable>,
+  point: OfficePoint,
+): OfficeDrawable | undefined {
+  return overviewShapesOf(floor).findLast((region) =>
+    overviewShapeContains(region.shape, point),
+  )?.drawable;
 }
 
 interface OverviewMiss {
-  readonly point: OfficeRect;
-  readonly wanted: BlockDrawable;
-  readonly actual: BlockDrawable | undefined;
+  readonly point: OfficePoint;
+  readonly wanted: OfficeBlockFill | null;
+  readonly actual: OfficeBlockFill | null;
 }
 
 /**
- * Nine points per block - both near corners, both edge midpoints and the
- * centre, on each axis - checked against a real per-rect `scene.frame(0, …)`
- * query rather than the whole-map floor it is compared to. The T5 review's
- * own probe (`t5-overview-handoff.test.ts`) uses the same nine fractions.
+ * Nine points per region - both near corners, both edge midpoints and the
+ * centre, along each of its own two edges - checked against a real per-rect
+ * `scene.frame(0, …)` query rather than the whole-map floor it is compared to.
+ * The T5 review's own probe (`t5-overview-handoff.test.ts`) uses the same nine
+ * fractions; they walk the region's edges rather than a bounding box because
+ * an isometric region is a parallelogram and the corners of ITS box are ground
+ * it does not paint (see `overview-shapes.ts`).
  */
-const SWEEP_FRACTIONS: ReadonlyArray<number> = [0.001, 0.5, 0.999];
-
 function sweepOverviewBlocks(
   scene: OfficeScene,
   view: OfficeView,
   layout: OfficeLayout,
 ): ReadonlyArray<OverviewMiss> {
-  const whole = wholeMapBlocks(view, layout);
+  const whole = wholeMapFloor(view, layout);
   const misses: OverviewMiss[] = [];
-  for (const block of whole) {
-    for (const fx of SWEEP_FRACTIONS) {
-      for (const fy of SWEEP_FRACTIONS) {
-        const point: OfficeRect = {
-          x: block.x + block.width * fx,
-          y: block.y + block.height * fy,
-          width: 1,
-          height: 1,
-        };
-        const wanted = whole.findLast((candidate) =>
-          rectsOverlap(candidate, point),
-        );
-        if (wanted === undefined) continue;
-        const actual = scene
-          .frame(0, point)
-          .floor.filter(isBlockDrawable)
-          .findLast((candidate) => rectsOverlap(candidate, point));
-        if (actual === undefined || actual.fill !== wanted.fill) {
-          misses.push({ point, wanted, actual });
-        }
+  for (const region of overviewShapesOf(whole)) {
+    for (const point of overviewSamplePoints(
+      region.shape,
+      OVERVIEW_FRACTIONS,
+    )) {
+      const rect: OfficeRect = { x: point.x, y: point.y, width: 1, height: 1 };
+      const wanted = topmostAt(whole, point);
+      if (wanted === undefined) continue;
+      const actual = topmostAt(scene.frame(0, rect).floor, point);
+      if (
+        actual === undefined ||
+        overviewFillOf(actual) !== overviewFillOf(wanted)
+      ) {
+        misses.push({
+          point,
+          wanted: overviewFillOf(wanted),
+          actual: actual === undefined ? null : overviewFillOf(actual),
+        });
       }
     }
   }
   return misses;
+}
+
+/** How many points a sweep actually put a question to, so an empty one cannot pass. */
+function sweepSampleCount(view: OfficeView, layout: OfficeLayout): number {
+  return (
+    overviewShapesOf(wholeMapFloor(view, layout)).length *
+    OVERVIEW_FRACTIONS.length *
+    OVERVIEW_FRACTIONS.length
+  );
 }
 
 // ---- H1: the grown-City parallelogram geometry ------------------------- //
@@ -190,8 +215,8 @@ function growAppendedCity(): OfficeScene {
   return scene;
 }
 
-describe("the grown-City block overhang (H1)", () => {
-  it("covers every block point of the final append-grown City district (18x410 tiles)", () => {
+describe("the grown-City overview coverage (H1)", () => {
+  it("covers every painted point of the final append-grown City district (18x410 tiles)", () => {
     const view = OFFICE_VIEWS.city;
     const scene = growAppendedCity();
     const layout = scene.layout();
@@ -201,57 +226,67 @@ describe("the grown-City block overhang (H1)", () => {
       rows: 410,
     });
     const misses = sweepOverviewBlocks(scene, view, layout);
-    // The symmetric-diamond overhang answers 634.2683906914502px on this
-    // layout and still misses six of the nine-point sweep, the first at
-    // (1007.7086485, 575.8543242) - inside the whole-map storey block. At
-    // 18x410 the narrow (18-tile) dimension puts a real edge three times
-    // closer to the block's own corner than a diamond assumes.
+    // The symmetric-diamond overhang answered 634.2683906914502px on this
+    // layout and still missed six of the nine-point sweep, the first at
+    // (1007.7086485, 575.8543242) - inside the whole-map storey RECTANGLE,
+    // which at 18x410 covered a great deal of ground the district does not
+    // stand on. Both halves of that are closed at once now: what is painted
+    // is the district, and what is painted is found.
     expect(misses).toEqual([]);
+    // Anti-vacuity: a sweep with nothing to sample proves nothing.
+    expect(sweepSampleCount(view, layout)).toBeGreaterThan(0);
   });
 
-  it("keeps the whole-map storey block visible at a real 1280x700 canvas panned to zoom 0.5", () => {
+  it("keeps the district's own far corner visible at a real 1280x700 canvas panned to zoom 0.5", () => {
     const view = OFFICE_VIEWS.city;
     const scene = growAppendedCity();
     const layout = scene.layout();
     if (layout === null) throw new Error("no layout");
-    // A real 1280x700 CSS canvas at zoom 0.5 asks the scene for exactly this
-    // 2560x1400 world rect when panned into the district's lower-right
-    // corner.
+    const storey = overviewShapesOf(wholeMapFloor(view, layout)).find(
+      (region) => overviewFillOf(region.drawable) === "storey",
+    );
+    if (storey === undefined) throw new Error("no whole-map storey");
+    // The district's own far corner, and a 2560x1400 world rect - what a real
+    // 1280x700 CSS canvas asks for at zoom 0.5 - panned so that corner sits
+    // ten pixels inside the camera's own.
+    //
+    // The camera is DERIVED rather than the literal one this case used to
+    // carry ((-1527.13, -796.57), probing (1022.87, 593.43)), because that
+    // point is no longer painted by anything: it was inside the equal-area
+    // rectangle that stood in for this district, and the district itself -
+    // eighteen tiles wide and four hundred and ten deep - runs nowhere near
+    // it. A camera aimed there now sees empty world, correctly, and a case
+    // built on it would pass while asking nothing.
+    const [corner] = overviewSamplePoints(storey.shape, [0.999]);
+    const point: OfficeRect = { x: corner.x, y: corner.y, width: 1, height: 1 };
     const camera: OfficeRect = {
-      x: -1527.1336187827387,
-      y: -796.5668093913694,
+      x: corner.x + 10 - 2560,
+      y: corner.y + 10 - 1400,
       width: 2560,
       height: 1400,
     };
-    const point: OfficeRect = {
-      x: 1022.8663812172613,
-      y: 593.4331906086306,
-      width: 1,
-      height: 1,
-    };
-    const wanted = wholeMapBlocks(view, layout).findLast(
-      (block) => block.fill === "storey" && rectsOverlap(block, point),
-    );
+    const wanted = topmostAt(wholeMapFloor(view, layout), corner);
     if (wanted === undefined) {
-      throw new Error("no whole-map storey block at the expected point");
+      throw new Error("no whole-map region at the district's own corner");
     }
-    const actual = scene
-      .frame(0, camera)
-      .floor.filter(isBlockDrawable)
-      .findLast((block) => rectsOverlap(block, point));
-    // Before H1 was closed, `scene.frame(0, camera).floor` returned zero floor
-    // drawables at all here - the same tight inverse-projection miss as the
-    // sweep above, made directly visible at a real pan. What is pinned now is
-    // that the storey block under the point is drawn.
-    expect(actual).toEqual(wanted);
+    const floor = scene.frame(0, camera).floor;
+    // Before H1 was closed the equivalent pan returned zero floor drawables
+    // at all - the tight inverse-projection miss of the sweep above, made
+    // directly visible. What is pinned now is that a point the district
+    // actually paints comes back from the camera that can see it.
+    expect(floor.length).toBeGreaterThan(0);
+    expect(topmostAt(floor, corner)).toEqual(wanted);
+    // And the one-pixel query at the same point, which is the sweep's form.
+    expect(topmostAt(scene.frame(0, point).floor, corner)).toEqual(wanted);
   });
 
-  it("still covers the same nine block points on fresh, near-square Campus and City triage(1000) layouts", () => {
-    // Anti-regression: an overhang widened enough for the tall grown
-    // district must not shrink back down for the ordinary square-ish case
-    // the original corner sweep already covers - a fix that only special-
-    // cases the tall shape would pass the case above and fail this one.
+  it("still covers the same nine points of every region on fresh, near-square Campus and City triage(1000) layouts", () => {
+    // Anti-regression: a shape that covers the tall grown district must not
+    // stop covering the ordinary square-ish case the original corner sweep
+    // already covers - a fix that only special-cased the tall shape would
+    // pass the case above and fail this one.
     const misses: OverviewMiss[] = [];
+    let samples = 0;
     for (const view of VIEWS) {
       const epic = makeTestEpic("triage", 1000, 1);
       const scene = new OfficeScene(view, null);
@@ -259,8 +294,12 @@ describe("the grown-City block overhang (H1)", () => {
       const layout = scene.layout();
       if (layout === null) throw new Error("no layout");
       misses.push(...sweepOverviewBlocks(scene, view, layout));
+      samples += sweepSampleCount(view, layout);
     }
     expect(misses).toEqual([]);
+    // Anti-vacuity, per view: 32 Campus regions and 60 City ones at this
+    // roster, nine points each.
+    expect(samples).toBeGreaterThan(500);
   });
 });
 
@@ -535,8 +574,21 @@ describe("the block-overhang memo's own invalidation (H2 fixup)", () => {
   }
 });
 
+/**
+ * WHAT THIS CASE IS NOW. It was written against an overhang that GREW with
+ * the district - roughly 64px at three agents and roughly 2,037px at a
+ * thousand - so a memo that never invalidated kept the small number and lost
+ * the block. The isometric painter declares zero at every population now, so
+ * a stale scalar is no longer a thing this case can catch; the call-counting
+ * case above is where invalidation is pinned.
+ *
+ * It is kept because the other half of it never depended on the number: a
+ * scene that has ALREADY PAINTED and then grows by append must still find the
+ * region under a real camera, through a new layout, a new projector and a new
+ * origin. That is the growth path the sweeps above never walk.
+ */
 describe("the overhang memo across a live City append (H2 fixup)", () => {
-  it("keeps a real block visible at every population as the district grows past an already-cached overhang", () => {
+  it("keeps a real block visible at every population as the district grows under an already-painted scene", () => {
     const view = OFFICE_VIEWS.city;
     const base = makeTestEpic("one-team", 3, 1);
     const extras = makeTestEpic("many-roots", 1000, 1).agents.map(
@@ -552,10 +604,9 @@ describe("the overhang memo across a live City append (H2 fixup)", () => {
     const scene = new OfficeScene(view, null);
     let previous: OfficePopulation | null = null;
     // Frames at EVERY population, not only the last - that is what makes
-    // this scene ALREADY PAINTED before it grows. At n=0 the small district
-    // puts roughly 64px of overhang in the cache; the mutation's failure is
-    // that same 64px still being cached at n=1000, which needs roughly
-    // 2,037px to keep this exact block on screen.
+    // this scene ALREADY PAINTED before it grows, so everything the growth
+    // replaces (the layout, its index, the memoised projector, the origin
+    // every point hangs off) is replaced with a warm cache behind it.
     for (const count of [0, 90, 1000]) {
       const agents = [...base.agents, ...extras.slice(0, count)];
       const statusById = new Map<string, OfficeAgentStatus>(
@@ -567,30 +618,26 @@ describe("the overhang memo across a live City append (H2 fixup)", () => {
 
       const layout = scene.layout();
       if (layout === null) throw new Error("no layout");
-      const block = wholeMapBlocks(view, layout).find(
-        (candidate) => candidate.fill === "storey",
+      const whole = wholeMapFloor(view, layout);
+      const storey = overviewShapesOf(whole).find(
+        (region) => overviewFillOf(region.drawable) === "storey",
       );
-      if (block === undefined) throw new Error("no storey block");
-      // A point 20px inside the block's own corner, and a 2560x1400 camera -
-      // a real viewport's world rect at zoom 0.5 - positioned so that same
-      // point sits 10px inside the camera's own far corner.
-      const point: OfficeRect = {
-        x: block.x + 20,
-        y: block.y + 20,
-        width: 1,
-        height: 1,
-      };
+      if (storey === undefined) throw new Error("no storey region");
+      // A point just inside the district's own far corner, and a 2560x1400
+      // camera - a real viewport's world rect at zoom 0.5 - positioned so
+      // that same point sits 10px inside the camera's own far corner.
+      const [corner] = overviewSamplePoints(storey.shape, [0.999]);
       const camera: OfficeRect = {
-        x: point.x + 10 - 2560,
-        y: point.y + 10 - 1400,
+        x: corner.x + 10 - 2560,
+        y: corner.y + 10 - 1400,
         width: 2560,
         height: 1400,
       };
-      const actual = scene
-        .frame(0, camera)
-        .floor.filter(isBlockDrawable)
-        .findLast((candidate) => rectsOverlap(candidate, point));
-      expect(actual).toEqual(block);
+      const wanted = topmostAt(whole, corner);
+      if (wanted === undefined) {
+        throw new Error("no whole-map region at the district's own corner");
+      }
+      expect(topmostAt(scene.frame(0, camera).floor, corner)).toEqual(wanted);
     }
   });
 });

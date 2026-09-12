@@ -1173,6 +1173,7 @@ type OfficeLabelDrawable = Extract<OfficeDrawable, { kind: "label" }>;
 type OfficeClockDrawable = Extract<OfficeDrawable, { kind: "clock" }>;
 type OfficePipDrawable = Extract<OfficeDrawable, { kind: "pip" }>;
 type OfficeBlockDrawable = Extract<OfficeDrawable, { kind: "block" }>;
+type OfficeQuadDrawable = Extract<OfficeDrawable, { kind: "quad" }>;
 
 /**
  * Per-frame scratch, module-scoped and reused.
@@ -1277,10 +1278,17 @@ function drawDrawableLayer(args: DrawLayerArgs): void {
       clocks.push(drawable);
       continue;
     }
-    // The two overview primitives. They are not sprites - at lod 0 a tile is
-    // under a pixel, so the floor is filled rects and a person is a dot.
+    // The three overview primitives. They are not sprites - at lod 0 a tile is
+    // under a pixel, so the floor is filled shapes and a person is a dot. A
+    // block and a quad are the same thing in two projections: the region a
+    // group of tiles adds up to, axis-aligned where the projector is the
+    // identity and sheared where it is not.
     if (drawable.kind === "block") {
       drawBlock({ ctx, block: drawable, palette });
+      continue;
+    }
+    if (drawable.kind === "quad") {
+      drawQuad({ ctx, quad: drawable, palette });
       continue;
     }
     if (drawable.kind === "pip") {
@@ -1552,6 +1560,36 @@ function drawBlock(args: {
   ctx.globalAlpha = block.alpha ?? 1;
   ctx.fillStyle = blockColor(block.fill, palette);
   ctx.fillRect(block.x, block.y, block.width, block.height);
+  ctx.restore();
+}
+
+/**
+ * The same block where the projector shears: four projected corners, filled as
+ * one path in the colour its fill resolves to.
+ *
+ * Filled and not stroked, and with no seam handling of its own: the regions a
+ * block map emits nest rather than abut - a district, then its amenities, then
+ * its rooms, each painted over the last - so a hairline between two of them is
+ * not a thing that can happen here.
+ */
+function drawQuad(args: {
+  readonly ctx: CanvasRenderingContext2D;
+  readonly quad: OfficeQuadDrawable;
+  readonly palette: OfficePalette;
+}): void {
+  const { ctx, palette, quad } = args;
+  // Indexed rather than destructured: this runs per region per frame, and a
+  // rest element would allocate a second array for three points every time.
+  const points = quad.points;
+  ctx.save();
+  ctx.fillStyle = blockColor(quad.fill, palette);
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let index = 1; index < points.length; index += 1) {
+    ctx.lineTo(points[index].x, points[index].y);
+  }
+  ctx.closePath();
+  ctx.fill();
   ctx.restore();
 }
 

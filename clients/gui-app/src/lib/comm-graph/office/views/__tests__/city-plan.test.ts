@@ -48,6 +48,15 @@ import {
   isoDepth,
 } from "@/lib/comm-graph/office/views/isometric/iso-projector";
 import {
+  overviewBoundingBoxOf,
+  overviewCentreOf,
+  overviewSamplePoints,
+  overviewShapeContains,
+  overviewShapeOf,
+  OVERVIEW_FRACTIONS,
+  type OverviewShape,
+} from "@/lib/comm-graph/office/views/__tests__/overview-shapes";
+import {
   OFFICE_VIEWS,
   type OfficeDeskState,
   type OfficePlanInput,
@@ -1717,14 +1726,13 @@ describe("planCity", () => {
     const blocks = ISO_PAINTER.floor(layout, tiles, 0);
     expect(blocks.length).toBeGreaterThan(0);
     for (const drawable of blocks) {
-      expect(drawable.kind).toBe("block");
-      if (drawable.kind !== "block") continue;
-      checkBox("block", {
-        x: drawable.x,
-        y: drawable.y,
-        width: drawable.width,
-        height: drawable.height,
-      });
+      expect(drawable.kind).toBe("quad");
+      const shape = overviewShapeOf(drawable);
+      if (shape === null) continue;
+      // A sheared region has no box of its own, so the bounds check is over
+      // the box its four corners span - which is the tightest rectangle the
+      // projector has to keep inside the world it reports.
+      checkBox("block", overviewBoundingBoxOf(shape));
     }
 
     // And every fixture an errand spot stands up.
@@ -1744,6 +1752,98 @@ describe("planCity", () => {
     }
 
     expect([...new Set(problems)]).toEqual([]);
+  });
+
+  it("keeps every overview pip inside its own block, and two districts apart", () => {
+    // THE OTHER HALF OF THE LIVE FINDING (M4). Campus's case is the pips
+    // standing outside their own room; City's is what two districts did to
+    // each other. A block map of equal-area RECTANGLES gave each district a
+    // box half again as wide as the ground it stands on, so the acceptance
+    // pass's `officeBenchShape=two-hosts` bench drew two machines as two
+    // overlapping slabs - where at office zoom they are two separate stands
+    // of buildings with a street between them. Projected corners cannot do
+    // that: the districts' tile rects are disjoint, so their shapes are.
+    const epic = makeTestEpic("two-hosts", 400, 1);
+    const scene = new OfficeScene(OFFICE_VIEWS.city, null);
+    scene.sync(sceneInputFor(epic.agents, epic.statusById));
+    const layout = scene.layout();
+    if (layout === null) throw new Error("expected a layout after sync");
+    expect(layout.floors.length).toBe(2);
+
+    const world = scene.worldSize();
+    const frame = scene.frame(0, {
+      x: 0,
+      y: 0,
+      width: world.width,
+      height: world.height,
+    });
+    const projector = ISO_PAINTER.projector(layout);
+    const shapeByCentre = new Map<string, OverviewShape>();
+    for (const drawable of frame.floor) {
+      const shape = overviewShapeOf(drawable);
+      if (shape === null) continue;
+      const centre = overviewCentreOf(shape);
+      shapeByCentre.set(`${centre.x.toFixed(3)},${centre.y.toFixed(3)}`, shape);
+    }
+    // Matched on the point both shapes are centred on - the projection of the
+    // region's own centre tile - so the case reads the same drawable whether
+    // the painter answers with a rectangle or with four projected corners.
+    const shapeFor = (bounds: OfficeTileRect): OverviewShape | undefined => {
+      const centre = projector.project(
+        bounds.col + bounds.cols / 2,
+        bounds.row + bounds.rows / 2,
+      );
+      return shapeByCentre.get(`${centre.x.toFixed(3)},${centre.y.toFixed(3)}`);
+    };
+
+    const outsideBlock: string[] = [];
+    const unseated: string[] = [];
+    let pips = 0;
+    for (const drawable of frame.actors) {
+      if (drawable.kind !== "pip") continue;
+      pips += 1;
+      const desk = layout.desks.get(drawable.agentId);
+      const block =
+        desk === undefined || desk.roomId === null
+          ? undefined
+          : layout.rooms.find(
+              (candidate) => candidate.rootAgentId === desk.roomId,
+            );
+      if (block === undefined) {
+        unseated.push(drawable.agentId);
+        continue;
+      }
+      const shape = shapeFor(block.bounds);
+      const point = { x: drawable.x, y: drawable.y };
+      if (shape === undefined || !overviewShapeContains(shape, point)) {
+        outsideBlock.push(`${drawable.agentId} at ${point.x},${point.y}`);
+      }
+    }
+    expect(unseated).toEqual([]);
+    expect(pips).toBeGreaterThan(300);
+    // Measured on the equal-area rectangle: 80 of these pips stood on ground
+    // their own block's drawable did not cover.
+    expect(outsideBlock.slice(0, 5)).toEqual([]);
+
+    // And the two districts, which is what a person actually sees at Fit.
+    const districts = layout.floors.map((floor) => shapeFor(floor.bounds));
+    const [first, second] = districts;
+    if (first === undefined || second === undefined) {
+      throw new Error("expected a drawable for each district");
+    }
+    const trespass: string[] = [];
+    for (const [name, mine, theirs] of [
+      ["first", first, second],
+      ["second", second, first],
+    ] as const) {
+      for (const point of overviewSamplePoints(mine, OVERVIEW_FRACTIONS)) {
+        if (overviewShapeContains(theirs, point)) {
+          trespass.push(`${name} at ${point.x},${point.y}`);
+        }
+      }
+    }
+    // Nine points of each district's own ground, none of them on the other's.
+    expect(trespass).toEqual([]);
   });
 
   it("renames nothing when a lexically earlier host arrives", () => {

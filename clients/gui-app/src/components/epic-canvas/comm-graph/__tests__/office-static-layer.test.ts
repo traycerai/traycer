@@ -1007,6 +1007,16 @@ const ONE_OF_EACH: Readonly<Record<OfficeDrawable["kind"], OfficeDrawable>> = {
     height: 16,
     fill: "room",
   },
+  quad: {
+    kind: "quad",
+    points: [
+      { x: 0, y: 0 },
+      { x: 16, y: 8 },
+      { x: 0, y: 16 },
+      { x: -16, y: 8 },
+    ],
+    fill: "room",
+  },
 };
 
 /**
@@ -1020,17 +1030,24 @@ describe("officeBakesIntoStaticFloor", () => {
     expect(officeBakesIntoStaticFloor(ONE_OF_EACH.sprite)).toBe(true);
   });
 
-  it.each(["label", "clock", "envelope", "logo", "pip", "block"] as const)(
-    "leaves a %s to the per-frame path",
-    (kind) => {
-      // A label on the floor is drawn in SCREEN space, a clock needs hands
-      // over it, and neither an envelope nor a logo is static by nature. A
-      // pip is overview-only and a block is a lod-0 stand-in for the very
-      // floor this layer bakes, so baking either here would double-draw the
-      // overview and never repaint once the lod changed back. Each of the six
-      // would have been silently dropped by a blitted floor that baked
-      // everything, and silently duplicated by one that baked nothing.
-      expect(officeBakesIntoStaticFloor(ONE_OF_EACH[kind])).toBe(false);
-    },
-  );
+  it.each([
+    "label",
+    "clock",
+    "envelope",
+    "logo",
+    "pip",
+    "block",
+    "quad",
+  ] as const)("leaves a %s to the per-frame path", (kind) => {
+    // A label on the floor is drawn in SCREEN space, a clock needs hands
+    // over it, and neither an envelope nor a logo is static by nature. A
+    // pip is overview-only, and a block and a quad are both the lod-0
+    // stand-in for the very floor this layer bakes - one axis-aligned, one
+    // sheared by an isometric projector - so baking any of them here would
+    // double-draw the overview and never repaint once the lod changed back.
+    // Each of the seven would have been silently dropped by a blitted floor
+    // that baked everything, and silently duplicated by one that baked
+    // nothing.
+    expect(officeBakesIntoStaticFloor(ONE_OF_EACH[kind])).toBe(false);
+  });
 });

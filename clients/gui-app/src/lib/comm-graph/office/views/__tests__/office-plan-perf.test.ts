@@ -41,12 +41,21 @@ import {
   type OfficeDrawable,
   type OfficeFrame,
   type OfficeLayout,
+  type OfficePoint,
   type OfficeRect,
   type OfficeSceneInput,
   type OfficeSeat,
   type OfficeSize,
   type OfficeViewId,
 } from "@/lib/comm-graph/office/office-types";
+import {
+  overviewFillOf,
+  overviewSamplePoints,
+  overviewShapeContains,
+  overviewShapeOf,
+  overviewShapesOf,
+  OVERVIEW_FRACTIONS,
+} from "@/lib/comm-graph/office/views/__tests__/overview-shapes";
 import {
   OFFICE_VIEW_IDS,
   OFFICE_VIEWS,
@@ -376,16 +385,6 @@ function blockRegionsOf(layout: OfficeLayout): number {
   return regions;
 }
 
-/** Whether two rects, in the same projected space, share any area. */
-function rectsOverlap(a: OfficeRect, b: OfficeRect): boolean {
-  return (
-    a.x < b.x + b.width &&
-    b.x < a.x + a.width &&
-    a.y < b.y + b.height &&
-    b.y < a.y + a.height
-  );
-}
-
 /** The camera positions a sweep looks at, across the whole world. */
 function viewRectsOver(world: OfficeSize): ReadonlyArray<OfficeRect> {
   const rects: OfficeRect[] = [];
@@ -652,7 +651,15 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
     expect(frame.world).toBeNull();
     expect(frame.actors.length).toBeLessThanOrEqual(SCALE);
     for (const actor of frame.actors) expect(actor.kind).toBe("pip");
-    for (const drawable of frame.floor) expect(drawable.kind).toBe("block");
+    // One filled region per region the plan describes, in whichever of the two
+    // shapes the view's projector calls for: a `block` under an identity
+    // projector, a `quad` - the same tile rect's four projected corners -
+    // under an isometric one. `overviewShapeOf` admits exactly those two, so a
+    // floor that slipped a sprite, a label or anything else into the overview
+    // fails here.
+    for (const drawable of frame.floor) {
+      expect(overviewShapeOf(drawable)).not.toBeNull();
+    }
     // Rule 8 says `population + rooms`; a block map draws one rect per REGION
     // the plan describes, which is its storeys and amenities and pods as well
     // as its rooms. The claim the number carries is the one that matters
@@ -790,10 +797,16 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
     // was actually painted from drops that block's corner out of a partial
     // frame while the whole-world map still shows it there. A WHOLE-WORLD
     // block COUNT cannot catch this - the frame returns something either
-    // way - so this samples nine points across every block the whole-world
-    // map emits (its corners and its centre, on each axis) and asks a
-    // one-pixel frame at each one. Before the fix this found 11 misses
-    // across the six views; this view's share of that has to be zero.
+    // way - so this samples nine points across every region the whole-world
+    // map emits (its corners and its centre, along each of the region's own
+    // two edges) and asks a one-pixel frame at each one. Before the fix this
+    // found 11 misses across the six views; this view's share of that has to
+    // be zero.
+    //
+    // The points walk the region's EDGES rather than a bounding box: an
+    // isometric region is a parallelogram, and the corners of its box are
+    // ground it does not paint, so a frame that declined to return it there
+    // would be right and would read as a miss.
     const scene = new OfficeScene(view, null);
     scene.sync(
       sceneInputFor({ agents: EPIC.agents, statusById: EPIC.statusById }),
@@ -804,38 +817,40 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
       { col: 0, row: 0, cols: layout.cols, rows: layout.rows },
       0,
     );
+    const topmostAt = (
+      floor: ReadonlyArray<OfficeDrawable>,
+      point: OfficePoint,
+    ): OfficeDrawable | undefined =>
+      overviewShapesOf(floor).findLast((region) =>
+        overviewShapeContains(region.shape, point),
+      )?.drawable;
     let samples = 0;
     let misses = 0;
-    for (const block of all) {
-      if (block.kind !== "block") continue;
-      for (const fx of [0.001, 0.5, 0.999]) {
-        for (const fy of [0.001, 0.5, 0.999]) {
-          samples += 1;
-          const rect: OfficeRect = {
-            x: block.x + block.width * fx,
-            y: block.y + block.height * fy,
-            width: 1,
-            height: 1,
-          };
-          const local = scene.frame(0, rect).floor;
-          const expected = all.findLast(
-            (drawable) =>
-              drawable.kind === "block" && rectsOverlap(drawable, rect),
-          );
-          const actual = local.findLast(
-            (drawable) =>
-              drawable.kind === "block" && rectsOverlap(drawable, rect),
-          );
-          if (
-            expected?.kind === "block" &&
-            (actual?.kind !== "block" || actual.fill !== expected.fill)
-          ) {
-            misses += 1;
-          }
+    for (const region of overviewShapesOf(all)) {
+      for (const point of overviewSamplePoints(
+        region.shape,
+        OVERVIEW_FRACTIONS,
+      )) {
+        samples += 1;
+        const rect: OfficeRect = {
+          x: point.x,
+          y: point.y,
+          width: 1,
+          height: 1,
+        };
+        const expected = topmostAt(all, point);
+        const actual = topmostAt(scene.frame(0, rect).floor, point);
+        if (
+          expected !== undefined &&
+          (actual === undefined ||
+            overviewFillOf(actual) !== overviewFillOf(expected))
+        ) {
+          misses += 1;
         }
       }
     }
-    // Anti-vacuity: a view with no blocks at all would pass trivially.
+    // Anti-vacuity: a view with no overview regions at all would pass
+    // trivially. Every view plans storeys and rooms, so every view samples.
     expect(samples).toBeGreaterThan(0);
     expect(misses).toBe(0);
   });
@@ -864,16 +879,14 @@ describe.each(["campus", "city"] as const)(
         { col: 0, row: 0, cols: layout.cols, rows: layout.rows },
         0,
       );
-      const block = all.find(
-        (drawable) => drawable.kind === "block" && drawable.fill === "storey",
+      const storey = overviewShapesOf(all).find(
+        (region) => overviewFillOf(region.drawable) === "storey",
       );
-      if (block?.kind !== "block") throw new Error("expected a storey block");
-      const point: OfficeRect = {
-        x: block.x + 20,
-        y: block.y + 20,
-        width: 1,
-        height: 1,
-      };
+      if (storey === undefined) throw new Error("expected a storey region");
+      // A point just inside the district's own near corner, and a 2560x1400
+      // camera - a real viewport's world rect at zoom 0.5 - positioned so
+      // that point sits 10px inside the camera's own far corner.
+      const [point] = overviewSamplePoints(storey.shape, [0.001]);
       const camera: OfficeRect = {
         x: point.x + 10 - 2560,
         y: point.y + 10 - 1400,
@@ -881,50 +894,106 @@ describe.each(["campus", "city"] as const)(
         height: 1400,
       };
       const visible = scene.frame(0, camera).floor;
-      const expected = all.findLast(
-        (drawable) =>
-          drawable.kind === "block" && rectsOverlap(drawable, point),
-      );
-      const actual = visible.findLast(
-        (drawable) =>
-          drawable.kind === "block" && rectsOverlap(drawable, point),
-      );
+      const topmostAt = (
+        floor: ReadonlyArray<OfficeDrawable>,
+      ): OfficeDrawable | undefined =>
+        overviewShapesOf(floor).findLast((region) =>
+          overviewShapeContains(region.shape, point),
+        )?.drawable;
       // Anti-vacuity: the pan has to see SOMETHING, or the equality below
       // would pass on two empty lists.
       expect(visible.length).toBeGreaterThan(0);
-      expect(actual).toEqual(expected);
+      expect(topmostAt(visible)).toEqual(topmostAt(all));
     });
   },
 );
 
+/**
+ * THE PAN A PERSON ACTUALLY REPORTED, kept beside the derived one above
+ * because the two fail differently. The case above builds its own camera from
+ * whatever storey the plan happens to emit first, which keeps it honest for
+ * City as well - and means a change to the packing quietly moves what it is
+ * looking at. These numbers are the ones reported from a real 1280x700 canvas
+ * at zoom 0.5 on this exact fixture, where the office drew a storey's
+ * lower-right shoulder and the frame that was supposed to contain it came back
+ * with no floor at all.
+ *
+ * The reported corner is now the interesting half. The shoulder that was drawn
+ * over it belonged to the equal-area RECTANGLE that stood in for this district,
+ * and the district itself - a parallelogram running from (1872, 24) down to
+ * (1680, 1800) - has never been anywhere near (540, 304). So the reported
+ * point is ground no region paints, and the two cases below say both halves of
+ * that: the real pan finds the district where the district is, and finds
+ * nothing where it is not.
+ */
 describe("the Campus pan the cold review actually found", () => {
-  it("draws a block over the corner point the review reported empty", () => {
-    // THE LITERAL REPRODUCTION, kept beside the derived one above because
-    // they fail differently. The case above builds its own camera from
-    // whatever storey the plan happens to emit first, which keeps it honest
-    // for City as well - and means a change to the packing quietly moves what
-    // it is looking at. These numbers are the ones a person reported from a
-    // real 1280x700 canvas at zoom 0.5, on this exact fixture, where the
-    // office drew a storey's lower-right shoulder and the frame that was
-    // supposed to contain it came back with no floor at all.
-    const scene = new OfficeScene(OFFICE_VIEWS.campus, null);
+  const campusFloor = (): {
+    readonly scene: OfficeScene;
+    readonly all: ReadonlyArray<OfficeDrawable>;
+  } => {
+    const view = OFFICE_VIEWS.campus;
+    const scene = new OfficeScene(view, null);
     scene.sync(
       sceneInputFor({ agents: EPIC.agents, statusById: EPIC.statusById }),
     );
-    const camera: OfficeRect = {
-      x: -2009.8216433873085,
-      y: -1085.9108216936543,
-      width: 2560,
-      height: 1400,
+    const layout = layoutOf(scene);
+    return {
+      scene,
+      all: view.painter.floor(
+        layout,
+        { col: 0, row: 0, cols: layout.cols, rows: layout.rows },
+        0,
+      ),
     };
-    const corner: OfficeRect = { x: 540.178, y: 304.089, width: 1, height: 1 };
+  };
 
-    const floor = scene.frame(0, camera).floor;
+  /** The pan reported, in the world rect a 1280x700 canvas asks for at zoom 0.5. */
+  const REPORTED_CAMERA: OfficeRect = {
+    x: -2009.8216433873085,
+    y: -1085.9108216936543,
+    width: 2560,
+    height: 1400,
+  };
+  /** The corner it reported empty, which the equal-area rectangle painted over. */
+  const REPORTED_CORNER: OfficePoint = { x: 540.178, y: 304.089 };
 
-    const covering = floor.filter(
-      (drawable) => drawable.kind === "block" && rectsOverlap(drawable, corner),
+  it("draws the district over its own lower-right shoulder at that pan", () => {
+    const { all, scene } = campusFloor();
+    const storey = overviewShapesOf(all).find(
+      (region) => overviewFillOf(region.drawable) === "storey",
+    );
+    if (storey === undefined) throw new Error("expected a storey region");
+    // The district's own far corner - the shoulder the report was about -
+    // with the reported camera size around it.
+    const [corner] = overviewSamplePoints(storey.shape, [0.999]);
+    const camera: OfficeRect = {
+      x: corner.x + 10 - REPORTED_CAMERA.width,
+      y: corner.y + 10 - REPORTED_CAMERA.height,
+      width: REPORTED_CAMERA.width,
+      height: REPORTED_CAMERA.height,
+    };
+    const covering = overviewShapesOf(scene.frame(0, camera).floor).filter(
+      (region) => overviewShapeContains(region.shape, corner),
     );
     expect(covering.length).toBeGreaterThan(0);
+  });
+
+  it("paints nothing over the corner the report named, which no district stands on", () => {
+    // The other half, and the one this fixup added: a block map that reaches
+    // past its own tiles is how the corner came to be painted in the first
+    // place. The whole-world map is checked as well as the frame, so a frame
+    // that simply returned nothing could not pass this on its own.
+    const { all, scene } = campusFloor();
+    const paintedWhole = overviewShapesOf(all).filter((region) =>
+      overviewShapeContains(region.shape, REPORTED_CORNER),
+    );
+    expect(paintedWhole).toEqual([]);
+    const paintedFrame = overviewShapesOf(
+      scene.frame(0, REPORTED_CAMERA).floor,
+    ).filter((region) => overviewShapeContains(region.shape, REPORTED_CORNER));
+    expect(paintedFrame).toEqual([]);
+    // Anti-vacuity: the map this is asking about is a real one.
+    expect(overviewShapesOf(all).length).toBeGreaterThan(30);
   });
 });
 

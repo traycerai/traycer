@@ -884,6 +884,33 @@ export type OfficeDrawable =
       readonly height: number;
       readonly fill: OfficeBlockFill;
       readonly alpha?: number;
+    }
+  | {
+      /**
+       * The same unit of a lod-0 block map, for a floor that is not
+       * axis-aligned: a region's four PROJECTED corners, filled as one
+       * quadrilateral.
+       *
+       * An isometric tile rectangle projects to a parallelogram, and the
+       * rectangle that used to stand in for one was drawn over ground the
+       * region does not cover while leaving ground it does cover bare - so the
+       * pips, which are projected seats and therefore form the parallelogram,
+       * spilled out of their own room at overview. A view whose projector IS
+       * the identity has nothing to gain here and keeps `block`.
+       *
+       * The corners are the projections of the tile rect's own corners, in
+       * perimeter order, so the shape is exactly the ground its tiles project
+       * to - nothing more to reach past them for (`blockOverhangPx`), and the
+       * silhouette a person sees one zoom step in.
+       */
+      readonly kind: "quad";
+      readonly points: readonly [
+        OfficePoint,
+        OfficePoint,
+        OfficePoint,
+        OfficePoint,
+      ];
+      readonly fill: OfficeBlockFill;
     };
 
 /** What a lod-0 block STANDS FOR; the renderer maps each to a theme colour. */

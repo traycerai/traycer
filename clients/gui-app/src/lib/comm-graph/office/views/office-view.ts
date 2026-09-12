@@ -167,13 +167,16 @@ export interface OfficePainter {
    *
    * The scene asks a painter for the floor of a rectangle by running the
    * projection backwards into tiles, which assumes a block is drawn where its
-   * tiles are. Three of the four painters draw exactly that - the block IS the
-   * tile rect - and answer zero. The isometric one cannot: a tile rect projects
-   * to a diamond, a block is one axis-aligned rectangle, and the rectangle of
-   * equal area has corners outside the diamond's slanted sides. A block can
-   * therefore be painted over a pixel none of its own tiles projects to, and a
-   * query tight to the tiles finds no block for a corner that is plainly on
-   * screen.
+   * tiles are. Every painter shipped today draws exactly that and answers zero:
+   * the three under an identity projector because their block IS the tile rect,
+   * and the isometric one because it fills the tile rect's four PROJECTED
+   * corners. The question is live all the same. It was opened by an isometric
+   * block that stood in for its diamond with an axis-aligned rectangle of equal
+   * area, whose corners sat outside the diamond's slanted sides: it was painted
+   * over pixels none of its own tiles projects to, and a query tight to the
+   * tiles found no block for a corner that was plainly on screen. Any painter
+   * that again draws a block somewhere other than where its tiles are says so
+   * here, and nowhere else.
    *
    * Declared per painter rather than added as a blanket margin because the two
    * are not the same question: a sprite bleed widens every query at every band
