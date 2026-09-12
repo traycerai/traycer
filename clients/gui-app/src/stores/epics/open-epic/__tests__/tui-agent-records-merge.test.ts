@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type {
   TuiAgentRecordSummaryV11,
-  TuiAgentRecordSummaryV12,
+  TuiAgentRecordSummaryV13,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -79,7 +79,7 @@ function makeMeta(): SnapshotMetaEpic {
  */
 function row(
   overrides: Partial<TuiAgentRecordSummaryV11>,
-): Extract<TuiAgentRecordSummaryV12, { origin: "registry" | "doc" }> {
+): Extract<TuiAgentRecordSummaryV13, { origin: "registry" | "doc" }> {
   const base: TuiAgentRecordSummaryV11 = {
     tuiAgentId: "tui-1",
     ownerUserId: USER,
@@ -106,9 +106,13 @@ function row(
     docResident: false,
     ...overrides,
   };
+  // `@1.3`'s session facet, which the `@1.1` base this is built from has no
+  // field for. `null` - "this host cannot say" - because every case here is
+  // about the MERGE; a case about the facet stamps it onto the result.
+  const wire = { ...base, sessionState: null, lastExit: null };
   return base.docResident
-    ? { ...base, origin: "doc" as const }
-    : { ...base, origin: "registry" as const };
+    ? { ...wire, origin: "doc" as const }
+    : { ...wire, origin: "registry" as const };
 }
 
 /**
@@ -767,10 +771,14 @@ describe("the doc slice is handed through by reference in doc-only mode", () => 
 
 /** The narrow cross-host arm, as a delta or a snapshot row. */
 function cloudRow(
-  overrides: Partial<Extract<TuiAgentRecordSummaryV12, { origin: "cloud" }>>,
-): TuiAgentRecordSummaryV12 {
+  overrides: Partial<Extract<TuiAgentRecordSummaryV13, { origin: "cloud" }>>,
+): TuiAgentRecordSummaryV13 {
   return {
     origin: "cloud",
+    // See `row()`: the facet is `null` on a replica until the cloud metadata
+    // projection carries it, which is the state `@1.3` documents for this arm.
+    sessionState: null,
+    lastExit: null,
     tuiAgentId: "tui-1",
     ownerUserId: USER,
     hostId: "host-elsewhere",

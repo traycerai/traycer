@@ -14,7 +14,8 @@
  * an account switch - see the `rowKey` declaration below.
  */
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { TuiAgentRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { TerminalAgentsSlice } from "../types";
 import { EMPTY_TERMINAL_AGENTS_SLICE } from "../types";
@@ -50,9 +51,29 @@ export interface TuiAgentRecordPublication {
 export interface TuiAgentRecordTable {
   current(): TerminalAgentsSlice;
   ingestSeq(): number;
+  /**
+   * The terminal twin of the chat table's - see
+   * {@link RecordTable.snapshotIncompleteSeq}.
+   */
+  snapshotIncompleteSeq(): number;
+  /**
+   * The `@1.3` row, which is the `@1.2` row plus the SESSION FACET
+   * (`sessionState` / `lastExit`). Typed up to it rather than left at `@1.2`
+   * so the facet survives in the retained rows: a reaped agent reads as asleep
+   * and resumable, and a type that dropped the two keys would leave the
+   * sidebar and the tile with no way to say so.
+   */
   applyRecords(
-    records: readonly TuiAgentRecordSummaryV12[],
+    records: readonly TuiAgentRecordSummaryV13[],
     issuedAtSeq: number | null,
+  ): TuiAgentRecordPublication | null;
+  /**
+   * The recency patches an `unchanged` list answer carried - the terminal twin
+   * of the chat table's, with the same contract: the recency pair only, under
+   * the strictly-exceeds rule, dropped for a row this table does not hold.
+   */
+  applyTouches(
+    patches: readonly RecordListRecencyPatch[],
   ): TuiAgentRecordPublication | null;
   applyDelta(delta: TuiAgentRecordDelta): TuiAgentRecordPublication | null;
   republishForCurrentUser(): TuiAgentRecordPublication | null;
@@ -99,8 +120,8 @@ export interface TuiAgentRecordTable {
  * trap above, reached by the newer of the two routes.
  */
 function tuiAgentRowSupersedes(
-  candidate: TuiAgentRecordSummaryV12,
-  held: TuiAgentRecordSummaryV12,
+  candidate: TuiAgentRecordSummaryV13,
+  held: TuiAgentRecordSummaryV13,
 ): boolean {
   const candidateIsLocal = candidate.origin !== "cloud";
   const heldIsLocal = held.origin !== "cloud";
@@ -114,8 +135,8 @@ export function createTuiAgentRecordTable(
 ): TuiAgentRecordTable {
   const { getCurrentUserId, onBeforePublish } = sources;
 
-  const table: RecordTable<TuiAgentRecordSummaryV12, TerminalAgentsSlice> =
-    createRecordTable(
+  const table: RecordTable<TuiAgentRecordSummaryV13, TerminalAgentsSlice> =
+    createRecordTable<TuiAgentRecordSummaryV13, TerminalAgentsSlice>(
       {
         /**
          * Keyed by `(ownerUserId, tuiAgentId)`, exactly as the chat table is,
@@ -161,6 +182,27 @@ export function createTuiAgentRecordTable(
          */
         supersedesOnSnapshot: tuiAgentRowSupersedes,
         supersedesOnUpsert: tuiAgentRowSupersedes,
+        recency: {
+          // The patch addresses the same owner-scoped identity the rows are
+          // keyed by - `id` on the wire is this plane's `tuiAgentId`.
+          rowKeyOfPatch: (patch) =>
+            ownerScopedRowKey(patch.ownerUserId, patch.id),
+          revisionOf: (row) => row.revision,
+          /**
+           * `origin` and the SESSION FACET are untouched, deliberately. A
+           * patch is a registry quiet write and reports neither: re-stamping
+           * `origin` would move the row between planes on an answer that never
+           * mentioned it (and {@link tuiAgentRowSupersedes} reads authority
+           * first for exactly that reason), and blanking `sessionState` would
+           * report a sleeping agent as unknown every time it emits a token.
+           *
+           * `revision` is untouched too, and that one is the shared table's
+           * rule rather than this plane's: it describes the row's CONTENT,
+           * which a quiet write did not move. See `record-table.ts`'s module
+           * doc.
+           */
+          withPatch: (row, patch) => ({ ...row, updatedAt: patch.updatedAt }),
+        },
         buildSlice: (visibleRows) => {
           const next = tuiAgentRecordsSlice(visibleRows);
           return next.allIds.length === 0 ? EMPTY_TERMINAL_AGENTS_SLICE : next;
@@ -199,9 +241,12 @@ export function createTuiAgentRecordTable(
   return {
     current: () => table.current(),
     ingestSeq: () => table.ingestSeq(),
+    snapshotIncompleteSeq: () => table.snapshotIncompleteSeq(),
 
     applyRecords: (records, issuedAtSeq) =>
       published(table.applySnapshot(records, issuedAtSeq)),
+
+    applyTouches: (patches) => published(table.applyTouches(patches)),
 
     applyDelta(delta) {
       if (delta.kind === "tuiRemove") {
@@ -226,7 +271,53 @@ export function createTuiAgentRecordTable(
       // construction") was true at `@1.1` and is false at `@1.2`, whose whole
       // point is that `tuiUpsert` can carry a cross-host replica - the same
       // premise that {@link tuiAgentRowSupersedes} had to stop relying on.
-      return published(table.applyUpsert(delta.record));
+      //
+      // The SESSION FACET is the one thing this delta does not deliver and the
+      // table nonetheless holds: `ChatRecordDelta`'s `tuiUpsert` row is the
+      // `@1.2` one. `host.chatRecords.subscribe@1.4` DOES stamp the facet on
+      // that frame, and this client now parses `@1.4` rather than absorbing it
+      // under the `@1.3` schema, but carrying the value onto the delta is stage
+      // 2's (it is what advances the list stamp from a delta, and the facet
+      // rides the same plumbing). So: carry forward what the last ANSWER stated
+      // for this agent and admit ignorance when nothing has, exactly as the
+      // chat twin does for `docResident`. Stamping `null` instead would report
+      // a sleeping agent as unknown on every unrelated rename until the next
+      // snapshot; read by the FULL record identity, not off the published
+      // slice, for the reason that twin gives.
+      //
+      // Bounded to one poll interval, not to the session, and the two reasons
+      // are worth stating precisely because the obvious one is wrong.
+      //
+      // NOT "the write that produced this delta moved the host's list
+      // revision". Deltas are emitted on paths that move no counter at all -
+      // a bind replay re-emits every existing row through the registry's
+      // change observer - so that premise fails for exactly the frames a
+      // reader would test it against. What holds instead:
+      //
+      //  1. The bound comes from the underlying REGISTRY WRITE, not from this
+      //     delta. A reap moved the list revision when it happened, whether a
+      //     delta was emitted for it, lost, or replayed later - so the next
+      //     gated poll sees that move independently of this stream and answers
+      //     with a snapshot that states the facet.
+      //  2. This carry-forward is IDEMPOTENT with respect to the facet. It
+      //     writes `held.sessionState`, which is the value already held, so a
+      //     delta can never move the facet backwards - only fail to improve it.
+      //     A replayed or duplicated frame therefore introduces no staleness of
+      //     its own, whatever its `listRevision` says.
+      //
+      // (2) is what makes the deferral safe rather than merely bounded, and it
+      // is the half that does not survive stamping `null` here - which is the
+      // other reason not to.
+      const held = table.retainedRow(
+        ownerScopedRowKey(delta.record.ownerUserId, delta.record.tuiAgentId),
+      );
+      return published(
+        table.applyUpsert({
+          ...delta.record,
+          sessionState: held === null ? null : held.sessionState,
+          lastExit: held === null ? null : held.lastExit,
+        }),
+      );
     },
 
     republishForCurrentUser: () => published(table.republish()),

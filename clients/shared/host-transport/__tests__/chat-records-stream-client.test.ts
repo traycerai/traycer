@@ -27,6 +27,7 @@ import type {
   StreamConnectionStatus,
 } from "../i-stream-session";
 import {
+  CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING,
   ChatRecordsStreamClient,
   type ChatRecordsStreamDelta,
 } from "../chat-records-stream-client";
@@ -565,6 +566,113 @@ describe("ChatRecordsStreamClient", () => {
 
       expect(h.deltas).toEqual([]);
       h.client.close();
+    });
+  });
+
+  /**
+   * `@1.4` is registered in the protocol, so this client ADVERTISES it and a
+   * `@1.4` host negotiates it. The ladder used to read `minor >= 3`, which
+   * parsed those frames with the `@1.3` schema - a plain object that silently
+   * dropped both of the things the minor exists to carry. These pin the fix:
+   * one arm per minor, a drop for a minor with no arm, and the ceiling pinned
+   * to the registry so the NEXT minor cannot repeat it.
+   */
+  describe("the @1.4 stamped frames - one arm per minor, nothing absorbed", () => {
+    const listRevision = { epoch: "epoch-1", revision: 12 };
+
+    it("PARSES a @1.4 tuiUpsert's session facet instead of stripping it at the wire (the delta's own type still stops at @1.2)", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
+      const record = {
+        ...tuiRow({ tuiAgentId: "tui-a", revision: 9 }),
+        docResident: false,
+        origin: "registry" as const,
+        sessionState: "sleeping" as const,
+        lastExit: "reaped" as const,
+      };
+      h.session.emitFrame({
+        kind: "tuiUpsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        tuiAgentId: "tui-a",
+        revision: 9,
+        listRevision,
+        record,
+      });
+
+      expect(h.deltas).toHaveLength(1);
+      const delta = h.deltas[0];
+      if (delta.kind !== "tuiUpsert") throw new Error("expected tuiUpsert");
+      // ONE LAYER, named in the title because the finding this sits under is
+      // framed as "silently discarded" and a reader scanning names would
+      // otherwise take this for end-to-end. It is not: `TuiAgentRecordDelta`
+      // types the row down to `@1.2`, and `tui-agent-record-table.ts`'s
+      // `applyDelta` still overwrites the facet with the held one, which is
+      // stage 2's to change. What this pins is the half that was a WIRE defect
+      // - the `@1.3` schema stripping the keys off a `@1.4` frame, before any
+      // consumer could have had them - so the assertion reads the parsed
+      // object rather than a typed field.
+      expect(delta.record).toMatchObject({
+        sessionState: "sleeping",
+        lastExit: "reaped",
+      });
+      h.client.close();
+    });
+
+    it("validates listRevision rather than discarding it - a malformed one drops the frame", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
+      h.session.emitFrame({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        // `recordListEpochSchema` is `min(1)`: an empty epoch is
+        // unrepresentable, because two of them would compare equal and license
+        // the stale `unchanged` the field exists to prevent. Parsed with the
+        // `@1.3` schema this key is not merely accepted - it is STRIPPED, and
+        // the frame is delivered as though the host had never stamped it.
+        listRevision: { epoch: "", revision: 7 },
+        record: rowStreamV13({ chatId: "chat-a", revision: 7 }),
+      });
+
+      expect(h.deltas).toEqual([]);
+      h.client.close();
+    });
+
+    it("drops a minor above this build's ceiling instead of parsing it with the newest arm", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = {
+        major: 1,
+        minor: CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING + 1,
+      };
+      h.session.emitFrame({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        listRevision,
+        record: rowStreamV13({ chatId: "chat-a", revision: 7 }),
+      });
+
+      // Dropped, and the poll carries the table meanwhile - this class's
+      // declared degrade. The alternative is what `minor >= 3` did: succeed
+      // with the unknown minor's fields stripped, which has no symptom at all.
+      expect(h.deltas).toEqual([]);
+      h.client.close();
+    });
+
+    it("parses every minor the registry installs - the ceiling is not allowed to lag", () => {
+      // THE LOUD ARM. Registering a minor is an edit in the protocol package;
+      // negotiation derives `min(mine, theirs)` from the registry and never
+      // consults this client. Without this assertion a new minor is negotiated,
+      // parsed by the arm below it, and silently stripped - which is exactly
+      // how `@1.4` shipped ahead of its arm.
+      expect(CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING).toBe(
+        hostStreamRpcRegistry["host.chatRecords.subscribe"][1].latestMinor,
+      );
     });
   });
 

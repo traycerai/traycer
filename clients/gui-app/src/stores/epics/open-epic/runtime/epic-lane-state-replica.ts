@@ -489,6 +489,20 @@ export function createEpicLaneStateReplica(
           candidate.revision > held.revision,
         supersedesOnUpsert: (candidate, held) =>
           candidate.revision > held.revision,
+        /**
+         * No recency patch can reach this plane, and its rows have nowhere to
+         * put one if it did.
+         *
+         * Patches are the `unchanged` arm of a revision-gated LIST READ
+         * (`epic.listChatRecords@1.3` and its terminal twin); this head is fed
+         * by `epic.state.subscribe`'s typed rows, which have no such arm. And
+         * `HeldLaneRow` carries no recency pair: the timestamp a lane row has
+         * lives inside `row.record` and belongs to the artifact, thread or
+         * epic header it describes, not to the row - so writing a patch here
+         * would need a record kind to aim at that the patch does not name.
+         * See `RecordTablePlane.recency`.
+         */
+        recency: null,
         buildSlice: (visibleRows) => buildLaneSlices(visibleRows),
         slicesEq: laneSlicesEq,
         emptySlice: EMPTY_LANE_STATE_SLICES,

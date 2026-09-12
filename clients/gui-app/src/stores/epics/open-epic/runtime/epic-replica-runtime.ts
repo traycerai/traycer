@@ -33,7 +33,8 @@ import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runt
 import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -309,6 +310,11 @@ export interface EpicReplicaRuntime {
     records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
   ): void;
+  /**
+   * The `unchanged` arm's recency patches - see
+   * {@link EpicRecordsReplica.applyChatRecordTouches}.
+   */
+  applyChatRecordTouches(patches: readonly RecordListRecencyPatch[]): void;
   peekChatIngestSeq(): number;
   markChatRecordListAuthoritative(): void;
   /** Withdraw the record list's authority for a new viewer. */
@@ -316,9 +322,11 @@ export interface EpicReplicaRuntime {
   applyChatRecordDelta(delta: ChatRecordDelta): void;
   applyConfirmedChatMutation(mutation: ConfirmedChatMutation): void;
   applyTuiAgentRecords(
-    records: readonly TuiAgentRecordSummaryV12[],
+    records: readonly TuiAgentRecordSummaryV13[],
     issuedAtSeq: number | null,
   ): void;
+  /** The terminal twin of {@link EpicReplicaRuntime.applyChatRecordTouches}. */
+  applyTuiAgentRecordTouches(patches: readonly RecordListRecencyPatch[]): void;
   peekTuiAgentIngestSeq(): number;
   applyTuiAgentRecordDelta(delta: TuiAgentRecordDelta): void;
   republishRecordsForCurrentUser(): void;
@@ -1543,6 +1551,9 @@ export function createEpicReplicaRuntime(
     applyChatRecords: (recordRows, issuedAtSeq) => {
       records.applyChatRecords(recordRows, issuedAtSeq);
     },
+    applyChatRecordTouches: (patches) => {
+      records.applyChatRecordTouches(patches);
+    },
     peekChatIngestSeq: () => records.peekChatIngestSeq(),
     markChatRecordListNotAuthoritative: () => {
       records.markChatRecordListNotAuthoritative();
@@ -1558,6 +1569,9 @@ export function createEpicReplicaRuntime(
     },
     applyTuiAgentRecords: (recordRows, issuedAtSeq) => {
       records.applyTuiAgentRecords(recordRows, issuedAtSeq);
+    },
+    applyTuiAgentRecordTouches: (patches) => {
+      records.applyTuiAgentRecordTouches(patches);
     },
     peekTuiAgentIngestSeq: () => records.peekTuiAgentIngestSeq(),
     applyTuiAgentRecordDelta: (delta) => {

@@ -1,9 +1,15 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
+import type {
+  RecordListRecencyPatch,
+  RecordListStamp,
+} from "@traycer/protocol/host/epic/record-list-revision";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { useRecordListStamp } from "@/hooks/chats/use-record-list-stamp";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -43,6 +49,27 @@ interface ChatRecordListAnswer {
    */
   readonly chats: readonly ChatRecordSummaryV12[] | null;
   /**
+   * What the `unchanged` arm carried instead of rows: the recency facts a
+   * QUIET write moved since the stamp this request sent. Empty on the
+   * `snapshot` arm, whose rows already carry their own `updatedAt`.
+   *
+   * Held in the CACHE ENTRY rather than applied straight from `mapResponse`
+   * for the same reason the rows are: the applying effect is what knows
+   * whether there is a store to apply into, and a cached answer that has not
+   * reached one yet is re-offered when it appears.
+   */
+  readonly touched: readonly RecordListRecencyPatch[];
+  /**
+   * The list stamp this answer carried, sent back verbatim as the next
+   * dispatch's `knownRevision` - see {@link useRecordListStamp}.
+   *
+   * `null` is the honest answer from a host that has no revision to report (a
+   * `@1.2` peer, through the upgrade path), and it keeps this hook asking for
+   * a snapshot every tick, which is exactly the behaviour that predates
+   * `@1.3`.
+   */
+  readonly listStamp: RecordListStamp | null;
+  /**
    * Always this store's own counter, because the store GENERATION is part of
    * the cache key - see the `cacheKeyIdentity` this hook builds. An entry
    * therefore belongs to exactly one session, and a fence read from another
@@ -59,6 +86,21 @@ interface ChatRecordListAnswer {
    * stops carrying the generation.
    */
   readonly issuedAtSeq: number | null;
+  /**
+   * Where the store's INCOMPLETE-APPLY counter stood when this request was
+   * dispatched, read from the same store and at the same moment as
+   * {@link ChatRecordListAnswer.issuedAtSeq}.
+   *
+   * The two are one fence read from both ends. `issuedAtSeq` tells the STORE
+   * which rows this answer cannot have known about; this one tells the POLL
+   * whether the store ended up holding the rows the answer did carry - and so
+   * whether this answer's `listStamp` may be sent back as a claim about what
+   * this client holds. See `RecordListStampHold.hold`.
+   *
+   * `null` when no session existed to read at dispatch, which declines the hold:
+   * with no store there is no apply for the claim to be about.
+   */
+  readonly snapshotIncompleteSeqAtDispatch: number | null;
 }
 
 /**
@@ -113,13 +155,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
   // only we know it: the host would have to infer it from `epic.subscribe`'s
   // negotiated major, which this method's own version cannot see.
   //
-  // `knownRevision` is pinned to `null` - "I hold no list stamp" - so the host
-  // always answers with a full `snapshot`, which is exactly what it answered
-  // before `@1.3` existed. Sending the stamp this hook could hold is the
-  // revision-gated polling change, and it needs a dispatch-time request seam
-  // (`params` is both the query KEY and the wire payload today, and the stamp
-  // must vary per dispatch without changing the key), so it does not belong
-  // in a constant memo.
+  // `knownRevision: null` here is the QUERY KEY's value, not the payload's:
+  // the stamp is replaced per dispatch through `buildRequest` below, and it
+  // deliberately does not reach the key. A stamp in the key would mint a fresh
+  // cache entry on every tick the host's revision moved - so the poll would
+  // refetch from scratch forever and the gating it exists for would never
+  // fire - and one frozen into the key at mount would be stale by the second
+  // tick. `null` is also the truthful value for the one dispatch that really
+  // does hold nothing: the first one.
   const params = useMemo(
     () => ({
       epicId,
@@ -156,16 +199,46 @@ export function useEpicSyncChatRecords(epicId: string): void {
   // construction, so for a given `store` it is a constant, and a number needs
   // no referential stability to key a query.
   const fenceIdentity = store?.getState().ingestFenceIdentity ?? null;
+  // The serving host, read from the SESSION's own client - the same value
+  // `useHostQuery` puts in this query's key, and never `useAddressableHostId()`,
+  // which would answer for a host this session is not projecting.
+  const hostId = useReactiveHostReadiness(client).hostId;
+  // How the stamp learns that an apply was incomplete. A stable getter rather
+  // than the number itself: it is read at DISPATCH, and a value read at render
+  // would be the one from before the poll's own answer landed. `store` is the
+  // only input, and a new store is a new `fenceIdentity`, so the stamp seam this
+  // feeds keeps one identity across every tick of one session.
+  const readChatSnapshotIncompleteSeq = useCallback(
+    () => store?.getState().chatSnapshotIncompleteSeq ?? null,
+    [store],
+  );
+  // The revision-gating seam. Keyed on the same four facts the cache entry is
+  // (epic, viewer, host, store generation), so the stamp dies with the row set
+  // it describes - see {@link useRecordListStamp}.
+  const stamp = useRecordListStamp({
+    epicId,
+    viewerUserId,
+    hostId,
+    storeGeneration: fenceIdentity,
+    readSnapshotIncompleteSeq: readChatSnapshotIncompleteSeq,
+  });
   const query = useHostQueryWithResponseMap<
     HostRpcRegistry,
     "epic.listChatRecords",
     ChatRecordListAnswer,
-    { readonly seq: number } | null
+    {
+      readonly seq: number;
+      readonly snapshotIncompleteSeq: number;
+    } | null
   >({
     cacheKeyIdentity: [viewerUserId, fenceIdentity],
     client,
     method: "epic.listChatRecords",
     params,
+    // What this client holds, at the moment the request leaves. An older host
+    // never sees it at all: the request is projected onto the negotiated
+    // minor, and `@1.2`'s schema has no `knownRevision` to project it into.
+    buildRequest: (base) => ({ ...base, knownRevision: stamp.read() }),
     options: {
       enabled: epicId.length > 0 && viewerUserId.length > 0,
       staleTime: 10_000,
@@ -184,20 +257,31 @@ export function useEpicSyncChatRecords(epicId: string): void {
     // the store knows the answer could not have carried that row.
     captureRequestContext: () => {
       if (store === null) return null;
-      return { seq: store.getState().peekChatIngestSeq() };
+      const state = store.getState();
+      return {
+        seq: state.peekChatIngestSeq(),
+        // Read here, in the same statement as the fence, because the two are
+        // compared against each other's consequences - see
+        // `ChatRecordListAnswer.snapshotIncompleteSeqAtDispatch`.
+        snapshotIncompleteSeq: state.chatSnapshotIncompleteSeq,
+      };
     },
     mapResponse: ({ response, requestContext }) => {
       const context = requestContext ?? null;
       return {
-        // `unchanged` is UNREACHABLE while `knownRevision` is `null` above -
-        // the host emits that arm only when a stamp the caller SENT matched -
-        // and it maps to `null`, never to `[]`. An empty array is not the
+        // `unchanged` maps to `null`, never to `[]`. An empty array is not the
         // neutral value here: the store merges omissions against the dispatch
         // fence, so an empty answer RETRACTS every row that landed before it.
         // "Nothing changed" and "you have no chats" must not share a
         // representation.
         chats: response.kind === "snapshot" ? response.chats : null,
+        // The `snapshot` arm carries no patches by construction: its rows are
+        // the recency.
+        touched: response.kind === "unchanged" ? response.touched : [],
+        listStamp: response.listStamp,
         issuedAtSeq: context === null ? null : context.seq,
+        snapshotIncompleteSeqAtDispatch:
+          context === null ? null : context.snapshotIncompleteSeq,
       };
     },
   });
@@ -208,13 +292,36 @@ export function useEpicSyncChatRecords(epicId: string): void {
     (query.isError && query.error.code === "E_HOST_UNSUPPORTED");
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;
-    if (answer !== null && answer.chats !== null) {
-      // The fence is used as captured. It was read from THIS store, because
-      // the generation is in the cache key - see `ChatRecordListAnswer`.
-      store.getState().applyChatRecords(answer.chats, answer.issuedAtSeq);
+    if (answer !== null) {
+      if (answer.chats !== null) {
+        // The fence is used as captured. It was read from THIS store, because
+        // the generation is in the cache key - see `ChatRecordListAnswer`.
+        store.getState().applyChatRecords(answer.chats, answer.issuedAtSeq);
+      } else if (answer.touched.length > 0) {
+        // The `unchanged` arm. No fence: this answer carried no rows, so it
+        // authorizes no omission and the snapshot watermark stays where the
+        // last rows answer left it.
+        //
+        // Guarded on emptiness because that is the STEADY STATE of a quiet
+        // epic - `unchanged` with nothing touched, every 20s - and the apply
+        // crosses the runtime worker's command bridge. The table would gate it
+        // to nothing at the far end; not sending it costs one comparison.
+        store.getState().applyChatRecordTouches(answer.touched);
+      }
+      // AFTER the apply, and only for an answer that reached a store. The
+      // stamp is the host's record of what this client holds, and holding one
+      // for an answer that was never applied would license an `unchanged`
+      // reply about rows this store never received.
+      //
+      // Reaching a store is not the same as being taken whole by it: the apply
+      // above is a fire-and-forget worker command, and the request-time fence
+      // can hold rows back at the far end. So the dispatch-time
+      // incomplete-apply counter rides along, and the stamp seam drops the
+      // stamp if that counter has moved by the next dispatch.
+      stamp.hold(answer.listStamp, answer.snapshotIncompleteSeqAtDispatch);
     }
     store.getState().markChatRecordListAuthoritative();
-  }, [answer, recordListAuthoritative, store]);
+  }, [answer, recordListAuthoritative, stamp, store]);
 }
 
 /**

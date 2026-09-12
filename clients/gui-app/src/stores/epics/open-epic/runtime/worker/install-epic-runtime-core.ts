@@ -159,11 +159,15 @@ export function epicRuntimeCorePortSourceOf(
     readWriteCommandIntent: (intent) => readWriteCommandIntent(intent),
     applyChatRecords: (records, issuedAtSeq) =>
       runtime.applyChatRecords(records, issuedAtSeq),
+    applyChatRecordTouches: (patches) =>
+      runtime.applyChatRecordTouches(patches),
     applyChatRecordDelta: (delta) => runtime.applyChatRecordDelta(delta),
     applyConfirmedChatMutation: (mutation) =>
       runtime.applyConfirmedChatMutation(mutation),
     applyTuiAgentRecords: (records, issuedAtSeq) =>
       runtime.applyTuiAgentRecords(records, issuedAtSeq),
+    applyTuiAgentRecordTouches: (patches) =>
+      runtime.applyTuiAgentRecordTouches(patches),
     applyTuiAgentRecordDelta: (delta) =>
       runtime.applyTuiAgentRecordDelta(delta),
     markChatRecordListAuthoritative: () =>
