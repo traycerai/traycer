@@ -36,7 +36,7 @@ const FLOOR_INDEX = 0;
 
 export const TIER_BASE_SEATS = 12;
 export const TIER_SEAT_GROWTH = 2;
-const AISLE_EVERY = 12;
+export const AISLE_EVERY = 12;
 export const ROWS_PER_TIER = 3;
 const CONSOLE_WIDTH_TILES = 2;
 const MIN_SIDE_TILES = 2;
@@ -1273,10 +1273,6 @@ function buildWalkable(packing: Packing): boolean[][] {
       walkable[row][spine] = true;
     }
   }
-  blockTile(walkable, cols, rows, {
-    col: packing.podiumCol,
-    row: HQ_CHAIR_ROW,
-  });
   return walkable;
 }
 

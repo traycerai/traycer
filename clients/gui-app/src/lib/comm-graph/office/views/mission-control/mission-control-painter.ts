@@ -539,16 +539,7 @@ function fixtureTile(spot: OfficeErrandSpot): OfficeTilePos {
   ) {
     return spot.tile;
   }
-  if (spot.actionTile !== null && spot.kind !== "whiteboard") {
-    return spot.actionTile;
-  }
-  if (spot.kind === "pingpong" && spot.actionTile !== null) {
-    return spot.actionTile;
-  }
-  if (spot.kind === "whiteboard" && spot.actionTile !== null) {
-    return spot.actionTile;
-  }
-  return spot.tile;
+  return spot.actionTile ?? spot.tile;
 }
 
 function paintSpot(

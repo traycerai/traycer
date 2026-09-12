@@ -15,6 +15,7 @@ import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import type { OfficeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
+  AISLE_EVERY,
   frozenOf,
   isMissionControlFrozen,
   TIER_BASE_SEATS,
@@ -106,8 +107,8 @@ function aisleIndexOf(layout: OfficeLayout, id: string): number {
   if (
     index === 0 ||
     index === seats.length - 1 ||
-    index % 12 === 0 ||
-    index % 12 === 11
+    index % AISLE_EVERY === 0 ||
+    index % AISLE_EVERY === AISLE_EVERY - 1
   ) {
     return -1;
   }
@@ -884,6 +885,36 @@ class CountingSeatMap extends Map<string, OfficeSeat> {
       yield seat;
     }
   }
+
+  override *entries(): MapIterator<[string, OfficeSeat]> {
+    for (const entry of super.entries()) {
+      this.onVisit();
+      yield entry;
+    }
+  }
+
+  override *keys(): MapIterator<string> {
+    for (const key of super.keys()) {
+      this.onVisit();
+      yield key;
+    }
+  }
+
+  override [Symbol.iterator](): MapIterator<[string, OfficeSeat]> {
+    return this.entries();
+  }
+
+  override forEach(
+    callback: (
+      seat: OfficeSeat,
+      key: string,
+      map: Map<string, OfficeSeat>,
+    ) => void,
+  ): void {
+    for (const [key, seat] of this.entries()) {
+      callback(seat, key, this);
+    }
+  }
 }
 
 describe("mission-control cold-review findings", () => {
@@ -992,12 +1023,12 @@ describe("mission-control cold-review findings", () => {
           const index = rowSeats.findIndex(
             (seat) => seat.seatId === lead.seatId,
           );
-          const inGroup = index % 12;
+          const inGroup = index % AISLE_EVERY;
           if (
             index !== 0 &&
             index !== rowSeats.length - 1 &&
             inGroup !== 0 &&
-            inGroup !== 11
+            inGroup !== AISLE_EVERY - 1
           ) {
             bad.push(`${n}:${team.teamId}:${index}`);
           }
@@ -1167,6 +1198,48 @@ describe("mission-control cold-review findings", () => {
     visits = 0;
     scene.frame(1, { x: 16, y: 0, width: 1, height: 1 });
     expect(visits).toBe(0);
+  });
+
+  it("counts seat-map enumerations through values, entries, keys, forEach and iteration", () => {
+    const layout = planFresh(
+      makeTestEpic("one-team", 12, 1),
+      VIEWPORT_WIDE,
+    ).layout;
+    let visits = 0;
+    const seats = new CountingSeatMap(layout.seats, () => {
+      visits += 1;
+    });
+    const expected = layout.seats.size;
+
+    visits = 0;
+    for (const seat of seats.values()) {
+      void seat;
+    }
+    expect(visits).toBe(expected);
+
+    visits = 0;
+    for (const entry of seats.entries()) {
+      void entry;
+    }
+    expect(visits).toBe(expected);
+
+    visits = 0;
+    for (const key of seats.keys()) {
+      void key;
+    }
+    expect(visits).toBe(expected);
+
+    visits = 0;
+    seats.forEach((seat) => {
+      void seat;
+    });
+    expect(visits).toBe(expected);
+
+    visits = 0;
+    for (const pair of seats) {
+      void pair;
+    }
+    expect(visits).toBe(expected);
   });
 
   it("keeps a single-host floor hostless", () => {
