@@ -8,7 +8,14 @@ import {
 } from "@/components/home/data/landing-options";
 import { cn } from "@/lib/utils";
 import { Zap } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import {
+  STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+  useReducedMotion,
+  useStatusAnimation,
+} from "@/lib/animation/status-animation-clock";
 import {
   singleDigitLeaderDigitFor,
   usePickerReasoningLeaderForIndex,
@@ -234,6 +241,76 @@ const REASONING_LEVEL_LABEL_SIZER =
 // truncates inside the reserved width instead.
 const REASONING_LEVEL_LABEL_NAME = "absolute inset-0 truncate";
 
+/** One pass of the flowing band, back from the max end. */
+const REASONING_MAX_FLOW_PERIOD_MS = 1600;
+/**
+ * The band's travel, as a share of its OWN width (`w-2/5` of the track, so 100%
+ * here is 40% of the track). It starts fully past the right edge and ends fully
+ * past the left one, which is what makes the wrap invisible: at either end of a
+ * pass there is nothing of the band inside the track to jump.
+ */
+const REASONING_MAX_FLOW_START_PERCENT = 250;
+const REASONING_MAX_FLOW_TRAVEL_PERCENT = 350;
+
+/** Right to left, linear, wrapping once per period. */
+function reasoningMaxFlowOffsetPercent(elapsedMs: number): number {
+  const progress =
+    (elapsedMs % REASONING_MAX_FLOW_PERIOD_MS) / REASONING_MAX_FLOW_PERIOD_MS;
+  return (
+    REASONING_MAX_FLOW_START_PERCENT -
+    progress * REASONING_MAX_FLOW_TRAVEL_PERCENT
+  );
+}
+
+/**
+ * The max treatment's moving half: a soft band of the accent flowing back down
+ * the track, right to left, for as long as the highest level is selected. The
+ * static halo and tail say "this is the top"; the flow is what makes it read as
+ * live rather than as a colour someone chose.
+ *
+ * It rides the shared 25 Hz status clock and writes one inline `transform` per
+ * tick - no CSS `animation`, which for continuous motion costs a main-thread
+ * style recalc every display frame for as long as it runs (see
+ * `status-animation-clock.ts`). The one-shot bloom keeps its keyframes: a
+ * 640 ms animation that retires itself is exactly what that budget is for.
+ *
+ * Mounted only while the whole gate holds - the component's presence IS the
+ * subscription, so "stop flowing" is an unmount and never a paused writer. The
+ * clock's own reduced-motion and hidden-pane rules apply on top.
+ */
+function ReasoningMaxFlow() {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
+    element.style.transform = `translateX(${reasoningMaxFlowOffsetPercent(elapsedMs).toFixed(2)}%)`;
+  }, []);
+  // Back to the stylesheet's own resting position, with no inline style left
+  // behind to park a visible band at the left edge.
+  const clear = useCallback((element: HTMLSpanElement) => {
+    element.style.removeProperty("transform");
+  }, []);
+  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
+
+  return (
+    // The lane is mirrored in RTL rather than the band: the writer's
+    // percentages are physical, and flipping them about the TRACK's centre is
+    // the only place the reflection is the one intended - a `scale` on the band
+    // itself would mirror its travel about its own box, which sits at the left
+    // edge. The tail flips the same way one rule below it in `index.css`, so
+    // the flow still runs back from whichever end max is on.
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 rtl:-scale-x-100"
+    >
+      <span
+        ref={ref}
+        aria-hidden="true"
+        data-testid="model-reasoning-max-flow"
+        className="reasoning-effort-max-flow absolute inset-y-0 left-0 w-2/5"
+      />
+    </span>
+  );
+}
+
 /**
  * One stop per catalog level, in the catalog's own order and never sorted -
  * including a zero-effort level (`off` / `none`), which is the leftmost stop
@@ -267,6 +344,18 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
   // hook clears an invalidated cue; this is the second reading of the same
   // question, taken where the DOM is written.
   const cue = drawableMaxCue(maxCue, atMax);
+  // The flowing band's gate. Deliberately NOT the cue's: the cue is one
+  // arrival, retired the moment its animation ends, while the flow is the
+  // state of being at max - it runs for a picker OPENED at max, which
+  // celebrates nothing. What it shares with the cue is the presentation half
+  // (the two signals `PopoverContent` checks before rendering at all, plus the
+  // picker's own `visibleOpen`), because a writer ticking against a popover
+  // nobody can see is the one thing the shared clock must never accumulate.
+  const paneFocused = usePaneFocused();
+  const concealed = usePortalConcealed();
+  const reducedMotion = useReducedMotion();
+  const flowing =
+    atMax && open && !disabled && paneFocused && !concealed && !reducedMotion;
 
   const selectLevel = (index: number) => {
     const option = options.at(index);
@@ -370,6 +459,10 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
             data-testid="model-reasoning-max-tail"
             className="reasoning-effort-max-tail pointer-events-none absolute inset-0 rounded-full"
           />
+          {/* Inside the track, so the track's own `overflow-hidden` is what
+              clips the band at both ends; over the range and the tail, under
+              the stops and the thumb, which are the slider's later siblings. */}
+          {flowing ? <ReasoningMaxFlow /> : null}
         </SliderTrack>
         {/* Inset by half the thumb, which is where Radix keeps the thumb's own
             centre at the two ends (`getThumbInBoundsOffset`) - without it the

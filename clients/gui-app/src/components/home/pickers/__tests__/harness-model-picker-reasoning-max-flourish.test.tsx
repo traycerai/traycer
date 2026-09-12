@@ -19,28 +19,18 @@ import {
   stubSliderGeometry,
 } from "@/components/home/pickers/__tests__/slider-pointer-geometry";
 import { useReasoningMaxCue } from "@/components/home/pickers/use-reasoning-max-cue";
-import {
-  resetStatusAnimationClockForTests,
-  subscribeStatusAnimation,
-} from "@/lib/animation/status-animation-clock";
+import { resetStatusAnimationClockForTests } from "@/lib/animation/status-animation-clock";
 import {
   DEFAULT_COMPOSER_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
 
-// The clock is the seam the flourish must NOT touch: a partial mock keeps the
-// real reduced-motion reader while counting subscriptions to the shared 25 Hz
-// writer set (see the "starts no writer" case).
-vi.mock("@/lib/animation/status-animation-clock", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/animation/status-animation-clock")
-    >();
-  return {
-    ...actual,
-    subscribeStatusAnimation: vi.fn(actual.subscribeStatusAnimation),
-  };
-});
+// The shared clock is observed through what it actually does - the ONE
+// `setInterval` it holds while any writer is subscribed, and the inline style a
+// writer leaves on its element - rather than through a mocked
+// `subscribeStatusAnimation`. `useStatusAnimation` calls that function through
+// the module's own binding, so a mock of the export is never the thing it
+// reaches, and a test written against one asserts nothing.
 
 const LEVELS: ReadonlyArray<ReasoningLevelOption> = [
   { id: "off", label: "Off", description: null },
@@ -256,6 +246,41 @@ function endBloom(element: HTMLElement): void {
   fireAnimationEnd(element, "reasoning-max-bloom");
 }
 
+/**
+ * `prefers-reduced-motion` under the test's control, live: the clock reads the
+ * media query through `matchMedia` and honours a CHANGE while subscribed, so
+ * the stub has to be able to flip and notify rather than answer once.
+ */
+function stubReducedMotion(initial: boolean): {
+  readonly setMatches: (next: boolean) => void;
+  readonly fireChange: () => void;
+} {
+  let matches = initial;
+  const listeners = new Set<() => void>();
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    get matches(): boolean {
+      return query === "(prefers-reduced-motion: reduce)" ? matches : false;
+    },
+    media: query,
+    onchange: null,
+    addEventListener: (type: string, listener: () => void) => {
+      if (type === "change") listeners.add(listener);
+    },
+    removeEventListener: (type: string, listener: () => void) => {
+      if (type === "change") listeners.delete(listener);
+    },
+    dispatchEvent: () => false,
+  }));
+  return {
+    setMatches: (next) => {
+      matches = next;
+    },
+    fireChange: () => {
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
 /** Every user route ends here, which is the point of the acknowledgement path. */
 function select(...ids: ReadonlyArray<string>): void {
   act(() => {
@@ -266,7 +291,6 @@ function select(...ids: ReadonlyArray<string>): void {
 beforeEach(() => {
   seam = null;
   useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
-  vi.mocked(subscribeStatusAnimation).mockClear();
 });
 
 afterEach(() => {
@@ -629,36 +653,6 @@ describe("reasoning max-effort flourish", () => {
   });
 
   describe("reduced motion", () => {
-    function stubReducedMotion(initial: boolean): {
-      readonly setMatches: (next: boolean) => void;
-      readonly fireChange: () => void;
-    } {
-      let matches = initial;
-      const listeners = new Set<() => void>();
-      vi.stubGlobal("matchMedia", (query: string) => ({
-        get matches(): boolean {
-          return query === "(prefers-reduced-motion: reduce)" ? matches : false;
-        },
-        media: query,
-        onchange: null,
-        addEventListener: (type: string, listener: () => void) => {
-          if (type === "change") listeners.add(listener);
-        },
-        removeEventListener: (type: string, listener: () => void) => {
-          if (type === "change") listeners.delete(listener);
-        },
-        dispatchEvent: () => false,
-      }));
-      return {
-        setMatches: (next) => {
-          matches = next;
-        },
-        fireChange: () => {
-          for (const listener of listeners) listener();
-        },
-      };
-    }
-
     it("creates no cue while the preference is on", () => {
       stubReducedMotion(true);
       const { selections } = mount({ initial: "low" });
@@ -694,20 +688,224 @@ describe("reasoning max-effort flourish", () => {
     });
   });
 
+  // The continuous half of the treatment: a band flowing back down the track
+  // for as long as max is SELECTED, which is a different question from the
+  // one-shot bloom's "max was just arrived at".
+  describe("the flowing band", () => {
+    function flow(): HTMLElement | null {
+      return screen.queryByTestId("model-reasoning-max-flow");
+    }
+
+    function liveFlow(): HTMLElement {
+      const element = flow();
+      if (element === null) throw new Error("Expected a flowing band");
+      return element;
+    }
+
+    /** The band's travel, read back off the inline style the clock writes. */
+    function offsetPercent(element: HTMLElement): number {
+      const match = /translateX\((-?[\d.]+)%\)/.exec(element.style.transform);
+      if (match?.[1] === undefined) {
+        throw new Error(`No translateX in "${element.style.transform}"`);
+      }
+      return Number(match[1]);
+    }
+
+    function tick(times: number): void {
+      act(() => {
+        vi.advanceTimersByTime(40 * times);
+      });
+    }
+
+    function withFakeTimers(body: () => void): void {
+      vi.useFakeTimers();
+      try {
+        body();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it("runs while max is selected, including a picker opened at max", () => {
+      withFakeTimers(() => {
+        mount({ initial: "ultra" });
+
+        // No arrival, no bloom - and the flow runs anyway, because it says
+        // where the level IS rather than that it just moved.
+        expect(bloom()).toBeNull();
+        // Subscribed and already written, before the first tick.
+        expect(liveFlow().style.transform).toMatch(/^translateX\(-?[\d.]+%\)$/);
+        expect(vi.getTimerCount()).toBeGreaterThan(0);
+      });
+    });
+
+    it("is absent below max, and leaves with the selection", () => {
+      withFakeTimers(() => {
+        mount({ initial: "low" });
+        expect(flow()).toBeNull();
+        // Nothing at all runs for a level that is not the top one.
+        expect(vi.getTimerCount()).toBe(0);
+
+        select("ultra");
+        expect(flow()).not.toBeNull();
+
+        select("high");
+        expect(flow()).toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    });
+
+    it("stops for a closed picker, a defocused pane, concealment and disablement", () => {
+      const cases: ReadonlyArray<MountOverrides> = [
+        { open: false },
+        { paneVisible: false },
+        { concealed: true },
+        { disabled: true },
+      ];
+      for (const gate of cases) {
+        cleanup();
+        const { rerender } = mount({ initial: "ultra" });
+        expect(flow(), JSON.stringify(gate)).not.toBeNull();
+
+        rerender(gate);
+        expect(flow(), JSON.stringify(gate)).toBeNull();
+
+        // And it comes back when the gate does: the flow is a state, not a
+        // one-shot that a closed gate spends.
+        rerender({
+          open: true,
+          paneVisible: true,
+          concealed: false,
+          disabled: false,
+        });
+        expect(flow(), JSON.stringify(gate)).not.toBeNull();
+      }
+    });
+
+    it("draws nothing under the list control", () => {
+      useLayoutStore.setState({
+        composer: {
+          ...DEFAULT_COMPOSER_LAYOUT,
+          reasoningFooterControl: "list",
+        },
+      });
+      withFakeTimers(() => {
+        mount({ initial: "ultra" });
+
+        expect(flow()).toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    });
+
+    it("advances right to left, one wrap per period, and never runs an animation", () => {
+      withFakeTimers(() => {
+        mount({ initial: "ultra" });
+        const band = liveFlow();
+
+        // Written pre-paint at subscribe time, so the first frame is already
+        // off the right-hand end rather than parked at the left edge.
+        const start = offsetPercent(band);
+        expect(start).toBeGreaterThan(100);
+        expect(band.style.animation).toBe("");
+
+        let previous = start;
+        // 40 ticks of 40ms is exactly the 1600ms period.
+        for (let step = 1; step < 40; step += 1) {
+          tick(1);
+          const next = offsetPercent(band);
+          expect(next, `tick ${step}`).toBeLessThan(previous);
+          previous = next;
+        }
+        // Past the left-hand end by the time the pass is over.
+        expect(previous).toBeLessThan(0);
+
+        tick(1);
+        expect(offsetPercent(band)).toBe(start);
+        expect(band.style.animation).toBe("");
+      });
+    });
+
+    it("leaves no inline style behind when it stops", () => {
+      withFakeTimers(() => {
+        mount({ initial: "ultra" });
+        const band = liveFlow();
+        tick(3);
+        expect(band.style.transform).not.toBe("");
+
+        select("high");
+
+        expect(flow()).toBeNull();
+        expect(band.style.transform).toBe("");
+        expect(band.getAttribute("style")).toBe("");
+      });
+    });
+
+    it("unsubscribes from the shared clock, stopping it when it was the only writer", () => {
+      withFakeTimers(() => {
+        const { rerender } = mount({ initial: "ultra" });
+        tick(2);
+        expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+        rerender({ open: false });
+
+        // Not merely hidden: the writer is gone, and with no writer left the
+        // shared interval stops rather than ticking against a popover nobody
+        // can see.
+        expect(flow()).toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    });
+
+    it("keeps the static halo and tail but does not flow under reduced motion", () => {
+      stubReducedMotion(true);
+      mount({ initial: "ultra" });
+
+      expect(flow()).toBeNull();
+      // The still treatment is exactly what reduced motion keeps.
+      expect(slider().getAttribute("data-max")).toBe("true");
+      expect(screen.getByTestId("model-reasoning-max-tail")).toBeDefined();
+      expect(screen.getByTestId("model-reasoning-thumb-core")).toBeDefined();
+    });
+
+    it("stops flowing the moment the preference turns on, and resumes when it turns off", () => {
+      const media = stubReducedMotion(false);
+      mount({ initial: "ultra" });
+      const band = liveFlow();
+
+      act(() => {
+        media.setMatches(true);
+        media.fireChange();
+      });
+      expect(flow()).toBeNull();
+      expect(band.style.transform).toBe("");
+
+      act(() => {
+        media.setMatches(false);
+        media.fireChange();
+      });
+      expect(flow()).not.toBeNull();
+    });
+  });
+
   describe("cost and semantics", () => {
-    it("subscribes no shared-clock writer and schedules no frames of its own", () => {
+    it("keeps the bloom on its own keyframes, off the clock and off rAF", () => {
+      // The one-shot half costs nothing continuous: away from max nothing is
+      // subscribed, and the bloom itself is CSS that retires on `animationend`.
+      // (The flow's subscription while AT max is the section below.)
       const setInterval = vi.spyOn(window, "setInterval");
       const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame");
       try {
         mount({ initial: "low" });
+        expect(setInterval).not.toHaveBeenCalled();
 
         select("ultra");
         expect(bloom()).not.toBeNull();
         endBloom(screen.getByTestId("model-reasoning-max-bloom"));
 
-        expect(subscribeStatusAnimation).not.toHaveBeenCalled();
-        expect(setInterval).not.toHaveBeenCalled();
         expect(requestAnimationFrame).not.toHaveBeenCalled();
+        // One interval for the whole app's clock, not one per decoration -
+        // and the bloom itself adds none: it is finite CSS from start to end.
+        expect(setInterval.mock.calls.length).toBeLessThanOrEqual(1);
       } finally {
         setInterval.mockRestore();
         requestAnimationFrame.mockRestore();
@@ -753,6 +951,7 @@ describe("reasoning max-effort flourish", () => {
         "model-reasoning-thumb-core",
         "model-reasoning-max-tail",
         "model-reasoning-max-bloom",
+        "model-reasoning-max-flow",
       ]) {
         const decoration = screen.getByTestId(testId);
         expect(decoration.getAttribute("aria-hidden"), testId).toBe("true");

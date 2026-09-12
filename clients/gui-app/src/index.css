@@ -233,10 +233,20 @@
    under reduced motion and clears one in flight, so the display rule is a
    guard for the frames before React catches up rather than the whole
    mechanism. */
+/* The max treatment's four alphas in one place. They were first set for the
+   default themes, where `--primary` is a saturated accent; in a monochrome
+   theme the same percentages of a near-foreground grey read as "slightly
+   lighter track" and the highest level was reported as having no treatment at
+   all. So the static pair carries most of the raise (the halo and tail are
+   what a still frame has to say max with), and the flowing band sits above
+   both - it has to be legible while crossing a track the tail has already
+   lit. The dots and the thumb paint above all of this, so none of it is at
+   their expense. */
 .reasoning-effort-slider {
   --reasoning-max-ring: color-mix(in srgb, var(--primary) 50%, transparent);
-  --reasoning-max-halo: color-mix(in srgb, var(--primary) 22%, transparent);
-  --reasoning-max-tail: color-mix(in srgb, var(--primary) 60%, transparent);
+  --reasoning-max-halo: color-mix(in srgb, var(--primary) 40%, transparent);
+  --reasoning-max-tail: color-mix(in srgb, var(--primary) 85%, transparent);
+  --reasoning-max-flow: color-mix(in srgb, var(--primary) 95%, transparent);
 }
 
 .reasoning-effort-thumb-core {
@@ -272,6 +282,19 @@
   );
 }
 
+/* Feathered at both ends so the band has no edge to read as a moving object:
+   what travels is a brightening of the track, not a shape on it. The travel
+   itself is an inline `transform` written from the shared status clock - there
+   is deliberately no `animation` here. */
+.reasoning-effort-max-flow {
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--reasoning-max-flow) 50%,
+    transparent
+  );
+}
+
 .reasoning-effort-bloom {
   inset: -4px;
   border: 1px solid var(--primary);
@@ -297,14 +320,19 @@
   }
 }
 
+/* The component already withholds both under the preference; these are the
+   floor for a frame rendered before React reads it. The halo and the tail stay
+   - they carry no motion, and they are what still says "max". */
 @media (prefers-reduced-motion: reduce) {
-  .reasoning-effort-bloom {
+  .reasoning-effort-bloom,
+  .reasoning-effort-max-flow {
     display: none;
   }
 }
 
 @media (forced-colors: active) {
   .reasoning-effort-bloom,
+  .reasoning-effort-max-flow,
   .reasoning-effort-max-tail {
     display: none;
   }
