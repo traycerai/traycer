@@ -29,8 +29,7 @@ import { WorkspaceBranchLabel } from "./workspace-branch-label";
  */
 export function FolderBranchControl(props: {
   readonly item: WorkspaceRunItem;
-  /** Collision boundary for the source dropdown nested inside the form. When
-   * the rows live inside a popover (in-epic) this is that popover element. */
+  /** Portal target inside a modal, outside the workspace picker scroll area. */
   readonly boundaryEl: HTMLElement | null;
   readonly readOnly: boolean;
 }) {

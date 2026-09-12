@@ -52,6 +52,11 @@ export interface TuiAgentRecordTable {
   current(): TerminalAgentsSlice;
   ingestSeq(): number;
   /**
+   * The terminal twin of the chat table's - see
+   * {@link RecordTable.snapshotIncompleteSeq}.
+   */
+  snapshotIncompleteSeq(): number;
+  /**
    * The `@1.3` row, which is the `@1.2` row plus the SESSION FACET
    * (`sessionState` / `lastExit`). Typed up to it rather than left at `@1.2`
    * so the facet survives in the retained rows: a reaped agent reads as asleep
@@ -190,12 +195,13 @@ export function createTuiAgentRecordTable(
            * mentioned it (and {@link tuiAgentRowSupersedes} reads authority
            * first for exactly that reason), and blanking `sessionState` would
            * report a sleeping agent as unknown every time it emits a token.
+           *
+           * `revision` is untouched too, and that one is the shared table's
+           * rule rather than this plane's: it describes the row's CONTENT,
+           * which a quiet write did not move. See `record-table.ts`'s module
+           * doc.
            */
-          withPatch: (row, patch) => ({
-            ...row,
-            updatedAt: patch.updatedAt,
-            revision: patch.revision,
-          }),
+          withPatch: (row, patch) => ({ ...row, updatedAt: patch.updatedAt }),
         },
         buildSlice: (visibleRows) => {
           const next = tuiAgentRecordsSlice(visibleRows);
@@ -235,6 +241,7 @@ export function createTuiAgentRecordTable(
   return {
     current: () => table.current(),
     ingestSeq: () => table.ingestSeq(),
+    snapshotIncompleteSeq: () => table.snapshotIncompleteSeq(),
 
     applyRecords: (records, issuedAtSeq) =>
       published(table.applySnapshot(records, issuedAtSeq)),
@@ -270,7 +277,7 @@ export function createTuiAgentRecordTable(
       // A `@1.4` frame STATES it (`delta.sessionFacet`), and that statement is
       // the point of the minor: a spawn or a reap moves nothing else on the
       // row, so a client that ignored it would learn an agent had gone to
-      // sleep only at the next full snapshot - which under stage-2 gating is
+      // sleep only at the next full snapshot - which under revision gating is
       // only ever fetched on a genuine gap, i.e. possibly never.
       //
       // Below `@1.4` the frame has no field for it (`null`), which is NOT the
@@ -286,6 +293,20 @@ export function createTuiAgentRecordTable(
       // exactly these two questions, so the `??` picks the authority and the
       // reads below need no second branch. It short-circuits, so a `@1.4`
       // frame never looks the row up.
+      //
+      // On that carry-forward path the staleness is bounded to one poll
+      // interval rather than to the session, WHEN the delta came from a live
+      // write: that write moved the host's list revision, so the next gated
+      // poll cannot answer `unchanged` and the snapshot it answers states the
+      // facet. That is the same guarantee `snapshotIncompleteSeq` restores for
+      // a fence-skipped row - see `record-table.ts`.
+      //
+      // One producer escapes the bound today: a BIND REPLAY re-emits rows
+      // without incrementing the counter, so a carried-forward facet it
+      // refreshes nothing for can outlive a poll. It is the pre-`@1.4` path
+      // that is exposed - a `@1.4` replay states the facet outright - and the
+      // host-side counter fix is in flight. Until it lands, treat the bound as
+      // a property of live writes.
       const facet =
         delta.sessionFacet ??
         table.retainedRow(

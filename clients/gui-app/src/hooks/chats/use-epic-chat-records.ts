@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
@@ -12,6 +12,7 @@ import {
   useRecordListStreamStamp,
 } from "@/hooks/chats/use-record-list-stamp";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -88,6 +89,21 @@ interface ChatRecordListAnswer {
    * stops carrying the generation.
    */
   readonly issuedAtSeq: number | null;
+  /**
+   * Where the store's INCOMPLETE-APPLY counter stood when this request was
+   * dispatched, read from the same store and at the same moment as
+   * {@link ChatRecordListAnswer.issuedAtSeq}.
+   *
+   * The two are one fence read from both ends. `issuedAtSeq` tells the STORE
+   * which rows this answer cannot have known about; this one tells the POLL
+   * whether the store ended up holding the rows the answer did carry - and so
+   * whether this answer's `listStamp` may be sent back as a claim about what
+   * this client holds. See `RecordListStampHold.hold`.
+   *
+   * `null` when no session existed to read at dispatch, which declines the hold:
+   * with no store there is no apply for the claim to be about.
+   */
+  readonly snapshotIncompleteSeqAtDispatch: number | null;
 }
 
 /**
@@ -186,15 +202,37 @@ export function useEpicSyncChatRecords(epicId: string): void {
   // construction, so for a given `store` it is a constant, and a number needs
   // no referential stability to key a query.
   const fenceIdentity = store?.getState().ingestFenceIdentity ?? null;
-  // The revision-gating seam. Keyed on the same three facts the cache entry is
-  // (epic, viewer, store generation), so the stamp dies with the row set it
-  // describes - see {@link useRecordListStamp}.
-  const stamp = useRecordListStamp(epicId, viewerUserId, fenceIdentity);
+  // The serving host, read from the SESSION's own client - the same value
+  // `useHostQuery` puts in this query's key, and never `useAddressableHostId()`,
+  // which would answer for a host this session is not projecting.
+  const hostId = useReactiveHostReadiness(client).hostId;
+  // How the stamp learns that an apply was incomplete. A stable getter rather
+  // than the number itself: it is read at DISPATCH, and a value read at render
+  // would be the one from before the poll's own answer landed. `store` is the
+  // only input, and a new store is a new `fenceIdentity`, so the stamp seam this
+  // feeds keeps one identity across every tick of one session.
+  const readChatSnapshotIncompleteSeq = useCallback(
+    () => store?.getState().chatSnapshotIncompleteSeq ?? null,
+    [store],
+  );
+  // The revision-gating seam. Keyed on the same four facts the cache entry is
+  // (epic, viewer, host, store generation), so the stamp dies with the row set
+  // it describes - see {@link useRecordListStamp}.
+  const stamp = useRecordListStamp({
+    epicId,
+    viewerUserId,
+    hostId,
+    storeGeneration: fenceIdentity,
+    readSnapshotIncompleteSeq: readChatSnapshotIncompleteSeq,
+  });
   const query = useHostQueryWithResponseMap<
     HostRpcRegistry,
     "epic.listChatRecords",
     ChatRecordListAnswer,
-    { readonly seq: number } | null
+    {
+      readonly seq: number;
+      readonly snapshotIncompleteSeq: number;
+    } | null
   >({
     cacheKeyIdentity: [viewerUserId, fenceIdentity],
     client,
@@ -222,7 +260,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
     // the store knows the answer could not have carried that row.
     captureRequestContext: () => {
       if (store === null) return null;
-      return { seq: store.getState().peekChatIngestSeq() };
+      const state = store.getState();
+      return {
+        seq: state.peekChatIngestSeq(),
+        // Read here, in the same statement as the fence, because the two are
+        // compared against each other's consequences - see
+        // `ChatRecordListAnswer.snapshotIncompleteSeqAtDispatch`.
+        snapshotIncompleteSeq: state.chatSnapshotIncompleteSeq,
+      };
     },
     mapResponse: ({ response, requestContext }) => {
       const context = requestContext ?? null;
@@ -238,6 +283,8 @@ export function useEpicSyncChatRecords(epicId: string): void {
         touched: response.kind === "unchanged" ? response.touched : [],
         listStamp: response.listStamp,
         issuedAtSeq: context === null ? null : context.seq,
+        snapshotIncompleteSeqAtDispatch:
+          context === null ? null : context.snapshotIncompleteSeq,
       };
     },
   });
@@ -274,7 +321,13 @@ export function useEpicSyncChatRecords(epicId: string): void {
       // stamp is the host's record of what this client holds, and holding one
       // for an answer that was never applied would license an `unchanged`
       // reply about rows this store never received.
-      stamp.hold(answer.listStamp);
+      //
+      // Reaching a store is not the same as being taken whole by it: the apply
+      // above is a fire-and-forget worker command, and the request-time fence
+      // can hold rows back at the far end. So the dispatch-time
+      // incomplete-apply counter rides along, and the stamp seam drops the
+      // stamp if that counter has moved by the next dispatch.
+      stamp.hold(answer.listStamp, answer.snapshotIncompleteSeqAtDispatch);
     }
     store.getState().markChatRecordListAuthoritative();
   }, [answer, recordListAuthoritative, stamp, store]);

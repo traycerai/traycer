@@ -17,17 +17,85 @@ export interface RecordListStampHold {
    */
   readonly read: () => RecordListStamp | null;
   /**
-   * Hold what an answer's `listStamp` carried, verbatim.
+   * Hold what an answer's `listStamp` carried, along with where the store's
+   * incomplete-apply counter stood when that answer was DISPATCHED.
    *
-   * Callers must call this only for an answer they APPLIED. The stamp is the
-   * host's record of what this client holds, so holding one whose rows or
-   * recency patches never reached the store would make the host answer
-   * `unchanged` about a change the store never saw - and equality-only
-   * comparison leaves nothing to detect that with. `null` is a legitimate
-   * value to hold: it is what a host with no revision to report answers, and
-   * it asks for a snapshot next time.
+   * Callers must call this only for an answer they routed to a store. That
+   * alone is not proof the store took it, which is why the second argument
+   * exists: the apply crosses a fire-and-forget command bridge and the
+   * request-time fence can hold rows back at the far end, long after this
+   * returns. So the stamp is held provisionally and {@link read} re-checks the
+   * counter at the next dispatch - if it moved, this answer (or one after it)
+   * was applied incompletely and the stamp is dropped.
+   *
+   * The counter is captured at DISPATCH rather than compared at hold, because at
+   * hold time the apply this stamp belongs to has not necessarily reached the
+   * worker, let alone published its result. Binding it to the dispatch makes the
+   * comparison correct in every interleaving: an incomplete apply's counter move
+   * is always later than the dispatch of the answer that caused it, and later
+   * than the dispatch of anything that raced ahead of the publish - so every
+   * stamp from that window is dropped, and the first stamp captured after the
+   * move survives.
+   *
+   * `null` for the stamp is a legitimate value to hold: it is what a host with
+   * no revision to report answers, and it asks for a snapshot next time. `null`
+   * for the counter is not a value at all - it means there was no store to read
+   * at dispatch - and declines the hold outright.
    */
-  readonly hold: (stamp: RecordListStamp | null) => void;
+  readonly hold: (
+    stamp: RecordListStamp | null,
+    snapshotIncompleteSeqAtDispatch: number | null,
+  ) => void;
+  /**
+   * Move the held stamp forward with NO dispatch behind it - what a push
+   * delta's immediate successor does.
+   *
+   * Separate from {@link hold} rather than `hold(next, <some counter>)`,
+   * because there is no dispatch here to bind a counter to and neither
+   * argument a caller could pass is right. `null` declines the hold and costs
+   * a snapshot on every delta, which is the entire saving. Re-reading the
+   * counter binds the stamp to NOW rather than to the dispatch that produced
+   * the rows - so a stamp already invalidated by an incomplete apply would be
+   * re-issued a clean binding, which is the hole {@link hold}'s dispatch
+   * capture exists to close.
+   *
+   * The right answer is the binding the stamp ALREADY carries - the row set is
+   * the one that dispatch produced plus this delta - so this preserves it and
+   * changes only the revision.
+   *
+   * It re-checks that binding first and declines when nothing valid is held.
+   * Today's only caller reads {@link read} immediately before (it needs the
+   * held revision to recognise the successor at all), which makes the check
+   * redundant FOR THAT CALLER and equivalent to re-reading the counter. It is
+   * kept so the guarantee is this function's own rather than a property of
+   * one call site: the laundering above is what a caller without that read
+   * would otherwise get.
+   */
+  readonly advance: (stamp: RecordListStamp) => void;
+}
+
+/**
+ * What one plane's stamp holder needs. An object rather than positional
+ * arguments: four of the five are strings/numbers whose order no reader could
+ * verify at a call site, and the two hooks that call this are the two places
+ * that must not disagree about them.
+ */
+export interface RecordListStampInputs {
+  readonly epicId: string;
+  readonly viewerUserId: string;
+  /** The SERVING host - what `useHostQuery` keys this plane's cache entry on. */
+  readonly hostId: string | null;
+  /** `OpenEpicState.ingestFenceIdentity`, or `null` with no session. */
+  readonly storeGeneration: number | null;
+  /**
+   * The store's incomplete-apply counter for THIS plane, read live - see the
+   * section below, and {@link RecordListStampHold.hold}.
+   *
+   * A getter rather than the number, and it must be referentially stable across
+   * the ticks of one session (the hooks wrap it in `useCallback` over `store`),
+   * because the holder it produces is a dependency of the applying effect.
+   */
+  readonly readSnapshotIncompleteSeq: () => number | null;
 }
 
 /**
@@ -52,26 +120,48 @@ export interface RecordListStampHold {
  * A stamp describes a specific client-side ROW SET, not a point in time, so it
  * is worthless - and actively dangerous - the moment that row set is replaced:
  * the host would answer `unchanged` to a client whose rows are gone, and the
- * comparison is equality-only, with nothing to notice the gap. The three
- * things that can replace it are the three identity inputs:
+ * comparison is equality-only, with nothing to notice the gap. The four things
+ * that can replace it are the four identity inputs:
  *
  *  - `storeGeneration` (`OpenEpicState.ingestFenceIdentity`) is minted once per
  *    store construction, so an epic REOPEN - and renderer parking, which
  *    releases the session and rebuilds it on show - changes it and the next
  *    dispatch asks for a snapshot;
  *  - `viewerUserId`, because the answer is one identity's own rows;
- *  - `epicId`, because one hook instance can be pointed at a different epic.
+ *  - `epicId`, because one hook instance can be pointed at a different epic;
+ *  - `hostId`, because the stamp is one host's own list revision and means
+ *    nothing to another. Carried here rather than left to the session: the
+ *    cache entry this stamp tracks is keyed on the serving host
+ *    (`useHostQuery`'s own key), and `EpicSessionProvider` releasing the
+ *    session on a host change - which mints a fresh generation - is a real
+ *    guarantee that lives in another file and nothing pins. Keying on it
+ *    directly makes the claim above self-evident instead of transitive.
  *
  * The comparison is made at READ and at HOLD rather than by an effect, so a
  * dispatch that raced the change cannot send the superseded stamp: an answer
  * issued for the old identity can only land in the old cache entry, which no
  * longer has an observer.
+ *
+ * ## What else drops it: an incomplete apply
+ *
+ * Identity covers a row set being REPLACED. It says nothing about a row set
+ * that was never fully received, which the request-time fence in
+ * `record-table.ts` produces routinely (one push delta racing one in-flight
+ * poll). `readSnapshotIncompleteSeq` is the store's count of those, and a stamp
+ * whose dispatch predates a move in it is dropped - see {@link hold}. That is
+ * what keeps the "next poll repairs it" promise the fence's own comment makes,
+ * now that a poll can answer `unchanged`.
  */
 export function useRecordListStamp(
-  epicId: string,
-  viewerUserId: string,
-  storeGeneration: number | null,
+  inputs: RecordListStampInputs,
 ): RecordListStampHold {
+  const {
+    epicId,
+    viewerUserId,
+    hostId,
+    storeGeneration,
+    readSnapshotIncompleteSeq,
+  } = inputs;
   // `sessionKeyOf` rather than a separator join, for the reason
   // `ownerScopedRowKey` gives: it is length-prefixed, so it reserves no
   // character and no pair of inputs can compose to the same key. `null` and
@@ -80,22 +170,55 @@ export function useRecordListStamp(
   const identity = sessionKeyOf([
     epicId,
     viewerUserId,
+    hostId ?? "no-host",
     storeGeneration === null ? "no-store" : String(storeGeneration),
   ]);
   const held = useRef<{
     readonly identity: string;
     readonly stamp: RecordListStamp | null;
-  }>({ identity, stamp: null });
-  return useMemo(
-    () => ({
-      read: () =>
-        held.current.identity === identity ? held.current.stamp : null,
-      hold: (stamp: RecordListStamp | null) => {
-        held.current = { identity, stamp };
+    readonly snapshotIncompleteSeq: number | null;
+  }>({ identity, stamp: null, snapshotIncompleteSeq: null });
+  return useMemo(() => {
+    // The held entry when it may still be used, `null` when it may not. Three
+    // ways it may not, and `read` and `advance` owe the same answer to all
+    // three - which is why this is one function rather than a guard repeated
+    // at each of them.
+    const validHeld = (): {
+      readonly identity: string;
+      readonly stamp: RecordListStamp | null;
+      readonly snapshotIncompleteSeq: number | null;
+    } | null => {
+      const current = held.current;
+      if (current.identity !== identity) return null;
+      // Never held for a real dispatch, so there is nothing to compare and
+      // nothing to send.
+      if (current.snapshotIncompleteSeq === null) return null;
+      // The store applied something incompletely since this stamp's request
+      // left. Whatever the host thinks this client holds, it does not.
+      if (readSnapshotIncompleteSeq() !== current.snapshotIncompleteSeq) {
+        return null;
+      }
+      return current;
+    };
+    return {
+      read: () => validHeld()?.stamp ?? null,
+      hold: (
+        stamp: RecordListStamp | null,
+        snapshotIncompleteSeqAtDispatch: number | null,
+      ) => {
+        held.current = {
+          identity,
+          stamp,
+          snapshotIncompleteSeq: snapshotIncompleteSeqAtDispatch,
+        };
       },
-    }),
-    [identity],
-  );
+      advance: (stamp: RecordListStamp) => {
+        const current = validHeld();
+        if (current === null) return;
+        held.current = { ...current, stamp };
+      },
+    };
+  }, [identity, readSnapshotIncompleteSeq]);
 }
 
 /**
@@ -177,11 +300,15 @@ export function useRecordListStreamStamp(
         ) {
           // `touchRevision` rides through untouched: a delta reports a list
           // change, never a quiet write, so the recency watermark this client
-          // holds is still exactly where the last answer left it.
-          stamp.hold({ ...currentStamp, revision: listRevision.revision });
+          // holds is still exactly where the last answer left it. `advance`
+          // rather than `hold`, so the incomplete-apply binding this stamp
+          // came with survives the move - see {@link RecordListStampHold}.
+          stamp.advance({ ...currentStamp, revision: listRevision.revision });
           return;
         }
-        stamp.hold(null);
+        // Dropped. A `null` counter is the decline: the next `read` finds
+        // nothing held for a dispatch and asks for a snapshot.
+        stamp.hold(null, null);
         void refetchRef.current();
       }),
     [epicId, stamp],

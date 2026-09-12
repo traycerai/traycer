@@ -119,18 +119,36 @@ export function snapshotVideoFrameIntoPeekCache(
   // The placeholder renders this at opacity-30/grayscale/object-contain, so
   // native resolution buys nothing and costs a ~16MiB RGBA buffer plus a
   // synchronous `toDataURL` on the main thread during unmount.
+  const logicalWidth = Number(video.dataset.viewportWidth);
+  const logicalHeight = Number(video.dataset.viewportHeight);
+  const aspect =
+    logicalWidth > 0 && logicalHeight > 0
+      ? logicalWidth / logicalHeight
+      : video.videoWidth / video.videoHeight;
+  const cropWidth = Math.min(video.videoWidth, video.videoHeight * aspect);
+  const cropHeight = Math.min(video.videoHeight, video.videoWidth / aspect);
   const scale = Math.min(
     1,
-    VIDEO_SNAPSHOT_MAX_EDGE_PX / Math.max(video.videoWidth, video.videoHeight),
+    VIDEO_SNAPSHOT_MAX_EDGE_PX / Math.max(cropWidth, cropHeight),
   );
   const canvas = document.createElement("canvas");
   // Clamped: an extreme aspect ratio can round a scaled axis to 0, and
   // `toDataURL` on a zero-dimension canvas throws inside this unmount path.
-  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.width = Math.max(1, Math.round(cropWidth * scale));
+  canvas.height = Math.max(1, Math.round(cropHeight * scale));
   const context = canvas.getContext("2d");
   if (context === null) return;
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  context.drawImage(
+    video,
+    0,
+    0,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
   retainLastFrame(key, {
     src: canvas.toDataURL("image/jpeg", VIDEO_SNAPSHOT_JPEG_QUALITY),
     sequence: -1, // never read back; the dormant placeholder only reads `.src`.

@@ -70,7 +70,12 @@ describe("<AppearanceSettingsPanel /> zoom control", () => {
     const bridge = zoomState.bridge;
     renderWithQueryClient(<AppearanceSettingsPanel />);
 
-    expect(await screen.findByText("100%")).toBeTruthy();
+    const zoomSelect = await screen.findByRole("combobox", {
+      name: "Display zoom",
+    });
+    await waitFor(() => {
+      expect(zoomSelect.textContent).toContain("100%");
+    });
     await waitFor(() => {
       expect(bridge?.listenerCount()).toBe(1);
     });
@@ -80,7 +85,9 @@ describe("<AppearanceSettingsPanel /> zoom control", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("125%")).toBeTruthy();
+      expect(
+        screen.getByRole("combobox", { name: "Display zoom" }).textContent,
+      ).toContain("125%");
     });
   });
 

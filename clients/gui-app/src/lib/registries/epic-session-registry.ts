@@ -235,6 +235,11 @@ export function getOpenEpicRegistry(): OpenEpicSessionRegistry {
   return registry;
 }
 
+export function getEpicSessionHostId(epicId: string): string | null {
+  const handle = registry.peek(epicId);
+  return handle === null ? null : getEpicSessionHandleHostId(handle);
+}
+
 const EMPTY_LIVE_CHAT_EPIC_IDS: Readonly<Record<string, string>> = {};
 const EMPTY_LOCAL_HOMED_EPIC_IDS: ReadonlySet<string> = new Set();
 

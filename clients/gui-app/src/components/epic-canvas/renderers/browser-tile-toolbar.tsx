@@ -1,4 +1,4 @@
-import { useState, type ComponentType } from "react";
+import { useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -7,14 +7,12 @@ import {
   EllipsisVertical,
   ExternalLink,
   Minus,
-  Monitor,
+  MonitorSmartphone,
   PictureInPicture2,
   Plus,
   RotateCcw,
   RotateCw,
   SquareMousePointer,
-  Smartphone,
-  Tablet,
   VenetianMask,
 } from "lucide-react";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
@@ -39,8 +37,6 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -54,7 +50,6 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
 
 const BROWSER_PRIVATE_SESSION_SHIELD_COPY = {
@@ -68,41 +63,6 @@ export interface BrowserPictureInPictureControl {
   readonly convert: () => void;
 }
 
-const BROWSER_VIEWPORT_PRESETS: ReadonlyArray<{
-  readonly id: BrowserViewViewportPresetId;
-  readonly label: string;
-  readonly description: string;
-  readonly Icon: ComponentType<{
-    readonly className?: string;
-    readonly "aria-hidden"?: boolean;
-  }>;
-}> = [
-  {
-    id: "responsive",
-    label: "Responsive",
-    description: "Fill tile",
-    Icon: Monitor,
-  },
-  {
-    id: "mobile",
-    label: "Mobile",
-    description: "390 x 844",
-    Icon: Smartphone,
-  },
-  {
-    id: "tablet",
-    label: "Tablet",
-    description: "820 x 1180",
-    Icon: Tablet,
-  },
-  {
-    id: "desktop",
-    label: "Desktop",
-    description: "1440 x 900",
-    Icon: Monitor,
-  },
-];
-
 export function BrowserTileToolbar(props: {
   readonly controller: TileController;
   readonly pictureInPicture: BrowserPictureInPictureControl | null;
@@ -114,11 +74,9 @@ export function BrowserTileToolbar(props: {
     capabilities.back || capabilities.forward || capabilities.reload;
   const showAddress = capabilities.navigate;
   const showAdvanced =
-    capabilities.zoom ||
-    capabilities.viewportPreset ||
-    capabilities.devtools ||
-    capabilities.siteInfo;
+    capabilities.zoom || capabilities.devtools || capabilities.siteInfo;
   const showTrailing =
+    controller.viewport !== null ||
     capabilities.annotate ||
     props.pictureInPicture !== null ||
     controller.profile === "isolated" ||
@@ -174,6 +132,7 @@ export function BrowserTileToolbarCompact(props: {
           {url === "" ? "New tab" : url}
         </div>
       )}
+      <BrowserResponsiveToggle controller={props.controller} />
       {props.readOnly ? (
         <Badge variant="outline" className="shrink-0">
           View only
@@ -341,6 +300,7 @@ function BrowserTileToolbarTrailing(props: {
   const clearSite = browserClearSiteAction(controller);
   return (
     <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
+      <BrowserResponsiveToggle controller={controller} />
       {controller.profile === "isolated" ? (
         <BrowserPrivateSessionShield />
       ) : null}
@@ -350,10 +310,7 @@ function BrowserTileToolbarTrailing(props: {
       {props.pictureInPicture === null ? null : (
         <BrowserPictureInPictureButton control={props.pictureInPicture} />
       )}
-      {capabilities.zoom ||
-      capabilities.viewportPreset ||
-      capabilities.devtools ||
-      capabilities.siteInfo ? (
+      {capabilities.zoom || capabilities.devtools || capabilities.siteInfo ? (
         <BrowserMoreMenu
           controller={controller}
           clearSite={clearSite}
@@ -475,13 +432,6 @@ function BrowserMoreMenu(props: {
         align="end"
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto"
       >
-        {capabilities.viewportPreset ? (
-          <BrowserViewportPresetMenu
-            value={controller.viewportPreset}
-            disabled={controller.disabled}
-            onChange={controller.onViewportPresetChange}
-          />
-        ) : null}
         {capabilities.zoom ? (
           <BrowserZoomControls controller={controller} />
         ) : null}
@@ -629,63 +579,6 @@ function BrowserAnnotateToggle(props: {
   );
 }
 
-function BrowserViewportPresetMenu(props: {
-  readonly value: BrowserViewViewportPresetId;
-  readonly disabled: boolean;
-  readonly onChange: (preset: BrowserViewViewportPresetId) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const current =
-    BROWSER_VIEWPORT_PRESETS.find((preset) => preset.id === props.value) ??
-    BROWSER_VIEWPORT_PRESETS[0];
-  return (
-    <DropdownMenuSub open={open} onOpenChange={setOpen}>
-      <DropdownMenuSubTrigger
-        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
-        disabled={props.disabled}
-        onClick={() => setOpen(true)}
-      >
-        <span className="min-w-0 truncate">Viewport</span>
-        <span className="min-w-0 truncate text-end text-ui-xs text-muted-foreground group-data-open:text-accent-foreground">
-          {current.label}
-        </span>
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent
-        sideOffset={8}
-        alignOffset={-4}
-        className="w-[min(80vw,13rem)] min-w-0"
-      >
-        <DropdownMenuRadioGroup value={props.value}>
-          {BROWSER_VIEWPORT_PRESETS.map((preset) => {
-            const Icon = preset.Icon;
-            return (
-              <DropdownMenuRadioItem
-                key={preset.id}
-                value={preset.id}
-                className="gap-2"
-                onSelect={(event) => {
-                  event.preventDefault();
-                  props.onChange(preset.id);
-                }}
-              >
-                <Icon className="size-4" aria-hidden />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-ui-sm">
-                    {preset.label}
-                  </span>
-                  <span className="block truncate text-ui-xs text-muted-foreground">
-                    {preset.description}
-                  </span>
-                </span>
-              </DropdownMenuRadioItem>
-            );
-          })}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
-}
-
 function BrowserSiteInfoMenu(props: { readonly url: string }) {
   const [open, setOpen] = useState(false);
   const isWebOrigin = isWebOriginUrl(props.url);
@@ -737,4 +630,35 @@ function isWebOriginUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+function BrowserResponsiveToggle({
+  controller,
+}: {
+  readonly controller: TileController;
+}) {
+  const viewport = controller.viewport;
+  if (viewport === null) return null;
+  const { setTrigger } = viewport;
+  return (
+    <TooltipWrapper
+      label="Responsive viewport"
+      side="bottom"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <Button
+        ref={setTrigger}
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Responsive viewport"
+        aria-expanded={viewport.expanded}
+        disabled={viewport.disabled}
+        onClick={viewport.open}
+      >
+        <MonitorSmartphone />
+      </Button>
+    </TooltipWrapper>
+  );
 }

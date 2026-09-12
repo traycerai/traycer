@@ -125,12 +125,18 @@ export type TuiAgentRecordDelta =
     };
 
 /**
- * Everything `host.chatRecords.subscribe@1.4` can deliver. An older host
- * negotiates down and simply never sends what its minor did not have: @1.0
- * omits the terminal-agent kinds entirely, @1.1 sends them for its OWN rows
- * only and never for a cross-host replica, @1.0-@1.2 carry no `head` on
- * the chat `upsert` row, and @1.0-@1.3 carry neither the list revision nor
- * the session facet.
+ * Everything `host.chatRecords.subscribe@1.4` can deliver, AS THIS CLIENT
+ * NAMES IT - which is now all of it. An older host negotiates down and simply
+ * never sends what its minor did not have: @1.0 omits the terminal-agent kinds
+ * entirely, @1.1 sends them for its OWN rows only and never for a cross-host
+ * replica, @1.0-@1.2 carry no `head` on the chat `upsert` row, and @1.0-@1.3
+ * carry neither the list revision nor the session facet.
+ *
+ * The `@1.4` additions travel under their own names rather than as unnamed
+ * data: `listRevision` beside the delta on {@link ChatRecordsStreamCallbacks}
+ * (it is a fact about the envelope, not the record) and the session facet on
+ * `tuiUpsert`'s {@link TuiAgentRecordDelta.sessionFacet} (it needs the third
+ * answer - NOT STATED - that the row alone cannot give).
  */
 export type ChatRecordsStreamDelta = ChatRecordDelta | TuiAgentRecordDelta;
 
@@ -224,6 +230,12 @@ export interface ChatRecordsStreamClientOptions {
 /**
  * A frame in whichever frozen shape its minor promised.
  *
+ * A UNION rather than the `@1.3` type every arm once resolved to. That older
+ * shape was a TYPE ceiling and not a parse one - `@1.4` only ADDS, so a `@1.4`
+ * frame satisfies the `@1.3` type and its additions rode along as data this
+ * file did not name - but a ceiling is only tenable while nothing here reads
+ * the additions, and the accessors below now do.
+ *
  * The two sets are read through ONE switch rather than normalized onto one of
  * them, because neither direction is honest: promoting a `@1.3` frame to `@1.4`
  * would have to invent a `listRevision` (and the whole point of that stamp is
@@ -285,6 +297,22 @@ function parseV11Frame(envelope: StreamFrameEnvelope): ParsedFrame {
   };
 }
 
+/**
+ * The newest `host.chatRecords.subscribe` minor this client has a parse arm
+ * for.
+ *
+ * Exported for ONE purpose: the test pins it against
+ * `hostStreamRpcRegistry["host.chatRecords.subscribe"][1].latestMinor`, so
+ * registering a minor without adding an arm here fails loudly. That pin is the
+ * only thing that can catch it. Registering a minor is an edit in another
+ * package, `prepareStreamSubscribeRequest` declares `min(mine, theirs)` off the
+ * registry with no reference to this file, and a `>=` ladder answers for
+ * every minor above its top arm without anybody choosing that - which is
+ * exactly how `@1.4` came to be negotiated and then parsed as `@1.3`, silently
+ * discarding the list revision and the session facet the minor exists to carry.
+ */
+export const CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING = 4;
+
 function parseNegotiatedFrame(
   negotiated: SchemaVersion | null,
   envelope: StreamFrameEnvelope,
@@ -292,13 +320,26 @@ function parseNegotiatedFrame(
   if (negotiated === null || negotiated.major !== 1) {
     return parseV11Frame(envelope);
   }
-  if (negotiated.minor >= 4) {
+  // A minor with no arm of its own. DROPPED rather than parsed with the newest
+  // arm this build has: every schema here is a plain (non-strict) object, so a
+  // newer frame parsed with an older arm SUCCEEDS with the new minor's fields
+  // stripped - the failure mode that has no symptom. A drop has one (the poll
+  // carries the table meanwhile, per this class's degrade contract) and the pin
+  // on the constant above means a build whose protocol and client moved
+  // together never reaches it.
+  if (negotiated.minor > CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING) {
+    return { success: false };
+  }
+  // EXACT minors below, never `>=`. `>=` is what let the top arm answer for a
+  // minor it was never written for; the guard above is only a backstop, and it
+  // cannot help while the ladder itself still claims everything above it.
+  if (negotiated.minor === 4) {
     return hostChatRecordsSubscribeServerFrameSchemaV14.safeParse(envelope);
   }
-  if (negotiated.minor >= 3) {
+  if (negotiated.minor === 3) {
     return hostChatRecordsSubscribeServerFrameSchemaV13.safeParse(envelope);
   }
-  if (negotiated.minor >= 2) {
+  if (negotiated.minor === 2) {
     return hostChatRecordsSubscribeServerFrameSchemaV12.safeParse(envelope);
   }
   return parseV11Frame(envelope);
@@ -361,6 +402,14 @@ export class ChatRecordsStreamClient {
     // client would then read every delta as carrying no stamp, never advance
     // its held revision, and ship a full snapshot per change per open tab,
     // which is the entire cost this minor removes.
+    //
+    // "Always" is enforced by the ladder's shape rather than asserted by this
+    // comment. It used to read `minor >= 3`, which is that same silent strip
+    // one minor along: `@1.4` is registered, so this client advertises it and a
+    // `@1.4` host negotiates it, and the `@1.3` schema would have dropped both
+    // additions off every delta with nothing failing anywhere. Each minor now
+    // has its own arm, and `CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING` is pinned
+    // against the registry so the NEXT minor cannot repeat it.
     const negotiated = this.session.getNegotiatedSchemaVersion();
     const parsed = parseNegotiatedFrame(negotiated, envelope);
     // A frame this build cannot parse is dropped rather than guessed at. The

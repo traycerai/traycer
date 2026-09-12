@@ -31,6 +31,7 @@ import type {
   StreamConnectionStatus,
 } from "../i-stream-session";
 import {
+  CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING,
   ChatRecordsStreamClient,
   type ChatRecordsStreamDelta,
 } from "../chat-records-stream-client";
@@ -608,7 +609,16 @@ describe("ChatRecordsStreamClient", () => {
     });
   });
 
-  describe("the @1.4 list revision stamp and session facet", () => {
+  /**
+   * `@1.4` is registered in the protocol, so this client ADVERTISES it and a
+   * `@1.4` host negotiates it. The ladder used to read `minor >= 3`, which
+   * parsed those frames with the `@1.3` schema - a plain object that silently
+   * dropped both of the things the minor exists to carry. These pin both
+   * halves of the fix: one arm per minor (a drop for a minor with no arm, and
+   * the ceiling pinned to the registry so the NEXT minor cannot repeat it),
+   * and the two facts reaching their consumers under their own names.
+   */
+  describe("the @1.4 stamped frames - one arm per minor, nothing absorbed", () => {
     it("delivers `listRevision` and a stated session facet on a tuiUpsert at @1.4", () => {
       const h = harness();
       h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
@@ -721,6 +731,62 @@ describe("ChatRecordsStreamClient", () => {
       ]);
       expect(h.listRevisions).toEqual([removeStamp, tuiRemoveStamp]);
       h.client.close();
+    });
+
+    it("validates listRevision rather than discarding it - a malformed one drops the frame", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
+      h.session.emitFrame({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        // `recordListEpochSchema` is `min(1)`: an empty epoch is
+        // unrepresentable, because two of them would compare equal and license
+        // the stale `unchanged` the field exists to prevent. Parsed with the
+        // `@1.3` schema this key is not merely accepted - it is STRIPPED, and
+        // the frame is delivered as though the host had never stamped it.
+        listRevision: { epoch: "", revision: 7 },
+        record: rowStreamV13({ chatId: "chat-a", revision: 7 }),
+      });
+
+      expect(h.deltas).toEqual([]);
+      h.client.close();
+    });
+
+    it("drops a minor above this build's ceiling instead of parsing it with the newest arm", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = {
+        major: 1,
+        minor: CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING + 1,
+      };
+      h.session.emitFrame({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        listRevision: listRevision({ revision: 12 }),
+        record: rowStreamV13({ chatId: "chat-a", revision: 7 }),
+      });
+
+      // Dropped, and the poll carries the table meanwhile - this class's
+      // declared degrade. The alternative is what `minor >= 3` did: succeed
+      // with the unknown minor's fields stripped, which has no symptom at all.
+      expect(h.deltas).toEqual([]);
+      h.client.close();
+    });
+
+    it("parses every minor the registry installs - the ceiling is not allowed to lag", () => {
+      // THE LOUD ARM. Registering a minor is an edit in the protocol package;
+      // negotiation derives `min(mine, theirs)` from the registry and never
+      // consults this client. Without this assertion a new minor is negotiated,
+      // parsed by the arm below it, and silently stripped - which is exactly
+      // how `@1.4` shipped ahead of its arm.
+      expect(CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING).toBe(
+        hostStreamRpcRegistry["host.chatRecords.subscribe"][1].latestMinor,
+      );
     });
   });
 

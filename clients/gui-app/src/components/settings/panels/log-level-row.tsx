@@ -37,8 +37,7 @@ export function LogLevelRow(props: LogLevelRowProps) {
 
   return (
     <SettingsRow
-      label={control.label}
-      description={control.description}
+      row={control.row}
       control={
         <Select
           value={control.level}
@@ -54,7 +53,7 @@ export function LogLevelRow(props: LogLevelRowProps) {
         >
           <SelectTrigger
             className="w-[min(40vw,9rem)]"
-            aria-label={control.label}
+            aria-label={control.row.label}
             data-testid={`settings-log-level-${control.scope}`}
           >
             <SelectValue placeholder="Loading…" />

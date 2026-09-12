@@ -78,6 +78,12 @@ export interface ChatRecordTable {
    * accepted row write advances it.
    */
   ingestSeq(): number;
+  /**
+   * How many snapshot applies the request-time fence held rows back from - the
+   * signal a caller declines a list stamp on. See
+   * {@link RecordTable.snapshotIncompleteSeq}.
+   */
+  snapshotIncompleteSeq(): number;
   applyRecords(
     records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
@@ -307,12 +313,12 @@ export function createChatRecordTable(
          * nothing decided or retract the one the last answer stated - see
          * {@link chatRowSupersedesOnSnapshot}'s first clause, which exists
          * because an unknown home closes every write affordance on the row.
+         *
+         * `revision` is untouched for a reason of the shared table's rather
+         * than this plane's - it describes the CONTENT, which a quiet write did
+         * not move. See `record-table.ts`'s module doc.
          */
-        withPatch: (row, patch) => ({
-          ...row,
-          updatedAt: patch.updatedAt,
-          revision: patch.revision,
-        }),
+        withPatch: (row, patch) => ({ ...row, updatedAt: patch.updatedAt }),
       },
       /**
        * Creations this client has asked for but has no record back for, folded
@@ -366,6 +372,7 @@ export function createChatRecordTable(
   return {
     current: () => table.current(),
     ingestSeq: () => table.ingestSeq(),
+    snapshotIncompleteSeq: () => table.snapshotIncompleteSeq(),
 
     // `@1.1` states the home for every row it carries, so the answer is
     // authoritative and the held row takes it verbatim.
@@ -490,7 +497,13 @@ export function createChatRecordTable(
       // issued before the chat existed, landing after) would otherwise leave
       // NEITHER, which is the exact disappearance this registry exists to
       // prevent. The redundant entry costs one map slot and is retired by the
-      // next answer carrying the row.
+      // next answer carrying the row - which since revision gating means the
+      // next SNAPSHOT. `applyTouches` deliberately does not call `onRowServed`
+      // (a patch is not an answer about the row's existence; the `unchanged`
+      // arm carries no rows at all), so a quiet tick retires nothing and a
+      // gated poll can leave the stand-in in place for a long time. Benign,
+      // and for the reason above: the union shadows it behind the real row for
+      // as long as that row is held, and `onRemoval` still drops it.
       const key = recordKey(ownerUserId, pending.chatId);
       if (pendingCreations.has(key)) return null;
       pendingCreations.set(key, {
