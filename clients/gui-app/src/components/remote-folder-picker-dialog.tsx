@@ -675,9 +675,9 @@ function PickerRow(props: {
         id={props.option?.id}
         aria-selected={props.option?.selected}
         className={cn(
-          "h-10 w-full justify-start gap-2 px-2 hover:bg-foreground/8",
+          "h-10 w-full justify-start gap-2 px-2 hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
           props.option?.selected === true &&
-            "bg-foreground/8 hover:bg-foreground/8",
+            "bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
         )}
         data-testid={props.testId}
         // Keep focus (and the keyboard model) on the combobox field.
@@ -814,9 +814,9 @@ function RemoteFolderPickerListing(props: {
             id={pickerOptionId(0)}
             aria-selected={props.selectedIndex === 0}
             className={cn(
-              "h-10 w-full justify-start gap-2 px-2 hover:bg-foreground/8",
+              "h-10 w-full justify-start gap-2 px-2 hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
               props.selectedIndex === 0 &&
-                "bg-foreground/8 hover:bg-foreground/8",
+                "bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
             )}
             data-testid="remote-folder-picker-up-row"
             // Keep focus (and the keyboard model) on the combobox field.

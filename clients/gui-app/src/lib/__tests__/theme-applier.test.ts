@@ -15,6 +15,7 @@ function resetThemeState(): void {
     themes: [],
     selected: { light: null, dark: null },
     glassOpacity: 100,
+    contrast: 100,
     draft: null,
     error: null,
   });
@@ -88,6 +89,34 @@ describe("theme applier", () => {
     expect(root.hasAttribute("data-glass-enabled")).toBe(true);
     expect(useThemeLibraryStore.getState().setGlassOpacity(100)).toBe(true);
     expect(root.hasAttribute("data-glass-enabled")).toBe(false);
+  });
+
+  it("optimizes glass surfaces against the translucent colour they ship", () => {
+    // Below 100% the CSS never paints --popover; it paints --popover mixed
+    // into the page at --glass-opacity. A contrast below 100 pulls the
+    // foreground toward that background, so the mixed surface is observable -
+    // on a palette whose dark popover differs from its page background, which
+    // the default neutral one does not.
+    const root = document.documentElement;
+    useSettingsStore.setState({ theme: "dark", themePreset: "amoled" });
+    const library = useThemeLibraryStore.getState();
+    expect(library.setAppearancePreference({ contrast: 70 })).toBe(true);
+
+    const solidPopover = root.style.getPropertyValue("--popover-foreground");
+    const pageForeground = root.style.getPropertyValue("--foreground");
+    expect(solidPopover).not.toBe("");
+
+    expect(useThemeLibraryStore.getState().setGlassOpacity(100)).toBe(true);
+    expect(root.style.getPropertyValue("--popover-foreground")).toBe(
+      solidPopover,
+    );
+
+    expect(useThemeLibraryStore.getState().setGlassOpacity(30)).toBe(true);
+    expect(root.style.getPropertyValue("--popover-foreground")).not.toBe(
+      solidPopover,
+    );
+    // Rows already keyed off the page background are unaffected by glass.
+    expect(root.style.getPropertyValue("--foreground")).toBe(pageForeground);
   });
 
   // Border visibility repair now runs once, at VS Code import time

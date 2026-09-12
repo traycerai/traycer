@@ -47,6 +47,7 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
+import { trackSettingChanged } from "@/lib/analytics";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { THEME_PRESETS, findThemePreset } from "@/lib/theme-presets";
@@ -713,12 +714,23 @@ function GlassControl() {
             max={100}
             value={opacity}
             onChange={(event) => setOpacity(Number(event.target.value))}
+            // Once per drag, not once per tick.
+            onPointerUp={() =>
+              trackSettingChanged("appearance", "glassOpacity")
+            }
             className="accent-primary"
           />
           <output className="text-ui-xs tabular-nums text-muted-foreground">
             {opacity}%
           </output>
-          <Button size="sm" variant="ghost" onClick={() => setOpacity(100)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setOpacity(100);
+              trackSettingChanged("appearance", "glassOpacity");
+            }}
+          >
             Reset
           </Button>
         </div>
