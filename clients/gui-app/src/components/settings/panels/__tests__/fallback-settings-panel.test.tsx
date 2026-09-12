@@ -207,14 +207,29 @@ vi.mock("@/hooks/providers/use-fallback-in-flight-count-query", () => ({
   useFallbackInFlightCountQuery: () => ({ data: undefined }),
 }));
 
-// The F20 catalog read is out of this suite's scope; zero options is the
-// documented "no answer" state that keeps the free-text Effort input, which is
-// what this suite's existing assertions expect - none of them touches Effort.
+// The F20 catalog read is out of this suite's scope; zero options for both
+// lookups is the documented "no answer" state under which the Model cell
+// still renders (a stored family shows PINNED and invalid-if-blank) and the
+// Effort cell stays on "Any effort" - none of this suite's assertions pick a
+// model from the catalog or an offered effort level. `catalogModelForFamily`
+// is kept REAL (not stubbed): the card imports it directly, alongside the
+// hook, to render the pinned-value and preview-label cases, and it is a pure
+// function over its arguments - nothing here needs it faked.
 vi.mock(
-  "@/components/settings/panels/fallback/fallback-effort-options",
-  () => ({
-    useFallbackEffortOptions: () => () => [],
-  }),
+  "@/components/settings/panels/fallback/fallback-catalog-options",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/panels/fallback/fallback-catalog-options")
+      >();
+    return {
+      ...actual,
+      useFallbackCatalogOptions: () => ({
+        modelsFor: () => [],
+        effortsFor: () => [],
+      }),
+    };
+  },
 );
 
 /**
@@ -280,15 +295,6 @@ vi.mock(
 // step 4 territory), so it is made inert rather than wired up.
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({ data: undefined }),
-}));
-
-// R6: the card's Model family field is `FallbackModelFamilyInput`, which
-// queries the harness catalog via `useHostClient()` - unreachable outside a
-// `<HostRuntimeProvider>`, same as the mocks above. `data: undefined` is "no
-// cached catalog", under which the component renders a plain textbox with no
-// datalist, so every existing family-input query in this suite is unaffected.
-vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessModelsQuery: () => ({ data: undefined }),
 }));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
@@ -754,17 +760,14 @@ describe("FallbackSettingsPanel - a text field commits on blur/Enter, not per ke
     ).toEqual(["fastest", "cheap"]);
   });
 
+  // The Model cell is a Select now and commits immediately on pick - the
+  // Group name input is the only text field left on the card, so this pins
+  // the same draft/commit lifecycle through it instead of a candidate's
+  // family.
   it("sends exactly one save carrying the full typed value, only once the field is left - unlike an immediate control", () => {
     fallbackMocks.queryData = respond(
       policy({
-        tierGroups: [
-          {
-            id: "fast",
-            candidates: [
-              { harnessId: "claude", modelFamily: "", reasoningEffort: null },
-            ],
-          },
-        ],
+        tierGroups: [{ id: "fast", candidates: [] }],
       }),
     );
     // Every commit in this test needs somewhere to resolve to; the content of
@@ -776,35 +779,31 @@ describe("FallbackSettingsPanel - a text field commits on blur/Enter, not per ke
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    const familyInput = () =>
-      screen.getByLabelText<HTMLInputElement>("Model family");
+    const nameInput = () =>
+      screen.getByLabelText<HTMLInputElement>("Group name");
 
     // Five keystrokes, each its own `change` event - the draft moves each
     // time, and nothing is sent while typing is in progress.
-    for (const value of ["o", "op", "opu", "opus", "opus1"]) {
-      fireEvent.change(familyInput(), { target: { value } });
+    for (const value of ["f", "fa", "fas", "fast", "fast1"]) {
+      fireEvent.change(nameInput(), { target: { value } });
     }
     expect(fallbackMocks.setMutateAsync).not.toHaveBeenCalled();
 
-    fireEvent.blur(familyInput());
+    fireEvent.blur(nameInput());
     expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
     const blurCall = fallbackMocks.setMutateAsync.mock.calls[0][0];
     // The FULL five-character value, not a stale prefix - the count
     // assertion alone would still pass if blur sent whatever value the
-    // handler had captured earliest ("o").
-    expect(blurCall.policy.tierGroups[0].candidates[0].modelFamily).toBe(
-      "opus1",
-    );
+    // handler had captured earliest ("f").
+    expect(blurCall.policy.tierGroups[0].id).toBe("fast1");
 
     // Enter also commits, and needs no blur to do it.
-    fireEvent.change(familyInput(), { target: { value: "sonnet" } });
+    fireEvent.change(nameInput(), { target: { value: "sonnet" } });
     expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
-    fireEvent.keyDown(familyInput(), { key: "Enter" });
+    fireEvent.keyDown(nameInput(), { key: "Enter" });
     expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
     const enterCall = fallbackMocks.setMutateAsync.mock.calls[1][0];
-    expect(enterCall.policy.tierGroups[0].candidates[0].modelFamily).toBe(
-      "sonnet",
-    );
+    expect(enterCall.policy.tierGroups[0].id).toBe("sonnet");
 
     // The control: an immediate control (the master switch) is unaffected by
     // the blur/Enter rule and still commits on its own interaction, with no
@@ -1946,22 +1945,17 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // refused request actually carried. Here the user types WHILE B is in
     // flight, which moves the revision without sending anything (`editDraft`),
     // and B's refusal then arrives against a draft it has never seen.
+    //
+    // Driven through the GROUP NAME field rather than a candidate's family:
+    // the Model cell is a Select now and commits immediately on pick, so it
+    // cannot sit mid-keystroke the way this pin needs. Group name is the only
+    // remaining text field on the card and reaches `editDraft` (revision
+    // moves, nothing sent) exactly the way the family field used to.
     fallbackMocks.queryData = respond(
       policy({
         enabled: false,
         graceWindowSeconds: 15,
-        tierGroups: [
-          {
-            id: "fast",
-            candidates: [
-              {
-                harnessId: "claude",
-                modelFamily: "sonnet",
-                reasoningEffort: null,
-              },
-            ],
-          },
-        ],
+        tierGroups: [{ id: "fast", candidates: [] }],
       }),
     );
     const saveA = deferred();
@@ -1977,23 +1971,12 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
             resolve({
               isSuccess: true,
               // The host committed A. Its `tierGroups` are the STORED ones -
-              // "sonnet", never "opus" - which is what makes the adopt visible.
+              // id "fast", never "opus" - which is what makes the adopt visible.
               data: respond(
                 policy({
                   enabled: true,
                   graceWindowSeconds: 15,
-                  tierGroups: [
-                    {
-                      id: "fast",
-                      candidates: [
-                        {
-                          harnessId: "claude",
-                          modelFamily: "sonnet",
-                          reasoningEffort: null,
-                        },
-                      ],
-                    },
-                  ],
+                  tierGroups: [{ id: "fast", candidates: [] }],
                 }),
               ),
             });
@@ -2013,7 +1996,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     openCombobox("Time to cancel before switching");
     chooseOption("11 seconds");
 
-    // C: typed into the family field and NOT committed - no blur, no Enter.
+    // C: typed into the group name field and NOT committed - no blur, no Enter.
     //
     // Measured against the count taken a line earlier rather than against a
     // literal. A literal 2 here was asserting the FIXTURE's bookkeeping - how
@@ -2022,7 +2005,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // no existing test had ever had reason to notice. The property this pin
     // needs is only that TYPING sends nothing, and that is what this now says.
     // NOT focused, deliberately, and this is the second thing the fixture got
-    // wrong. `commitOnLeave` commits the candidate on BLUR (D181), and Radix
+    // wrong. `commitOnLeave` commits the group name on BLUR (D181), and Radix
     // restores focus to the Select's trigger asynchronously after
     // `chooseOption` - so focusing the input here handed it a blur on the next
     // flush and committed "opus" as a third save. That is the blur rule working
@@ -2032,8 +2015,8 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // produces - the focus was only ever flavour.
     const savesBeforeTyping = fallbackMocks.setMutateAsync.mock.calls.length;
     openFallbackTab("equivalentModels");
-    const familyInput = screen.getByLabelText<HTMLInputElement>("Model family");
-    fireEvent.change(familyInput, { target: { value: "opus" } });
+    const nameInput = screen.getByLabelText<HTMLInputElement>("Group name");
+    fireEvent.change(nameInput, { target: { value: "opus" } });
     expect(fallbackMocks.setMutateAsync.mock.calls.length).toBe(
       savesBeforeTyping,
     );
@@ -2041,7 +2024,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // B is refused. It carried revision 2 and has never contained "opus".
     saveB.rejectWith(refusedByHost("policy is out of date"));
     await flushHostReplies();
-    expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
+    expect(screen.getByLabelText<HTMLInputElement>("Group name").value).toBe(
       "opus",
     );
 
@@ -2063,23 +2046,20 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // `applySaveFailed`'s outstanding-ticket branch. B's refusal then marks
     // revision 3 - C - as refused, so `draftIsRefused` is true here and
     // `reconciled` takes its adopt path, overwriting the whole view with the
-    // host's policy and replacing "opus" with the stored "sonnet" while the
+    // host's policy and replacing "opus" with the stored "fast" while the
     // cursor is still in the field. The switch reads `true` either way, which
     // is exactly why it cannot be the assertion.
-    expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
+    expect(screen.getByLabelText<HTMLInputElement>("Group name").value).toBe(
       "opus",
     );
     expect(automaticFallback().getAttribute("aria-checked")).toBe("true");
     // ...and it was never sent. Stated as a property of every request this
     // panel made, not as a count: "opus" reached no policy on the wire, so it
     // is still the user's uncommitted edit for its own blur/Enter to carry.
-    const sentFamilies = fallbackMocks.setMutateAsync.mock.calls.flatMap(
-      (call) =>
-        call[0].policy.tierGroups.flatMap((group) =>
-          group.candidates.map((candidate) => candidate.modelFamily),
-        ),
+    const sentGroupNames = fallbackMocks.setMutateAsync.mock.calls.flatMap(
+      (call) => call[0].policy.tierGroups.map((group) => group.id),
     );
-    expect(sentFamilies).not.toContain("opus");
+    expect(sentGroupNames).not.toContain("opus");
     expect(fallbackMocks.setMutateAsync.mock.calls.length).toBe(
       savesBeforeTyping,
     );
@@ -2130,18 +2110,18 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
   });
 });
 
-describe("FallbackSettingsPanel - F24 a Model family input keeps its identity across an async-rejected save", () => {
+describe("FallbackSettingsPanel - F24 a Group name input keeps its identity across an async-rejected save", () => {
   it("stays the same DOM node and keeps focus once the rejection reverts the row", async () => {
+    // Driven through Group name rather than a candidate's family: the Model
+    // cell is a Select now, which commits and reverts as a complete value with
+    // no keystroke-held DOM identity to lose, so it cannot exercise this pin.
+    // `revertKeyedGroups`'s own doc calls a rename one of the three edits this
+    // path exists for ("a rename, an effort change, a family correction"), so
+    // driving it through the group's name keeps this pin on the exact same
+    // revert path the family field used to reach.
     fallbackMocks.queryData = respond(
       policy({
-        tierGroups: [
-          {
-            id: "fast",
-            candidates: [
-              { harnessId: "claude", modelFamily: "", reasoningEffort: null },
-            ],
-          },
-        ],
+        tierGroups: [{ id: "fast", candidates: [] }],
       }),
     );
     fallbackMocks.setMutateAsync.mockRejectedValueOnce(
@@ -2156,10 +2136,10 @@ describe("FallbackSettingsPanel - F24 a Model family input keeps its identity ac
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    const familyInput = screen.getByLabelText<HTMLInputElement>("Model family");
-    familyInput.focus();
-    fireEvent.change(familyInput, { target: { value: "opus" } });
-    fireEvent.keyDown(familyInput, { key: "Enter" });
+    const nameInput = screen.getByLabelText<HTMLInputElement>("Group name");
+    nameInput.focus();
+    fireEvent.change(nameInput, { target: { value: "opus" } });
+    fireEvent.keyDown(nameInput, { key: "Enter" });
 
     await screen.findByTestId("fallback-host-error");
 
@@ -2168,8 +2148,8 @@ describe("FallbackSettingsPanel - F24 a Model family input keeps its identity ac
     // value-only edit would then be treated as a foreign list (identical
     // shape, different VALUE fails that stricter check) and re-seed, remounting
     // this exact input out from under the keystroke that was rejected.
-    expect(screen.getByLabelText("Model family")).toBe(familyInput);
-    expect(document.activeElement).toBe(familyInput);
+    expect(screen.getByLabelText("Group name")).toBe(nameInput);
+    expect(document.activeElement).toBe(nameInput);
   });
 });
 
@@ -2265,9 +2245,12 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     fireEvent.click(automaticFallback());
     // C is typed and left uncommitted, which moves the revision past B without
     // sending anything - the only way B's echo can land on the MOVED-ON path
-    // with a notice still up, since `edited` clears the notice itself.
+    // with a notice still up, since `edited` clears the notice itself. Driven
+    // through Group name: the Model cell is a Select now and commits
+    // immediately, so it cannot sit uncommitted the way this pin needs -
+    // Group name is the only remaining field that reaches `editDraft`.
     openFallbackTab("equivalentModels");
-    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
+    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Group name"), {
       target: { value: "opus" },
     });
 
@@ -2302,7 +2285,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     });
     expect(screen.queryByTestId("fallback-check-again")).toBeNull();
     // C was never the subject of any of it and is still in the field.
-    expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
+    expect(screen.getByLabelText<HTMLInputElement>("Group name").value).toBe(
       "opus",
     );
   });
@@ -2357,7 +2340,11 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
       policy({
         enabled: false,
         graceWindowSeconds: 15,
-        tierGroups: storedGroups(),
+        // Zero candidates rather than `storedGroups()`: the invalid draft
+        // below is now reached by ADDING a blank row (the Model cell is a
+        // Select and cannot be cleared back to blank), and starting from
+        // nothing keeps that row "Model 1", matching the assertions.
+        tierGroups: [{ id: "fast", candidates: [] }],
       }),
     );
     const saveA = deferred();
@@ -2368,19 +2355,19 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     });
     renderPanel();
 
-    // A (revision 1) goes out, then the user empties the family field: an
-    // INVALID draft, kept on screen with its error, and sent nowhere.
+    // A (revision 1) goes out, then the user adds a blank model row: an
+    // INVALID draft, kept on screen with its error, and sent nowhere -
+    // `commit` returns after `edited` because the new candidate's family is
+    // blank.
     fireEvent.click(automaticFallback());
     openFallbackTab("equivalentModels");
-    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
-      target: { value: "" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 1 in “fast” needs a family name.");
+    ).toContain("Model 1 in “fast” needs a model.");
 
-    // A's reply is lost. It carried revision 1 and has never seen the empty
-    // family field, so it has judged nothing the user is looking at.
+    // A's reply is lost. It carried revision 1 and has never seen the blank
+    // model row, so it has judged nothing the user is looking at.
     saveA.rejectWith(lostTheReply());
     await flushHostReplies();
 
@@ -2389,10 +2376,14 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     // field with nothing beside it and reads as accepted.
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 1 in “fast” needs a family name.");
-    expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
-      "",
-    );
+    ).toContain("Model 1 in “fast” needs a model.");
+    // The row is still unselected - the invalid edit was never sent, so
+    // nothing could have put a value into it.
+    expect(
+      screen
+        .getByRole("combobox", { name: "Model" })
+        .getAttribute("aria-invalid"),
+    ).toBe("true");
     // Falsification (panel): restore the early
     // `if (localError !== null) return <p .../>` in `FallbackSaveStatus`. The
     // preserved validation error then masks the notice AND the only Check
@@ -2667,9 +2658,12 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
 
     fireEvent.click(automaticFallback());
     fireEvent.click(automaticFallback());
-    // C is typed into the family field and never committed.
+    // C is typed into the group name field and never committed. Driven
+    // through Group name, not a candidate's family: the Model cell is a
+    // Select now and commits immediately, so it cannot sit uncommitted the
+    // way this pin needs.
     openFallbackTab("equivalentModels");
-    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
+    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Group name"), {
       target: { value: "opus" },
     });
     // A's reply is lost, and its read-back lands - keeping C, and stamping
@@ -2688,10 +2682,10 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     // Falsification: restore `draftConfirmed: revision === persistedRevision`.
     // The page then says "what's on screen is in force" about `opus`, which has
     // never left the browser, while the policy the host actually confirmed
-    // holds `sonnet`.
+    // holds the group named "fast".
     expect(notice.textContent).toContain("haven't been saved yet");
     expect(notice.textContent).not.toContain("is in force");
-    expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
+    expect(screen.getByLabelText<HTMLInputElement>("Group name").value).toBe(
       "opus",
     );
   });
@@ -3264,23 +3258,6 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
 
   const AUTHORED = "change you made since";
 
-  /**
-   * A local copy: the sibling of this name lives inside another `describe` and
-   * is not in scope here. Annotated rather than inferred for the reason stated
-   * at that one - `harnessId` is a registry-derived union a standalone literal
-   * widens to `string`.
-   */
-  function storedGroups(): TierGroup[] {
-    return [
-      {
-        id: "fast",
-        candidates: [
-          { harnessId: "claude", modelFamily: "sonnet", reasoningEffort: null },
-        ],
-      },
-    ];
-  }
-
   it("a read-back that adopts the ORIGINAL policy does not say a change of yours was saved", async () => {
     // A and B both go out; B's reply is lost; the read-back returns P - the
     // policy that was there before either - so NEITHER save committed. The
@@ -3378,19 +3355,22 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       policy({
         enabled: false,
         graceWindowSeconds: 15,
-        tierGroups: storedGroups(),
+        // Zero candidates rather than `storedGroups()`: the invalid edit below
+        // is reached by ADDING a blank row (the Model cell is a Select and
+        // cannot be cleared back to blank), and starting from nothing keeps
+        // that row "Model 1".
+        tierGroups: [{ id: "fast", candidates: [] }],
       }),
     );
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    // An invalid edit: kept on screen, sent nowhere.
-    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
-      target: { value: "" },
-    });
+    // An invalid edit: kept on screen, sent nowhere - `commit` returns after
+    // `edited` because the new candidate's family is blank.
+    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 1 in “fast” needs a family name.");
+    ).toContain("Model 1 in “fast” needs a model.");
 
     fallbackMocks.resetMutateAsync.mockRejectedValueOnce(lostTheReply());
     fallbackMocks.refetchMock.mockResolvedValue({
@@ -3534,22 +3514,16 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     return screen.getByRole("switch", { name: "Automatic fallback" });
   }
 
+  /**
+   * Zero candidates: both callers below drive the GROUP NAME field (or add a
+   * blank model row) rather than an existing candidate's family, so there is
+   * no need to seed one - see each test's own comment for why.
+   */
   function groupsPolicy(): FallbackPolicy {
     return policy({
       enabled: false,
       graceWindowSeconds: 15,
-      tierGroups: [
-        {
-          id: "fast",
-          candidates: [
-            {
-              harnessId: "claude",
-              modelFamily: "sonnet",
-              reasoningEffort: null,
-            },
-          ],
-        },
-      ],
+      tierGroups: [{ id: "fast", candidates: [] }],
     });
   }
 
@@ -3619,12 +3593,14 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     renderPanel();
 
     openFallbackTab("equivalentModels");
-    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
-      target: { value: "" },
-    });
+    // The Model cell is a Select and cannot be cleared back to blank, so the
+    // invalid draft is reached by adding a fresh, unselected row instead -
+    // `commit` returns after `edited` because the new candidate's family is
+    // blank.
+    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 1 in “fast” needs a family name.");
+    ).toContain("Model 1 in “fast” needs a model.");
 
     // Reset lives on `plan`, and a reset stamps `activeField: "danger"` - so
     // from here the panel's one status line renders THERE, not beside the
@@ -3655,7 +3631,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // BOTH alerts, asserted together: the eighth-pass reset pin checked the
     // local one only BEFORE the reset, which is why this survived it.
     expect(screen.getByTestId("fallback-local-error").textContent).toContain(
-      "Model 1 in “fast” needs a family name.",
+      "Model 1 in “fast” needs a model.",
     );
     const notice = screen.getByTestId("fallback-host-error");
     expect(notice.textContent).toContain("whether the reset went through");
@@ -3665,9 +3641,11 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // now also proves it survives that tab being unmounted and remounted,
     // since the value lives in the panel's reducer and not in the input.
     openFallbackTab("equivalentModels");
-    expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
-      "",
-    );
+    expect(
+      screen
+        .getByRole("combobox", { name: "Model" })
+        .getAttribute("aria-invalid"),
+    ).toBe("true");
   });
 
   // The `loaded-unchanged x restore x unknown` cell is pinned by the eighth
@@ -3687,18 +3665,23 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // TEXT-field path, moves the draft while sending nothing. `uncommitted` is
     // therefore reachable from a text edit and from nothing else, which also
     // makes it unreachable under a RESTORE: that button is the tier-group
-    // editor's empty state and a "Model family" field only exists inside a
-    // group. The operation here is the reset for that reason, not by preference.
+    // editor's empty state and the Group name field - the only text field left
+    // on the card - only exists inside a group. The operation here is the
+    // reset for that reason, not by preference.
     //
     // VALID, which is what is new. Both existing "hasn't been sent" assertions
     // reach `uncommitted` through an INVALID draft, where a validation alert
     // sits above the notice already saying the edit was not sent. Strip that
     // second voice and the notice has to carry the claim alone.
+    //
+    // Driven through Group name rather than a candidate's family: the Model
+    // cell is a Select now and commits (and validates) immediately on pick, so
+    // it cannot produce a VALID, UNSENT edit the way a text field can.
     fallbackMocks.queryData = respond(groupsPolicy());
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Model family"), {
+    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Group name"), {
       target: { value: "opus" },
     });
     // No `save-started` behind this: a valid text edit is still only an edit.
@@ -3926,7 +3909,7 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 2 in “fast” needs a family name.");
+    ).toContain("Model 2 in “fast” needs a model.");
 
     // The reset is refused. It carried defaults; it never carried C. Reset and
     // everything the refusal then says are on `plan` (see the sibling MATRIX
@@ -3952,11 +3935,13 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // true, the read-back adopts over it, and both assertions below fail
     // together - the empty field is gone AND the error that explained it is.
     expect(screen.getByTestId("fallback-local-error").textContent).toContain(
-      "Model 2 in “fast” needs a family name.",
+      "Model 2 in “fast” needs a model.",
     );
     openFallbackTab("equivalentModels");
+    // Both rows are still there - the adopt did not replace them with the
+    // host's single-row policy.
     expect(
-      screen.getAllByLabelText<HTMLInputElement>("Model family").length,
+      screen.getAllByRole("combobox", { name: "Model" }).length,
     ).toBeGreaterThan(1);
   });
 
@@ -4321,23 +4306,16 @@ describe("FallbackSettingsPanel - AX8: the master switch names its own consequen
 });
 
 describe("FallbackSettingsPanel - R-OSS-2: reset completion must not steal focus mid-edit or save a half-typed draft", () => {
-  it("a Model family input focused while Reset is pending keeps its focus, and no draft save fires, when the reset is refused", async () => {
+  it("a Group name input focused while Reset is pending keeps its focus, and no draft save fires, when the reset is refused", async () => {
+    // Driven through Group name rather than a candidate's family: the Model
+    // cell is a Select now, which has no "half-typed, not yet blurred" state
+    // for a forced blur to catch - Group name is the only remaining field
+    // this guard can be pinned through.
     fallbackMocks.queryData = respond(
       policy({
         enabled: false,
         graceWindowSeconds: 15,
-        tierGroups: [
-          {
-            id: "fast",
-            candidates: [
-              {
-                harnessId: "claude",
-                modelFamily: "sonnet",
-                reasoningEffort: null,
-              },
-            ],
-          },
-        ],
+        tierGroups: [{ id: "fast", candidates: [] }],
       }),
     );
     let rejectReset: (error: Error) => void = () => {};
@@ -4361,10 +4339,10 @@ describe("FallbackSettingsPanel - R-OSS-2: reset completion must not steal focus
     });
 
     // Reset is now pending, and the rest of the editor stays interactive.
-    // Focus the family field and type an incomplete (half-finished) value,
-    // but do NOT blur it - the user is still mid-edit.
+    // Focus the group name field and type an incomplete (half-finished)
+    // value, but do NOT blur it - the user is still mid-edit.
     //
-    // `familyInput.focus()`, NOT `fireEvent.focus(familyInput)`. The latter
+    // `nameInput.focus()`, NOT `fireEvent.focus(nameInput)`. The latter
     // dispatches a focus EVENT without moving `document.activeElement` - jsdom
     // only reassigns the active element for the real DOM method - so the
     // original spelling left focus on `document.body` and the assertion below
@@ -4372,10 +4350,10 @@ describe("FallbackSettingsPanel - R-OSS-2: reset completion must not steal focus
     // assertion not been there the cell would have gone on to "prove" that the
     // guard preserved a focus the test never established.
     openFallbackTab("equivalentModels");
-    const familyInput = screen.getByLabelText<HTMLInputElement>("Model family");
-    familyInput.focus();
-    fireEvent.change(familyInput, { target: { value: "son" } });
-    expect(document.activeElement).toBe(familyInput);
+    const nameInput = screen.getByLabelText<HTMLInputElement>("Group name");
+    nameInput.focus();
+    fireEvent.change(nameInput, { target: { value: "fas" } });
+    expect(document.activeElement).toBe(nameInput);
 
     rejectReset(
       new HostRpcError({
@@ -4390,11 +4368,11 @@ describe("FallbackSettingsPanel - R-OSS-2: reset completion must not steal focus
 
     // Falsification: delete the `active !== null && active !== document.body`
     // guard in `fallback-danger-zone.tsx`'s settle effect. The unconditional
-    // `resetButtonRef.current?.focus()` then forces a blur on the family
-    // field, which fires `CandidateRow`'s commit-on-leave and dispatches a
-    // draft save carrying the half-typed "son" - both assertions below fail
+    // `resetButtonRef.current?.focus()` then forces a blur on the group name
+    // field, which fires the card's commit-on-leave and dispatches a draft
+    // save carrying the half-typed "fas" - both assertions below fail
     // together.
-    expect(document.activeElement).toBe(familyInput);
+    expect(document.activeElement).toBe(nameInput);
     expect(fallbackMocks.setMutateAsync).not.toHaveBeenCalled();
   });
 

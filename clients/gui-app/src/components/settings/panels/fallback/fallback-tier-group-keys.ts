@@ -324,6 +324,16 @@ export type FallbackGroupsInverse =
       readonly index: number;
       /** {@link tierGroupIdentityGeneration} as of the removal. */
       readonly generation: number;
+      /**
+       * Whether this group was the policy's default when it was deleted. The
+       * deletion cleared `defaultTierGroupId` (a default naming no group is
+       * unsavable), so putting the group back without this would put back a
+       * group that has silently stopped being the default. Applied by the
+       * panel, which owns the policy the inverse is applied to - and only if
+       * no other group has been made the default since, because that later
+       * choice is the newer fact.
+       */
+      readonly wasDefault: boolean;
     }
   | {
       readonly kind: "candidate";

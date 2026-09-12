@@ -325,6 +325,29 @@ describe("validateFallbackPolicyDraft", () => {
         "Model 2 in “fast” has a blank effort level - pick one, or leave it unset.",
     });
   });
+
+  it("names the default-group refusal when defaultTierGroupId points at no existing group", () => {
+    // A hand-built draft rather than anything the editor itself can produce -
+    // the editor clears the marker on delete and carries it through a rename
+    // (`replaceGroupAt`), so this path is reachable only via a stored policy
+    // or a race, exactly as `draftIssueMessage`'s own comment says.
+    const result = validateFallbackPolicyDraft(
+      policy({
+        tierGroups: [{ id: "fast", candidates: [candidate("opus")] }],
+        defaultTierGroupId: "nonexistent",
+      }),
+    );
+    // Falsification: drop the `head === "defaultTierGroupId"` arm from
+    // `draftIssueMessage` - the message would fall through to
+    // `groupListIssueMessage`, which describes a duplicate-name or blank-name
+    // problem this draft does not have, on the one field the refine actually
+    // flagged (`fallbackPolicySchema`'s object-level refine, `path:
+    // ["defaultTierGroupId"]`).
+    expect(result).toEqual({
+      kind: "invalid",
+      message: "The default group must be one of the groups below.",
+    });
+  });
 });
 
 describe("fallbackPolicyDraftReducer - edited", () => {
@@ -1344,7 +1367,10 @@ describe("fallbackPolicyDraftReducer - composition-table cells (U / R / S togeth
         tierGroups: [tierGroup("fast", [candidate("")])],
       }),
     );
-    expect(invalid.localError).toBe("Model 1 in “fast” needs a family name.");
+    // The Model cell is now a catalog Select rather than a free-text family
+    // field, so a blank row's copy points at "a model" rather than "a family
+    // name" - see `draftIssueMessage`'s `fifth === "modelFamily"` arm.
+    expect(invalid.localError).toBe("Model 1 in “fast” needs a model.");
 
     // A's reply is lost while C is on screen: the `unknown` branch.
     const aUnknown = failUnknown(invalid, a);
@@ -1512,6 +1538,37 @@ describe("fallbackPolicyValuesEqual", () => {
       fallbackPolicyValuesEqual(
         policy({ tierGroups: [tierGroup("fast", [candidate("sonnet")])] }),
         policy({ tierGroups: [tierGroup("fast", [candidate("sonnet")])] }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is sensitive to defaultTierGroupId - the eighth field, per the production doc comment naming Eight as the count as of the default tier group's arrival", () => {
+    // Falsification: drop the `a.defaultTierGroupId !== b.defaultTierGroupId`
+    // arm from `fallbackPolicyValuesEqual`. Two policies differing ONLY in
+    // which group is the default would then compare equal, so an edit to the
+    // default-group select would be reported as already saved.
+    expect(
+      fallbackPolicyValuesEqual(
+        policy({
+          tierGroups: [tierGroup("fast", [])],
+          defaultTierGroupId: "fast",
+        }),
+        policy({
+          tierGroups: [tierGroup("fast", [])],
+          defaultTierGroupId: null,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      fallbackPolicyValuesEqual(
+        policy({
+          tierGroups: [tierGroup("fast", [])],
+          defaultTierGroupId: "fast",
+        }),
+        policy({
+          tierGroups: [tierGroup("fast", [])],
+          defaultTierGroupId: "fast",
+        }),
       ),
     ).toBe(true);
   });

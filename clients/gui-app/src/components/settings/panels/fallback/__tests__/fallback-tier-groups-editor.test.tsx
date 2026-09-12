@@ -6,7 +6,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   createDefaultFallbackPolicy,
   type FallbackPolicy,
@@ -21,7 +21,7 @@ import {
   type FallbackGroupsInverse,
   type KeyedGroup,
 } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
-import type { FallbackEffortOptions } from "@/components/settings/panels/fallback/fallback-effort-options";
+import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
 
 /** The shape of the second argument the removal toasts pass `toast.success`. */
@@ -42,18 +42,26 @@ vi.mock("sonner", () => ({
   },
 }));
 
-// R6: the card's Model family field is `FallbackModelFamilyInput`, which
-// queries the harness catalog. `data: undefined` means "no cached catalog",
-// under which the component renders a plain textbox with no datalist - every
-// existing family-input query in this suite keeps working unchanged.
-vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessModelsQuery: () => ({ data: undefined }),
-}));
-
 afterEach(() => {
   cleanup();
   toastSuccess.mockClear();
 });
+
+/**
+ * Spies typed AT the mock, so a test can read `mock.calls[0]` as the policy
+ * and groups the editor emitted without asserting a shape onto it. An untyped
+ * `vi.fn()` types its calls as `any`, and the destructure then reads as an
+ * unsafe member access - a lint refusal, not a cast, but the same smell: the
+ * test would keep compiling after the editor stopped passing a policy at all.
+ */
+function commitSpy(): Mock<
+  (next: FallbackPolicy, groups: readonly KeyedGroup[]) => void
+> {
+  return vi.fn<(next: FallbackPolicy, groups: readonly KeyedGroup[]) => void>();
+}
+function undoSpy(): Mock<(inverse: FallbackGroupsInverse) => void> {
+  return vi.fn<(inverse: FallbackGroupsInverse) => void>();
+}
 
 function candidate(modelFamily: string): TierCandidate {
   return { harnessId: "claude", modelFamily, reasoningEffort: null };
@@ -66,7 +74,10 @@ function tierGroup(
   return { id, candidates: [...candidates] };
 }
 
-const NO_EFFORT_OPTIONS: FallbackEffortOptions = () => [];
+const NO_CATALOG: FallbackCatalogOptions = {
+  modelsFor: () => [],
+  effortsFor: () => [],
+};
 
 /**
  * A minimal stateful wrapper - the editor is fully controlled
@@ -123,7 +134,7 @@ function Harness(props: {
       // the prop is required, and an identity function keeps it honest about
       // that rather than pretending a label was produced.
       labelFor={(profileId) => profileId}
-      effortOptions={NO_EFFORT_OPTIONS}
+      catalog={NO_CATALOG}
       previewPending={previewPending}
       previewUnavailable={previewUnavailable}
       onRetryPreview={onRetryPreview}
@@ -135,6 +146,50 @@ function Harness(props: {
         if (next === current) return;
         adopt(withTierGroups(policyRef.current, next), next);
       }}
+      onRestoreDefaults={() => {}}
+      restorePending={false}
+      status={null}
+    />
+  );
+}
+
+/**
+ * A narrower stateful wrapper for the default-marker COMMIT-path pin below.
+ *
+ * `onChange` feeds the draft back into state - same as `Harness` - so a
+ * rename's keystroke is genuinely reflected in the `group` prop the CARD
+ * closes over by the time a blur fires its commit (`commitOnLeave` commits
+ * `group` AS IT STANDS AT RENDER TIME, not the raw DOM value - see the card's
+ * own comment). `onCommit` is a pure spy instead of also updating state: this
+ * harness exists to inspect exactly one commit's own arguments, not to
+ * simulate the rest of a session.
+ */
+function CommitCarryHarness(props: {
+  readonly initialPolicy: FallbackPolicy;
+  readonly initialGroups: readonly KeyedGroup[];
+  readonly onCommit: (
+    policy: FallbackPolicy,
+    groups: readonly KeyedGroup[],
+  ) => void;
+}): ReactNode {
+  const [policy, setPolicy] = useState(props.initialPolicy);
+  const [groups, setGroups] = useState(props.initialGroups);
+  return (
+    <FallbackTierGroupsEditor
+      policy={policy}
+      groups={groups}
+      preview={null}
+      labelFor={(profileId) => profileId}
+      catalog={NO_CATALOG}
+      previewPending={false}
+      previewUnavailable={false}
+      onRetryPreview={() => {}}
+      onChange={(nextPolicy, nextGroups) => {
+        setPolicy(nextPolicy);
+        setGroups(nextGroups);
+      }}
+      onCommit={props.onCommit}
+      onUndo={() => {}}
       onRestoreDefaults={() => {}}
       restorePending={false}
       status={null}
@@ -161,29 +216,36 @@ describe("FallbackTierGroupsEditor - candidate identity survives a reorder", () 
       />,
     );
 
-    const familyInputs = (): HTMLInputElement[] =>
-      screen.getAllByLabelText<HTMLInputElement>("Model family");
-    expect(familyInputs().map((input) => input.value)).toEqual([
+    // The Model cell is a catalog `Select` now, not a free-text family input
+    // - with no catalog (`NO_CATALOG.modelsFor` returns `[]`), the stored
+    // family renders PINNED, as its own trigger text, so this still reads
+    // the row's family off the DOM without depending on any catalog data.
+    const modelControls = (): HTMLElement[] =>
+      screen.getAllByRole("combobox", { name: "Model" });
+    expect(modelControls().map((control) => control.textContent)).toEqual([
       "opus",
       "sonnet",
     ]);
-    const secondRowInput = familyInputs()[1];
+    const secondRowControl = modelControls()[1];
 
     // Move the second row ("sonnet") up one place.
     fireEvent.click(screen.getAllByLabelText("Move up")[1]);
 
-    const reordered = familyInputs();
-    expect(reordered.map((input) => input.value)).toEqual(["sonnet", "opus"]);
+    const reordered = modelControls();
+    expect(reordered.map((control) => control.textContent)).toEqual([
+      "sonnet",
+      "opus",
+    ]);
 
     // The identity model's whole point: under `key={candidate.key}` React
     // MOVES the existing node to its new position, so the object captured
-    // above IS the first input now - not merely an input with the same
-    // value. Under an index key React would instead keep the node parked at
-    // position 1 and swap only its value, and this assertion would see the
-    // value change with the ELEMENT staying the same object at the OLD
-    // index - i.e. `reordered[1]` would be `secondRowInput`, not
+    // above IS the first control now - not merely a control with the same
+    // text. Under an index key React would instead keep the node parked at
+    // position 1 and swap only its content, and this assertion would see
+    // the text change with the ELEMENT staying the same object at the OLD
+    // index - i.e. `reordered[1]` would be `secondRowControl`, not
     // `reordered[0]`.
-    expect(reordered[0]).toBe(secondRowInput);
+    expect(reordered[0]).toBe(secondRowControl);
   });
 });
 
@@ -589,7 +651,7 @@ describe("FallbackTierGroupsEditor - a duplicated group NAME withholds the previ
         groups={toKeyedGroups(groups)}
         preview={preview}
         labelFor={(profileId) => profileId}
-        effortOptions={NO_EFFORT_OPTIONS}
+        catalog={NO_CATALOG}
         previewPending={false}
         previewUnavailable={false}
         onRetryPreview={() => {}}
@@ -649,5 +711,356 @@ describe("FallbackTierGroupsEditor - a duplicated group NAME withholds the previ
     const lines = screen.queryAllByTestId("fallback-tier-candidate-preview");
     expect(lines).toHaveLength(1);
     expect(lines[0].textContent).toContain("claude-sonnet-4");
+  });
+});
+
+describe("FallbackTierGroupsEditor - default tier group", () => {
+  /** Radix's select: open with the keyboard, then commit the named option. */
+  function openDefaultGroupSelect(): void {
+    fireEvent.keyDown(
+      screen.getByRole("combobox", { name: "For a model not in any group" }),
+      { key: "ArrowDown" },
+    );
+  }
+
+  function chooseDefaultGroupOption(name: string): void {
+    const item = screen.getByRole("option", { name });
+    fireEvent.focus(item);
+    fireEvent.keyDown(item, { key: "Enter" });
+  }
+
+  it("lists exactly the distinct non-blank group names, plus None, in encounter order", () => {
+    const groups: TierGroup[] = [
+      tierGroup("fast", []),
+      tierGroup("", []),
+      tierGroup("cheap", []),
+      // A repeat of the first group's name - the state a rename passes
+      // through, per `fallback-tier-group-keys.ts`.
+      tierGroup("fast", []),
+    ];
+    render(
+      <FallbackTierGroupsEditor
+        policy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+    openDefaultGroupSelect();
+    const labels = screen
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    // Falsification: drop the `names.includes(group.id)` dedupe guard or the
+    // blank-name skip from `DefaultGroupSelect` in
+    // `fallback-tier-groups-editor.tsx` - a duplicate "fast" or an empty-text
+    // option would then appear in this list.
+    expect(labels).toEqual(["None - skip this step", "fast", "cheap"]);
+  });
+
+  it("choosing a default commits defaultTierGroupId, leaving `groups` the SAME reference", () => {
+    const groups: TierGroup[] = [tierGroup("fast", []), tierGroup("cheap", [])];
+    const keyedGroups = toKeyedGroups(groups);
+    const onCommit = commitSpy();
+    render(
+      <FallbackTierGroupsEditor
+        policy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
+        groups={keyedGroups}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={onCommit}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+    openDefaultGroupSelect();
+    chooseDefaultGroupOption("cheap");
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const [committedPolicy, committedGroups] = onCommit.mock.calls[0];
+    expect(committedPolicy.defaultTierGroupId).toBe("cheap");
+    // Falsification: rebuild the `groups` array (e.g. `[...groups]`) at the
+    // `DefaultGroupSelect`'s `onCommit` call site instead of passing the
+    // identical `groups` reference through - the doc comment on `onCommit`
+    // says both callbacks carry the groups UNCHANGED for this control.
+    expect(committedGroups).toBe(keyedGroups);
+  });
+
+  it("only the group named by defaultTierGroupId renders the Default pill", () => {
+    const groups: TierGroup[] = [tierGroup("fast", []), tierGroup("cheap", [])];
+    render(
+      <FallbackTierGroupsEditor
+        policy={{
+          ...createDefaultFallbackPolicy(),
+          tierGroups: groups,
+          defaultTierGroupId: "cheap",
+        }}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+    // Falsification: pass `isDefault={false}` unconditionally, or compare
+    // `policy.defaultTierGroupId` against the group's `draftKey` instead of
+    // its `id`, at the `FallbackTierGroupCard` call site in
+    // `fallback-tier-groups-editor.tsx` - the pill would then either never
+    // appear or attach to the wrong card.
+    expect(
+      screen
+        .getByTestId("fallback-tier-group-fast")
+        .querySelector('[data-testid="fallback-tier-group-default"]'),
+    ).toBeNull();
+    expect(
+      screen
+        .getByTestId("fallback-tier-group-cheap")
+        .querySelector('[data-testid="fallback-tier-group-default"]'),
+    ).not.toBeNull();
+  });
+
+  it("renaming the DEFAULT group carries the marker on the DRAFT (onChange) path", () => {
+    const groups: TierGroup[] = [tierGroup("fast", []), tierGroup("cheap", [])];
+    const onChange = commitSpy();
+    render(
+      <FallbackTierGroupsEditor
+        policy={{
+          ...createDefaultFallbackPolicy(),
+          tierGroups: groups,
+          defaultTierGroupId: "fast",
+        }}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={onChange}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+    const nameInput =
+      screen.getAllByLabelText<HTMLInputElement>("Group name")[0];
+    fireEvent.change(nameInput, { target: { value: "fastest" } });
+    // Falsification: drop the carry branch from `replaceGroupAt` in
+    // `fallback-tier-groups-editor.tsx` (the
+    // `policy.defaultTierGroupId === previous.id && next.id !== previous.id`
+    // check) - the emitted policy would keep `defaultTierGroupId: "fast"`, a
+    // name no group holds any more the instant this keystroke lands.
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const [nextPolicy] = onChange.mock.calls[0];
+    expect(nextPolicy.defaultTierGroupId).toBe("fastest");
+  });
+
+  it("renaming the DEFAULT group also carries the marker on the COMMIT (blur) path", () => {
+    const groups: TierGroup[] = [tierGroup("fast", []), tierGroup("cheap", [])];
+    const onCommit = commitSpy();
+    render(
+      <CommitCarryHarness
+        initialPolicy={{
+          ...createDefaultFallbackPolicy(),
+          tierGroups: groups,
+          defaultTierGroupId: "fast",
+        }}
+        initialGroups={toKeyedGroups(groups)}
+        onCommit={onCommit}
+      />,
+    );
+    const nameInput =
+      screen.getAllByLabelText<HTMLInputElement>("Group name")[0];
+    fireEvent.change(nameInput, { target: { value: "fastest" } });
+    fireEvent.blur(nameInput);
+    // Falsification: drop the same carry branch from `replaceGroupAt` at the
+    // COMMIT call site - the committed policy would keep
+    // `defaultTierGroupId: "fast"`, saving a policy the schema's own refine
+    // refuses the instant this rename lands (`fallbackPolicySchema`'s
+    // `path: ["defaultTierGroupId"]` refine).
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const [committedPolicy] = onCommit.mock.calls[0];
+    expect(committedPolicy.defaultTierGroupId).toBe("fastest");
+  });
+
+  it("deleting the DEFAULT group commits null, and its Undo inverse carries wasDefault: true", () => {
+    const groups: TierGroup[] = [tierGroup("fast", []), tierGroup("cheap", [])];
+    const onCommit = commitSpy();
+    const onUndo = undoSpy();
+    render(
+      <FallbackTierGroupsEditor
+        policy={{
+          ...createDefaultFallbackPolicy(),
+          tierGroups: groups,
+          defaultTierGroupId: "fast",
+        }}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={onCommit}
+        onUndo={onUndo}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+    // Delete "fast" (index 0), which IS the default.
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    // Falsification: drop the `wasDefault ? { ...policy, defaultTierGroupId:
+    // null } : policy` branch from the `onDelete` handler - the committed
+    // policy would keep `defaultTierGroupId: "fast"`, a name the deleted
+    // group no longer holds, which the schema then refuses to save.
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const [committedPolicy] = onCommit.mock.calls[0];
+    expect(committedPolicy.defaultTierGroupId).toBeNull();
+
+    expect(toastSuccess).toHaveBeenCalledTimes(1);
+    const toastCall = toastSuccess.mock.calls[0];
+    act(() => {
+      toastCall[1].action.onClick();
+    });
+    // Falsification: drop `wasDefault` from the inverse object built at the
+    // toast's Undo callback - Undo would then always report `wasDefault:
+    // false` (or `undefined`), losing that this group was the default when
+    // it was removed.
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    const [inverse] = onUndo.mock.calls[0];
+    expect(inverse.kind).toBe("group");
+    expect(inverse.kind === "group" ? inverse.wasDefault : null).toBe(true);
+  });
+
+  it("deleting a NON-default group's Undo inverse carries wasDefault: false", () => {
+    const groups: TierGroup[] = [tierGroup("fast", []), tierGroup("cheap", [])];
+    const onUndo = undoSpy();
+    render(
+      <FallbackTierGroupsEditor
+        policy={{
+          ...createDefaultFallbackPolicy(),
+          tierGroups: groups,
+          defaultTierGroupId: "fast",
+        }}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={onUndo}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+    // Delete "cheap" (index 1), which is NOT the default.
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[1]);
+    const toastCall = toastSuccess.mock.calls[0];
+    act(() => {
+      toastCall[1].action.onClick();
+    });
+    // The control for the cell above: without it, a reducer that always
+    // reports `wasDefault: true` would satisfy that assertion trivially.
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    const [inverse] = onUndo.mock.calls[0];
+    expect(inverse.kind).toBe("group");
+    expect(inverse.kind === "group" ? inverse.wasDefault : null).toBe(false);
+  });
+
+  it("'Add a group' emits the policy UNCHANGED apart from the appended group - defaultTierGroupId untouched", () => {
+    const groups: TierGroup[] = [tierGroup("fast", [])];
+    const keyedGroups = toKeyedGroups(groups);
+    const onCommit = commitSpy();
+    render(
+      <FallbackTierGroupsEditor
+        policy={{
+          ...createDefaultFallbackPolicy(),
+          tierGroups: groups,
+          defaultTierGroupId: "fast",
+        }}
+        groups={keyedGroups}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={onCommit}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add a group" }));
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const [committedPolicy, committedGroups] = onCommit.mock.calls[0];
+    // Falsification: rebuild the policy (rather than passing the untouched
+    // `policy` reference through `withTierGroups`) at the "Add a group"
+    // click handler - `defaultTierGroupId` (or any other field) could then
+    // drift on a purely additive edit that named nothing about it.
+    expect(committedPolicy.defaultTierGroupId).toBe("fast");
+    expect(committedGroups).toHaveLength(2);
+    expect(committedGroups[0]).toBe(keyedGroups[0]);
+    expect(committedGroups[1].id).toBe("New group");
+  });
+
+  it("the default-group select does not render when groups is empty - the EmptyGroups branch", () => {
+    render(
+      <FallbackTierGroupsEditor
+        policy={createDefaultFallbackPolicy()}
+        groups={[]}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+    // Falsification: render `DefaultGroupSelect` unconditionally instead of
+    // gating it on `groups.length === 0` in `FallbackTierGroupsEditor` - a
+    // combobox with nothing to name a default FOR would then render over the
+    // "Restore the default groups" empty state.
+    expect(screen.queryByTestId("fallback-tier-default-group")).toBeNull();
+    expect(screen.getByTestId("fallback-tier-groups-empty")).not.toBeNull();
   });
 });

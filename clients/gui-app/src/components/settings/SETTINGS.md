@@ -2383,17 +2383,32 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   - **Equivalent models** is the user's statement about which models are
     interchangeable, and the only thing that makes the "equivalent model" step
     possible - the host will not move a chat between a standard and a frontier
-    model on its own guess. Each row is **provider + model family + optional
-    effort**. **Effort is a select of the levels the harness's own models
-    advertise**, not free text: an unrestricted input whose only hint was a
+    model on its own guess. Each row is **provider + model + optional
+    effort**, and **both Model and Effort are selects over the provider's
+    catalog**, not free text: an unrestricted input whose only hint was a
     placeholder made the user guess a provider-specific spelling, and a typo was
-    accepted, saved as policy, and then silently dropped at resolution - so the
-    value on screen did not mean the effort the fallback would run at. The
-    levels come from `agent.gui.listModels`' per-model `supportedReasoningEfforts`,
-    unioned across the harness's models (a row names a FAMILY, and the effort
-    applies to whichever model that family resolves to at hop time), read once
-    per DISTINCT harness in the draft through the same cache-only slots the
-    model pickers use and gated on availability. The per-row preview cannot
+    accepted, saved as policy, and then silently dropped or unmatched at
+    resolution - so the value on screen did not mean what the fallback would
+    run. Model lists the catalog by label (the composer picker's own models)
+    and stores the SLUG; a stored value that is not a catalog slug - the
+    seeded family names (`opus`), or a retired slug - is pinned as the first
+    option and stays selected, tagged "family" once the catalog has answered.
+    The row's verdict line renders only when it adds something: a family's
+    "matches Claude Opus 5 today", or a problem. Effort offers the chosen
+    model's own `supportedReasoningEfforts` when Model names a slug and the
+    union across the harness's models when it names a family (the effort
+    applies to whichever model the family resolves to at hop time); the
+    catalogs come from `agent.gui.listModels`, read once per DISTINCT harness
+    in the draft through the same cache-only slots the model pickers use and
+    gated on availability (`fallback-catalog-options.ts`). Changing a row's
+    provider clears its model and effort, since both are one catalog's
+    vocabulary. **A default group** (`defaultTierGroupId`, one select above the
+    list, a `Default` pill on the card) is the group the step uses for a model
+    in NO group - a configuration the user makes, never seeded; "None" keeps
+    the old behaviour, where the step is skipped for an unlisted model. The
+    editor carries the marker through a rename, clears it on a delete and
+    restores it on that delete's Undo; the schema refuses a default naming no
+    group. The per-row preview cannot
     supply this: with no failed tuple the engine's walk stops at the resolved
     slug and never reaches effort normalisation, so it returns no effort
     information and no warnings. A stored value outside the set keeps an option

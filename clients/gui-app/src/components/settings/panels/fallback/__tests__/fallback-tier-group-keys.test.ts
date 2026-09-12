@@ -227,6 +227,9 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       group: hydrated[0],
       index: 0,
       generation: stale,
+      // Compile-fix site only - this cell is about the generation guard, not
+      // about the default marker, so a semantically neutral value is fine.
+      wasDefault: false,
     };
     // Falsification: delete the `if (inverse.generation !== identityGeneration)
     // return groups;` guard at the top of `applyGroupsInverse`. Neither the
@@ -264,6 +267,9 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       group: removedGroup,
       index: 1,
       generation,
+      // Compile-fix site only - this cell is about re-insertion into a
+      // changed list, not about the default marker.
+      wasDefault: false,
     };
     const next = applyGroupsInverse(current, inverse);
     expect(next.map((group) => group.draftKey)).toEqual(["g1", "g2", "g3"]);
@@ -286,6 +292,9 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       // longer exists in that shape.
       index: 99,
       generation,
+      // Compile-fix site only - this cell is about index clamping, not about
+      // the default marker.
+      wasDefault: false,
     };
     const next = applyGroupsInverse(current, inverse);
     expect(next.map((group) => group.draftKey)).toEqual(["g1", "g2"]);
@@ -301,6 +310,9 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       group: already[0],
       index: 0,
       generation,
+      // Compile-fix site only - this cell is about the already-present no-op,
+      // not about the default marker.
+      wasDefault: false,
     };
     expect(applyGroupsInverse(already, inverse)).toBe(already);
   });

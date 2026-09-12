@@ -20,9 +20,10 @@ import type { AgentReasoningEffortOption } from "@traycer/protocol/host/index";
 /**
  * F20 - the Effort control. Every collaborator this panel reaches through is
  * mocked at the same seams `fallback-settings-panel.test.tsx` uses, EXCEPT
- * `useFallbackEffortOptions`, which this file is exempt from stubbing to
- * `() => []` for: rendering the real combobox-vs-textbox distinction is the
- * whole point.
+ * `useFallbackCatalogOptions`, which this file is exempt from stubbing to
+ * `{ modelsFor: () => [], effortsFor: () => [] }` for: rendering what the
+ * Select offers - and whether it is enabled - for a real set of advertised
+ * efforts is the whole point.
  */
 const fallbackMocks = vi.hoisted(
   (): {
@@ -107,14 +108,32 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({ data: undefined }),
 }));
 
-// The one seam this suite is exempt from stubbing to `() => []` - it exercises
-// exactly the control that stub keeps latent.
+// The one seam this suite is exempt from stubbing to
+// `{ modelsFor: () => [], effortsFor: () => [] }` - it exercises exactly the
+// control that stub keeps latent. `modelsFor` stays empty throughout: this
+// suite is about the Effort cell, and an empty model catalog does not change
+// what `effortsFor` offers for a given harness.
 vi.mock(
-  "@/components/settings/panels/fallback/fallback-effort-options",
-  () => ({
-    useFallbackEffortOptions: () => (harnessId: string) =>
-      fallbackMocks.optionsByHarness.get(harnessId) ?? [],
-  }),
+  "@/components/settings/panels/fallback/fallback-catalog-options",
+  async (importOriginal) => {
+    // `importOriginal` rather than a bare object literal: the card also
+    // imports this module's `catalogModelForFamily` directly (for the
+    // Model cell and the removal toast's display name), and a full mock
+    // that omitted it would leave that import `undefined` at every call
+    // site, not just the hook under test here.
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/panels/fallback/fallback-catalog-options")
+      >();
+    return {
+      ...actual,
+      useFallbackCatalogOptions: () => ({
+        modelsFor: () => [],
+        effortsFor: (harnessId: string) =>
+          fallbackMocks.optionsByHarness.get(harnessId) ?? [],
+      }),
+    };
+  },
 );
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessModelsQuery: () => ({ data: undefined }),
@@ -261,7 +280,7 @@ describe("FallbackSettingsPanel - F20 the Effort control", () => {
     expect(unsupported.getAttribute("data-state")).toBe("checked");
   });
 
-  it("negative half: with ZERO options the control stays a free-text input, not a combobox", () => {
+  it("with ZERO options and no stored value, the Effort control is a disabled Select showing 'Any effort'", () => {
     // No entry in `optionsByHarness` for "claude" - the documented "no
     // answer" state.
     fallbackMocks.queryData = respond(
@@ -282,10 +301,46 @@ describe("FallbackSettingsPanel - F20 the Effort control", () => {
     );
     renderPanel();
     openFallbackTab("equivalentModels");
-    // Falsification: drop the `options.length === 0` branch in
-    // `EffortControl` (`fallback-tier-group-card.tsx`) so it always renders
-    // the `Select` - this would then find a combobox instead of a textbox.
-    expect(screen.getByRole("textbox", { name: "Effort" })).not.toBeNull();
-    expect(screen.queryByRole("combobox", { name: "Effort" })).toBeNull();
+    const trigger = screen.getByRole("combobox", { name: "Effort" });
+    // Falsification: drop the `options.length === 0 && stored === null` guard
+    // in `EffortControl` (`fallback-tier-group-card.tsx`) so the control is
+    // always enabled - this assertion would then find an enabled control.
+    expect(trigger.hasAttribute("disabled")).toBe(true);
+    // Falsification: select a value other than `ANY_EFFORT_VALUE` when
+    // `stored` is `null` - the trigger's rendered text would then be
+    // something other than the "Any effort" item's own label.
+    expect(trigger.textContent).toBe("Any effort");
+  });
+
+  it("with ZERO options but a value already stored, the Effort control stays enabled", () => {
+    // No entry in `optionsByHarness` for "claude" - same "no answer" state as
+    // the disabled case above - but this row's own effort IS stored, which is
+    // the other half of `EffortControl`'s `disabled` condition
+    // (`options.length === 0 && stored === null`).
+    fallbackMocks.queryData = respond(
+      policy({
+        tierGroups: [
+          {
+            id: "fast",
+            candidates: [
+              {
+                harnessId: "claude",
+                modelFamily: "opus",
+                reasoningEffort: "ultra-high",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+    // Falsification: drop `stored === null` from the `disabled` ternary,
+    // leaving `options.length === 0` alone - this control would then be
+    // disabled even though a value is stored, and clearing it would become
+    // impossible.
+    expect(
+      screen.getByRole("combobox", { name: "Effort" }).hasAttribute("disabled"),
+    ).toBe(false);
   });
 });

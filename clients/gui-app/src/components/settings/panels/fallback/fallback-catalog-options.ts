@@ -5,6 +5,7 @@ import type {
 } from "@traycer/protocol/host/fallback-policy";
 import type {
   AgentReasoningEffortOption,
+  GuiAgentModelOption,
   GuiHarnessId,
 } from "@traycer/protocol/host/index";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
@@ -13,17 +14,36 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
 
 /**
- * The effort levels a harness's own models advertise, or an empty list when
- * nothing can say.
+ * What the "Equivalent models" editor may offer in a row's Model and Effort
+ * cells, per harness - or empty lists when nothing can say.
  *
- * Empty is not "this harness has no efforts" - it is "no answer", which the
- * control must render differently from a known-empty set. See
- * {@link useFallbackEffortOptions}.
+ * Empty is not "this harness has no models" - it is "no answer": an older
+ * host, a harness the user no longer has, a cold catalog slot. The controls
+ * render that differently from a known set (a stored value still shows, as
+ * itself), which is why the two lookups return lists rather than `null` and
+ * the caller reads the length.
  */
-export type FallbackEffortOptions = (
-  harnessId: TierCandidate["harnessId"],
-) => readonly AgentReasoningEffortOption[];
+export interface FallbackCatalogOptions {
+  /** The harness's catalog, in the provider's own order. */
+  readonly modelsFor: (
+    harnessId: TierCandidate["harnessId"],
+  ) => readonly GuiAgentModelOption[];
+  /**
+   * The effort levels to offer beside `modelFamily` on `harnessId`.
+   *
+   * A family that IS a catalog slug names one model, so the offer is that
+   * model's own levels. Anything else names a FAMILY, which resolves to
+   * whichever model matches at hop time - so the offer is the union across the
+   * harness's models, since narrowing it to today's match would hide a level
+   * that is valid for the model the row will actually reach.
+   */
+  readonly effortsFor: (
+    harnessId: TierCandidate["harnessId"],
+    modelFamily: string,
+  ) => readonly AgentReasoningEffortOption[];
+}
 
+const NO_MODELS: readonly GuiAgentModelOption[] = [];
 const NO_EFFORTS: readonly AgentReasoningEffortOption[] = [];
 const NO_HARNESS_IDS: readonly GuiHarnessId[] = [];
 const NO_REQUESTS: ReadonlyArray<{
@@ -35,32 +55,44 @@ const NO_REQUESTS: ReadonlyArray<{
 }> = [];
 
 /**
- * Which effort levels the "Equivalent models" editor may offer, per harness.
+ * Whether a stored family is exactly one catalog slug - the test the Model
+ * cell uses to decide between "a model the user picked" and "a family name",
+ * and the one {@link FallbackCatalogOptions.effortsFor} uses to decide between
+ * one model's levels and the union.
+ *
+ * Case-insensitive because the engine's own family match lower-cases both
+ * sides (`candidateFamilyMatchesSlug`), so "GPT-5" and "gpt-5" are one model
+ * to it and must be one model here.
+ */
+export function catalogModelForFamily(
+  models: readonly GuiAgentModelOption[],
+  modelFamily: string,
+): GuiAgentModelOption | null {
+  const wanted = modelFamily.trim().toLowerCase();
+  if (wanted === "") return null;
+  return models.find((model) => model.slug.toLowerCase() === wanted) ?? null;
+}
+
+/**
+ * The catalogs the "Equivalent models" editor draws its Model and Effort
+ * dropdowns from, per harness.
  *
  * ## Why a catalog read rather than the preview
  *
- * The row's Effort control used to be an unrestricted text input whose only
- * hint was the placeholder "any effort". A user had to already know a
- * provider-specific spelling; a typo was accepted, saved as policy, and then
- * silently dropped at resolution - so the value on screen did not mean the
- * effort the fallback would run at, on the one surface whose job is to say what
- * a row will do.
+ * Both cells used to be text. A user had to already know a provider-specific
+ * slug or effort spelling; a typo was accepted, saved as policy, and then
+ * silently dropped or unmatched at resolution - so the value on screen did not
+ * mean what the fallback would run, on the one surface whose job is to say
+ * what a row will do. The composer's model picker never had that problem
+ * because it renders the catalog, and this is the same catalog.
  *
- * The per-row preview cannot supply the answer. It reports what a family
- * RESOLVES to, and in preview mode (no failed tuple) the engine's walk stops at
- * the resolved slug without assembling a run tuple, so it never reaches the
- * effort normalisation and returns no effort information and no warnings at
- * all. The live source the GUI already has is `agent.gui.listModels`, whose
+ * The per-row preview cannot supply it. It reports what a family RESOLVES to,
+ * one row at a time, and in preview mode (no failed tuple) the engine's walk
+ * stops at the resolved slug without assembling a run tuple, so it never
+ * reaches the effort normalisation and returns no effort information at all.
+ * The live source the GUI already has is `agent.gui.listModels`, whose
  * per-model `supportedReasoningEfforts` is what every other effort picker in
  * this app renders from.
- *
- * ## The union, not one model's list
- *
- * A candidate names a model FAMILY, not a model, and the effort applies to
- * whichever model that family resolves to at hop time - which depends on the
- * catalog then, not now. So the offer is the union across the harness's models:
- * narrowing it to the currently-resolved model would hide a level that is valid
- * for the model this row will actually reach.
  *
  * ## Cost
  *
@@ -76,9 +108,9 @@ const NO_REQUESTS: ReadonlyArray<{
  * availability-blind read would hit that provider's `listModels` and retry the
  * failure on every mount of this page.
  */
-export function useFallbackEffortOptions(
+export function useFallbackCatalogOptions(
   groups: readonly TierGroup[],
-): FallbackEffortOptions {
+): FallbackCatalogOptions {
   const client = useHostClient();
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: true,
@@ -88,10 +120,10 @@ export function useFallbackEffortOptions(
   const available = harnessesQuery.data?.harnesses;
   /**
    * The wanted harnesses as a stable STRING, so the array below - and with it
-   * the query observers - survives a keystroke.
+   * the query observers - survives a draft move.
    *
    * `groups` is a new reference on every draft move, including every character
-   * typed into a model-family field. Memoising the array on `groups` alone
+   * typed into a group's name field. Memoising the array on `groups` alone
    * would rebuild it each time with identical contents, and hand `useQueries` a
    * fresh options array per keystroke.
    *
@@ -157,7 +189,14 @@ export function useFallbackEffortOptions(
   });
 
   const byHarnessId = useMemo(() => {
-    const map = new Map<GuiHarnessId, readonly AgentReasoningEffortOption[]>();
+    const map = new Map<
+      GuiHarnessId,
+      {
+        readonly models: readonly GuiAgentModelOption[];
+        /** The union across `models`, built once per catalog rather than per row render. */
+        readonly efforts: readonly AgentReasoningEffortOption[];
+      }
+    >();
     harnessIds.forEach((harnessId, index) => {
       // `requests` is memoised straight off `harnessIds`, so the two arrays are
       // the same length in every render this runs in - the entry is missing
@@ -173,17 +212,27 @@ export function useFallbackEffortOptions(
           if (!seen.has(effort.id)) seen.set(effort.id, effort);
         }
       }
-      map.set(harnessId, [...seen.values()]);
+      map.set(harnessId, { models, efforts: [...seen.values()] });
     });
     return map;
   }, [harnessIds, modelQueries]);
 
-  return useMemo(
-    () => (harnessId: TierCandidate["harnessId"]) => {
+  return useMemo(() => {
+    const entryFor = (harnessId: TierCandidate["harnessId"]) => {
       const parsed = guiHarnessIdSchema.safeParse(harnessId);
-      if (!parsed.success) return NO_EFFORTS;
-      return byHarnessId.get(parsed.data) ?? NO_EFFORTS;
-    },
-    [byHarnessId],
-  );
+      if (!parsed.success) return null;
+      return byHarnessId.get(parsed.data) ?? null;
+    };
+    return {
+      modelsFor: (harnessId) => entryFor(harnessId)?.models ?? NO_MODELS,
+      effortsFor: (harnessId, modelFamily) => {
+        const entry = entryFor(harnessId);
+        if (entry === null) return NO_EFFORTS;
+        const picked = catalogModelForFamily(entry.models, modelFamily);
+        return picked === null
+          ? entry.efforts
+          : picked.supportedReasoningEfforts;
+      },
+    };
+  }, [byHarnessId]);
 }

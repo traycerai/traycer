@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { toast } from "sonner";
 import type {
   FallbackPolicy,
@@ -13,7 +13,7 @@ import {
   type KeyedGroup,
 } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
 import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/fallback/fallback-profile-labels";
-import type { FallbackEffortOptions } from "@/components/settings/panels/fallback/fallback-effort-options";
+import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import {
   FALLBACK_ADD_GROUP_ATTRIBUTE,
   FALLBACK_GROUP_DELETE_ATTRIBUTE,
@@ -23,6 +23,13 @@ import {
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { FallbackTierGroupCard } from "@/components/settings/panels/fallback/fallback-tier-group-card";
 import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 
@@ -40,11 +47,23 @@ import { FALLBACK } from "@/components/settings/panels/fallback-settings.definit
  */
 const SEED_HARNESS_ID: TierCandidate["harnessId"] = "claude";
 
+/**
+ * The default-group Select's stand-in for `null`. A sentinel rather than the
+ * empty string because Radix's `Select` reads `""` as "nothing selected" and
+ * would render a placeholder for a choice the user made. It never reaches the
+ * wire - `onValueChange` maps it back to `null` - and a group cannot be named
+ * this, because the name field is what a user types and this is not a name.
+ */
+const NO_DEFAULT_GROUP_VALUE = "__no-default-group__";
+
 export interface FallbackTierGroupsEditorProps {
   /**
-   * The policy every other control on the panel is editing. Read here only to
-   * carry the untouched fields through onto the next value - this editor owns
-   * `tierGroups` and nothing else on it.
+   * The policy every other control on the panel is editing. Read here to
+   * carry the untouched fields through onto the next value, and for the two
+   * fields this editor owns: `tierGroups` and `defaultTierGroupId`. Both save
+   * under the panel's `tierGroups` field, because the default is a fact about
+   * the groups - which one is the default - and its status line, its tab dot
+   * and its refusal all belong where the groups are.
    */
   readonly policy: FallbackPolicy;
   /**
@@ -62,8 +81,8 @@ export interface FallbackTierGroupsEditorProps {
   readonly preview: readonly TierCandidatePreview[] | null;
   /** Names the account a preview row resolved on - never its raw id (D190). */
   readonly labelFor: FallbackSettingsProfileLabel;
-  /** The effort levels each row's harness advertises; see `fallback-effort-options.ts`. */
-  readonly effortOptions: FallbackEffortOptions;
+  /** The catalogs each row's Model and Effort cells draw from; see `fallback-catalog-options.ts`. */
+  readonly catalog: FallbackCatalogOptions;
   readonly previewPending: boolean;
   /**
    * The preview request FAILED, as opposed to having no answer yet.
@@ -88,9 +107,9 @@ export interface FallbackTierGroupsEditorProps {
   /** Re-asks the failed preview. Only reachable while `previewUnavailable`. */
   readonly onRetryPreview: () => void;
   /**
-   * A draft move that is NOT saved: a keystroke in the group-name or model-family
-   * field. The value on screen follows it and so does the inline validation
-   * message; the host hears nothing until {@link onCommit}.
+   * A draft move that is NOT saved: a keystroke in a group's name field. The
+   * value on screen follows it and so does the inline validation message; the
+   * host hears nothing until {@link onCommit}.
    */
   readonly onChange: (
     next: FallbackPolicy,
@@ -145,7 +164,7 @@ export function FallbackTierGroupsEditor(
     groups,
     preview,
     labelFor,
-    effortOptions,
+    catalog,
     previewPending,
     previewUnavailable,
     onRetryPreview,
@@ -159,14 +178,49 @@ export function FallbackTierGroupsEditor(
 
   // Every edit below builds a new keyed list and projects it through
   // `withTierGroups`, so identity never leaves this module in a saved policy
-  // and never has to be reconstructed on the way back in.
-  const toPolicy = (next: readonly KeyedGroup[]): FallbackPolicy =>
-    withTierGroups(policy, next);
-  const emitDraft = (next: readonly KeyedGroup[]): void => {
-    onChange(toPolicy(next), next);
+  // and never has to be reconstructed on the way back in. The policy the
+  // projection starts from is a parameter rather than `policy` itself, because
+  // two edits also move the default marker - see `replaceGroupAt` and the
+  // delete handler.
+  const emitDraft = (
+    base: FallbackPolicy,
+    next: readonly KeyedGroup[],
+  ): void => {
+    onChange(withTierGroups(base, next), next);
   };
-  const emit = (next: readonly KeyedGroup[]): void => {
-    onCommit(toPolicy(next), next);
+  const emit = (base: FallbackPolicy, next: readonly KeyedGroup[]): void => {
+    onCommit(withTierGroups(base, next), next);
+  };
+  /**
+   * One group replaced, and the default marker CARRIED through a rename.
+   *
+   * The marker is the group's id, and the id is the editable name: a rename
+   * would otherwise leave the policy pointing at a name no group has, which
+   * the schema then refuses to save - the user would meet an error for
+   * renaming the group they had just made the default. So when the group
+   * being replaced IS the default and its name changed, the marker follows
+   * it. Both the keystroke path and the commit path go through here, because
+   * the draft has to validate on every keystroke of the rename, not only at
+   * the end.
+   */
+  const replaceGroupAt = (
+    index: number,
+    next: KeyedGroup,
+  ): {
+    readonly base: FallbackPolicy;
+    readonly groups: readonly KeyedGroup[];
+  } => {
+    const previous = groups[index];
+    const carried =
+      policy.defaultTierGroupId !== null &&
+      policy.defaultTierGroupId === previous.id &&
+      next.id !== previous.id
+        ? { ...policy, defaultTierGroupId: next.id }
+        : policy;
+    return {
+      base: carried,
+      groups: groups.map((existing, at) => (at === index ? next : existing)),
+    };
   };
 
   const { containerRef, focusAfterRemoval } = useRemovalFocus();
@@ -187,7 +241,6 @@ export function FallbackTierGroupsEditor(
         <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
           Models you consider interchangeable. When one fails, the
           &ldquo;equivalent model&rdquo; step tries the others in this order.
-          Pick a catalog model or type a family name.
         </p>
         {groups.length === 0 ? (
           <EmptyGroups
@@ -195,75 +248,106 @@ export function FallbackTierGroupsEditor(
             restorePending={restorePending}
           />
         ) : (
-          <div className="mt-3 flex flex-col gap-3">
-            {groups.map((group, index) => (
-              <FallbackTierGroupCard
-                // The group's own client-side identity, not its `id`. The id
-                // is the EDITABLE NAME: keying on it remounted the card - and
-                // so destroyed the focused input - on every keystroke of a
-                // rename, and could not represent the intermediate duplicate
-                // and empty names a rename passes through. Not the index
-                // either, for the reason `no-array-index-key` names. See
-                // `fallback-tier-group-keys.ts`.
-                key={group.draftKey}
-                group={group}
-                preview={previewForGroup(preview, group.id, ambiguousNames)}
-                labelFor={labelFor}
-                effortOptions={effortOptions}
-                onUndo={onUndo}
-                defaultHarnessId={firstHarnessId(groups)}
-                onChange={(next) => {
-                  emitDraft(
-                    groups.map((existing, at) =>
-                      at === index ? next : existing,
-                    ),
-                  );
-                }}
-                onCommit={(next) => {
-                  emit(
-                    groups.map((existing, at) =>
-                      at === index ? next : existing,
-                    ),
-                  );
-                }}
-                onDelete={() => {
-                  // The keyboard has to land somewhere: the button that had it
-                  // is inside the subtree about to be filtered out. The group
-                  // that takes this one's place, its neighbour if this was the
-                  // last, and "Add a group" once the list is empty.
-                  focusAfterRemoval([
-                    ...groupDeleteSelectors(groups, index),
-                    `[${FALLBACK_ADD_GROUP_ATTRIBUTE}]`,
-                  ]);
-                  // Read BEFORE the commit, which is what makes the stamp
-                  // mean "the generation this row was removed from". `emit`
-                  // dispatches synchronously and a refusal later in the same
-                  // episode re-seeds, so a generation read inside the toast's
-                  // own callback would be the generation at UNDO time and
-                  // would always compare equal - the guard would be there and
-                  // decide nothing.
-                  const generation = tierGroupIdentityGeneration();
-                  emit(groups.filter((_, at) => at !== index));
-                  // The INVERSE of this one deletion, not the list as it stands
-                  // now: the toast outlives this render, and re-submitting a
-                  // captured list would also revert whatever the user changed
-                  // while the toast was up - and resurrect a group deleted
-                  // after it. `group` carries its own identity and its rows',
-                  // so the undo brings back the same group rather than a
-                  // lookalike, at the position it held; position is the one
-                  // thing a user cannot re-enter by typing.
-                  toast.success(`Deleted “${group.id}”`, {
-                    action: {
-                      label: "Undo",
-                      onClick: () => {
-                        onUndo({ kind: "group", group, index, generation });
+          <>
+            <DefaultGroupSelect
+              defaultTierGroupId={policy.defaultTierGroupId}
+              groups={groups}
+              onCommit={(next) => {
+                onCommit({ ...policy, defaultTierGroupId: next }, groups);
+              }}
+            />
+            <div className="mt-3 flex flex-col gap-3">
+              {groups.map((group, index) => (
+                <FallbackTierGroupCard
+                  // The group's own client-side identity, not its `id`. The id
+                  // is the EDITABLE NAME: keying on it remounted the card - and
+                  // so destroyed the focused input - on every keystroke of a
+                  // rename, and could not represent the intermediate duplicate
+                  // and empty names a rename passes through. Not the index
+                  // either, for the reason `no-array-index-key` names. See
+                  // `fallback-tier-group-keys.ts`.
+                  key={group.draftKey}
+                  group={group}
+                  // By NAME, which is the marker's own currency. While a
+                  // rename passes through a sibling's name both cards show the
+                  // pill; the draft is unsavable in that state anyway (ids
+                  // must be unique), so the pill is at worst briefly ambiguous
+                  // on a page that is already saying so.
+                  isDefault={
+                    policy.defaultTierGroupId !== null &&
+                    policy.defaultTierGroupId === group.id
+                  }
+                  preview={previewForGroup(preview, group.id, ambiguousNames)}
+                  labelFor={labelFor}
+                  catalog={catalog}
+                  onUndo={onUndo}
+                  defaultHarnessId={firstHarnessId(groups)}
+                  onChange={(next) => {
+                    const replaced = replaceGroupAt(index, next);
+                    emitDraft(replaced.base, replaced.groups);
+                  }}
+                  onCommit={(next) => {
+                    const replaced = replaceGroupAt(index, next);
+                    emit(replaced.base, replaced.groups);
+                  }}
+                  onDelete={() => {
+                    // The keyboard has to land somewhere: the button that had it
+                    // is inside the subtree about to be filtered out. The group
+                    // that takes this one's place, its neighbour if this was the
+                    // last, and "Add a group" once the list is empty.
+                    focusAfterRemoval([
+                      ...groupDeleteSelectors(groups, index),
+                      `[${FALLBACK_ADD_GROUP_ATTRIBUTE}]`,
+                    ]);
+                    // Read BEFORE the commit, which is what makes the stamp
+                    // mean "the generation this row was removed from". `emit`
+                    // dispatches synchronously and a refusal later in the same
+                    // episode re-seeds, so a generation read inside the toast's
+                    // own callback would be the generation at UNDO time and
+                    // would always compare equal - the guard would be there and
+                    // decide nothing.
+                    const generation = tierGroupIdentityGeneration();
+                    // Deleting the default group clears the marker: a policy
+                    // whose default names no group is one the schema refuses,
+                    // and the user asked to delete a group, not to be told
+                    // their policy is invalid. The inverse remembers, so Undo
+                    // puts the marker back with the group.
+                    const wasDefault =
+                      policy.defaultTierGroupId !== null &&
+                      policy.defaultTierGroupId === group.id;
+                    emit(
+                      wasDefault
+                        ? { ...policy, defaultTierGroupId: null }
+                        : policy,
+                      groups.filter((_, at) => at !== index),
+                    );
+                    // The INVERSE of this one deletion, not the list as it stands
+                    // now: the toast outlives this render, and re-submitting a
+                    // captured list would also revert whatever the user changed
+                    // while the toast was up - and resurrect a group deleted
+                    // after it. `group` carries its own identity and its rows',
+                    // so the undo brings back the same group rather than a
+                    // lookalike, at the position it held; position is the one
+                    // thing a user cannot re-enter by typing.
+                    toast.success(`Deleted “${group.id}”`, {
+                      action: {
+                        label: "Undo",
+                        onClick: () => {
+                          onUndo({
+                            kind: "group",
+                            group,
+                            index,
+                            generation,
+                            wasDefault,
+                          });
+                        },
                       },
-                    },
-                  });
-                }}
-              />
-            ))}
-          </div>
+                    });
+                  }}
+                />
+              ))}
+            </div>
+          </>
         )}
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <Button
@@ -274,7 +358,7 @@ export function FallbackTierGroupsEditor(
             onClick={() => {
               // `keyedGroup` mints the identity, which is what lets two clicks
               // produce two distinguishable cards even before either is named.
-              emit([
+              emit(policy, [
                 ...groups,
                 keyedGroup({ id: nextGroupName(groups), candidates: [] }),
               ]);
@@ -291,6 +375,89 @@ export function FallbackTierGroupsEditor(
         {status}
       </div>
     </SettingsGroup>
+  );
+}
+
+/**
+ * Which group the "equivalent model" step uses for a model that is in NO
+ * group - the user's own answer to "and what about everything I haven't
+ * listed", which used to be a dead end (the step was skipped and the ladder
+ * moved on).
+ *
+ * ONE control above the list rather than a toggle on each card: it is one
+ * policy field that at most one group can hold, and N toggles for it would
+ * need N-1 of them to flip on every change. The card shows a pill instead.
+ *
+ * "None" is a real choice and the seeded one: with no default the step does
+ * nothing for an unlisted model, which is the documented behaviour the user
+ * had before this control existed. The option copy says so rather than
+ * leaving "None" to mean "unset".
+ *
+ * A stored id naming no group (a hand-edited store; the schema refuses to SAVE
+ * one) still renders as its own option and stays selected - the range-render
+ * rule every select on this page applies. Blank and duplicate names are the
+ * transient states a rename passes through, and are left out of the menu
+ * rather than offered: an option with no text cannot be chosen on purpose,
+ * and two options with one value cannot be told apart.
+ */
+function DefaultGroupSelect(props: {
+  readonly defaultTierGroupId: string | null;
+  readonly groups: readonly KeyedGroup[];
+  readonly onCommit: (next: string | null) => void;
+}): ReactNode {
+  const { defaultTierGroupId, groups, onCommit } = props;
+  const labelId = useId();
+  const names: string[] = [];
+  for (const group of groups) {
+    if (group.id.trim() === "" || names.includes(group.id)) continue;
+    names.push(group.id);
+  }
+  const unlisted =
+    defaultTierGroupId !== null && !names.includes(defaultTierGroupId);
+  return (
+    <div
+      className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1"
+      data-testid="fallback-tier-default-group"
+    >
+      <span id={labelId} className="text-ui-sm">
+        For a model not in any group
+      </span>
+      <Select
+        value={defaultTierGroupId ?? NO_DEFAULT_GROUP_VALUE}
+        onValueChange={(next) => {
+          onCommit(next === NO_DEFAULT_GROUP_VALUE ? null : next);
+        }}
+      >
+        <SelectTrigger
+          className="h-8 w-full max-w-[28ch]"
+          aria-labelledby={labelId}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_DEFAULT_GROUP_VALUE}>
+            None - skip this step
+          </SelectItem>
+          {names.map((name) => (
+            <SelectItem key={name} value={name}>
+              {name}
+            </SelectItem>
+          ))}
+          {unlisted ? (
+            <SelectItem
+              value={defaultTierGroupId}
+              data-testid="fallback-tier-default-group-unlisted"
+            >
+              {defaultTierGroupId} - no such group
+            </SelectItem>
+          ) : null}
+        </SelectContent>
+      </Select>
+      <span className="basis-full text-ui-xs text-muted-foreground">
+        The group whose models are tried when the failed model is not listed in
+        any group.
+      </span>
+    </div>
   );
 }
 

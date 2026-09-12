@@ -162,6 +162,42 @@ export function findTierGroupForFailedTuple(
 }
 
 /**
+ * The group a failed tuple ROUTES to: its own group under the most-specific
+ * match above, else the user's default group, else nothing.
+ *
+ * The default is a CONFIGURATION, not a guess. A model in no group used to be
+ * a dead end for the "equivalent model" step - `no-group`, straight to the
+ * next rung - and a user who had set up a group of models they were happy to
+ * fall to had no way to say "and use that one for anything I haven't listed".
+ * `defaultTierGroupId` is that sentence. It is consulted only when the
+ * specific match finds nothing, so a model that IS listed keeps routing to its
+ * own group even when a default is set.
+ *
+ * One function for both consumers - the engine's scoping and the frozen
+ * error-card verdict ({@link tierGroupsNameDestinationFor}) - so the two cannot
+ * disagree about whether a default applies. An id naming no group (the schema
+ * refuses it on save, but a stored policy is a stored policy) routes nowhere
+ * rather than to a lookalike.
+ */
+export function routeTierGroupForFailedTuple(input: {
+  readonly groups: readonly TierGroup[];
+  readonly defaultTierGroupId: string | null;
+  readonly harnessId: HarnessId;
+  readonly model: string;
+}): TierGroup | null {
+  const matched = findTierGroupForFailedTuple(
+    input.groups,
+    input.harnessId,
+    input.model,
+  );
+  if (matched !== null) return matched;
+  if (input.defaultTierGroupId === null) return null;
+  return (
+    input.groups.find((group) => group.id === input.defaultTierGroupId) ?? null
+  );
+}
+
+/**
  * Whether a set of groups NAMES an equivalent-model destination for a tuple - a
  * question about CONFIGURATION, answered with no I/O at all.
  *
@@ -191,14 +227,12 @@ export function findTierGroupForFailedTuple(
  */
 export function tierGroupsNameDestinationFor(input: {
   readonly groups: readonly TierGroup[];
+  /** The default group, consulted for a model in no group - see {@link routeTierGroupForFailedTuple}. */
+  readonly defaultTierGroupId: string | null;
   readonly harnessId: HarnessId;
   readonly model: string;
 }): boolean {
-  const group = findTierGroupForFailedTuple(
-    input.groups,
-    input.harnessId,
-    input.model,
-  );
+  const group = routeTierGroupForFailedTuple(input);
   if (group === null) return false;
   const slug = input.model.toLowerCase();
   return group.candidates.some((candidate) => {
@@ -259,35 +293,57 @@ export const TIER_RUNG_SKIP_REASONS = [
 export const tierRungSkipReasonSchema = z.enum(TIER_RUNG_SKIP_REASONS);
 export type TierRungSkipReason = z.infer<typeof tierRungSkipReasonSchema>;
 
-export const fallbackPolicySchema = z.object({
-  enabled: z.boolean(),
-  // Empty is valid: exhaustion always notifies, even without an explicit rung.
-  ladder: fallbackLadderSchema,
-  reasonOverrides: z
-    .partialRecord(
-      z.enum(HOST_NOTIFICATION_STOPPED_REASONS),
-      z.union([fallbackLadderSchema, z.literal("off")]),
-    )
-    .optional(),
-  graceWindowSeconds: z
-    .number()
-    .int()
-    .min(FALLBACK_POLICY_LIMITS.minGraceWindowSeconds)
-    .max(FALLBACK_POLICY_LIMITS.maxGraceWindowSeconds),
-  maxWaitMinutes: z
-    .number()
-    .int()
-    .min(FALLBACK_POLICY_LIMITS.minWaitMinutes)
-    .max(FALLBACK_POLICY_LIMITS.maxWaitMinutes),
-  returnToPreferred: z.enum(["prompt", "auto", "stay"]),
-  tierGroups: z
-    .array(tierGroupSchema)
-    .refine(
-      (groups) =>
-        new Set(groups.map((group) => group.id)).size === groups.length,
-      { message: "Tier group IDs must be unique" },
-    ),
-});
+export const fallbackPolicySchema = z
+  .object({
+    enabled: z.boolean(),
+    // Empty is valid: exhaustion always notifies, even without an explicit rung.
+    ladder: fallbackLadderSchema,
+    reasonOverrides: z
+      .partialRecord(
+        z.enum(HOST_NOTIFICATION_STOPPED_REASONS),
+        z.union([fallbackLadderSchema, z.literal("off")]),
+      )
+      .optional(),
+    graceWindowSeconds: z
+      .number()
+      .int()
+      .min(FALLBACK_POLICY_LIMITS.minGraceWindowSeconds)
+      .max(FALLBACK_POLICY_LIMITS.maxGraceWindowSeconds),
+    maxWaitMinutes: z
+      .number()
+      .int()
+      .min(FALLBACK_POLICY_LIMITS.minWaitMinutes)
+      .max(FALLBACK_POLICY_LIMITS.maxWaitMinutes),
+    returnToPreferred: z.enum(["prompt", "auto", "stay"]),
+    tierGroups: z
+      .array(tierGroupSchema)
+      .refine(
+        (groups) =>
+          new Set(groups.map((group) => group.id)).size === groups.length,
+        { message: "Tier group IDs must be unique" },
+      ),
+    /**
+     * The group the "equivalent model" step uses for a model that is in NO
+     * group, by id, or `null` for none - see {@link routeTierGroupForFailedTuple}.
+     *
+     * `.default(null)` rather than required, for the reason the since-removed
+     * exclusion list carried one: a policy stored by a build that predates the
+     * field must still parse, and a required field would turn every such row
+     * into `storedPolicyUnreadable` on upgrade. The refinement below is at the
+     * OBJECT level because it relates two fields: the id has to name one of the
+     * groups beside it.
+     */
+    defaultTierGroupId: z.string().trim().min(1).nullable().default(null),
+  })
+  .refine(
+    (policy) =>
+      policy.defaultTierGroupId === null ||
+      policy.tierGroups.some((group) => group.id === policy.defaultTierGroupId),
+    {
+      message: "The default tier group must name an existing group",
+      path: ["defaultTierGroupId"],
+    },
+  );
 export type FallbackPolicy = z.infer<typeof fallbackPolicySchema>;
 
 /** Fresh data on every read; no caller can mutate another user's defaults. */
@@ -300,6 +356,10 @@ export function createDefaultFallbackPolicy(): FallbackPolicy {
     returnToPreferred: "prompt",
     // Tier seeding owns the distinction between never seeded and user emptied.
     tierGroups: [],
+    // A configuration the user makes, never a seed: the seeded groups are a
+    // starting point, and silently routing every unlisted model into one of
+    // them would be a decision taken on their behalf.
+    defaultTierGroupId: null,
   };
 }
 

@@ -626,9 +626,9 @@ export type FallbackSaveFailureOutcome = "refused" | "unknown";
  * omission until someone adds it here, and every sentence this function
  * licenses is then false about an edit to that field alone: it would compare
  * equal to `persisted`, so `draftConfirmed` would call an unsaved change
- * stored, and `displayDispatchState` would call it `loaded-unchanged`. Seven is
- * the count as of the removal of the destination exclusion list; if that
- * number and the comparisons below disagree, the comparisons are what is wrong.
+ * stored, and `displayDispatchState` would call it `loaded-unchanged`. Eight is
+ * the count as of the default tier group's arrival; if that number and the
+ * comparisons below disagree, the comparisons are what is wrong.
  */
 export function fallbackPolicyValuesEqual(
   a: FallbackPolicy,
@@ -638,7 +638,8 @@ export function fallbackPolicyValuesEqual(
     a.enabled !== b.enabled ||
     a.graceWindowSeconds !== b.graceWindowSeconds ||
     a.maxWaitMinutes !== b.maxWaitMinutes ||
-    a.returnToPreferred !== b.returnToPreferred
+    a.returnToPreferred !== b.returnToPreferred ||
+    a.defaultTierGroupId !== b.defaultTierGroupId
   ) {
     return false;
   }
@@ -1098,9 +1099,15 @@ function draftIssueMessage(
   draft: FallbackPolicy,
 ): string {
   const [head, second, third, fourth, fifth] = path;
+  if (head === "defaultTierGroupId") {
+    // Reachable only through a stored policy or a race the editor does not
+    // produce: the editor carries the marker through a rename and clears it
+    // on a delete, so the id names a group in every draft it builds.
+    return "The default group must be one of the groups below.";
+  }
   if (head === "tierGroups") {
     if (fifth === "modelFamily") {
-      return `${candidateSubject(draft, second, fourth)} needs a family name.`;
+      return `${candidateSubject(draft, second, fourth)} needs a model.`;
     }
     if (fifth === "reasoningEffort") {
       return `${candidateSubject(draft, second, fourth)} has a blank effort level - pick one, or leave it unset.`;

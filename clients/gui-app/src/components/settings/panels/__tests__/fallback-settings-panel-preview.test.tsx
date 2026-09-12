@@ -19,7 +19,7 @@ import {
 } from "@traycer/protocol/host/fallback-policy";
 
 /**
- * The per-row "resolves to" verdicts (ticket 08, clause 4).
+ * The per-row "matches ... today" verdicts (ticket 08, clause 4).
  *
  * Separate from `fallback-settings-panel.test.tsx`, which makes the preview hook
  * inert: this suite's whole subject is what that hook's answer renders, so it
@@ -117,19 +117,31 @@ vi.mock(
   }),
 );
 
-// Real data, not `{ data: undefined }`: the label resolver under test builds
-// its map from THIS read, so an empty one would make every id degrade to its
-// prefix and the pin below would pass without the rule ever running.
-// The Effort control's catalog read is out of this suite's scope, and
-// `useFallbackEffortOptions` calls `useHostClient()`, which throws outside a
-// `<HostRuntimeProvider>` (`src/lib/host/runtime.ts:125`). Zero options is the
-// documented "no answer" state that keeps the free-text Effort input, which is
-// what this suite's assertions already expect - none of them touches Effort.
+// The Model and Effort cells' catalog read is out of this suite's scope, and
+// `useFallbackCatalogOptions` calls `useHostClient()` (via
+// `useGuiHarnessesQuery`/`useHostQueries`), which throws outside a
+// `<HostRuntimeProvider>` (`src/lib/host/runtime.ts:125`). Empty catalogs are
+// the documented "no answer" state: the Model cell still renders - pinned on
+// each row's stored family, since nothing in this file drives it - so the row
+// count assertions below can query it by its accessible name regardless.
+// `importOriginal` keeps `catalogModelForFamily`, which the card imports
+// directly from this module (for the Model cell and the removal toast's
+// display name) rather than through the hook this suite overrides.
 vi.mock(
-  "@/components/settings/panels/fallback/fallback-effort-options",
-  () => ({
-    useFallbackEffortOptions: () => () => [],
-  }),
+  "@/components/settings/panels/fallback/fallback-catalog-options",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/panels/fallback/fallback-catalog-options")
+      >();
+    return {
+      ...actual,
+      useFallbackCatalogOptions: () => ({
+        modelsFor: () => [],
+        effortsFor: () => [],
+      }),
+    };
+  },
 );
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessModelsQuery: () => ({ data: undefined }),
@@ -329,7 +341,12 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
 
     const lines = previewLines();
     expect(lines).toHaveLength(4);
-    expect(lines[0].textContent).toContain("resolves to");
+    // The row's own family ("opus") differs from what it resolved to
+    // ("claude-opus-5"), so the line is the "matches ... today" sentence
+    // (`previewSentence` in `fallback-tier-group-card.tsx`), not the old
+    // permanent "resolves to" line every row used to carry.
+    expect(lines[0].textContent).toContain("matches");
+    expect(lines[0].textContent).toContain("today");
     expect(lines[0].textContent).toContain("claude-opus-5");
     expect(lines[0].textContent).toContain("on Work");
     expect(lines[1].textContent).toContain("No model matches this family");
@@ -389,8 +406,10 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     // successful policy read.
     expect(previewLines()).toHaveLength(0);
     // ... while the rows themselves are on screen, so the emptiness above is
-    // the verdict lines' own and not a panel that failed to render.
-    expect(screen.getAllByLabelText("Model family")).toHaveLength(4);
+    // the verdict lines' own and not a panel that failed to render. The Model
+    // cell is a `Select` now (accessible name "Model"), not the old free-text
+    // "Model family" textbox.
+    expect(screen.getAllByRole("combobox", { name: "Model" })).toHaveLength(4);
   });
 
   it("names the ACCOUNT, never its id - D190", () => {
@@ -487,9 +506,17 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     // draft away from the persisted groups. The panel must stop asking: the
     // verdicts pair to rows by position, so an answer computed for a list that
     // is not on screen would put one model's verdict under another.
+    //
+    // Driven through the group NAME field rather than a candidate's model, as
+    // this test originally did: the Model and Effort cells are Selects now
+    // and commit on every interaction (`fallback-tier-group-card.tsx`'s own
+    // doc comment - "a complete value per interaction"), so there is no
+    // in-between keystroke state left to drive there. The group name is still
+    // free text, and it moves the exact same `keyedTierGroups` the panel's
+    // gate (`keyedGroupsMatch`) reads.
     openFallbackTab("equivalentModels");
-    fireEvent.change(screen.getAllByLabelText("Model family")[0], {
-      target: { value: "opu" },
+    fireEvent.change(screen.getByLabelText("Group name"), {
+      target: { value: "frontie" },
     });
     expect(previewMocks.previewSpy).toHaveBeenLastCalledWith(null);
   });

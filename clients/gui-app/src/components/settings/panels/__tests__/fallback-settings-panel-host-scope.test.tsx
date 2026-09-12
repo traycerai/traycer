@@ -119,16 +119,28 @@ vi.mock(
     }),
   }),
 );
-// The Effort control's catalog read is out of this suite's scope, and
-// `useFallbackEffortOptions` calls `useHostClient()`, which throws outside a
-// `<HostRuntimeProvider>` (`src/lib/host/runtime.ts:125`). Zero options is the
-// documented "no answer" state that keeps the free-text Effort input, which is
-// what this suite's assertions already expect - none of them touches Effort.
+// The Model and Effort cells' catalog read is out of this suite's scope, and
+// `useFallbackCatalogOptions` calls `useHostClient()`, which throws outside a
+// `<HostRuntimeProvider>` (`src/lib/host/runtime.ts:125`). Empty catalogs are
+// the documented "no answer" state: the Model cell still renders - pinned on
+// the row's own stored family - so `modelTriggerText()` below can read it
+// straight off the Select's trigger. `importOriginal` keeps
+// `catalogModelForFamily`, which the card imports directly from this module.
 vi.mock(
-  "@/components/settings/panels/fallback/fallback-effort-options",
-  () => ({
-    useFallbackEffortOptions: () => () => [],
-  }),
+  "@/components/settings/panels/fallback/fallback-catalog-options",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/panels/fallback/fallback-catalog-options")
+      >();
+    return {
+      ...actual,
+      useFallbackCatalogOptions: () => ({
+        modelsFor: () => [],
+        effortsFor: () => [],
+      }),
+    };
+  },
 );
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessModelsQuery: () => ({ data: undefined }),
@@ -171,8 +183,22 @@ function renderPanel() {
   );
 }
 
-function familyInput(): HTMLInputElement {
-  return screen.getByLabelText<HTMLInputElement>("Model family");
+/**
+ * The group's name field - the one free-text control left on a row now that
+ * the Model and Effort cells are Selects (which commit on every interaction,
+ * not on blur/Enter), so it is what still carries an UNCOMMITTED draft value
+ * to drive this suite's "typed but not sent" states.
+ */
+function groupNameInput(): HTMLInputElement {
+  return screen.getByLabelText<HTMLInputElement>("Group name");
+}
+
+/** The Model cell's own displayed value - a pinned family name here, since
+ * the catalog mock above never resolves it to a catalog model. Reading it
+ * off the trigger is this suite's way of seeing WHICH host's policy is on
+ * screen, now that the value used to live in a plain textbox. */
+function modelTriggerText(): string {
+  return screen.getByRole("combobox", { name: "Model" }).textContent;
 }
 
 beforeEach(() => {
@@ -193,12 +219,13 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
   it("drops an uncommitted edit and shows the new host's policy when the scope moves", () => {
     const { rerender } = renderPanel();
     openFallbackTab("equivalentModels");
-    expect(familyInput().value).toBe("opus");
+    expect(groupNameInput().value).toBe("frontier");
+    expect(modelTriggerText()).toBe("opus");
 
     // Typed but NOT committed - no blur, no Enter - so it exists only in this
     // host's draft and has never been sent anywhere.
-    fireEvent.change(familyInput(), { target: { value: "sonnet-typed" } });
-    expect(familyInput().value).toBe("sonnet-typed");
+    fireEvent.change(groupNameInput(), { target: { value: "frontier-typed" } });
+    expect(groupNameInput().value).toBe("frontier-typed");
     expect(scopeMocks.setMutateAsync).not.toHaveBeenCalled();
 
     // The picker moves to another machine, whose stored policy is different.
@@ -214,9 +241,10 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
     // The draft did not travel: what is on screen is host B's stored value,
     // not the text typed against host A. The host switch remounted the
     // editor (its `key` carries `scope.hostId`), which reset the tab rail
-    // back to its default - reopen it to reach the family input again.
+    // back to its default - reopen it to reach the group's controls again.
     openFallbackTab("equivalentModels");
-    expect(familyInput().value).toBe("haiku");
+    expect(groupNameInput().value).toBe("frontier");
+    expect(modelTriggerText()).toBe("haiku");
     // And it was not written to either host on the way out. This is the half
     // that matters most - a draft that vanished from the screen but was saved
     // to the new host's row would satisfy the assertion above.
@@ -234,7 +262,7 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
     // green. The only difference between the two is `scope.hostId`.
     const { rerender } = renderPanel();
     openFallbackTab("equivalentModels");
-    fireEvent.change(familyInput(), { target: { value: "sonnet-typed" } });
+    fireEvent.change(groupNameInput(), { target: { value: "frontier-typed" } });
 
     scopeMocks.queryData = respond({ tierGroups: groups("haiku") });
     rerender(
@@ -246,7 +274,7 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
     // Still the typed value: a later READ does not reach a control either, which
     // is the other half of the seeding rule - a background refetch must not yank
     // a value out from under someone mid-edit. Only the HOST changing does.
-    expect(familyInput().value).toBe("sonnet-typed");
+    expect(groupNameInput().value).toBe("frontier-typed");
     expect(scopeMocks.setMutateAsync).not.toHaveBeenCalled();
   });
 });

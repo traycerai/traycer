@@ -24,9 +24,15 @@ import {
 } from "@/components/settings/panels/fallback/fallback-removal-focus";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import { harnessLabel } from "@/components/settings/panels/fallback/fallback-harness-label";
-import type { AgentReasoningEffortOption } from "@traycer/protocol/host/index";
-import type { FallbackEffortOptions } from "@/components/settings/panels/fallback/fallback-effort-options";
-import { FallbackModelFamilyInput } from "@/components/settings/panels/fallback/fallback-model-family-input";
+import type {
+  AgentReasoningEffortOption,
+  GuiAgentModelOption,
+} from "@traycer/protocol/host/index";
+import {
+  catalogModelForFamily,
+  type FallbackCatalogOptions,
+} from "@/components/settings/panels/fallback/fallback-catalog-options";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -48,6 +54,13 @@ export interface FallbackTierGroupCardProps {
    */
   readonly group: KeyedGroup;
   /**
+   * Whether this group is the policy's default - the one the "equivalent
+   * model" step uses for a model that is in no group. Decided by the editor
+   * (it owns the policy field) and only DISPLAYED here, so a rename that
+   * carries the marker and a delete that clears it have one owner.
+   */
+  readonly isDefault: boolean;
+  /**
    * The preview rows for THIS group, or `null` when no preview is available -
    * an older host, or the read has not landed. `null` renders nothing rather
    * than an optimistic guess: the whole point of the preview is that only the
@@ -60,10 +73,11 @@ export interface FallbackTierGroupCardProps {
    */
   readonly labelFor: FallbackSettingsProfileLabel;
   /**
-   * The effort levels a harness advertises. Threaded like `labelFor` rather
-   * than resolved per card: one catalog read serves every row.
+   * The catalogs the Model and Effort cells draw from. Threaded like
+   * `labelFor` rather than resolved per card: one catalog read serves every
+   * row.
    */
-  readonly effortOptions: FallbackEffortOptions;
+  readonly catalog: FallbackCatalogOptions;
   /** A text keystroke: the draft moves, nothing is saved. */
   readonly onChange: (next: KeyedGroup) => void;
   /** A completed edit, to save - every control but a text field, and a text
@@ -116,9 +130,10 @@ export function FallbackTierGroupCard(
 ): ReactNode {
   const {
     group,
+    isDefault,
     preview,
     labelFor,
-    effortOptions,
+    catalog,
     onChange,
     onCommit,
     onDelete,
@@ -136,16 +151,16 @@ export function FallbackTierGroupCard(
   return (
     // A NAMED container, which is AX8's half of this card. Every control
     // inside it repeats a label the panel uses several times over - "Provider",
-    // "Model family", "Effort", "Move up" - so with two groups on screen the
+    // "Model", "Effort", "Move up" - so with two groups on screen the
     // accessible names alone cannot say which group is being changed, and with
     // two rows in one group they cannot say which row. The names are right; the
     // RELATIONSHIPS were missing.
     //
     // Naming the container rather than qualifying every control is the ARIA
     // answer and the cheaper one: group context is announced on entry and then
-    // stays out of the way, where "Model family, row 2, group fast" would be
-    // read on every field. It also leaves every existing accessible-name query
-    // in the tree working.
+    // stays out of the way, where "Model, row 2, group fast" would be read on
+    // every field. It also leaves every existing accessible-name query in the
+    // tree working.
     //
     // `aria-label` rather than `aria-labelledby` pointing at the name field:
     // the group's name is an editable INPUT, and an input is not a label - its
@@ -172,6 +187,15 @@ export function FallbackTierGroupCard(
             onCommit(group);
           })}
         />
+        {/* A pill, not a control: the default is chosen ONCE, above the list,
+            and a per-card toggle would be N controls for one policy field
+            that only one card can hold at a time. The pill is what tells a
+            reader scanning the cards which group unlisted models land in. */}
+        {isDefault ? (
+          <Badge variant="secondary" data-testid="fallback-tier-group-default">
+            Default
+          </Badge>
+        ) : null}
         <div className="flex-1" />
         <Button
           type="button"
@@ -214,7 +238,7 @@ export function FallbackTierGroupCard(
           // The row's own client-side identity, assigned once when it entered
           // the draft. Not the index (these rows reorder, and an index key
           // makes React reuse the node at a position rather than follow the
-          // row, so a move keeps the input the user is typing in while its data
+          // row, so a move keeps the control the user is in while its data
           // changes underneath) and not the content (two rows may legitimately
           // hold the same values - two fresh rows both start empty).
           <CandidateRow
@@ -229,10 +253,7 @@ export function FallbackTierGroupCard(
             candidateCount={group.candidates.length}
             preview={previewFor(preview, index)}
             labelFor={labelFor}
-            effortOptions={effortOptions}
-            onChange={(next) => {
-              onChange(withCandidateAt(group, index, next));
-            }}
+            catalog={catalog}
             onCommit={(next) => {
               onCommit(withCandidateAt(group, index, next));
             }}
@@ -269,7 +290,7 @@ export function FallbackTierGroupCard(
               // (the rung walks this order) and is the one thing a user
               // cannot recover by retyping.
               toast.success(
-                `Removed ${candidate.value.modelFamily.trim() === "" ? "the empty row" : `“${candidate.value.modelFamily}”`}`,
+                `Removed ${candidate.value.modelFamily.trim() === "" ? "the empty row" : `“${candidateDisplayName(candidate.value, catalog)}”`}`,
                 {
                   action: {
                     label: "Undo",
@@ -301,8 +322,8 @@ export function FallbackTierGroupCard(
               ...group.candidates,
               // `keyedCandidate` mints a fresh identity, which is what lets two
               // clicks produce two distinguishable empty rows.
-              // A new row starts with an EMPTY family rather than a plausible
-              // one. The draft is invalid until the user types it (the wire
+              // A new row starts with an EMPTY model rather than a plausible
+              // one. The draft is invalid until the user picks it (the wire
               // schema requires a non-empty trimmed family), which is the
               // correct state: an invented default is a value the user never
               // chose that would be saved as though they had. The HARNESS is
@@ -336,6 +357,23 @@ export function FallbackTierGroupCard(
  */
 function groupContainerLabel(id: string): string {
   return id.trim() === "" ? "Unnamed model group" : `Model group ${id}`;
+}
+
+/**
+ * How a row's model is NAMED in copy that is not the cell itself: the removal
+ * toast and the Remove button's accessible name. The catalog label when the
+ * stored value is a slug the catalog knows ("Claude Opus 5"), the stored
+ * value otherwise - a family name is already the user's word for it.
+ */
+function candidateDisplayName(
+  candidate: TierCandidate,
+  catalog: FallbackCatalogOptions,
+): string {
+  const picked = catalogModelForFamily(
+    catalog.modelsFor(candidate.harnessId),
+    candidate.modelFamily,
+  );
+  return picked === null ? candidate.modelFamily : picked.label;
 }
 
 /**
@@ -389,8 +427,10 @@ function candidateRemoveSelectorAt(
  * submitted; taking focus away would punish the gesture that asked for a save.
  *
  * Returned as props to spread rather than taken as a wrapper, so the call site
- * still reads as an `<Input>` with an `onChange`, and adding a third text field
- * cannot accidentally get one handler and not the other.
+ * still reads as an `<Input>` with an `onChange`. The group name is the only
+ * text field left on the card - the Model and Effort cells are selects, which
+ * commit on their own interaction - but the shape is kept so a second text
+ * field cannot accidentally get one handler and not the other.
  */
 function commitOnLeave(commit: () => void): {
   readonly onBlur: () => void;
@@ -407,9 +447,9 @@ function commitOnLeave(commit: () => void): {
 /**
  * One row replaced, its identity kept.
  *
- * The key travels with the row through an edit: changing a family name is the
- * same row, not a new one, and minting a fresh key here would remount the input
- * on every keystroke - the exact bug the identities exist to prevent.
+ * The key travels with the row through an edit: changing the model is the same
+ * row, not a new one, and minting a fresh key here would remount the row's
+ * controls on every change - the exact bug the identities exist to prevent.
  */
 function withCandidateAt(
   group: KeyedGroup,
@@ -447,8 +487,7 @@ function CandidateRow(props: {
   readonly candidateCount: number;
   readonly preview: TierCandidatePreview | null;
   readonly labelFor: FallbackSettingsProfileLabel;
-  readonly effortOptions: FallbackEffortOptions;
-  readonly onChange: (next: TierCandidate) => void;
+  readonly catalog: FallbackCatalogOptions;
   readonly onCommit: (next: TierCandidate) => void;
   readonly onMove: (toIndex: number) => void;
   readonly onRemove: () => void;
@@ -460,18 +499,14 @@ function CandidateRow(props: {
     candidateCount,
     preview,
     labelFor,
-    effortOptions,
-    onChange,
+    catalog,
     onCommit,
     onMove,
   } = props;
-  // Both text fields commit the candidate AS IT STANDS: `candidate` is a prop,
-  // so it already carries every keystroke this handler could be committing.
-  const commitCurrent = commitOnLeave(() => {
-    onCommit(candidate);
-  });
-  const familyId = useId();
+  const models = catalog.modelsFor(candidate.harnessId);
+  const modelId = useId();
   const previewId = useId();
+  const verdict = previewSentence(candidate, preview, models, labelFor);
   return (
     // The row's own named container, nested inside the group's (AX8). "Model 1"
     // is the same way the validation copy names a row
@@ -479,9 +514,9 @@ function CandidateRow(props: {
     // the error line agree about what to call it - which is the whole point of
     // naming it at all.
     //
-    // Position and not the family name: the family is the field that is blank
-    // in the case this matters most, so naming the row by it produces "the
-    // model called “”".
+    // Position and not the model: the model is the cell that is blank in the
+    // case this matters most, so naming the row by it produces "the model
+    // called “”".
     <div
       role="group"
       aria-label={`Model ${index + 1}`}
@@ -495,49 +530,58 @@ function CandidateRow(props: {
           harnessId={candidate.harnessId}
           // A select produces a complete value per interaction, so it commits
           // immediately - the blur rule is about text, not about controls.
+          //
+          // The MODEL is cleared with the provider: a slug is meaningful on
+          // one catalog only, and carrying "claude-opus-5" onto Codex would
+          // save a row the engine can never match. The effort goes with it
+          // for the same reason - the levels are the provider's vocabulary.
           onChange={(next) => {
-            onCommit({ ...candidate, harnessId: next });
+            onCommit({
+              harnessId: next,
+              modelFamily: "",
+              reasoningEffort: null,
+            });
           }}
         />
       </div>
       <div className={cn("min-w-0", CANDIDATE_CELL_X)}>
-        <FallbackModelFamilyInput
-          id={familyId}
-          harnessId={candidate.harnessId}
-          value={candidate.modelFamily}
-          aria-label="Model family"
-          // The verdict line below is what this field resolves to, so it is
-          // this field's DESCRIPTION (AX8). Dropped when there is no verdict
+        <ModelSelect
+          id={modelId}
+          modelFamily={candidate.modelFamily}
+          models={models}
+          // The verdict line below is what this cell resolves to, so it is
+          // this cell's DESCRIPTION (AX8). Dropped when there is no verdict
           // rather than pointing at an element that is not rendered: a
           // dangling `aria-describedby` is a promise of detail with nothing
           // behind it, and the absence is itself meaningful here (D159).
-          aria-describedby={preview === null ? undefined : previewId}
-          // A blank family is invalid by the wire schema
-          // (`modelFamily: z.string().trim().min(1)`) and blocks EVERY commit
-          // on the page until it is filled, the master switch included. That
-          // is a local fact this row can see for itself, so it is stated on
-          // the field rather than threaded down from the panel's one error
-          // line - which names the row but cannot mark it.
-          aria-invalid={candidate.modelFamily.trim() === "" ? true : undefined}
-          placeholder="opus"
-          className="h-8 w-full"
-          onChange={(event) => {
-            onChange({ ...candidate, modelFamily: event.target.value });
+          describedBy={verdict === null ? undefined : previewId}
+          onChange={(next) => {
+            // Picking a different model keeps the effort only while the new
+            // model offers it; a level that was valid for the old model and
+            // is not for this one would otherwise be saved and then dropped
+            // at resolution, which is the defect the select replaced.
+            const efforts = catalog.effortsFor(candidate.harnessId, next);
+            const keepsEffort =
+              candidate.reasoningEffort !== null &&
+              efforts.some((option) => option.id === candidate.reasoningEffort);
+            onCommit({
+              ...candidate,
+              modelFamily: next,
+              reasoningEffort: keepsEffort ? candidate.reasoningEffort : null,
+            });
           }}
-          {...commitCurrent}
         />
       </div>
       <div className={cn("min-w-0", CANDIDATE_CELL_X)}>
         <EffortControl
           reasoningEffort={candidate.reasoningEffort}
-          options={effortOptions(candidate.harnessId)}
-          onChange={(next) => {
-            onChange({ ...candidate, reasoningEffort: next });
-          }}
+          options={catalog.effortsFor(
+            candidate.harnessId,
+            candidate.modelFamily,
+          )}
           onCommit={(next) => {
             onCommit({ ...candidate, reasoningEffort: next });
           }}
-          commitCurrent={commitCurrent}
         />
       </div>
       <div className={cn("flex items-center", CANDIDATE_CELL_X)}>
@@ -559,7 +603,7 @@ function CandidateRow(props: {
           type="button"
           variant="ghost"
           className="size-7 p-0 text-muted-foreground"
-          aria-label={`Remove ${candidate.modelFamily || "model"}`}
+          aria-label={`Remove ${candidate.modelFamily.trim() === "" ? "model" : candidateDisplayName(candidate, catalog)}`}
           {...{ [FALLBACK_CANDIDATE_REMOVE_ATTRIBUTE]: removeKey }}
           onClick={props.onRemove}
         >
@@ -569,75 +613,150 @@ function CandidateRow(props: {
       {/* The row's fifth child, so it auto-places onto a second internal line
           starting under Model - the column it is about. It costs no wrapper:
           the row is already `col-span-4 grid grid-cols-subgrid`. */}
-      <CandidatePreviewLine
-        id={previewId}
-        preview={preview}
-        labelFor={labelFor}
-      />
+      {verdict === null ? null : (
+        <p
+          id={previewId}
+          className={cn(
+            "col-start-2 col-span-3 mt-1 px-2 text-ui-xs",
+            verdict.unmatched ? "text-destructive" : "text-muted-foreground",
+          )}
+          data-testid="fallback-tier-candidate-preview"
+          data-unmatched={verdict.unmatched ? "true" : undefined}
+        >
+          {verdict.text}
+        </p>
+      )}
     </div>
   );
 }
 
 /**
+ * Which model this row names.
+ *
+ * A `Select` over the provider's catalog - the same models the composer's
+ * picker offers, by their catalog labels, in catalog order - storing the
+ * chosen SLUG. It replaced a text field that accepted anything: a user had to
+ * know a slug or family spelling already, and a typo was accepted, saved as
+ * policy, and then matched nothing at resolution, so the value on screen did
+ * not mean the model the fallback would run.
+ *
+ * A stored value that is not a catalog slug still renders, PINNED as the first
+ * option and selected - the same range-render rule {@link HarnessSelect} and
+ * {@link EffortControl} apply, and for the same reason: silently rewriting a
+ * stored value on a page someone opened to read is worse than showing them
+ * what is actually saved. Two stored values reach that branch:
+ *
+ *  - a FAMILY name (`opus`), which the seeded groups use and which the engine
+ *    resolves against the live catalog at hop time. Tagged "family" so a
+ *    reader can tell it from a model, and only once the catalog has answered
+ *    - with no catalog, nothing can say whether "gpt-5" is a slug or a word,
+ *    and calling it a family would be a claim with nothing behind it;
+ *  - a slug the catalog no longer lists, which the row's preview line then
+ *    reports as matching nothing.
+ *
+ * The cell cannot TYPE a family any more; that is the trade the dropdown
+ * makes, and the seeded families survive it because they are pinned. Blank -
+ * a row just added - shows the placeholder and is marked invalid, which is
+ * the same rule the wire schema applies (`modelFamily: z.string().trim()
+ * .min(1)`): the draft cannot be saved until the row names something.
+ */
+function ModelSelect(props: {
+  readonly id: string;
+  readonly modelFamily: string;
+  readonly models: readonly GuiAgentModelOption[];
+  readonly describedBy: string | undefined;
+  readonly onChange: (next: string) => void;
+}): ReactNode {
+  const { id, modelFamily, models, describedBy, onChange } = props;
+  const stored = modelFamily.trim();
+  const picked = catalogModelForFamily(models, stored);
+  // The catalog's own spelling when it knows the value, so the Select's value
+  // matches its item exactly - the engine lower-cases both sides, so "GPT-5"
+  // and "gpt-5" are one model to it and must select one item here.
+  const value = picked === null ? stored : picked.slug;
+  const pinned = stored !== "" && picked === null;
+  const taggedFamily = pinned && models.length > 0;
+  return (
+    <Select
+      value={value}
+      onValueChange={(next) => {
+        onChange(next);
+      }}
+    >
+      <SelectTrigger
+        id={id}
+        className="h-8 w-full"
+        aria-label="Model"
+        aria-describedby={describedBy}
+        // Stated on the cell rather than threaded down from the panel's one
+        // error line - which names the row but cannot mark it.
+        aria-invalid={stored === "" ? true : undefined}
+      >
+        <SelectValue placeholder="Choose a model" />
+      </SelectTrigger>
+      <SelectContent>
+        {pinned ? (
+          <SelectItem value={stored} data-testid="fallback-model-pinned">
+            {stored}
+            {taggedFamily ? (
+              <Badge
+                variant="outline"
+                className="ml-1"
+                data-testid="fallback-model-family-tag"
+              >
+                family
+              </Badge>
+            ) : null}
+          </SelectItem>
+        ) : null}
+        {models.map((model) => (
+          <SelectItem key={model.slug} value={model.slug}>
+            {model.label}
+          </SelectItem>
+        ))}
+        {models.length === 0 && !pinned ? (
+          // A menu with nothing in it reads as broken; a disabled line says
+          // why. `value` is never selectable, so the sentinel cannot reach
+          // `onValueChange`.
+          <SelectItem value={NO_MODELS_VALUE} disabled>
+            No models to choose from
+          </SelectItem>
+        ) : null}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * The disabled placeholder item's value. Never selectable and never emitted;
+ * it exists because Radix requires every item to carry a non-empty value.
+ */
+const NO_MODELS_VALUE = "__no-models__";
+
+/**
  * The reasoning effort this row runs at.
  *
- * A `Select` of the levels the harness's own models advertise, which is what
- * the agreed UX specified and what every other effort picker in the app
- * renders. It replaced an unrestricted text input whose only hint was a
- * placeholder: a user had to know a provider-specific spelling already, and a
- * typo was accepted, saved as policy, and then silently dropped at resolution -
- * so the value on screen did not mean the effort the fallback would run at.
+ * A `Select` of the levels on offer for the row's model - that model's own
+ * when the Model cell names a catalog slug, the union across the harness's
+ * models when it names a family (see `fallback-catalog-options.ts`) - plus
+ * "Any effort" for the `null` that means no constraint. What every other
+ * effort picker in the app renders, and what replaced a free-text input that
+ * accepted a misspelling and then dropped it at resolution.
  *
- * Two states, decided by whether any levels are ADVERTISED - which is not the
- * same distinction the comment here used to draw. It described "no answer"
- * versus "an answer that happens to be empty" as if the control could tell them
- * apart; it cannot. The lookup returns an array, and a harness that advertises
- * nothing and a harness nothing is known about both arrive as an empty one. So
- * the rule this implements, and the rule D207 states, is the weaker and true
- * one: with no levels on offer, free text is accepted.
- *
- *  - **levels are advertised.** A `Select` of them, plus "Any effort" for the
- *    `null` that means no constraint. A STORED value outside the set keeps an
- *    option of its own and stays selected, labelled as not offered - the same
- *    rule {@link HarnessSelect} applies to an unknown harness, and for the same
- *    reason: silently rewriting a stored value on a page someone opened to read
- *    is worse than showing them what is actually saved.
- *  - **none are** - an older host, a harness the user no longer has, a cold
- *    catalog slot, or a harness that genuinely offers none. The text input
- *    stands, because a `Select` built from nothing would offer only "Any
- *    effort" and would take away a level the user can legitimately type.
+ * A STORED value outside the set keeps an option of its own and stays
+ * selected, labelled as not offered - the same range-render rule
+ * {@link HarnessSelect} and {@link ModelSelect} apply. With nothing on offer at
+ * all (an older host, a harness the user no longer has, a cold catalog slot)
+ * the control still renders: disabled on "Any effort" when that is the stored
+ * value, since there is nothing to pick; enabled when a value IS stored, so
+ * the one edit still possible - clearing it - stays possible.
  */
 function EffortControl(props: {
   readonly reasoningEffort: string | null;
   readonly options: readonly AgentReasoningEffortOption[];
-  readonly onChange: (next: string | null) => void;
   readonly onCommit: (next: string | null) => void;
-  /** The blur/Enter props the text fallback shares with the family input. */
-  readonly commitCurrent: {
-    readonly onBlur: () => void;
-    readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  };
 }): ReactNode {
-  const { reasoningEffort, options, onChange, onCommit, commitCurrent } = props;
-  if (options.length === 0) {
-    return (
-      <Input
-        value={reasoningEffort ?? ""}
-        aria-label="Effort"
-        placeholder="any effort"
-        className="h-8 w-full"
-        onChange={(event) => {
-          // Empty means "no effort constraint", which the wire encodes as
-          // `null` - NOT as an empty string, which the schema refuses. The
-          // control cannot express the refused value at all, so this is the
-          // one normalisation worth doing at the edit site.
-          const next = event.target.value;
-          onChange(next.trim() === "" ? null : next);
-        }}
-        {...commitCurrent}
-      />
-    );
-  }
+  const { reasoningEffort, options, onCommit } = props;
   const stored = reasoningEffort;
   const unsupported =
     stored !== null && !options.some((option) => option.id === stored);
@@ -646,6 +765,7 @@ function EffortControl(props: {
       // `ANY_EFFORT_VALUE`, not "": Radix treats an empty string as "no value"
       // and would render the placeholder for a choice the user made.
       value={stored ?? ANY_EFFORT_VALUE}
+      disabled={options.length === 0 && stored === null}
       onValueChange={(next) => {
         onCommit(next === ANY_EFFORT_VALUE ? null : next);
       }}
@@ -756,19 +876,31 @@ function MoveButton(props: {
 }
 
 /**
- * What this row resolves to right now, in the host's words.
+ * What the row's verdict line says, or `null` when it has nothing to add.
  *
- * The reason this is an RPC and not a client-side computation: resolving a
- * family to a slug needs the live model catalog, the provider's enabled and
+ * The reason the verdict is an RPC and not a client-side computation: resolving
+ * a family to a slug needs the live model catalog, the provider's enabled and
  * runnable state, and which account would run it - none of which the renderer
  * has, and all of which the engine already walks. A second implementation here
  * would offer targets the engine skips and drift on every engine change.
  *
- * `skipLabel` is always what gets RENDERED, so a reason a released client has
- * never heard of still prints a sentence instead of blanking the row. The
- * `skipReason` is parsed only to decide the TONE, which is the split the
- * protocol's own doc prescribes for an open reason field: parse to branch, fall
- * back to the label when it does not match.
+ * ## Only when informative
+ *
+ * The line used to print "resolves to <slug>" under every row. Now that the
+ * Model cell shows a catalog model by name, a line saying the model resolves
+ * to itself is noise under every row, and it buried the two cases the line
+ * exists for. It renders exactly when:
+ *
+ *  - the row names a FAMILY and the host says which model it means today
+ *    ("matches Claude Opus 5 today on Work") - the catalog label where the
+ *    catalog knows the slug, the slug otherwise;
+ *  - the host could not resolve it, in which case `skipLabel` is what gets
+ *    rendered, so a reason a released client has never heard of still prints a
+ *    sentence instead of blanking the row. `skipReason` is parsed only to
+ *    decide the TONE, which is the split the protocol's own doc prescribes for
+ *    an open reason field: parse to branch, fall back to the label when it does
+ *    not match;
+ *  - the host attached warnings, whichever way it resolved.
  *
  * Only `family-unmatched` is red. It is the one verdict that says the USER's
  * row is wrong - they named a family nothing matches, and it will never fire
@@ -777,58 +909,50 @@ function MoveButton(props: {
  * user's authoring error, and colouring those red would train people to ignore
  * the colour on the row that actually needs it. The row is never auto-removed
  * either way; it stays and says why.
+ *
+ * The ACCOUNT'S NAME, never its id. `profileId` is a managed-profile uuid, and
+ * printing it produced "resolves to gpt-5.6-sol on 3f2a9c1e-…" - the D118
+ * defect, on the one surface whose job is to say what a row will do. `null`
+ * still omits the clause rather than naming an account: here it means the
+ * preview has no particular one to report, which is not the chat cards'
+ * "Terminal account".
  */
-function CandidatePreviewLine(props: {
-  /**
-   * The id the row's Model family field points its `aria-describedby` at
-   * (AX8). The field is the one this verdict is about - it says what that
-   * family resolves to - so the association runs field → line rather than the
-   * line announcing itself.
-   */
-  readonly id: string;
-  readonly preview: TierCandidatePreview | null;
-  readonly labelFor: FallbackSettingsProfileLabel;
-}): ReactNode {
-  const { id, preview, labelFor } = props;
+function previewSentence(
+  candidate: TierCandidate,
+  preview: TierCandidatePreview | null,
+  models: readonly GuiAgentModelOption[],
+  labelFor: FallbackSettingsProfileLabel,
+): { readonly text: string; readonly unmatched: boolean } | null {
   if (preview === null) return null;
+  const warnings = preview.warnings.map((warning) => ` - ${warning}`).join("");
   const resolved = preview.resolvedModel;
-  const parsedReason =
-    preview.skipReason === null
+  if (resolved === null) {
+    const parsedReason =
+      preview.skipReason === null
+        ? null
+        : tierRungSkipReasonSchema.safeParse(preview.skipReason);
+    const unmatched =
+      parsedReason !== null &&
+      parsedReason.success &&
+      parsedReason.data === "family-unmatched";
+    return {
+      text: `${preview.skipLabel ?? "not available"}${warnings}`,
+      unmatched,
+    };
+  }
+  // The cell already names this model: nothing to add unless the host did.
+  const namesItself =
+    candidate.modelFamily.trim().toLowerCase() === resolved.toLowerCase();
+  if (namesItself) {
+    return warnings === ""
       ? null
-      : tierRungSkipReasonSchema.safeParse(preview.skipReason);
-  const unmatchedFamily =
-    parsedReason !== null &&
-    parsedReason.success &&
-    parsedReason.data === "family-unmatched";
-  return (
-    <p
-      id={id}
-      className={cn(
-        "col-start-2 col-span-3 mt-1 px-2 text-ui-xs",
-        unmatchedFamily ? "text-destructive" : "text-muted-foreground",
-      )}
-      data-testid="fallback-tier-candidate-preview"
-      data-unmatched={unmatchedFamily ? "true" : undefined}
-    >
-      {resolved === null ? (
-        <span>{preview.skipLabel ?? "not available"}</span>
-      ) : (
-        <span>
-          resolves to <span className="text-foreground">{resolved}</span>
-          {/* The ACCOUNT'S NAME, never its id. `profileId` is a managed-profile
-              uuid, and printing it produced "resolves to gpt-5.6-sol on
-              3f2a9c1e-…" - the D118 defect, on the one surface whose job is to
-              say what a row will do. `null` still omits the clause rather than
-              naming an account: here it means the preview has no particular one
-              to report, which is not the chat cards' "Terminal account". */}
-          {preview.profileId === null
-            ? null
-            : ` on ${labelFor(preview.profileId)}`}
-        </span>
-      )}
-      {preview.warnings.map((warning) => (
-        <span key={warning}> - {warning}</span>
-      ))}
-    </p>
-  );
+      : { text: warnings.slice(3), unmatched: false };
+  }
+  const label = catalogModelForFamily(models, resolved)?.label ?? resolved;
+  const account =
+    preview.profileId === null ? "" : ` on ${labelFor(preview.profileId)}`;
+  return {
+    text: `matches ${label} today${account}${warnings}`,
+    unmatched: false,
+  };
 }

@@ -108,11 +108,27 @@ vi.mock(
     }),
   }),
 );
+// The Model and Effort cells' catalog read is out of this suite's scope, and
+// `useFallbackCatalogOptions` would otherwise call the REAL `useHostClient()`
+// this file wires up (via `useGuiHarnessesQuery`/`useHostQueries`), issuing a
+// live `agent.gui.listHarnesses` request the mock messenger below has no
+// handler for. `importOriginal` keeps `catalogModelForFamily`, which the card
+// imports directly from this module.
 vi.mock(
-  "@/components/settings/panels/fallback/fallback-effort-options",
-  () => ({
-    useFallbackEffortOptions: () => () => [],
-  }),
+  "@/components/settings/panels/fallback/fallback-catalog-options",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/panels/fallback/fallback-catalog-options")
+      >();
+    return {
+      ...actual,
+      useFallbackCatalogOptions: () => ({
+        modelsFor: () => [],
+        effortsFor: () => [],
+      }),
+    };
+  },
 );
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessModelsQuery: () => ({ data: undefined }),

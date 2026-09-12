@@ -49,7 +49,7 @@ import { useFallbackPolicyResetMutation } from "@/hooks/providers/use-fallback-p
 import { useFallbackPolicyRestoreTierGroupsMutation } from "@/hooks/providers/use-fallback-policy-restore-tier-groups-mutation";
 import { useFallbackPolicyPreviewTierGroupsQuery } from "@/hooks/providers/use-fallback-policy-preview-tier-groups-query";
 import { useFallbackSettingsProfileLabels } from "@/components/settings/panels/fallback/fallback-profile-labels";
-import { useFallbackEffortOptions } from "@/components/settings/panels/fallback/fallback-effort-options";
+import { useFallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
@@ -382,8 +382,8 @@ function FallbackPolicyEditor(props: {
   // map, rather than each card rebuilding it (D190).
   const profileLabelFor = useFallbackSettingsProfileLabels();
   // Same shape, same reason: one model-catalog read per distinct harness in the
-  // draft serves every row's Effort control.
-  const effortOptions = useFallbackEffortOptions(state.draft.tierGroups);
+  // draft serves every row's Model and Effort cells.
+  const catalog = useFallbackCatalogOptions(state.draft.tierGroups);
 
   const previewQuery = useFallbackPolicyPreviewTierGroupsQuery(
     keyedGroupsMatch(state.keyedTierGroups, state.persisted.tierGroups)
@@ -396,11 +396,12 @@ function FallbackPolicyEditor(props: {
    * message follows it, but nothing is sent.
    *
    * Text is the one control kind whose intermediate states are not values the
-   * user means. "opus" passes through "o", "op", "opu", and a save per character
-   * writes three model families nobody asked for, spends a catalog read per
-   * candidate previewing each, and makes the response to "o" arrive while "op"
-   * is on screen. Every other control here - switches, selects, arrows, buttons -
-   * produces a complete value per interaction and commits immediately.
+   * user means. A group named "fast" passes through "f", "fa", "fas", and a
+   * save per character writes three group names nobody asked for, spends a
+   * catalog read per candidate previewing each, and makes the response to "f"
+   * arrive while "fa" is on screen. Every other control here - switches,
+   * selects (the Model and Effort cells included), arrows, buttons - produces
+   * a complete value per interaction and commits immediately.
    *
    * Validation still runs per keystroke, which is the point of separating the
    * two: the message under a blank family name has to appear as it goes blank,
@@ -521,7 +522,16 @@ function FallbackPolicyEditor(props: {
       // has since been deleted. A commit here would be a save with no change in
       // it.
       if (groups === current.keyedTierGroups) return;
-      commit(withTierGroups(current.draft, groups), "tierGroups", groups);
+      // A restored group that was the default becomes the default again -
+      // unless another group has been made the default while the toast was
+      // up, in which case that later choice is the newer fact and stands.
+      const base =
+        inverse.kind === "group" &&
+        inverse.wasDefault &&
+        current.draft.defaultTierGroupId === null
+          ? { ...current.draft, defaultTierGroupId: inverse.group.id }
+          : current.draft;
+      commit(withTierGroups(base, groups), "tierGroups", groups);
     },
     [commit],
   );
@@ -976,7 +986,7 @@ function FallbackPolicyEditor(props: {
             // inputs that question needs.
             preview={previewQuery.data?.candidates ?? null}
             labelFor={profileLabelFor}
-            effortOptions={effortOptions}
+            catalog={catalog}
             previewPending={previewQuery.isFetching}
             // The distinction `preview` cannot make (FC9). `preview` is
             // data-or-null and a null renders no line, so a FAILED check was
@@ -1468,6 +1478,7 @@ function TierStepHint({
   if (
     tierGroupsNameDestinationFor({
       groups: policy.tierGroups,
+      defaultTierGroupId: policy.defaultTierGroupId,
       harnessId: lastRun.harnessId,
       model: lastRun.model,
     })
