@@ -58,7 +58,6 @@ const PODIUM_FACING: OfficeFacing = "down";
 
 const QUEUE_LENGTH = 4;
 const ROOM_SIGN_WIDTH_TILES = 2;
-const PLATE_WIDTH_TILES = 1;
 const HOST_SIGN_WIDTH_TILES = 2;
 
 export interface MissionControlTeamReserve {
@@ -1550,6 +1549,56 @@ function uniqueHosts(input: OfficePlanInput): ReadonlyArray<string | null> {
   return hosts;
 }
 
+/**
+ * ONE TEAM'S SEATS ON ONE TIER: the arc segment a plate is allowed to cover.
+ *
+ * The packing seats a team in contiguous slots, but contiguous slots are not
+ * always one tier - a team longer than the seats left in its aisle group runs
+ * on into the next tier - and a plate names the segment it SITS OVER, so the
+ * span stops where the lead's row does. Aisle gaps inside the segment count
+ * towards the width because the plate is drawn straight across them, and the
+ * team's reserve seat counts too: it is the team's tinted band either way.
+ */
+interface TierRun {
+  /** The segment's leftmost console tile, on the row the plate hangs on. */
+  readonly tile: OfficeTilePos;
+  /** Its span in tiles, the trailing console's second tile included. */
+  readonly widthTiles: number;
+}
+
+function sameTeamOnTier(
+  packing: Packing,
+  index: number,
+  tier: number,
+  teamId: string,
+): boolean {
+  return (
+    packing.slots[index].tier === tier && packing.fills[index].teamId === teamId
+  );
+}
+
+/** The arc segment around one seat: its team's run, clipped to its own tier. */
+function tierRunAt(packing: Packing, index: number, teamId: string): TierRun {
+  const slot = packing.slots[index];
+  let first = index;
+  while (first > 0 && sameTeamOnTier(packing, first - 1, slot.tier, teamId)) {
+    first -= 1;
+  }
+  let last = index;
+  while (
+    last + 1 < packing.slots.length &&
+    sameTeamOnTier(packing, last + 1, slot.tier, teamId)
+  ) {
+    last += 1;
+  }
+  const leftCol = packing.slots[first].deskTile.col;
+  return {
+    tile: { col: leftCol, row: slot.chairTile.row },
+    widthTiles:
+      packing.slots[last].deskTile.col - leftCol + CONSOLE_WIDTH_TILES,
+  };
+}
+
 function buildSigns(
   packing: Packing,
   input: OfficePlanInput,
@@ -1576,31 +1625,36 @@ function buildSigns(
     hostId: null,
     agentIds: [],
   });
-  const leadPlates = new Map<string, OfficeTilePos>();
+  // A PLATE IS ITS OWN ARC SEGMENT WIDE, and hangs over it rather than beside
+  // it. It used to be one tile at the lead's aisle end, which is a budget no
+  // reading of a name ever fits: the drawing step sizes the box from the
+  // measured text and centres it on the sign's own tiles, so `team-26-lead`
+  // over a two-seat run reached three consoles either side and the next
+  // opaque box painted over it - the amphitheatre half of M3. Handed the run
+  // it names, the box can never leave it, and two runs on a tier are disjoint
+  // by construction, so two plates on a tier cannot overlap.
+  const leadPlates = new Map<string, TierRun>();
   for (let i = 0; i < packing.slots.length; i += 1) {
     const fill = packing.fills[i];
     if (fill.agentId === null || fill.teamId === null) continue;
     if (fill.agentId !== fill.teamId) continue;
-    const slot = packing.slots[i];
-    const towardAisle =
-      slot.indexInTier === 0 || slot.aisleEnd
-        ? { col: slot.deskTile.col - 1, row: slot.chairTile.row }
-        : {
-            col: slot.deskTile.col + CONSOLE_WIDTH_TILES,
-            row: slot.chairTile.row,
-          };
-    leadPlates.set(fill.teamId, towardAisle);
+    leadPlates.set(fill.teamId, tierRunAt(packing, i, fill.teamId));
   }
-  for (const [teamId, tile] of leadPlates) {
+  for (const [teamId, run] of leadPlates) {
     const lead = byId.get(teamId);
     signs.push({
       kind: "plate",
-      tile,
-      widthTiles: PLATE_WIDTH_TILES,
+      tile: run.tile,
+      widthTiles: run.widthTiles,
       text: lead === undefined ? teamId : lead.name,
       ownerAgentId: teamId,
       hostId: lead === undefined ? null : lead.hostId,
       agentIds: [],
+      // The lead is re-lettered at the cursor, so the ladder is derived from
+      // whatever it is called there: `team-26-lead`, `team-26`, `t-26`, `t2l`,
+      // and no plate at all where even the initials overflow the run - at
+      // which point the team keeps the name its hover card has always carried.
+      rungs: "name",
     });
   }
   const hosts = uniqueHosts(input);
