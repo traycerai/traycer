@@ -27,6 +27,7 @@ import {
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { isMobileApp } from "@/lib/mobile-app";
+import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
 import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
@@ -1101,7 +1102,7 @@ export class TabCommandCoordinator {
       target.draftId ??
       mobileStableDraftId ??
       (target.create ? uuidv4() : null);
-    if (draftId === null) return null;
+    if (draftId === null || landingDraftIsRetired(draftId)) return null;
     const drafts = useLandingDraftStore.getState().drafts;
     const present = drafts.some((draft) => draft.id === draftId);
     const open = drafts.some(
@@ -1956,8 +1957,18 @@ export class TabCommandCoordinator {
     const additions = knownSources.filter(
       (ref) => findStripItemForRef(withoutMissing, ref) === null,
     );
+    const withAdditions = additions.reduce(createLayoutItem, withoutMissing);
     return {
-      next: additions.reduce(createLayoutItem, withoutMissing),
+      // Background source updates must not select a newly mirrored draft.
+      // Explicit tab commands focus their target separately.
+      next:
+        additions.length === 0 || withoutMissing.activeItemId === null
+          ? withAdditions
+          : {
+              ...withAdditions,
+              activeItemId: withoutMissing.activeItemId,
+              activationHistory: withoutMissing.activationHistory,
+            },
       additions,
       removals,
     };
