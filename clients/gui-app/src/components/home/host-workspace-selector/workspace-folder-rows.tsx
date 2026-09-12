@@ -92,6 +92,7 @@ export function WorkspaceFolderRows(props: {
       pending={props.addFolderPending}
       disabled={props.addFolderDisabled}
       disabledReason={props.addFolderDisabledReason}
+      iconOnly={false}
     />
   );
   // Terminal-agent "Update" action: pinned to the far right of the folder block
@@ -215,20 +216,30 @@ function DiscardStagedButton(props: {
   );
 }
 
+export const ADD_FOLDER_LABEL = "Add folder";
+
+/**
+ * `iconOnly` drops the visible word for a row too narrow to spare it; the
+ * button keeps its name through `aria-label` and a hover tooltip. A disabled
+ * reason still owns the tooltip when there is one - a button gets one tooltip.
+ */
 export function AddFolderButton(props: {
   readonly onAddFolder: AddFolderHandler;
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly disabledReason: string | null;
+  readonly iconOnly: boolean;
 }) {
+  const buttonDisabled = props.pending || props.disabled;
   const button = (
     <Button
       type="button"
-      size="sm"
+      size={props.iconOnly ? "icon-sm" : "sm"}
       variant="ghost"
       className="rounded-lg text-muted-foreground"
       data-testid="folder-add"
-      disabled={props.pending || props.disabled}
+      aria-label={props.iconOnly ? ADD_FOLDER_LABEL : undefined}
+      disabled={buttonDisabled}
       onClick={() => {
         void props.onAddFolder();
       }}
@@ -242,22 +253,40 @@ export function AddFolderButton(props: {
       ) : (
         <FolderPlus data-icon="inline-start" />
       )}
-      <span className="truncate">Add folder</span>
+      {props.iconOnly ? null : (
+        <span className="truncate">{ADD_FOLDER_LABEL}</span>
+      )}
     </Button>
   );
-  if (props.disabled && props.disabledReason !== null) {
-    return (
-      <TooltipWrapper
-        label={props.disabledReason}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
+  const tooltipLabel = addFolderTooltipLabel(props);
+  if (tooltipLabel === null) return button;
+  return (
+    <TooltipWrapper
+      label={tooltipLabel}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* A disabled button fires no pointer events, so a wrapper takes the
+          hover in its place. */}
+      {buttonDisabled ? (
         <span className="inline-flex w-fit">{button}</span>
-      </TooltipWrapper>
-    );
+      ) : (
+        button
+      )}
+    </TooltipWrapper>
+  );
+}
+
+function addFolderTooltipLabel(input: {
+  readonly disabled: boolean;
+  readonly disabledReason: string | null;
+  readonly iconOnly: boolean;
+}): string | null {
+  if (input.disabled && input.disabledReason !== null) {
+    return input.disabledReason;
   }
-  return button;
+  return input.iconOnly ? ADD_FOLDER_LABEL : null;
 }
 
 /**

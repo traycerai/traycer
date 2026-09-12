@@ -20,7 +20,7 @@ import {
  * than a bug.
  */
 const SELECTED_UTILITIES = [
-  "data-[selected=true]:bg-primary/12",
+  "data-[selected=true]:bg-[color-mix(in_srgb,var(--primary)_14%,var(--popover))]",
   "data-[selected=true]:border-primary/35",
   "data-[selected=true]:shadow-sm",
   "data-[selected=true]:text-foreground",

@@ -1,5 +1,6 @@
 import type { Query, QueryClient } from "@tanstack/react-query";
 import type { IHostQueryInvalidator } from "@traycer-clients/shared/host-client/host-client";
+import type { AvailabilityRecoveryKind } from "@traycer-clients/shared/host-transport/availability-recovery-kind";
 import { appLogger } from "@/lib/logger";
 import { isCloudEpicTasksQueryKey, queryKeys } from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
@@ -76,6 +77,51 @@ function isActiveRefetchExempt(query: Query): boolean {
 }
 
 /**
+ * A read whose current attempt is still in flight and has not failed.
+ * TanStack resets `fetchFailureCount` when a fetch starts and raises it when
+ * an attempt fails, so a read parked in retry backoff - still `"fetching"` -
+ * reads a count above zero and is not one of these.
+ */
+function attemptInFlightHasNotFailed(query: Query): boolean {
+  return (
+    query.state.fetchStatus === "fetching" &&
+    query.state.fetchFailureCount === 0
+  );
+}
+
+/**
+ * Whether a recovery sweep of `kind` cancels and re-issues `query`.
+ *
+ * Never a read whose current attempt is still in flight and has not failed.
+ * Cancelling one threw its work away, and the same sweep re-issued it at once
+ * into a host that was already behind: during the incident behind this rule
+ * the renderer logged a sweep with `refetching: 140` every 10 s. Left alone,
+ * such a read either answers or fails - at its own timeout, or when its
+ * transport drops, since both unary transports reject an in-flight request at
+ * the drop - and once it has failed, a sweep reaches it. A read parked in
+ * retry backoff has already failed, so it still qualifies, and the cancel in
+ * the sweep exists for exactly that read.
+ *
+ * Past that, the kind decides:
+ * - `"stall"`: the socket survived, so the process answering is the one that
+ *   answered before. Only a read that failed is stranded: status `error`, or
+ *   a failed attempt in its current fetch.
+ * - `"reconnect"`: every settled or failed read, because the host may have
+ *   restarted and a settled read may describe a process that is gone.
+ */
+function recoverySweepReaches(
+  query: Query,
+  kind: AvailabilityRecoveryKind,
+): boolean {
+  if (attemptInFlightHasNotFailed(query)) return false;
+  return (
+    kind === "reconnect" ||
+    query.state.status === "error" ||
+    query.state.fetchFailureCount > 0
+  );
+}
+
+/**
  * Adapts the app's `QueryClient` to the `IHostQueryInvalidator` port.
  *
  * Host-scoped queries use the key layout `["host", hostId, method, params]`,
@@ -92,7 +138,9 @@ function isActiveRefetchExempt(query: Query): boolean {
  * refetching, because the request context may already be gone; the two
  * host-named sweeps can refetch active observers - except the two carve-outs
  * in `isActiveRefetchExempt` (harness catalogs, cloud epic-tasks history),
- * which are skipped entirely.
+ * which are skipped entirely, and whatever `recoverySweepReaches` leaves
+ * alone: a read still on its first attempt, and after a stall, every read
+ * that settled without failing.
  */
 export function createHostQueryInvalidator(
   client: QueryClient,
@@ -108,11 +156,14 @@ export function createHostQueryInvalidator(
         // cancel below is async; reusing only the broad host predicate after
         // that await would also invalidate queries mounted in the meantime,
         // even though they were never stranded by this recovery episode.
+        const inScope = client
+          .getQueryCache()
+          .findAll({ queryKey })
+          .filter((query) => !isActiveRefetchExempt(query));
         const affectedQueries = new Set(
-          client
-            .getQueryCache()
-            .findAll({ queryKey })
-            .filter((query) => !isActiveRefetchExempt(query)),
+          inScope.filter((query) =>
+            recoverySweepReaches(query, options.recovery),
+          ),
         );
         // The one line that counts SWEEPS. The per-stream-client recovery
         // wiring logs at debug, once per client, which over-reported the
@@ -120,9 +171,14 @@ export function createHostQueryInvalidator(
         // that reading is what turned two sweeps a minute into a reported
         // "1056 refetch storms a day" in the 2026-09-03 field investigation.
         // A sweep is worth an info line; a wiring reporting one is not.
+        // `recovery` and `inFlight` say which edge fired and how many reads
+        // the sweep left to answer on their own: without them the line
+        // cannot tell a reconnect's sweep from a stall's.
         appLogger.info("[stream] host-scope sweep", {
           hostId: hostId ?? "all",
+          recovery: options.recovery,
           refetching: affectedQueries.size,
+          inFlight: inScope.filter(attemptInFlightHasNotFailed).length,
         });
         const predicate = (query: Query): boolean => affectedQueries.has(query);
         // A query waiting in TanStack's retry backoff is still `fetchStatus:

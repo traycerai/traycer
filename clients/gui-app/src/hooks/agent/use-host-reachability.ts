@@ -12,6 +12,7 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { isUnknownHost } from "@/lib/host/constants";
+import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
 import { HOST_STARTING_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 
@@ -116,6 +117,12 @@ export interface HostReachability {
  * carries `basis: "starting-deadline"` - read it before driving anything
  * destructive off "unreachable".
  *
+ * An EXPECTED restart holds it (D4): while the host's lease says
+ * `restarting-expected`, a directory `offline` reads "host-starting" too, and
+ * the budget above does not run. The lease's own bounds end the hold - one
+ * restart episode for any host, the mutation lane's ceiling for this machine -
+ * and the budget starts when the lease stops vouching.
+ *
  * A host that is merely BUSY is reachable. See `HostAvailability`: `busy`
  * means the shell proved the process is alive and only a probe went
  * unanswered, and the entry keeps its real `websocketUrl` throughout, so
@@ -214,7 +221,7 @@ export function useHostReachability(hostId: string): HostReachability {
     // to dial. The genuinely-dead LOCAL host reaches the user through the
     // readiness controller's provisioning/Retry card, which this row is
     // deliberately shaped to keep armed.
-    if (entry.kind === "local" && entry.websocketUrl === null) {
+    if (isLocalHostBootingEntry(entry)) {
       return {
         status: "host-starting",
         hostLabel: entry.label.length > 0 ? entry.label : hostId,
@@ -304,6 +311,35 @@ export function useHostReachability(hostId: string): HostReachability {
     };
   }, [hostId, list.data, list.fetchStatus, hasReadySession, lease]);
 
+  // D4. An announced restart is not an outage. While the lease says
+  // `restarting-expected`, the authority expects the host back: inside a
+  // restart episode, which only a host that announces its restart opens
+  // (`RESTART_INTENT_EPISODE_MS`, 60 s), or for this machine while its
+  // mutation lane converges (`LOCAL_EXPECTED_OUTAGE_CEILING_MS`, 15 min). A
+  // directory `offline` in that window is the restart itself, so it reads
+  // `host-starting`, and every tile keeps its non-destructive wait instead of
+  // the dead-tile banner, the Clone offer and the terminal's "permanently
+  // closed" notification. `plan-restricted` is an entitlement verdict, not an
+  // outage, and is left alone. A crash announces nothing and opens no episode,
+  // so it still reads `offline`.
+  const restartExpected = lease?.status === "restarting-expected";
+  const heldVerdict = useMemo<HostReachability>(() => {
+    if (
+      !restartExpected ||
+      directoryVerdict.status !== "unreachable" ||
+      directoryVerdict.unavailability !== "offline"
+    ) {
+      return directoryVerdict;
+    }
+    return {
+      status: "host-starting",
+      hostLabel: directoryVerdict.hostLabel,
+      unavailability: null,
+      basis: "directory",
+      hostKind: directoryVerdict.hostKind,
+    };
+  }, [directoryVerdict, restartExpected]);
+
   // F4/S2. `host-starting` was the one arm with no way out: the directory
   // cannot distinguish "this machine's host is three seconds from publishing"
   // from "it is never going to", and it answered the optimistic one FOREVER.
@@ -321,20 +357,24 @@ export function useHostReachability(hostId: string): HostReachability {
   // decorative: the presentation falls, but a deadline is not proof of death,
   // so the persisted "Terminal permanently closed" notification stays gated on
   // directory evidence. See `HostReachabilityBasis`.
+  //
+  // The budget does not run while the lease vouches for a restart (D4, above):
+  // the lease's own bounds end that wait, and the 15 s start when it stops
+  // vouching, so a restart that outlives its episode still reaches the fall.
   const startingBudgetElapsed = useLoadDeadline(
-    directoryVerdict.status === "host-starting" ? hostId : null,
+    heldVerdict.status === "host-starting" && !restartExpected ? hostId : null,
     HOST_STARTING_BUDGET_MS,
   );
 
   return useMemo<HostReachability>(() => {
-    if (!startingBudgetElapsed) return directoryVerdict;
+    if (!startingBudgetElapsed) return heldVerdict;
     // Re-checked rather than assumed: the deadline's own key clears when the
     // status leaves `host-starting`, but reading the CURRENT verdict here is
     // what makes that a belt-and-braces invariant instead of a timing bet.
-    if (directoryVerdict.status !== "host-starting") return directoryVerdict;
+    if (heldVerdict.status !== "host-starting") return heldVerdict;
     return {
       status: "unreachable",
-      hostLabel: directoryVerdict.hostLabel,
+      hostLabel: heldVerdict.hostLabel,
       // `offline` is the retryable reason, and it is the honest one: the host
       // did not come up. It is deliberately NOT `plan-restricted` (an
       // entitlement verdict this arm has no evidence for) - the two read
@@ -343,9 +383,9 @@ export function useHostReachability(hostId: string): HostReachability {
       basis: "starting-deadline",
       // Carried through unchanged: whose machine this is does not change
       // because our patience ran out.
-      hostKind: directoryVerdict.hostKind,
+      hostKind: heldVerdict.hostKind,
     };
-  }, [directoryVerdict, startingBudgetElapsed]);
+  }, [heldVerdict, startingBudgetElapsed]);
 }
 
 /**

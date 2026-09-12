@@ -48,7 +48,7 @@ export class FakeStreamSession implements IStreamSession {
    */
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
-    if (this.status === "open") handler("open", null);
+    if (this.status === "open") handler("open", null, null);
   }
 
   requestReconnect(): void {}
@@ -63,21 +63,25 @@ export class FakeStreamSession implements IStreamSession {
 
   emitStatus(status: StreamStatus): void {
     this.status = status;
-    this.statusHandler?.(status, null);
+    this.statusHandler?.(status, null, null);
   }
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
   emitFatal(reason: string): void {
     this.status = "closed";
-    this.statusHandler?.("closed", {
-      kind: "fatalError",
-      details: {
-        code: "UNAUTHORIZED",
-        reason,
-        incompatibleMethods: null,
-        upgradeGuidance: null,
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
       },
-    });
+      null,
+    );
   }
 
   /**

@@ -321,13 +321,19 @@ export const REASSEMBLY_PROGRESS_TIMEOUT_MS = 20_000;
  * symptom (a timed-out unary, a stalled reassembly, a subscribe with no first
  * frame) is allowed to become a silence CANDIDATE.
  *
- * Deliberately equal to {@link REASSEMBLY_PROGRESS_TIMEOUT_MS} above and to the
- * chat tile's `STALLED_CHAT_LOAD_ELAPSED_MS` (`chat-tile-runtime-gate.tsx`),
- * and deliberately a SEPARATE constant: those two bound ONE stream's transfer
- * and the moment a pane offers a person Retry, while this bounds the session
- * behind all of them. They answer to different owners and will move
- * independently; equal today is an intent, not a shared value, and collapsing
- * them would tie a session-level verdict to a per-stream budget.
+ * Deliberately equal to {@link REASSEMBLY_PROGRESS_TIMEOUT_MS} above, and
+ * deliberately a SEPARATE constant: that one bounds ONE stream's transfer,
+ * while this bounds the session behind every stream. They answer to different
+ * owners and will move independently; equal today is an intent, not a shared
+ * value, and collapsing them would tie a session-level verdict to a
+ * per-stream budget.
+ *
+ * What it must stay below is the chat tile's `CHAT_LOAD_DEADLINE_MS` (60s,
+ * `chat-pre-content.ts`), the moment the tile first offers a person Try again.
+ * A silent session is then already detectable when the button appears, so the
+ * click can wake it before it redials. The tile's own 20s mark
+ * (`STALLED_CHAT_LOAD_ELAPSED_MS`) only adds a line saying the load is taking
+ * longer; nothing ties it to this value.
  *
  * The equality does cost the distinctness this file's other comments ask for
  * (see {@link RESTORE_STALL_LOG_AFTER_MS}): a suite that identifies timers by

@@ -382,6 +382,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         {deadTileBanner(true)}
         <ChatTileSessionView
           isLiveSession={false}
+          preContent={null}
           handle={replicaHandle}
           node={{
             id: node.chatId,
@@ -443,6 +444,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       <PublishedChatSourceProvider source={publishedSource}>
         <ChatTileSessionView
           isLiveSession={false}
+          preContent={null}
           handle={applied.handle}
           node={{
             // The CHAT id, not the tile ref's id: inside the surface this is what

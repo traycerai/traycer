@@ -747,6 +747,51 @@ describe("WsRpcClient", () => {
     expect(stub.closed).toEqual({ code: 1000, reason: "ok" });
   });
 
+  // G4: a recovery sweep no longer re-issues a read whose attempt is still in
+  // flight, which is safe only if an attempt cannot outlive its socket. A host
+  // restart closes the socket under a dispatched request; the request has to
+  // fail at the close, where the query layer and the next sweep can see it,
+  // not sit out a frame budget sized for a live host.
+  it("rejects a request in flight the moment its socket closes, not at its frame timeout", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-drop",
+      dialTimeoutMs: 1_000,
+      frameTimeoutMs: 60_000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const settled = client.request("host.echo", { message: "hi" }).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    expect(expectRequestFrame(sockets[0].sent[1]).requestId).toBe("req-drop");
+
+    const closedAt = Date.now();
+    sockets[0].socket.fireClose(1006, "host restarted", false);
+    const error = await settled;
+
+    // Unkeyed, so the outcome is ambiguous and the class says so. What this
+    // pins is WHEN the failure arrives: at the close, with a minute of frame
+    // budget still left.
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
+    expect(error instanceof Error ? error.message : "").toContain(
+      "WebSocket closed before next frame",
+    );
+    expect(Date.now() - closedAt).toBeLessThan(1_000);
+    expect(sockets).toHaveLength(1);
+  });
+
   describe("cloud verdict wire (lane 5, F1 unary carrier + F2 queued unary)", () => {
     function authorityWithVerdict(
       token: string,

@@ -255,14 +255,11 @@ export const epicPromotionStateSchema = z.enum(["pending", "active"]);
 export type EpicPromotionState = z.infer<typeof epicPromotionStateSchema>;
 
 /**
- * The two pause reasons the renderer must act on differently. The persisted
- * registry field is intentionally wider, so the host maps recognised values
- * to this closed wire union and omits unknown values.
+ * The pause reason the renderer must act on. The persisted registry field is
+ * intentionally wider, so the host maps recognised values to this closed wire
+ * union and omits unknown values.
  */
-export const epicDurabilityPauseReasonSchema = z.enum([
-  "entitlement-lapsed",
-  "access-revoked",
-]);
+export const epicDurabilityPauseReasonSchema = z.enum(["access-revoked"]);
 export type EpicDurabilityPauseReason = z.infer<
   typeof epicDurabilityPauseReasonSchema
 >;
@@ -294,7 +291,6 @@ export type EpicDurabilityPauseReason = z.infer<
  * it.
  */
 export const epicDurabilityPauseReasonSchemaV15 = z.enum([
-  "entitlement-lapsed",
   "access-revoked",
   "delete-pending-acknowledgement",
   "delete-tombstone-unscoped-cleared",

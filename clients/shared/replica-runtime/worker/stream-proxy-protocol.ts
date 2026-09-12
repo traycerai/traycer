@@ -44,6 +44,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
 
 /**
@@ -230,6 +231,8 @@ export interface StreamProxyStatus {
   readonly streamId: number;
   readonly status: StreamConnectionStatus;
   readonly reason: StreamCloseReason | null;
+  /** The transition's retry cause (see `StatusChangeHandler`). */
+  readonly retryCause: FatalErrorDetails | null;
 }
 
 /** The per-SESSION negotiated version, replicated for a synchronous read. */

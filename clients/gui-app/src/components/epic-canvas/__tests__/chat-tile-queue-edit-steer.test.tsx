@@ -241,7 +241,7 @@ function createChatHarness(): {
         (_epicId, _chatId, nextCallbacks) => {
           callbacks = nextCallbacks;
           setTimeout(() => {
-            nextCallbacks.onConnectionStatus("open", null);
+            nextCallbacks.onConnectionStatus("open", null, null);
             emitChatSnapshot(nextCallbacks, access, queueItems);
           }, 0);
           const client: ChatStreamClientHandle = {
@@ -591,7 +591,9 @@ function renderChatTile(): void {
 
 async function waitForChatTileLoaded(): Promise<void> {
   await waitFor(() => {
-    expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
+    expect(
+      document.querySelector('[data-testid^="chat-tile-pre-content-"]'),
+    ).toBeNull();
   });
   await waitFor(() => {
     expect(screen.getByTestId("queued-message-rows")).not.toBeNull();

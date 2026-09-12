@@ -1,5 +1,9 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import {
+  SESSION_CLOSED_FATAL_CODE,
+  SESSION_NOT_READY_FATAL_CODE,
+} from "@traycer/protocol/framework/stream-ws-protocol";
 
 /**
  * Interface for a single open `/stream` subscription. Returned by
@@ -104,6 +108,29 @@ export function isIncompatibleCloseForMethod(
 }
 
 /**
+ * Whether a fatal close on `method` is a host-side session LIFECYCLE refusal:
+ * the host could not serve this subscribe at this moment, and says nothing
+ * about the chat. Both transports retry it on their ordinary backoff instead
+ * of going terminal, and publish its details as the `retryCause` of the
+ * `reconnecting` transition (see `SESSION_NOT_READY_FATAL_CODE`).
+ *
+ * `chat.subscribe` only, because the codes are the chat session's. A host
+ * that sends them without `retryable` is one released before they were
+ * flagged; on any other method they carry no such meaning and keep their
+ * terminal reading.
+ */
+export function isRetryableSessionLifecycleFatal(
+  method: string,
+  details: FatalErrorDetails,
+): boolean {
+  return (
+    method === "chat.subscribe" &&
+    (details.code === SESSION_NOT_READY_FATAL_CODE ||
+      details.code === SESSION_CLOSED_FATAL_CODE)
+  );
+}
+
+/**
  * Frame envelope shape exposed to session consumers. The `kind` discriminant
  * plus `hasBinaryPayload` is the minimum the transport needs to route each
  * frame; every other field is contract-specific and is preserved verbatim
@@ -120,9 +147,24 @@ export type ServerFrameHandler = (
   binaryPayload: Uint8Array | null,
 ) => void;
 
+/**
+ * `retryCause` is the host's reason for a RETRYABLE close, delivered on the
+ * `reconnecting` transition that close causes, and `null` on every other
+ * transition. A consumer that counts failed attempts records it (the chat
+ * store's `PreSnapshotRetryEvidence.code`).
+ *
+ * It is its own argument, not a `StreamCloseReason`, because that type
+ * describes a CLOSE and is read that way: readers across the clients check
+ * `reason.kind` without checking the status first (the browser view maps any
+ * `fatalError` to failed, and several subscription hooks read anything but
+ * `caller` as a failure), so a reason on a `reconnecting` transition would
+ * turn every retry into a failure there. A listener that takes two
+ * parameters never sees this one.
+ */
 export type StatusChangeHandler = (
   status: StreamConnectionStatus,
   reason: StreamCloseReason | null,
+  retryCause: FatalErrorDetails | null,
 ) => void;
 
 export interface IStreamSession {
