@@ -753,6 +753,68 @@ describe("partitionOfficePopulation", () => {
     // Every surviving agent is still in exactly one of HQ, a team, or solos.
   });
 
+  it("lists a host's teams by the creation order of whoever heads each roster, including a team whose lead is gone", () => {
+    // CONTROL for CR2, not a fails-before case: the index map is a rewrite
+    // of findIndex with the same answers, so this passes on the unfixed
+    // tree too. What it has to do is go red if the index were wrong -
+    // looking up the team's name instead of the roster head, reversing
+    // creation order, or sorting by team id.
+    const base: ReadonlyArray<OfficeAgentInput> = [
+      agent({ id: "R", parentId: null, createdAt: 0 }),
+      // `kkk`'s MEMBER predates every other team's, and `kkk` itself
+      // postdates every other lead. Rosters are collected in creation order,
+      // so team kkk is the first one built and has to end up listed LAST -
+      // which is the only reason this case can tell a comparator apart from
+      // no comparator at all. Without it the order the rooms happen to be
+      // built in is already the answer, and deleting the sort outright would
+      // pass. A record older than its own parent's is a shape this file
+      // handles elsewhere on purpose; it is not a contrived one.
+      agent({ id: "kkk-m", parentId: "kkk", createdAt: 5 }),
+      // "zzz" is created first among the leads but sorts last by name, so
+      // a comparator on teamId disagrees with one on creation order.
+      agent({ id: "zzz", parentId: "R", createdAt: 10 }),
+      agent({ id: "zzz-m", parentId: "zzz", createdAt: 11 }),
+      agent({ id: "aaa", parentId: "R", createdAt: 20 }),
+      agent({ id: "aaa-m", parentId: "aaa", createdAt: 21 }),
+      agent({ id: "mmm", parentId: "R", createdAt: 30 }),
+      agent({ id: "mmm-m", parentId: "mmm", createdAt: 31 }),
+      agent({ id: "kkk", parentId: "R", createdAt: 40 }),
+    ];
+    const before = partitionVerified({
+      agents: base,
+      statusById: statusMap([]),
+      previous: null,
+    });
+    // Built kkk, zzz, aaa, mmm; listed by their roster heads instead.
+    expect(before.hosts[0].teams.map((team) => team.teamId)).toEqual([
+      "zzz",
+      "aaa",
+      "mmm",
+      "kkk",
+    ]);
+
+    // zzz is gone; zzz-m heads that roster. The team's name and the head
+    // of the roster now disagree - the case a careless index
+    // (orderOf(team.teamId) / leadAgentId) gets wrong, because "zzz" is
+    // absent and sorts last.
+    const agents: ReadonlyArray<OfficeAgentInput> = base.filter(
+      (candidate) => candidate.id !== "zzz",
+    );
+    const after = partitionVerified({
+      agents,
+      statusById: statusMap([]),
+      previous: before,
+    });
+
+    expect(after.teamOf("zzz-m")?.memberAgentIds).toEqual(["zzz-m"]);
+    expect(after.hosts[0].teams.map((team) => team.teamId)).toEqual([
+      "zzz",
+      "aaa",
+      "mmm",
+      "kkk",
+    ]);
+  });
+
   describe("N3: an arrival under a surviving member of a lead-less team", () => {
     // R -> L -> M all on host-a, fresh. L is then removed with M retained -
     // exactly F5b/N1b's sequence - so M is a frozen team member of L on

@@ -120,6 +120,15 @@ export interface OfficePopulationInput {
 interface Lineage {
   readonly byId: ReadonlyMap<string, OfficeAgentInput>;
   readonly ordered: ReadonlyArray<OfficeAgentInput>;
+  /**
+   * Each agent's index in `ordered`, so asking where somebody comes in
+   * creation order is a lookup rather than a scan.
+   *
+   * It is built here because the question is asked from inside a COMPARATOR -
+   * twice per comparison, once per host - and a scan there turns sorting a
+   * host's rooms into a walk of the whole epic per step.
+   */
+  readonly orderById: ReadonlyMap<string, number>;
   readonly childrenByParent: ReadonlyMap<
     string,
     ReadonlyArray<OfficeAgentInput>
@@ -173,7 +182,15 @@ function buildLineage(agents: ReadonlyArray<OfficeAgentInput>): Lineage {
     if (siblings === undefined) childrenByParent.set(parentId, [agent]);
     else siblings.push(agent);
   }
-  return { byId, ordered, childrenByParent, trueRoots, orphans };
+  // FIRST occurrence wins, which is what a scan for the id would have found.
+  // Two records sharing an id is already a broken input - `byId` keeps one of
+  // them - but it must not become a broken ORDER on top of that.
+  const orderById = new Map<string, number>();
+  for (const [at, agent] of ordered.entries()) {
+    if (orderById.has(agent.id)) continue;
+    orderById.set(agent.id, at);
+  }
+  return { byId, ordered, orderById, childrenByParent, trueRoots, orphans };
 }
 
 function childrenOf(
@@ -675,8 +692,7 @@ interface HostGroup {
 
 /** An agent's place in creation order; an absent id sorts last. */
 function orderOf(lineage: Lineage, agentId: string): number {
-  const at = lineage.ordered.findIndex((candidate) => candidate.id === agentId);
-  return at < 0 ? lineage.ordered.length : at;
+  return lineage.orderById.get(agentId) ?? lineage.ordered.length;
 }
 
 /** Host-id order with the hostless group last: exactly how storeys stack. */
