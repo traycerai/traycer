@@ -159,6 +159,19 @@ export class RemoteStreamClient<
   }
 
   /**
+   * The session's own silence verdict (see {@link IRemoteSession.isSilentFor}),
+   * forwarded unchanged - including its `isReady()` term, so a client whose
+   * host is merely DETACHED at the relay answers false and a person's Retry
+   * stays a re-subscribe.
+   *
+   * Production builds this over an ACQUIRED view, so a client whose consumer
+   * has released inherits that view's ownership guard and answers false too.
+   */
+  isSilentFor(ms: number): boolean {
+    return this.session.isSilentFor(ms);
+  }
+
+  /**
    * Bridges the session's ready-boundary transition (full attach through the
    * host's `openAck`; see `RemoteSession.subscribeAvailabilityRecovered`) to
    * availability-recovered listeners - the same "endpoint recovered" evidence

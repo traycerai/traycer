@@ -34,12 +34,12 @@ export const HOST_BOOT_CARD_SURFACE = "host-boot-card";
  * with a large foreground spinner floating on its own line - and the
  * narrator's card was `max-w-md` again while the two before it were `sm`.
  *
- * One width, one alignment, one spinner treatment - and one BODY for every
- * healthy wait (`LocalHostLoadingContent`: headline, bar, footer, whether or
- * not a lane has spoken yet), so across a healthy launch only the sentence
- * and the bar's fill change inside a box that does not move. Only a settled
- * failure ADDS to it (a title, diagnostics, actions), which reads as one
- * surface filling in rather than several modals taking turns.
+ * One width, one alignment - and one BODY for every healthy wait
+ * (`LocalHostLoadingContent`: mark, headline, footer, plus a progress bar
+ * while a stage reports a percentage), so across a healthy launch only the
+ * sentence and that bar change. Only a settled failure ADDS to it (a title,
+ * diagnostics, actions), which reads as one surface filling in rather than
+ * several modals taking turns.
  *
  * `pointer-events-auto` is unconditional and inert everywhere but one place:
  * the narrator's startup layer is `pointer-events-none` so toasts and the gate

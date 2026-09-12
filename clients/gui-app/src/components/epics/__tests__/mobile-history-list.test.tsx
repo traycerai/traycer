@@ -93,10 +93,6 @@ interface DeleteEpicsMutationVariables {
   } | null;
 }
 
-interface DeleteEpicsMutationOptions {
-  readonly onSuccess: () => void;
-}
-
 interface RenameEpicTitleVariables {
   readonly epicDelta: {
     readonly id: string;
@@ -118,13 +114,7 @@ const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
   completeness: null as ListTasksCompleteness | null,
   cloudPagePending: false,
-  mutate:
-    vi.fn<
-      (
-        variables: DeleteEpicsMutationVariables,
-        options: DeleteEpicsMutationOptions,
-      ) => void
-    >(),
+  mutate: vi.fn<(variables: DeleteEpicsMutationVariables) => void>(),
   renameMutate: vi.fn<(variables: RenameEpicTitleVariables) => void>(),
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   refetch: vi.fn<() => Promise<void>>(),
@@ -159,6 +149,7 @@ vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
     isPending: false,
     mutate: testState.mutate,
   }),
+  usePendingDeleteEpicIds: () => new Set<string>(),
 }));
 
 vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({

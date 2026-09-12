@@ -608,6 +608,17 @@ export function acquireRemoteSession<
     start: () => session.start(),
     isClosed: () => session.isClosed(),
     isReady: () => session.isReady(),
+    // Guarded like `wake` and `forceReconnect` below, and deliberately NOT
+    // like `isReady` above, even though all three only READ. What separates
+    // them is what the answer is FOR: `isReady` reports a fact about a
+    // connection to whoever asks, while this predicate is the gate on a forced
+    // redial - a stale view answering "silent" makes a Retry drop a session
+    // this consumer no longer holds. A released view is not silent; it has no
+    // standing to say anything about the session at all.
+    isSilentFor: (ms) =>
+      released || entry.superseded || session.isClosed()
+        ? false
+        : session.isSilentFor(ms),
     terminalFatal: () => session.terminalFatal(),
     sendUnary: (
       method,

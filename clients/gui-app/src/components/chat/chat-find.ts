@@ -28,4 +28,8 @@ export {
   type ChatFindRevealTarget,
 } from "@/components/chat/chat-find-adapter";
 
-export { queryMountedChatFindUnit } from "@/components/chat/chat-find-highlighter";
+export {
+  queryMountedChatFindUnit,
+  queryMountedChatMessageRoot,
+  queryMountedChatBlock,
+} from "@/components/chat/chat-find-highlighter";

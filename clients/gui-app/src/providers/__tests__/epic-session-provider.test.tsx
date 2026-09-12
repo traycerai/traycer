@@ -229,6 +229,7 @@ import {
   fakeDurableStreamTransports,
   resetFakeDurableStreamTransports,
 } from "@/lib/host/test-support/fake-durable-stream-transport";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import {
   createInProcessEpicRuntimeWorker,
   createProxiedInProcessEpicRuntimeWorker,
@@ -1733,6 +1734,132 @@ describe("<EpicSessionProvider />", () => {
     await act(() => Promise.resolve());
     expect(handlesB.at(-1)).toBe(handlesA.at(-1));
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  it("retryRepoint on the LOSER of a sibling re-point adoption reaches the WINNER's client", async () => {
+    // Base (before the fix): `adoptWinner` disposes the loser's own
+    // candidate (clearing its provider-local `epicStreamClientRef`) and then
+    // adopts the sibling's handle without ever writing this provider's ref -
+    // so the loser's silence gate reads "not silent" regardless of what the
+    // WINNER's actual client reports, and Retry on the loser never forces a
+    // reconnect.
+    // ONE FAKE PER OPEN, not one shared across the epic: the claim is that
+    // the loser reaches the WINNER's client, and a single client makes
+    // "reached the winner" and "reached its own disposed candidate"
+    // indistinguishable - which is exactly the wrong implementation this pin
+    // has to exclude.
+    const fakes: FakeStreamClient[] = [];
+    fakeDurableStreamTransports().opener = (_hostId) => {
+      const client = new FakeStreamClient(true);
+      fakes.push(client);
+      return {
+        wsStreamClient: client,
+        close: () => {
+          client.close();
+        },
+        closeWithReason: () => {
+          client.close();
+        },
+      };
+    };
+    const streams: ControlledEpicStream[] = [];
+    const handlesA: OpenEpicStoreHandle[] = [];
+    const handlesB: OpenEpicStoreHandle[] = [];
+    const presentationsA: Array<EpicSessionPresentation | null> = [];
+    const presentationsB: Array<EpicSessionPresentation | null> = [];
+    installStreamFactory((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+    const body = (): React.JSX.Element => (
+      <>
+        <EpicSessionProvider epicId="epic-retry-sibling-adopt" tabId="tab-a">
+          <HandleProbe onHandle={(handle) => handlesA.push(handle)} />
+          <PresentationProbe onPresentation={(p) => presentationsA.push(p)} />
+        </EpicSessionProvider>
+        <EpicSessionProvider epicId="epic-retry-sibling-adopt" tabId="tab-b">
+          <HandleProbe onHandle={(handle) => handlesB.push(handle)} />
+          <PresentationProbe onPresentation={(p) => presentationsB.push(p)} />
+        </EpicSessionProvider>
+      </>
+    );
+    const view = render(body());
+    await waitFor(() => {
+      expect(handlesA).toHaveLength(1);
+      expect(handlesB).toHaveLength(1);
+    });
+    expect(handlesB[0]).toBe(handlesA[0]);
+    expect(streams).toHaveLength(1);
+    act(() => {
+      deliverSnapshot(streams[0], "room-a");
+    });
+
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(body());
+    });
+    await waitFor(() => expect(streams).toHaveLength(3));
+
+    // The first candidate (tab-a's, streams[1]) wins; tab-b's (streams[2])
+    // is disposed and ADOPTS tab-a's handle - tab-b is the loser here.
+    act(() => {
+      deliverSnapshot(streams[1], "room-a");
+    });
+    await waitFor(() => {
+      expect(handlesA.at(-1)).not.toBe(handlesA[0]);
+      expect(handlesB.at(-1)).not.toBe(handlesB[0]);
+    });
+    expect(handlesB.at(-1)).toBe(handlesA.at(-1));
+    expect(streams[2].closeCount).toBe(1);
+    await waitFor(() => {
+      expect(presentationsA.at(-1)?.kind).toBe("ready");
+      expect(presentationsB.at(-1)?.kind).toBe("ready");
+    });
+
+    // Opens happen inside `createHandle`, in the same order as the stream
+    // factory calls above: [0] the original shared handle, [1] tab-a's
+    // candidate (the winner), [2] tab-b's (the loser, whose transport the
+    // adoption closed). The closed flags are asserted rather than assumed.
+    expect(fakes).toHaveLength(3);
+    const winnerClient = fakes[1];
+    const loserClient = fakes[2];
+    expect(loserClient.isClosed()).toBe(true);
+    expect(winnerClient.isClosed()).toBe(false);
+    const winnerReconnect = vi.spyOn(winnerClient, "reconnectAll");
+    const loserReconnect = vi.spyOn(loserClient, "reconnectAll");
+
+    // BOTH report silent, so a gate that read the loser's own disposed client
+    // would force on it and this pin would catch that too.
+    winnerClient.silentFor = true;
+    loserClient.silentFor = true;
+    act(() => {
+      presentationsB.at(-1)?.retry();
+    });
+    expect(winnerReconnect).toHaveBeenCalledTimes(1);
+    expect(winnerReconnect).toHaveBeenCalledWith("epic-retry", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+    expect(loserReconnect).not.toHaveBeenCalled();
+
+    winnerReconnect.mockClear();
+    winnerClient.silentFor = false;
+    loserClient.silentFor = false;
+    act(() => {
+      presentationsB.at(-1)?.retry();
+    });
+    expect(winnerReconnect).not.toHaveBeenCalled();
+    expect(loserReconnect).not.toHaveBeenCalled();
   });
 
   /**
@@ -3338,6 +3465,155 @@ describe("<EpicSessionProvider />", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("retryRepoint forces reconnectAll epic-retry when the injected client reports silent, and does not when it does not", async () => {
+    const fake = new FakeStreamClient(true);
+    const reconnectAll = vi.spyOn(fake, "reconnectAll");
+    fakeDurableStreamTransports().opener = (_hostId) => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+      closeWithReason: () => {
+        fake.close();
+      },
+    });
+    installStreamFactory(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    const presentations: Array<EpicSessionPresentation | null> = [];
+    render(
+      <EpicSessionProvider
+        epicId="epic-retry-silence"
+        tabId="epic-retry-silence"
+      >
+        <PresentationProbe
+          onPresentation={(presentation) => presentations.push(presentation)}
+        />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+    await waitFor(() => {
+      expect(presentations.at(-1)?.kind).toBe("ready");
+    });
+
+    fake.silentFor = true;
+    act(() => {
+      presentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).toHaveBeenCalledWith("epic-retry", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    reconnectAll.mockClear();
+    fake.silentFor = false;
+    act(() => {
+      presentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).not.toHaveBeenCalled();
+  });
+
+  it("retryRepoint forces reconnectAll on a WARM handle re-acquired after a provider remount, not the cold-constructed one", async () => {
+    // Base (before the fix): `epicStreamClientRef` is a provider-local ref,
+    // written only inside THIS provider's own `createHandle`. A warm
+    // re-acquire (`registry.acquireMounted`) hands back the existing handle
+    // WITHOUT running the factory, so the remounted provider's ref stays
+    // null and the silence gate reads "not silent" no matter what the warm
+    // handle's actual client reports - Retry never forces a reconnect.
+    const fake = new FakeStreamClient(true);
+    const reconnectAll = vi.spyOn(fake, "reconnectAll");
+    fakeDurableStreamTransports().opener = (_hostId) => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+      closeWithReason: () => {
+        fake.close();
+      },
+    });
+    installStreamFactory(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    function providerBody(
+      onHandle: (handle: OpenEpicStoreHandle) => void,
+      onPresentation: (presentation: EpicSessionPresentation | null) => void,
+    ): React.JSX.Element {
+      return (
+        <EpicSessionProvider
+          epicId="epic-retry-warm-remount"
+          tabId="epic-retry-warm-remount"
+        >
+          <HandleProbe onHandle={onHandle} />
+          <PresentationProbe onPresentation={onPresentation} />
+        </EpicSessionProvider>
+      );
+    }
+
+    const firstMountHandles: OpenEpicStoreHandle[] = [];
+    const firstMountPresentations: Array<EpicSessionPresentation | null> = [];
+    const view = render(
+      providerBody(
+        (handle) => firstMountHandles.push(handle),
+        (presentation) => firstMountPresentations.push(presentation),
+      ),
+    );
+    await waitFor(() => expect(firstMountHandles).toHaveLength(1));
+    await waitFor(() =>
+      expect(firstMountPresentations.at(-1)?.kind).toBe("ready"),
+    );
+    const warmHandle = firstMountHandles[0];
+
+    // Unmount: the MRU registry keeps the handle warm - the durable
+    // transport (and its stream client) stays alive underneath it.
+    view.unmount();
+    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+
+    // Remount on the SAME host: the registry hands back the warm handle and
+    // does NOT run the factory again.
+    const remountHandles: OpenEpicStoreHandle[] = [];
+    const remountPresentations: Array<EpicSessionPresentation | null> = [];
+    render(
+      providerBody(
+        (handle) => remountHandles.push(handle),
+        (presentation) => remountPresentations.push(presentation),
+      ),
+    );
+    await waitFor(() => expect(remountHandles).toHaveLength(1));
+    expect(remountHandles[0]).toBe(warmHandle);
+    await waitFor(() =>
+      expect(remountPresentations.at(-1)?.kind).toBe("ready"),
+    );
+
+    fake.silentFor = true;
+    act(() => {
+      remountPresentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).toHaveBeenCalledTimes(1);
+    expect(reconnectAll).toHaveBeenCalledWith("epic-retry", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    reconnectAll.mockClear();
+    fake.silentFor = false;
+    act(() => {
+      remountPresentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).not.toHaveBeenCalled();
   });
 
   it("retires the handle a worker fatal killed, so Retry rebuilds instead of re-presenting the corpse", async () => {

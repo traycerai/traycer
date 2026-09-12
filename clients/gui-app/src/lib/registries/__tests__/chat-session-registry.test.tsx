@@ -22,6 +22,7 @@ import {
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 
 // `useChatSessionHandle`'s own module state (the process-wide registry) is
 // exercised for real below - only its collaborators are mocked, so the
@@ -465,5 +466,66 @@ describe("a live chat session survives a degraded liveness read", () => {
     expect(result.current).toBe(liveHandle);
     expect(tracked.records()).toHaveLength(1);
     expect(tracked.records()[0].closeCount).toBe(0);
+  });
+});
+
+describe("useChatSessionHandle retryFromUser silence gate", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllChatSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+  });
+
+  function signInAndBind(fake: FakeStreamClient): void {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    openTransportRef.fn = () => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+    });
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+  }
+
+  it("wakes the bound FakeStreamClient when silentFor is true, and only re-subscribes when it is false", async () => {
+    const fake = new FakeStreamClient(false);
+    const reconnectAll = vi.spyOn(fake, "reconnectAll");
+    signInAndBind(fake);
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-silence-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const handle = result.current;
+    if (handle === null) {
+      throw new Error("expected a chat session handle");
+    }
+
+    fake.silentFor = true;
+    handle.store.getState().retryFromUser();
+    expect(reconnectAll).toHaveBeenCalledWith("user-retry", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    reconnectAll.mockClear();
+    fake.silentFor = false;
+    handle.store.getState().retryFromUser();
+    expect(reconnectAll).not.toHaveBeenCalled();
   });
 });
