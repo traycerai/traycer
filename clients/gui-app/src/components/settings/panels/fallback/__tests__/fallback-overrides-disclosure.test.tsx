@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultFallbackPolicy,
@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe("FallbackOverridesMatrix disclosure", () => {
-  it("renders the RF5 disclosure only after opening the per-failure editor", () => {
+  it("states the RF5 sentence with no click, because its own tab names it", () => {
     // Literal, and it has already earned the literalness once: this sentence
     // promised that an all-off row "preserves that failure's pre-retry/HOLD
     // behavior", and the engine stopped arming a non-transient notify-only
@@ -40,10 +40,13 @@ describe("FallbackOverridesMatrix disclosure", () => {
       />,
     );
 
-    expect(screen.queryByText(FALLBACK_OVERRIDES_DISCLOSURE)).toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: /Per-failure overrides/i }),
-    );
+    // This used to open only after clicking a "Per-failure overrides" row.
+    // That collapse kept a long single page short; on a tab of its own it put
+    // a second name and a second click in front of the only thing the tab
+    // holds, so it is gone and the matrix is simply there.
     expect(screen.getByText(FALLBACK_OVERRIDES_DISCLOSURE)).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: /Per-failure overrides/i }),
+    ).toBeNull();
   });
 });

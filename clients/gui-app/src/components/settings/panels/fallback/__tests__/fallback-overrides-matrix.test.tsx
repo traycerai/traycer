@@ -41,10 +41,8 @@ function renderMatrix(
       status={null}
     />,
   );
-  // Collapsed by default - open it before any row assertion.
-  fireEvent.click(
-    screen.getByRole("button", { name: /Per-failure overrides/i }),
-  );
+  // No opening step: the matrix used to sit behind a "Per-failure overrides"
+  // collapse, which its own tab made redundant.
 }
 
 afterEach(() => {

@@ -6,7 +6,6 @@ import type {
 import { FALLBACK_REASON_LABELS } from "@traycer/protocol/host/notifications/presentation";
 import type { HostNotificationStoppedReason } from "@traycer/protocol/host/notifications/payloads";
 import { SettingsGroup } from "@/components/settings/settings-group";
-import { HostSettingsDisclosure } from "@/components/settings/panels/host-settings-disclosure";
 import { Button } from "@/components/ui/button";
 import {
   FALLBACK_MATRIX_RUNGS,
@@ -65,10 +64,13 @@ export function FallbackOverridesMatrix(
       dataTestId="settings-fallback-overrides-group"
       fill={false}
     >
-      {/* The Host panel's disclosure, reused as-is. Its name records where it
-          was first needed, not a scope - it is a label-plus-chevron row, and
-          the doctor card already reuses it from outside that panel. */}
-      <HostSettingsDisclosure label="Per-failure overrides" defaultOpen={false}>
+      {/* No longer behind a "Per-failure overrides" collapse. That collapse
+          earned its place while this sat at the foot of one long scrolling
+          page - it kept the page short. On a tab of its own the trade inverts:
+          the rail already says Overrides, so the collapse was a second name in
+          front of a second click, guarding the one thing the tab exists for,
+          on a pane the matrix fits inside with room to spare. */}
+      <div className="px-5 py-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
             Which steps may run for each kind of failure. Where you change a
@@ -112,7 +114,7 @@ export function FallbackOverridesMatrix(
         </div>
         <ExcludedReasonsRow />
         {status}
-      </HostSettingsDisclosure>
+      </div>
     </SettingsGroup>
   );
 }
