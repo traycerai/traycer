@@ -231,14 +231,39 @@ function officeViewForCanvas(
   resolvedViewId: OfficeViewId | null,
   witnessedMove: boolean,
 ): CommGraphTileViewState {
+  // The Graph reads `x`, `y`, `zoom` as its own, which since D68 is exactly
+  // what they are. Nothing to project.
   if (view.mode !== "office") return view;
-  if (resolvedViewId === null) return view;
+  // Auto has not answered yet, so there is no view for a camera to be about.
+  // Still projected, and deliberately: the office canvas IS mounted here (on
+  // the measuring view, withheld by `ready`), and `createOfficeRuntime` reads
+  // the three fields once on its first render - so handing it the raw view
+  // would seat the office in the GRAPH's camera for the life of that runtime.
+  if (resolvedViewId === null) return { ...view, ...NEUTRAL_CAMERA };
   const framesAnotherView =
     witnessedMove ||
     (view.officeCameraView !== null &&
       view.officeCameraView !== resolvedViewId);
-  if (!framesAnotherView) return view;
-  return { ...view, ...NEUTRAL_CAMERA, officeCameraView: resolvedViewId };
+  if (framesAnotherView) {
+    // `officeCamera` is cleared alongside the three projected fields even
+    // though the canvas never reads it: "this camera frames another view"
+    // means there is no office camera for THIS one, and a projection whose
+    // two halves disagreed would be a trap for the next reader. The STORE is
+    // untouched - this is the value handed to the canvas, and the effect
+    // below is what settles the record.
+    return {
+      ...view,
+      ...NEUTRAL_CAMERA,
+      officeCamera: null,
+      officeCameraView: resolvedViewId,
+    };
+  }
+  // THE PROJECTION. `officeCamera` is where the office's framing lives; the
+  // canvas reads a plain camera and is told nothing about the split. `null`
+  // becomes the neutral camera, which is what that canvas reads as "fit
+  // yourself" - and what `isDefaultCommGraphView` then answers `true` for,
+  // so an unframed office still arms auto-fit exactly as it always has.
+  return { ...view, ...(view.officeCamera ?? NEUTRAL_CAMERA) };
 }
 
 const EMPTY_COMM_GRAPH_FIND_RENDERER: CommGraphFindRenderer = {
@@ -493,7 +518,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     if (before === after) return;
     updateView(viewTabId, node.id, {
       ...node.view,
-      ...NEUTRAL_CAMERA,
+      officeCamera: null,
       officeCameraView: after,
     });
   }, [node.id, node.view, settingsDefaultView, updateView, viewTabId]);
@@ -537,7 +562,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     if (node.view.officeCameraView === resolvedViewId) return;
     updateView(viewTabId, node.id, {
       ...node.view,
-      ...NEUTRAL_CAMERA,
+      officeCamera: null,
       officeCameraView: resolvedViewId,
     });
   }, [node.id, node.view, resolvedViewId, updateView, viewTabId]);
@@ -562,13 +587,11 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // camera framed for the Floor, and reopening it on a Building through
     // those numbers is a view of empty space. An outcome of Floor is the view
     // that camera was for, so it keeps it.
-    const camera: CommGraphTileCamera =
-      decision.view === "floor"
-        ? { x: node.view.x, y: node.view.y, zoom: node.view.zoom }
-        : NEUTRAL_CAMERA;
+    const camera: CommGraphTileCamera | null =
+      decision.view === "floor" ? node.view.officeCamera : null;
     updateView(viewTabId, node.id, {
       ...node.view,
-      ...camera,
+      officeCamera: camera,
       officeAutoView: decision.view,
       // Whichever arm ran, the camera now frames THIS view - the Floor's
       // because it was already the Floor's, the neutral one because it was
@@ -592,7 +615,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
         setAutoRevision((revision) => revision + 1);
         updateView(viewTabId, node.id, {
           ...node.view,
-          ...NEUTRAL_CAMERA,
+          officeCamera: null,
           officeView: "auto",
           officeAutoView: null,
           // Nothing is drawn until Auto answers, so the neutral camera is
@@ -607,13 +630,11 @@ export function CommGraphTile(props: CommGraphTileProps) {
       // landed here, and the person is nailing that down. The camera frames
       // that same office, so only a view that genuinely changes invalidates
       // it - the same reason the mode toggle guards its own reset.
-      const camera: CommGraphTileCamera =
-        next === resolvedViewId
-          ? { x: node.view.x, y: node.view.y, zoom: node.view.zoom }
-          : NEUTRAL_CAMERA;
+      const camera: CommGraphTileCamera | null =
+        next === resolvedViewId ? node.view.officeCamera : null;
       updateView(viewTabId, node.id, {
         ...node.view,
-        ...camera,
+        officeCamera: camera,
         officeView: next,
         officeCameraView: next,
       });
@@ -623,34 +644,22 @@ export function CommGraphTile(props: CommGraphTileProps) {
 
   const handleModeChange = useCallback(
     (mode: CommGraphTileViewState["mode"]) => {
-      // Pressing the mode you are already in is not a mode change, and the
-      // reset below would throw away a framing the person chose by hand.
+      // Pressing the mode you are already in is not a mode change.
       if (mode === node.view.mode) return;
-      // The viewport is RESET, not carried over: the two modes measure it in
-      // different units (flow units against sprite pixels), so a framing chosen
-      // in one is meaningless in the other and would land the incoming mode
-      // off-screen with nothing to say it had. The neutral viewport is what
-      // each renderer reads as "fit yourself".
+      // D68: A MODE SWITCH IS NOT A CAMERA EVENT. Nothing is reset, in either
+      // direction - the mode is the only thing that moves.
       //
-      // The OFFICE CHOICES ride through, spread from the current value rather
-      // than taken from the default: going to the graph and back is not a
-      // statement about which office you want, and rebuilding from the default
-      // would answer it with "whatever Settings says" every time.
-      updateView(viewTabId, node.id, {
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        mode,
-        officeView: node.view.officeView,
-        officeAutoView: node.view.officeAutoView,
-      });
+      // This used to neutralise the viewport, and had to: there was one camera
+      // for both renderers, measured in flow units by one and sprite pixels by
+      // the other, so carrying it across would have opened the incoming mode
+      // off-screen while still counting as user-framed. The reset was standing
+      // in for ownership. Now each renderer HAS a camera - `x`/`y`/`zoom` are
+      // the graph's, `officeCamera` the office's - so there is nothing left
+      // for a switch to protect, and the reset only destroyed the framing the
+      // person was going to come back to (the live re-run's N10).
+      updateView(viewTabId, node.id, { ...node.view, mode });
     },
-    [
-      node.id,
-      node.view.mode,
-      node.view.officeView,
-      node.view.officeAutoView,
-      updateView,
-      viewTabId,
-    ],
+    [node.id, node.view, updateView, viewTabId],
   );
 
   if (agents.length === 0) {
