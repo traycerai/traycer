@@ -222,7 +222,12 @@ describe("<AppNotificationsSettingsPanel />", () => {
     for (const testCase of cases) {
       it(`matches the index with ${testCase.name}`, () => {
         const { container, runnerHost } = mountPanel(testCase.capabilities);
-        const context = { runnerHost, featureSettings: null, mobileApp: false };
+        const context = {
+          runnerHost,
+          featureSettings: null,
+          mobileApp: false,
+          mobileFooter: false,
+        };
         expect(isSystemNotificationsGroupAvailable(context)).toBe(
           testCase.system,
         );

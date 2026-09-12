@@ -8,7 +8,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { NarrowOnlyTooltip } from "@/components/home/toolbar/narrow-only-tooltip";
 import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import { cn } from "@/lib/utils";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 import {
   PERMISSION_OPTIONS,
   findPermissionLabel,
@@ -55,32 +58,63 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   const displayValue = normalizePermissionMode(value, supportedPermissionModes);
   const Icon = findPermissionOption(displayValue).icon;
   const label = findPermissionLabel(displayValue);
+  // Layout ▸ Composer's floor for this picker, never `hidden`: the pill reports
+  // the permission the next send will run under, so `compact` takes it to the
+  // shape a narrow composer already puts it in - icon alone, name on hover -
+  // and no further.
+  const compact = useLayoutStore((s) => s.composer.access) === "compact";
+
+  // No tooltip of its own: the wrapper below already renders one (both branches
+  // ARE a `TooltipWrapper`), and the label is VISIBLE on this pill until the
+  // composer goes narrow - which is exactly when that wrapper takes over. A
+  // second wrapper here put two tooltips carrying the same text on one trigger,
+  // and its guard span sat between `DropdownMenuTrigger asChild` and the
+  // button, so Radix's menu props - `aria-haspopup`, `aria-expanded`,
+  // `data-state`, the ref - landed on a generic span instead of the focusable
+  // control.
+  const trigger = (
+    <DropdownMenuTrigger asChild>
+      <ToolbarPillButton
+        aria-label={label}
+        disabled={disabled}
+        className={cn(
+          "max-w-[min(32cqw,13rem)] disabled:cursor-not-allowed disabled:opacity-50",
+          compact && "justify-center",
+        )}
+      >
+        <Icon className="size-4 shrink-0" />
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate whitespace-nowrap @max-lg:hidden",
+            compact && "hidden",
+          )}
+        >
+          {label}
+        </span>
+        <ChevronDown
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground @max-lg:hidden",
+            compact && "hidden",
+          )}
+        />
+      </ToolbarPillButton>
+    </DropdownMenuTrigger>
+  );
 
   return (
     <DropdownMenu>
-      <NarrowOnlyTooltip label={label}>
-        {/* No tooltip of its own: `NarrowOnlyTooltip` above already renders one
-            (it IS a `TooltipWrapper`), and the label is VISIBLE on this pill
-            until the composer goes narrow - which is exactly when that wrapper
-            takes over. A second wrapper here put two tooltips carrying the same
-            text on one trigger, and its guard span sat between
-            `DropdownMenuTrigger asChild` and the button, so Radix's menu props
-            - `aria-haspopup`, `aria-expanded`, `data-state`, the ref - landed
-            on a generic span instead of the focusable control. */}
-        <DropdownMenuTrigger asChild>
-          <ToolbarPillButton
-            aria-label={label}
-            disabled={disabled}
-            className="max-w-[min(32cqw,13rem)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Icon className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate whitespace-nowrap @max-lg:hidden">
-              {label}
-            </span>
-            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground @max-lg:hidden" />
-          </ToolbarPillButton>
-        </DropdownMenuTrigger>
-      </NarrowOnlyTooltip>
+      {compact ? (
+        <TooltipWrapper
+          label={label}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          {trigger}
+        </TooltipWrapper>
+      ) : (
+        <NarrowOnlyTooltip label={label}>{trigger}</NarrowOnlyTooltip>
+      )}
       <DropdownMenuContent
         align="start"
         className="min-w-[min(90vw,20rem)] p-1.5"

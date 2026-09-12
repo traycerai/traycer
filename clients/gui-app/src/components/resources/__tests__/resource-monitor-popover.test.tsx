@@ -832,7 +832,11 @@ function renderPopover(): void {
   render(
     <TooltipProvider>
       <ResourcesStreamMount epicId="epic-1" />
-      <ResourceMonitorPopover className={undefined} />
+      <ResourceMonitorPopover
+        trigger="header-button"
+        className={undefined}
+        claimsOpenAction
+      />
     </TooltipProvider>,
   );
 }
@@ -911,6 +915,41 @@ describe("ResourceMonitorPopover", () => {
         true,
       );
     });
+    expect(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+    ).not.toBeNull();
+  });
+
+  it("registers no handler for that action when it is not the claimant", () => {
+    // One slot, several possible mounts, and an unregister that clears only
+    // its own handler - so a mount that is not the owner must register
+    // NOTHING rather than register and hope to lose the race. Registering
+    // would displace the owner's handler and then, on unmount, delete the slot
+    // and leave the owner chordless with no way to re-arm.
+    installStubFactory();
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction={false}
+        />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      expect(dispatchAction("app.resources.open", DYNAMIC_ACTION_ROUTER)).toBe(
+        false,
+      );
+    });
+    expect(
+      screen.queryByRole("searchbox", { name: "Search resources" }),
+    ).toBeNull();
+
+    // And the panel is still reachable the way that mount's own user reaches
+    // it - standing down costs the chord, never the surface.
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     expect(
       screen.getByRole("searchbox", { name: "Search resources" }),
     ).not.toBeNull();
@@ -2353,7 +2392,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3562,7 +3605,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3589,7 +3636,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3645,7 +3696,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3670,7 +3725,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3741,7 +3800,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3783,7 +3846,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -4518,6 +4585,24 @@ describe("ResourceMonitorPopover · host picker", () => {
     expect(returnToActive).toHaveBeenCalled();
   });
 
+  it("holds the global stream mount out of the tree while the pick has not resolved its own client", () => {
+    // Same scope as the test above - `hasExplicitPick: true`, no
+    // `streamBinding`, `status: "unreachable"` - which makes
+    // `streamBoundToScope` false. `GlobalResourcesStreamMount` renders
+    // nothing itself; its only observable effect is acquiring the registry's
+    // global entry, so that is what this proves absent. This is the safety
+    // claim the status bar's own dropped `scopedToOwnHost` gate now rests on:
+    // the popover staying mounted under an unresolved pick must not, by
+    // itself, open a stream against a machine nobody asked about.
+    hostScopeMock.scope = watchingSecondHostScope({ status: "unreachable" });
+    hostScopeMock.hasExplicitPick = true;
+    installStubFactory();
+
+    renderPopover();
+
+    expect(resourcesRegistry.getGlobal()).toBeNull();
+  });
+
   it("offers an upgrade, not a connectivity story, for a plan-restricted pick", () => {
     const returnToActive = vi.fn();
     hostScopeMock.scope = watchingSecondHostScope({
@@ -4575,7 +4660,11 @@ describe("ResourceMonitorPopover · host picker", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -4987,5 +5076,60 @@ describe("ResourceMonitorPopover · host picker", () => {
       expect.objectContaining({ instanceId: "tile-term-shared-a" }),
       expect.anything(),
     );
+  });
+});
+
+/**
+ * The footer supplies its own trigger and needs the panel above it. The two
+ * halves are asserted together because the pairing is the point: a custom
+ * trigger that kept the header's downward panel would open off the bottom of
+ * the window, which is exactly what the discriminated prop exists to prevent.
+ */
+describe("ResourceMonitorPopover · custom trigger", () => {
+  function renderWithCustomTrigger(): void {
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover
+          trigger="custom"
+          claimsOpenAction
+          contentSide="top"
+          triggerNode={
+            <button type="button" data-testid="status-bar-trigger">
+              cpu 12%
+            </button>
+          }
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  it("renders the caller's node instead of the header button", () => {
+    installStubFactory();
+    renderWithCustomTrigger();
+
+    expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
+    expect(screen.getByTestId("status-bar-trigger")).not.toBeNull();
+  });
+
+  it("opens from that node, upward", () => {
+    installStubFactory();
+    renderWithCustomTrigger();
+
+    fireEvent.click(screen.getByTestId("status-bar-trigger"));
+
+    expect(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("dialog").getAttribute("data-side")).toBe("top");
+  });
+
+  it("leaves the header's own panel opening downward", () => {
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.getByRole("dialog").getAttribute("data-side")).toBe("bottom");
   });
 });

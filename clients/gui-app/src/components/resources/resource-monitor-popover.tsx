@@ -11,6 +11,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent,
   PointerEvent,
+  ReactElement,
   ReactNode,
 } from "react";
 import {
@@ -36,7 +37,6 @@ import type {
   ChromiumProcessDescriptorWire,
   ManagedCommandOwnerWire,
   OwnerResourceSnapshotWireV15,
-  HostTreeResourceSnapshotWireV15,
   OtherResourceSnapshotWireV15,
   ResourceOwnerKindWireV14,
   ResourceProcessSnapshotWireV15,
@@ -71,6 +71,7 @@ import { useScopedStreamBinding } from "@/components/settings/host-scope/use-sco
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useResourceMonitorHostScope } from "@/hooks/resources/use-resource-monitor-host-scope";
+import { useDesktopAppResourceUsage } from "@/hooks/resources/use-desktop-app-resource-usage";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
@@ -100,7 +101,6 @@ import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import {
-  EMPTY_GLOBAL_RESOURCE_PROJECTION,
   useGlobalResourceProjection,
   type GlobalResourceEpicEntry,
   type GlobalResourceProjection,
@@ -124,10 +124,14 @@ import {
   formatProcessCount,
 } from "@/lib/resources/format-resource-usage";
 import {
-  desktopAppResourceUsageFromMetrics,
-  getDesktopDiagnosticsBridge,
-  type DesktopAppProcessGroupUsage,
-  type DesktopAppResourceUsage,
+  combineHeadlineResourceSummary,
+  hostMemorySharePercent,
+  resolveResourceMonitorHostReading,
+  type HeadlineResourceSummary,
+} from "@/lib/resources/headline-resource-summary";
+import type {
+  DesktopAppProcessGroupUsage,
+  DesktopAppResourceUsage,
 } from "@/lib/resources/desktop-app-resource-usage";
 import { queryClient } from "@/lib/query-client";
 import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
@@ -212,15 +216,60 @@ const ROW_ACTION_SLOT = "flex w-10 shrink-0 items-center justify-center";
 /** Row actions stay out of the way until the row is hovered or focused. */
 const ROW_HOVER_REVEAL =
   "opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100";
-const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
-const desktopAppResourceListeners = new Set<() => void>();
-let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
-let desktopAppResourceTimer: number | null = null;
-let desktopAppResourceInFlight = false;
 
-interface ResourceMonitorPopoverProps {
-  readonly className: string | undefined;
+/**
+ * How this popover is opened, as a discriminated union rather than an
+ * injectable node with a spare `className`.
+ *
+ * The two callers do not differ by decoration, they differ by ANATOMY. The
+ * header owns a fixed icon button and anchors its panel downward; the status
+ * bar's trigger is a live readout whose contents this component knows nothing
+ * about, and its panel has to open upward because there is nothing below the
+ * strip. A single optional-node shape would have let a caller supply a custom
+ * trigger and silently keep the header's downward panel — off the bottom of
+ * the window — which is precisely the pairing a union makes unrepresentable.
+ */
+export type ResourceMonitorPopoverTrigger =
+  | {
+      readonly trigger: "header-button";
+      readonly className: string | undefined;
+    }
+  | {
+      readonly trigger: "custom";
+      /**
+       * Rendered through `PopoverTrigger asChild`, so it must be a single
+       * element that forwards props and a ref to a real DOM node. `ReactElement`
+       * rather than `ReactNode` because that is the whole of Radix's Slot
+       * contract: a fragment, a string, an array or a `null` all typecheck as a
+       * node and all fail at render, where the type is the only place the
+       * requirement can be stated once for every caller.
+       */
+      readonly triggerNode: ReactElement;
+      readonly contentSide: "top" | "bottom";
+    };
+
+/**
+ * Whether THIS mount owns `app.resources.open`.
+ *
+ * The action has one handler slot and several possible mounts, and an
+ * unregister only clears its own handler - so two live mounts are not a tie,
+ * they are the later one silently displacing the earlier and then, on
+ * unmounting, deleting the slot outright and leaving the survivor chordless
+ * with no way to re-arm (its effect is long past re-running).
+ *
+ * On desktop the mounts are mutually exclusive by `placement`, so this is
+ * simply `true` everywhere. It exists for the MOBILE viewport, where the
+ * header's monitor and the footer's both draw at once and the header is the
+ * one that stays: the caller that is not the owner passes `false`. Required
+ * rather than defaulted, because "who holds the chord" is a fact about the
+ * arrangement of surfaces and only a call site can know it.
+ */
+interface ResourceMonitorPopoverOwnProps {
+  readonly claimsOpenAction: boolean;
 }
+
+type ResourceMonitorPopoverProps = ResourceMonitorPopoverTrigger &
+  ResourceMonitorPopoverOwnProps;
 
 interface CanvasResourceSnapshot {
   readonly openTabOrder: readonly string[];
@@ -304,12 +353,6 @@ interface TaskDisplayRow {
   readonly owners: readonly OwnerDisplayRow[];
 }
 
-interface DesktopResourceSummary {
-  readonly cpuPercent: number;
-  readonly rssBytes: number;
-  readonly processCount: number;
-}
-
 interface DesktopProcessGroupEntry {
   readonly label: string;
   readonly usage: DesktopAppProcessGroupUsage;
@@ -336,15 +379,6 @@ interface OwnerProcessRows {
   readonly selfMemoryBytes: number | null;
   readonly treeCpuPercent: number;
   readonly treeMemoryBytes: number | null;
-}
-
-interface HeadlineResourceSummary {
-  readonly cpuPercent: number;
-  readonly memoryBytes: number | null;
-  readonly rssBytes: number | null;
-  readonly pssBytes: number | null;
-  readonly privateBytes: number | null;
-  readonly trackedProcessCount: number;
 }
 
 interface ResourceSearchProjection {
@@ -464,7 +498,8 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
       value={scopedStreamBinding ?? ambientStreamBinding}
     >
       <ScopedResourceMonitorPopover
-        className={props.className}
+        trigger={props}
+        claimsOpenAction={props.claimsOpenAction}
         scope={scope}
         hasExplicitPick={hasExplicitPick}
         streamBoundToScope={
@@ -478,7 +513,8 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
 }
 
 function ScopedResourceMonitorPopover(props: {
-  readonly className: string | undefined;
+  readonly trigger: ResourceMonitorPopoverTrigger;
+  readonly claimsOpenAction: boolean;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
   /** The provided stream client is the picked host's, not a fallback. */
@@ -487,13 +523,17 @@ function ScopedResourceMonitorPopover(props: {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const chord = useBindingForAction("app.resources.open");
-  useEffect(
-    () =>
-      registerDynamicActionHandler("app.resources.open", () => {
-        setOpen(true);
-      }),
-    [],
-  );
+  // See `ResourceMonitorPopoverOwnProps`: one slot, several possible mounts,
+  // and an unregister that clears only its own handler. A mount that is not
+  // the owner registers nothing rather than registering and hoping to lose the
+  // race - its own `PopoverTrigger` still opens this panel on a click.
+  const claimsOpenAction = props.claimsOpenAction;
+  useEffect(() => {
+    if (!claimsOpenAction) return;
+    return registerDynamicActionHandler("app.resources.open", () => {
+      setOpen(true);
+    });
+  }, [claimsOpenAction]);
   // While the panel is open, let the header drop its title-bar drag regions so a
   // click on the (otherwise event-swallowing) drag area dismisses the popover.
   useTitleBarDragSuppression("resource-monitor", open);
@@ -516,31 +556,39 @@ function ScopedResourceMonitorPopover(props: {
         <GlobalResourcesStreamMount interactive={open} />
       ) : null}
       <Popover open={open} onOpenChange={setOpen}>
-        <TooltipWrapper
-          // The host belongs in the label only when it is NOT the obvious one.
-          // Naming the active host on every hover would train people to ignore
-          // the one case the words exist for.
-          label={tooltip}
-          side="top"
-          sideOffset={6}
-          align={undefined}
-        >
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Resources"
-              data-testid="resource-monitor-header-button"
-              className={cn(
-                "text-muted-foreground hover:text-foreground",
-                props.className,
-              )}
-            >
-              <Cpu className="size-3.5" />
-            </Button>
-          </PopoverTrigger>
-        </TooltipWrapper>
+        {props.trigger.trigger === "header-button" ? (
+          <TooltipWrapper
+            // The host belongs in the label only when it is NOT the obvious one.
+            // Naming the active host on every hover would train people to ignore
+            // the one case the words exist for.
+            label={tooltip}
+            side="top"
+            sideOffset={6}
+            align={undefined}
+          >
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Resources"
+                data-testid="resource-monitor-header-button"
+                className={cn(
+                  "text-muted-foreground hover:text-foreground",
+                  props.trigger.className,
+                )}
+              >
+                <Cpu className="size-3.5" />
+              </Button>
+            </PopoverTrigger>
+          </TooltipWrapper>
+        ) : (
+          // No tooltip wrapper: a custom trigger is a readout, not a glyph, so
+          // it already says what the icon button needed a hover to say - and
+          // the status bar's segment carries per-metric tooltips of its own
+          // that a wrapper here would compete with.
+          <PopoverTrigger asChild>{props.trigger.triggerNode}</PopoverTrigger>
+        )}
 
         {open ? (
           <ResourceMonitorContent
@@ -550,6 +598,11 @@ function ScopedResourceMonitorPopover(props: {
             scope={scope}
             hasExplicitPick={props.hasExplicitPick}
             streamBoundToScope={props.streamBoundToScope}
+            contentSide={
+              props.trigger.trigger === "header-button"
+                ? "bottom"
+                : props.trigger.contentSide
+            }
           />
         ) : null}
       </Popover>
@@ -735,6 +788,7 @@ function ResourceMonitorContent(props: {
   readonly hasExplicitPick: boolean;
   /** The provided stream client is the picked host's, not a fallback. */
   readonly streamBoundToScope: boolean;
+  readonly contentSide: "top" | "bottom";
 }) {
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const scope = props.scope;
@@ -780,6 +834,7 @@ function ResourceMonitorContent(props: {
   return (
     <PopoverContent
       align="end"
+      side={props.contentSide}
       sideOffset={8}
       collisionPadding={12}
       role="dialog"
@@ -1108,122 +1163,6 @@ function watchesNamedHost(scope: HostScope, hasExplicitPick: boolean): boolean {
   return hasExplicitPick && !scope.isViewingActive;
 }
 
-/** Everything watching another machine changes about what this panel reads. */
-interface ResourceMonitorHostReading {
-  /**
-   * Where a kill goes for rows that carry no host of their own - the "Other"
-   * roots. Owner rows route by their own `owner.hostId` and never consult this.
-   */
-  readonly killHostId: string | null;
-  readonly projection: GlobalResourceProjection;
-  readonly desktopApp: DesktopAppResourceUsage | null;
-}
-
-/**
- * Whether "Traycer Desktop" — the Electron shell, which is THIS computer's
- * process — belongs in the reading.
- *
- * The test is the machine's IDENTITY, not whether the surface happens to be
- * following the active selection. Those come apart in both directions: the
- * active host can itself be a remote machine (counting the local shell there
- * attributes this computer's memory to another one, over a "RAM share"
- * denominator its numerator never came from), and someone can explicitly pick
- * the machine they are sitting at while the active host is elsewhere — where
- * the row is exactly what they asked for.
- *
- * With no host resolved the answer is "we do not know which machine this is
- * describing", and the row stays hidden — which is also what it did before
- * there was a picker, since `isViewingActive` is itself false until a host
- * resolves (`isFollowing` requires one). Reaching for `isViewingActive` as a
- * cold-start fallback here looks like it preserves something and cannot: it is
- * false in exactly the case it would be consulted.
- */
-function readingShowsLocalDesktop(scope: HostScope): boolean {
-  return scope.host?.isLocalMachine === true;
-}
-
-/**
- * Reconcile the panel's three host-dependent inputs in ONE place, so the
- * "which machine is this" question is answered once rather than re-derived
- * beside every consumer — the shape of mistake where the totals move to the
- * picked host and the kill route quietly does not.
- *
- * Following the active host every answer is what it was before the picker
- * existed; nothing about a single-host window changes.
- */
-function resolveResourceMonitorHostReading(input: {
-  readonly scope: HostScope;
-  readonly hasExplicitPick: boolean;
-  readonly streamed: GlobalResourceProjection;
-  readonly localDesktopApp: DesktopAppResourceUsage | null;
-}): ResourceMonitorHostReading {
-  // ONE value answers "which machine is this reading about", and it answers it
-  // for both the data and the actions. Deriving the kill target from a second
-  // reader of the active host — `useAddressableHostId`, which this used to
-  // call — is what let the two disagree: on an ambient host swap it moved to
-  // the new machine a commit before the stream transport did, so the panel
-  // showed the old host's processes with kills aimed at the new one. That
-  // needed no picker to happen, and no pick to reproduce.
-  return {
-    killHostId: input.scope.hostId,
-    projection: attributedProjection(
-      input.scope,
-      input.hasExplicitPick,
-      input.streamed,
-    ),
-    desktopApp: readingShowsLocalDesktop(input.scope)
-      ? input.localDesktopApp
-      : null,
-  };
-}
-
-/**
- * The projection, or nothing, according to what this surface is CLAIMING —
- * and the two claims differ, so the burden of proof does too.
- *
- * The projection is a module singleton that outlives any one transport, so it
- * can describe a machine the current reading was not opened against: a host
- * swap still in flight (ambient or scoped — the registry entry is named at
- * acquire time, one commit before the replacement binding reaches context), or
- * a pick just dropped, where the entry still carries the abandoned host's name.
- *
- * **Under a pick** the surface is accountable to a machine the person named, so
- * it owes positive proof: the projection must say this host, or there is
- * nothing to show. An unattributed projection is not good enough — that is
- * exactly the pre-v1.1 per-epic fallback, which rides the ambient transport and
- * would put one machine's processes under another's name.
- *
- * **With no pick** nothing on screen names a machine; the only thing that can
- * go wrong is a kill routed at a host these rows did not come from. So refuse
- * what can be PROVEN foreign and nothing more. A scope that has not resolved
- * its host id — every cold start, between the ambient stream connecting and the
- * host lists answering — proves nothing, and has no kill target either
- * (`defaultHostId` is null, so the Other roots offer no action). Demanding
- * proof there would blank a working monitor on every launch to defend a name it
- * never prints.
- *
- * The branch is `hasExplicitPick`, NOT `isViewingActive`. The latter is false
- * throughout that same cold-start window (see `watchesNamedHost`), so keying on
- * it puts the strict branch in charge of exactly the case the permissive branch
- * exists for — which is the bug this comment used to describe as fixed.
- */
-function attributedProjection(
-  scope: HostScope,
-  hasExplicitPick: boolean,
-  streamed: GlobalResourceProjection,
-): GlobalResourceProjection {
-  if (hasExplicitPick) {
-    return streamed.hostId !== null && streamed.hostId === scope.hostId
-      ? streamed
-      : EMPTY_GLOBAL_RESOURCE_PROJECTION;
-  }
-  const provablyAnotherMachine =
-    streamed.hostId !== null &&
-    scope.hostId !== null &&
-    streamed.hostId !== scope.hostId;
-  return provablyAnotherMachine ? EMPTY_GLOBAL_RESOURCE_PROJECTION : streamed;
-}
-
 /**
  * The panel itself, mounted only once the surface is bound to the host it
  * names. Split from `ResourceMonitorContent` so the reads below are not
@@ -1256,7 +1195,10 @@ function ResourceMonitorPanel(props: {
   const sortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const dismissingSortMenuRef = useRef(false);
   const streamedProjection = useGlobalResourceProjection();
-  const localDesktopApp = useDesktopAppResourceUsage();
+  // `true`, not the scope: this panel is mounted only while it is OPEN, and it
+  // shows both scopes' readings at once — the shell row is drawn beside the
+  // host tree, not instead of it.
+  const localDesktopApp = useDesktopAppResourceUsage(true);
   const reading = resolveResourceMonitorHostReading({
     scope,
     hasExplicitPick: props.hasExplicitPick,
@@ -1703,73 +1645,6 @@ function ResourceMonitorPanel(props: {
   );
 }
 
-function useDesktopAppResourceUsage(): DesktopAppResourceUsage | null {
-  return useSyncExternalStore(
-    subscribeDesktopAppResourceUsage,
-    getDesktopAppResourceSnapshot,
-    getDesktopAppResourceSnapshot,
-  );
-}
-
-function subscribeDesktopAppResourceUsage(listener: () => void): () => void {
-  desktopAppResourceListeners.add(listener);
-  if (desktopAppResourceListeners.size === 1) {
-    sampleDesktopAppResourceUsage();
-    desktopAppResourceTimer = window.setInterval(
-      sampleDesktopAppResourceUsage,
-      DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS,
-    );
-  }
-  return () => {
-    desktopAppResourceListeners.delete(listener);
-    if (
-      desktopAppResourceListeners.size === 0 &&
-      desktopAppResourceTimer !== null
-    ) {
-      window.clearInterval(desktopAppResourceTimer);
-      desktopAppResourceTimer = null;
-    }
-  };
-}
-
-function getDesktopAppResourceSnapshot(): DesktopAppResourceUsage | null {
-  return desktopAppResourceSnapshot;
-}
-
-function sampleDesktopAppResourceUsage(): void {
-  const bridge = getDesktopDiagnosticsBridge();
-  if (bridge === null) {
-    setDesktopAppResourceSnapshot(null);
-    return;
-  }
-  if (desktopAppResourceInFlight) return;
-  desktopAppResourceInFlight = true;
-  void bridge
-    .getMetrics()
-    .then(
-      (snapshot) => {
-        setDesktopAppResourceSnapshot(
-          desktopAppResourceUsageFromMetrics(snapshot, Date.now()),
-        );
-      },
-      () => {
-        setDesktopAppResourceSnapshot(null);
-      },
-    )
-    .finally(() => {
-      desktopAppResourceInFlight = false;
-    });
-}
-
-function setDesktopAppResourceSnapshot(
-  next: DesktopAppResourceUsage | null,
-): void {
-  desktopAppResourceSnapshot = next;
-  for (const listener of Array.from(desktopAppResourceListeners)) {
-    listener();
-  }
-}
-
 function useResourceCanvasSnapshot(): CanvasResourceSnapshot {
   return useEpicCanvasStore(
     useShallow((state) => ({
@@ -2069,20 +1944,14 @@ function hostTreeVisibleProjection(
   };
 }
 
-function hostMemorySharePercent(
-  app: AppResourceUsage | null,
-  summary: HeadlineResourceSummary | null,
-): number | null {
-  if (app === null || app.hostTotalMemoryBytes <= 0) return null;
-  if (summary === null || summary.memoryBytes === null) return null;
-  return (summary.memoryBytes / app.hostTotalMemoryBytes) * 100;
-}
-
 function HostRamShareMetric(props: {
   readonly app: AppResourceUsage | null;
   readonly summary: HeadlineResourceSummary | null;
 }) {
-  const percent = hostMemorySharePercent(props.app, props.summary);
+  const percent = hostMemorySharePercent(
+    props.summary?.memoryBytes ?? null,
+    props.app,
+  );
   return (
     <MetricBlock
       label="RAM share"
@@ -2096,7 +1965,10 @@ function HostRamShareBar(props: {
   readonly app: AppResourceUsage | null;
   readonly summary: HeadlineResourceSummary | null;
 }) {
-  const percent = hostMemorySharePercent(props.app, props.summary);
+  const percent = hostMemorySharePercent(
+    props.summary?.memoryBytes ?? null,
+    props.app,
+  );
   if (percent === null) return null;
   // Only the bar geometry and its ARIA value are bounded; the text above
   // reports the raw ratio, including a >100% one that exposes overlap.
@@ -2162,87 +2034,6 @@ function handleResourcePanelKeyDown(
     event.preventDefault();
     event.stopPropagation();
   }
-}
-
-function combineHeadlineResourceSummary(input: {
-  readonly hostTree: HostTreeResourceSnapshotWireV15 | null;
-  readonly app: AppResourceUsage | null;
-  readonly owners: readonly OwnerResourceSnapshotWireV15[];
-  readonly desktopApp: DesktopAppResourceUsage | null;
-  readonly memoryMetric: ResourceMemoryMetric;
-}): HeadlineResourceSummary | null {
-  const { hostTree, app, owners, desktopApp, memoryMetric } = input;
-  if (
-    hostTree === null &&
-    app === null &&
-    desktopApp === null &&
-    owners.length === 0
-  ) {
-    return null;
-  }
-  // Pre-v1.2 hosts don't send the whole-host-tree aggregate, so fall back to
-  // the host app process plus the tracked owner trees.
-  const base =
-    hostTree === null
-      ? legacyHeadlineSummary(app, owners)
-      : {
-          cpuPercent: hostTree.cpuPercent,
-          rssBytes: hostTree.rssBytes,
-          pssBytes: hostTree.pssBytes,
-          privateBytes: hostTree.privateBytes,
-          trackedProcessCount: hostTree.processCount,
-        };
-  const desktop = desktopResourceSummary(desktopApp);
-
-  const summary = {
-    cpuPercent: base.cpuPercent + desktop.cpuPercent,
-    rssBytes: base.rssBytes === null ? null : base.rssBytes + desktop.rssBytes,
-    pssBytes: desktopApp === null ? base.pssBytes : null,
-    privateBytes: desktopApp === null ? base.privateBytes : null,
-    trackedProcessCount: base.trackedProcessCount + desktop.processCount,
-  };
-  return {
-    ...summary,
-    memoryBytes: memoryMetric === "pss" ? summary.pssBytes : summary.rssBytes,
-  };
-}
-
-function legacyHeadlineSummary(
-  app: AppResourceUsage | null,
-  owners: readonly OwnerResourceSnapshotWireV15[],
-): Omit<HeadlineResourceSummary, "memoryBytes"> {
-  return owners.reduce(
-    (summary, owner) => ({
-      cpuPercent: summary.cpuPercent + owner.cpuPercent,
-      rssBytes: sumCompleteMemoryBytes([summary.rssBytes, owner.rssBytes]),
-      pssBytes: sumCompleteMemoryBytes([summary.pssBytes, owner.pssBytes]),
-      privateBytes: sumCompleteMemoryBytes([
-        summary.privateBytes,
-        owner.privateBytes,
-      ]),
-      trackedProcessCount: summary.trackedProcessCount + owner.processCount,
-    }),
-    {
-      cpuPercent: app?.cpuPercent ?? 0,
-      rssBytes: app === null ? 0 : app.rssBytes,
-      pssBytes: app?.pssBytes ?? null,
-      privateBytes: app?.privateBytes ?? null,
-      trackedProcessCount: app?.processCount ?? 0,
-    },
-  );
-}
-
-function desktopResourceSummary(
-  desktopApp: DesktopAppResourceUsage | null,
-): DesktopResourceSummary {
-  if (desktopApp === null) {
-    return { cpuPercent: 0, rssBytes: 0, processCount: 0 };
-  }
-  return {
-    cpuPercent: desktopApp.cpuPercent,
-    rssBytes: desktopApp.rssBytes,
-    processCount: desktopApp.processCount,
-  };
 }
 
 function buildEpicTitleById(

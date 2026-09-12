@@ -28,3 +28,22 @@ export function hasChatPinnedStackContent(
 ): boolean {
   return todo !== null || chatChangesPanelHasContent(restore);
 }
+
+/**
+ * The same question once the changes panel may be folded into a chip.
+ *
+ * A folded changes panel takes the whole pinned stack with it only when the
+ * todo panel is not also in there - which is why this cannot be a `&&` at the
+ * call site. Both the dock (which mounts the stack) and the surface around it
+ * (which sizes everything below the dock from the same answer) read it here, so
+ * a folded row can never leave a bordered empty box or the composer's
+ * "connected" top spacing under nothing.
+ */
+export function chatPinnedStackVisible(input: {
+  readonly todo: PinnedTodoSnapshot | null;
+  readonly restore: ChatRestoreContextValue;
+  readonly changesFolded: boolean;
+}): boolean {
+  if (input.todo !== null) return true;
+  return !input.changesFolded && chatChangesPanelHasContent(input.restore);
+}

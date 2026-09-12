@@ -19,13 +19,18 @@ import {
   buildContextUsageRows,
   computeEffectiveContextUsage,
   contextUsageTone,
+  DESTRUCTIVE_PERCENT_LEFT,
   formatContextWindowTokens,
   formatContextUsageRowValue,
   type ContextUsageRow,
   type EffectiveContextUsage,
 } from "@/components/chat/context-usage";
 import { cn } from "@/lib/utils";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useLayoutStore } from "@/stores/settings/layout-store";
+import {
+  useSettingsStore,
+  type ContextIndicatorStyle,
+} from "@/stores/settings/settings-store";
 
 interface ContextUsageChipProps {
   /**
@@ -69,6 +74,7 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
   const setPinContextUsageBreakdown = useSettingsStore(
     (s) => s.setPinContextUsageBreakdown,
   );
+  const indicatorStyle = useSettingsStore((s) => s.contextIndicatorStyle);
 
   useLayoutEffect(() => {
     if (pinContextUsageBreakdown && focusPinnedActionAfterPinRef.current) {
@@ -121,44 +127,73 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
     setPinContextUsageBreakdown(value);
   };
 
+  const trigger = (
+    <button
+      ref={compactTriggerRef}
+      type="button"
+      aria-label={`Context window ${percent}% left. Open context usage breakdown`}
+      data-testid="context-usage-chip"
+      data-indicator-style={indicatorStyle}
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-sm bg-transparent text-ui-sm font-normal tabular-nums whitespace-nowrap transition-colors outline-none hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50",
+        // Held back at rest only where the reading can afford it. A gauge is
+        // already small, and an exhausted window is the moment the chip has
+        // most to say - dimming either one makes the alarm quieter as the
+        // emergency gets worse.
+        indicatorStyle === "text" &&
+          percent > DESTRUCTIVE_PERCENT_LEFT &&
+          "opacity-70",
+        contextUsageTone(percent),
+      )}
+      onPointerDown={() => {
+        preserveFocusOnOpenRef.current = true;
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          preserveFocusOnOpenRef.current = false;
+        }
+      }}
+    >
+      {indicatorStyle === "text" ? (
+        <>
+          <span className="@max-[28rem]:sr-only">{percent}% context left</span>
+          <span
+            aria-hidden
+            data-testid="context-usage-meter"
+            // muted-fill-ok: the meter is in the PopoverTrigger, not the
+            // content, and its own inner disc below is bg-canvas - the one
+            // surface --muted never collapses with
+            className="hidden size-5 rounded-full bg-[conic-gradient(currentColor_var(--context-usage-percent),var(--muted)_0)] p-[3px] @max-[28rem]:inline-flex"
+            style={meterStyle}
+          >
+            <span className="size-full rounded-full bg-canvas" />
+          </span>
+        </>
+      ) : (
+        <ContextUsageRing percent={percent} style={indicatorStyle} />
+      )}
+    </button>
+  );
+
   return (
     <div className="flex min-w-0 items-center gap-0.5 justify-self-end">
       {onCompact === null ? null : <CompactAction onCompact={onCompact} />}
       <Popover>
         <PopoverTrigger asChild>
-          <button
-            ref={compactTriggerRef}
-            type="button"
-            aria-label={`Context window ${percent}% left. Open context usage breakdown`}
-            data-testid="context-usage-chip"
-            className={cn(
-              "inline-flex shrink-0 items-center rounded-sm bg-transparent text-ui-sm font-normal tabular-nums whitespace-nowrap opacity-70 transition-colors outline-none hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50",
-              contextUsageTone(percent),
-            )}
-            onPointerDown={() => {
-              preserveFocusOnOpenRef.current = true;
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                preserveFocusOnOpenRef.current = false;
-              }
-            }}
-          >
-            <span className="@max-[28rem]:sr-only">
-              {percent}% context left
-            </span>
-            <span
-              aria-hidden
-              data-testid="context-usage-meter"
-              // muted-fill-ok: the meter is in the PopoverTrigger, not the
-              // content, and its own inner disc below is bg-canvas - the one
-              // surface --muted never collapses with
-              className="hidden size-5 rounded-full bg-[conic-gradient(currentColor_var(--context-usage-percent),var(--muted)_0)] p-[3px] @max-[28rem]:inline-flex"
-              style={meterStyle}
+          {indicatorStyle === "ring-only" ? (
+            // The number is nowhere on screen in this style, so hover gets it
+            // back without opening the breakdown.
+            <TooltipWrapper
+              label={`${percent}% context left`}
+              side="top"
+              sideOffset={6}
+              align={undefined}
             >
-              <span className="size-full rounded-full bg-canvas" />
-            </span>
-          </button>
+              {trigger}
+            </TooltipWrapper>
+          ) : (
+            trigger
+          )}
         </PopoverTrigger>
         <PopoverContent
           align="end"
@@ -189,6 +224,89 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
   );
 }
 
+interface ContextUsageRingProps {
+  readonly percent: number;
+  readonly style: Exclude<ContextIndicatorStyle, "text">;
+}
+
+// Same construction as `MicProgressRing` (`home/toolbar/composer-mic-button`)
+// and `DownloadProgressRing` (`layout/header/app-update-button`), down to the
+// radius and the track's opacity, so the three stay one shape.
+const RING_RADIUS = 8.5;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+// At 0% left the exact arc length is zero, which leaves the faint track alone
+// on screen at the one moment the reading matters most. A stub arc says
+// "almost nothing" where an absent one says "nothing to report".
+const RING_MINIMUM_FILL = 0.05;
+
+/**
+ * The remaining percentage as a circular gauge: the arc is the context LEFT,
+ * running clockwise from twelve o'clock, and colour is inherited from the
+ * trigger, where the severity tone lives - so the arc, the number and the
+ * sentence in the other style all cross a threshold together.
+ *
+ * The number is an HTML element centred over the SVG rather than an SVG
+ * `<text>`, because a user-unit font size is measured against the viewBox: the
+ * root font size is the `uiFontSize` setting, so a 20-unit box at the smallest
+ * setting would render a "7-unit" numeral at ~4px. Real CSS typography scales
+ * WITH that setting instead of against it.
+ */
+function ContextUsageRing({ percent, style }: ContextUsageRingProps) {
+  const filled = Math.max(RING_MINIMUM_FILL, percent / 100);
+  return (
+    <span
+      data-testid="context-usage-ring"
+      className={cn(
+        "relative inline-flex shrink-0 items-center justify-center",
+        style === "ring" ? "size-5" : "size-4",
+      )}
+    >
+      <svg
+        viewBox="0 0 20 20"
+        aria-hidden
+        className="absolute inset-0 size-full -rotate-90"
+      >
+        <circle
+          cx="10"
+          cy="10"
+          r={RING_RADIUS}
+          fill="none"
+          stroke="currentColor"
+          strokeOpacity={0.25}
+          strokeWidth="2"
+        />
+        <circle
+          data-testid="context-usage-ring-arc"
+          data-percent-left={percent}
+          cx="10"
+          cy="10"
+          r={RING_RADIUS}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray={RING_CIRCUMFERENCE}
+          strokeDashoffset={RING_CIRCUMFERENCE * (1 - filled)}
+        />
+      </svg>
+      {style === "ring" ? (
+        <span
+          data-testid="context-usage-ring-value"
+          aria-hidden
+          className={cn(
+            "relative font-semibold leading-none tabular-nums",
+            // Three digits have to clear the ring's inner disc, so the full
+            // reading drops a step rather than colliding with the stroke.
+            percent === 100 ? "text-[0.5rem]" : "text-[0.625rem]",
+          )}
+        >
+          {percent}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 interface CompactActionProps {
   readonly onCompact: () => void;
 }
@@ -201,8 +319,15 @@ interface CompactActionProps {
  * it outright when there is nothing to wait for. `self-center` because the
  * pinned strip lays its usage figures out on a shared text baseline, which a
  * button box would otherwise be dragged onto.
+ *
+ * Layout ▸ Composer can remove it. The gate is HERE rather than at the chip's
+ * two call sites so the inline chip and the pinned strip can never disagree,
+ * and it removes only this shortcut: the command palette and `/compact` reach
+ * the same compaction.
  */
 function CompactAction({ onCompact }: CompactActionProps) {
+  const compactButton = useLayoutStore((s) => s.composer.compactButton);
+  if (compactButton === "hidden") return null;
   return (
     <TooltipWrapper
       label="Compact conversation"
@@ -292,6 +417,11 @@ function ContextUsagePinnedStrip({
   onCompact,
   actionRef,
 }: ContextUsagePinnedStripProps) {
+  const fields = useSettingsStore((s) => s.pinnedContextBreakdownFields);
+  // `rows` is already in canonical order and only ever carries rows the data
+  // supports, so filtering it keeps both properties; the picker decides which
+  // of those the strip prints, not what the data can say.
+  const visibleRows = rows.filter((row) => fields.includes(row.key));
   const usedSummary = `${formatContextWindowTokens(effective.used)} / ${formatContextWindowTokens(effective.window)} used`;
   return (
     <div
@@ -315,17 +445,19 @@ function ContextUsagePinnedStrip({
             />
             %<span className="@max-[34rem]:sr-only"> left</span>
           </span>
-          <span
-            data-testid="context-usage-pinned-summary"
-            className="hidden min-w-0 truncate font-mono tabular-nums text-muted-foreground @max-[34rem]:block"
-          >
-            {usedSummary}
-          </span>
+          {fields.includes("used") ? (
+            <span
+              data-testid="context-usage-pinned-summary"
+              className="hidden min-w-0 truncate font-mono tabular-nums text-muted-foreground @max-[34rem]:block"
+            >
+              {usedSummary}
+            </span>
+          ) : null}
           <div
             data-testid="context-usage-pinned-details"
             className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1 @max-[34rem]:hidden"
           >
-            {rows.map((row) => (
+            {visibleRows.map((row) => (
               <PinnedUsageRow key={row.key} row={row} />
             ))}
           </div>

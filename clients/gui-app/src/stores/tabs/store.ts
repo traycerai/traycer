@@ -51,6 +51,8 @@ import {
   type SystemTabs,
 } from "@/stores/tabs/layout";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
 import { isTabStructurallyLocked } from "@/stores/tabs/tab-structural-lock";
 
@@ -110,32 +112,6 @@ export interface TabsStoreState extends PersistedTabsStoreState {
 }
 
 const TABS_PERSIST_KEY = persistKey(STORE_KEYS.tabs);
-// Hand-maintained, and duplicated verbatim in `desktop-tabs-persistence.ts`.
-// It is NOT derived from `SETTINGS_SECTIONS` because it also has to accept
-// `service`, the retired id that `settings.service.tsx` still redirects, and
-// because a persisted path from an older build is exactly the input this
-// guards. The cost of hand-maintaining it is that a new section can be
-// forgotten here and silently stop being recognised as a settings route -
-// `devices` was, from the day it was added until `app-diagnostics` arrived and
-// the omission was noticed next to it.
-const SETTINGS_PATHS = new Set([
-  "agents",
-  "app-diagnostics",
-  "appearance",
-  "devices",
-  "diagnostics",
-  "general",
-  "host",
-  "keybindings",
-  "notifications",
-  "opening-behavior",
-  "providers",
-  "service",
-  "shell",
-  "usage",
-  "worktrees",
-]);
-
 let tabsLocalPersistenceEnabled = true;
 let pendingLegacySourceActiveSelection = false;
 
@@ -187,11 +163,47 @@ function itemContainsStructurallyLockedRef(item: StripItem): boolean {
 }
 
 function committedLayout(layout: PersistedTabStripLayout): CommittedTabsLayout {
-  const repaired = repairLayout(layout, isRegisteredTabKind);
+  const repaired = withHomeActivePreserved(
+    layout,
+    repairLayout(layout, isRegisteredTabKind),
+  );
   return {
     ...repaired,
     stripOrder: flattenLayoutRefs(repaired),
   };
+}
+
+/**
+ * `true` when this layout's `activeItemId: null` means "the Home tab is
+ * active", rather than "the strip is empty and nothing is selected".
+ *
+ * The two states are the same value and are told apart by the flag alone: with
+ * Home off, a populated strip always has an active item and `repairLayout`
+ * restores that invariant after every commit. Home is what makes null a
+ * selection a populated strip can legitimately hold.
+ */
+export function layoutHomeIsActive(layout: PersistedTabStripLayout): boolean {
+  return layout.activeItemId === null && isHomeTabEnabled();
+}
+
+/**
+ * Re-applies a deliberate Home selection that `repairLayout` resolved away.
+ *
+ * `repairLayout` is pure and knows nothing about Home, so it reads a null
+ * active id as "unset" and falls back to the first item - correct before Home
+ * existed, and still correct for a persisted payload that simply never carried
+ * one. Only the source layout can say which of the two it meant, so the
+ * distinction is drawn here, at the commit boundary, rather than by teaching
+ * the reducer a flag.
+ */
+function withHomeActivePreserved(
+  source: PersistedTabStripLayout,
+  repaired: PersistedTabStripLayout,
+): PersistedTabStripLayout {
+  if (repaired.activeItemId === null || !layoutHomeIsActive(source)) {
+    return repaired;
+  }
+  return { ...repaired, activeItemId: null };
 }
 
 function layoutFromState(state: TabsStoreState): PersistedTabStripLayout {
@@ -335,6 +347,9 @@ function parseTabRef(value: unknown): ReadonlyArray<TabRef> {
   if (!isRegisteredTabKind(value.kind) || value.id.length === 0) return [];
   if (value.kind === "history" && value.id !== "history") return [];
   if (value.kind === "settings" && value.id !== "settings") return [];
+  // Home is never persisted as a strip ref; `repairLayout` would drop one
+  // anyway, but refusing it here keeps the parsed layout honest.
+  if (value.kind === "home") return [];
   return [{ kind: value.kind, id: value.id }];
 }
 

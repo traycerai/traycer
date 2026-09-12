@@ -1,4 +1,9 @@
 import {
+  browserCanvasHydration,
+  isBrowserCanvasHydrated,
+  subscribeBrowserCanvasHydration,
+} from "@/lib/tab-sync/browser-canvas-hydration";
+import {
   useLayoutEffect,
   useMemo,
   useSyncExternalStore,
@@ -152,8 +157,15 @@ export function WindowsBridgeProvider(
     getCompletedHydrationRequest,
     getCompletedHydrationRequest,
   );
+  const browserHydrated = useSyncExternalStore(
+    subscribeBrowserCanvasHydration,
+    isBrowserCanvasHydrated,
+    isBrowserCanvasHydrated,
+  );
   const hasHydrated =
-    hydrationRequest === null || completedRequest === hydrationRequest;
+    hydrationRequest === null
+      ? browserHydrated
+      : completedRequest === hydrationRequest;
 
   useLayoutEffect(() => {
     if (bridge === null) return installMissingDesktopWindowsBridge();
@@ -187,7 +199,9 @@ function installMissingDesktopWindowsBridge(): () => void {
     window.addEventListener("pagehide", flushFileEditRecovery);
     window.addEventListener("beforeunload", flushFileEditRecovery);
   }
-  queueMicrotask(() => {
+  // A browser still has an asynchronous auth-to-account-canvas handoff.
+  // Opening reconciliation before that handoff prunes/reorders persisted tabs.
+  void browserCanvasHydration.then(() => {
     trackAppOpenedOnce(false);
     markHydrated();
   });

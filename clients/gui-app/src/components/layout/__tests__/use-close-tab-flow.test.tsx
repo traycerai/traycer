@@ -1,18 +1,28 @@
-import { renderHook, act } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { tabItemId, tabRefKey } from "@/stores/tabs/layout";
 import { executeTabSplitCommand } from "@/stores/tabs/tab-split-commands";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
+import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import * as TabNav from "@/lib/tab-navigation";
 import type { HeaderTab } from "@/stores/tabs/types";
 
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 
 const routerState = vi.hoisted(() => ({ pathname: "/" }));
+const mockUnsynced = vi.hoisted(() => ({ epicIds: new Set<string>() }));
 const navigateSpy = vi.hoisted(() => vi.fn());
 const requestCloseWindowSpy = vi.hoisted(() =>
   vi.fn((_windowId: string) => Promise.resolve()),
@@ -53,7 +63,7 @@ vi.mock("@/providers/windows-bridge-context", () => ({
 // answer for a harness with no live session: the tab gets `hostId: null` and
 // its consumers fall back to the app-wide client.
 vi.mock("@/lib/registries/epic-session-registry", () => ({
-  epicHasUnsyncedEdits: () => false,
+  epicHasUnsyncedEdits: (epicId: string) => mockUnsynced.epicIds.has(epicId),
   releaseOpenEpicSessionIfUnused: () => undefined,
   getOpenEpicRegistry: () => ({
     subscribe: () => () => undefined,
@@ -70,6 +80,88 @@ function resetStores(): void {
     stripOrder: [],
     systemTabs: { history: null, settings: null },
   });
+  useTabRecoveryHistory.setState({ entries: [], ready: true });
+  mockUnsynced.epicIds.clear();
+}
+
+function epicHeaderTab(epicId: string, tabId: string, name: string): HeaderTab {
+  return {
+    kind: "epic",
+    id: tabId,
+    epicId,
+    hostId: null,
+    name,
+    route: `/epics/${epicId}/${tabId}`,
+    icon: null,
+    canClose: true,
+    canDuplicate: true,
+    canOpenInNewWindow: true,
+    appearance: null,
+  };
+}
+
+function seedGroupedTabs() {
+  const a = useEpicCanvasStore.getState().openEpicTab("epic-a", "Alpha");
+  const b = useEpicCanvasStore.getState().openEpicTab("epic-b", "Beta");
+  const c = useEpicCanvasStore.getState().openEpicTab("epic-c", "Gamma");
+  const refA = { kind: "epic" as const, id: a };
+  const refB = { kind: "epic" as const, id: b };
+  const refC = { kind: "epic" as const, id: c };
+  const refs = [refA, refB, refC];
+  useTabsStore.setState({
+    version: 2,
+    items: refs.map((ref) => ({
+      kind: "tab" as const,
+      id: tabItemId(ref),
+      ref,
+    })),
+    activeItemId: tabItemId(refA),
+    stripOrder: refs,
+    systemTabs: { history: null, settings: null },
+    customizations: {
+      [tabRefKey(refA)]: { color: null, icon: null, groupId: "group-a" },
+      [tabRefKey(refB)]: { color: null, icon: null, groupId: "group-a" },
+      [tabRefKey(refC)]: { color: null, icon: null, groupId: null },
+    },
+    groups: {
+      "group-a": {
+        name: "Group A",
+        color: "#8ab4f8",
+        collapsed: false,
+      },
+    },
+  });
+  routerState.pathname = `/epics/epic-a/${a}`;
+  return { a, b, c, refA, refB, refC };
+}
+
+function CloseGroupHarness(props: {
+  readonly groupId: string;
+  readonly unrelatedTab: HeaderTab | null;
+}) {
+  const flow = useCloseTabFlow();
+  const unrelatedTab = props.unrelatedTab;
+  return (
+    <>
+      {flow.unsyncedDialog}
+      <button
+        type="button"
+        data-testid="close-group"
+        onClick={() => flow.closeGroup(props.groupId)}
+      >
+        close group
+      </button>
+      {unrelatedTab !== null ? (
+        <button
+          type="button"
+          data-testid="close-unrelated"
+          onClick={() => flow.requestCloseTab(unrelatedTab)}
+        >
+          close unrelated
+        </button>
+      ) : null}
+    </>
+  );
 }
 
 function draftHeaderTab(draftId: string): HeaderTab {
@@ -91,9 +183,11 @@ describe("useCloseTabFlow", () => {
     navigateSpy.mockReset();
     requestCloseWindowSpy.mockClear();
     windowsBridgeState.bridge = null;
+    mockUnsynced.epicIds.clear();
     resetStores();
   });
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
     resetStores();
   });
@@ -343,5 +437,109 @@ describe("useCloseTabFlow", () => {
       expect.objectContaining({ id: "split-ab", kind: "split" }),
     ]);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("batches recovery entries when closing a tab group", () => {
+    const { a, b, refC } = seedGroupedTabs();
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.closeGroup("group-a");
+    });
+
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+    const recovery = useTabRecoveryHistory.getState().entries.at(0);
+    if (recovery === undefined || recovery.kind !== "header") {
+      throw new Error("expected one bulk header recovery entry");
+    }
+    expect(recovery.bulk).toBe(true);
+    expect(recovery.items.map((item) => item.kind)).toEqual(["epic", "epic"]);
+    expect(
+      new Set(
+        recovery.items.flatMap((item) =>
+          item.kind === "epic" ? [item.tab.tabId] : [],
+        ),
+      ),
+    ).toEqual(new Set([a, b]));
+    expect(useTabsStore.getState().stripOrder).toEqual([refC]);
+  });
+
+  it("confirms a dirty active group close as one bulk recovery action", () => {
+    const { a, b, refA, refB, refC } = seedGroupedTabs();
+    mockUnsynced.epicIds.add("epic-a");
+
+    render(<CloseGroupHarness groupId="group-a" unrelatedTab={null} />);
+    fireEvent.click(screen.getByTestId("close-group"));
+    expect(screen.getByTestId("epic-tab-unsynced-dialog")).toBeDefined();
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+    expect(useTabsStore.getState().stripOrder).toEqual([refA, refB, refC]);
+
+    fireEvent.click(screen.getByTestId("epic-tab-unsynced-discard"));
+
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+    const recovery = useTabRecoveryHistory.getState().entries.at(0);
+    if (recovery === undefined || recovery.kind !== "header") {
+      throw new Error("expected one bulk header recovery entry");
+    }
+    expect(recovery.bulk).toBe(true);
+    const recoveredIds = recovery.items.flatMap((item) =>
+      item.kind === "epic" ? [item.tab.tabId] : [],
+    );
+    expect(new Set(recoveredIds)).toEqual(new Set([a, b]));
+    expect(useTabsStore.getState().stripOrder).toEqual([refC]);
+  });
+
+  it("cancels a dirty active group close without changing tabs or history", () => {
+    const { refA, refB, refC } = seedGroupedTabs();
+    mockUnsynced.epicIds.add("epic-a");
+
+    render(<CloseGroupHarness groupId="group-a" unrelatedTab={null} />);
+    fireEvent.click(screen.getByTestId("close-group"));
+    fireEvent.click(screen.getByTestId("epic-tab-unsynced-wait"));
+
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+    expect(useTabsStore.getState().stripOrder).toEqual([refA, refB, refC]);
+  });
+
+  it("keeps an unrelated close separate while group confirmation is pending", () => {
+    const { a, b, c, refA, refB } = seedGroupedTabs();
+    mockUnsynced.epicIds.add("epic-a");
+
+    render(
+      <CloseGroupHarness
+        groupId="group-a"
+        unrelatedTab={epicHeaderTab("epic-c", c, "Gamma")}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("close-group"));
+    fireEvent.click(screen.getByTestId("close-unrelated"));
+
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+    const unrelatedRecovery = useTabRecoveryHistory.getState().entries.at(0);
+    if (
+      unrelatedRecovery === undefined ||
+      unrelatedRecovery.kind !== "header"
+    ) {
+      throw new Error("expected unrelated header recovery entry");
+    }
+    expect(unrelatedRecovery.bulk).toBe(false);
+    expect(unrelatedRecovery.items).toHaveLength(1);
+    expect(unrelatedRecovery.items[0]).toMatchObject({
+      kind: "epic",
+      tab: { tabId: c },
+    });
+    expect(useTabsStore.getState().stripOrder).toEqual([refA, refB]);
+
+    fireEvent.click(screen.getByTestId("epic-tab-unsynced-discard"));
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(2);
+    const groupRecovery = useTabRecoveryHistory.getState().entries.at(1);
+    if (groupRecovery === undefined || groupRecovery.kind !== "header") {
+      throw new Error("expected group header recovery entry");
+    }
+    expect(groupRecovery.bulk).toBe(true);
+    const groupRecoveredIds = groupRecovery.items.flatMap((item) =>
+      item.kind === "epic" ? [item.tab.tabId] : [],
+    );
+    expect(new Set(groupRecoveredIds)).toEqual(new Set([a, b]));
   });
 });

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsSettingsPanel } from "@/components/settings/panels/keybindings-settings-panel";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { GLOBAL_SHORTCUT_DEFAULT_CHORDS } from "@traycer-clients/shared/keybindings/global-shortcuts";
 import type {
   DesktopGlobalShortcutsBridge,
@@ -71,6 +72,41 @@ function makeBridge(
     onChange: vi.fn(() => ({ dispose: () => undefined })),
   };
 }
+
+/**
+ * A row here is a promise that its chord does something, and it is bindable -
+ * so an action whose handler is gated on a setting must not be listed while
+ * that setting is off, or the user can assign a chord to nothing. Same rule the
+ * command palette applies to the same action.
+ */
+describe("KeybindingsSettingsPanel - flag-gated actions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    platformMock.isMac = false;
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useSettingsStore.setState({ homeTabEnabled: false });
+    summonHotkeyMock.current = { bridge: null, status: null };
+  });
+
+  afterEach(() => {
+    cleanup();
+    useSettingsStore.setState({ homeTabEnabled: false });
+  });
+
+  it("omits Go to Home while the Home tab is off", () => {
+    renderPanel();
+
+    expect(screen.queryByText("Go to Home")).toBeNull();
+  });
+
+  it("lists Go to Home once the Home tab is on", () => {
+    useSettingsStore.setState({ homeTabEnabled: true });
+
+    renderPanel();
+
+    expect(screen.getByText("Go to Home")).not.toBeNull();
+  });
+});
 
 describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
   beforeEach(() => {
@@ -251,7 +287,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     expect(set).not.toHaveBeenCalled();
     expect(
       screen.getByText(
-        "Global shortcuts need at least one modifier key (⌘, Ctrl, Shift, or Alt).",
+        "Global shortcuts need at least one modifier key, such as Ctrl or Shift.",
       ),
     ).toBeTruthy();
 
