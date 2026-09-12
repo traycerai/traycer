@@ -2397,6 +2397,234 @@ describe("CommGraphTile", () => {
     });
   });
 
+  describe("the reverse default move hands Auto's keep arm a camera the witness distrusts (fixup 12, Finding D)", () => {
+    // THE MIRROR of the headline above. There the default moved between two
+    // CONCRETE views while Graph was up, and the record already named the
+    // arriving one - the store's own effects had nothing to say and only the
+    // witness caught it. Here the default moves CONCRETE -> "auto" while
+    // Graph is up, so `resolvedViewId` goes "towers" -> `null` (Auto has not
+    // answered yet). That `null` is the one shape BOTH store-side effects
+    // decline at (the followed-default effect returns on Graph mode at
+    // `:518`; the record/witness effect returns on `resolvedViewId === null`
+    // at `:575`), so the stale Towers camera survives in the store with
+    // nothing but the witness left to remember that anything moved.
+    //
+    // Then Office mounts and REAL Auto answers Floor. The D52 keep arm at
+    // `:631-640` (`decision.view === "floor" ? node.view.officeCamera :
+    // null`) was written for a TRUSTED camera - a tile that predates the
+    // choice, carrying a Floor-framed camera nothing has touched since. A
+    // held witness is exactly the statement that this camera is not that:
+    // a writer promised to speak for the arriving view and never has. The
+    // keep arm preserves it anyway, unconditionally, and stamps `floor` -
+    // vouching for Towers coordinates it was never told to distrust.
+    //
+    // THE RULING mid-fixup: declining only at the keep arm is not enough by
+    // itself. It protects the runtime THIS mount builds, but a tile closed
+    // and reopened in the window between the default move and Auto's
+    // answer has no mount alive to decline anything - it gets the stale
+    // camera handed straight back on parse, with the record still naming
+    // "towers" (or, in the unstamped case below, naming nothing at all).
+    // That is exactly requirement 3's gap. So the store has to retire the
+    // camera WHILE THE VIEW IS STILL UNRESOLVED, on the witness alone -
+    // before Auto, before a reload, before anything else gets a say.
+    function seededTowersToAutoTile(
+      officeCameraView: OfficeViewId | null,
+    ): CommGraphTileViewState {
+      return {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        mode: "graph",
+        officeView: null,
+        officeAutoView: null,
+        officeCameraView,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
+      };
+    }
+
+    it("retires the stale camera while still unresolved, and builds the first resolved Floor runtime neutral (Settings towers -> auto, stamped record)", async () => {
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      await renderSeededOffice(seededTowersToAutoTile("towers"));
+      expect(storedView()?.mode).toBe("graph");
+      expect(storedView()).toMatchObject({
+        x: DEFAULT_COMM_GRAPH_VIEW.x,
+        y: DEFAULT_COMM_GRAPH_VIEW.y,
+        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+      });
+
+      // THE ARMING MOVE, reversed from the headline: Settings towers ->
+      // auto while Graph is still up. `resolvedViewId` goes "towers" ->
+      // `null` - Auto has not measured anything yet - which is the one
+      // shape neither store-side effect will touch.
+      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+
+      // ASSERTION 1, and the reviewer's mid-fixup ruling: the store must
+      // retire the camera HERE, before Auto ever runs and while Graph is
+      // still the mode on screen - a reload in this exact window has only
+      // the record to go on, and the record still names "towers" over a
+      // camera nothing has framed for the arriving (unresolved) view.
+      // RED today: both effects decline on `resolvedViewId === null` /
+      // the Graph-mode gate, so nothing retires it - the camera and its
+      // stale stamp both survive untouched.
+      expect(storedView()).toMatchObject({
+        mode: "graph",
+        officeCamera: null,
+        officeCameraView: null,
+      });
+
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+
+      // Switch to Office. `resolvedViewId` is still `null` - Auto has
+      // nothing to decide from yet - so this mounts on the measuring view
+      // first, exactly as every other "Auto has not answered" case in
+      // this file does.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+        await Promise.resolve();
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+
+      // REAL Auto, not a stub: this fixture's handful of agents fits the
+      // Floor comfortably at 1040x700, the same fixture every other Auto
+      // case in this file relies on.
+      await waitFor(() => {
+        expect(storedView()?.officeAutoView).toBe("floor");
+      });
+
+      // ASSERTION 2: the FIRST resolved Floor runtime is built from the
+      // neutral camera - not the stale Towers numbers the keep arm at
+      // `:631-640` preserves unconditionally today because the witness
+      // gets no say in that decision.
+      expect(lastCanvasCamera(office)).toMatchObject({ x: 0, y: 0, zoom: 1 });
+
+      // ASSERTION 3: the Graph's own camera was never anyone's business
+      // in this sequence and has to read exactly as seeded throughout -
+      // this whole detour is about the OFFICE's `officeCamera`, a
+      // different field since D68.
+      expect(storedView()).toMatchObject({
+        x: DEFAULT_COMM_GRAPH_VIEW.x,
+        y: DEFAULT_COMM_GRAPH_VIEW.y,
+        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+      });
+    });
+
+    it("retires the stale camera while still unresolved even with no stamp at all - the legacy variant with the same store-settlement gap", async () => {
+      // Identical to the case above except `officeCameraView: null` - a
+      // camera persisted before the stamp field ever existed. This is the
+      // case that separates the two kinds of evidence `officeViewForCanvas`
+      // reads as an OR: the RECORD (a name the camera was saved under) and
+      // the WITNESS (a mount that watched the default move). A fix that
+      // only consults the record - "does `officeCameraView` disagree with
+      // where we are headed" - has nothing to read here: the record has
+      // always said "nobody framed this" and will keep saying so no matter
+      // what the default does. Only the witness knows a default move
+      // happened at all, so if store settlement is wired through the
+      // record alone, this case still fails while the stamped case above
+      // passes.
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      await renderSeededOffice(seededTowersToAutoTile(null));
+      expect(storedView()?.mode).toBe("graph");
+      expect(storedView()).toMatchObject({
+        x: DEFAULT_COMM_GRAPH_VIEW.x,
+        y: DEFAULT_COMM_GRAPH_VIEW.y,
+        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+      });
+
+      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+
+      // ASSERTION 1, same ruling as the stamped case: the store must
+      // retire the camera while still unresolved and Graph is up. RED
+      // today, and for the same reason - `resolvedViewId === null` blocks
+      // both effects regardless of what the record does or does not say.
+      expect(storedView()).toMatchObject({
+        mode: "graph",
+        officeCamera: null,
+        officeCameraView: null,
+      });
+
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+        await Promise.resolve();
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+
+      await waitFor(() => {
+        expect(storedView()?.officeAutoView).toBe("floor");
+      });
+
+      // ASSERTION 2: same as the stamped case - the first resolved Floor
+      // runtime has to be built neutral, not from the stale Towers camera
+      // a record-only fix would have no evidence to distrust.
+      expect(lastCanvasCamera(office)).toMatchObject({ x: 0, y: 0, zoom: 1 });
+
+      // ASSERTION 3: the Graph's camera, untouched throughout.
+      expect(storedView()).toMatchObject({
+        x: DEFAULT_COMM_GRAPH_VIEW.x,
+        y: DEFAULT_COMM_GRAPH_VIEW.y,
+        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+      });
+    });
+
+    it("an explicit pick of the already-resolved view finds nothing left to preserve (pick sibling, ~687) - green by timing, not by rule", async () => {
+      // The pick sibling has its own preservation arm: `next ===
+      // resolvedViewId ? node.view.officeCamera : null`. To exercise it
+      // with a witnessed move actually held, `resolvedViewId` has to stay
+      // CONCRETE the whole time - unlike the two cases above, which route
+      // through Auto's `null`. So this arms the witness on towers ->
+      // campus instead, both concrete.
+      //
+      // The reason this is expected to come back GREEN rather than red:
+      // whenever `resolvedViewId` is concrete, the record/witness reset
+      // effect (`:566`) is not blocked by the `resolvedViewId === null`
+      // guard at all, and - since D68/fixup 12 - it carries NO mode gate
+      // either. So it retires the stale camera and releases the witness
+      // the moment the default move resolves to something concrete,
+      // whether Graph or Office is on screen, well before any pick could
+      // ever see an armed witness sitting over a non-null camera. The pick
+      // arm is unreachable by TIMING here - the other effect always wins
+      // the race - not because the arm itself knows to decline a
+      // witnessed camera the way Finding D's fix teaches the keep arm to.
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      await renderSeededOffice(seededTowersToAutoTile("towers"));
+      expect(storedView()?.mode).toBe("graph");
+
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("campus"),
+      );
+
+      // Confirms the timing claim above before doing anything else: the
+      // camera is already retired, WHILE GRAPH IS STILL UP, with no mode
+      // switch and no pick in sight yet.
+      expect(storedView()).toMatchObject({
+        mode: "graph",
+        officeCamera: null,
+        officeCameraView: "campus",
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+        await Promise.resolve();
+      });
+
+      // An explicit pick of "campus" - the view already resolved and
+      // already showing - exercises the pick sibling's own keep arm at
+      // `:687`.
+      chooseView("campus");
+
+      // GREEN: there was never a non-null camera left for this arm to
+      // preserve by the time it could run.
+      expect(storedView()).toMatchObject({
+        officeView: "campus",
+        officeCameraView: "campus",
+        officeCamera: null,
+      });
+    });
+  });
+
   describe("restored Auto outcome (persisted, no re-measurement)", () => {
     it("reads a restored Building outcome from persistence without deciding again", async () => {
       const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
