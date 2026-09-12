@@ -104,7 +104,8 @@ export function OfficeViewPicker(props: OfficeViewPickerProps) {
           <ChevronDown data-icon="inline-end" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-w-[min(90vw,22rem)]">
+      {/* The shadcn base pins `w` to the trigger; max-w cannot displace it. */}
+      <DropdownMenuContent align="end" className="w-[min(90vw,22rem)]">
         <DropdownMenuRadioGroup
           value={choice}
           onValueChange={(value) => {

@@ -245,4 +245,25 @@ describe("OfficeViewPicker", () => {
 
     expect(onChoose).toHaveBeenCalledWith("auto");
   });
+
+  it("sizes the open menu independently of the trigger width", () => {
+    // The shadcn DropdownMenuContent base pins `w` to the trigger. A
+    // `max-w-[min(90vw,22rem)]` on the picker never displaced that, so
+    // every description wrapped to four or five lines. The resolved
+    // class list has to carry a real width and must not still name the
+    // trigger-width variable - layout is not asserted here because jsdom
+    // does not compute it.
+    renderPicker({
+      choice: "towers",
+      autoViewId: null,
+      decision: null,
+      onChoose: vi.fn(),
+    });
+
+    openPicker();
+
+    const classes = screen.getByRole("menu").className.split(/\s+/);
+    expect(classes).toContain("w-[min(90vw,22rem)]");
+    expect(classes).not.toContain("w-(--radix-dropdown-menu-trigger-width)");
+  });
 });
