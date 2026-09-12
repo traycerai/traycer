@@ -832,6 +832,11 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
         region.shape,
         OVERVIEW_FRACTIONS,
       )) {
+        // A sample is a point the whole map RESOLVES: counting the grid
+        // before the lookup would let a sweep that skipped every comparison
+        // still pass the anti-vacuity bar below.
+        const expected = topmostAt(all, point);
+        if (expected === undefined) continue;
         samples += 1;
         const rect: OfficeRect = {
           x: point.x,
@@ -839,12 +844,10 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
           width: 1,
           height: 1,
         };
-        const expected = topmostAt(all, point);
         const actual = topmostAt(scene.frame(0, rect).floor, point);
         if (
-          expected !== undefined &&
-          (actual === undefined ||
-            overviewFillOf(actual) !== overviewFillOf(expected))
+          actual === undefined ||
+          overviewFillOf(actual) !== overviewFillOf(expected)
         ) {
           misses += 1;
         }

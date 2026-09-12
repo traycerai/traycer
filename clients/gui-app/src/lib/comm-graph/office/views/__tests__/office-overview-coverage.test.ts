@@ -164,13 +164,24 @@ function sweepOverviewBlocks(
   return misses;
 }
 
-/** How many points a sweep actually put a question to, so an empty one cannot pass. */
+/**
+ * How many points a sweep actually put a question to, so an empty one cannot
+ * pass. Only the points the whole map RESOLVES count: `sweepOverviewBlocks`
+ * skips the others, so counting the full grid would let a sweep that skipped
+ * every comparison still report samples.
+ */
 function sweepSampleCount(view: OfficeView, layout: OfficeLayout): number {
-  return (
-    overviewShapesOf(wholeMapFloor(view, layout)).length *
-    OVERVIEW_FRACTIONS.length *
-    OVERVIEW_FRACTIONS.length
-  );
+  const whole = wholeMapFloor(view, layout);
+  let count = 0;
+  for (const region of overviewShapesOf(whole)) {
+    for (const point of overviewSamplePoints(
+      region.shape,
+      OVERVIEW_FRACTIONS,
+    )) {
+      if (topmostAt(whole, point) !== undefined) count += 1;
+    }
+  }
+  return count;
 }
 
 // ---- H1: the grown-City parallelogram geometry ------------------------- //

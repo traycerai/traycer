@@ -1547,6 +1547,9 @@ describe("oblique plates: fixup 6 rule 2 - plates fit their pods and never overl
     const byText = new Map(
       resolvedAt(1).map((entry) => [entry.sign.text, entry.text]),
     );
+    // All three plates resolve at office zoom: a dropped plate would make the
+    // two negative readings below pass on `undefined`.
+    expect(byText.size).toBe(3);
     expect(byText.get("team-6-lead")).not.toBe("team-6-lead");
     expect(byText.get("team-8-lead")).not.toBe("team-8-lead");
     expect(byText.get("team-10-lead")).toBe("team-10-lead");
