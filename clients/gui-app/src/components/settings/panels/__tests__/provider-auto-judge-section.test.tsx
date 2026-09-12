@@ -114,16 +114,23 @@ describe("<ProviderAutoJudgeSection />", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders nothing when the harness row reports nativeAutoJudge: false", () => {
+  it("renders a read-only Traycer's judge line, and no select, when the harness row reports nativeAutoJudge: false", () => {
     guiHarnessesQueryMock.data = {
       harnesses: [harnessRow({ nativeAutoJudge: false })],
     };
 
-    const { container } = render(
-      <ProviderAutoJudgeSection state={providerState()} />,
-    );
+    render(<ProviderAutoJudgeSection state={providerState()} />);
 
-    expect(container.firstChild).toBeNull();
+    // The tab is drawn for every provider, so "nothing to choose" is still
+    // an answer: the question the tab is named for, and where the judge that
+    // answers it is chosen. No switch with one option.
+    const readonly = screen.getByTestId("provider-auto-judge-readonly");
+    expect(readonly.textContent).toContain(
+      "Who reviews Claude Code's commands",
+    );
+    expect(readonly.textContent).toContain("Traycer's judge");
+    expect(readonly.textContent).toContain("Settings ▸ Permissions");
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
   it("renders the row when nativeAutoJudge is true", () => {

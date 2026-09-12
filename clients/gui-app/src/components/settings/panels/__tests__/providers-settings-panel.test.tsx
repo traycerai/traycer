@@ -6884,6 +6884,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
       "Profiles & Limits",
       "CLI & Args",
       "Env",
+      "Permissions",
       "Model Providers",
       "MCP",
       "Plugins",

@@ -19,14 +19,19 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 
 /**
  * Which classifier reviews this provider's actions in the `auto` permission
- * mode.
+ * mode - the body of the provider's Permissions tab.
  *
- * Rendered ONLY for a provider whose catalog row reports
- * `nativeAutoJudge: true` - a switch with one option is not a switch, and every
- * other provider runs Traycer's judge with nothing to choose. That flag is also
- * why this needs no separate method gate: it rides the same catalog minor as
+ * A SWITCH only for a provider whose catalog row reports
+ * `nativeAutoJudge: true`; a switch with one option is not a switch, so every
+ * other provider gets a read-only line instead, naming Traycer's judge and
+ * pointing at where that judge is chosen. The line is there because the tab
+ * is: a user who opens a provider's Permissions tab is asking who reviews its
+ * commands, and "nothing to choose" is still an answer. The flag is also why
+ * the switch needs no separate method gate: it rides the same catalog minor as
  * `providers.setAutoJudge` itself, so a host old enough to lack the write is a
- * host that reports the flag `false` (its default) and never draws this row.
+ * host that reports the flag `false` (its default) and never draws the select.
+ * Nothing renders until the catalog has answered, so the tab never flashes the
+ * read-only line at a provider that is about to get the switch.
  *
  * Reads through the SURFACE's host, like its neighbour
  * `TerminalAgentArgsSection`: this section renders inside the Providers panel's
@@ -65,13 +70,33 @@ export function ProviderAutoJudgeSection({
   const value = echo !== null && echo.against === stored ? echo.chosen : stored;
 
   const harnessId = providerIdToGuiHarnessId(providerId);
-  const hasNativeJudge =
-    harnessesQuery.data?.harnesses.some(
-      (harness) => harness.id === harnessId && harness.nativeAutoJudge,
-    ) ?? false;
-  if (!hasNativeJudge) return null;
+  const harnesses = harnessesQuery.data?.harnesses;
+  if (harnesses === undefined) return null;
+  const hasNativeJudge = harnesses.some(
+    (harness) => harness.id === harnessId && harness.nativeAutoJudge,
+  );
 
   const providerName = PROVIDER_DISPLAY_NAMES[providerId];
+
+  if (!hasNativeJudge) {
+    return (
+      <div
+        className="mt-3 flex flex-col gap-2 rounded-lg border border-border/60 p-3"
+        data-testid="provider-auto-judge-readonly"
+      >
+        <p className="text-ui-sm font-medium text-foreground">
+          Who reviews {providerName}&apos;s commands
+        </p>
+        <p className="text-ui-sm text-foreground">Traycer&apos;s judge</p>
+        <p className="text-ui-xs text-muted-foreground">
+          {providerName} has no classifier of its own, so Traycer&apos;s judge
+          reviews every command while a conversation runs in Auto mode. Which
+          agent runs that judge, and the policy it follows, are set under
+          Settings ▸ Permissions and apply to every provider alike.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border/60 p-3">

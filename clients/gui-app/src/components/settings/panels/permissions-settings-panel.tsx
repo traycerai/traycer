@@ -23,7 +23,8 @@ import { AutoModeSettingsSection } from "./auto-mode-settings-section";
 // General (SETTINGS.md, "Scope: the organising idea"). The per-provider switch
 // between Traycer's judge and a provider's own classifier is not here either;
 // it is a fact about one provider's CLI and lives on that provider's own
-// Permissions tab under Providers, which is the switch that wins.
+// Permissions tab under Providers (every provider has the tab; only one with
+// a classifier of its own has the switch), which is the switch that wins.
 export function PermissionsSettingsPanel() {
   const scope = useHostScope();
   return (

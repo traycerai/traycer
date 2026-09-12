@@ -1421,12 +1421,21 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   - **Who reviews &lt;provider&gt;'s commands**
     (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
     tab. The tab is client-derived like `account` (`provider-settings-tabs.ts`:
-    never on the wire enum), sits right after CLI & Args, and is drawn only
-    for a provider whose GUI harness catalog row reports `nativeAutoJudge` -
-    so it cannot become anyone's default tab, and a catalog that has not
-    answered yet simply draws it a moment later. It used to be a section at
-    the bottom of CLI & Args, where nobody looking for "permissions" would
-    open. Labelled by provider rather than "Auto mode judge" because the row
+    never on the wire enum), sits right after Env, and is drawn for EVERY
+    provider once the selected host advertises `autoJudge.get` - a host that
+    predates auto mode has no judge to name, so it shows no tab. After Env
+    rather than after CLI & Args so it cannot become a provider's default tab:
+    amp and cursor advertise `env` without `general`, and a tab every provider
+    gets must not displace the one the provider asked for. Inside, a provider
+    whose GUI harness catalog row
+    reports `nativeAutoJudge` gets the two-option select; every other provider
+    gets a read-only line naming Traycer's judge and pointing at Settings ▸
+    Permissions - "nothing to choose" is still the answer to the question the
+    tab is named for. Nothing renders until the catalog has answered, so the
+    line never flashes at a provider about to get the select. It used to be a
+    section at the bottom of CLI & Args, drawn for Claude Code alone, where
+    nobody looking for "permissions" would open. Labelled by provider rather
+    than "Auto mode judge" because the row
     under Permissions carries that name too and THIS is the one that wins
     (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
     so both rows now name whose judge they are about; the provider name is
@@ -1445,10 +1454,10 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     Rendered ONLY for a provider whose `useGuiHarnessesQuery` row reports
     `nativeAutoJudge: true` - a switch with one option is not a switch, and
     every other provider runs Traycer's judge with nothing to choose. **Claude
-    Code is the only provider that reports it**, so it is the only row drawn;
-    the flag also stands in for a method gate, because it rides the same
-    catalog minor as the setter, so a host too old to accept the write reports
-    it `false`. Drawing the row is not the same as the provider judging: the
+    Code is the only provider that reports it**, so it is the only select
+    drawn; the flag also stands in for a method gate, because it rides the
+    same catalog minor as the setter, so a host too old to accept the write
+    reports it `false`. Drawing the select is not the same as the provider judging: the
     host's own store answers `traycer` for a provider nobody has switched, and
     `resolveAutoJudgeForTurn` resolves anything that is not exactly `provider`
     to Traycer's judge.
