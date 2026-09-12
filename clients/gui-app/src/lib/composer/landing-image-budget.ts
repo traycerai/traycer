@@ -227,6 +227,17 @@ export function reserveLandingImageBudget(
   draftId: string | null,
   candidates: ReadonlyArray<LandingImageBudgetCandidate>,
 ): LandingImageBudgetReservation | null {
+  const reservation = tryReserveLandingImageBudget(candidates);
+  if (reservation === null) showBudgetExceededToast(draftId);
+  return reservation;
+}
+
+/** Silent admission for callers that provide their own retryable failure UI.
+ * Admission never deletes drafts or recovery history, including on rejection.
+ */
+export function tryReserveLandingImageBudget(
+  candidates: ReadonlyArray<LandingImageBudgetCandidate>,
+): LandingImageBudgetReservation | null {
   const liveRoots = landingLiveImageRootHashes();
   const owned: Array<{ readonly key: string; readonly bytes: number }> = [];
   const seenThisCall = new Set<string>();
@@ -245,7 +256,6 @@ export function reserveLandingImageBudget(
     const projected =
       currentReferencedBytes() + inFlightBytes() + additionalBytes;
     if (projected > LANDING_IMAGE_BUDGET_BYTES) {
-      showBudgetExceededToast(draftId);
       return null;
     }
   }

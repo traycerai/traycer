@@ -5,7 +5,10 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { createFakeRunnerHost } from "../../../__tests__/create-fake-runner-host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
+import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
+import { epicCanvasKey } from "@/lib/persist";
 import {
   useWindowsBridge,
   useWindowsBridgeHydrated,
@@ -252,6 +255,7 @@ function landingDesktopContent(text: string): DesktopJsonValue {
 
 describe("<WindowsBridgeProvider />", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     resetStores();
   });
 
@@ -260,6 +264,112 @@ describe("<WindowsBridgeProvider />", () => {
     resetStores();
     window.localStorage.clear();
     vi.useRealTimers();
+  });
+
+  it("keeps browser tab reconciliation pending until the account canvas hydrates", async () => {
+    const accountId = "user:alice@example.com";
+    const accountTabs = [
+      { tabId: "tab-account-b", epicId: "epic-b", name: "Beta" },
+      { tabId: "tab-account-a", epicId: "epic-a", name: "Alpha" },
+    ] as const;
+    window.localStorage.setItem(
+      epicCanvasKey(accountId),
+      JSON.stringify({
+        state: {
+          tabsById: Object.fromEntries(
+            accountTabs.map((tab) => [
+              tab.tabId,
+              {
+                ...tab,
+              },
+            ]),
+          ),
+          canvasByTabId: Object.fromEntries(
+            accountTabs.map((tab) => [
+              tab.tabId,
+              {
+                root: null,
+                activePaneId: null,
+                tilesByInstanceId: {},
+                sizesByGroupId: {},
+              },
+            ]),
+          ),
+          openTabOrder: accountTabs.map((tab) => tab.tabId),
+          activeTabId: accountTabs[0].tabId,
+          mostRecentTabIdByEpicId: Object.fromEntries(
+            accountTabs.map((tab) => [tab.epicId, tab.tabId]),
+          ),
+          artifactTreeByEpicId: Object.fromEntries(
+            accountTabs.map((tab) => [tab.epicId, []]),
+          ),
+        },
+        version: 1,
+      }),
+    );
+
+    // Model the pre-auth startup state: the lifecycle bridge mounts beneath
+    // auth.start(), so its initial signed-out hydration effect must wait.
+    useAuthStore.setState({
+      status: "signing-in",
+      profile: null,
+      contextMetadata: null,
+    });
+    useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
+    useTabsStore
+      .getState()
+      .setStripOrder(
+        accountTabs.map((tab) => ({ kind: "epic" as const, id: tab.tabId })),
+      );
+
+    render(
+      <RunnerHostProvider runnerHost={createBaseRunnerHost()}>
+        <WindowsBridgeProvider>
+          <EpicCanvasPersistLifecycleBridge>
+            <HydrationProbe />
+          </EpicCanvasPersistLifecycleBridge>
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    expect(screen.getByTestId("hydration-state").textContent).toBe("pending");
+    expect(useTabsStore.getState().stripOrder).toEqual([
+      { kind: "epic", id: "tab-account-b" },
+      { kind: "epic", id: "tab-account-a" },
+    ]);
+
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: accountId,
+          userName: "alice@example.com",
+          email: "alice@example.com",
+        },
+        contextMetadata: { userId: accountId, username: "alice@example.com" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([
+        "tab-account-b",
+        "tab-account-a",
+      ]);
+      expect(
+        useEpicCanvasStore.getState().tabsById["tab-account-b"]?.epicId,
+      ).toBe("epic-b");
+      expect(
+        useEpicCanvasStore.getState().tabsById["tab-account-a"]?.epicId,
+      ).toBe("epic-a");
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+
+    expect(useTabsStore.getState().stripOrder).toEqual([
+      { kind: "epic", id: "tab-account-b" },
+      { kind: "epic", id: "tab-account-a" },
+    ]);
   });
 
   it("resolves a desktop bridge only when ownership claim/release are exposed", async () => {
@@ -1542,4 +1652,10 @@ function resetStores(): void {
   setDesktopEpicOwnershipBridge(null);
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
+  useAuthStore.setState({
+    status: "signed-out",
+    profile: null,
+    contextMetadata: null,
+  });
 }

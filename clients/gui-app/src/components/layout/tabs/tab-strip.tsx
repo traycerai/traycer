@@ -45,10 +45,13 @@ import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { TabStripSkeleton } from "@/components/layout/tabs/tab-strip-skeleton";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { homeTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
 import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
+import { TabStripHomeItem } from "@/components/layout/tabs/tab-strip-home-item";
+import { useHomeBadgeCount } from "@/components/home-focus/use-home-badge-count";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import { useHeaderTabIndicators } from "./header-tab-presentation";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -74,8 +77,14 @@ import {
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
   const persistedStripCount = useTabsStore((s) => s.stripOrder.length);
+  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
   if (!hasHydrated) {
-    return <TabStripSkeleton count={persistedStripCount} />;
+    return (
+      <TabStripSkeleton
+        count={persistedStripCount}
+        reserveHome={homeTabEnabled}
+      />
+    );
   }
   return <TabStripBody />;
 }
@@ -93,6 +102,11 @@ function TabStripBody() {
   const modalActive = useAnySystemOverlayActive();
   const handleWheel = useHorizontalWheelScroll();
   const activeItemId = useTabsStore((state) => state.activeItemId);
+  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  // `activeItemId === null` over a populated strip means Home holds the
+  // selection; over an empty one it means the same thing, since Home is the
+  // only surface left to hold it.
+  const homeIsActive = homeTabEnabled && activeItemId === null;
   const activePathname = useRouterState({
     select: (s) => s.location.pathname,
   });
@@ -194,6 +208,10 @@ function TabStripBody() {
 
   const handleNewTab = useCallback(() => {
     navigateToTabIntent(navigate, openNewEpicIntent(), undefined);
+  }, [navigate]);
+
+  const handleHomeTab = useCallback(() => {
+    navigateToTabIntent(navigate, homeTabIntent(), undefined);
   }, [navigate]);
 
   const handleDuplicateTab = useCallback(
@@ -308,7 +326,11 @@ function TabStripBody() {
     });
   }, [closeActiveStripTab, closeModal, modalActive]);
 
-  if (allTabs.length === 0 && isLandingPage) {
+  // The empty strip used to be nothing at all on the landing route. Home is a
+  // fixed tab, so with it on there is always something to render and the strip
+  // must not collapse - otherwise the one control that gets the user back to
+  // Home disappears exactly when it is the only surface open.
+  if (!homeTabEnabled && allTabs.length === 0 && isLandingPage) {
     return null;
   }
 
@@ -326,6 +348,13 @@ function TabStripBody() {
           data-testid="tab-strip"
           className="relative flex min-w-0 flex-1 items-end"
         >
+          {/* Outside the scrollable list and before it: Home is fixed, so it
+              must not scroll away with the task tabs, and it must not sit
+              inside the `LayoutGroup` whose reorder animations belong to
+              draggable items. */}
+          {homeTabEnabled ? (
+            <HomeStripSlot isActive={homeIsActive} onActivate={handleHomeTab} />
+          ) : null}
           <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
             <LayoutGroup id="header-tabs">
               <div
@@ -399,6 +428,24 @@ function TabStripBody() {
         </div>
       </ChatIndicatorHostScopes>
     </NotificationIndicatorsProvider>
+  );
+}
+
+/**
+ * Owns the badge subscription so a change to the cross-task prompt count
+ * re-renders the Home control alone, not the whole strip body.
+ */
+function HomeStripSlot(props: {
+  readonly isActive: boolean;
+  readonly onActivate: () => void;
+}): ReactNode {
+  const badgeCount = useHomeBadgeCount();
+  return (
+    <TabStripHomeItem
+      isActive={props.isActive}
+      onActivate={props.onActivate}
+      badgeCount={badgeCount}
+    />
   );
 }
 

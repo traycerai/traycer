@@ -50,7 +50,7 @@ function parsePane(
   const raw = value.tabInstanceIds;
   if (!Array.isArray(raw)) return null;
   const seen = new Set<string>();
-  const tabInstanceIds = raw.flatMap((entry) => {
+  const parsedIds = raw.flatMap((entry) => {
     if (typeof entry !== "string") return [];
     if (seen.has(entry)) return [];
     if (!Object.hasOwn(ctx.tiles, entry)) return [];
@@ -59,7 +59,14 @@ function parsePane(
   });
   // A pane that listed tabs but resolved none is unrecoverable; an
   // explicitly-empty pane (drop zone) stays valid.
-  if (raw.length > 0 && tabInstanceIds.length === 0) return null;
+  if (raw.length > 0 && parsedIds.length === 0) return null;
+  const tabInstanceIds = normalizePickerTabs(
+    parsedIds,
+    ctx.tiles,
+    value.activeTabId,
+  );
+  const keptIds = new Set(tabInstanceIds);
+  for (const id of seen) if (!keptIds.has(id)) seen.delete(id);
   const activeTabId =
     typeof value.activeTabId === "string" && seen.has(value.activeTabId)
       ? value.activeTabId
@@ -81,6 +88,23 @@ function parsePane(
     previewTabId,
     activationHistory,
   };
+}
+
+/** Retire legacy automatic picker tabs without collapsing their panes. */
+function normalizePickerTabs(
+  ids: readonly string[],
+  tiles: Readonly<Record<string, EpicCanvasTileRef>>,
+  activeId: unknown,
+): string[] {
+  const blankIds = ids.filter((id) => tiles[id]?.type === "blank");
+  const blanks = new Set(blankIds);
+  if (blankIds.length === 0) return [...ids];
+  if (blankIds.length === ids.length) return [];
+  const keep =
+    typeof activeId === "string" && blanks.has(activeId)
+      ? activeId
+      : blankIds[0];
+  return ids.filter((id) => !blanks.has(id) || id === keep);
 }
 
 function firstTabId(tabInstanceIds: ReadonlyArray<string>): string | null {

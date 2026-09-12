@@ -114,13 +114,14 @@ afterEach(() => {
 });
 
 describe("ResourceUsageChip", () => {
-  it("renders formatted CPU / memory / process values with an accessible label", () => {
+  it("renders every picked value in chip order with the full breakdown on the accessible label", () => {
     render(
       <ResourceUsageChip
         cpuPercent={12}
         rssBytes={357 * 1024 * 1024}
         pssBytes={null}
         processCount={3}
+        metrics={["cpu", "memory", "processes"]}
         label="Resource usage"
         className={undefined}
       />,
@@ -128,9 +129,138 @@ describe("ResourceUsageChip", () => {
     const chip = screen.getByLabelText(
       "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
     );
-    expect(chip.textContent).toContain("12%");
-    expect(chip.textContent).toContain("357 MB RSS");
-    expect(chip.textContent).toContain("3");
+    expect(chip.textContent).toBe("12%·357 MB RSS·3 procs");
+  });
+
+  it("prints CPU and memory only when the process count is not picked", () => {
+    render(
+      <ResourceUsageChip
+        cpuPercent={12}
+        rssBytes={357 * 1024 * 1024}
+        pssBytes={null}
+        processCount={3}
+        metrics={["cpu", "memory"]}
+        label="Resource usage"
+        className={undefined}
+      />,
+    );
+    const chip = screen.getByLabelText(
+      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
+    );
+    // The process count is still carried by the label, just not printed.
+    expect(chip.textContent).toBe("12%·357 MB RSS");
+    expect(chip.querySelector('[data-metric="processes"]')).toBeNull();
+  });
+
+  it("singularises the process unit for a one-process row", () => {
+    render(
+      <ResourceUsageChip
+        cpuPercent={12}
+        rssBytes={357 * 1024 * 1024}
+        pssBytes={null}
+        processCount={1}
+        metrics={["processes"]}
+        label="Resource usage"
+        className={undefined}
+      />,
+    );
+    expect(
+      screen.getByLabelText("Resource usage: 12% CPU, 357 MB RSS, 1 process")
+        .textContent,
+    ).toBe("1 proc");
+  });
+
+  it("prints only the process count when that is the sole picked metric", () => {
+    render(
+      <ResourceUsageChip
+        cpuPercent={12}
+        rssBytes={357 * 1024 * 1024}
+        pssBytes={null}
+        processCount={3}
+        metrics={["processes"]}
+        label="Resource usage"
+        className={undefined}
+      />,
+    );
+    const chip = screen.getByLabelText(
+      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
+    );
+    // Named on screen, not only in the label: alone beside the frame's CPU
+    // glyph a bare `3` would read as a percentage that lost its sign.
+    expect(chip.textContent).toBe("3 procs");
+    expect(chip.querySelector('[data-metric="cpu"]')).toBeNull();
+    expect(chip.querySelector('[data-metric="memory"]')).toBeNull();
+  });
+
+  it("prints only CPU when that is the sole picked metric", () => {
+    render(
+      <ResourceUsageChip
+        cpuPercent={12}
+        rssBytes={357 * 1024 * 1024}
+        pssBytes={null}
+        processCount={3}
+        metrics={["cpu"]}
+        label="Resource usage"
+        className={undefined}
+      />,
+    );
+    const chip = screen.getByLabelText(
+      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
+    );
+    expect(chip.textContent).toBe("12%");
+    expect(chip.querySelector('[data-metric="memory"]')).toBeNull();
+  });
+
+  it("prints only memory when that is the sole picked metric", () => {
+    render(
+      <ResourceUsageChip
+        cpuPercent={12}
+        rssBytes={357 * 1024 * 1024}
+        pssBytes={null}
+        processCount={3}
+        metrics={["memory"]}
+        label="Resource usage"
+        className={undefined}
+      />,
+    );
+    const chip = screen.getByLabelText(
+      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
+    );
+    expect(chip.textContent).toBe("357 MB RSS");
+    expect(chip.querySelector('[data-metric="cpu"]')).toBeNull();
+  });
+
+  it("prints the metrics in the order it is given", () => {
+    render(
+      <ResourceUsageChip
+        cpuPercent={12}
+        rssBytes={357 * 1024 * 1024}
+        pssBytes={null}
+        processCount={3}
+        metrics={["processes", "memory", "cpu"]}
+        label="Resource usage"
+        className={undefined}
+      />,
+    );
+    expect(screen.getByLabelText(/Resource usage/).textContent).toBe(
+      "3 procs·357 MB RSS·12%",
+    );
+  });
+
+  it("renders nothing at all when no metric is picked", () => {
+    const { container } = render(
+      <ResourceUsageChip
+        cpuPercent={12}
+        rssBytes={357 * 1024 * 1024}
+        pssBytes={null}
+        processCount={3}
+        metrics={[]}
+        label="Resource usage"
+        className={undefined}
+      />,
+    );
+    expect(container.innerHTML).toBe("");
+    expect(screen.queryByLabelText(/Resource usage/)).toBeNull();
   });
 
   it("names PSS in the visible text so two chips stay comparable", () => {
@@ -140,6 +270,7 @@ describe("ResourceUsageChip", () => {
         rssBytes={357 * 1024 * 1024}
         pssBytes={120 * 1024 * 1024}
         processCount={3}
+        metrics={["cpu", "memory"]}
         label="Resource usage"
         className={undefined}
       />,
@@ -160,6 +291,7 @@ describe("ResourceUsageChip", () => {
         rssBytes={null}
         pssBytes={null}
         processCount={3}
+        metrics={["cpu", "memory"]}
         label="Resource usage"
         className={undefined}
       />,
@@ -183,6 +315,7 @@ describe("OwnerResourceChip", () => {
           kind="terminal"
           ownerId="s1"
           hostId="host-1"
+          metrics={["cpu", "memory", "processes"]}
           className={undefined}
         />
       </>,
@@ -212,6 +345,7 @@ describe("OwnerResourceChip", () => {
           kind="terminal"
           ownerId="missing"
           hostId="host-1"
+          metrics={["cpu", "memory", "processes"]}
           className={undefined}
         />
       </>,
@@ -234,6 +368,7 @@ describe("OwnerResourceChip", () => {
           kind="terminal"
           ownerId="shared"
           hostId="host-b"
+          metrics={["cpu", "memory", "processes"]}
           className={undefined}
         />
       </>,
@@ -275,7 +410,11 @@ describe("EpicResourceChip", () => {
     render(
       <>
         <ResourcesStreamMount epicId="epic-1" />
-        <EpicResourceChip epicId="epic-1" className={undefined} />
+        <EpicResourceChip
+          epicId="epic-1"
+          metrics={["cpu", "memory", "processes"]}
+          className={undefined}
+        />
       </>,
     );
     expect(screen.queryByLabelText(/Epic resource usage/)).toBeNull();
