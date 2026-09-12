@@ -1,3 +1,4 @@
+import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
@@ -1960,10 +1961,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       const found = findOpenTileInTab(tabId, openRef());
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
-          prepareCloseCanvasTabFocusTarget(
-            tabId,
-            found.paneId,
-            found.instanceId,
+          withoutTabRecovery(() =>
+            prepareCloseCanvasTabFocusTarget(
+              tabId,
+              found.paneId,
+              found.instanceId,
+            ),
           ),
         );
       }

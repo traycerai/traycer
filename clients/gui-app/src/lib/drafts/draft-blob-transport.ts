@@ -1,3 +1,4 @@
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { DraftWrite } from "@traycer/protocol/host";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -112,10 +113,30 @@ export async function putDraftBlobs(
  * Already-local hashes are left alone. `missing` / corrupt collapse to
  * skip (images render unavailable).
  */
-export async function readDraftBlobsIntoLocalStore(
+export function readDraftBlobsIntoLocalStore(
   hostId: string,
   client: DraftBlobClient,
   hashes: readonly string[],
+): Promise<ReadonlyMap<string, PromptStashImageBlob>> {
+  return readDraftBlobs(hostId, client, hashes, putImageBytesAtHash);
+}
+
+/** Read without storing so recovery can admit the complete byte batch first.
+ * The recovery writer must validate digests before installing these bytes.
+ */
+export function readDraftBlobsForRecovery(
+  hostId: string,
+  client: DraftBlobClient,
+  hashes: readonly string[],
+): Promise<ReadonlyMap<string, PromptStashImageBlob>> {
+  return readDraftBlobs(hostId, client, hashes, () => Promise.resolve(true));
+}
+
+async function readDraftBlobs(
+  hostId: string,
+  client: DraftBlobClient,
+  hashes: readonly string[],
+  store: (hash: string, bytes: ImageBytes) => Promise<boolean>,
 ): Promise<ReadonlyMap<string, PromptStashImageBlob>> {
   const images = new Map<string, PromptStashImageBlob>();
   if (hashes.length === 0) return images;
@@ -132,7 +153,7 @@ export async function readDraftBlobsIntoLocalStore(
       if (!response.ok) continue;
       const bytes = base64ToBytes(response.bytesBase64);
       if (bytes === null) continue;
-      const stored = await putImageBytesAtHash(sha256, bytes);
+      const stored = await store(sha256, bytes);
       if (!stored) continue;
       const mimeType = sniffImageMimeType(bytes) ?? "image/png";
       images.set(sha256, { bytes, mimeType });

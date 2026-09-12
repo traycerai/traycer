@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { setMobileApp } from "@/lib/mobile-app";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
@@ -174,6 +176,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setMobileApp(false);
   useAuthStore.getState().setSignedOut();
   queryClient.clear();
   hostClientRef.current = null;
@@ -250,6 +253,17 @@ function queryStatuses(): ReadonlyArray<string> {
 }
 
 describe("<CommentSidebar /> read failures", () => {
+  it("includes the Windows/Linux comment shortcut in the empty-state guidance", async () => {
+    setMobileApp(false);
+    renderSidebar(defaultEpicHandle, null);
+
+    expect(
+      await screen.findByText(
+        `No open comments. Select text in the editor and click 💬 to start a thread (${formatChordForDisplay("mod+alt+m")}).`,
+      ),
+    ).not.toBeNull();
+  });
+
   it("keeps the spinner visible for an enabled cold query that is actively fetching", async () => {
     let resolveResponse = (_response: ListCommentThreadsResponse): void => {
       throw new Error("missing pending response");
