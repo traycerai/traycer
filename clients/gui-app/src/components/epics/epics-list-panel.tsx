@@ -50,7 +50,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import {
+  useEpicBatchDelete,
+  usePendingDeleteEpicIds,
+} from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
@@ -162,6 +165,7 @@ const PRESERVED_ORPHAN_DELETE_TOOLTIP =
 // credential, which no amount of waiting fixes - only signing in again does.
 // "Once it is" covers both the transient recovery and the re-sign-in without
 // promising either.
+const DELETE_IN_FLIGHT_TOOLTIP = "This task is being deleted.";
 const UNVERIFIED_SESSION_DELETE_TOOLTIP =
   "Your sign-in couldn't be confirmed. Deleting this task will work again once it is.";
 const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
@@ -525,12 +529,22 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     return item === undefined ? null : historyItemDisplayTitle(item);
   }, [items, sweepEpicIds]);
+  // A Task whose deletion is still in flight is not deletable AGAIN: the
+  // dialog closes at kickoff, so its row renders with its controls back while
+  // the host is still working, and nothing on the wire deduplicates a second
+  // `epic.batchDelete` for the same id. Excluded here so the row action, the
+  // bulk selection and the confirm re-filter all refuse it from one set.
+  const pendingDeleteEpicIds = usePendingDeleteEpicIds();
   const selectableItemIds = useMemo(
     () =>
       items
-        .filter((item) => canDeleteHistoryItem(item, cloudAuthorized))
+        .filter(
+          (item) =>
+            canDeleteHistoryItem(item, cloudAuthorized) &&
+            !pendingDeleteEpicIds.has(item.epicId),
+        )
         .map((item) => item.epicId),
-    [cloudAuthorized, items],
+    [cloudAuthorized, items, pendingDeleteEpicIds],
   );
   const selectableIdSet = useMemo(
     () => new Set(selectableItemIds),
@@ -630,6 +644,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     const itemsByEpicId = new Map(items.map((item) => [item.epicId, item]));
     const ids = pendingDeleteIds.filter((id) => {
+      if (pendingDeleteEpicIds.has(id)) return false;
       const item = itemsByEpicId.get(id);
       if (item === undefined) return authorizedNow;
       return canDeleteHistoryItem(item, authorizedNow);
@@ -1653,14 +1668,13 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     authorizesCloudCapability(state.status),
   );
   const canEditTitle = canEditHistoryItemTitle(item, cloudAuthorized);
-  const canDeleteItem = canDeleteHistoryItem(item, cloudAuthorized);
+  const { canDeleteItem, deleteDisabledTooltip } = useHistoryRowDeleteGate(
+    item,
+    cloudAuthorized,
+  );
   const selectionDisabled = historySelectionDisabled(
     selectionMode,
     canDeleteItem,
-  );
-  const deleteDisabledTooltip = historyDeleteDisabledTooltip(
-    item,
-    cloudAuthorized,
   );
   const { mutate: renameEpicTitle, isPending: isRenamePending } =
     useEpicUpdateTitle();
@@ -2177,6 +2191,33 @@ function historySelectionDisabled(
   canDeleteItem: boolean,
 ): boolean {
   return selectionMode && !canDeleteItem;
+}
+
+/**
+ * The row's delete admission plus the reason shown when it is refused. The
+ * in-flight arm sits ahead of the static verdict: deletion runs in the
+ * background and the dialog closes at kickoff, so this row is back on screen
+ * before the host has answered, and a second `epic.batchDelete` for the same
+ * id is not deduplicated anywhere on the wire.
+ */
+function useHistoryRowDeleteGate(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): {
+  readonly canDeleteItem: boolean;
+  readonly deleteDisabledTooltip: string;
+} {
+  const isDeleteInFlight = usePendingDeleteEpicIds().has(item.epicId);
+  if (isDeleteInFlight) {
+    return {
+      canDeleteItem: false,
+      deleteDisabledTooltip: DELETE_IN_FLIGHT_TOOLTIP,
+    };
+  }
+  return {
+    canDeleteItem: canDeleteHistoryItem(item, cloudAuthorized),
+    deleteDisabledTooltip: historyDeleteDisabledTooltip(item, cloudAuthorized),
+  };
 }
 
 function historyDeleteDisabledTooltip(

@@ -149,6 +149,7 @@ vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
     isPending: false,
     mutate: testState.mutate,
   }),
+  usePendingDeleteEpicIds: () => new Set<string>(),
 }));
 
 vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
