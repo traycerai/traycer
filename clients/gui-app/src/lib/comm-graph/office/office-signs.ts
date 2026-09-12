@@ -208,7 +208,18 @@ function nameRungs(name: string): ReadonlyArray<string> {
   return [name, words[0], initials];
 }
 
-function compareHeat(
+/**
+ * Hotter first, ties broken by id so two runs of one office agree.
+ *
+ * Exported for its own contract test and nothing else. A comparator has to
+ * answer 0 for a pair it considers equal, and this one answered 1 for an id
+ * against itself - which `Array.prototype.sort` is entitled to act on however
+ * it likes, making the order implementation-defined the moment a roster
+ * carries a duplicate. That is unobservable through the board text, because
+ * two copies of one id read the same whichever way round they land, so the
+ * only honest way to hold the rule is to state it about the comparator.
+ */
+export function compareHeat(
   left: string,
   right: string,
   statusById: ReadonlyMap<string, OfficeAgentStatus>,
@@ -216,7 +227,7 @@ function compareHeat(
   const leftHeat = STATUS_HEAT[statusById.get(left) ?? "idle"];
   const rightHeat = STATUS_HEAT[statusById.get(right) ?? "idle"];
   if (leftHeat !== rightHeat) return leftHeat - rightHeat;
-  // Ties break by id so two runs of one office agree with each other.
+  if (left === right) return 0;
   return left < right ? -1 : 1;
 }
 

@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import {
+  compareHeat,
   OFFICE_SIGN_FONT_PX,
   OFFICE_SIGN_LETTER_SPACING_EM,
   OFFICE_SIGN_PADDING_X,
@@ -762,5 +763,38 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
     // rather than painting over the room next door.
     expect(measure(text)).toBeLessThanOrEqual(available);
     expect(text.length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("compareHeat - the comparator contract", () => {
+  const statusById = new Map<string, OfficeAgentStatus>([
+    ["a", "attention"],
+    ["b", "idle"],
+  ]);
+
+  /**
+   * An id against itself. The sort at the HQ board's heart is entitled to act
+   * on whatever this answers, so answering 1 here makes the order of a roster
+   * carrying a duplicate implementation-defined - and that is a property of
+   * the engine's sort, not of the office, so the rule is stated here rather
+   * than through a board whose text cannot show it either way.
+   */
+  it("answers zero for an id compared with itself", () => {
+    expect(compareHeat("a", "a", statusById)).toBe(0);
+    expect(compareHeat("b", "b", statusById)).toBe(0);
+  });
+
+  it("still orders hotter first and breaks remaining ties by id", () => {
+    // "a" is attention, "b" is idle: heat decides, whichever way round it is
+    // asked, and the two answers are opposite rather than both positive.
+    expect(compareHeat("a", "b", statusById)).toBeLessThan(0);
+    expect(compareHeat("b", "a", statusById)).toBeGreaterThan(0);
+    // Equal heat, different ids: the id decides, and still antisymmetrically.
+    const tied = new Map<string, OfficeAgentStatus>([
+      ["x", "idle"],
+      ["y", "idle"],
+    ]);
+    expect(compareHeat("x", "y", tied)).toBeLessThan(0);
+    expect(compareHeat("y", "x", tied)).toBeGreaterThan(0);
   });
 });

@@ -12,6 +12,7 @@ import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-popula
 import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 import type { OfficeView } from "@/lib/comm-graph/office/views/office-view";
 import {
+  OFFICE_CHARACTER_WIDTH,
   type OfficeAgentInput,
   type OfficeAgentStatus,
   type OfficeFrame,
@@ -249,7 +250,9 @@ describe("OfficeScene replay", () => {
     // hit-testable - a sheeted, empty desk - even once nobody is in it).
     function hasCharacterRegion(frame: OfficeFrame, agentId: string): boolean {
       return frame.hitRegions.some(
-        (region) => region.agentId === agentId && region.rect.width === 16,
+        (region) =>
+          region.agentId === agentId &&
+          region.rect.width === OFFICE_CHARACTER_WIDTH,
       );
     }
 
