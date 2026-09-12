@@ -209,16 +209,19 @@ export function parseCommGraphTileViewState(
     degradesFrom(value.officeCameraView, officeCameraView);
   const mode = readCommGraphViewMode(value.mode);
   const camera: CommGraphTileCamera = {
-    x: stale
-      ? DEFAULT_COMM_GRAPH_VIEW.x
-      : readFiniteNumber(value.x, PERSISTED_COMM_GRAPH_VIEW.x),
-    y: stale
-      ? DEFAULT_COMM_GRAPH_VIEW.y
-      : readFiniteNumber(value.y, PERSISTED_COMM_GRAPH_VIEW.y),
+    // NOT zeroed by `stale`. Staleness is a fact about an OFFICE view id this
+    // build cannot draw, and since D68 these three are the Graph's fields -
+    // so retiring them here wiped a Graph framing that had nothing to do with
+    // the unknown office view. What `stale` retires is the office's own
+    // camera, below. The one case where these numbers do go neutral is a
+    // MIGRATED record, and that is decided on its own terms further down:
+    // there they were the office's, which is exactly why they cannot stay.
+    x: readFiniteNumber(value.x, PERSISTED_COMM_GRAPH_VIEW.x),
+    y: readFiniteNumber(value.y, PERSISTED_COMM_GRAPH_VIEW.y),
     // A persisted zoom of 0 (or negative) would render an invisible canvas the
     // user cannot recover from, so it degrades to the default rather than
     // failing the whole tile.
-    zoom: stale || zoom <= 0 ? DEFAULT_COMM_GRAPH_VIEW.zoom : zoom,
+    zoom: zoom <= 0 ? DEFAULT_COMM_GRAPH_VIEW.zoom : zoom,
   };
   /**
    * D68's MIGRATION: before the split there was one camera, and in `office`
@@ -232,6 +235,11 @@ export function parseCommGraphTileViewState(
    * view pick neutralised. `graph` mode is not migrated because there the
    * numbers were always the graph's, and neither is a neutral camera, which
    * says nothing to carry.
+   *
+   * A STALE record still migrates, and must: the office camera it produces is
+   * retired to `null` a few lines down, but the three shared fields have to
+   * go neutral with it, because on a pre-D68 office record they were the
+   * office's numbers and are meaningless to the Graph that now owns them.
    */
   const migrates =
     value.officeCamera === undefined &&

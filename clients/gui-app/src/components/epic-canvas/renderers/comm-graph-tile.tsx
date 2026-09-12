@@ -109,7 +109,7 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
 interface OfficeCameraWitness {
   readonly view: OfficeViewId | null;
   readonly defaultChoice: OfficeViewChoice;
-  readonly armedOn: CommGraphTileViewState | null;
+  readonly armed: boolean;
 }
 
 /**
@@ -124,23 +124,25 @@ interface OfficeCameraWitness {
  * the record differs, whether either side of the move is `null`), which is
  * what the two previous versions of this rule got wrong.
  */
-function nextArmedOn(
+function nextArmed(
   witness: OfficeCameraWitness,
   resolvedViewId: OfficeViewId | null,
   defaultChoice: OfficeViewChoice,
-  view: CommGraphTileViewState,
-): CommGraphTileViewState | null {
-  if (witness.view !== resolvedViewId) {
-    return witness.defaultChoice === defaultChoice ? null : view;
-  }
-  if (witness.armedOn === null) return null;
-  // Released once a writer has spoken FOR the arriving view. Both halves are
-  // needed: a write on its own can be about something else (a Graph pan while
-  // the move waits for the office to come back), and a record on its own can
-  // have named this view since before the move.
-  if (view === witness.armedOn) return witness.armedOn;
-  if (view.officeCameraView !== resolvedViewId) return witness.armedOn;
-  return null;
+): boolean {
+  // ARMING ONLY. This used to decide the release too, by INFERRING it from the
+  // stored value: a writer had replaced the view object AND the record named
+  // the arriving view. Both halves can be true with no office writer having
+  // run - a mode switch replaces the object for free, and the record can have
+  // named the view since long before the move - which is the defect this
+  // replaces. A release is now something a writer SAYS (`releaseWitness`),
+  // never something the store's shape implies.
+  if (witness.view === resolvedViewId) return witness.armed;
+  // The DEFAULT moving is what arms this, and it is not inferred from the
+  // shape of the value (whether the record differs, whether either side of the
+  // move is `null`), which is what earlier versions of this rule got wrong. An
+  // Auto outcome resolving `null -> concrete` under an unchanged default is
+  // not a default move and must not arm.
+  return witness.defaultChoice !== defaultChoice;
 }
 
 /**
@@ -152,17 +154,16 @@ function nextOfficeCameraWitness(
   witness: OfficeCameraWitness,
   resolvedViewId: OfficeViewId | null,
   defaultChoice: OfficeViewChoice,
-  view: CommGraphTileViewState,
 ): OfficeCameraWitness {
-  const armedOn = nextArmedOn(witness, resolvedViewId, defaultChoice, view);
+  const armed = nextArmed(witness, resolvedViewId, defaultChoice);
   if (
     witness.view === resolvedViewId &&
     witness.defaultChoice === defaultChoice &&
-    witness.armedOn === armedOn
+    witness.armed === armed
   ) {
     return witness;
   }
-  return { view: resolvedViewId, defaultChoice, armedOn };
+  return { view: resolvedViewId, defaultChoice, armed };
 }
 
 /**
@@ -178,23 +179,26 @@ function nextOfficeCameraWitness(
 function useWitnessedOfficeViewMove(
   resolvedViewId: OfficeViewId | null,
   defaultChoice: OfficeViewChoice,
-  view: CommGraphTileViewState,
-): boolean {
+): { readonly witnessedMove: boolean; readonly releaseWitness: () => void } {
   const [witness, setWitness] = useState<OfficeCameraWitness>(() => ({
     view: resolvedViewId,
     defaultChoice,
     // A fresh mount watched nothing happen: what its camera frames is the
     // record's question, and D52 answers a `null` one by keeping the framing.
-    armedOn: null,
+    armed: false,
   }));
-  const next = nextOfficeCameraWitness(
-    witness,
-    resolvedViewId,
-    defaultChoice,
-    view,
-  );
+  const next = nextOfficeCameraWitness(witness, resolvedViewId, defaultChoice);
   if (next !== witness) setWitness(next);
-  return next.armedOn !== null;
+  // Called by each writer that speaks FOR the arriving view, after its write.
+  // A no-op when nothing is armed, and - the point of constraint 2 - it runs
+  // even when the write itself was a by-value no-op in the store, so a release
+  // never depends on the store growing a new object.
+  const releaseWitness = useCallback(() => {
+    setWitness((current) =>
+      current.armed ? { ...current, armed: false } : current,
+    );
+  }, []);
+  return { witnessedMove: next.armed, releaseWitness };
 }
 
 /**
@@ -357,6 +361,16 @@ export function CommGraphTile(props: CommGraphTileProps) {
   const resolvedViewId: OfficeViewId | null =
     choice === "auto" ? node.view.officeAutoView : choice;
 
+  // The live half of the evidence below: a `null` record cannot carry a
+  // default change this tile is watching happen, so the tile remembers it.
+  // The raw Settings value, not `choice`: a tile with its own pick does not
+  // resolve through the default, so a default that moves under one never
+  // reaches the branch that arms this.
+  const { witnessedMove, releaseWitness } = useWitnessedOfficeViewMove(
+    resolvedViewId,
+    settingsDefaultView,
+  );
+
   // The OFFICE's camera write, which also records the view it frames. Safe to
   // close over the resolved view despite the 150ms debounce: a view change
   // remounts the canvas, and that unmount cancels the pending write - the
@@ -365,8 +379,12 @@ export function CommGraphTile(props: CommGraphTileProps) {
   const handleOfficeCameraChange = useCallback(
     (camera: CommGraphTileCamera) => {
       updateOfficeCamera(viewTabId, node.id, camera, resolvedViewId);
+      // The office has framed the arriving view with its own hands, which is
+      // the strongest release there is: whatever the witness was holding out
+      // for has now happened.
+      releaseWitness();
     },
-    [node.id, resolvedViewId, updateOfficeCamera, viewTabId],
+    [node.id, releaseWitness, resolvedViewId, updateOfficeCamera, viewTabId],
   );
 
   // Auto's own state: the measurement in hand (for the chip and the picker's
@@ -463,17 +481,6 @@ export function CommGraphTile(props: CommGraphTileProps) {
    */
   const measureReady = drawReady && snapshot.initialHistoryCaughtUp;
 
-  // The live half of the evidence below: a `null` record cannot carry a
-  // default change this tile is watching happen, so the tile remembers it.
-  // The raw Settings value, not `choice`: a tile with its own pick does not
-  // resolve through the default, so a default that moves under one never
-  // reaches the branch that arms this.
-  const witnessedMove = useWitnessedOfficeViewMove(
-    resolvedViewId,
-    settingsDefaultView,
-    node.view,
-  );
-
   const viewForCanvas = useMemo(
     () => officeViewForCanvas(node.view, resolvedViewId, witnessedMove),
     [node.view, resolvedViewId, witnessedMove],
@@ -521,7 +528,15 @@ export function CommGraphTile(props: CommGraphTileProps) {
       officeCamera: null,
       officeCameraView: after,
     });
-  }, [node.id, node.view, settingsDefaultView, updateView, viewTabId]);
+    releaseWitness();
+  }, [
+    node.id,
+    node.view,
+    releaseWitness,
+    settingsDefaultView,
+    updateView,
+    viewTabId,
+  ]);
 
   /**
    * THE CAMERA IS ABOUT A VIEW, and stops meaning anything when that view
@@ -549,23 +564,49 @@ export function CommGraphTile(props: CommGraphTileProps) {
    * records the view, and a default change seen while mounted resets anyway.
    */
   useEffect(() => {
-    // NOT while the Graph owns the camera. `resolvedViewId` is derived from
-    // the choice and the Settings default, neither of which knows what mode
-    // this tile is in - so a stale office record mismatching the current
-    // office default would fire here and neutralise the GRAPH's stored
-    // camera, with no office canvas even mounted. The render-time decision is
-    // gated the same way; this is the store-side half of the same rule, and
-    // the mismatch it declines to act on is carried to the next office mount.
-    if (node.view.mode !== "office") return;
+    // NO MODE GATE, deliberately. This used to skip while the Graph was up,
+    // because the camera it retired was the one BOTH renderers shared and
+    // neutralising it would have thrown away a framing the office had no
+    // claim on. D68 removed the sharing: the two fields written below are the
+    // office's alone and the Graph reads neither, so this can settle its own
+    // fields with the Graph on screen and no office canvas mounted at all.
+    // That is what stops the Graph-mode default move from reaching the office
+    // as a stale camera in the first place.
     if (resolvedViewId === null) return;
-    if (node.view.officeCameraView === null) return;
-    if (node.view.officeCameraView === resolvedViewId) return;
+    const recordNamesAnotherView =
+      node.view.officeCameraView !== null &&
+      node.view.officeCameraView !== resolvedViewId;
+    // The case the record cannot answer: the default moved under this tile
+    // while the record ALREADY named the arriving view, so the stamp agrees
+    // and the camera is stale anyway. The stamp is about the camera's past;
+    // the witness is about a writer that has not run yet.
+    //
+    // Gated on there BEING a camera: this arm exists to retire a stale one,
+    // and a witnessed move over a `null` camera has nothing to retire - the
+    // projection is neutral regardless, and a stale stamp with no camera is
+    // the arm above's business.
+    const witnessDistrustsTheCamera =
+      witnessedMove && node.view.officeCamera !== null;
+    if (!recordNamesAnotherView && !witnessDistrustsTheCamera) return;
     updateView(viewTabId, node.id, {
       ...node.view,
       officeCamera: null,
       officeCameraView: resolvedViewId,
     });
-  }, [node.id, node.view, resolvedViewId, updateView, viewTabId]);
+    // This write is what RELEASES the witness, and the two are load-bearing
+    // on each other: the release is explicit (a by-value no-op in the store
+    // must still release), and because it always sets a camera that was
+    // non-null to `null`, it always terminates rather than re-firing.
+    releaseWitness();
+  }, [
+    node.id,
+    node.view,
+    releaseWitness,
+    resolvedViewId,
+    updateView,
+    viewTabId,
+    witnessedMove,
+  ]);
 
   /**
    * AUTO, run ONCE per decision and persisted.
@@ -598,7 +639,16 @@ export function CommGraphTile(props: CommGraphTileProps) {
       // just made for it.
       officeCameraView: decision.view,
     });
-  }, [choice, measureReady, node.id, node.view, updateView, viewTabId]);
+    releaseWitness();
+  }, [
+    choice,
+    measureReady,
+    node.id,
+    node.view,
+    releaseWitness,
+    updateView,
+    viewTabId,
+  ]);
 
   /**
    * A pick. Choosing the view you are already on is a no-op - EXCEPT Auto,
@@ -622,6 +672,9 @@ export function CommGraphTile(props: CommGraphTileProps) {
           // about no view yet; Auto's own write names it.
           officeCameraView: null,
         });
+        // A pick is the person naming the view themselves, which settles
+        // whatever a default move left owed.
+        releaseWitness();
         return;
       }
       if (next === node.view.officeView) return;
@@ -638,8 +691,9 @@ export function CommGraphTile(props: CommGraphTileProps) {
         officeView: next,
         officeCameraView: next,
       });
+      releaseWitness();
     },
-    [node.id, node.view, resolvedViewId, updateView, viewTabId],
+    [node.id, node.view, releaseWitness, resolvedViewId, updateView, viewTabId],
   );
 
   const handleModeChange = useCallback(
