@@ -35,6 +35,7 @@ import {
 } from "@/lib/comm-graph/office/views/isometric/city-plan";
 import { ISO_PAINTER } from "@/lib/comm-graph/office/views/isometric/iso-painter";
 import {
+  cityRoofLift,
   isoPropsIn,
   isoRoomsIn,
   isoRectsOverlap,
@@ -162,6 +163,94 @@ function fixtureTilesOf(layout: OfficeLayout): ReadonlySet<string> {
     }
   }
   return tiles;
+}
+
+/** Occupied, close-up: enough sprites that a stale projector would show. */
+const CLOSE_UP_WORKING: OfficeDeskState = {
+  agentId: "agent-root",
+  name: "Root",
+  status: "working",
+  sheeted: false,
+  openRequests: 3,
+  screenFrame: 0,
+  harnessId: null,
+  modelTier: "large",
+  accentId: null,
+};
+
+/**
+ * Counts `layout.cols` reads. `buildProjector` reads `cols` (and `rows`) and
+ * nothing else on the seat path does - measured, not assumed.
+ */
+function installColsReadCounter(layout: OfficeLayout): { reads: number } {
+  const counts = { reads: 0 };
+  const cols = layout.cols;
+  Object.defineProperty(layout, "cols", {
+    configurable: true,
+    enumerable: true,
+    get(): number {
+      counts.reads += 1;
+      return cols;
+    },
+  });
+  return counts;
+}
+
+function paintAllSeats(layout: OfficeLayout): void {
+  for (const seat of layout.seats.values()) {
+    ISO_PAINTER.seatProps(layout, seat, CLOSE_UP_WORKING, 2);
+  }
+}
+
+function spriteDeltas(
+  before: ReadonlyArray<OfficeWorldDrawable>,
+  after: ReadonlyArray<OfficeWorldDrawable>,
+): string[] {
+  const deltas = new Set<string>();
+  for (const [index, entry] of before.entries()) {
+    const next = after[index];
+    const left = entry.drawable;
+    const right = next.drawable;
+    if (left.kind !== "sprite" || right.kind !== "sprite") {
+      throw new Error("expected sprite drawables");
+    }
+    deltas.add(`${right.x - left.x},${right.y - left.y}`);
+  }
+  return [...deltas];
+}
+
+function allSeatProps(
+  layout: OfficeLayout,
+): ReadonlyArray<ReadonlyArray<OfficeWorldDrawable>> {
+  return [...layout.seats.values()].map((seat) =>
+    ISO_PAINTER.seatProps(layout, seat, CLOSE_UP_WORKING, 2),
+  );
+}
+
+function allSpotProps(
+  layout: OfficeLayout,
+): ReadonlyArray<ReadonlyArray<OfficeWorldDrawable>> {
+  return layout.floors.flatMap((floor) =>
+    floor.errandSpots.map((spot) => ISO_PAINTER.spotProps(layout, spot, 2)),
+  );
+}
+
+function wholeWorldTiles(layout: OfficeLayout): OfficeTileRect {
+  return { col: 0, row: 0, cols: layout.cols, rows: layout.rows };
+}
+
+function projectGrid(
+  projector: OfficeProjector,
+  layout: OfficeLayout,
+): ReadonlyArray<string> {
+  const points: string[] = [];
+  for (let col = 0; col <= layout.cols; col += 7) {
+    for (let row = 0; row <= layout.rows; row += 5) {
+      const point = projector.project(col, row);
+      points.push(`${point.x},${point.y}`);
+    }
+  }
+  return points;
 }
 
 const WHOLE_WORLD: OfficeRect = { x: 0, y: 0, width: 8000, height: 8000 };
@@ -837,6 +926,99 @@ describe("planCity", () => {
       if (seat === undefined) continue;
       expect(after.seatLift(seat)).toBe(before.seatLift(desk));
     }
+  });
+
+  describe("the painter's projector memo", () => {
+    it("returns the same projector object for the same layout", () => {
+      const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+      const first = ISO_PAINTER.projector(layout);
+      expect(ISO_PAINTER.projector(layout)).toBe(first);
+    });
+
+    it("builds one projector for every seat on the same layout, not one per seat", () => {
+      const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+      const counts = installColsReadCounter(layout);
+      paintAllSeats(layout);
+      // Measured: 1 `cols` read with the memo, 82 without (one per seat on
+      // this `triage(60)` fixture, reserves included; unfixed red:
+      // `expected 82 to be less than 8`). `buildProjector` is the only
+      // seat-path reader of `cols`.
+      expect(layout.seats.size).toBeGreaterThan(20);
+      expect(counts.reads).toBeLessThan(8);
+      expect(layout.seats.size).toBeGreaterThan(counts.reads * 10);
+    });
+
+    it("moves every projected point by exactly the origin delta when rows grow", () => {
+      const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+      const before = ISO_PAINTER.projector(layout);
+      const k = 3;
+      const after = ISO_PAINTER.projector({ ...layout, rows: layout.rows + k });
+      const deltas = new Set<string>();
+      for (let col = 0; col <= layout.cols; col += 7) {
+        for (let row = 0; row <= layout.rows; row += 5) {
+          const p = before.project(col, row);
+          const q = after.project(col, row);
+          deltas.add(`${q.x - p.x},${q.y - p.y}`);
+        }
+      }
+      expect([...deltas]).toEqual([`${ISO_HALF_WIDTH * k},0`]);
+    });
+
+    it("moves every painted seat by exactly the origin delta when rows grow", () => {
+      const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+      const k = 3;
+      const grown: OfficeLayout = { ...layout, rows: layout.rows + k };
+      const seat = [...layout.seats.values()][0];
+      const before = ISO_PAINTER.seatProps(layout, seat, CLOSE_UP_WORKING, 2);
+      const after = ISO_PAINTER.seatProps(grown, seat, CLOSE_UP_WORKING, 2);
+      expect(before.length).toBeGreaterThan(0);
+      expect(after).toHaveLength(before.length);
+      expect(spriteDeltas(before, after)).toEqual([`${ISO_HALF_WIDTH * k},0`]);
+    });
+
+    it("paints the same drawables after the memo is cleared as before", () => {
+      // `{ ...layout, frozen: null }` is not an oracle on City: stripping
+      // frozen drops storeys, the spire set, and `seatLift`, so the painter
+      // draws Campus desks at Campus stack height. Clearing the memo and
+      // rebuilding through the same index is the unmemoised path that still
+      // means this view.
+      const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+      const frozen = readCityFrozen(layout);
+      if (frozen === null) throw new Error("expected City's frozen packing");
+      const tiles = wholeWorldTiles(layout);
+      const before = {
+        grid: projectGrid(ISO_PAINTER.projector(layout), layout),
+        lod0: ISO_PAINTER.floor(layout, tiles, 0),
+        lod2: ISO_PAINTER.floor(layout, tiles, 2),
+        seats: allSeatProps(layout),
+        spots: allSpotProps(layout),
+      };
+      frozen.index.projectorMemo = null;
+      const after = {
+        grid: projectGrid(ISO_PAINTER.projector(layout), layout),
+        lod0: ISO_PAINTER.floor(layout, tiles, 0),
+        lod2: ISO_PAINTER.floor(layout, tiles, 2),
+        seats: allSeatProps(layout),
+        spots: allSpotProps(layout),
+      };
+      expect(after).toEqual(before);
+    });
+
+    it("keeps the cached projector's seatLift on the rooftop of a multi-storey seat", () => {
+      const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+      const frozen = readCityFrozen(layout);
+      if (frozen === null) throw new Error("expected City's frozen packing");
+      const projector = ISO_PAINTER.projector(layout);
+      expect(ISO_PAINTER.projector(layout)).toBe(projector);
+      let found = false;
+      for (const seat of layout.seats.values()) {
+        const storeys = frozen.storeysBySeatId.get(seat.seatId) ?? 1;
+        if (storeys < 2) continue;
+        expect(projector.seatLift(seat)).toBe(cityRoofLift(storeys));
+        found = true;
+      }
+      expect(found).toBe(true);
+    });
   });
 
   it("makes the HQ building the tallest, and the only one with a spire", () => {

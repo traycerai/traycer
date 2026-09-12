@@ -44,6 +44,7 @@ import {
   isoSpotDraws,
   isoWithinRect,
   readCityFrozen,
+  readIsoIndex,
   ISO_CAMPUS_STACK_HEIGHT,
   ISO_SPOT_FIXTURES,
   type CityFrozen,
@@ -83,7 +84,7 @@ const SPIRE_WIDTH = 8;
  * sort and the scene's merge are stable, so emission order is the order.
  */
 
-function projectorFor(layout: OfficeLayout): OfficeProjector {
+function buildProjector(layout: OfficeLayout): OfficeProjector {
   const frozen = readCityFrozen(layout);
   if (frozen === null) {
     return createIsoProjector({
@@ -102,6 +103,37 @@ function projectorFor(layout: OfficeLayout): OfficeProjector {
     seatLift: (seat: OfficeSeat) =>
       cityRoofLift(frozen.storeysBySeatId.get(seat.seatId) ?? 1),
   });
+}
+
+/**
+ * This layout's projector, built once however many times it is asked for.
+ *
+ * The scene is handed one at install and keeps it, but the painter is called
+ * with a LAYOUT rather than with that projector, so every floor chunk, every
+ * seat and every spot used to build a fresh one: on a 400-agent Campus that
+ * was 367 projectors on the cold frame and 47 more every time a second of
+ * screen flicker invalidated the scene's per-seat cache. Each is cheap - two
+ * object literals and a closure - and none of them was ever different from
+ * the last, since a projector is a pure function of `cols`, `rows` and the
+ * frozen stack height, all fixed when the plan returned.
+ *
+ * The memo lives on the layout's own index rather than in this module, for
+ * the reason `IsoPlanIndex` states: a cache here would be painter state keyed
+ * on a layout the painter does not own - wrong the moment two scenes hold two
+ * layouts. It is keyed by the LAYOUT and not by the index it is stored on,
+ * because one index can be reached through two layouts - a spread that grows
+ * `rows` carries the same frozen with it - and those two project differently.
+ * A layout carrying no index still projects; it just builds each time,
+ * exactly as every layout did before.
+ */
+function projectorFor(layout: OfficeLayout): OfficeProjector {
+  const index = readIsoIndex(layout);
+  if (index === null) return buildProjector(layout);
+  const memo = index.projectorMemo;
+  if (memo !== null && memo.layout === layout) return memo.projector;
+  const projector = buildProjector(layout);
+  index.projectorMemo = { layout, projector };
+  return projector;
 }
 
 /**

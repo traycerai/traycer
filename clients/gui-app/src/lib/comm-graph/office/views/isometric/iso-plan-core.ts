@@ -38,6 +38,7 @@ import type {
   OfficeTilePos,
   OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
+import type { OfficeProjector } from "@/lib/comm-graph/office/views/office-view";
 
 /**
  * `H` for Campus: the tallest thing stacked on one of its tiles, measured up
@@ -841,6 +842,21 @@ interface IsoIndexedRoom {
   readonly order: number;
 }
 
+/**
+ * A built projector and the layout it answers for, keyed BY THAT LAYOUT.
+ *
+ * The key is the layout object and not the index holding it, because the two
+ * are not the same thing: `{ ...layout, rows: layout.rows + 3 }` is a second
+ * layout over the SAME frozen index, and it projects to a different origin -
+ * that is exactly what "growth moves the origin" means. A memo that assumed
+ * one index meant one layout would hand the grown world the old world's
+ * projector and move nothing, which is the one defect this seam can have.
+ */
+export interface IsoProjectorMemo {
+  readonly layout: OfficeLayout;
+  readonly projector: OfficeProjector;
+}
+
 export class IsoPlanIndex {
   /** Floor-pass props only: a fixture is drawn from its spot, not from here. */
   readonly propsByTile: Map<string, IsoIndexedProp[]>;
@@ -853,11 +869,24 @@ export class IsoPlanIndex {
   readonly drawingSpots: Set<string>;
   /** The widest and tallest sprite indexed, in TILES, rounded up. */
   propMargin: number;
+  /**
+   * The last projector the painter built through this index, and the layout it
+   * was built for. A memo, filled on first use rather than at build time,
+   * because a plan has no projector to hand and the painter does.
+   *
+   * `null` is a complete answer - nothing reads this that cannot build one -
+   * which is what lets it be a memo rather than a fact about the plan. It
+   * lives here and not in the painter module for the reason the class comment
+   * gives: a cache there would be painter state keyed on a layout the painter
+   * does not own, wrong the moment two scenes hold two layouts.
+   */
+  projectorMemo: IsoProjectorMemo | null;
   constructor() {
     this.propsByTile = new Map();
     this.roomsByCell = new Map();
     this.floorsByCell = new Map();
     this.drawingSpots = new Set();
+    this.projectorMemo = null;
     this.propMargin = 0;
   }
 }

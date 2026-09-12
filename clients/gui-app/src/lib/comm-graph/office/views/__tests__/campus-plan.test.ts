@@ -14,6 +14,7 @@ import {
   OFFICE_TILE,
   type OfficeAgentInput,
   type OfficeAgentStatus,
+  type OfficeDrawable,
   type OfficeErrandSpot,
   type OfficeFloor,
   type OfficeLayout,
@@ -24,6 +25,7 @@ import {
   type OfficeSize,
   type OfficeTilePos,
   type OfficeTileRect,
+  type OfficeWorldDrawable,
 } from "@/lib/comm-graph/office/office-types";
 import {
   measureCampus,
@@ -103,15 +105,25 @@ const reflectGet: (
  * can prove a lookup never walked the array it wraps. `for...of` reads
  * indices through the iterator, so it counts too.
  */
+function bumpingArrayProxy<T>(
+  items: ReadonlyArray<T>,
+  bump: () => void,
+): ReadonlyArray<T> {
+  return new Proxy(items, {
+    get(target, prop, receiver): unknown {
+      if (typeof prop === "string" && /^\d+$/.test(prop)) bump();
+      return reflectGet(target, prop, receiver);
+    },
+  });
+}
+
+/** The same, for a case counting into one tally rather than several. */
 function countedArrayProxy<T>(
   items: ReadonlyArray<T>,
   counts: { reads: number },
 ): ReadonlyArray<T> {
-  return new Proxy(items, {
-    get(target, prop, receiver): unknown {
-      if (typeof prop === "string" && /^\d+$/.test(prop)) counts.reads += 1;
-      return reflectGet(target, prop, receiver);
-    },
+  return bumpingArrayProxy(items, () => {
+    counts.reads += 1;
   });
 }
 
@@ -159,6 +171,160 @@ function fixtureTilesOf(layout: OfficeLayout): ReadonlySet<string> {
     }
   }
   return tiles;
+}
+
+/** Occupied, close-up: enough sprites that a stale projector would show. */
+const CLOSE_UP_WORKING: OfficeDeskState = {
+  agentId: "agent-root",
+  name: "Root",
+  status: "working",
+  sheeted: false,
+  openRequests: 3,
+  screenFrame: 0,
+  harnessId: null,
+  modelTier: "large",
+  accentId: null,
+};
+
+/**
+ * Counts `layout.cols` reads. `buildProjector` reads `cols` (and `rows`) and
+ * nothing else on the seat path does - measured, not assumed.
+ */
+function installColsReadCounter(layout: OfficeLayout): { reads: number } {
+  const counts = { reads: 0 };
+  const cols = layout.cols;
+  Object.defineProperty(layout, "cols", {
+    configurable: true,
+    enumerable: true,
+    get(): number {
+      counts.reads += 1;
+      return cols;
+    },
+  });
+  return counts;
+}
+
+function paintAllSeats(layout: OfficeLayout): void {
+  for (const seat of layout.seats.values()) {
+    ISO_PAINTER.seatProps(layout, seat, CLOSE_UP_WORKING, 2);
+  }
+}
+
+/** Chebyshev gap between two tile rects: 0 if they overlap. */
+function tileRectGap(left: OfficeTileRect, right: OfficeTileRect): number {
+  const gapCol = Math.max(
+    0,
+    left.col - (right.col + right.cols),
+    right.col - (left.col + left.cols),
+  );
+  const gapRow = Math.max(
+    0,
+    left.row - (right.row + right.rows),
+    right.row - (left.row + left.rows),
+  );
+  return Math.max(gapCol, gapRow);
+}
+
+function wrapRectReads(rect: OfficeTileRect, bump: () => void): OfficeTileRect {
+  return new Proxy(rect, {
+    get(target, key, receiver): unknown {
+      bump();
+      return reflectGet(target, key, receiver);
+    },
+  });
+}
+
+/**
+ * Counting proxies over every floor's bounds and amenities, in place, so the
+ * ground question's cost is visible on the same `OfficeFloor` objects the
+ * index holds. Per-floor and total, because the claim is that districts far
+ * from the window cost nothing.
+ */
+function installFloorBoundCounters(layout: OfficeLayout): {
+  readonly total: { reads: number };
+  readonly perFloor: ReadonlyArray<{ reads: number }>;
+} {
+  const total = { reads: 0 };
+  const perFloor = layout.floors.map(() => ({ reads: 0 }));
+  for (const [index, floor] of layout.floors.entries()) {
+    const counts = perFloor[index];
+    const bump = (): void => {
+      counts.reads += 1;
+      total.reads += 1;
+    };
+    Object.defineProperty(floor, "bounds", {
+      value: wrapRectReads({ ...floor.bounds }, bump),
+      configurable: true,
+    });
+    const rawAmenities = floor.amenities;
+    for (const amenity of rawAmenities) {
+      Object.defineProperty(amenity, "bounds", {
+        value: wrapRectReads({ ...amenity.bounds }, bump),
+        configurable: true,
+      });
+    }
+    Object.defineProperty(floor, "amenities", {
+      value: bumpingArrayProxy(rawAmenities, bump),
+      configurable: true,
+    });
+  }
+  total.reads = 0;
+  for (const counts of perFloor) counts.reads = 0;
+  return { total, perFloor };
+}
+
+function lastDistrictWindow(layout: OfficeLayout): OfficeTileRect {
+  const last = layout.floors[layout.floors.length - 1];
+  return { col: last.bounds.col, row: last.bounds.row, cols: 32, rows: 32 };
+}
+
+function snapshotFloorBounds(
+  layout: OfficeLayout,
+): ReadonlyArray<OfficeTileRect> {
+  return layout.floors.map((floor) => ({ ...floor.bounds }));
+}
+
+function spriteDeltas(
+  before: ReadonlyArray<OfficeWorldDrawable>,
+  after: ReadonlyArray<OfficeWorldDrawable>,
+): string[] {
+  const deltas = new Set<string>();
+  for (const [index, entry] of before.entries()) {
+    const next = after[index];
+    const left = entry.drawable;
+    const right = next.drawable;
+    if (left.kind !== "sprite" || right.kind !== "sprite") {
+      throw new Error("expected sprite drawables");
+    }
+    deltas.add(`${right.x - left.x},${right.y - left.y}`);
+  }
+  return [...deltas];
+}
+
+function allSeatProps(
+  layout: OfficeLayout,
+): ReadonlyArray<ReadonlyArray<OfficeWorldDrawable>> {
+  return [...layout.seats.values()].map((seat) =>
+    ISO_PAINTER.seatProps(layout, seat, CLOSE_UP_WORKING, 2),
+  );
+}
+
+function wholeWorldTiles(layout: OfficeLayout): OfficeTileRect {
+  return { col: 0, row: 0, cols: layout.cols, rows: layout.rows };
+}
+
+function projectGrid(
+  projector: OfficeProjector,
+  layout: OfficeLayout,
+): ReadonlyArray<string> {
+  const points: string[] = [];
+  for (let col = 0; col <= layout.cols; col += 7) {
+    for (let row = 0; row <= layout.rows; row += 5) {
+      const point = projector.project(col, row);
+      points.push(`${point.x},${point.y}`);
+    }
+  }
+  return points;
 }
 
 const WHOLE_WORLD: OfficeRect = { x: 0, y: 0, width: 8000, height: 8000 };
@@ -729,6 +895,65 @@ describe("planCampus", () => {
     expect([...deltas]).toEqual([`${16 * k},0`]);
   });
 
+  describe("the painter's projector memo", () => {
+    it("returns the same projector object for the same layout", () => {
+      const layout = planCampus(inputFor("triage", 60, VIEWPORT_1280));
+      const first = ISO_PAINTER.projector(layout);
+      expect(ISO_PAINTER.projector(layout)).toBe(first);
+    });
+
+    it("builds one projector for every seat on the same layout, not one per seat", () => {
+      const layout = planCampus(inputFor("triage", 60, VIEWPORT_1280));
+      const counts = installColsReadCounter(layout);
+      paintAllSeats(layout);
+      // Measured: 1 `cols` read with the memo, 60 without (one per seat on
+      // this `triage(60)` fixture; unfixed red: `expected 60 to be less
+      // than 8`). `buildProjector` is the only seat-path reader of `cols`.
+      expect(layout.seats.size).toBeGreaterThan(20);
+      expect(counts.reads).toBeLessThan(8);
+      expect(layout.seats.size).toBeGreaterThan(counts.reads * 10);
+    });
+
+    it("moves every painted seat by exactly the origin delta when rows grow", () => {
+      const layout = planCampus(inputFor("triage", 60, VIEWPORT_1280));
+      const k = 3;
+      const grown: OfficeLayout = { ...layout, rows: layout.rows + k };
+      const seat = [...layout.seats.values()][0];
+      const before = ISO_PAINTER.seatProps(layout, seat, CLOSE_UP_WORKING, 2);
+      const after = ISO_PAINTER.seatProps(grown, seat, CLOSE_UP_WORKING, 2);
+      expect(before.length).toBeGreaterThan(0);
+      expect(after).toHaveLength(before.length);
+      expect(spriteDeltas(before, after)).toEqual([`${16 * k},0`]);
+    });
+
+    it("paints the same drawables with the index as without it", () => {
+      // A layout with no index takes the branch that builds a projector every
+      // time, so this is the memoised path against the unmemoised one on the
+      // same world. The floor call goes FIRST deliberately: it fills the memo
+      // through the painter's own internals, and the projector compared below
+      // is then whatever that left behind.
+      //
+      // Floor lod 2 and spotProps are outside the comparison, and not because
+      // they are inconvenient: stripping `frozen` drops the index itself, so
+      // the floor pass paints the fixtures the index leaves to spots and
+      // `isoSpotDraws` answers true for every `actionTile`. Those differences
+      // are the index's, and say nothing about the projector.
+      const layout = planCampus(inputFor("triage", 60, VIEWPORT_1280));
+      const unindexed: OfficeLayout = { ...layout, frozen: null };
+      const tiles = wholeWorldTiles(layout);
+      const indexedLod0: ReadonlyArray<OfficeDrawable> = ISO_PAINTER.floor(
+        layout,
+        tiles,
+        0,
+      );
+      expect(projectGrid(ISO_PAINTER.projector(layout), layout)).toEqual(
+        projectGrid(ISO_PAINTER.projector(unindexed), unindexed),
+      );
+      expect(indexedLod0).toEqual(ISO_PAINTER.floor(unindexed, tiles, 0));
+      expect(allSeatProps(layout)).toEqual(allSeatProps(unindexed));
+    });
+  });
+
   it("keeps the projector's bounds a superset of every drawable's sprite box", () => {
     const layout = planCampus(inputFor("triage", 200, VIEWPORT_1280));
     const projector = ISO_PAINTER.projector(layout);
@@ -1092,70 +1317,28 @@ describe("planCampus", () => {
     // regardless of how big the bullpen is: measured 11, 8 and 8 reads at
     // 10, 100 and 1,000 hosts (10 reads a touch higher, since its window
     // sits close enough to an edge to walk a few wall tiles).
-    it.each([
-      { n: 10, reads: 11 },
-      { n: 100, reads: 8 },
-      { n: 1000, reads: 8 },
-    ])("reads bullpen.bounds $reads times at $n hosts", ({ n, reads }) => {
-      const layout = planCampus(manyRootsInput(n, undefined));
-      const bullpen = layout.rooms.find((room) =>
-        room.rootAgentId.endsWith("/bullpen"),
-      );
-      if (bullpen === undefined) throw new Error("expected a bullpen room");
-      const tiles: OfficeTileRect = {
-        col: bullpen.bounds.col + 2,
-        row: bullpen.bounds.row + 2,
-        cols: 1,
-        rows: 1,
-      };
-      // Installed AFTER planning and indexing, over the SAME room objects
-      // the index holds - the index bypasses `layout.rooms` (the array),
-      // which is exactly why a guard on that array alone would miss this.
-      const counts = { reads: 0 };
-      for (const room of layout.rooms) {
-        const raw: OfficeTileRect = { ...room.bounds };
-        Object.defineProperty(room, "bounds", {
-          value: new Proxy(raw, {
-            get(target, key) {
-              counts.reads += 1;
-              return reflectGet(target, key, target);
-            },
-          }),
-          configurable: true,
-        });
-      }
-      counts.reads = 0;
-      const out = ISO_PAINTER.floor(layout, tiles, 2);
-      // One ground diamond for the one tile asked about, tile for tile the
-      // same as the old per-tile filter would have produced.
-      expect(out).toHaveLength(1);
-      expect(out[0].kind).toBe("sprite");
-      expect(counts.reads).toBe(reads);
-    });
-  });
-
-  it("costs the same per tile at 1 host and at 50, for the ground question", () => {
-    // `groundSpriteAt`/`isoGroundAt`'s O(1)-per-tile claim, pinned by
-    // wrapping every floor's bounds and amenities in counting proxies -
-    // installed in place, over the same `OfficeFloor` OBJECTS the index
-    // holds, so the count is observable at all.
-    const install = (layout: OfficeLayout, counts: { reads: number }): void => {
-      for (const floor of layout.floors) {
-        const rawBounds: OfficeTileRect = { ...floor.bounds };
-        Object.defineProperty(floor, "bounds", {
-          value: new Proxy(rawBounds, {
-            get(target, key) {
-              counts.reads += 1;
-              return reflectGet(target, key, target);
-            },
-          }),
-          configurable: true,
-        });
-        const rawAmenities = floor.amenities;
-        for (const amenity of rawAmenities) {
-          const rawAmenityBounds: OfficeTileRect = { ...amenity.bounds };
-          Object.defineProperty(amenity, "bounds", {
-            value: new Proxy(rawAmenityBounds, {
+    it.each([{ n: 10 }, { n: 100 }, { n: 1000 }])(
+      "reads bullpen.bounds a handful of times at $n hosts",
+      ({ n }) => {
+        const layout = planCampus(manyRootsInput(n, undefined));
+        const bullpen = layout.rooms.find((room) =>
+          room.rootAgentId.endsWith("/bullpen"),
+        );
+        if (bullpen === undefined) throw new Error("expected a bullpen room");
+        const tiles: OfficeTileRect = {
+          col: bullpen.bounds.col + 2,
+          row: bullpen.bounds.row + 2,
+          cols: 1,
+          rows: 1,
+        };
+        // Installed AFTER planning and indexing, over the SAME room objects
+        // the index holds - the index bypasses `layout.rooms` (the array),
+        // which is exactly why a guard on that array alone would miss this.
+        const counts = { reads: 0 };
+        for (const room of layout.rooms) {
+          const raw: OfficeTileRect = { ...room.bounds };
+          Object.defineProperty(room, "bounds", {
+            value: new Proxy(raw, {
               get(target, key) {
                 counts.reads += 1;
                 return reflectGet(target, key, target);
@@ -1164,32 +1347,41 @@ describe("planCampus", () => {
             configurable: true,
           });
         }
-        Object.defineProperty(floor, "amenities", {
-          value: new Proxy(rawAmenities, {
-            get(target, prop, receiver) {
-              if (typeof prop === "string" && /^\d+$/.test(prop)) {
-                counts.reads += 1;
-              }
-              return reflectGet(target, prop, receiver);
-            },
-          }),
-          configurable: true,
-        });
-      }
-    };
-    const window = (layout: OfficeLayout): OfficeTileRect => {
-      const last = layout.floors[layout.floors.length - 1];
-      return { col: last.bounds.col, row: last.bounds.row, cols: 32, rows: 32 };
-    };
+        counts.reads = 0;
+        const out = ISO_PAINTER.floor(layout, tiles, 2);
+        // One ground diamond for the one tile asked about, tile for tile the
+        // same as the old per-tile filter would have produced.
+        expect(out).toHaveLength(1);
+        expect(out[0].kind).toBe("sprite");
+        // Measured: 11, 8 and 8 reads at 10, 100 and 1,000 hosts. One shared
+        // budget across all three is the constancy claim; 24 leaves headroom
+        // over the 11 without letting a per-tile perimeter walk (hundreds
+        // of reads on a large bullpen) pass.
+        expect(counts.reads).toBeLessThan(24);
+      },
+    );
+  });
 
-    // 1 host.
+  it("costs the same per tile at 1 host and at 50, for the ground question", () => {
+    // `isoGroundAt` answers per tile from the coarse-cell index, so cost
+    // tracks the WINDOW and not the population. Counting proxies wrap every
+    // floor's bounds and amenities in place, over the same `OfficeFloor`
+    // OBJECTS the index holds - per floor, because the claim is that the
+    // districts the window is not in cost NOTHING, which no total can say.
+    //
+    // Measured over the 1,024-tile window: 5,693 reads at one host and 6,221
+    // at fifty - and at fifty, two districts are read and the other
+    // forty-eight exactly zero times. Evidence in a comment, not pins: the
+    // assertions below are the zero, a per-tile bound (8 a tile, which is
+    // CodeRabbit's own), and the ratio. An earlier form of this case took
+    // its window from bounds it had already wrapped, which is where the
+    // 5,695 / 6,223 in the review thread came from - two reads of the last
+    // floor, spent measuring rather than painting.
+
     const layout1 = planCampus(manyRootsInput(20, undefined));
-    const counts1 = { reads: 0 };
-    install(layout1, counts1);
-    counts1.reads = 0;
-    ISO_PAINTER.floor(layout1, window(layout1), 2);
-    // Measured: 5,695 reads over the 1,024-tile window - 5.56/tile.
-    expect(counts1.reads).toBe(5695);
+    const window1 = lastDistrictWindow(layout1);
+    const counts1 = installFloorBoundCounters(layout1);
+    ISO_PAINTER.floor(layout1, window1, 2);
 
     // 50 hosts at the same density - 1,000 agents dealt round-robin across
     // fifty host bands, so each district holds the same twenty agents the
@@ -1198,24 +1390,41 @@ describe("planCampus", () => {
       manyRootsInput(1000, (index) => `host-${index % 50}`),
     );
     expect(layout50.floors.length).toBe(50);
-    const counts50 = { reads: 0 };
-    install(layout50, counts50);
-    counts50.reads = 0;
-    ISO_PAINTER.floor(layout50, window(layout50), 2);
-    // Measured: 6,223 reads - 6.08/tile, a small constant over the 1-host
-    // cost rather than the ~50x it would be walking every district.
-    expect(counts50.reads).toBe(6223);
-    expect(counts50.reads / counts1.reads).toBeLessThan(2);
+    const bounds50 = snapshotFloorBounds(layout50);
+    const window50 = lastDistrictWindow(layout50);
+    const counts50 = installFloorBoundCounters(layout50);
+    ISO_PAINTER.floor(layout50, window50, 2);
+
+    let farFloors = 0;
+    let nearbyReads = 0;
+    for (const [index, bounds] of bounds50.entries()) {
+      if (tileRectGap(bounds, window50) > 32) {
+        expect(counts50.perFloor[index].reads).toBe(0);
+        farFloors += 1;
+      } else {
+        nearbyReads += counts50.perFloor[index].reads;
+      }
+    }
+    expect(farFloors).toBeGreaterThan(layout50.floors.length / 2);
+    // Districts READ AT ALL, which is the claim from the other side: the
+    // window's own and whatever shares a coarse cell with it. Measured 2 of
+    // 50. A count of districts rather than of field reads, so a reader that
+    // asks each of them one question fewer does not move it.
+    const touched = counts50.perFloor.filter((counts) => counts.reads > 0);
+    expect(touched.length).toBeLessThanOrEqual(5);
+    expect(nearbyReads).toBeLessThan(1024 * 8);
+    expect(counts1.total.reads).toBeLessThan(1024 * 8);
+    expect(counts50.total.reads / counts1.total.reads).toBeLessThan(2);
 
     // Without the index (the walk this replaced), the same 50-host window
     // costs an order of magnitude more - the comparison the index exists
     // to make untrue.
     const unindexed: OfficeLayout = { ...layout50, frozen: null };
-    const countsUnindexed = { reads: 0 };
-    install(unindexed, countsUnindexed);
-    countsUnindexed.reads = 0;
-    ISO_PAINTER.floor(unindexed, window(unindexed), 2);
-    expect(countsUnindexed.reads).toBeGreaterThan(counts50.reads * 5);
+    const countsUnindexed = installFloorBoundCounters(unindexed);
+    ISO_PAINTER.floor(unindexed, window50, 2);
+    expect(countsUnindexed.total.reads).toBeGreaterThan(
+      counts50.total.reads * 5,
+    );
   });
 
   /** The bounding box over a set of sprite rects: min corner to max corner. */
@@ -1432,9 +1641,20 @@ describe("planCampus", () => {
 
     expect(smallWindowReads).toBeGreaterThan(0);
     // Measured on 08ee4f038: 96 reads for the 64x64 window against 278 for
-    // the whole 8,000x8,000 world.
-    expect(smallWindowReads).toBe(96);
-    expect(wholeWorldReads).toBe(278);
+    // the whole 8,000x8,000 world; bounded at 2x those rather than pinned,
+    // since the claim is the FRACTION and not either count.
+    //
+    // The mutation these are aimed at is the query ignoring the chunk index
+    // and scanning every chunk: the small window then reads 204, which
+    // breaks the bound and the ratio together. A tile-chunk filing of the
+    // spots themselves - the pre-T2 shape - makes the small window read
+    // FEWER (8), and is caught where it belongs, by the culling case above:
+    // `expected Set{} to deeply equal Set{ '2,4', '3,4', '6,4', '1,5', ... }`.
+    // A floor under the read count would catch it here too, and would fail
+    // just as readily on a reader that legitimately read `approachTile`
+    // once instead of twice, which is the pin this case is being cured of.
+    expect(smallWindowReads).toBeLessThan(192);
+    expect(wholeWorldReads).toBeLessThan(556);
     expect(smallWindowReads).toBeLessThan(wholeWorldReads / 2);
   });
 
