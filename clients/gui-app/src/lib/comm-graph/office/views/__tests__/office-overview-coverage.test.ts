@@ -1,18 +1,22 @@
 /**
- * Two overview-floor coverage regressions left open by T5's cold review of
- * `08ee4f038`, on top of the seam that review closed: the original eleven
- * Campus/City corner misses (see `original-corner-sweep` in the review
- * evidence) are not reopened here.
+ * Two overview-floor coverage regressions found by T5's cold review of
+ * `08ee4f038`, on top of the seam that review closed. BOTH ARE CLOSED; what
+ * follows records what each one was and pins the behaviour that replaced it.
+ * The original eleven Campus/City corner misses (see `original-corner-sweep`
+ * in the review evidence) are not reopened here.
  *
- * H1 - `cornerOverhangOf` (`views/isometric/iso-painter.ts`) derives its bleed
+ * H1 - `cornerOverhangOf` (`views/isometric/iso-painter.ts`) derived its bleed
  * from a symmetric diamond, but a NONSQUARE tile rectangle projects to a
  * parallelogram. City freezes a district's width across appends, so a real
- * append-grown district gets steadily narrower against its height, and the
- * declared overhang stops being conservative enough.
+ * append-grown district got steadily narrower against its height and the
+ * declared overhang stopped being conservative enough. It is measured from the
+ * real parallelogram now, and the cases below pin the corners that were missed.
  *
- * H2 - `isoBlockOverhang` walks every floor, amenity and room on EVERY
- * overview frame, before the scene's floor cache is even consulted, which
- * reintroduces the full-population work T5's painter index removed.
+ * H2 - `isoBlockOverhang` walked every floor, amenity and room on EVERY
+ * overview frame, before the scene's floor cache was consulted, which
+ * reintroduced the full-population work T5's painter index removed. The scene
+ * memoises the painter's declared overhang per plan now, and the case below
+ * pins the repeat walks at none.
  *
  * Both are pinned through a real `OfficeScene` and real plans - a City that
  * actually grew by append, a Campus/City that actually seated `many-roots` -
@@ -235,9 +239,10 @@ describe("the grown-City block overhang (H1)", () => {
       .frame(0, camera)
       .floor.filter(isBlockDrawable)
       .findLast((block) => rectsOverlap(block, point));
-    // Today `scene.frame(0, camera).floor` returns zero floor drawables at
-    // all - the same tight inverse-projection miss as the sweep above, made
-    // directly visible at a real pan.
+    // Before H1 was closed, `scene.frame(0, camera).floor` returned zero floor
+    // drawables at all here - the same tight inverse-projection miss as the
+    // sweep above, made directly visible at a real pan. What is pinned now is
+    // that the storey block under the point is drawn.
     expect(actual).toEqual(wanted);
   });
 
@@ -399,11 +404,12 @@ describe("the per-frame room-population memo (H2)", () => {
       expect(records.map((record) => record.rooms)).toEqual(
         MANY_ROOTS_ROOM_COUNTS,
       );
-      // THE FIX: `isoBlockOverhang` walks every floor, amenity and room on
-      // every overview frame, before `floorIn` ever gets to consult its
-      // cache. Today this reads 30 / 255 / 2,505 room entries across the
-      // five repeats - exactly five full walks of the 6 / 51 / 501-room
-      // population, however unchanged the floor is between them.
+      // WHAT H2 WAS: `isoBlockOverhang` walked every floor, amenity and room
+      // on every overview frame, before `floorIn` ever got to consult its
+      // cache. Before the memo this read 30 / 255 / 2,505 room entries across
+      // the five repeats - exactly five full walks of the 6 / 51 / 501-room
+      // population, however unchanged the floor was between them. The memo is
+      // keyed on the plan, so the repeats now read none at all.
       expect(records.map((record) => record.reads)).toEqual([0, 0, 0]);
       // A memo that returns a STALE or WRONG number is not a pass: the six
       // identical frames (the warm-up plus the five repeats) must still

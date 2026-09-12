@@ -219,12 +219,18 @@ describe("findOfficePath", () => {
 
   it("keeps a grid big enough for the largest office it has searched", () => {
     const small = sealedLayout();
+    // ITS OWN PRECONDITION. The scratch is module state, so this case used to
+    // pass only because an earlier `it` had already sized it to the big
+    // layout. Run alone - under `it.only`, or after a reordering - the
+    // three-by-three search below would do the growing itself and the case
+    // would fail for something that is not a regression.
+    findOfficePath(layout, layout.doorTile, layout.lobbyTile);
     const before = officePathScratch();
 
     findOfficePath(small, { col: 0, row: 0 }, { col: 2, row: 2 });
 
-    // The big layout above has already run, so a three-by-three floor reuses
-    // what is there rather than shrinking it and growing it back.
+    // A three-by-three floor reuses what the big layout left rather than
+    // shrinking it and growing it back.
     const after = officePathScratch();
     expect(after.capacity).toBe(before.capacity);
     expect(after.growths).toBe(before.growths);

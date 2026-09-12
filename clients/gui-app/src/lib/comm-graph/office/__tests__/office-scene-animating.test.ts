@@ -55,13 +55,21 @@ const BOTH = new Set(["alpha", "beta"]);
 
 function input(overrides: Partial<OfficeSceneInput>): OfficeSceneInput {
   const agents = overrides.agents ?? AGENTS;
+  // DERIVED FROM WHAT THE CASE PASSED, the same way `agents` is. The partition
+  // is a function of the statuses, so building it from an empty map while
+  // `statusById` arrives through the overrides hands the scene a partition
+  // that disagrees with its own statuses - and every case that sets a status
+  // to watch the floor move was being read against a partition that had
+  // nobody working in it.
+  const statusById =
+    overrides.statusById ?? new Map<string, OfficeAgentStatus>();
   return {
     agents,
     visibleAgentIds: BOTH,
-    statusById: new Map<string, OfficeAgentStatus>(),
+    statusById,
     partition: partitionOfficePopulation({
       agents,
-      statusById: new Map(),
+      statusById,
       previous: null,
     }),
     activityById: new Map<string, number>(),

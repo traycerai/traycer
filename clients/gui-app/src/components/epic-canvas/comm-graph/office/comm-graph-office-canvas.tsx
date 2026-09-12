@@ -2748,7 +2748,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     let lastClockSecond = -1;
     let pausedAt: number | null = null;
     const gate = new OfficeFrameGate();
-    const staticLayer = new OfficeStaticLayer(createOfficeStaticSurface);
+    const staticLayer = new OfficeStaticLayer(
+      createOfficeStaticSurface,
+      OFFICE_STATIC_CHUNK_BUDGET,
+    );
     runtime.onInvalidateFrame(() => {
       gate.invalidate();
     });

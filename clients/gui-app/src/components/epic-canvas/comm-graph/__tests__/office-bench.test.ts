@@ -132,8 +132,12 @@ describe("officeBench", () => {
     const bench = officeBench({ shape: "triage", agents: 309 });
 
     expect(bench.statusById).toEqual(fixture.statusById);
+    // NEITHER of the two still statuses counts. `idle` is seated with nothing
+    // to do and `archived` is a dust sheet over a desk - an office of nothing
+    // but archives would satisfy a `!== "idle"` filter and move not at all,
+    // which is the one thing this case exists to rule out.
     const hot = [...bench.statusById.values()].filter(
-      (status) => status !== "idle",
+      (status) => status !== "idle" && status !== "archived",
     );
     expect(hot.length).toBeGreaterThan(0);
     // About a tenth of the floor, which is what an epic under way looks like.

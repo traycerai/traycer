@@ -344,8 +344,22 @@ export class OfficeStaticLayer {
   /** Counts chunk repaints, so a test can prove a frame did NOT cause one. */
   private paints = 0;
 
-  constructor(create: OfficeStaticSurfaceFactory) {
+  /**
+   * The ceiling this layer holds itself to, in chunks.
+   *
+   * Taken rather than read off the module constant so the layer and the PLAN
+   * it is handed are bound to one value. They were two: the planner refused a
+   * span over the `budget` it was given, while `sync` measured the plan it got
+   * back against `OFFICE_STATIC_CHUNK_BUDGET`. A caller planning with a larger
+   * budget therefore handed over a legal plan that `sync` rejected wholesale -
+   * releasing every held bitmap and returning no draws on every frame, with a
+   * silently disabled cache and a slower floor as the only symptom.
+   */
+  private readonly budget: number;
+
+  constructor(create: OfficeStaticSurfaceFactory, budget: number) {
     this.create = create;
+    this.budget = budget;
   }
 
   get paintCount(): number {
@@ -398,7 +412,7 @@ export class OfficeStaticLayer {
       this.unsupportedChunks.clear();
       this.key = key;
     }
-    if (chunks.length === 0 || chunks.length > OFFICE_STATIC_CHUNK_BUDGET) {
+    if (chunks.length === 0 || chunks.length > this.budget) {
       this.releaseChunks();
       return NO_DRAWS;
     }
@@ -489,7 +503,7 @@ export class OfficeStaticLayer {
    */
   private evictFor(wanted: ReadonlyArray<WantedChunk>): void {
     const keep = new Set(wanted.map((entry) => entry.id));
-    const spare = Math.max(0, OFFICE_STATIC_CHUNK_BUDGET - keep.size);
+    const spare = Math.max(0, this.budget - keep.size);
     let extras = 0;
     for (const id of this.held.keys()) {
       if (!keep.has(id)) extras += 1;

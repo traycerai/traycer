@@ -112,7 +112,7 @@ describe("officeStaticLayerKeysMatch", () => {
 describe("OfficeStaticLayer", () => {
   it("paints once and blits the same canvas thereafter", () => {
     const { create } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const paint = vi.fn();
 
     const first = layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
@@ -122,13 +122,21 @@ describe("OfficeStaticLayer", () => {
     // The whole point: thirty frames a second cost one paint, not thirty.
     expect(paint).toHaveBeenCalledTimes(1);
     expect(layer.paintCount).toBe(1);
+    // Handing back NOTHING is a real answer from `sync` - a refused chunk is
+    // simply absent - so the count is asserted before the canvases are read.
+    // Indexing an empty result instead reports a TypeError about `canvas`,
+    // which names neither the chunk that went missing nor the sync that
+    // dropped it.
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(third).toHaveLength(1);
     expect(second[0].canvas).toBe(first[0].canvas);
     expect(third[0].canvas).toBe(first[0].canvas);
   });
 
   it("paints each chunk once and hands them back in the order asked for", () => {
     const { create } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const paint = vi.fn();
     const world: OfficeStaticLayerKey = { ...KEY, width: 1600, height: 1200 };
     const chunks: ReadonlyArray<OfficeStaticChunk> = [
@@ -154,7 +162,7 @@ describe("OfficeStaticLayer", () => {
 
   it("paints a chunk in world space, so a painter needs no chunk offset", () => {
     const { create, made } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const transforms: ReadonlyArray<number>[] = [];
     const surface = made;
     const chunk: OfficeStaticChunk = { chunkCol: 1, chunkRow: 2 };
@@ -184,7 +192,7 @@ describe("OfficeStaticLayer", () => {
 
   it("crops the chunks at the world's edge rather than over-allocating", () => {
     const { create, made } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
 
     layer.sync({
       key: { ...KEY, width: 600, height: 700 },
@@ -207,7 +215,7 @@ describe("OfficeStaticLayer", () => {
 
   it("repaints when the floor's version moves", () => {
     const { create } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const paint = vi.fn();
     layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
 
@@ -222,7 +230,7 @@ describe("OfficeStaticLayer", () => {
 
   it("repaints when the theme flips, since the palette is in the pixels", () => {
     const { create } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const paint = vi.fn();
     layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
 
@@ -237,7 +245,7 @@ describe("OfficeStaticLayer", () => {
 
   it("drops every chunk it held when the key moves", () => {
     const { create, made } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint: () => undefined });
 
     layer.sync({
@@ -256,7 +264,7 @@ describe("OfficeStaticLayer", () => {
 
   it("evicts the least recently drawn chunk past the budget", () => {
     const { create } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const key: OfficeStaticLayerKey = { ...KEY, width: 65_536, height: 1024 };
     const paint = vi.fn();
     const chunkAt = (col: number): OfficeStaticChunk => ({
@@ -312,7 +320,7 @@ describe("OfficeStaticLayer", () => {
       );
       return { canvas, ctx };
     };
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const world: OfficeSize = { width: 12000, height: 12000 };
     const plannedCounts: number[] = [];
 
@@ -344,7 +352,7 @@ describe("OfficeStaticLayer", () => {
 
   it("never holds more pixels than the budget allows", () => {
     const { create } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const key: OfficeStaticLayerKey = { ...KEY, width: 65_536, height: 65_536 };
     for (let col = 0; col < 80; col += 1) {
       layer.sync({
@@ -361,7 +369,7 @@ describe("OfficeStaticLayer", () => {
 
   it("holds nothing while the office is suspended", () => {
     const { create } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint: () => undefined });
     expect(layer.heldPixels).toBeGreaterThan(0);
 
@@ -374,7 +382,7 @@ describe("OfficeStaticLayer", () => {
 
   it("drops the bitmap on release and repaints if asked again", () => {
     const { create, made } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const paint = vi.fn();
     layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
 
@@ -387,7 +395,7 @@ describe("OfficeStaticLayer", () => {
 
   it("bakes nothing for a floor with no area yet", () => {
     const { create } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const paint = vi.fn();
 
     // The first frames of a tile that has not been laid out.
@@ -402,7 +410,7 @@ describe("OfficeStaticLayer", () => {
 
   it("bakes nothing when the plan holds no chunks", () => {
     const { create } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
+    const layer = new OfficeStaticLayer(create, OFFICE_STATIC_CHUNK_BUDGET);
     const paint = vi.fn();
     layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
 
@@ -417,7 +425,7 @@ describe("OfficeStaticLayer", () => {
   it("reports no layer where the host has no 2D context at all", () => {
     // jsdom, and any canvas-less host. The caller draws the floor tile by tile
     // instead: the blit is an optimization, never a requirement.
-    const layer = new OfficeStaticLayer(() => null);
+    const layer = new OfficeStaticLayer(() => null, OFFICE_STATIC_CHUNK_BUDGET);
     const paint = vi.fn();
 
     expect(layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint })).toEqual([]);
@@ -437,7 +445,7 @@ describe("OfficeStaticLayer", () => {
       const ctx = canvas.getContext("2d");
       if (ctx === null) throw new Error("the stub returned no context");
       return { canvas, ctx };
-    });
+    }, OFFICE_STATIC_CHUNK_BUDGET);
 
     const drawn = layer.sync({
       key: { ...KEY, width: 1600, height: 600 },
@@ -474,7 +482,7 @@ describe("OfficeStaticLayer", () => {
       const ctx = canvas.getContext("2d");
       if (ctx === null) throw new Error("the stub returned no context");
       return { canvas, ctx };
-    });
+    }, OFFICE_STATIC_CHUNK_BUDGET);
     const key = { ...KEY, width: 2048, height: 600 };
 
     const first = layer.sync({
@@ -531,7 +539,7 @@ describe("OfficeStaticLayer", () => {
       const ctx = canvas.getContext("2d");
       if (ctx === null) throw new Error("the stub returned no context");
       return { canvas, ctx };
-    });
+    }, OFFICE_STATIC_CHUNK_BUDGET);
     const chunk: OfficeStaticChunk = { chunkCol: 1, chunkRow: 0 };
     const failingKey: OfficeStaticLayerKey = {
       ...KEY,

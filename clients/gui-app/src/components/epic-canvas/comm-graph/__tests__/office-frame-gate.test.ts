@@ -322,6 +322,22 @@ function motions(scene: OfficeScene): Motion[] {
 }
 
 /**
+ * The one character these cases drive, with its absence REPORTED rather than
+ * dereferenced. An empty population is a real outcome of the scene, and
+ * indexing `[0]` on one throws a TypeError that names nothing - the same
+ * reason the shape checks above throw a sentence instead of letting a bad
+ * read surface three lines later.
+ */
+function soleMotion(scene: OfficeScene): Motion {
+  // The LENGTH, not an `undefined` element: this project leaves
+  // `noUncheckedIndexedAccess` off, so `[0]` is typed `Motion` and comparing
+  // it against `undefined` is a condition the linter can prove never fires.
+  const found = motions(scene);
+  if (found.length === 0) throw new Error("no character to move");
+  return found[0];
+}
+
+/**
  * The gate driven the way the canvas actually drives it, not through
  * `shouldDraw` alone: `gate.elapsed` gates the tick, `scene.tick` advances the
  * simulation, `scene.isAnimating` reads the state THAT tick just produced, and
@@ -392,12 +408,12 @@ describe("OfficeFrameGate through the scene's real tick-then-ask loop", () => {
     for (let step = 0; step < 400; step += 1) {
       scene.frame(0, whole(scene));
       scene.tick(100);
-      const moving = motions(scene)[0];
+      const moving = soleMotion(scene);
       const chairCol =
         scene.layout()?.desks.get(id)?.chairTile.col ?? moving.col;
       if (!moving.seated && Math.abs(moving.col - chairCol) > 1) break;
     }
-    expect(motions(scene)[0].seated).toBe(false);
+    expect(soleMotion(scene).seated).toBe(false);
     scene.sync(input(epic.agents, new Map([[id, "working"]]), false));
 
     const gate = new OfficeFrameGate();
@@ -411,7 +427,7 @@ describe("OfficeFrameGate through the scene's real tick-then-ask loop", () => {
       if (gate.shouldDraw({ animating, minute: 0, panning: false })) {
         drawn = scene.frame(0, whole(scene));
       }
-      if (!motions(scene)[0].seated) movingFrames += 1;
+      if (!soleMotion(scene).seated) movingFrames += 1;
       else break;
     }
     // Anti-vacuity: there has to have been a walk in progress to settle, or

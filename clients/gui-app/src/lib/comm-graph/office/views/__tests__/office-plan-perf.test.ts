@@ -43,6 +43,7 @@ import {
   type OfficeLayout,
   type OfficeRect,
   type OfficeSceneInput,
+  type OfficeSeat,
   type OfficeSize,
   type OfficeViewId,
 } from "@/lib/comm-graph/office/office-types";
@@ -237,14 +238,43 @@ function layoutOf(scene: OfficeScene): OfficeLayout {
 }
 
 /**
- * The seats with somebody in them whose art the rect can reach - the scene's
- * own cull, computed the way the scene computes it: the seat's projected box
- * against the view grown by the cull margin.
+ * One seat's projected box, derived the way `OfficeScene.seatBox` derives it.
  *
- * Only the OCCUPIED ones. An empty reserve seat generates nothing to draw, so
- * counting it would inflate the budget with seats that cost nothing.
+ * The plan's own answer wins where it has one: an isometric seat is painted
+ * away from its desk tile and carries the box it went to, which this end
+ * cannot recompute.
  */
-function occupiedSeatsIn(args: {
+function seatBoxOf(seat: OfficeSeat, projector: OfficeProjector): OfficeRect {
+  if (seat.hitBox !== null) return seat.hitBox;
+  const origin = projector.project(seat.deskTile.col, seat.deskTile.row);
+  return {
+    x: origin.x,
+    y: origin.y,
+    width: seat.hitTiles.width * OFFICE_TILE,
+    height: seat.hitTiles.height * OFFICE_TILE,
+  };
+}
+
+/**
+ * The seats whose art the rect can reach, counted the way the SCENE counts
+ * them: every seat it would hand the painter, against the view grown by the
+ * cull margin.
+ *
+ * RESERVES INCLUDED, which is the correction. This counted `layout.desks`
+ * alone on the reasoning that an empty seat draws nothing, and that is false:
+ * `OfficeScene.seatsIn` keeps an unoccupied seat whenever it is a non-cubby
+ * reserve - a spare cubby is the quiet stack's empty slot rather than
+ * furniture with a front to draw - and the painters emit for one. Mission
+ * Control's `paintSeat` returns early only at overview, so a vacant console
+ * still costs its two tier-steps, its console and its chair.
+ *
+ * The undercount sat on the RIGHT of `body <= per-seat * seats + slack`, so it
+ * made the ceiling too low rather than too high: every reading the bound has
+ * ever passed holds a fortiori. What it risked was the other direction - a
+ * view whose packer leaves many visible reserves failing a budget it actually
+ * meets.
+ */
+function paintedSeatsIn(args: {
   readonly layout: OfficeLayout;
   readonly projector: OfficeProjector;
   readonly rect: OfficeRect;
@@ -254,13 +284,14 @@ function occupiedSeatsIn(args: {
   const top = rect.y - OFFICE_CULL_MARGIN_PX;
   const right = rect.x + rect.width + OFFICE_CULL_MARGIN_PX;
   const bottom = rect.y + rect.height + OFFICE_CULL_MARGIN_PX;
+  const assigned = new Set<string>();
+  for (const desk of layout.desks.values()) assigned.add(desk.seatId);
   let seats = 0;
-  for (const seat of layout.desks.values()) {
-    const origin = projector.project(seat.deskTile.col, seat.deskTile.row);
-    const width = seat.hitTiles.width * OFFICE_TILE;
-    const height = seat.hitTiles.height * OFFICE_TILE;
-    if (origin.x >= right || left >= origin.x + width) continue;
-    if (origin.y >= bottom || top >= origin.y + height) continue;
+  for (const seat of layout.seats.values()) {
+    if (!assigned.has(seat.seatId) && seat.kind === "cubby") continue;
+    const box = seatBoxOf(seat, projector);
+    if (box.x >= right || left >= box.x + box.width) continue;
+    if (box.y >= bottom || top >= box.y + box.height) continue;
     seats += 1;
   }
   return seats;
@@ -507,7 +538,7 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
     let worst = 0;
 
     for (const rect of viewRectsOver(scene.worldSize())) {
-      const seats = occupiedSeatsIn({ layout, projector, rect });
+      const seats = paintedSeatsIn({ layout, projector, rect });
       const frame = scene.frame(1, rect);
       const body =
         frame.props.length +
