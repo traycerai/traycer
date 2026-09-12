@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { transform } from "lightningcss";
 import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(__dirname, "../..");
@@ -73,7 +74,6 @@ describe("glass inset surfaces", () => {
       "data-minimap-list-card",
       ".tc-editor-bubble-menu",
       ".tc-node-block-toolbar",
-      ".glass-with-insets::before",
     ];
     const directRule = /:is\(([\s\S]*?)\)\s*\{([^}]*)\}/.exec(SURFACES_CSS);
     expect(directRule).toBeDefined();
@@ -81,7 +81,9 @@ describe("glass inset surfaces", () => {
     const directDeclarations = directRule?.[2] ?? "";
     for (const slot of directSlots) expect(directSelector).toContain(slot);
     expect(directDeclarations).toMatch(/background-color:\s*color-mix\(/);
-    expect(directDeclarations).toMatch(/backdrop-filter:\s*blur\(16px\)/);
+    expect(directDeclarations).toMatch(
+      /backdrop-filter:\s*blur\(28px\) saturate\(140%\)/,
+    );
 
     const popperRule =
       /\[data-radix-popper-content-wrapper\]\s*>\s*:is\(([\s\S]*?)\)\s*\{([^}]*)\}/.exec(
@@ -117,7 +119,9 @@ describe("glass inset surfaces", () => {
     expect(pseudoRule).toMatch(/background-color:\s*color-mix\(/);
     expect(pseudoRule).toMatch(/var\(--popover\)/);
     expect(pseudoRule).toMatch(/var\(--glass-opacity/);
-    expect(pseudoRule).toMatch(/backdrop-filter:\s*blur\(16px\)/);
+    expect(pseudoRule).toMatch(
+      /backdrop-filter:\s*blur\(28px\) saturate\(140%\)/,
+    );
 
     expect(SURFACES_CSS).toMatch(
       /\)\s*\[data-state="open"]\s*\{[^}]*animation-fill-mode:\s*backwards/,
@@ -134,6 +138,63 @@ describe("glass inset surfaces", () => {
       )?.[1];
     expect(enabledInsetRule).toBeDefined();
     expect(enabledInsetRule).toMatch(/background-color:\s*transparent/);
-    expect(enabledInsetRule).toMatch(/backdrop-filter:\s*blur\(16px\)/);
+    expect(enabledInsetRule).toMatch(
+      /backdrop-filter:\s*blur\(28px\) saturate\(140%\)/,
+    );
+  });
+
+  /**
+   * A pseudo-element is invalid inside `:is()`, so the dialog's glass layer
+   * cannot ride the tint list - lightningcss drops the offending entry with no
+   * error and the dialog paints nothing. It needs its own rule, and the check
+   * has to run through the compiler rather than the source text, because the
+   * source read as correct for as long as the bug shipped.
+   */
+  it("paints the dialog glass from a standalone pseudo-element rule", () => {
+    const dialogPseudo =
+      /\[data-slot="dialog-content"\]\.glass-with-insets::before\s*\{([^}]*)\}/s.exec(
+        SURFACES_CSS,
+      )?.[1];
+    expect(dialogPseudo).toBeDefined();
+    expect(dialogPseudo).toMatch(/background-color:\s*color-mix\(/);
+    expect(dialogPseudo).toMatch(/var\(--popover\)/);
+    expect(dialogPseudo).toMatch(/var\(--glass-opacity/);
+    expect(dialogPseudo).toMatch(
+      /backdrop-filter:\s*blur\(28px\) saturate\(140%\)/,
+    );
+
+    const compiled = transform({
+      filename: "theme-surfaces.css",
+      code: Buffer.from(SURFACES_CSS),
+      minify: false,
+    }).code.toString();
+    const compiledPseudo =
+      /\[data-slot="dialog-content"\]\.glass-with-insets::?before\s*\{([^}]*)\}/s.exec(
+        compiled,
+      )?.[1];
+    expect(compiledPseudo).toBeDefined();
+    expect(compiledPseudo).toMatch(/backdrop-filter:\s*blur\(28px\)/);
+  });
+
+  /**
+   * The backdrop-root guard and the tint list are the same set by
+   * construction. Plain CSS cannot share one selector list between two rules,
+   * so the duplication is checked here rather than avoided.
+   */
+  it("keeps the backdrop-root guard list identical to the tint list", () => {
+    const listOf = (pattern: RegExp): ReadonlyArray<string> => {
+      const raw = pattern.exec(SURFACES_CSS)?.[1];
+      expect(raw, String(pattern)).toBeTypeOf("string");
+      return (raw ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    };
+    const tintList = listOf(
+      /:is\(\n([^)]*?)\n\)\s*\{\s*--command-surface-background/,
+    );
+    const guardList = listOf(/:is\(\n([^)]*?)\n\)\[data-state="open"\]/);
+    expect(tintList.length).toBeGreaterThan(10);
+    expect(guardList).toEqual(tintList);
   });
 });

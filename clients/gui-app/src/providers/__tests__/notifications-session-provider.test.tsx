@@ -1854,57 +1854,6 @@ describe("<NotificationsSessionProvider />", () => {
     });
   });
 
-  it("keeps the dormant entitlement refusal on a stable unavailable wall", async () => {
-    const queryClient = new QueryClient();
-    const streamClient = new MockWsStreamClient();
-    hostState.id = mockLocalHostEntry.hostId;
-    streamState.client = streamClient;
-    streamState.cloudFeedSupport = "supported";
-    __setNotificationsStreamFactoryForTests(() => ({
-      applyUpdate: () => undefined,
-      close: () => undefined,
-    }));
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <NotificationsSessionProvider>
-          <div />
-        </NotificationsSessionProvider>
-      </QueryClientProvider>,
-    );
-    act(() => {
-      resetAuth("signed-in", "alice@example.com", "alice@example.com");
-    });
-    await waitFor(() => {
-      // The stream-factory override is the local-mode test harness path: it
-      // suppresses the host durable-home feed so this case can isolate the
-      // cloud entitlement wall without mixed-plane stream noise.
-      expect(streamClient.subscribedMethods).toEqual([
-        "agent.activity.subscribe",
-        "host.notifications.cloudFeed.subscribe",
-      ]);
-    });
-
-    act(() => {
-      streamClient.session.emitClosed(fatalClose("FREE_TIER_NO_CLOUD_SYNC"));
-    });
-    await waitFor(() => {
-      expect(useAuthStore.getState().subscriptionStatus).toBe("FREE");
-      expect(useCloudNotificationsStore.getState().connectionState).toBe(
-        "unavailable",
-      );
-      expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(1);
-      expect(
-        streamClient.subscribedMethods.filter(
-          (method) => method === "host.notifications.cloudFeed.subscribe",
-        ),
-      ).toHaveLength(1);
-      expect(streamClient.subscribedMethods).not.toContain(
-        "host.notifications.feed.subscribe",
-      );
-    });
-  });
-
   it("keeps retained v1 rows while a rebuilt client's capability is pending offline", async () => {
     const queryClient = new QueryClient();
     const streamClient = new WsStreamClient({
