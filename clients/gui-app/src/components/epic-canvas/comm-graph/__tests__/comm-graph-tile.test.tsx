@@ -929,6 +929,13 @@ describe("CommGraphTile", () => {
       // A tile that predates this choice carries a camera framed for the
       // Floor - the view that has always existed - so a first outcome OF
       // Floor is the view that camera already addresses and must survive.
+      //
+      // D68: seeded through the OFFICE's own writer, exactly as the
+      // neutralising case below is. Seeding the graph's `x`/`y`/`zoom` here
+      // would pass without proving anything - Auto's write never touches
+      // those fields now, so the "keeps it" arm it is meant to pin
+      // (`decision.view === "floor" ? node.view.officeCamera : null`) would
+      // go untested while the test still went green.
       await renderOfficeTile();
       await waitFor(() => {
         expect(Array.from(openedByHost.keys()).sort()).toEqual([
@@ -937,17 +944,16 @@ describe("CommGraphTile", () => {
         ]);
       });
       act(() => {
-        useEpicCanvasStore
-          .getState()
-          .updateCommGraphTileCameraInTab(
-            AUTO_TAB_ID,
-            commGraphTileId(EPIC_ID),
-            {
-              x: 111,
-              y: 222,
-              zoom: 2,
-            },
-          );
+        useEpicCanvasStore.getState().updateCommGraphTileOfficeCameraInTab(
+          AUTO_TAB_ID,
+          commGraphTileId(EPIC_ID),
+          {
+            x: 111,
+            y: 222,
+            zoom: 2,
+          },
+          "floor",
+        );
       });
 
       setIntersecting(true);
@@ -957,15 +963,17 @@ describe("CommGraphTile", () => {
       await waitFor(() => {
         expect(storedView()?.officeAutoView).toBe("floor");
       });
-      expect(storedView()?.x).toBe(111);
-      expect(storedView()?.y).toBe(222);
-      expect(storedView()?.zoom).toBe(2);
+      expect(storedView()?.officeCamera).toEqual({ x: 111, y: 222, zoom: 2 });
     });
 
     it("neutralises the camera when Auto's first outcome is not Floor", async () => {
       // The saved camera was framed for a Floor. Landing on a different view
       // through those same numbers would be a view of empty space, so the
       // patch that writes the outcome resets the camera in the same write.
+      //
+      // D68: the OFFICE's own camera path is what seeds this, now that it is
+      // a field of its own rather than the shared x/y/zoom - the graph's
+      // writer (`updateCommGraphTileCameraInTab`) cannot reach it any more.
       await renderOfficeTile();
       await waitFor(() => {
         expect(Array.from(openedByHost.keys()).sort()).toEqual([
@@ -974,17 +982,16 @@ describe("CommGraphTile", () => {
         ]);
       });
       act(() => {
-        useEpicCanvasStore
-          .getState()
-          .updateCommGraphTileCameraInTab(
-            AUTO_TAB_ID,
-            commGraphTileId(EPIC_ID),
-            {
-              x: 111,
-              y: 222,
-              zoom: 2,
-            },
-          );
+        useEpicCanvasStore.getState().updateCommGraphTileOfficeCameraInTab(
+          AUTO_TAB_ID,
+          commGraphTileId(EPIC_ID),
+          {
+            x: 111,
+            y: 222,
+            zoom: 2,
+          },
+          "floor",
+        );
       });
 
       setIntersecting(true);
@@ -1000,9 +1007,7 @@ describe("CommGraphTile", () => {
       // somewhere other than Building, that is a fact to report, not a box
       // to keep shrinking until it agrees.
       expect(storedView()?.officeAutoView).toBe("building");
-      expect(storedView()?.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
-      expect(storedView()?.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
-      expect(storedView()?.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
+      expect(storedView()?.officeCamera).toBeNull();
     });
 
     it("does not re-measure on a mode toggle", async () => {
@@ -1181,12 +1186,13 @@ describe("CommGraphTile", () => {
 
   describe("Settings default view", () => {
     it("resets a followed default camera when Settings changes the resolved view", async () => {
+      // D68: the camera under test is the OFFICE's, which since D68 lives in
+      // `officeCamera` and not the top-level x/y/zoom (the graph's now) - the
+      // claim is unchanged, only where it is read from.
       useSettingsStore.getState().setAgentOfficeDefaultView("floor");
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
       });
       expect(
         screen.getByTestId("comm-graph-office-view-picker").textContent,
@@ -1200,9 +1206,7 @@ describe("CommGraphTile", () => {
         screen.getByTestId("comm-graph-office-view-picker").textContent,
       ).toBe("Towers");
       expect(storedView()).toMatchObject({
-        x: 0,
-        y: 0,
-        zoom: 1,
+        officeCamera: null,
         officeView: null,
       });
     });
@@ -1258,12 +1262,14 @@ describe("CommGraphTile", () => {
       // The default moved while this tile was CLOSED - nothing mounted to
       // witness the change, so the only evidence is the record the camera
       // itself carries.
+      //
+      // D68: the camera under test is the office's own, seeded through
+      // `officeCamera` rather than the top-level fields, which are the
+      // graph's now and would sit unread by anything in office mode.
       useSettingsStore.getState().setAgentOfficeDefaultView("towers");
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: "floor",
       });
 
@@ -1273,27 +1279,25 @@ describe("CommGraphTile", () => {
         ).toBe("Towers"),
       );
       expect(storedView()).toMatchObject({
-        x: 0,
-        y: 0,
-        zoom: 1,
+        officeCamera: null,
         officeCameraView: "towers",
       });
     });
 
     it("leaves the camera untouched on mount when the record already matches the resolved view", async () => {
+      // D68: seeded in `officeCamera`, which is the field the mount-time
+      // reset would clear. Seeding the graph's `x`/`y`/`zoom` would make this
+      // vacuous - nothing in this scenario writes them either way, so the
+      // case would stay green even if the reset fired on every mount.
       useSettingsStore.getState().setAgentOfficeDefaultView("floor");
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: "floor",
       });
 
       expect(storedView()).toMatchObject({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: "floor",
       });
     });
@@ -1351,11 +1355,13 @@ describe("CommGraphTile", () => {
         useSettingsStore
           .getState()
           .setAgentOfficeDefaultView(kind === "mounted" ? "floor" : "towers");
+        // D68: the camera the office runtime actually reads is
+        // `officeCamera`, not the top-level fields (the graph's now) -
+        // seeded there so this is a real test of the runtime this ticket is
+        // about, not of a field nothing reads in office mode.
         await renderSeededOfficeInLoadedSession({
           ...DEFAULT_COMM_GRAPH_VIEW,
-          x: -10000,
-          y: -20000,
-          zoom: 4,
+          officeCamera: { x: -10000, y: -20000, zoom: 4 },
           officeCameraView: "floor",
         });
         setOfficeCanvasSize({ width: 1040, height: 700 });
@@ -1378,9 +1384,7 @@ describe("CommGraphTile", () => {
 
         const cameraBeforePan = storedView();
         expect(cameraBeforePan).toMatchObject({
-          x: 0,
-          y: 0,
-          zoom: 1,
+          officeCamera: null,
           officeCameraView: "towers",
         });
         // The ACTUAL claim: the runtime's own frame, built from whatever
@@ -1415,15 +1419,14 @@ describe("CommGraphTile", () => {
     );
 
     it("preserves the actual runtime camera when the stored view and unchanged default agree", async () => {
+      // D68: seeded through `officeCamera`, same reasoning as the case above.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
       useSettingsStore.getState().setAgentOfficeDefaultView("floor");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: "floor",
       });
       setOfficeCanvasSize({ width: 1040, height: 700 });
@@ -1433,9 +1436,7 @@ describe("CommGraphTile", () => {
 
       const state = lastFrameAndBounds(frames, sync);
       expect(storedView()).toMatchObject({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: "floor",
       });
       // The runtime kept the persisted framing too - a control against the
@@ -1463,15 +1464,15 @@ describe("CommGraphTile", () => {
     // reads x/y/zoom exactly once at construction and an effect's write
     // always lands one commit after the canvas that needed it.
     it("resets the actual runtime camera for a live default change with no framing record at all", async () => {
+      // D68: seeded through `officeCamera` - the camera under test is the
+      // office's, and the top-level fields are the graph's now.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
       useSettingsStore.getState().setAgentOfficeDefaultView("floor");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         // A camera from before this field existed - never framed a view.
         officeCameraView: null,
       });
@@ -1483,9 +1484,7 @@ describe("CommGraphTile", () => {
       // Not yet reset: nothing has moved, so the persisted framing survives
       // exactly as a legacy tile's should.
       expect(storedView()).toMatchObject({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
       const beforeElement = screen.getByTestId("comm-graph-office-canvas");
@@ -1505,9 +1504,7 @@ describe("CommGraphTile", () => {
         beforeElement,
       );
       expect(storedView()).toMatchObject({
-        x: 0,
-        y: 0,
-        zoom: 1,
+        officeCamera: null,
         officeCameraView: "towers",
       });
       // The ACTUAL claim: the runtime's own frame has to contain the
@@ -1536,8 +1533,10 @@ describe("CommGraphTile", () => {
         await new Promise((resolve) => window.setTimeout(resolve, 180));
       });
       expect(storedView()).toMatchObject({ officeCameraView: "towers" });
-      expect(storedView()?.x).not.toBe(-10020);
-      expect(storedView()?.y).not.toBe(-20030);
+      // D68: the persisted-relative-to-neutral claim reads `officeCamera`
+      // now, not the top-level fields.
+      expect(storedView()?.officeCamera?.x).not.toBe(-10020);
+      expect(storedView()?.officeCamera?.y).not.toBe(-20030);
     });
 
     it("does not fire when the default never moves, even with no framing record", async () => {
@@ -1546,15 +1545,14 @@ describe("CommGraphTile", () => {
       // staying null (not stamped to the resolved view) is the tell - a
       // store-side stamp instead of a render-phase witness would have
       // written a fabricated record here even though nothing moved.
+      // D68: seeded through `officeCamera`, same reasoning as the case above.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
       useSettingsStore.getState().setAgentOfficeDefaultView("floor");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
       setOfficeCanvasSize({ width: 1040, height: 700 });
@@ -1564,9 +1562,7 @@ describe("CommGraphTile", () => {
 
       const state = lastFrameAndBounds(frames, sync);
       expect(storedView()).toMatchObject({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
       expect(state.frame).toEqual({
@@ -1585,15 +1581,16 @@ describe("CommGraphTile", () => {
       // EVERY tile saved before `officeCameraView` existed the instant
       // Settings' default happened to differ from what they were framed
       // for - the worse of the two costs, and the one D52 accepted.
+      //
+      // D68: seeded through `officeCamera`, same reasoning as every other
+      // case in this describe block.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
       useSettingsStore.getState().setAgentOfficeDefaultView("towers");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
       setOfficeCanvasSize({ width: 1040, height: 700 });
@@ -1603,9 +1600,7 @@ describe("CommGraphTile", () => {
 
       const state = lastFrameAndBounds(frames, sync);
       expect(storedView()).toMatchObject({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
       expect(state.frame).toEqual({
@@ -1629,14 +1624,19 @@ describe("CommGraphTile", () => {
       // reaches a rendered frame. It is only visible one layer up, at the
       // prop boundary itself - so this reads what the canvas was actually
       // GIVEN on its most recent render, not what it drew.
+      // D68: seeded through `officeCamera` (same reasoning as the rest of
+      // this describe block), and the store-side comparison at the end
+      // reads `officeCamera` too - the canvas's `view` prop is still the
+      // PROJECTION (`officeCamera ?? NEUTRAL_CAMERA`) built for it, so
+      // `handedCamera` is unaffected, but the raw stored view's x/y/zoom are
+      // the graph's now and would never move regardless of what the office
+      // panned to.
       const { step } = installCanvas();
       const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
       useSettingsStore.getState().setAgentOfficeDefaultView("floor");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
       setOfficeCanvasSize({ width: 1040, height: 700 });
@@ -1667,18 +1667,20 @@ describe("CommGraphTile", () => {
       if (handedCamera === null) {
         throw new Error("the office canvas never rendered with a view prop");
       }
-      const stored = storedView();
-      if (stored === null) throw new Error("no stored view");
+      const storedOfficeCamera = storedView()?.officeCamera ?? null;
+      if (storedOfficeCamera === null) {
+        throw new Error("no stored office camera");
+      }
       // The comparison below only means something if the store actually
       // moved off neutral - otherwise a wheel that silently became a no-op
       // would still pass, since a neutral `handedCamera` and a neutral
       // `stored` agree trivially. This is what stops that from happening
       // unnoticed; it doesn't pin exact coordinates, same reasoning as case 1.
-      expect(stored).not.toMatchObject({ x: 0, y: 0, zoom: 1 });
+      expect(storedOfficeCamera).not.toMatchObject({ x: 0, y: 0, zoom: 1 });
       expect(handedCamera).toMatchObject({
-        x: stored.x,
-        y: stored.y,
-        zoom: stored.zoom,
+        x: storedOfficeCamera.x,
+        y: storedOfficeCamera.y,
+        zoom: storedOfficeCamera.zoom,
       });
     });
   });
@@ -1722,6 +1724,8 @@ describe("CommGraphTile", () => {
     it.each(["towers", "campus"] as const)(
       "resets the runtime camera when Settings moves from an unresolved Auto to %s",
       async (target) => {
+        // D68: seeded through `officeCamera` - the top-level fields are the
+        // graph's now and would never move regardless of the office's story.
         const { step } = installCanvas();
         const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
         const frames = vi.spyOn(OfficeScene.prototype, "frame");
@@ -1729,9 +1733,7 @@ describe("CommGraphTile", () => {
         useSettingsStore.getState().setAgentOfficeDefaultView("auto");
         await renderSeededOfficeInLoadedSession({
           ...DEFAULT_COMM_GRAPH_VIEW,
-          x: -10000,
-          y: -20000,
-          zoom: 4,
+          officeCamera: { x: -10000, y: -20000, zoom: 4 },
           officeCameraView: null,
         });
         setOfficeCanvasSize({ width: 1040, height: 700 });
@@ -1740,9 +1742,7 @@ describe("CommGraphTile", () => {
         // what keeps the resolved view at `null` here.
         expect(decide).not.toHaveBeenCalled();
         expect(storedView()).toMatchObject({
-          x: -10000,
-          y: -20000,
-          zoom: 4,
+          officeCamera: { x: -10000, y: -20000, zoom: 4 },
           officeCameraView: null,
         });
 
@@ -1758,9 +1758,7 @@ describe("CommGraphTile", () => {
         // never a measurement for it to make.
         expect(decide).not.toHaveBeenCalled();
         expect(storedView()).toMatchObject({
-          x: 0,
-          y: 0,
-          zoom: 1,
+          officeCamera: null,
           officeCameraView: target,
         });
         const state = lastFrameAndBounds(frames, sync);
@@ -1784,8 +1782,8 @@ describe("CommGraphTile", () => {
           await new Promise((resolve) => window.setTimeout(resolve, 180));
         });
         expect(storedView()).toMatchObject({ officeCameraView: target });
-        expect(storedView()?.x).not.toBe(-10020);
-        expect(storedView()?.y).not.toBe(-20030);
+        expect(storedView()?.officeCamera?.x).not.toBe(-10020);
+        expect(storedView()?.officeCamera?.y).not.toBe(-20030);
       },
     );
 
@@ -1797,6 +1795,7 @@ describe("CommGraphTile", () => {
       // FOR the view arriving now. This is the case that rules out "record
       // !== resolvedView" as the trigger - a rule keyed on the value alone
       // would have waved this one through.
+      // D68: seeded through `officeCamera`, same reasoning as the case above.
       const { step } = installCanvas();
       const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
@@ -1804,18 +1803,14 @@ describe("CommGraphTile", () => {
       useSettingsStore.getState().setAgentOfficeDefaultView("auto");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: "towers",
       });
       setOfficeCanvasSize({ width: 1040, height: 700 });
       setIntersecting(true);
       expect(decide).not.toHaveBeenCalled();
       expect(storedView()).toMatchObject({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: "towers",
       });
 
@@ -1829,9 +1824,7 @@ describe("CommGraphTile", () => {
 
       expect(decide).not.toHaveBeenCalled();
       expect(storedView()).toMatchObject({
-        x: 0,
-        y: 0,
-        zoom: 1,
+        officeCamera: null,
         officeCameraView: "towers",
       });
       const state = lastFrameAndBounds(frames, sync);
@@ -1853,28 +1846,26 @@ describe("CommGraphTile", () => {
         await new Promise((resolve) => window.setTimeout(resolve, 180));
       });
       expect(storedView()).toMatchObject({ officeCameraView: "towers" });
-      expect(storedView()?.x).not.toBe(-10020);
-      expect(storedView()?.y).not.toBe(-20030);
+      expect(storedView()?.officeCamera?.x).not.toBe(-10020);
+      expect(storedView()?.officeCamera?.y).not.toBe(-20030);
     });
 
     it("leaves an explicit pick's own reset alone - the pick's write did it, not the witness", async () => {
+      // D68: seeded through `officeCamera`, same reasoning as the rest of
+      // this describe block.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
       useSettingsStore.getState().setAgentOfficeDefaultView("auto");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
       setOfficeCanvasSize({ width: 1040, height: 700 });
       setIntersecting(true);
       expect(storedView()).toMatchObject({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
 
@@ -1886,9 +1877,7 @@ describe("CommGraphTile", () => {
       expect(storedView()).toMatchObject({
         officeView: "towers",
         officeCameraView: "towers",
-        x: 0,
-        y: 0,
-        zoom: 1,
+        officeCamera: null,
       });
 
       setOfficeCanvasSize({ width: 1040, height: 700 });
@@ -1914,15 +1903,15 @@ describe("CommGraphTile", () => {
       // exists to catch - it would have already thrown this camera away by
       // the time the assertions below run, and the frame would land on the
       // neutral camera's numbers instead of these.
+      // D68: seeded through `officeCamera`, same reasoning as the rest of
+      // this describe block.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
       useSettingsStore.getState().setAgentOfficeDefaultView("auto");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeCameraView: null,
       });
       setOfficeCanvasSize({ width: 1040, height: 700 });
@@ -1931,9 +1920,7 @@ describe("CommGraphTile", () => {
       step();
 
       expect(storedView()).toMatchObject({
-        x: -10000,
-        y: -20000,
-        zoom: 4,
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
         officeAutoView: "floor",
         officeCameraView: "floor",
       });
@@ -1953,15 +1940,15 @@ describe("CommGraphTile", () => {
     });
 
     it("neutralises the camera on a re-pick of Auto - the re-pick's own write did it, not the witness", async () => {
+      // D68: seeded through `officeCamera`, same reasoning as the rest of
+      // this describe block.
       const { step } = installCanvas();
       useSettingsStore.getState().setAgentOfficeDefaultView("auto");
       await renderSeededOfficeInLoadedSession({
         ...DEFAULT_COMM_GRAPH_VIEW,
         officeView: "floor",
         officeCameraView: "floor",
-        x: 155,
-        y: 266,
-        zoom: 2,
+        officeCamera: { x: 155, y: 266, zoom: 2 },
       });
       setOfficeCanvasSize({ width: 1040, height: 700 });
       setIntersecting(true);
@@ -1970,9 +1957,7 @@ describe("CommGraphTile", () => {
       expect(storedView()).toMatchObject({
         officeView: "floor",
         officeCameraView: "floor",
-        x: 155,
-        y: 266,
-        zoom: 2,
+        officeCamera: { x: 155, y: 266, zoom: 2 },
       });
 
       chooseView("auto");
@@ -1984,15 +1969,34 @@ describe("CommGraphTile", () => {
         officeView: "auto",
         officeAutoView: null,
         officeCameraView: null,
-        x: 0,
-        y: 0,
-        zoom: 1,
+        officeCamera: null,
       });
     });
   });
 
   describe("graph camera untouched by an office default change (fixup 2, R3)", () => {
     it("leaves the active graph camera alone, and Office resumes framing neutral once it is active again", async () => {
+      // D68 restructures exactly what this case is about, so the claim is
+      // re-read rather than merely re-pointed at new fields.
+      //
+      // Before D68: the graph's pan survived a default change made while
+      // Graph was active (R3's own claim), and switching back to Office then
+      // RESET the shared viewport - which is what kept the office from
+      // inheriting the graph's numbers as if they were an office camera.
+      //
+      // After D68: a mode switch resets nothing at all, in either direction
+      // (that reset is precisely what N10 cost the office camera). The
+      // graph's pan surviving the default change is UNCHANGED - it is still
+      // the graph's alone, and a Settings change under Graph still can't
+      // touch it. What differs is the second half: Office does not "resume
+      // framing neutral" because a switch reset it - it never had anything
+      // else to frame. `officeCamera` is a field of its own that this
+      // sequence never touches, so the projection (`officeCamera ??
+      // NEUTRAL_CAMERA`) still hands the office a neutral camera regardless
+      // of where the graph's x/y/zoom sit. Read off what the office canvas
+      // is actually HANDED - the raw stored view no longer speaks for the
+      // office at all once Graph has moved its own fields.
+      const officeSpy = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
       useSettingsStore.getState().setAgentOfficeDefaultView("floor");
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
@@ -2021,21 +2025,30 @@ describe("CommGraphTile", () => {
         x: 155,
         y: 266,
         zoom: 2,
+        officeCamera: null,
         officeCameraView: null,
       });
 
-      // Switching back to Office resets the viewport (camera AND the
-      // framing record) the same way any mode toggle does - it must not
-      // carry the graph's coordinates in as if they were an office camera.
+      // Switching back to Office is NOT a camera event any more - the
+      // graph's pan survives the switch untouched, in either field.
       fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
 
       expect(storedView()).toMatchObject({
         mode: "office",
-        x: 0,
-        y: 0,
-        zoom: 1,
+        x: 155,
+        y: 266,
+        zoom: 2,
+        officeCamera: null,
         officeCameraView: null,
       });
+      // The office still resumes framing NEUTRAL - not because anything
+      // reset just now, but because `officeCamera` was never anything else,
+      // and the projection reads that field alone, never the graph's.
+      const camera = lastCanvasCamera(officeSpy);
+      if (camera === null) {
+        throw new Error("no camera prop was passed to the Office canvas");
+      }
+      expect(camera).toMatchObject({ x: 0, y: 0, zoom: 1 });
     });
 
     /**
@@ -2080,6 +2093,119 @@ describe("CommGraphTile", () => {
         throw new Error("no camera prop was passed to the Graph canvas");
       }
       expect(camera).toMatchObject({ x: 155, y: 266, zoom: 2 });
+    });
+  });
+
+  describe("each renderer owns its camera, so a Graph detour cannot lose the office's framing (fixup 11, D68, N10)", () => {
+    it("mounts the office back on its saved camera after a Graph detour that moved the graph's own camera", async () => {
+      // THE HEADLINE. The live re-run's N10: zoom into the office, switch to
+      // Graph, switch back, and before D68 the office returned at its
+      // auto-fit rather than where it was left - because the one shared
+      // camera was reset on every mode switch. Reproduced here end to end:
+      // an office camera change, a detour through Graph that moves the
+      // GRAPH's own camera, and back - the office must mount on the camera
+      // it had, untouched by anything the graph did while it was away.
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+      await reachAutoFloor();
+
+      // The office camera change.
+      act(() => {
+        useEpicCanvasStore
+          .getState()
+          .updateCommGraphTileOfficeCameraInTab(
+            AUTO_TAB_ID,
+            commGraphTileId(EPIC_ID),
+            { x: 55, y: 66, zoom: 3 },
+            "floor",
+          );
+      });
+      expect(storedView()?.officeCamera).toEqual({ x: 55, y: 66, zoom: 3 });
+
+      // The detour.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("comm-graph-mode-graph"));
+        await Promise.resolve();
+      });
+      expect(storedView()?.mode).toBe("graph");
+
+      // A graph move-end camera write DURING the detour - exactly what a
+      // debounced pan on the Graph canvas does.
+      act(() => {
+        useEpicCanvasStore
+          .getState()
+          .updateCommGraphTileCameraInTab(
+            AUTO_TAB_ID,
+            commGraphTileId(EPIC_ID),
+            { x: 900, y: -400, zoom: 1.5 },
+          );
+      });
+
+      // Back to Office. Before D68 this reset the shared camera to neutral;
+      // now nothing resets on a mode switch in either direction, so the
+      // office's saved camera is exactly where the first write left it -
+      // the graph's pan during the detour never had anywhere to reach it.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+        await Promise.resolve();
+      });
+
+      expect(storedView()).toMatchObject({
+        mode: "office",
+        officeCamera: { x: 55, y: 66, zoom: 3 },
+        // The graph's own camera also survived the round trip, untouched by
+        // the office's return - each renderer really does own its own.
+        x: 900,
+        y: -400,
+        zoom: 1.5,
+      });
+      // THE ACTUAL CLAIM: the office canvas mounts framing the SAVED camera,
+      // not the auto-fit N10 saw and not the graph's numbers either.
+      const camera = lastCanvasCamera(office);
+      if (camera === null) {
+        throw new Error("no camera prop was passed to the Office canvas");
+      }
+      expect(camera).toMatchObject({ x: 55, y: 66, zoom: 3 });
+    });
+
+    it("a mode switch leaves the graph's camera exactly where it was, in either direction", async () => {
+      // Red before D68: `handleModeChange` reset the shared viewport to
+      // neutral on every switch, so the graph's own pan never survived one
+      // either. Now the mode is the only thing a switch touches.
+      const graphCanvas = vi.spyOn(commGraphCanvasModule, "CommGraphCanvas");
+      await renderSeededOffice({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        mode: "graph",
+        x: 300,
+        y: -150,
+        zoom: 1.75,
+      });
+      expect(storedView()).toMatchObject({
+        mode: "graph",
+        x: 300,
+        y: -150,
+        zoom: 1.75,
+      });
+
+      fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+      expect(storedView()).toMatchObject({
+        mode: "office",
+        x: 300,
+        y: -150,
+        zoom: 1.75,
+      });
+
+      fireEvent.click(screen.getByTestId("comm-graph-mode-graph"));
+      expect(storedView()).toMatchObject({
+        mode: "graph",
+        x: 300,
+        y: -150,
+        zoom: 1.75,
+      });
+      const camera = lastCanvasCamera(graphCanvas);
+      if (camera === null) {
+        throw new Error("no camera prop was passed to the Graph canvas");
+      }
+      expect(camera).toMatchObject({ x: 300, y: -150, zoom: 1.75 });
     });
   });
 
@@ -2430,28 +2556,28 @@ describe("CommGraphTile", () => {
     });
 
     it("picking a different view records the choice and resets the camera", async () => {
+      // D68: the camera under test is the office's own - seeded through
+      // `updateCommGraphTileOfficeCameraInTab`, the writer that reaches
+      // `officeCamera`, since the graph's writer can no longer touch it.
       await reachAutoFloor();
       act(() => {
-        useEpicCanvasStore
-          .getState()
-          .updateCommGraphTileCameraInTab(
-            AUTO_TAB_ID,
-            commGraphTileId(EPIC_ID),
-            {
-              x: 55,
-              y: 66,
-              zoom: 3,
-            },
-          );
+        useEpicCanvasStore.getState().updateCommGraphTileOfficeCameraInTab(
+          AUTO_TAB_ID,
+          commGraphTileId(EPIC_ID),
+          {
+            x: 55,
+            y: 66,
+            zoom: 3,
+          },
+          "floor",
+        );
       });
 
       openPicker();
       fireEvent.click(screen.getByTestId("comm-graph-office-view-towers"));
 
       expect(storedView()?.officeView).toBe("towers");
-      expect(storedView()?.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
-      expect(storedView()?.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
-      expect(storedView()?.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
+      expect(storedView()?.officeCamera).toBeNull();
     });
 
     it("re-measures through the real Auto row, not by clearing the outcome directly", async () => {
