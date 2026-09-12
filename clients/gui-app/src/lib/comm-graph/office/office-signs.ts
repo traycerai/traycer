@@ -8,7 +8,7 @@
  * without a canvas - and so a view's own regression can call the real resolver
  * rather than a copy of it.
  *
- * Three things happen here that used to be scattered through the draw calls:
+ * Four things happen here that used to be scattered through the draw calls:
  *
  * - **Projection.** An anchor is the sign's tile PUT THROUGH the view's
  *   projector. Raw `tile.col * OFFICE_TILE` is right only for a view whose
@@ -20,6 +20,13 @@
  * - **Boards read the cursor.** A roster counts the agents that exist AS OF the
  *   cursor, never the whole planned membership, or a board announces people who
  *   have not been created yet.
+ * - **A plate fits the room it names.** The plate is drawn at a fixed face and
+ *   centred on its own tiles, so the same twelve characters that sit over three
+ *   desks at close-up are wider than a two-desk pod at office zoom - and the
+ *   drawing step, given a reading too long for the room, centres it anyway and
+ *   paints the pod next door. A sign that declares a ladder comes down it here,
+ *   where the measured face is, and is dropped rather than drawn over its
+ *   neighbour when even the last rung is too wide.
  */
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { officeFloorName } from "@/lib/comm-graph/office/office-floor-name";
@@ -74,6 +81,32 @@ export type OfficePlateMeasure = (text: string) => number;
  * One character, so it fits the narrowest plate any real board ever has.
  */
 const BOARD_OVERFLOW_GLYPH = "…";
+
+/**
+ * THE MOST CHARACTERS A PLATE CAN CARRY, whatever its pixels allow.
+ *
+ * The renderer cuts a name-bearing plate to a character budget of its own
+ * before it draws it, and it does so AFTER the reading has been chosen - so a
+ * rung that fits the room in pixels but runs past this budget is cut mid-word
+ * with an ellipsis, which is exactly the `BULLPEN · 9…` the ladder exists to
+ * prevent. The fit below therefore never offers a rung the drawing step would
+ * cut: the ladder and the budget have to agree, and the ladder is the half
+ * that can shorten a reading without lying about it.
+ *
+ * These are the renderer's own two numbers, and the threshold between them is
+ * its own: a plate narrower than two tiles gets the smaller budget. They live
+ * here because the fit is decided here; the renderer still holds a copy of
+ * them, and the day it reads these instead, this paragraph is what goes.
+ */
+export const OFFICE_SIGN_PLATE_MAX_CHARS = 12;
+export const OFFICE_SIGN_NARROW_PLATE_MAX_CHARS = 10;
+const OFFICE_SIGN_NARROW_PLATE_TILES = 2;
+
+function plateMaxChars(widthTiles: number): number {
+  return widthTiles >= OFFICE_SIGN_NARROW_PLATE_TILES
+    ? OFFICE_SIGN_PLATE_MAX_CHARS
+    : OFFICE_SIGN_NARROW_PLATE_MAX_CHARS;
+}
 
 /**
  * THE FACE A PLATE IS SET IN, declared here rather than in the renderer.
@@ -176,17 +209,34 @@ function lastResortRungs(total: number): ReadonlyArray<string> {
   return [`${total}`, BOARD_OVERFLOW_GLYPH, ""];
 }
 
-/** The widest rendering that fits, or the narrowest when none does. */
-function widestThatFits(args: {
+interface FitRequest {
+  /** The same reading at decreasing lengths, widest first. */
   readonly renderings: ReadonlyArray<string>;
   readonly available: number;
   readonly measure: OfficePlateMeasure;
-}): string {
+}
+
+/**
+ * The widest rendering that fits, or `null` when none of them does.
+ *
+ * The one scan in this module: a board comes down its ladder here and so does
+ * a plate, because "widest that fits" is the same question about the same
+ * measured face and two copies of it would drift the moment one of them was
+ * taught something. What differs is the ANSWER TO NOTHING FITTING - a board
+ * has a last rung it can always show, a plate is dropped - so that choice is
+ * left to the two callers rather than decided here.
+ */
+function firstThatFits(args: FitRequest): string | null {
   const { available, measure, renderings } = args;
   for (const text of renderings) {
     if (measure(text) <= available) return text;
   }
-  return renderings[renderings.length - 1];
+  return null;
+}
+
+/** The widest rendering that fits, or the narrowest when none does. */
+function widestThatFits(args: FitRequest): string {
+  return firstThatFits(args) ?? args.renderings[args.renderings.length - 1];
 }
 
 /**
@@ -206,6 +256,121 @@ function nameRungs(name: string): ReadonlyArray<string> {
   if (words.length === 0) return [name, name, name];
   const initials = words.map((word) => word.slice(0, 1)).join("");
   return [name, words[0], initials];
+}
+
+/**
+ * A label's parts and the separators between them.
+ *
+ * A board splits a name on spaces, because a board is naming PEOPLE and people
+ * are called "Alpha One". A plate names a room after its lead, and an agent is
+ * as often called `team-26-lead` as it is "Platform Team" - so the parts a
+ * plate can give up are separated by hyphens as well as by spaces. The
+ * separators are carried rather than normalised so a shortened reading is
+ * still spelled the way the label was: `team-26`, never `team 26`.
+ */
+interface LabelParts {
+  readonly segments: ReadonlyArray<string>;
+  /** What sits between segment *i* and segment *i + 1*. */
+  readonly separators: ReadonlyArray<string>;
+}
+
+/** Captured, so `split` hands back the separators along with the parts. */
+const LABEL_SEPARATOR_SPLIT = /([\s-]+)/;
+const LABEL_SEPARATOR_ONLY = /^[\s-]+$/;
+
+function labelParts(label: string): LabelParts {
+  const segments: string[] = [];
+  const separators: string[] = [];
+  for (const piece of label.split(LABEL_SEPARATOR_SPLIT)) {
+    if (piece === "") continue;
+    if (!LABEL_SEPARATOR_ONLY.test(piece)) {
+      segments.push(piece);
+      continue;
+    }
+    // A separator before the first segment belongs to nothing and is dropped,
+    // which keeps `separators[i - 1]` the thing that precedes `segments[i]`.
+    if (segments.length > 0) separators.push(piece);
+  }
+  return { segments, separators };
+}
+
+function joinParts(
+  segments: ReadonlyArray<string>,
+  separators: ReadonlyArray<string>,
+): string {
+  let out = "";
+  for (const [index, segment] of segments.entries()) {
+    if (index > 0) out += separators[index - 1] ?? " ";
+    out += segment;
+  }
+  return out;
+}
+
+/**
+ * ONE NAME AT DECREASING LENGTHS, widest first: as written, then a trailing
+ * part at a time, then its leading part cut to an initial, then its initials.
+ *
+ * `team-26-lead` comes down `team-26`, `t-26`, `t2l`. The trailing parts go
+ * first because a name is usually specific at its front - a lead's role is
+ * what its team already implies - and the LAST cut keeps the tail rather than
+ * the head for the same reason read the other way: `team` names every room on
+ * the storey, `t-26` names this one. The board's ladder is the model
+ * (`nameRungs`): shorten rather than drop, and never cut a word in half,
+ * because a name cut mid-word names nobody while an abbreviated one still
+ * points at somebody.
+ *
+ * One part at a time rather than all but the first in one step, so a name with
+ * five parts has a rung near every width instead of falling from a sentence
+ * straight to five letters.
+ *
+ * Exported for every plate that has to fit the tiles it names - the oblique
+ * views' room plates today, Mission control's tier plates next.
+ */
+export function officePlateRungs(label: string): ReadonlyArray<string> {
+  const { segments, separators } = labelParts(label);
+  if (segments.length === 0) return [label];
+  const rungs = [label];
+  for (let kept = segments.length - 1; kept >= 2; kept -= 1) {
+    rungs.push(joinParts(segments.slice(0, kept), separators));
+  }
+  if (segments.length >= 2) {
+    rungs.push(joinParts([segments[0].slice(0, 1), segments[1]], separators));
+  }
+  rungs.push(segments.map((segment) => segment.slice(0, 1)).join(""));
+  return rungs;
+}
+
+/**
+ * THE WIDEST READING OF A PLATE THAT FITS THE TILES IT NAMES, or `null` when
+ * even the narrowest overflows them.
+ *
+ * The width budget is the sign's own span through the camera - the same
+ * arithmetic a board's width uses - because a plate is drawn at a fixed face
+ * whatever the zoom while the room under it shrinks with the camera: the
+ * twelve characters that sit comfortably over three desks at close-up are
+ * half as wide again as the pod they name at office zoom, which is how two
+ * neighbouring plates came to paint over each other.
+ *
+ * `null` is a real answer, not a failure: a plate whose narrowest reading is
+ * still wider than its room is dropped rather than drawn over the room next
+ * door, exactly as a board with nothing it can say is dropped.
+ */
+export function officePlateTextThatFits(args: {
+  /** The same lettering at decreasing lengths, widest first. */
+  readonly rungs: ReadonlyArray<string>;
+  /** The plate's own span in tiles: the pod, the tier run, the room. */
+  readonly widthTiles: number;
+  /** The camera's zoom, because the tiles' width on screen is a camera fact. */
+  readonly zoom: number;
+  readonly measure: OfficePlateMeasure;
+}): string | null {
+  const { measure, rungs, widthTiles, zoom } = args;
+  const maxChars = plateMaxChars(widthTiles);
+  return firstThatFits({
+    renderings: rungs.filter((text) => text.length <= maxChars),
+    available: officePlateWidthPx(widthTiles, zoom),
+    measure,
+  });
 }
 
 /**
@@ -326,9 +491,14 @@ export function officeBoardText(args: {
   });
 }
 
+/** Any sign's own width on screen: its tiles, through the camera's zoom. */
+export function officePlateWidthPx(widthTiles: number, zoom: number): number {
+  return Math.max(1, widthTiles) * OFFICE_TILE * zoom;
+}
+
 /** A board's own width on screen: its tiles, through the camera's zoom. */
 export function officeBoardWidthPx(sign: OfficeSign, zoom: number): number {
-  return Math.max(1, sign.widthTiles) * OFFICE_TILE * zoom;
+  return officePlateWidthPx(sign.widthTiles, zoom);
 }
 
 /**
@@ -419,15 +589,80 @@ export function officeSignsToDraw(args: {
     // the plan wrote, re-lettered from the owner's current name.
     const text = signTextOf({ sign, owner, nameById, hostNameById });
     if (text === "") continue;
-    out.push({ sign, text, subtext: roleClaimOf(roleClaims, owner), anchor });
+    const claim = roleClaimOf(roleClaims, owner);
+    const rungs = plateRungsFor(sign, text);
+    // A sign that names no ladder is drawn as written, which is every sign on
+    // every view but the two oblique ones: their plates are the only lettering
+    // whose room is narrow enough for the reading to have to give way.
+    if (rungs === null) {
+      out.push({ sign, text, subtext: claim, anchor });
+      continue;
+    }
+    const fitted = officePlateTextThatFits({
+      rungs,
+      widthTiles: sign.widthTiles,
+      zoom,
+      measure,
+    });
+    if (fitted === null) continue;
+    out.push({
+      sign,
+      text: fitted,
+      // THE CLAIM FITS TOO, or it is not drawn. It is a second plate on the
+      // same centre, so a claim wider than the room overhangs it exactly as
+      // the name would have, and the name being short is no protection.
+      subtext:
+        claim === null
+          ? null
+          : officePlateTextThatFits({
+              rungs: officePlateRungs(claim),
+              widthTiles: sign.widthTiles,
+              zoom,
+              measure,
+            }),
+      anchor,
+    });
   }
   return out;
 }
 
 /**
- * A floor's name over its stairwell. Only when the building has more than one
- * storey: with a single host the building IS the epic, and a sign over it would
- * label the obvious.
+ * The ladder this sign comes down, or `null` where it has none.
+ *
+ * A plate that says `"name"` is re-lettered from whoever owns it AT THE
+ * CURSOR, so its ladder is derived here from the resolved text rather than
+ * carried from the plan: a renamed lead would otherwise shorten through its
+ * old name. A plate that carries its own readings is a SUMMARY the plan wrote
+ * ("Bullpen · 9 live solos"), with no owner and no name to re-letter, so those
+ * readings are used exactly as they were written.
+ */
+function plateRungsFor(
+  sign: OfficeSign,
+  text: string,
+): ReadonlyArray<string> | null {
+  if (sign.rungs === undefined) return null;
+  if (sign.rungs === "name") return officePlateRungs(text);
+  return sign.rungs;
+}
+
+/**
+ * A HOST'S NAME OVER ITS STAIRWELL - once per host, never once per storey.
+ *
+ * The label answers "whose machine is this part of the office", so it is asked
+ * of a HOST and not of a floor. Two rules follow, and both are about the same
+ * question being asked too often:
+ *
+ * - **One host, no label.** With a single host the office IS the epic and a
+ *   sign over it labels the obvious. This is the old `floors.length <= 1`
+ *   guard, restated about hosts: a thousand agents on one machine stack into
+ *   twenty-one storeys, which is one host and was twenty-one `Unattributed`s.
+ * - **A stack names itself at its foot.** Where a host holds several floors
+ *   they are the storeys of one building, and the plan already puts a `host`
+ *   sign across its ground row - so a label over every stairwell repeats that
+ *   name down the whole tower. The foot sign is the one that carries it.
+ *
+ * What is left is the case this was written for: one floor per host, which is
+ * every host on Floor, Campus and City. Those are unaffected.
  */
 export function officeFloorSignsToDraw(args: {
   readonly floors: ReadonlyArray<OfficeFloor>;
@@ -436,9 +671,18 @@ export function officeFloorSignsToDraw(args: {
   readonly lod: OfficeLod;
 }): ReadonlyArray<OfficeFloorSignToDraw> {
   const { floors, hostNameById, lod, projector } = args;
-  if (lod === 0 || floors.length <= 1) return NO_FLOOR_SIGNS_TO_DRAW;
-  const out: OfficeFloorSignToDraw[] = [];
+  if (lod === 0) return NO_FLOOR_SIGNS_TO_DRAW;
+  const byHost = new Map<string | null, OfficeFloor[]>();
   for (const floor of floors) {
+    const group = byHost.get(floor.hostId);
+    if (group === undefined) byHost.set(floor.hostId, [floor]);
+    else group.push(floor);
+  }
+  if (byHost.size <= 1) return NO_FLOOR_SIGNS_TO_DRAW;
+  const out: OfficeFloorSignToDraw[] = [];
+  for (const group of byHost.values()) {
+    if (group.length !== 1) continue;
+    const floor = group[0];
     const tile = floor.stairsTile ?? {
       col: floor.bounds.col,
       row: floor.bounds.row,

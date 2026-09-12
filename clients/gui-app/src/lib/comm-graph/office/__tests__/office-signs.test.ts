@@ -14,8 +14,10 @@ import {
   OFFICE_SIGN_FONT_PX,
   OFFICE_SIGN_LETTER_SPACING_EM,
   OFFICE_SIGN_PADDING_X,
+  OFFICE_SIGN_PLATE_MAX_CHARS,
   officeBoardText,
   officeFloorSignsToDraw,
+  officePlateWidthPx,
   officeSignCenterX,
   officeSignsToDraw,
 } from "@/lib/comm-graph/office/office-signs";
@@ -579,7 +581,7 @@ for (const viewId of ["towers", "building"] as const) {
 }
 
 for (const viewId of ["towers", "building"] as const) {
-  it(`${viewId} preserves ownerless aggregate text through the real resolver`, () => {
+  it(`${viewId} preserves ownerless aggregate text through the real resolver, and re-letters an owned plate from its CURRENT name`, () => {
     const { epic, layout, names, statusById } = realObliqueSigns(viewId);
     const aggregate = layout.signs.filter(
       (sign) => sign.text === "Solo desks" || sign.text.startsWith("Bullpen ·"),
@@ -605,15 +607,38 @@ for (const viewId of ["towers", "building"] as const) {
       lod: 1,
     });
     expect(drawn).toHaveLength(aggregate.length + 1);
+    // OWNERLESS PLATES ARE NEVER RE-LETTERED FROM AN OWNER. `ownerAgentId` is
+    // `null` on every aggregate sign, so the resolver has nothing to look
+    // "Renamed owner" up by - each still comes down ITS OWN ladder (rule 3).
+    // Towers' solo plates at this population are wide enough to hold "Solo
+    // desks" whole at every rung; Building's bullpen plates are rule 3's own
+    // reproduction - narrower than the plan's " live solos" wording but wide
+    // enough for the count, which the ladder drops last rather than first.
     for (const sign of aggregate) {
       const resolved = drawn.find((entry) => entry.sign === sign);
       if (resolved === undefined) throw new Error("expected aggregate sign");
-      expect(resolved.text).toBe(sign.text);
       expect(resolved.sign.ownerAgentId).toBeNull();
+      if (viewId === "towers") {
+        expect(resolved.text).toBe("Solo desks");
+      } else {
+        expect(sign.text.startsWith("Bullpen · ")).toBe(true);
+        expect(sign.text.endsWith(" live solos")).toBe(true);
+        expect(resolved.text).toBe(sign.text.replace(" live solos", ""));
+      }
     }
+    // AN OWNED PLATE IS RE-LETTERED FROM THE CURRENT NAME, NOT THE PLAN'S: the
+    // sign was written at plan time from whoever led that room then, and the
+    // resolver derives its ladder from `nameById` at the CURSOR instead
+    // (`plateRungsFor`'s `"name"` case). This plate is two tiles wide, so the
+    // ladder has nowhere to go but initials - "Ro" are "Renamed owner"'s,
+    // which only the LIVE name can have produced: the plan's own text here
+    // (`owner.text`, asserted below to differ) never contained an "o" in that
+    // position for the ladder to have found by accident.
     const resolvedOwner = drawn.find((entry) => entry.sign === owner);
     if (resolvedOwner === undefined) throw new Error("expected owned plate");
-    expect(resolvedOwner.text).toBe("Renamed owner");
+    expect(owner.widthTiles).toBe(2);
+    expect(owner.text).not.toBe("Renamed owner");
+    expect(resolvedOwner.text).toBe("Ro");
   });
 }
 
@@ -857,5 +882,304 @@ describe("compareHeat - the comparator contract", () => {
     ]);
     expect(compareHeat("x", "y", tied)).toBeLessThan(0);
     expect(compareHeat("y", "x", tied)).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Fixup 6, rule 1 (finding M2): `officeFloorSignsToDraw` used to gate on
+ * `floors.length <= 1`, so a host holding several floors got a label on
+ * EVERY ONE of them - `host-a` x9 and `host-b` x10 down the two towers,
+ * `Unattributed` x21 down the thousand-agent Building. The plan already
+ * paints the name once, across the building's own `host` sign at its foot;
+ * the fix is grouping by HOST rather than counting floors, so a stack gets
+ * no per-storey label at all and only a host that holds exactly one floor
+ * (every host on Floor, Campus and City) keeps one.
+ */
+describe("officeFloorSignsToDraw - fixup 6 rule 1: one host label per building, not per storey", () => {
+  it("draws none of the old per-storey labels on a real two-host Towers or Building - the name lives on the foot sign instead", () => {
+    for (const viewId of ["towers", "building"] as const) {
+      const epic = makeTestEpic("two-hosts", 400, 1);
+      const statusById = new Map(epic.statusById);
+      const partition = partitionOfficePopulation({
+        agents: epic.agents,
+        statusById,
+        previous: null,
+      });
+      const layout = OFFICE_VIEWS[viewId].plan({
+        agents: epic.agents,
+        partition,
+        activityById: new Map(),
+        occupancy: new Map(),
+        needsCapacity: [],
+        viewport: { width: 1040, height: 700 },
+        previous: null,
+      });
+      // An oblique storey stack: the shape the finding measured. Sixty floors
+      // on Towers, twenty-eight on Building at this population - a two-digit
+      // multiple of "one label per storey", not a coincidence a smaller
+      // fixture could pass by accident.
+      expect(layout.floors.length).toBeGreaterThan(20);
+      const hostNameById = new Map([
+        ["host-a", "Host A"],
+        ["host-b", "Host B"],
+      ]);
+      const floorSigns = officeFloorSignsToDraw({
+        floors: layout.floors,
+        hostNameById,
+        projector: OFFICE_VIEWS[viewId].painter.projector(layout),
+        lod: 1,
+      });
+      expect(floorSigns).toEqual([]);
+      // The name is not gone - it moved. Both hosts still get exactly one
+      // `host` sign each, across the whole building's foot, and that sign
+      // resolves through the ordinary resolver with the host's own name.
+      const hostSigns = layout.signs.filter((sign) => sign.kind === "host");
+      expect(hostSigns).toHaveLength(2);
+      const drawnHostSigns = officeSignsToDraw({
+        signs: hostSigns,
+        visibleAgentIds: new Set(epic.agents.map((agent) => agent.id)),
+        statusById,
+        nameById: new Map(),
+        hostNameById,
+        roleClaims: {},
+        zoom: 1,
+        measure,
+        projector: OFFICE_VIEWS[viewId].painter.projector(layout),
+        lod: 1,
+      });
+      expect(drawnHostSigns.map((entry) => entry.text).sort()).toEqual([
+        "Host A",
+        "Host B",
+      ]);
+    }
+  });
+
+  it("still labels each host once on a view that never stacks a host's floors, in a pure two-floor fixture", () => {
+    // Floor, Campus and City give every host exactly one floor apiece, so
+    // this is the group-of-one branch: `emptyFloor` pins it without a real
+    // packer's geometry in the way.
+    const floors = [
+      emptyFloor({ hostId: "host-a" }),
+      emptyFloor({ hostId: "host-b" }),
+    ];
+    const hostNameById = new Map([
+      ["host-a", "Host A"],
+      ["host-b", "Host B"],
+    ]);
+    const signs = officeFloorSignsToDraw({
+      floors,
+      hostNameById,
+      projector: SHIFTED_PROJECTOR,
+      lod: 1,
+    });
+    expect(signs).toHaveLength(2);
+    expect(signs.map((sign) => sign.text).sort()).toEqual(["Host A", "Host B"]);
+  });
+
+  it("still labels each host once on a real Floor plan with two hosts", () => {
+    const epic = makeTestEpic("two-hosts", 40, 1);
+    const statusById = new Map(epic.statusById);
+    const partition = partitionOfficePopulation({
+      agents: epic.agents,
+      statusById,
+      previous: null,
+    });
+    const layout = OFFICE_VIEWS.floor.plan({
+      agents: epic.agents,
+      partition,
+      activityById: new Map(),
+      occupancy: new Map(),
+      needsCapacity: [],
+      viewport: { width: 1040, height: 700 },
+      previous: null,
+    });
+    // The rule this case pins: Floor packs one floor PER HOST, so every group
+    // in `officeFloorSignsToDraw`'s host map has exactly one member and the
+    // group-of-one branch fires for both, the same as it always did.
+    expect(layout.floors).toHaveLength(2);
+    const hostNameById = new Map([
+      ["host-a", "Host A"],
+      ["host-b", "Host B"],
+    ]);
+    const signs = officeFloorSignsToDraw({
+      floors: layout.floors,
+      hostNameById,
+      projector: OFFICE_VIEWS.floor.painter.projector(layout),
+      lod: 1,
+    });
+    expect(signs).toHaveLength(2);
+    expect(signs.map((sign) => sign.text).sort()).toEqual(["Host A", "Host B"]);
+  });
+});
+
+/**
+ * Fixup 6, rule 3 (finding L1): the resolver used to hand the renderer the
+ * plan's literal text unconditionally, so a bullpen plate's `Bullpen · 9 live
+ * solos` (22 characters) went in whole and the RENDERER's own twelve-char
+ * budget (`OFFICE_SIGN_PLATE_MAX_CHARS`, `truncateSign` in the canvas) cut it
+ * to `BULLPEN · 9…` - the count is the part that got cut, because it sits
+ * after everything else in the string being trimmed. That assertion would
+ * have passed before this fixup too: the ellipsis was never the resolver's to
+ * add or withhold. What is actually new is that the RESOLVER now steps the
+ * reading down itself, so nothing it hands the renderer is left for that
+ * budget to cut - proven here by size (the character budget) and by pixels
+ * (the plate's own tiles), never by the ellipsis the renderer alone decides.
+ */
+describe("officeSignsToDraw - fixup 6 rule 3: bullpen and solo plates come down rungs, never mid-word", () => {
+  it("keeps the count and drops only ` live solos` on real wide bullpen plates, within both the character budget and the pod's own pixels", () => {
+    for (const { shape, count } of [
+      { shape: "two-hosts", count: 400 },
+      { shape: "many-roots", count: 1000 },
+    ] as const) {
+      const epic = makeTestEpic(shape, count, 1);
+      const statusById = new Map(epic.statusById);
+      const partition = partitionOfficePopulation({
+        agents: epic.agents,
+        statusById,
+        previous: null,
+      });
+      const layout = OFFICE_VIEWS.building.plan({
+        agents: epic.agents,
+        partition,
+        activityById: new Map(),
+        occupancy: new Map(),
+        needsCapacity: [],
+        viewport: { width: 1040, height: 700 },
+        previous: null,
+      });
+      const wideBullpens = layout.signs.filter(
+        (sign) =>
+          sign.kind === "plate" &&
+          sign.text.startsWith("Bullpen · ") &&
+          sign.text.endsWith(" live solos") &&
+          sign.widthTiles === 18,
+      );
+      expect(wideBullpens.length).toBeGreaterThan(0);
+      const names = new Map(epic.agents.map((agent) => [agent.id, agent.name]));
+      const visibleAgentIds = new Set(epic.agents.map((agent) => agent.id));
+      const drawn = officeSignsToDraw({
+        signs: wideBullpens,
+        visibleAgentIds,
+        statusById,
+        nameById: names,
+        hostNameById: new Map(),
+        roleClaims: {},
+        zoom: 1,
+        measure,
+        projector: OFFICE_VIEWS.building.painter.projector(layout),
+        lod: 1,
+      });
+      expect(drawn).toHaveLength(wideBullpens.length);
+      for (const entry of drawn) {
+        // What the base commit handed the renderer for this exact plate -
+        // over budget on its own, which is what made the renderer's cut land
+        // mid-number rather than never happening at all.
+        expect(entry.sign.text.length).toBeGreaterThan(
+          OFFICE_SIGN_PLATE_MAX_CHARS,
+        );
+        // THE COUNT SURVIVES; ONLY THE WORDS AFTER IT ARE DROPPED - rule 3's
+        // own ladder drops "Bullpen · N live solos" to "Bullpen · N" before
+        // it drops the number, so the plate still says how many.
+        expect(entry.text).toBe(entry.sign.text.replace(" live solos", ""));
+        expect(entry.text.length).toBeLessThanOrEqual(
+          OFFICE_SIGN_PLATE_MAX_CHARS,
+        );
+        expect(measure(entry.text)).toBeLessThanOrEqual(
+          entry.sign.widthTiles * OFFICE_TILE,
+        );
+      }
+    }
+  });
+
+  it("falls all the way to `BP` on a bullpen too narrow for even the bare word, never a reading cut mid-word", () => {
+    const epic = makeTestEpic("two-hosts", 400, 1);
+    const statusById = new Map(epic.statusById);
+    const partition = partitionOfficePopulation({
+      agents: epic.agents,
+      statusById,
+      previous: null,
+    });
+    const layout = OFFICE_VIEWS.building.plan({
+      agents: epic.agents,
+      partition,
+      activityById: new Map(),
+      occupancy: new Map(),
+      needsCapacity: [],
+      viewport: { width: 1040, height: 700 },
+      previous: null,
+    });
+    const narrowBullpen = layout.signs.find(
+      (sign) =>
+        sign.kind === "plate" &&
+        sign.text.startsWith("Bullpen") &&
+        sign.widthTiles === 2,
+    );
+    if (narrowBullpen === undefined) {
+      throw new Error(
+        "expected two-hosts/400 Building to place a two-tile bullpen plate",
+      );
+    }
+    const names = new Map(epic.agents.map((agent) => [agent.id, agent.name]));
+    const visibleAgentIds = new Set(epic.agents.map((agent) => agent.id));
+    const drawn = officeSignsToDraw({
+      signs: [narrowBullpen],
+      visibleAgentIds,
+      statusById,
+      nameById: names,
+      hostNameById: new Map(),
+      roleClaims: {},
+      zoom: 1,
+      measure,
+      projector: OFFICE_VIEWS.building.painter.projector(layout),
+      lod: 1,
+    });
+    expect(drawn).toHaveLength(1);
+    // `BP`, not `Bul…` or any other cut of a word this plate had no room for.
+    expect(drawn[0].text).toBe("BP");
+    const available = officePlateWidthPx(narrowBullpen.widthTiles, 1);
+    expect(measure("Bullpen")).toBeGreaterThan(available);
+    expect(measure("BP")).toBeLessThanOrEqual(available);
+  });
+
+  /**
+   * Towers' own population never seats a solo bench narrow enough to force
+   * this ladder past its first rung - every real solo plate here has the
+   * pixels for "Solo desks" whole - so the narrower two rungs are pinned on a
+   * plate carrying the exact ladder `roomRungs` (`oblique-plan.ts`) declares
+   * for Towers, exercised through the real resolver rather than a copy of it.
+   */
+  it("steps a solo-desks plate through its own ladder as the pod narrows", () => {
+    const rungs = ["Solo desks", "Solos", "SD"];
+    const widthsAndExpected: ReadonlyArray<readonly [number, string]> = [
+      [18, "Solo desks"],
+      [3, "Solos"],
+      [2, "SD"],
+    ];
+    for (const [widthTiles, expected] of widthsAndExpected) {
+      const sign: OfficeSign = {
+        kind: "plate",
+        tile: { col: 0, row: 0 },
+        widthTiles,
+        text: "Solo desks",
+        ownerAgentId: null,
+        hostId: null,
+        agentIds: [],
+        rungs,
+      };
+      const drawn = officeSignsToDraw({
+        signs: [sign],
+        visibleAgentIds: new Set(),
+        statusById: new Map(),
+        nameById: new Map(),
+        hostNameById: new Map(),
+        roleClaims: {},
+        zoom: 1,
+        measure,
+        projector: SHIFTED_PROJECTOR,
+        lod: 1,
+      });
+      expect(drawn).toHaveLength(1);
+      expect(drawn[0].text).toBe(expected);
+    }
   });
 });

@@ -8,6 +8,16 @@ import {
   type OfficePopulation,
 } from "@/lib/comm-graph/office/office-population";
 import {
+  OFFICE_SIGN_FONT_PX,
+  OFFICE_SIGN_LETTER_SPACING_EM,
+  OFFICE_SIGN_NARROW_PLATE_MAX_CHARS,
+  OFFICE_SIGN_PADDING_X,
+  OFFICE_SIGN_PLATE_MAX_CHARS,
+  officeSignCenterX,
+  officeSignsToDraw,
+  type OfficeSignToDraw,
+} from "@/lib/comm-graph/office/office-signs";
+import {
   makeTestEpic,
   type OfficeTestEpic,
   type OfficeTestEpicShape,
@@ -19,6 +29,7 @@ import type {
   OfficeLayout,
   OfficeLod,
   OfficeRect,
+  OfficeSeat,
   OfficeSceneInput,
   OfficeSize,
 } from "@/lib/comm-graph/office/office-types";
@@ -33,10 +44,27 @@ import {
   measureBuilding,
   measureTowers,
   obliqueIsPlaza,
+  obliqueReserveLabelSeatId,
   planBuilding,
   planTowers,
   TOWERS_VIEW,
 } from "../oblique/oblique-plan";
+
+/**
+ * A plate's width in the face it is ACTUALLY DRAWN IN, derived the same way
+ * `office-signs.test.ts` and `office-board-fit.test.ts` derive it, rather than
+ * hard-coded: `ctx.letterSpacing` counts towards `measureText` as well as the
+ * painted glyphs, so leaving the tracking out under-reports every plate by the
+ * exact margin that separates a rung that fits from one that overflows the
+ * room it names.
+ */
+const MONOSPACE_ADVANCE_EM = 0.6;
+const CHAR_PX =
+  OFFICE_SIGN_FONT_PX * (MONOSPACE_ADVANCE_EM + OFFICE_SIGN_LETTER_SPACING_EM);
+const PLATE_PADDING_PX = OFFICE_SIGN_PADDING_X * 2;
+function measure(text: string): number {
+  return text.length * CHAR_PX + PLATE_PADDING_PX;
+}
 
 const SHAPES: ReadonlyArray<OfficeTestEpicShape> = [
   "triage",
@@ -1338,4 +1366,309 @@ describe("oblique fit ranges", () => {
       });
     }
   }
+});
+
+/**
+ * Fixup 6, rule 2 (finding M3-towers): a plate's box used to be centred on its
+ * text at whatever length the plan wrote, never checked against the pod it
+ * sat over - `TEAM-6-LE│TEAM-8-LEAD│TEAM-10-LEAD` clipped across three
+ * neighbouring pods because nothing shrank the reading OR checked its box
+ * against the next one's. The general property below is `office-board-fit
+ * .test.ts`'s own shape, run over every resolved PLATE (not board) the two
+ * bench populations produce: it fits its own pod in pixels, it fits the
+ * renderer's character budget (so nothing is left for the renderer to cut),
+ * and no two plates on one storey's row overlap. The case after it pins the
+ * live sitting's own reproduction.
+ */
+describe("oblique plates: fixup 6 rule 2 - plates fit their pods and never overlap", () => {
+  const ZOOMS: ReadonlyArray<number> = [0.7, 0.92, 1.6];
+  const BENCH_POPULATIONS: ReadonlyArray<{
+    readonly label: string;
+    readonly epic: OfficeTestEpic;
+  }> = [
+    { label: "two-hosts/400", epic: makeTestEpic("two-hosts", 400, 1) },
+    { label: "many-roots/1000", epic: makeTestEpic("many-roots", 1000, 1) },
+  ];
+
+  function plateFitAndOverlapOffenders(args: {
+    readonly label: string;
+    readonly viewId: string;
+    readonly drawn: ReadonlyArray<OfficeSignToDraw>;
+    readonly zoom: number;
+  }): string[] {
+    const { label, viewId, drawn, zoom } = args;
+    const offenders: string[] = [];
+    for (const entry of drawn) {
+      const available = entry.sign.widthTiles * OFFICE_TILE * zoom;
+      const measured = measure(entry.text);
+      if (measured > available) {
+        offenders.push(
+          `${label}/${viewId}/zoom=${zoom}: "${entry.text}" measures ${measured}px over its ${available}px pod`,
+        );
+      }
+      const maxChars =
+        entry.sign.widthTiles >= 2
+          ? OFFICE_SIGN_PLATE_MAX_CHARS
+          : OFFICE_SIGN_NARROW_PLATE_MAX_CHARS;
+      if (entry.text.length > maxChars) {
+        offenders.push(
+          `${label}/${viewId}/zoom=${zoom}: "${entry.text}" is ${entry.text.length} chars, over its ${maxChars}-char budget`,
+        );
+      }
+    }
+    // NO TWO PLATES ON ONE STOREY'S ROW OVERLAP. Grouped by the sign's own
+    // tile row, which is the storey: two plates on different storeys stack
+    // above and below each other and were never the finding's overlap.
+    const byRow = new Map<number, OfficeSignToDraw[]>();
+    for (const entry of drawn) {
+      const row = entry.sign.tile.row;
+      const bucket = byRow.get(row);
+      if (bucket === undefined) byRow.set(row, [entry]);
+      else bucket.push(entry);
+    }
+    for (const bucket of byRow.values()) {
+      const boxes = bucket
+        .map((entry) => {
+          const width = measure(entry.text);
+          const center = officeSignCenterX(entry) * zoom;
+          return {
+            left: center - width / 2,
+            right: center + width / 2,
+            text: entry.text,
+          };
+        })
+        .sort((a, b) => a.left - b.left);
+      for (let i = 1; i < boxes.length; i += 1) {
+        if (boxes[i].left < boxes[i - 1].right) {
+          offenders.push(
+            `${label}/${viewId}/zoom=${zoom}: "${boxes[i - 1].text}" overlaps "${boxes[i].text}"`,
+          );
+        }
+      }
+    }
+    return offenders;
+  }
+
+  it("keeps every resolved plate within its own pod's pixels and the renderer's character budget, and never overlapping its neighbour on the same storey, across both bench populations and every supported zoom", () => {
+    const offenders: string[] = [];
+    let combinationsChecked = 0;
+    for (const { label, epic } of BENCH_POPULATIONS) {
+      const statusById = new Map(epic.statusById);
+      const names = new Map(epic.agents.map((agent) => [agent.id, agent.name]));
+      const visibleAgentIds = new Set(epic.agents.map((agent) => agent.id));
+      for (const view of [TOWERS_VIEW, BUILDING_VIEW]) {
+        const layout = view.plan(initialInput(epic, VIEWPORTS[0]));
+        // EVERY plate, not only the ones that declare a ladder: "the plates
+        // this view draws all fit" is the property, and a filter on the field
+        // the fix added would make the case pass on a plan that had stopped
+        // declaring one.
+        const plates = layout.signs.filter((sign) => sign.kind === "plate");
+        expect(plates.length).toBeGreaterThan(0);
+        for (const zoom of ZOOMS) {
+          combinationsChecked += 1;
+          const drawn = officeSignsToDraw({
+            signs: plates,
+            visibleAgentIds,
+            statusById,
+            nameById: names,
+            hostNameById: new Map(),
+            roleClaims: {},
+            zoom,
+            measure,
+            projector: view.painter.projector(layout),
+            lod: 1,
+          });
+          offenders.push(
+            ...plateFitAndOverlapOffenders({
+              label,
+              viewId: view.id,
+              drawn,
+              zoom,
+            }),
+          );
+        }
+      }
+    }
+    // Not vacuous: real plates, on both populations and views, were actually
+    // exercised - otherwise an empty `offenders` array would prove nothing.
+    expect(combinationsChecked).toBeGreaterThan(0);
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps team-6/-8/-10's adjacent two- and three-desk pods on Towers from colliding, at the live sitting's own reproduction", () => {
+    const epic = makeTestEpic("two-hosts", 400, 1);
+    const statusById = new Map(epic.statusById);
+    const names = new Map(epic.agents.map((agent) => [agent.id, agent.name]));
+    const visibleAgentIds = new Set(epic.agents.map((agent) => agent.id));
+    const layout = TOWERS_VIEW.plan(initialInput(epic, VIEWPORTS[0]));
+    const plates = ["team-6-lead", "team-8-lead", "team-10-lead"].map(
+      (text) => {
+        const sign = layout.signs.find(
+          (candidate) => candidate.kind === "plate" && candidate.text === text,
+        );
+        if (sign === undefined) throw new Error(`expected a ${text} plate`);
+        return sign;
+      },
+    );
+    const resolvedAt = (zoom: number) =>
+      officeSignsToDraw({
+        signs: plates,
+        visibleAgentIds,
+        statusById,
+        nameById: names,
+        hostNameById: new Map(),
+        roleClaims: {},
+        zoom,
+        measure,
+        projector: TOWERS_VIEW.painter.projector(layout),
+        lod: 1,
+      });
+    for (const zoom of [0.7, 0.92, 1.6]) {
+      const drawn = resolvedAt(zoom);
+      expect(drawn).toHaveLength(3);
+      const sorted = [...drawn].sort(
+        (a, b) => officeSignCenterX(a) - officeSignCenterX(b),
+      );
+      for (let i = 1; i < sorted.length; i += 1) {
+        const prevRight =
+          officeSignCenterX(sorted[i - 1]) * zoom +
+          measure(sorted[i - 1].text) / 2;
+        const nextLeft =
+          officeSignCenterX(sorted[i]) * zoom - measure(sorted[i].text) / 2;
+        // NO OVERLAP. The reproduction was `TEAM-6-LE│TEAM-8-LEAD│TEAM-10-
+        // LEAD` clipping across three pods; the boxes below never cross now.
+        expect(nextLeft).toBeGreaterThanOrEqual(prevRight);
+      }
+    }
+    // The two FOUR-TILE pods never keep the full `team-N-lead` reading - the
+    // reproduction's own overflow - while the EIGHT-TILE `team-10-lead` pod
+    // has the room for it at office zoom.
+    const byText = new Map(
+      resolvedAt(1).map((entry) => [entry.sign.text, entry.text]),
+    );
+    expect(byText.get("team-6-lead")).not.toBe("team-6-lead");
+    expect(byText.get("team-8-lead")).not.toBe("team-8-lead");
+    expect(byText.get("team-10-lead")).toBe("team-10-lead");
+  });
+
+  it("pins team-26-lead's own pod ladder at zooms 0.7, 0.92 and 1.6", () => {
+    const epic = makeTestEpic("two-hosts", 400, 1);
+    const statusById = new Map(epic.statusById);
+    const names = new Map(epic.agents.map((agent) => [agent.id, agent.name]));
+    const visibleAgentIds = new Set(epic.agents.map((agent) => agent.id));
+    const layout = TOWERS_VIEW.plan(initialInput(epic, VIEWPORTS[0]));
+    const sign = layout.signs.find(
+      (candidate) =>
+        candidate.kind === "plate" && candidate.text === "team-26-lead",
+    );
+    if (sign === undefined) throw new Error("expected a team-26-lead plate");
+    // Six tiles at this population - checked here rather than assumed, since
+    // the pod a real plan gives a lead is a fact about the packing.
+    expect(sign.widthTiles).toBe(6);
+    const resolvedAt = (zoom: number): string | undefined =>
+      officeSignsToDraw({
+        signs: [sign],
+        visibleAgentIds,
+        statusById,
+        nameById: names,
+        hostNameById: new Map(),
+        roleClaims: {},
+        zoom,
+        measure,
+        projector: TOWERS_VIEW.painter.projector(layout),
+        lod: 1,
+      })[0]?.text;
+    expect(resolvedAt(0.7)).toBe("team-26");
+    expect(resolvedAt(0.92)).toBe("team-26");
+    expect(resolvedAt(1.6)).toBe("team-26-lead");
+  });
+});
+
+/**
+ * Fixup 6, rule 4 (finding L4): `seatProps` used to draw a `reserve` label
+ * under EVERY empty desk at close-up, so a vacant fifteen-desk storey painted
+ * the same word fifteen times and competed with the name tags close-up exists
+ * to show. `obliqueReserveLabelSeatId` now names one seat per storey - the one
+ * nearest its own centre - and only that seat's empty desk draws the label.
+ */
+describe("oblique painters: fixup 6 rule 4 - one reserve label per storey, not one per empty desk", () => {
+  it("paints at most one reserve label per storey while dozens of desks sit empty, on two-hosts/400 Building", () => {
+    const epic = makeTestEpic("two-hosts", 400, 1);
+    const layout = planBuilding(initialInput(epic, VIEWPORTS[0]));
+    const painter = BUILDING_VIEW.painter;
+    const assignedSeatIds = new Set(
+      [...layout.desks.values()].map((desk) => desk.seatId),
+    );
+    let emptyDeskSeats = 0;
+    const labelCountByFloor = new Map<number, number>();
+    for (const seat of layout.seats.values()) {
+      if (seat.kind !== "desk" || assignedSeatIds.has(seat.seatId)) continue;
+      emptyDeskSeats += 1;
+      const props = painter.seatProps(layout, seat, idleDeskState(null), 2);
+      const hasLabel = props.some(
+        (item) =>
+          item.drawable.kind === "label" && item.drawable.text === "reserve",
+      );
+      if (hasLabel) {
+        labelCountByFloor.set(
+          seat.floorIndex,
+          (labelCountByFloor.get(seat.floorIndex) ?? 0) + 1,
+        );
+      }
+    }
+    // DOZENS of empty desks - the noise L4 measured - not a handful, and a
+    // double-figure count of storeys that DO carry a label, so the case is
+    // not vacuously true of a population with nothing empty to label. Said as
+    // floors rather than as this packing's exact 97 and 15: the property is
+    // "one a storey however many are empty", and a packing change that moves
+    // those two numbers is not a regression of it.
+    expect(emptyDeskSeats).toBeGreaterThan(50);
+    expect(labelCountByFloor.size).toBeGreaterThan(9);
+    // EVERY labelled storey got EXACTLY one - never the fifteen identical
+    // "reserve"s a per-cubby label used to paint across one vacant storey.
+    expect([...labelCountByFloor.values()].every((count) => count === 1)).toBe(
+      true,
+    );
+  });
+
+  it("names the empty seat nearest the storey's own centre column, not a fixed slot index", () => {
+    const epic = makeTestEpic("two-hosts", 400, 1);
+    const layout = planBuilding(initialInput(epic, VIEWPORTS[0]));
+    const assignedSeatIds = new Set(
+      [...layout.desks.values()].map((desk) => desk.seatId),
+    );
+    const deskSeatsByFloor = new Map<number, OfficeSeat[]>();
+    for (const seat of layout.seats.values()) {
+      if (seat.kind !== "desk") continue;
+      const bucket = deskSeatsByFloor.get(seat.floorIndex);
+      if (bucket === undefined) deskSeatsByFloor.set(seat.floorIndex, [seat]);
+      else bucket.push(seat);
+    }
+    let floorsChecked = 0;
+    for (const [floorIndex, seats] of deskSeatsByFloor) {
+      const empty = seats.filter((seat) => !assignedSeatIds.has(seat.seatId));
+      if (empty.length === 0) continue;
+      const cols = seats.map((seat) => seat.deskTile.col);
+      const centre = (Math.min(...cols) + Math.max(...cols)) / 2;
+      // The SAME rule `reserveLabelSeats` (`oblique-plan.ts`) applies: nearest
+      // to the centre column, ties broken by the first encountered in
+      // ascending column order - which is also this storey's own slot order.
+      const nearest = [...empty]
+        .sort((a, b) => a.deskTile.col - b.deskTile.col)
+        .reduce<OfficeSeat | null>((closest, candidate) => {
+          if (closest === null) return candidate;
+          const candidateDistance = Math.abs(candidate.deskTile.col - centre);
+          const closestDistance = Math.abs(closest.deskTile.col - centre);
+          return candidateDistance < closestDistance ? candidate : closest;
+        }, null);
+      if (nearest === null) continue;
+      floorsChecked += 1;
+      expect(obliqueReserveLabelSeatId(layout, floorIndex)).toBe(
+        nearest.seatId,
+      );
+    }
+    // Not vacuous: at least one storey with an empty desk was actually
+    // checked.
+    expect(floorsChecked).toBeGreaterThan(0);
+  });
 });

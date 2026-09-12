@@ -17,6 +17,7 @@ import type {
   OfficeRoom,
   OfficeSeat,
   OfficeSign,
+  OfficeSignRungs,
   OfficeSize,
   OfficeSpriteName,
   OfficeTilePos,
@@ -71,6 +72,15 @@ class ObliquePacking {
   readonly assignment: Map<string, string>;
   readonly cubby: Map<string, boolean>;
   shift: number;
+  /**
+   * Which seat speaks for each storey's empty desks, built on first ask.
+   *
+   * Derived from `assignment`, which is settled by the time anything can ask:
+   * a packing is frozen into the layout it produced, and growth clones it into
+   * a fresh one rather than editing this. Cached because the question is put
+   * once per empty desk on screen and its answer is a fact about the storey.
+   */
+  reserveLabels: Map<number, string> | null;
   constructor(mode: ObliqueMode) {
     this.mode = mode;
     this.propsByTile = new Map();
@@ -80,6 +90,7 @@ class ObliquePacking {
     this.assignment = new Map();
     this.cubby = new Map();
     this.shift = 0;
+    this.reserveLabels = null;
   }
 }
 
@@ -1127,6 +1138,34 @@ function roomText(
   if (!solo) return name;
   return mode === "towers" ? "Solo desks" : `Bullpen · ${count} live solos`;
 }
+/**
+ * A SOLO FLOOR'S PLATE AT DECREASING LENGTHS, widest first.
+ *
+ * The count is the part a narrow plate loses LAST, not first. It used to be
+ * cut mid-number - `BULLPEN · 9…` on a plate that had room for eleven
+ * characters and a reading nineteen long - because the drawing step trims what
+ * it is given and this plate was giving it a sentence. Said as a ladder, the
+ * words go before the number does, and a plate that can only carry two
+ * characters says `BP` rather than half a word.
+ *
+ * A room plate that names a LEAD needs no list: the renderer re-letters it
+ * from whoever that agent is called at the cursor, so its ladder is derived
+ * there from the current name (`OfficeSignRungs`'s `"name"`).
+ */
+function roomRungs(
+  mode: ObliqueMode,
+  solo: boolean,
+  count: number,
+): OfficeSignRungs {
+  if (!solo) return "name";
+  if (mode === "towers") return ["Solo desks", "Solos", "SD"];
+  return [
+    `Bullpen · ${count} live solos`,
+    `Bullpen · ${count}`,
+    "Bullpen",
+    "BP",
+  ];
+}
 /** Team summaries describe membership, even when capacity lends somebody a seat. */
 function roomMembers(
   context: PlanContext,
@@ -1184,6 +1223,10 @@ function materializeRooms(
       ownerAgentId: owner,
       hostId: building.hostId,
       agentIds: members,
+      // The pod's own width is the plate's budget, so a plate never reaches
+      // into the pod beside it - `cols` above is that width, and this is what
+      // makes the renderer honour it rather than centring whatever it is given.
+      rungs: roomRungs(packing.mode, room.solo, members.length),
     });
     sign(geometry, {
       kind: "board",
@@ -1372,6 +1415,55 @@ export const BUILDING_VIEW: OfficeView = {
   painter: OBLIQUE_PAINTER,
 };
 
+/**
+ * ONE SEAT PER STOREY SAYS `reserve`, and this is the one - `null` where the
+ * storey plans no empty desk at all.
+ *
+ * A vacant storey is fifteen empty desks, and fifteen copies of the same word
+ * across one floor is not fifteen facts: it is one fact said fifteen times,
+ * over the name tags that close-up exists to show. The storey says it once,
+ * nearest its own centre, and the empty desks themselves - drawn dark, at less
+ * than half alpha - carry the rest of the reading.
+ *
+ * The seat is chosen from the PLAN's own assignment rather than from who is
+ * sitting there at the cursor, because a painter is asked about one seat at a
+ * time and its answer is cached per seat: a choice that depended on the other
+ * desks' occupants would have to be re-made for the whole storey every time
+ * one of them lit up. The cost is a storey whose spokesman has since been
+ * woken into saying nothing, which is a label fewer, never a label more.
+ */
+export function obliqueReserveLabelSeatId(
+  layout: OfficeLayout,
+  floorIndex: number,
+): string | null {
+  const packing = layout.frozen;
+  if (!(packing instanceof ObliquePacking)) return null;
+  if (packing.reserveLabels === null) {
+    packing.reserveLabels = reserveLabelSeats(packing);
+  }
+  return packing.reserveLabels.get(floorIndex) ?? null;
+}
+function reserveLabelSeats(packing: ObliquePacking): Map<number, string> {
+  const taken = new Set(packing.assignment.values());
+  const out = new Map<number, string>();
+  for (const storey of packing.storeys) {
+    if (storey.slots.length === 0) continue;
+    const centre =
+      (storey.slots[0].col + storey.slots[storey.slots.length - 1].col) / 2;
+    let chosen: Slot | null = null;
+    for (const slot of storey.slots) {
+      if (taken.has(slot.id)) continue;
+      if (
+        chosen === null ||
+        Math.abs(slot.col - centre) < Math.abs(chosen.col - centre)
+      ) {
+        chosen = slot;
+      }
+    }
+    if (chosen !== null) out.set(storey.id, chosen.id);
+  }
+  return out;
+}
 /** Storey identity comes from the recipe, independently of its painted bounds. */
 export function obliqueIsPlaza(
   layout: OfficeLayout,

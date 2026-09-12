@@ -606,6 +606,20 @@ export type OfficeSignKind =
   | "hq-board";
 
 /**
+ * How a sign's lettering gives way when it is wider than the tiles it names.
+ *
+ * - `"name"` - the shared name ladder, derived at the cursor from whatever the
+ *   owner is called right now (`officePlateRungs`).
+ * - a list of readings, widest first - this sign's own wording said at
+ *   decreasing lengths, for a plate that carries a SUMMARY rather than a name
+ *   and so has no owner to re-letter from.
+ *
+ * A sign that declares neither is drawn as written, which is every sign that
+ * is wider than its lettering can ever be.
+ */
+export type OfficeSignRungs = "name" | ReadonlyArray<string>;
+
+/**
  * One piece of lettering, placed by the plan and drawn by the renderer.
  *
  * Signs leave the scene's prop pass because WHO a sign names is a plan fact
@@ -625,6 +639,16 @@ export interface OfficeSign {
   readonly hostId: string | null;
   /** Boards only: whose statuses this sign summarises. */
   readonly agentIds: ReadonlyArray<string>;
+  /**
+   * What this sign says when its full lettering is wider than `widthTiles`;
+   * absent draws the text as written.
+   *
+   * A plate is the one piece of lettering whose room can be narrower than its
+   * own name - a two-desk pod is four tiles, and a twelve-character plate is
+   * half as wide again as that at office zoom - so a plate that names a pod
+   * declares how it comes down rather than overflowing into the pod beside it.
+   */
+  readonly rungs?: OfficeSignRungs;
 }
 
 /**

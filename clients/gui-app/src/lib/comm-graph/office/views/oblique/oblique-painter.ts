@@ -22,7 +22,11 @@ import type {
   OfficeProjector,
 } from "../office-view";
 
-import { obliqueIsPlaza, obliquePropsIn } from "./oblique-plan";
+import {
+  obliqueIsPlaza,
+  obliquePropsIn,
+  obliqueReserveLabelSeatId,
+} from "./oblique-plan";
 
 const STATIC_PROPS: ReadonlySet<OfficeSpriteName> = new Set([
   "face",
@@ -204,7 +208,7 @@ function envelopeStack(count: number): OfficeSpriteName {
   return "envelope-stack-3";
 }
 function seatProps(
-  _layout: OfficeLayout,
+  layout: OfficeLayout,
   seat: OfficeSeat,
   state: OfficeDeskState,
   lod: OfficeLod,
@@ -256,7 +260,13 @@ function seatProps(
     }),
   ];
   if (owner === null) {
-    if (lod === 2)
+    // ONCE A STOREY, not once a desk: the storey nominates the seat that says
+    // it, and every other empty desk on that floor says it with its own dark,
+    // half-lit furniture instead.
+    if (
+      lod === 2 &&
+      obliqueReserveLabelSeatId(layout, seat.floorIndex) === seat.seatId
+    )
       result.push({
         drawable: {
           kind: "label",

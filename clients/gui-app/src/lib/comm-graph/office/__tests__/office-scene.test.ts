@@ -11,6 +11,7 @@ import {
 } from "@/lib/comm-graph/office/office-scene";
 import { OfficeSeatBook } from "@/lib/comm-graph/office/office-seat-book";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
+import { obliqueReserveLabelSeatId } from "@/lib/comm-graph/office/views/oblique/oblique-plan";
 import {
   OFFICE_VIEW_IDS,
   OFFICE_VIEWS,
@@ -4767,12 +4768,21 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       }
       expect(front.drawable.alpha).toBe(0.45);
       if (lod === 2) {
+        // ONE `reserve` A STOREY, not one an empty desk: the storey nominates
+        // the seat that says the word, and this reserve carries it only if it
+        // was the one nominated. What marks it as free either way is the dark,
+        // half-alpha desk front asserted just above.
         const label = call.props.find(
           (entry) =>
             entry.drawable.kind === "label" &&
             entry.drawable.text === "reserve",
         );
-        expect(label).toBeDefined();
+        const spokesman = obliqueReserveLabelSeatId(
+          layoutOf(scene),
+          reserve.floorIndex,
+        );
+        expect(spokesman).not.toBeNull();
+        expect(label !== undefined).toBe(spokesman === reserve.seatId);
       }
     }
     seatPropsSpy.mockRestore();
