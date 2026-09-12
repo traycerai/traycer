@@ -198,3 +198,42 @@ describe("agent list run config", () => {
     );
   });
 });
+
+describe("agent list session facet", () => {
+  it("describes an archived row with no [archived] marker to lean on", async () => {
+    // This command is the WORST surface for the `stopped` wording, and the
+    // reason is structural: it renders the response it just parsed through
+    // `listAgentsResponseSchema`, which has no `archived` key, so zod strips
+    // it. `sessionState` is a real `@9.1` field and survives. An archived
+    // agent therefore reaches a CLI reader as a bare `session: stopped` with
+    // no `[archived]` marker and no `[archived]` legend line anywhere - the
+    // legend clause is the ONLY thing said about that row, and the reader
+    // cannot tell archived from deleted from the row itself.
+    //
+    // That is why the clause may not assert finality: it shipped as "the agent
+    // is over as a record", which on this surface is an unqualified death
+    // claim about an agent a message would wake.
+    rpcMock.mockResolvedValue({
+      ...LEGACY_LIST_RESPONSE,
+      agents: [
+        {
+          ...LEGACY_LIST_RESPONSE.agents[0],
+          // Present on the host-enriched listing, absent from the wire schema.
+          archived: true,
+          sessionState: "stopped",
+          lastExit: null,
+        },
+      ],
+    });
+
+    const result = await buildCommand()(makeCtx(false));
+
+    expect(result.data).not.toHaveProperty("agents.0.archived");
+    expect(result.human).not.toContain("[archived]");
+    expect(result.human).toContain("session: stopped");
+    expect(result.human).toContain(
+      "An ARCHIVED agent is not over - it stays addressable, and your next message unarchives and wakes it; a deleted one is gone",
+    );
+    expect(result.human).not.toContain("the agent is over as a record");
+  });
+});
