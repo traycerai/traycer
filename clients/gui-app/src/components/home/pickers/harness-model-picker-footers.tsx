@@ -26,6 +26,11 @@ import {
 } from "@/components/ui/slider";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useLayoutStore } from "@/stores/settings/layout-store";
+import {
+  isMaxReasoningLevel,
+  type ReasoningMaxCue,
+  type ReasoningMaxCueConfig,
+} from "@/components/home/pickers/use-reasoning-max-cue";
 
 export interface ReasoningFooterConfig {
   readonly value: ReasoningLevel;
@@ -43,25 +48,33 @@ export interface ServiceTierFooterConfig {
 interface HarnessModelPickerModelSettingsFooterProps {
   readonly reasoning: ReasoningFooterConfig | null;
   readonly serviceTier: ServiceTierFooterConfig | null;
+  /** `null` for a footer mounted without the picker's cue state: no bloom is
+   *  ever drawn, and the strip reads as presented. */
+  readonly reasoningMax: ReasoningMaxCueConfig | null;
 }
 
 export function HarnessModelPickerModelSettingsFooter(
   props: HarnessModelPickerModelSettingsFooterProps,
 ) {
-  const { reasoning, serviceTier } = props;
+  const { reasoning, serviceTier, reasoningMax } = props;
   if (reasoning === null && serviceTier === null) return null;
   return (
-    <ModelSettingsFooter reasoning={reasoning} serviceTier={serviceTier} />
+    <ModelSettingsFooter
+      reasoning={reasoning}
+      serviceTier={serviceTier}
+      reasoningMax={reasoningMax}
+    />
   );
 }
 
 interface ModelSettingsFooterProps {
   readonly reasoning: ReasoningFooterConfig | null;
   readonly serviceTier: ServiceTierFooterConfig | null;
+  readonly reasoningMax: ReasoningMaxCueConfig | null;
 }
 
 function ModelSettingsFooter(props: ModelSettingsFooterProps) {
-  const { reasoning, serviceTier } = props;
+  const { reasoning, serviceTier, reasoningMax } = props;
   const upgradeServiceTier =
     serviceTier === null
       ? null
@@ -109,7 +122,7 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
           mount without the strip. A model with no levels renders nothing here
           and the next model that has them mounts the group afresh. */}
       {reasoning === null || !hasReasoningOptions ? null : (
-        <ReasoningFooterGroup config={reasoning} />
+        <ReasoningFooterGroup config={reasoning} maxCue={reasoningMax} />
       )}
     </div>
   );
@@ -117,6 +130,7 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
 
 interface ReasoningFooterGroupProps {
   readonly config: ReasoningFooterConfig;
+  readonly maxCue: ReasoningMaxCueConfig | null;
 }
 
 // Mounted only for a model that reports at least one level - see the gate in
@@ -134,7 +148,7 @@ interface ReasoningFooterGroupProps {
 // single stop is a control that cannot be moved, and the level's name alone is
 // what that model has to say.
 function ReasoningFooterGroup(props: ReasoningFooterGroupProps) {
-  const { config } = props;
+  const { config, maxCue } = props;
   const control = useLayoutStore(
     (state) => state.composer.reasoningFooterControl,
   );
@@ -146,7 +160,7 @@ function ReasoningFooterGroup(props: ReasoningFooterGroupProps) {
       className="m-0 flex min-w-0 flex-1 items-center border-0 p-0"
     >
       {stepped ? (
-        <ReasoningLevelSlider config={config} />
+        <ReasoningLevelSlider config={config} maxCue={maxCue} />
       ) : (
         <ReasoningLevelList config={config} />
       )}
@@ -156,6 +170,11 @@ function ReasoningFooterGroup(props: ReasoningFooterGroupProps) {
 
 interface ReasoningLevelStripProps {
   readonly config: ReasoningFooterConfig;
+}
+
+interface ReasoningLevelSliderProps {
+  readonly config: ReasoningFooterConfig;
+  readonly maxCue: ReasoningMaxCueConfig | null;
 }
 
 function ReasoningLevelList(props: ReasoningLevelStripProps) {
@@ -217,8 +236,9 @@ function ReasoningLevelList(props: ReasoningLevelStripProps) {
  * without taking them out of the accessibility tree. Clicking one writes the
  * same level the track under it would, so the two routes cannot disagree.
  */
-function ReasoningLevelSlider(props: ReasoningLevelStripProps) {
+function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
   const { value, options, disabled, onChange } = props.config;
+  const maxCue = props.maxCue;
   const selectedIndex = options.findIndex((option) => option.id === value);
   // A level the catalog does not list (remembered from another model, before
   // normalization catches up) parks the thumb at the first stop rather than
@@ -228,6 +248,12 @@ function ReasoningLevelSlider(props: ReasoningLevelStripProps) {
   const thumbIndex = selectedIndex === -1 ? 0 : selectedIndex;
   const lastIndex = options.length - 1;
   const gesture = useRef<PointerGesture>({ active: false, moved: false });
+  const atMax = isMaxReasoningLevel(value, options);
+  const open = maxCue === null || maxCue.open;
+  // Drawn only while the cue still belongs to what is on screen. The owning
+  // hook clears an invalidated cue; this is the second reading of the same
+  // question, taken where the DOM is written.
+  const cue = drawableMaxCue(maxCue, atMax);
 
   const selectLevel = (index: number) => {
     const option = options.at(index);
@@ -256,9 +282,18 @@ function ReasoningLevelSlider(props: ReasoningLevelStripProps) {
       >
         {findReasoningLabel(value, options)}
       </span>
+      {/* `py-3` is the bloom's room, not spacing: the ring reaches ~20px from
+          the thumb's centre (a 16px thumb, `inset:-4px`, scaled to 1.65), and
+          the popover clips it. 12px here plus the footer's own `py-1.5` puts
+          the centre exactly 20px above the bottom edge at every width. The
+          padding lives on the slider alone, so a footer that also carries the
+          service-tier row does not add it twice, and the list keeps its own
+          height. */}
       <Slider
         data-testid="model-reasoning-slider"
-        className="min-w-0 flex-1 py-2"
+        className="reasoning-effort-slider min-w-0 flex-1 py-3"
+        data-max={atMax ? "true" : undefined}
+        data-open={open ? "true" : undefined}
         value={[thumbIndex]}
         min={0}
         max={lastIndex}
@@ -280,6 +315,14 @@ function ReasoningLevelSlider(props: ReasoningLevelStripProps) {
       >
         <SliderTrack>
           <SliderRange />
+          {/* The end of the track takes the accent at max. Static, and a
+              gradient rather than a second solid fill, so the neutral base and
+              the stops stay readable under it. */}
+          <span
+            aria-hidden="true"
+            data-testid="model-reasoning-max-tail"
+            className="reasoning-effort-max-tail pointer-events-none absolute inset-0 rounded-full"
+          />
         </SliderTrack>
         {/* Inset by half the thumb, which is where Radix keeps the thumb's own
             centre at the two ends (`getThumbInBoundsOffset`) - without it the
@@ -300,13 +343,58 @@ function ReasoningLevelSlider(props: ReasoningLevelStripProps) {
             ))}
           </div>
         </div>
+        {/* The thumb keeps its own hit area, focus ring and Radix geometry;
+            the visible disc is the core drawn inside it, so the max halo and
+            the focus ring are separate channels that cannot displace each
+            other. */}
         <SliderThumb
           aria-label="Thinking effort"
           aria-valuetext={findReasoningLabel(value, options)}
-        />
+          className="border-0 bg-transparent shadow-none"
+        >
+          <span
+            aria-hidden="true"
+            data-testid="model-reasoning-thumb-core"
+            className="reasoning-effort-thumb-core pointer-events-none absolute inset-0 rounded-full"
+          />
+          {cue === null ? null : (
+            <span
+              // Keyed by generation: leaving max and coming straight back is a
+              // new node, so the animation restarts instead of being skipped
+              // as an unchanged element.
+              key={cue.generation}
+              aria-hidden="true"
+              data-pulse="true"
+              data-testid="model-reasoning-max-bloom"
+              className="reasoning-effort-bloom pointer-events-none absolute rounded-full"
+              onAnimationEnd={(event) => {
+                // This element's own bloom, and no other animation that
+                // happens to end here - a popover or tooltip playing out
+                // nearby must not retire the cue.
+                if (event.target !== event.currentTarget) return;
+                if (event.animationName !== "reasoning-max-bloom") return;
+                maxCue?.onCueEnd(cue.generation);
+              }}
+            />
+          )}
+        </SliderThumb>
       </Slider>
     </div>
   );
+}
+
+/**
+ * The cue to draw, or `null`. A cue survives only while the world it names is
+ * still the one on screen: same host, harness, model and catalog, still at the
+ * last stop, still presented.
+ */
+function drawableMaxCue(
+  maxCue: ReasoningMaxCueConfig | null,
+  atMax: boolean,
+): ReasoningMaxCue | null {
+  if (maxCue === null || maxCue.cue === null) return null;
+  if (!atMax || !maxCue.open) return null;
+  return maxCue.cue.contextKey === maxCue.contextKey ? maxCue.cue : null;
 }
 
 /** One pointer gesture on the slider: whether it is in flight, and whether it

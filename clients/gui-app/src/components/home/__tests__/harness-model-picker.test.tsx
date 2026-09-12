@@ -4150,6 +4150,64 @@ describe("<HarnessModelPicker />", () => {
     expect(reasoningChanges).toEqual(["high"]);
   });
 
+  it("blooms the slider's last stop when the sub-leader digit lands on it", async () => {
+    // The ⌥-digit chord reaches the level through `usePickerLeaderScope`,
+    // never touching the slider - so this is the route that proves the cue
+    // hangs off the picker's one acknowledgement path rather than off a
+    // handler inside the strip.
+    renderPicker({
+      reasoning: "low",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    expect(screen.queryByTestId("model-reasoning-max-bloom")).toBeNull();
+
+    act(() => {
+      fireLeaderDigit(2, "alt");
+    });
+
+    const slider = screen.getByTestId("model-reasoning-slider");
+    expect(slider.getAttribute("data-max")).toBe("true");
+    expect(slider.getAttribute("data-open")).toBe("true");
+    expect(screen.getByTestId("model-reasoning-max-bloom")).not.toBeNull();
+  });
+
+  it("leaves the slider static when the sub-leader digit lands short of the last stop", async () => {
+    renderPicker({
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(1, "alt");
+    });
+
+    expect(
+      screen.getByTestId("model-reasoning-slider").getAttribute("data-max"),
+    ).toBeNull();
+    expect(screen.queryByTestId("model-reasoning-max-bloom")).toBeNull();
+  });
+
   it("sets the thinking level on the now-committed model after a rail switch", async () => {
     // The old "browse a different provider without committing" premise is gone -
     // a rail switch now COMMITS. Once the new harness's catalog loads, the footer

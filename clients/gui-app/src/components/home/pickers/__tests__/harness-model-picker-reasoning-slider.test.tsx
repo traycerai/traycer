@@ -6,6 +6,7 @@ import {
   type ReasoningFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
 import type { ReasoningLevelOption } from "@/components/home/data/landing-options";
+import { stubSliderGeometry } from "@/components/home/pickers/__tests__/slider-pointer-geometry";
 import {
   DEFAULT_COMPOSER_LAYOUT,
   useLayoutStore,
@@ -38,6 +39,7 @@ function reasoningConfig(
 function renderFooter(config: ReasoningFooterConfig): void {
   render(
     <HarnessModelPickerModelSettingsFooter
+      reasoningMax={null}
       reasoning={config}
       serviceTier={null}
     />,
@@ -55,6 +57,7 @@ function renderStatefulFooter(initial: string): ReadonlyArray<string> {
     const [value, setValue] = useState(initial);
     return (
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={{
           value,
           options: FOUR_OPTIONS,
@@ -74,49 +77,6 @@ function renderStatefulFooter(initial: string): ReadonlyArray<string> {
 
 function thumb(): HTMLElement {
   return screen.getByRole("slider", { name: "Thinking effort" });
-}
-
-/**
- * Enough of a layout for Radix to turn a pointer position into a value.
- *
- * jsdom measures everything as zero, so a real drag reports no movement at all
- * and a pointer test would pass against a slider that never moved. The track is
- * given a 400px box and pointer capture is granted, which is what Radix's
- * `onPointerMove` checks before it treats a move as a slide. Returns the undo.
- */
-function stubSliderGeometry(): () => void {
-  const rect = vi
-    .spyOn(Element.prototype, "getBoundingClientRect")
-    .mockReturnValue({
-      x: 0,
-      y: 0,
-      top: 0,
-      left: 0,
-      right: 400,
-      bottom: 16,
-      width: 400,
-      height: 16,
-      toJSON: () => ({}),
-    });
-  const element: {
-    setPointerCapture?: (pointerId: number) => void;
-    releasePointerCapture?: (pointerId: number) => void;
-    hasPointerCapture?: (pointerId: number) => boolean;
-  } = Element.prototype;
-  const previous = {
-    set: element.setPointerCapture,
-    release: element.releasePointerCapture,
-    has: element.hasPointerCapture,
-  };
-  element.setPointerCapture = () => undefined;
-  element.releasePointerCapture = () => undefined;
-  element.hasPointerCapture = () => true;
-  return () => {
-    rect.mockRestore();
-    element.setPointerCapture = previous.set;
-    element.releasePointerCapture = previous.release;
-    element.hasPointerCapture = previous.has;
-  };
 }
 
 function stops(): ReadonlyArray<HTMLElement> {
@@ -259,6 +219,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
   it("moves the name beside the track when the level changes", () => {
     const { rerender } = render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("low", FOUR_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -269,6 +230,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
 
     rerender(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("max", FOUR_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -322,6 +284,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     const onChange = vi.fn<(next: string) => void>();
     render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={{
           value: "low",
           options: FOUR_OPTIONS,

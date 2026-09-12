@@ -217,6 +217,104 @@
   animation: chat-dock-chip-pulse 620ms ease-out forwards;
 }
 
+/* Arriving at the model picker's LAST thinking level: a fine ring blooms out
+   of the slider's thumb once and dissolves, leaving a static halo on the thumb
+   and the accent on the end of the track. The thumb does not move and the
+   label does not change - the cue is the arrival, not the setting.
+
+   The `--reasoning-max-*` properties are local aliases of `--primary`, not
+   theme tokens: a custom primary recolours the halo with no React involved,
+   and an achromatic default theme still reads, because the ring's EXPANSION
+   is what carries the flourish.
+
+   Unlike the dock chip above, this one does get a reduced-motion rule. The
+   chip relies on `animationend` to take `data-pulse` off, so suppressing the
+   animation would strand it; here the owning hook refuses to create a cue
+   under reduced motion and clears one in flight, so the display rule is a
+   guard for the frames before React catches up rather than the whole
+   mechanism. */
+.reasoning-effort-slider {
+  --reasoning-max-ring: color-mix(in srgb, var(--primary) 50%, transparent);
+  --reasoning-max-halo: color-mix(in srgb, var(--primary) 22%, transparent);
+  --reasoning-max-tail: color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+.reasoning-effort-thumb-core {
+  background: var(--foreground);
+  border: 2px solid var(--popover);
+  /* Position/size/rounding from composition classes above. */
+}
+
+.reasoning-effort-slider[data-max="true"] .reasoning-effort-thumb-core {
+  box-shadow:
+    0 0 0 2px var(--reasoning-max-ring),
+    0 0 12px 2px var(--reasoning-max-halo);
+}
+
+.reasoning-effort-max-tail {
+  opacity: 0;
+}
+
+.reasoning-effort-slider[data-max="true"] .reasoning-effort-max-tail {
+  opacity: 1;
+  background: linear-gradient(
+    to right,
+    transparent 35%,
+    var(--reasoning-max-tail)
+  );
+}
+
+.reasoning-effort-slider:dir(rtl)[data-max="true"] .reasoning-effort-max-tail {
+  background: linear-gradient(
+    to left,
+    transparent 35%,
+    var(--reasoning-max-tail)
+  );
+}
+
+.reasoning-effort-bloom {
+  inset: -4px;
+  border: 1px solid var(--primary);
+  opacity: 0;
+}
+
+.reasoning-effort-slider[data-open="true"][data-max="true"]
+  .reasoning-effort-bloom[data-pulse="true"] {
+  animation: reasoning-max-bloom 640ms cubic-bezier(0.16, 1, 0.3, 1) 1 both;
+}
+
+@keyframes reasoning-max-bloom {
+  0% {
+    opacity: 0.65;
+    transform: scale(0.75);
+  }
+  30% {
+    opacity: 0.42;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.65);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-effort-bloom {
+    display: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .reasoning-effort-bloom,
+  .reasoning-effort-max-tail {
+    display: none;
+  }
+  .reasoning-effort-slider[data-max="true"] .reasoning-effort-thumb-core {
+    box-shadow: none;
+    outline: 1px solid CanvasText;
+    outline-offset: 2px;
+  }
+}
+
 /* A label-only tooltip must never win hit-testing from what it covers.
    `TooltipContent`'s own `pointer-events-none` is NOT enough: Radix Popper
    renders the content inside a positioning wrapper of exactly the same size,

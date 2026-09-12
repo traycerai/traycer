@@ -1901,6 +1901,25 @@ md:top-0`): positioned against the nearest scrollport - the settings
     control that cannot be moved. The ⌥-digit chord still sets a level in
     either mode (it lives in `usePickerLeaderScope`, not in the strip); only
     its per-button badges are a thing the list has and the slider does not.
+  - **The last stop blooms once, and only when a person lands on it.**
+    Arriving at the catalog's final level draws a 640ms ring out of the thumb
+    (`reasoning-max-bloom` in `index.css`) and leaves a static halo plus an
+    accent on the end of the track. The cue is captured on the CHANGE path -
+    `useReasoningMaxCue` wraps `ReasoningFooterConfig.onChange`, which every
+    route reaches, the ⌥-digit chord included - so a level that arrives by
+    hydration, a catalog refresh or a model swap gets the static treatment and
+    no celebration, and so does one reached from a level the catalog does not
+    list (nobody climbed off a rung that was not there). It is finite CSS
+    retired by its own `animationend`, keyed by a generation so a late finish
+    cannot erase a newer bloom; leaving max, closing the picker, losing pane
+    focus or being concealed - the two signals `PopoverContent` itself
+    un-presents on, which unmount the footer while the picker's root stays
+    open - disabling the control, switching to the list, changing
+    host/model/catalog or turning reduced motion on all CLEAR the cue rather
+    than hiding it, so reopening a gate never replays it. The slider row
+    carries `py-3` for the ring's ~20px reach, since the popover clips it. No clock, no timer:
+    `useStatusAnimation` is for continuous motion and is deliberately not used
+    here. The trigger chip is untouched at max, in both display modes.
   - **The glyph's slot per bar is fixed, and the box grows sideways**
     (`h-3.5 w-auto`, `viewBox` width = count × slot). Harnesses advertise
     anywhere from two graded levels to seven, and dividing a fixed width by

@@ -11,6 +11,7 @@ import {
   type HarnessOption,
   type ModelOption,
   type ProviderId,
+  type ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
@@ -77,6 +78,7 @@ import type {
   ReasoningFooterConfig,
   ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
+import { useReasoningMaxCue } from "@/components/home/pickers/use-reasoning-max-cue";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
@@ -233,15 +235,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => findReasoningOptionsForModel(selectedModel),
     [selectedModel],
   );
-  const reasoningFooter = useMemo<ReasoningFooterConfig>(
-    () => ({
-      value: reasoning,
-      options: reasoningOptions,
-      disabled: selectedModel !== null && reasoningOptions.length === 0,
-      onChange: setReasoning,
-    }),
-    [reasoning, reasoningOptions, selectedModel, setReasoning],
-  );
   // Service-tier preference is intentionally NOT normalized here. The store's
   // `serviceTier` is the user's sticky preference; the wire filter lives in
   // the codex-adapter at thread/start. Normalizing in the UI would race the
@@ -278,6 +271,35 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.harnessId,
     selection.profileId,
     disabled,
+  );
+  const reasoningDisabled = hasNoReasoningLevels(
+    selectedModel,
+    reasoningOptions,
+  );
+  // The max-effort cue hangs off the CHANGE path rather than off the value, so
+  // a level that arrives by hydration, a catalog refresh or a model swap is not
+  // mistaken for someone moving the slider. Every route lands on
+  // `reasoningFooter.onChange` - the slider, the list, and the ⌥-digit chord
+  // through `usePickerLeaderScope` - so wrapping it here covers all of them.
+  const { config: reasoningMaxCue, onChange: handleReasoningChange } =
+    useReasoningMaxCue({
+      value: reasoning,
+      options: reasoningOptions,
+      disabled: reasoningDisabled,
+      open: visibleOpen,
+      hostId: runTargetHostId,
+      harnessId: selection.harnessId,
+      modelSlug: selection.modelSlug,
+      onSelect: setReasoning,
+    });
+  const reasoningFooter = useMemo<ReasoningFooterConfig>(
+    () => ({
+      value: reasoning,
+      options: reasoningOptions,
+      disabled: reasoningDisabled,
+      onChange: handleReasoningChange,
+    }),
+    [reasoning, reasoningOptions, reasoningDisabled, handleReasoningChange],
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const coarsePointer = useCoarsePointer();
@@ -1042,6 +1064,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onActiveRow={setActiveRowId}
         onSelectRow={selectRow}
         reasoningFooter={reasoningFooter}
+        reasoningMaxCue={reasoningMaxCue}
         serviceTierFooter={serviceTierFooter}
         createProfileHostId={createProfileHostId}
         runTargetHostId={runTargetHostId}
@@ -1052,6 +1075,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       />
     </Popover>
   );
+}
+
+/**
+ * A model that reports no thinking levels at all, which greys the footer's
+ * control rather than removing it. A model that has not RESOLVED yet reports
+ * nothing either, and must not read as a model without levels.
+ */
+function hasNoReasoningLevels(
+  selectedModel: ModelOption | null,
+  options: ReadonlyArray<ReasoningLevelOption>,
+): boolean {
+  return selectedModel !== null && options.length === 0;
 }
 
 export const HarnessModelPicker = memo(HarnessModelPickerImpl);
