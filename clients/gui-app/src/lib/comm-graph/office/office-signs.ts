@@ -241,22 +241,22 @@ function widestThatFits(args: FitRequest): string {
 }
 
 /**
- * One name at three lengths, widest first: as written, its first word, its
- * initials. A name is shortened rather than dropped, because the board exists
- * to say WHO needs the lead and half a roster does not say it.
+ * One name at two lengths, widest first: as written, then its first word. A
+ * name is shortened rather than dropped, because the board exists to say WHO
+ * needs the lead and half a roster does not say it.
  *
- * A ONE-WORD NAME SHORTENS TOO. It used to be exempted, on the reasoning that
- * "Zeta" cut to "Z" names nobody - but a plate that overflows its board names
- * nobody either, and it does so while covering the room next door. Five
- * one-word names ran 213px across a 128px board with no rung left to take,
- * because holding the word meant the separators were the only width left to
- * give back. An initial is a poor name and a legible one.
+ * A ONE-WORD NAME HAS NOWHERE TO GO, and that is now allowed. There used to be
+ * a third rung - the name's initials - so that five one-word names had
+ * something narrower to fall to than the 213px "Alpha Beta Gamma Delta
+ * Epsilon" they otherwise measured. What falls out of a board too narrow for
+ * first names is the ROSTER'S COUNTS (see `hqBoardText`), which every board
+ * can say at every width, so a name that cannot shorten now simply loses its
+ * rung to the next one down instead of being lettered away to "A".
  */
-function nameRungs(name: string): ReadonlyArray<string> {
+function nameRungs(name: string): readonly [string, string] {
   const words = name.split(" ").filter((word) => word !== "");
-  if (words.length === 0) return [name, name, name];
-  const initials = words.map((word) => word.slice(0, 1)).join("");
-  return [name, words[0], initials];
+  if (words.length === 0) return [name, name];
+  return [name, words[0]];
 }
 
 /**
@@ -398,12 +398,27 @@ export function compareHeat(
 }
 
 /**
- * The HQ board names the five hottest agents rather than counting them.
+ * The HQ board names the five hottest agents while it has the pixels to letter
+ * them, and COUNTS ITS ROOM once it does not.
  *
  * HQ overlooks the whole office, and "who needs me" is what its board is for -
  * a count of idle agents is the one thing a lead standing there does not need.
  * All five are listed whatever the width: an omitted name is an agent the
  * board failed to raise, which is worse than an abbreviated one.
+ *
+ * BELOW THE FIRST NAMES IT STOPS LETTERING. The ladder used to carry on into
+ * initials - " · "-joined, then spaced, then run together - and a real HQ
+ * board is eight tiles, which at office zoom is about 118px: five names never
+ * fit there, so those were the rungs the office's own zoom always landed on.
+ * The live sitting read `R R R R R` off the top storey of the Building, which
+ * names nobody, and at that size looks like a rendering fault rather than a
+ * summary. So the names hand over to the roster COUNTS the other boards
+ * already use - the same reading, over the same roster, that a `board` would
+ * give - which is a true statement about the room at every width.
+ *
+ * The board is not dropped below close-up instead. The top storey is where the
+ * eye lands first, and a board that vanishes at the office's own zoom reads as
+ * broken art; one that counts reads as a summary.
  */
 function hqBoardText(args: {
   readonly agentIds: ReadonlyArray<string>;
@@ -428,27 +443,27 @@ function hqBoardText(args: {
     named.push(name);
     if (named.length === HQ_BOARD_NAMES) break;
   }
+  // THE WHOLE ROSTER'S COUNTS, not the five named agents'. The rungs below the
+  // names answer a different question - how the ROOM is doing - and they answer
+  // it about everyone this board summarises, exactly as an ordinary `board`
+  // does over the same ids. Counting only the five would make the board's
+  // narrow readings disagree with its wide ones about who is on it.
+  const counts = boardRenderings(countRoster(agentIds, statusById));
   // Nobody is named yet at this cursor: the board falls back to counting,
   // which is a true statement about the room rather than an empty plate.
   if (named.length === 0) {
-    return widestThatFits({
-      renderings: boardRenderings(countRoster(agentIds, statusById)),
-      available,
-      measure,
-    });
+    return widestThatFits({ renderings: counts, available, measure });
   }
-  // EVERY ENTRY, AT WHATEVER LENGTH FITS. The rungs shorten all of them
-  // together - written, first name, initials, then initials without the
-  // separators - so a narrow board says less about each agent and never less
-  // about how many of them need the lead.
+  // EVERY ENTRY, AT WHATEVER LENGTH FITS. The two name rungs shorten all five
+  // together - written, then first names - so a narrow board says less about
+  // each agent and never fewer of them. Narrower than that it says nothing
+  // about them at all and counts the room instead, down the same tail any
+  // board ends on.
   const rungs = named.map(nameRungs);
   const renderings = [
     rungs.map((rung) => rung[0]).join(" · "),
     rungs.map((rung) => rung[1]).join(" · "),
-    rungs.map((rung) => rung[2]).join(" · "),
-    rungs.map((rung) => rung[2]).join(" "),
-    rungs.map((rung) => rung[2]).join(""),
-    ...lastResortRungs(named.length),
+    ...counts,
   ];
   return widestThatFits({ renderings, available, measure });
 }
