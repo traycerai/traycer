@@ -47,6 +47,7 @@ import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-
 import { harnessDisplayName } from "@/components/session-import/session-import-model";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { DraftSurfaceContext } from "@/providers/draft-surface-context";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
@@ -325,13 +326,16 @@ function historyWorktree(): WorktreeHostEntryV12 {
 }
 
 function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
-  return renderPanelWithOpenItem(variant, initialEntry, null);
+  return renderPanelWithOpenItem(variant, initialEntry, null, null);
 }
 
 function renderPanelWithOpenItem(
   variant: EpicsListPanelVariant,
   initialEntry: string,
   onOpenItem: ((item: HistoryItem) => void) | null,
+  // The start-task draft whose composer sits above the panel, as the draft
+  // tab provides it; `null` mounts the panel outside any draft surface.
+  surfaceDraftId: string | null,
 ) {
   const rootRoute = createRootRoute({
     component: () => <RootOutlet />,
@@ -340,15 +344,17 @@ function renderPanelWithOpenItem(
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => (
-      <EpicsListPanel
-        variant={variant}
-        className={undefined}
-        onSelectEpic={null}
-        onOpenItem={onOpenItem}
-        routeSearch={null}
-        historyNowMs={null}
-        autoFocusSearch={false}
-      />
+      <DraftSurfaceContext.Provider value={surfaceDraftId}>
+        <EpicsListPanel
+          variant={variant}
+          className={undefined}
+          onSelectEpic={null}
+          onOpenItem={onOpenItem}
+          routeSearch={null}
+          historyNowMs={null}
+          autoFocusSearch={false}
+        />
+      </DraftSurfaceContext.Provider>
     ),
   });
   const oldEpicRoute = createRoute({
@@ -465,7 +471,7 @@ describe("<EpicsListPanel />", () => {
 
   it("lets a destination picker replace normal row navigation", async () => {
     const onOpenItem = vi.fn();
-    const router = renderPanelWithOpenItem("embedded", "/", onOpenItem);
+    const router = renderPanelWithOpenItem("embedded", "/", onOpenItem, null);
 
     fireEvent.click(
       await screen.findByRole("link", { name: "Open task Open from landing" }),
@@ -3274,6 +3280,28 @@ describe("<EpicsListPanel />", () => {
 
     expect(await screen.findByText("Open from landing")).not.toBeNull();
     expect(screen.queryByTestId("history-drafts-block")).toBeNull();
+  });
+
+  it("hides the draft the composer above it is editing", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    const typingId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().setDraftContent(
+      typingId,
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "typing now" }],
+          },
+        ],
+      },
+      null,
+    );
+    renderPanelWithOpenItem("embedded", "/", null, typingId);
+
+    expect(await screen.findByText("abandoned prompt")).not.toBeNull();
+    expect(screen.queryByText("typing now")).toBeNull();
   });
 
   it("does not expose drafts as a task filter", async () => {
