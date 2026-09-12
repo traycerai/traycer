@@ -145,7 +145,9 @@ import {
   OFFICE_SIGN_NARROW_PLATE_MAX_CHARS,
   OFFICE_SIGN_PADDING_X,
   OFFICE_SIGN_PLATE_MAX_CHARS,
+  nameTagTextThatFits,
   officeFloorSignsToDraw,
+  officePlateWidthPx,
   officeSignCenterX,
   officeSignsToDraw,
   type OfficePlateMeasure,
@@ -1217,8 +1219,18 @@ const LABEL_BACKINGS: Readonly<
  * every frame, and an agent's name does not change width between two frames.
  * The font is a module constant, so the text alone is the whole key. Bounded
  * because a long session can meet a lot of names.
+ *
+ * THE BOUND IS PER READING, not per agent. A seated tag is fitted to its seat
+ * by walking a ladder - the written name, then its clipped readings, then its
+ * first word, then its initials - so one agent contributes up to about ten
+ * strings rather than one. Every one of them is a string the ladder will ask
+ * for again: the CANDIDATES do not move with the camera, only the budget they
+ * are measured against does, so after the first couple of frames a zoom
+ * gesture is served entirely from here. A bound that a single storey's
+ * occupants could exceed would turn that into a fresh shaping run per rung per
+ * frame, which is the cost this cache exists to refuse.
  */
-const MEASURE_CACHE_LIMIT = 512;
+const MEASURE_CACHE_LIMIT = 4096;
 const measuredWidths = new Map<string, number>();
 
 function measuredWidth(ctx: CanvasRenderingContext2D, text: string): number {
@@ -1386,6 +1398,36 @@ function signMaxChars(widthTiles: number): number {
 function truncateSign(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars - 1)}…`;
+}
+
+/**
+ * WHAT THIS TAG SAYS AT THIS ZOOM, or `null` when nothing readable fits.
+ *
+ * A label with no `fitTiles` is drawn as written: a walker has left its box,
+ * and a painter's own lettering was laid out by whoever placed it. A SEATED
+ * one is fitted to its seat, because the seat is the only width that makes two
+ * neighbours' tags disjoint without measuring either against the other - a
+ * cubby is one tile wide and a fourteen-character tag over it covers the
+ * cubbies either side, which is the smear a dense row used to read as.
+ *
+ * The budget is a camera fact, which is why the scene cannot answer this: the
+ * same one-tile seat is sixteen pixels at office zoom and thirty-two at
+ * close-up. {@link nameTagTextThatFits} owns the ladder; this is the two lines
+ * of it that belong to the renderer.
+ */
+function nameTagTextFor(args: {
+  readonly label: OfficeLabelDrawable;
+  readonly zoom: number;
+  readonly measure: OfficePlateMeasure;
+}): string | null {
+  const { label, measure, zoom } = args;
+  const fitTiles = label.fitTiles;
+  if (fitTiles === null) return label.text;
+  return nameTagTextThatFits({
+    name: label.text,
+    widthPx: officePlateWidthPx(fitTiles, zoom),
+    measure,
+  });
 }
 
 /**
@@ -1611,6 +1653,11 @@ function drawQuad(args: {
  * where everything is named, a walker was not. Crowding is what
  * {@link layoutNameTags} is for, and it moves or drops a tag by where the tag
  * lands rather than by what its owner happens to be doing.
+ *
+ * WHAT a tag says is a different question, and a SEAT'S. A seated agent's name
+ * comes down the ladder until it fits its own seat
+ * ({@link nameTagTextThatFits}), so two neighbours in a cubby row are disjoint
+ * before the layout pass has looked at either of them.
  */
 function drawNameTags(args: {
   readonly ctx: CanvasRenderingContext2D;
@@ -1642,6 +1689,13 @@ function drawNameTags(args: {
   if (lod === 0) return named;
   const candidates = resetScratch(nameTagScratch);
   ctx.font = LABEL_FONT;
+  // THE FACE THE TAGS ARE DRAWN IN, and therefore the one they are fitted in:
+  // the thing that decides whether a reading fits has to be the thing that
+  // lays it out, which is the rule a sign's plate is picked by too. Not the
+  // plate's own face - that is bold, tracked and padded out for a background
+  // box a name tag never paints, and it rejects readings this face has room
+  // for. Memoized, because the ladder asks about the same strings every frame.
+  const measure: OfficePlateMeasure = (text) => measuredWidth(ctx, text);
   for (const label of labels) {
     // Signage is drawn from `layout.signs` by `drawSignLabels` and never
     // reaches the frame, so a `bright` label here is a view sending signage
@@ -1664,13 +1718,19 @@ function drawNameTags(args: {
     ) {
       continue;
     }
+    // THE SEAT DECIDES THE READING. A tag wider than the seat under it comes
+    // down the name ladder, and one with no readable rung left is dropped here
+    // rather than offered to the layout pass - a tag nobody can read is not a
+    // tag whose collisions are worth resolving.
+    const text = nameTagTextFor({ label, zoom: camera.zoom, measure });
+    if (text === null) continue;
     candidates.push({
-      text: label.text,
+      text,
       tone: label.tone,
       ownerAgentId: owner,
       centerX: label.x * camera.zoom + camera.x,
       baselineY: label.y * camera.zoom + camera.y,
-      width: measuredWidth(ctx, label.text),
+      width: measuredWidth(ctx, text),
     });
   }
   for (const placed of layoutNameTags(candidates, NAME_TAG_LINE_HEIGHT)) {

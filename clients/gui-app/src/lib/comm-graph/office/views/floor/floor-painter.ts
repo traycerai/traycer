@@ -754,6 +754,10 @@ function sheetedDesk(
       y: chairY + OFFICE_TILE + LABEL_GAP,
       tone: "muted",
       ownerAgentId: owner,
+      // A DESK PLATE, not a tag on a person: the owner is away, and this is
+      // the painter's own lettering for its empty desk. It is laid out where
+      // the painter put it, at the width the painter chose.
+      fitTiles: null,
     },
     depth: chairY,
     ownerAgentId: owner,

@@ -980,6 +980,7 @@ const ONE_OF_EACH: Readonly<Record<OfficeDrawable["kind"], OfficeDrawable>> = {
     y: 0,
     tone: "default",
     ownerAgentId: null,
+    fitTiles: null,
   },
   clock: { kind: "clock", x: 0, y: 0, timeMs: 0 },
   envelope: {

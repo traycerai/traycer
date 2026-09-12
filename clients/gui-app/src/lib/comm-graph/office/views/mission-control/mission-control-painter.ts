@@ -453,6 +453,8 @@ function paintSeat(
             y: deskY + OFFICE_TILE,
             tone: "muted",
             ownerAgentId: null,
+            // Nobody's name, so no seat to be fitted to.
+            fitTiles: null,
           },
           depth + 1,
           null,

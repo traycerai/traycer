@@ -707,3 +707,131 @@ const NO_FLOOR_SIGNS_TO_DRAW: ReadonlyArray<OfficeFloorSignToDraw> = [];
 export function officeSignCenterX(sign: OfficeSignToDraw): number {
   return sign.anchor.x + (sign.sign.widthTiles * OFFICE_TILE) / 2;
 }
+
+// ---- A seated agent's name tag -------------------------------------- //
+//
+// Everything below is the NAME TAG's own fit, and it deliberately shares
+// nothing with the plate ladder above but `officePlateWidthPx`. A tag is a
+// person's name over a box the plan sized; a plate is a room's lettering. The
+// two rules look alike and disagree about every interesting case, so they are
+// kept apart rather than parameterised into one.
+
+/**
+ * HOW MANY CHARACTERS HAVE TO SURVIVE IN FRONT OF AN ELLIPSIS for a clipped
+ * name to still point at somebody.
+ *
+ * `Orchestra…` names one agent; `Orch…` names whoever the reader guesses, and
+ * on a bench where every name shares a stem it names a whole team. A count and
+ * not a width, because it is a statement about reading rather than about
+ * pixels - the one place in this module where a character budget is the right
+ * unit.
+ */
+const NAME_TAG_MIN_CLIPPED_CHARS = 6;
+
+/**
+ * What a clipped reading must not end in: a gap reads as a missing word, and a
+ * second ellipsis as a typo. Also what makes the STEM, so a clip never lands
+ * on the ellipsis `truncate` already added and never offers the written
+ * reading back as though it were a shorter one.
+ */
+const NAME_TAG_CLIP_FILLER = /[\s…]+$/;
+
+/** A name's words, split the way a person's name splits: on spaces alone. */
+function tagWords(name: string): ReadonlyArray<string> {
+  return name.split(" ").filter((word) => word !== "");
+}
+
+/** The leading word, or the whole name when it has no spaces in it. */
+function tagFirstWord(name: string): string {
+  return tagWords(name)[0] ?? name;
+}
+
+/** One letter a word. `Bay member` is `BM`; `team-4-member` is `t`. */
+function tagInitials(name: string): string {
+  return tagWords(name)
+    .map((word) => word.slice(0, 1))
+    .join("");
+}
+
+/**
+ * THE WIDEST READING OF A SEATED AGENT'S NAME TAG THAT FITS ITS SEAT, or
+ * `null` when nothing readable does.
+ *
+ * A cubby is ONE tile wide and a truncated name is fourteen characters, so a
+ * dense row used to print its occupants over each other while every name in it
+ * was individually correct. Fitting each tag to its OWN seat is what makes two
+ * neighbours disjoint with no neighbour search and nothing measured against
+ * the row.
+ *
+ * This is not {@link officePlateTextThatFits}, and the difference is in both
+ * halves. A plate gives up a name's trailing parts, which reads `team-4` for
+ * every member of team 4; and a plate's character budgets exist to keep a
+ * reading out of the renderer's own ellipsis, where a tag REACHES for that
+ * ellipsis as its second rung.
+ *
+ * The rungs, widest first:
+ *
+ * 1. as the scene wrote it (already cut to `MAX_LABEL_CHARS`);
+ * 2. clipped to the budget with an ellipsis, while at least
+ *    {@link NAME_TAG_MIN_CLIPPED_CHARS} characters survive in front of it;
+ * 3. its first word, where the name has more than one;
+ * 4. its initials, where there are at least two of them;
+ * 5. nothing.
+ *
+ * A LONE LETTER IS NOT A RUNG, which is why 4 needs two initials and 5 is a
+ * real answer rather than a failure. `t` is what every agent of a hyphenated
+ * bench comes down to, and a cubby storey of identical single letters says
+ * strictly less than a row of bare desks does. An agent whose one long word
+ * will not fit therefore carries no tag until six of its characters do - the
+ * hover card and the directory name it meanwhile, and an overprinted row names
+ * nobody at all.
+ */
+export function nameTagTextThatFits(args: {
+  readonly name: string;
+  /** The seat's own width on screen: {@link officePlateWidthPx}. */
+  readonly widthPx: number;
+  /** The face the tag is DRAWN in, so what fits is what lays out. */
+  readonly measure: OfficePlateMeasure;
+}): string | null {
+  const { measure, name, widthPx } = args;
+  if (measure(name) <= widthPx) return name;
+  const clipped = clippedNameThatFits({ name, widthPx, measure });
+  if (clipped !== null) return clipped;
+  // A SINGLE-WORD NAME HAS NO RUNG 3: its first word is the written reading,
+  // which has already been measured and did not fit.
+  const firstWord = tagFirstWord(name);
+  if (firstWord !== name && measure(firstWord) <= widthPx) return firstWord;
+  const initials = tagInitials(name);
+  if (initials.length >= 2 && measure(initials) <= widthPx) return initials;
+  return null;
+}
+
+/**
+ * The longest ellipsized reading of a name that fits, or `null` when none
+ * keeps enough of it.
+ *
+ * LONGEST FIRST, so the first fit is the longest one by construction - no
+ * assumption that a longer prefix measures wider, which a proportional
+ * fallback face in the stack would not owe us.
+ */
+function clippedNameThatFits(args: {
+  readonly name: string;
+  readonly widthPx: number;
+  readonly measure: OfficePlateMeasure;
+}): string | null {
+  const { measure, name, widthPx } = args;
+  const stem = name.replace(NAME_TAG_CLIP_FILLER, "");
+  for (
+    let kept = stem.length - 1;
+    kept >= NAME_TAG_MIN_CLIPPED_CHARS;
+    kept -= 1
+  ) {
+    const prefix = stem.slice(0, kept).replace(NAME_TAG_CLIP_FILLER, "");
+    // Trimming a trailing gap can take a reading under the floor, and every
+    // shorter one is under it too.
+    if (prefix.length < NAME_TAG_MIN_CLIPPED_CHARS) break;
+    const clipped = `${prefix}…`;
+    if (measure(clipped) <= widthPx) return clipped;
+  }
+  return null;
+}
