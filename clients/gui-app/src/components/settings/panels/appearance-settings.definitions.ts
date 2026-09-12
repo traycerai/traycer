@@ -109,8 +109,8 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     availableWhen: alwaysAvailable,
     keywords: ["gallery", "preset", "built in", "download", "art"],
   },
-  // The effect rows exist only once a wallpaper is chosen, and each only for
-  // the effects it adjusts.
+  // The effect rows exist only once a wallpaper is chosen, and Tint only for
+  // the effect it adjusts. Strength applies to all three.
   wallpaperEffect: {
     kind: "row",
     group: "startPage",

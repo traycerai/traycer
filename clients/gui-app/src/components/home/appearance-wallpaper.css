@@ -20,20 +20,67 @@
   background-size: 4px 4px;
 }
 
+/*
+ * Two layers, and only the first one may read the theme.
+ *
+ * The bottom fade blends the wallpaper into the page colour where the page
+ * continues below it; that seam has to match `--background` or it shows.
+ *
+ * The clearing around the composer is NEUTRAL: black under a dark scheme,
+ * white under a light one, never the palette's own hue. Mixing the theme
+ * colour in here made the same photo read moody on a blue-grey theme and
+ * punchy on a pure-black one; a neutral veil keeps a wallpaper looking like
+ * itself everywhere. `--wallpaper-scrim` (0..1) is its strength at the
+ * centre, set from the user's effect strength by `AppearanceWallpaper`.
+ */
 .appearance-wallpaper-mask {
+  --wallpaper-veil: light-dark(rgb(255 255 255), rgb(0 0 0));
   background:
-    linear-gradient(
-      to bottom,
-      color-mix(in srgb, var(--background) 18%, transparent),
-      transparent 25%,
-      var(--background) 90%
-    ),
+    linear-gradient(to bottom, transparent 40%, var(--background) 92%),
     radial-gradient(
       ellipse at var(--wallpaper-focus-x, 50%) var(--wallpaper-focus-y, 56%),
-      color-mix(in srgb, var(--background) 85%, transparent),
-      color-mix(in srgb, var(--background) 65%, transparent) 30%,
-      color-mix(in srgb, var(--background) 40%, transparent) 55%,
-      color-mix(in srgb, var(--background) 12%, transparent) 72%,
+      color-mix(
+        in srgb,
+        var(--wallpaper-veil) calc(var(--wallpaper-scrim, 0.45) * 100%),
+        transparent
+      ),
+      color-mix(
+          in srgb,
+          var(--wallpaper-veil) calc(var(--wallpaper-scrim, 0.45) * 60%),
+          transparent
+        )
+        35%,
+      color-mix(
+          in srgb,
+          var(--wallpaper-veil) calc(var(--wallpaper-scrim, 0.45) * 20%),
+          transparent
+        )
+        65%,
       transparent 88%
     );
+}
+
+/*
+ * The greeting sits on the least-veiled part of the image, so it carries its
+ * own legibility: a soft neutral pool behind the text and a faint shadow on
+ * the glyphs. Both are local to the hero, so the picture stays a picture.
+ */
+.landing-appearance-surface:has(.appearance-wallpaper) [data-landing-hero] {
+  text-shadow:
+    0 1px 2px light-dark(rgb(255 255 255 / 0.6), rgb(0 0 0 / 0.6)),
+    0 0 24px light-dark(rgb(255 255 255 / 0.4), rgb(0 0 0 / 0.4));
+}
+
+.landing-appearance-surface:has(.appearance-wallpaper)
+  [data-landing-hero]::before {
+  content: "";
+  position: absolute;
+  inset: -45% -35%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    light-dark(rgb(255 255 255 / 0.55), rgb(0 0 0 / 0.5)),
+    transparent 70%
+  );
 }

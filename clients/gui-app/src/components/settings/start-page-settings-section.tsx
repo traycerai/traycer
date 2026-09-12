@@ -281,40 +281,38 @@ export function StartPageSettingsSection() {
             }
           />
 
-          {wallpaper.style === "photo" ? null : (
-            <SettingsRow
-              row={APPEARANCE.definitions.effectStrength}
-              control={
-                <div className="space-y-1">
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    aria-label="Effect strength"
-                    value={Math.round(wallpaper.intensity * 100)}
-                    onChange={(event) => {
-                      setWallpaper({
-                        ...wallpaper,
-                        intensity: event.target.valueAsNumber / 100,
-                      });
-                    }}
-                    onPointerUp={() =>
-                      trackSettingChanged("appearance", "startPageWallpaper")
-                    }
-                    className="w-[min(40vw,10rem)] accent-primary"
-                  />
-                  <div
-                    aria-hidden
-                    className="flex justify-between text-ui-xs text-muted-foreground"
-                  >
-                    <span>Subtle</span>
-                    <span>Strong</span>
-                  </div>
+          <SettingsRow
+            row={APPEARANCE.definitions.effectStrength}
+            control={
+              <div className="space-y-1">
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  aria-label="Effect strength"
+                  value={Math.round(wallpaper.intensity * 100)}
+                  onChange={(event) => {
+                    setWallpaper({
+                      ...wallpaper,
+                      intensity: event.target.valueAsNumber / 100,
+                    });
+                  }}
+                  onPointerUp={() =>
+                    trackSettingChanged("appearance", "startPageWallpaper")
+                  }
+                  className="w-[min(40vw,10rem)] accent-primary"
+                />
+                <div
+                  aria-hidden
+                  className="flex justify-between text-ui-xs text-muted-foreground"
+                >
+                  <span>Subtle</span>
+                  <span>Strong</span>
                 </div>
-              }
-            />
-          )}
+              </div>
+            }
+          />
 
           {wallpaper.style !== "dither" ? null : (
             <SettingsRow

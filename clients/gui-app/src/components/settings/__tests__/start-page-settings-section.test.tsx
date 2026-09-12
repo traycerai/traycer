@@ -144,7 +144,7 @@ describe("StartPageSettingsSection", () => {
     expect(screen.getByText("Strong")).not.toBeNull();
   });
 
-  it("keeps the effect picker but drops strength for the photo treatment", () => {
+  it("keeps strength for the photo treatment, where it sets the veil", () => {
     wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
     useSettingsStore.setState({
       startPageWallpaper: {
@@ -160,6 +160,7 @@ describe("StartPageSettingsSection", () => {
       "Wallpaper",
       "Traycer team curated wallpapers",
       "Wallpaper effect",
+      "Effect strength",
       "Show greeting",
       "Show recent tasks",
     ]);

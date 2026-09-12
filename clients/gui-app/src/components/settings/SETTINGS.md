@@ -234,7 +234,7 @@ different answers:
 - **Gated on DATA** ("Detected dev origins" and its Browser card, which render
   only once a terminal has printed a local URL; the start page's Wallpaper
   effect, Effect strength and Tint rows, which render only once a wallpaper is
-  chosen and each only for the effects it adjusts) — `contributesTo: "page"`.
+  chosen, and Tint only for the effect it adjusts) — `contributesTo: "page"`.
   No shell can promise the row, so no shell offers it. "Detected dev origins"
   shipped as a result that navigated to General and lit nothing.
 - **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
@@ -1080,7 +1080,8 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     Traycer team curated wallpapers (the tile gallery, below), Wallpaper
     effect (segmented Photo / Dot pattern / Film grain, only once
     a wallpaper is set), Effect strength (0..100 range input with Subtle /
-    Strong endpoints, only for dot pattern and film grain), Tint wallpaper
+    Strong endpoints, for every effect: it sets the neutral veil behind the
+    composer, and for dot pattern and film grain the texture as well), Tint wallpaper
     with theme accent color (`Switch`, dot pattern only; off dithers each RGB channel on its
     own so the image keeps its own colours), Greeting and
     Recent tasks (`showGreeting` / `showRecentHistory` switches). The style,
