@@ -537,6 +537,21 @@ function installCanvas(): { readonly step: () => void } {
   const context = new Proxy(blank, {
     get: (_target, key): unknown => {
       if (key === "measureText") {
+        // A CONSTANT, and deliberately so: `set` discards every write, so
+        // nothing here carries state and `save`/`restore` have nothing to
+        // unwind. That is what keeps this double clear of the defect the
+        // canvas suite's two doubles had (T2 fixup 8), where a persisted
+        // `font` / `letterSpacing` made every measurement after the first
+        // sign plate model a browser that does not exist.
+        //
+        // It is immune by CONSTRUCTION, not by design, and the distinction
+        // matters to whoever reads this next: 6 px/char is the untracked
+        // name-tag face and nothing else. It is font-blind, so it is
+        // accidentally right for a tag and under-reports a sign plate by its
+        // tracking and its padding. No case in this file reads a width
+        // today. The first one that asserts a FIT must not use this - give
+        // it a real modelled measure, or it will pass against a face that
+        // was never drawn.
         return (text: string) => ({ width: text.length * 6 });
       }
       if (key === "createImageData") {
