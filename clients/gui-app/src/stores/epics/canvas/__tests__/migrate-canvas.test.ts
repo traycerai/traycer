@@ -19,6 +19,7 @@ import {
   serializeTileNode,
 } from "@/stores/epics/canvas/migrate-canvas";
 import { serializeTileRef } from "@/stores/epics/canvas/tile-schema";
+import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
@@ -107,6 +108,73 @@ describe("parseEpicCanvasState", () => {
     ]);
     expect(state.tilesByInstanceId[CHAT_A.instanceId]).toEqual(CHAT_A);
     expect(state.tilesByInstanceId[SPEC_B.instanceId]).toEqual(SPEC_B);
+    expectCanvasInvariants(state);
+  });
+
+  it("keeps one blank picker beside content and preserves an empty split pane", () => {
+    const firstBlank = makeBlankTileRef();
+    const activeBlank = makeBlankTileRef();
+    const emptyPaneBlank = makeBlankTileRef();
+    const state = requireParse({
+      root: {
+        kind: "group",
+        id: "group-with-pickers",
+        direction: "horizontal",
+        children: [
+          {
+            kind: "pane",
+            id: "pane-populated",
+            tabInstanceIds: [
+              firstBlank.instanceId,
+              activeBlank.instanceId,
+              SPEC_B.instanceId,
+            ],
+            activeTabId: activeBlank.instanceId,
+            previewTabId: null,
+            activationHistory: [
+              firstBlank.instanceId,
+              activeBlank.instanceId,
+              SPEC_B.instanceId,
+            ],
+          },
+          {
+            kind: "pane",
+            id: "pane-empty",
+            tabInstanceIds: [emptyPaneBlank.instanceId],
+            activeTabId: emptyPaneBlank.instanceId,
+            previewTabId: null,
+          },
+        ],
+      },
+      activePaneId: "pane-empty",
+      tilesByInstanceId: {
+        [firstBlank.instanceId]: ser(firstBlank),
+        [activeBlank.instanceId]: ser(activeBlank),
+        [emptyPaneBlank.instanceId]: ser(emptyPaneBlank),
+        [SPEC_B.instanceId]: ser(SPEC_B),
+      },
+      sizesByGroupId: {},
+    });
+
+    if (state.root === null || state.root.kind !== "group") {
+      throw new Error("expected a split canvas");
+    }
+    const populated = state.root.children.at(0);
+    const empty = state.root.children.at(1);
+    if (
+      populated === undefined ||
+      empty === undefined ||
+      populated.kind !== "pane" ||
+      empty.kind !== "pane"
+    ) {
+      throw new Error("expected split panes");
+    }
+    expect(populated.tabInstanceIds).toEqual([
+      activeBlank.instanceId,
+      SPEC_B.instanceId,
+    ]);
+    expect(empty.tabInstanceIds).toEqual([]);
+    expect(state.activePaneId).toBe("pane-empty");
     expectCanvasInvariants(state);
   });
 });

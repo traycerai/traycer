@@ -185,16 +185,6 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     availableWhen: alwaysAvailable,
     keywords: ["cursor", "mouse", "hand", "hover"],
   },
-  minimapSide: {
-    kind: "row",
-    group: "interface",
-    search: { anchor: "appearance-minimap-side" },
-    label: "Minimap position",
-    description:
-      "Minimaps are compact overviews for navigating chats and artifacts. Choose where they appear, or hide them.",
-    availableWhen: alwaysAvailable,
-    keywords: ["minimap", "side", "overview", "left", "right", "hide"],
-  },
   typography: {
     kind: "group",
     search: { anchor: "appearance-typography" },

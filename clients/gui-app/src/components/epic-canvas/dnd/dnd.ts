@@ -243,6 +243,14 @@ export interface ComposerAttachmentDropTargetData {
 export type LeftPanelRailDropPosition = "before" | "after" | "combine";
 
 /**
+ * Which way a rail lays its slots out. The drop bands run along that axis, so
+ * a rail item has to say which one it is: read down a row of icons and every
+ * sideways drag stays inside the band it started in, which reads as a nest
+ * rather than the reorder the gesture asked for.
+ */
+export type LeftPanelRailOrientation = "horizontal" | "vertical";
+
+/**
  * Canvas drop targets carry the view-tab (and, for the empty shell, the
  * epic) that owns them so the root-level commit can address the right
  * canvas without React context.
@@ -276,6 +284,7 @@ export type EpicCanvasDropTargetData =
       readonly kind: "left-panel-rail-item";
       readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
+      readonly orientation: LeftPanelRailOrientation;
     }
   | {
       readonly kind: "left-panel-rail-list";
@@ -312,6 +321,7 @@ type EpicCanvasLeftPanelDropTargetData =
       readonly kind: "left-panel-rail-item";
       readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
+      readonly orientation: LeftPanelRailOrientation;
     }
   | {
       readonly kind: "left-panel-rail-list";
@@ -489,6 +499,12 @@ function isLeftPanelRailDragOrigin(
   value: unknown,
 ): value is EpicCanvasLeftPanelRailDragData["origin"] {
   return value === "rail" || value === "panel-section";
+}
+
+function isLeftPanelRailOrientation(
+  value: unknown,
+): value is LeftPanelRailOrientation {
+  return value === "horizontal" || value === "vertical";
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -850,13 +866,18 @@ function readLeftPanelDropTargetData(
   value: Record<string, unknown>,
 ): EpicCanvasLeftPanelDropTargetData | null {
   if (value.kind === "left-panel-rail-item") {
-    if (!isNonEmptyString(value.viewTabId) || !isLeftPanelId(value.panelId)) {
+    if (
+      !isNonEmptyString(value.viewTabId) ||
+      !isLeftPanelId(value.panelId) ||
+      !isLeftPanelRailOrientation(value.orientation)
+    ) {
       return null;
     }
     return {
       kind: "left-panel-rail-item",
       viewTabId: value.viewTabId,
       panelId: value.panelId,
+      orientation: value.orientation,
     };
   }
   if (value.kind === "left-panel-rail-list") {
@@ -939,14 +960,23 @@ export function getArtifactTabDropIndexFromPoint(
   return target.index + 1;
 }
 
-export function getLeftPanelRailDropPositionFromPoint(
+/**
+ * The rail's own drop bands, along whichever axis the slots are laid out on:
+ * the outer 30% at each end reorders, the middle 40% nests. Every surface that
+ * lays those slots out resolves through here - the rail down a column (`"y"`)
+ * or across a row (`"x"`), and the strip on Layout ▸ Sidebar - so the same
+ * gesture reads the same way wherever it is made.
+ */
+export function getLeftPanelRailDropPositionOnAxis(
   point: PointLike,
   rect: RectLike | null,
+  axis: "x" | "y",
 ): LeftPanelRailDropPosition {
   if (rect === null) return "combine";
-  const y = point.y - rect.top;
-  if (y < rect.height * 0.3) return "before";
-  if (y > rect.height * 0.7) return "after";
+  const offset = axis === "x" ? point.x - rect.left : point.y - rect.top;
+  const extent = axis === "x" ? rect.width : rect.height;
+  if (offset < extent * 0.3) return "before";
+  if (offset > extent * 0.7) return "after";
   return "combine";
 }
 
@@ -1066,7 +1096,11 @@ export function getEpicCanvasDropPreview(
       kind: "left-panel-rail",
       viewTabId: target.viewTabId,
       panelId: target.panelId,
-      position: getLeftPanelRailDropPositionFromPoint(point, rect),
+      position: getLeftPanelRailDropPositionOnAxis(
+        point,
+        rect,
+        target.orientation === "horizontal" ? "x" : "y",
+      ),
     };
   }
   if (target.kind === "left-panel-rail-list") {

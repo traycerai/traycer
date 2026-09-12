@@ -1,0 +1,705 @@
+import { useMemo, useState } from "react";
+import { HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP } from "@traycer/protocol/host/notifications/contracts";
+import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
+import type { AgentActivityCloudSyncStatus } from "@traycer/protocol/host/agent/activity";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import {
+  useAgentActivityStore,
+  type HostAgentActivity,
+} from "@/stores/agent-activity-store";
+import {
+  EMPTY_AGENT_ACTIVITY_BY_EPIC,
+  mergeEpicAgentActivity,
+  type EpicAgentActivity,
+} from "@/lib/agent-activity";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useMergedNotificationRows } from "@/stores/notifications/merged-notifications";
+import {
+  buildFocusModel,
+  EMPTY_FOCUS_MODEL,
+  focusActivityCoverage,
+} from "@/lib/home-focus/build-focus-model";
+import { compareAscending } from "@/lib/home-focus/focus-identity";
+import type { FocusModel } from "@/lib/home-focus/focus-model";
+import { pendingPromptEpicIds } from "@/lib/home-focus/focus-prompts";
+import { focusAgentKey } from "@/lib/home-focus/focus-tasks";
+import type { FocusBackgroundChat } from "@/lib/home-focus/focus-background";
+import type { FocusBrowserEpic } from "@/lib/home-focus/focus-browsers";
+import {
+  useMountedEpicProjection,
+  type MountedEpicRef,
+} from "@/hooks/home-focus/use-mounted-epic-projection";
+import { useBrowserSessionsPlane } from "@/hooks/home-focus/use-browser-sessions-plane";
+import { useWarmChatBackground } from "@/hooks/home-focus/use-warm-chat-background";
+
+/**
+ * Per-hook-instance memory of the last model built, so an unchanged section
+ * keeps its row objects across a rebuild triggered by a different section.
+ * Keyed by a token the hook owns, so two Home surfaces in one window do not
+ * share (and reset) each other's baseline, and the entry dies with the token.
+ */
+const focusModelCache = new WeakMap<object, FocusModel>();
+
+/**
+ * Every host's `byEpic`, unioned.
+ *
+ * The activity store keys its slices by the host whose stream produced them,
+ * and each `state` frame replaces only that host's slice - so no single slice
+ * is the account's answer. The Running list is fleet-wide by construction, so
+ * it reads the union: the same reading `useEpicAgentActivity` gives for one
+ * epic, widened to the whole map because this surface ENUMERATES the working
+ * epics rather than asking about one it already holds an id for.
+ *
+ * Keyed by the `byHost` map that produced it, for the reason the store's own
+ * merge cache is: this runs as a Zustand selector, Zustand compares selector
+ * output with `Object.is`, and `byHost` is replaced on EVERY write - a fresh
+ * map per read would re-render this hook on every unrelated frame and defeat
+ * the joined-key memos below. The single-host path returns that host's map by
+ * identity, so the overwhelmingly common install allocates nothing at all.
+ */
+const unionByEpicCache = new WeakMap<
+  ReadonlyMap<string, HostAgentActivity>,
+  ReadonlyMap<string, EpicAgentActivity>
+>();
+
+/**
+ * {@link focusAgentKey} → the host that reported the agent, from LOCAL-PLANE
+ * slices only.
+ *
+ * A slice's key is the host its STREAM was opened against. On a
+ * `cloud`-served slice that host is answering for the whole FLEET
+ * (`cloud-agent-activity-view`), so A's slice carries B's agents and the key
+ * says nothing about where any of them run - reading it as attribution names
+ * the wrong machine, confidently. A `local`-served slice is one host answering
+ * about itself, and there the key IS the agent's host.
+ *
+ * The same `byHost`-keyed `WeakMap` the union above uses, for the same reason:
+ * this runs as a Zustand selector, `byHost` is replaced on every write, and a
+ * fresh map per read would re-render the whole hook on every unrelated frame.
+ *
+ * Hosts are walked in sorted order so the tiebreak is deterministic: the same
+ * agent id reported by two local slices keeps the first, and "first" is a
+ * property of the ids rather than of map insertion order.
+ */
+const activityHostIdsCache = new WeakMap<
+  ReadonlyMap<string, HostAgentActivity>,
+  ReadonlyMap<string, string>
+>();
+
+function selectActivityHostIds(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+): ReadonlyMap<string, string> {
+  const cached = activityHostIdsCache.get(byHost);
+  if (cached !== undefined) return cached;
+  const hostIds = new Map<string, string>();
+  for (const hostId of Array.from(byHost.keys()).sort(compareAscending)) {
+    const host = byHost.get(hostId);
+    if (host === undefined) continue;
+    if (host.servedBy !== "local") continue;
+    for (const [epicId, activity] of host.byEpic) {
+      for (const agentId of activity.working) {
+        const key = focusAgentKey(epicId, agentId);
+        if (!hostIds.has(key)) hostIds.set(key, hostId);
+      }
+    }
+  }
+  activityHostIdsCache.set(byHost, hostIds);
+  return hostIds;
+}
+
+function selectUnionByEpic(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+): ReadonlyMap<string, EpicAgentActivity> {
+  let only: HostAgentActivity | null = null;
+  for (const host of byHost.values()) {
+    if (only !== null) {
+      only = null;
+      break;
+    }
+    only = host;
+  }
+  if (only !== null) return only.byEpic;
+  if (byHost.size === 0) return EMPTY_AGENT_ACTIVITY_BY_EPIC;
+  const cached = unionByEpicCache.get(byHost);
+  if (cached !== undefined) return cached;
+  const merged = new Map<string, EpicAgentActivity>();
+  for (const host of byHost.values()) {
+    for (const [epicId, activity] of host.byEpic) {
+      const previous = merged.get(epicId);
+      merged.set(
+        epicId,
+        previous === undefined
+          ? activity
+          : mergeEpicAgentActivity(previous, activity),
+      );
+    }
+  }
+  unionByEpicCache.set(byHost, merged);
+  return merged;
+}
+
+/**
+ * How bad a coverage verdict is. `focusActivityCoverage` answers about ONE
+ * slice; this orders those answers so several can be folded into one.
+ */
+const COVERAGE_SEVERITY: Readonly<
+  Record<FocusModel["coverage"]["activity"], number>
+> = Object.freeze({
+  live: 0,
+  unknown: 1,
+  reconnecting: 2,
+  disconnected: 3,
+});
+
+/**
+ * The pre-open reading: no host has dialed yet, so `byHost` is still empty.
+ * `connecting` is the value the flat store carried as its own initial state,
+ * and it keeps a booting client on `reconnecting` rather than flashing
+ * `disconnected` before the first stream opens.
+ */
+const PRE_OPEN_ACTIVITY_HEALTH: {
+  readonly connectionStatus: StreamConnectionStatus;
+  readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
+  readonly stateFrameSeenThisEpoch: boolean;
+} = Object.freeze({
+  connectionStatus: "connecting",
+  cloudSyncStatus: null,
+  stateFrameSeenThisEpoch: false,
+});
+
+/**
+ * Which host's slice speaks for the plane's health: the WORST one.
+ *
+ * `focusActivityCoverage` asks a four-valued question - live, unknown,
+ * reconnecting, disconnected - that one socket used to answer. With a slice
+ * per host there is no single socket, and the answer has to be the worst
+ * slice's rather than the best, because of what the field is FOR: it drives
+ * the view's "some activity may be missing" notice. A host whose stream is
+ * down contributes no epics to the union, so its tasks are simply absent from
+ * the Running list - and reporting a healthy sibling's `live` over the top of
+ * that hides exactly the gap the notice exists to declare. A union is only as
+ * complete as its least complete contributor.
+ *
+ * Deliberately folded by running the builder's OWN predicate per slice and
+ * keeping the worst answer, rather than restating its rules here. That keeps
+ * one copy of the precedence - the `stateFrameSeenThisEpoch` arm, the cloud
+ * stamp arms, and the single-host escape hatch that stops an install with no
+ * cloud link from reading as blind - so the fold cannot drift from the verdict
+ * it is folding. The winning slice's three fields are then handed through
+ * unchanged, and the builder re-derives that same verdict downstream.
+ *
+ * With one host this returns that host's slice, so the single-host reading is
+ * byte-identical to the flat store's.
+ */
+function selectActivityHealth(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+  connectableHostCount: number,
+  connectableHostsResolved: boolean,
+): {
+  readonly degradedHostIds: ReadonlyArray<string>;
+  readonly connectionStatus: StreamConnectionStatus;
+  readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
+  readonly stateFrameSeenThisEpoch: boolean;
+} {
+  let worst: HostAgentActivity | null = null;
+  let worstSeverity = -1;
+  // The same pass names the degraded hosts individually. A page grouped by
+  // host puts the notice on the heading it belongs to, and only this loop
+  // knows which slice earned it - the fold above keeps one verdict and loses
+  // the attribution.
+  const degradedHostIds: string[] = [];
+  for (const [hostId, host] of byHost) {
+    const coverage = focusActivityCoverage({
+      connectionStatus: host.connectionStatus,
+      cloudSyncStatus: host.cloudSyncStatus,
+      stateFrameSeenThisEpoch: host.stateFrameSeenThisEpoch,
+      connectableHostCount,
+      connectableHostsResolved,
+    });
+    if (coverage === "reconnecting" || coverage === "disconnected") {
+      degradedHostIds.push(hostId);
+    }
+    const severity = COVERAGE_SEVERITY[coverage];
+    if (severity > worstSeverity) {
+      worstSeverity = severity;
+      worst = host;
+    }
+  }
+  degradedHostIds.sort(compareAscending);
+  return { ...(worst ?? PRE_OPEN_ACTIVITY_HEALTH), degradedHostIds };
+}
+
+/**
+ * The Home focus view's whole data contract, joined from the stores this client
+ * already runs. No RPC of its own beyond two batched reads (task titles by id,
+ * and the host's per-epic indicator flags), and no protocol change.
+ *
+ * ## Hook-count stability
+ *
+ * The number of tasks and warm chats changes as agents start, tiles open and
+ * the session cap evicts - so nothing here may call a hook per row. Every
+ * dynamic set is read through ONE subscription that publishes a value-comparable
+ * snapshot: `useMountedEpicProjection` for names and parentage,
+ * `useWarmChatBackground` for shells and background items,
+ * `useEpicGetTaskContexts` for titles (which batches ids into cap-sized
+ * requests inside a single `useHostQueries`).
+ *
+ * ## Task titles and their staleness
+ *
+ * Two sources, in this precedence:
+ *
+ * 1. A MOUNTED epic's live Y.Doc title, which is what the tab strip shows and
+ *    updates the instant someone renames the task.
+ * 2. The cloud task index (`epic.getTaskContexts`, five-minute stale window).
+ *
+ * Which means a title here can be BEHIND for a task not open in this window,
+ * and ABSENT for a brand-new task the cloud index has not published yet -
+ * `null`, not a placeholder. Rendering an id is honest; inventing "Untitled" as
+ * if it were the task's name is not. Not `useHistoryQuery`, the app's other
+ * title reader: it resolves a SEARCH PAGE (with debouncing, local fuzzy ranking
+ * and worktree probes) and would answer for the epics that happen to be on the
+ * current page rather than the epics that are actually running.
+ * `useEpicGetTaskContexts` is the by-id primitive `useHistoryQuery` itself uses
+ * for exactly this, and it is documented as the presentation-only title reader.
+ *
+ * ## The indicator batch cap
+ *
+ * `host.notifications.indicatorState` is capped at
+ * `HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP` ids per request, and the query hook
+ * pages beyond it by issuing MORE requests. This surface asks about at most one
+ * page: an install with more than 500 simultaneously-running tasks would
+ * otherwise fan out an unbounded number of RPCs to decorate rows nobody can
+ * read. Epics past the cap still resolve `needsYou` from a loaded prompt row -
+ * they lose only the host's flags for a prompt this client has not paged in.
+ * The ids are sorted before slicing so the covered set is stable rather than
+ * re-drawn on every frame.
+ */
+export function useFocusModel(): FocusModel {
+  const byEpic = useAgentActivityStore((state) =>
+    selectUnionByEpic(state.byHost),
+  );
+  // Read above the health selectors because the per-slice verdict they fold
+  // depends on the fleet's shape: `focusActivityCoverage`'s last arm is what
+  // keeps a single-host install off `unknown`, and a slice cannot be judged
+  // without it.
+  const connectableHosts = useConnectableHostIds();
+  const connectableHostCount = connectableHosts.hostIds.length;
+  const connectableHostsResolved = connectableHosts.resolved;
+  // Three selectors rather than one returning the winning slice: each of these
+  // answers with a PRIMITIVE, so Zustand's `Object.is` comparison re-renders
+  // this hook only when the health answer itself moves - never on the `byHost`
+  // replacement every activity frame produces.
+  const connectionStatus = useAgentActivityStore(
+    (state) =>
+      selectActivityHealth(
+        state.byHost,
+        connectableHostCount,
+        connectableHostsResolved,
+      ).connectionStatus,
+  );
+  const cloudSyncStatus = useAgentActivityStore(
+    (state) =>
+      selectActivityHealth(
+        state.byHost,
+        connectableHostCount,
+        connectableHostsResolved,
+      ).cloudSyncStatus,
+  );
+  const stateFrameSeenThisEpoch = useAgentActivityStore(
+    (state) =>
+      selectActivityHealth(
+        state.byHost,
+        connectableHostCount,
+        connectableHostsResolved,
+      ).stateFrameSeenThisEpoch,
+  );
+  // Joined to a primitive for the same reason the three above pick one field:
+  // the fold allocates a fresh array per call, so selecting it directly would
+  // re-render this hook on every activity frame. The key is split back into a
+  // list in one memo below.
+  const degradedHostIdsKey = useAgentActivityStore((state) =>
+    joinList(
+      selectActivityHealth(
+        state.byHost,
+        connectableHostCount,
+        connectableHostsResolved,
+      ).degradedHostIds,
+    ),
+  );
+  const degradedHostIds = useMemo(
+    () => splitIds(degradedHostIdsKey),
+    [degradedHostIdsKey],
+  );
+  const activityHostIds = useAgentActivityStore((state) =>
+    selectActivityHostIds(state.byHost),
+  );
+  const notificationRows = useMergedNotificationRows();
+  const feedMode = useNotificationFeedMode();
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const warmChats = useWarmChatBackground();
+  // Registry-only: this SUBSCRIBES to the browser coordinators other surfaces
+  // hold and never acquires one, so Home lists browsers without opening a
+  // single `browser.sessions` stream of its own. See the hook's own docblock.
+  const browserEpics = useBrowserSessionsPlane();
+  const activeHostId = useEffectiveHostId();
+
+  // Every derived id list is memoized on a JOINED KEY rather than on the store
+  // value it came from, and that indirection is the point: `notificationRows`
+  // is re-minted on any notification frame and `byEpic` on any activity frame,
+  // so memoizing directly on them re-mints an equal-content array several times
+  // a minute - which re-subscribes the projection, re-keys the task-context
+  // query and re-encodes the whole snapshot for no change at all. A string is
+  // cheap to build and compares by value, so the arrays below keep their
+  // identity for as long as their CONTENTS do.
+  const activeEpicIdsKey = useMemo(
+    () => joinIds(workingEpicIds(byEpic)),
+    [byEpic],
+  );
+  const promptEpicIdsKey = useMemo(
+    () => joinIds(pendingPromptEpicIds(notificationRows)),
+    [notificationRows],
+  );
+  const warmEpicIdsKey = useMemo(
+    () => joinIds(new Set(warmChats.map((chat) => chat.epicId))),
+    [warmChats],
+  );
+  const browserEpicIdsKey = useMemo(
+    () => joinIds(new Set(browserEpics.map((epic) => epic.epicId))),
+    [browserEpics],
+  );
+  // Titles are needed for every epic the page can name: the running tasks, the
+  // tasks a prompt points at, the tasks whose warm chats contribute background
+  // rows, and the tasks with a live browser. The last is its own set rather
+  // than a subset of the others: an epic whose canvas is open with a browser
+  // tile and no chat clicked into has no working agent and no warm chat, so
+  // without this its browser rows would read `in <nothing>`.
+  const titleEpicIds = useMemo(
+    () =>
+      unionIds([
+        activeEpicIdsKey,
+        promptEpicIdsKey,
+        warmEpicIdsKey,
+        browserEpicIdsKey,
+      ]),
+    [activeEpicIdsKey, promptEpicIdsKey, warmEpicIdsKey, browserEpicIdsKey],
+  );
+  const indicatorEpicIds = useMemo(
+    () =>
+      unionIds([activeEpicIdsKey, promptEpicIdsKey]).slice(
+        0,
+        HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP,
+      ),
+    [activeEpicIdsKey, promptEpicIdsKey],
+  );
+  // The warm chats of each epic, so a chat whose only activity is a durable
+  // shell still gets a NAME. `agentIds` below is otherwise the working set, and
+  // a fully idle chat hosting a running command has no working agent at all -
+  // its background rows would then name the task and nothing else. A chat
+  // agent's id IS its chat id, so these resolve through the same projection
+  // lookup; ids it does not know are simply unresolved.
+  const warmChatIdsByEpicId = useMemo(() => {
+    const byEpicId = new Map<string, Set<string>>();
+    for (const chat of warmChats) {
+      const existing = byEpicId.get(chat.epicId);
+      if (existing === undefined) {
+        byEpicId.set(chat.epicId, new Set([chat.chatId]));
+      } else {
+        existing.add(chat.chatId);
+      }
+    }
+    return byEpicId;
+  }, [warmChats]);
+  // The chats DRIVING a browser tab, for the same reason: a browser row names
+  // the conversation working the page, and that chat need not be warm here or
+  // mid-turn - an agent that navigated once and is now thinking has an idle
+  // chat and a tab it still owns. Its id joins the projection's refs so the
+  // row can say `driven by <name>` instead of `driven by` and a uuid.
+  const drivingChatIdsByEpicId = useMemo(() => {
+    const byEpicId = new Map<string, Set<string>>();
+    for (const epic of browserEpics) {
+      const chatIds = epic.sessions.flatMap((session) =>
+        session.tabs.flatMap((tab) => tab.drivenBy.map((d) => d.chatId)),
+      );
+      if (chatIds.length > 0) byEpicId.set(epic.epicId, new Set(chatIds));
+    }
+    return byEpicId;
+  }, [browserEpics]);
+  const agentRefsKey = useMemo(
+    () =>
+      titleEpicIds
+        .map((epicId) =>
+          [
+            epicId,
+            joinIds(
+              new Set([
+                ...(byEpic.get(epicId)?.working ?? EMPTY_ID_SET),
+                ...(warmChatIdsByEpicId.get(epicId) ?? EMPTY_ID_SET),
+                ...(drivingChatIdsByEpicId.get(epicId) ?? EMPTY_ID_SET),
+              ]),
+            ),
+          ].join(ID_GROUP_SEPARATOR),
+        )
+        .join(ID_GROUP_LIST_SEPARATOR),
+    [titleEpicIds, byEpic, warmChatIdsByEpicId, drivingChatIdsByEpicId],
+  );
+  const agentRefs = useMemo<ReadonlyArray<MountedEpicRef>>(
+    () => decodeAgentRefs(agentRefsKey),
+    [agentRefsKey],
+  );
+
+  // `userId` above is an ADMISSION fact - `admitsLocalPlane` resolves one for
+  // an `unverified` session - and this batch reaches the account's servers for
+  // every id the host cannot answer locally, so the SPEND is gated separately
+  // on the verdict. Home is a local-plane surface and stays mounted without
+  // one; the rows simply keep the ids they already have instead of a title.
+  const taskContexts = useEpicGetTaskContexts(titleEpicIds, userId, {
+    enabled: cloudAuthorized,
+  });
+  const projection = useMountedEpicProjection(agentRefs);
+  // Epic ids only, so the app-wide active host is the right one to ask: an Epic
+  // is a shared cloud entity, not a host-owned record.
+  const indicators = useNotificationIndicators({
+    hostId: null,
+    epicIds: indicatorEpicIds,
+    chatIds: [],
+    enabled: indicatorEpicIds.length > 0,
+  });
+
+  const taskTitles = useMemo(
+    () => mergeTaskTitles(taskContexts.tasksById, projection.liveTitles),
+    [taskContexts.tasksById, projection.liveTitles],
+  );
+  const coldEpicHostIds = useMemo(
+    () => singleHostTaskIds(taskContexts.tasksById),
+    [taskContexts.tasksById],
+  );
+  const reachableHostIds = useMemo(
+    () => new Set(connectableHosts.hostIds),
+    [connectableHosts.hostIds],
+  );
+  const backgroundChats = useMemo<ReadonlyArray<FocusBackgroundChat>>(
+    () =>
+      warmChats.map((chat) => ({
+        ...chat,
+        taskTitle: taskTitles.get(chat.epicId) ?? null,
+        // A CHAT agent's id IS its chat id (`liveAgentIdentity` reads
+        // `state.chats.byId[agentId]`), so the identity map the task rows are
+        // already built from answers "what is this conversation called" with no
+        // second projection read. `null` for an epic not mounted here, which is
+        // the same window-local limit that produced the row in the first place.
+        chatTitle:
+          projection.agentIdentities.get(
+            focusAgentKey(chat.epicId, chat.chatId),
+          )?.title ?? null,
+      })),
+    [warmChats, taskTitles, projection.agentIdentities],
+  );
+  const browsers = useMemo(
+    () => ({
+      epics: browserEpics.map((epic): FocusBrowserEpic => ({
+        epicId: epic.epicId,
+        taskTitle: taskTitles.get(epic.epicId) ?? null,
+        sessions: epic.sessions,
+      })),
+      // The same identity map the background rows read their chat names from -
+      // a chat agent's id IS its chat id, so one projection answers both.
+      agentIdentities: projection.agentIdentities,
+    }),
+    [browserEpics, taskTitles, projection.agentIdentities],
+  );
+
+  // The previous model, so the builders can hand back their own unchanged rows
+  // rather than rebuilding every section whenever one of them moves. `useMemo`
+  // alone cannot do this - it has no access to what it produced last time.
+  //
+  // Held in a module WeakMap keyed by a per-instance token, the same shape
+  // `useStableChatTimelineRows` uses and for the same reason: reading a ref
+  // during render is what `react-hooks/refs` forbids. The entry is published
+  // from render, so a discarded render can advance it - which is harmless here
+  // because the builders are idempotent (rebuilding from identical inputs
+  // against a previous that already equals the result returns that same
+  // result), and nothing downstream reasons about what was last COMMITTED.
+  const [cacheKey] = useState<object>(() => ({}));
+  const model = useMemo(() => {
+    const previous = focusModelCache.get(cacheKey) ?? EMPTY_FOCUS_MODEL;
+    const next = buildFocusModel(
+      {
+        notificationRows,
+        tasks: {
+          byEpic,
+          taskTitles,
+          mountedEpicIds: projection.mountedEpicIds,
+          agentIdentities: projection.agentIdentities,
+          activityHostIds,
+          indicatorEpics: indicators.epics,
+          coldEpicHostIds,
+          activeHostId,
+          reachableHostIds,
+        },
+        backgroundChats,
+        browsers,
+        activity: {
+          connectionStatus,
+          cloudSyncStatus,
+          stateFrameSeenThisEpoch,
+          connectableHostCount: connectableHosts.hostIds.length,
+          connectableHostsResolved: connectableHosts.resolved,
+        },
+        degradedHostIds,
+        feedMode,
+      },
+      previous,
+    );
+    focusModelCache.set(cacheKey, next);
+    return next;
+  }, [
+    cacheKey,
+    notificationRows,
+    byEpic,
+    taskTitles,
+    projection.mountedEpicIds,
+    projection.agentIdentities,
+    activityHostIds,
+    indicators.epics,
+    backgroundChats,
+    browsers,
+    coldEpicHostIds,
+    activeHostId,
+    reachableHostIds,
+    connectionStatus,
+    cloudSyncStatus,
+    stateFrameSeenThisEpoch,
+    degradedHostIds,
+    connectableHosts.hostIds.length,
+    connectableHosts.resolved,
+    feedMode,
+  ]);
+  return model;
+}
+
+function workingEpicIds(
+  byEpic: ReadonlyMap<string, { readonly working: ReadonlySet<string> }>,
+): ReadonlySet<string> {
+  const epicIds = new Set<string>();
+  for (const [epicId, activity] of byEpic) {
+    if (activity.working.size > 0) epicIds.add(epicId);
+  }
+  return epicIds;
+}
+
+const EMPTY_ID_SET: ReadonlySet<string> = new Set<string>();
+const EMPTY_IDS: ReadonlyArray<string> = [];
+/**
+ * THREE separators, one per nesting level, and they must stay distinct.
+ *
+ * An earlier version reused the id-list separator for the group list, so a
+ * single epic with two working agents - a root plus one subagent, the most
+ * ordinary state Home has - encoded to `epic<GROUP>a1<LIST>a2` and split back
+ * into two GROUPS, leaving the second without an id list at all. Nesting one
+ * delimited list inside another delimited list needs a delimiter the inner one
+ * cannot contain, which is why the outer level gets its own code point and is
+ * split first.
+ */
+const ID_LIST_SEPARATOR = "\u0000";
+const ID_GROUP_SEPARATOR = "\u0001";
+const ID_GROUP_LIST_SEPARATOR = "\u0002";
+
+/** Byte-order ascending, so every derived id list is stable frame to frame and
+ * the indicator slice always covers the same epics. Joined on a NUL, which no
+ * id can carry. */
+/** `joinIds` for an already-ordered list, whose order is the caller's answer
+ * rather than something to re-sort. */
+function joinList(ids: ReadonlyArray<string>): string {
+  return ids.join(ID_LIST_SEPARATOR);
+}
+
+function joinIds(ids: ReadonlySet<string>): string {
+  return Array.from(ids).sort(compareAscending).join(ID_LIST_SEPARATOR);
+}
+
+function splitIds(key: string): ReadonlyArray<string> {
+  return key.length === 0 ? EMPTY_IDS : key.split(ID_LIST_SEPARATOR);
+}
+
+/** The sorted union of several joined keys. */
+function unionIds(keys: ReadonlyArray<string>): ReadonlyArray<string> {
+  const ids = new Set(keys.flatMap((key) => splitIds(key)));
+  return ids.size === 0 ? EMPTY_IDS : Array.from(ids).sort(compareAscending);
+}
+
+/**
+ * Inverse of the `agentRefsKey` encoding: one group per epic, each
+ * `<epicId><GROUP><joined agent ids>`, groups separated by `<GROUP_LIST>`.
+ *
+ * Split on the OUTERMOST separator first, then cut each group at its first
+ * group separator rather than destructuring the split - a group that somehow
+ * carries no separator yields an epic with no agents instead of an exception
+ * inside a `useMemo`, which React surfaces as the whole page failing.
+ */
+function decodeAgentRefs(key: string): ReadonlyArray<MountedEpicRef> {
+  if (key.length === 0) return EMPTY_AGENT_REFS;
+  return key.split(ID_GROUP_LIST_SEPARATOR).map((group) => {
+    const separatorIndex = group.indexOf(ID_GROUP_SEPARATOR);
+    if (separatorIndex < 0) return { epicId: group, agentIds: EMPTY_IDS };
+    return {
+      epicId: group.slice(0, separatorIndex),
+      agentIds: splitIds(group.slice(separatorIndex + 1)),
+    };
+  });
+}
+
+const EMPTY_AGENT_REFS: ReadonlyArray<MountedEpicRef> = [];
+
+/**
+ * Cloud-index titles, displaced by the live projection's title wherever this
+ * window has the epic open. An empty title is dropped rather than stored: the
+ * cloud index keeps an epic's RAW title, and "" there means untitled, not
+ * named "".
+ */
+function mergeTaskTitles(
+  tasksById: ReadonlyMap<string, ListTaskLight>,
+  liveTitles: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const titles = new Map<string, string>();
+  for (const [epicId, task] of tasksById) {
+    const title = task.epic?.light?.title ?? task.phase?.light?.title ?? "";
+    if (title.length > 0) titles.set(epicId, title);
+  }
+  for (const [epicId, title] of liveTitles) titles.set(epicId, title);
+  return titles;
+}
+
+/**
+ * Epic id → the one host that owns this task's chats, and only when the cloud
+ * index names EXACTLY one.
+ *
+ * `chatHostIds` is "the hosts owning the signed-in user's own live chats in
+ * this task", and `undefined` (a peer too old to report it) is not `[]`. Two or
+ * more hosts is unusable here: nothing in it says WHICH host a given agent id
+ * belongs to, and a wrong guess aims a stop at a machine that never ran the
+ * agent. One host is the case worth resolving - it is also the overwhelmingly
+ * common one - and it is what lets a task nobody has opened in this window
+ * still show as stoppable.
+ */
+function singleHostTaskIds(
+  tasksById: ReadonlyMap<string, ListTaskLight>,
+): ReadonlyMap<string, string> {
+  const hostIds = new Map<string, string>();
+  for (const [epicId, task] of tasksById) {
+    const chatHostIds = task.chatHostIds ?? [];
+    if (chatHostIds.length !== 1) continue;
+    hostIds.set(epicId, chatHostIds[0]);
+  }
+  return hostIds;
+}
