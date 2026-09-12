@@ -22,7 +22,7 @@ import type {
  * MCP/Plugins/Skills with it. Nothing about "does this provider take an API
  * key?" needs the host to say so anyway; `state.apiKey.supported` already does.
  */
-export type ProviderTabKey = ProviderSettingsTab | "account";
+export type ProviderTabKey = ProviderSettingsTab | "account" | "permissions";
 
 /**
  * Stable display order for the provider detail tab bar. Unsupported tabs are
@@ -40,11 +40,18 @@ export type ProviderTabKey = ProviderSettingsTab | "account";
  * belongs with the other configuration tabs. And placing it there cannot move
  * any provider's DEFAULT tab: every provider that advertises it also advertises
  * `general` and `env`, which come first.
+ *
+ * `permissions` - client-only, like `account` - sits right after CLI & Args:
+ * who reviews this provider's commands in Auto mode is configuration about
+ * the provider's own CLI, and the tab is drawn only for a provider whose
+ * harness reports a native classifier, so it cannot become anyone's default
+ * tab either (every such provider advertises `general`).
  */
 export const PROVIDER_TAB_ORDER: readonly ProviderTabKey[] = [
   "account",
   "usage",
   "general",
+  "permissions",
   "env",
   "modelProviders",
   "mcp",
@@ -66,6 +73,16 @@ export interface ProviderTabInputs {
   readonly apiKeySupported: boolean;
   /** `nativeCapabilities.supportedTabs` as advertised by the host. */
   readonly advertised: readonly ProviderSettingsTab[];
+  /**
+   * Whether the provider's harness reports `nativeAutoJudge` in the GUI
+   * harness catalog - the one fact that makes a Permissions tab worth drawing.
+   * A switch with one option is not a switch, so every other provider shows
+   * no tab and runs Traycer's judge with nothing to choose. Read from the
+   * catalog rather than from `ProviderCliState` because that is where the
+   * host says it; a catalog that has not answered yet reads `false`, and the
+   * tab appears when it does.
+   */
+  readonly nativeAutoJudge: boolean;
 }
 
 /**
@@ -94,6 +111,8 @@ export interface ProviderTabInputs {
  * - `usage` is taken at the host's word. It already gates that tab on being
  *   able to populate it (managed profiles, the Traycer subscription card, or
  *   rate limits), which is the same question this side would have to re-derive.
+ * - `permissions` is client-derived from the harness catalog's
+ *   `nativeAutoJudge`, for the reason on {@link ProviderTabInputs}.
  */
 export function supportedTabsFor(
   input: ProviderTabInputs,
@@ -101,14 +120,19 @@ export function supportedTabsFor(
   const advertised = new Set<ProviderTabKey>(input.advertised);
   return PROVIDER_TAB_ORDER.filter((tab) => {
     if (tab === "account") return input.apiKeySupported;
+    if (tab === "permissions") return input.nativeAutoJudge;
     return advertised.has(tab);
   });
 }
 
-export function providerTabInputs(state: ProviderCliState): ProviderTabInputs {
+export function providerTabInputs(
+  state: ProviderCliState,
+  nativeAutoJudge: boolean,
+): ProviderTabInputs {
   return {
     apiKeySupported: state.apiKey.supported,
     advertised: state.nativeCapabilities.supportedTabs,
+    nativeAutoJudge,
   };
 }
 

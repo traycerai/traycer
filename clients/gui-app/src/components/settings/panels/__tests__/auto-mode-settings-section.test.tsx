@@ -68,9 +68,14 @@ describe("<AutoModeSettingsSection />", () => {
     // PER METHOD, so the hook is faked now and what is left here is the
     // SECTION's behaviour alone. The hook's own fail-closed default belongs in
     // its own suite.
-    const { container } = render(<AutoModeSettingsSection />);
+    render(<AutoModeSettingsSection />);
 
-    expect(container.firstChild).toBeNull();
+    // Not nothing: the section is the whole Permissions page, and an empty
+    // page reads as a broken one. One sentence, and no control that would
+    // silently do nothing on a host with no notion of auto mode.
+    expect(screen.getByTestId("auto-mode-unsupported").textContent).toContain(
+      "predates Auto mode",
+    );
     expect(screen.queryByTestId("auto-judge-picker")).toBeNull();
     expect(screen.queryByText("Auto mode policy")).toBeNull();
     // The judge row's label as SHIPPED. It was "Auto mode judge" until the

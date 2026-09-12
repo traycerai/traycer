@@ -4,6 +4,7 @@ import {
   Bell,
   Bot,
   Boxes,
+  Gavel,
   GitBranch,
   Keyboard,
   LineChart,
@@ -25,6 +26,7 @@ export type SettingsSectionId =
   | "app-notifications"
   | "providers"
   | "notifications"
+  | "permissions"
   | "agents"
   | "keybindings"
   | "shell"
@@ -101,10 +103,11 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now sixteen. Providers,
- * Worktrees, the host's Notifications, Agent selection, Shell and Diagnostics
- * are the eleventh through sixteenth and go without. Providers is the newest
- * to lose one, to Opening behavior taking the third Application slot.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now seventeen. Providers,
+ * Worktrees, the host's Notifications, Permissions, Agent selection, Shell and
+ * Diagnostics are the eleventh through seventeenth and go without. Providers
+ * is the newest to lose one, to Opening behavior taking the third Application
+ * slot.
  *
  * Worktrees is the one that lost a digit to the app-scoped Sounds
  * entry below. That follows from keeping Application entries together at the
@@ -230,6 +233,19 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "notifications",
     label: "Notifications",
     icon: Bell,
+    group: "host",
+  },
+  // What an agent may do on this machine without asking: the judge that
+  // reviews actions under the `auto` permission mode, the policy it follows
+  // and the rules that always apply. Its own page rather than rows on Agent
+  // selection - that page is about which agent gets CHOSEN for a task, and
+  // permissions are a different question. The app-wide DEFAULT permission
+  // mode stays on General: it is one preference for this app, not per machine
+  // (SETTINGS.md, "Scope: the organising idea").
+  {
+    id: "permissions",
+    label: "Permissions",
+    icon: Gavel,
     group: "host",
   },
   // "Agent selection", not "Agents": this section configures HOW a coding agent

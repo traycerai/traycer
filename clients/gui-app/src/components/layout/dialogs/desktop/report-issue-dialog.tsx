@@ -121,6 +121,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/link-phone": "Settings - Link mobile app",
   "/settings/notifications": "Settings - Notifications",
   "/settings/opening-behavior": "Settings - Opening behavior",
+  "/settings/permissions": "Settings - Permissions",
   "/settings/providers": "Settings - Providers",
   "/settings/service": "Settings - Service",
   "/settings/shell": "Settings - Shell",

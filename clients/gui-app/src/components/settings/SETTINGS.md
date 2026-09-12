@@ -260,7 +260,7 @@ different answers:
   stream and a negotiated import capability; host Diagnostics' Log detail and
   both Shell cards, Terminal shell · New terminals and Host environment ·
   After restart, which a host too old for the config RPC replaces with a
-  notice; Agent selection's three Auto mode rows, which a host advertising
+  notice; Permissions' Auto mode group, which a host advertising
   neither `autoJudge.get` nor `autoPolicy.get` has no notion of at all; and
   the Overview's Installation and Danger zone cards themselves,
   which the page drops for an unresolved or vanished host) — not indexed. A
@@ -1419,9 +1419,15 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
   - **Who reviews &lt;provider&gt;'s commands**
-    (`provider-auto-judge-section.tsx`), directly under the CLI-arguments
-    field. Labelled by provider rather than "Auto mode judge" because the row
-    under Agents carries that name too and THIS is the one that wins
+    (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
+    tab. The tab is client-derived like `account` (`provider-settings-tabs.ts`:
+    never on the wire enum), sits right after CLI & Args, and is drawn only
+    for a provider whose GUI harness catalog row reports `nativeAutoJudge` -
+    so it cannot become anyone's default tab, and a catalog that has not
+    answered yet simply draws it a moment later. It used to be a section at
+    the bottom of CLI & Args, where nobody looking for "permissions" would
+    open. Labelled by provider rather than "Auto mode judge" because the row
+    under Permissions carries that name too and THIS is the one that wins
     (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
     so both rows now name whose judge they are about; the provider name is
     interpolated, which renders "Who reviews Claude Code's commands" today and
@@ -1429,7 +1435,8 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     description ends with the precedence sentence - choosing the provider's
     classifier means chats on this provider skip Traycer's judge AND the Auto
     mode policy entirely - because this control is where that is decided and
-    a user who has written a policy under Agents has no other way to learn it.
+    a user who has written a policy under Permissions has no other way to
+    learn it.
     A two-option `Select` - Traycer's judge, or this
     provider's own classifier - written through `providers.setAutoJudge` and
     persisted as `autoJudge` in `provider-overrides.json`, beside
@@ -2257,65 +2264,38 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     tested row, but the Test button on every OTHER row is also disabled while
     any one test is in flight (the mutation is global, not per-row) - worth
     knowing if this ever reads as a bug report.
-- `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
-  compatibility identifiers) Editor for the **global** agent selection guide
-  (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
-  to decide which child agents to spawn (coding agent / model / reasoning
-  effort) for a task. The section is named for _selection_ because it configures
-  how an agent is chosen, not the Agents that live inside a Task; the panel
-  description says so. A full-height CodeMirror Markdown source editor provides syntax
-  highlighting and line numbers, including for Mermaid and wireframe fences.
-  It debounce-auto-saves (and flushes on blur) via
-  `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status sits in the
-  footer, no Save button. A **Revert to default** button (disabled while the
-  content already equals the provider-based default) calls
-  `agent.selectionGuide.resetGlobalToDefault` behind a `ConfirmDestructiveDialog`.
-  The editor has NO host selector of its own - the sidebar switcher scopes it.
-  It reaches non-active hosts with a transient `useHostClientFor` context
-  override and remounts on `scope.hostId` so one host's file never carries into
-  another; the whole subtree stays unmounted until `isHostScopeUsable`, so the
-  guide query cannot fire against the ambient host. Backed by
-  `agent.selectionGuide.getGlobal` (returns `{ content, generatedDefaultContent }`),
-  `agent.selectionGuide.setGlobal`, and
-  `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
-  hooks. This settings panel edits only the global guide. A workspace can add
-  `.traycer/agent-selection-guide.md` manually; agents layer that file over the
-  global guide when they work in that workspace.
-
-  Above the editor sits the **Auto mode** block
-  (`auto-mode-settings-section.tsx`): two rows for the settings the `auto`
-  permission mode depends on - plus, under the policy row, a read-only view of
-  the rules that apply before either of them - both host RPCs, both scoped by
-  the same sidebar picker as the guide. They are here because the judge is
-  stored PER HOST and
-  because it answers the same question the page already asks - which agent
-  Traycer reaches for on your behalf. The mode's app-wide DEFAULT is not here;
-  it is a General row (see "Scope: the organising idea").
-  - An in-card `<h2>`, not a `SettingsGroup`: this panel's body is one card by
-    necessity (the guide editor fills its remaining height), and a group would
-    nest a card inside a card. The rows contribute nothing to the panel's
-    height, and the `fillHeight` contract is unchanged - the guide still owns
-    everything the rows do not need. The heading has no definition for the same
-    reason - there is no group to render one on - so all three rows sit at
-    `group: null` in `agents-settings.definitions.ts`, which is where their
-    labels and descriptions live and where the copy notes below are written.
-    Each one is `contributesTo: "page"`, because the block is dropped whole on
-    a host that has no notion of auto mode (see § Search, "Gated on the
-    SELECTED HOST").
-  - **The block renders NOTHING, with no notice of its own, in three cases**:
-    the host does not advertise `autoJudge.get` / `autoPolicy.get` (optional
-    capabilities with an `unsupported` degrade - so this is every host until it
-    updates, and `useHostSupportsMethod` fails closed, hiding on "not yet
-    known" too); the scope is connecting/unreachable/vanished
-    (`isHostScopeUsable` - checked so the rows are not MOUNTED, since a hidden
-    query still fires against the ambient host); or there is no binding to
-    re-provide. The copy for those states is the guide section's own gate, one
-    section down - a second identical notice here would be the same sentence
-    twice. The cost of skipping that gate's hidden `<Activity>` is that a
-    transient same-host disconnect closes an open policy dialog and drops its
-    draft; accepted, because the judge row holds no draft and the policy dialog
-    is an explicit, explicitly-saved editing session rather than the
-    always-open editor Activity was introduced for.
+- `Permissions` (section id `permissions`, route `/settings/permissions`,
+  `panels/permissions-settings-panel.tsx`) Who reviews what an agent does on
+  the selected host under the `auto` permission mode. Its own page, not rows
+  on Agent selection: that page is about which agent gets CHOSEN for a task,
+  and permissions are a different question, asked at a different time (a user
+  decision, 2026-09-12, after the rows first shipped above the guide). The
+  mode's app-wide DEFAULT is not here; it is a General row (see "Scope: the
+  organising idea"). The per-provider switch between Traycer's judge and a
+  provider's own classifier is not here either - it is a fact about one
+  provider's CLI and lives on that provider's own Permissions tab under
+  Providers, which is the switch that wins.
+  One `SettingsGroup`, **Auto mode** (`auto-mode-settings-section.tsx`): the
+  judge row, the policy row and, under it, a read-only view of the rules that
+  apply before either - all host RPCs, all scoped by the sidebar picker. The
+  group and its rows are defined in `permissions-settings.definitions.ts`,
+  every one `contributesTo: "page"`, because the group is dropped whole on a
+  host that has no notion of auto mode (see § Search, "Gated on the SELECTED
+  HOST").
+  - **The section is the whole page, so it never renders nothing.** Two
+    states replace the rows with one sentence: the scope is
+    connecting/unreachable/vanished (`isHostScopeUsable` - checked so the rows
+    are not MOUNTED, since a hidden query still fires against the ambient
+    host), or the host does not advertise `autoJudge.get` / `autoPolicy.get`
+    (optional capabilities with an `unsupported` degrade - so this is every
+    host until it updates, and `useHostSupportsMethod` fails closed, hiding on
+    "not yet known" too), in which case the sentence says the host predates
+    Auto mode and asks for an update. A sentence rather than a hidden
+    `<Activity>` keeping the rows mounted: the cost is that a transient
+    same-host disconnect closes an open policy dialog and drops its draft;
+    accepted, because the judge row holds no draft and the policy dialog is an
+    explicit, explicitly-saved editing session rather than the always-open
+    editor Activity was introduced for.
   - **Traycer's auto mode judge** reuses the composer's `HarnessModelPicker`
     (`auto-judge-picker.tsx`) with BOTH footers off - `withServiceTier={false}`
     and the new `withReasoning={false}` - because the stored record is
@@ -2402,6 +2382,31 @@ deny`, `Hard deny`) and nothing else - the guidance about what belongs under
     judge and "non-overridable" over-promises to a person, who can always
     approve the action on the card. The out-of-scope note is the one piece of
     prose written here rather than taken from the document.
+
+- `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
+  compatibility identifiers) Editor for the **global** agent selection guide
+  (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
+  to decide which child agents to spawn (coding agent / model / reasoning
+  effort) for a task. The section is named for _selection_ because it configures
+  how an agent is chosen, not the Agents that live inside a Task; the panel
+  description says so. A full-height CodeMirror Markdown source editor provides syntax
+  highlighting and line numbers, including for Mermaid and wireframe fences.
+  It debounce-auto-saves (and flushes on blur) via
+  `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status sits in the
+  footer, no Save button. A **Revert to default** button (disabled while the
+  content already equals the provider-based default) calls
+  `agent.selectionGuide.resetGlobalToDefault` behind a `ConfirmDestructiveDialog`.
+  The editor has NO host selector of its own - the sidebar switcher scopes it.
+  It reaches non-active hosts with a transient `useHostClientFor` context
+  override and remounts on `scope.hostId` so one host's file never carries into
+  another; the whole subtree stays unmounted until `isHostScopeUsable`, so the
+  guide query cannot fire against the ambient host. Backed by
+  `agent.selectionGuide.getGlobal` (returns `{ content, generatedDefaultContent }`),
+  `agent.selectionGuide.setGlobal`, and
+  `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
+  hooks. This settings panel edits only the global guide. A workspace can add
+  `.traycer/agent-selection-guide.md` manually; agents layer that file over the
+  global guide when they work in that workspace.
 
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY

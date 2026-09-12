@@ -45,8 +45,8 @@ export const GENERAL = defineSettingsSection("general", {
   // Application scope, deliberately: this is one preference for this app, not
   // per machine, so it belongs here rather than under the sidebar's host picker
   // (SETTINGS.md, "Scope: the organising idea"). The Auto-mode judge it pairs
-  // with IS per machine and lives on the host-scoped Agent selection page for
-  // the same reason.
+  // with IS per machine and lives on the host-scoped Permissions page for the
+  // same reason.
   defaultPermission: {
     kind: "row",
     group: "chatComposer",

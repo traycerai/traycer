@@ -1,4 +1,11 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -29,6 +36,7 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   useProviderProfileEnablementPending,
   useProvidersSetProfileEnabledForClient,
@@ -115,6 +123,7 @@ type ProvidersListQuery = UseQueryResult<
 // label now names its own content.
 const PROVIDER_TAB_LABELS: Record<ProviderTabKey, string> = {
   general: "CLI & Args",
+  permissions: "Permissions",
   account: "Account",
   usage: "Profiles & Limits",
   env: "Env",
@@ -146,10 +155,13 @@ function initialActiveProviderId(
 function initialActiveTab(
   providers: readonly ProviderCliState[],
   providerId: ProviderId,
+  hasNativeJudge: (providerId: ProviderId) => boolean,
 ): ProviderTabKey {
   const state =
     providers.find((p) => p.providerId === providerId) ?? providers[0];
-  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  const tabs = resolveSupportedTabs(
+    providerTabInputs(state, hasNativeJudge(state.providerId)),
+  );
   // `focusTab` is a plain `string` in the store, so a deep link CAN name the
   // client-only `account` tab even though it is absent from the wire enum -
   // the match below is against the resolved tab list, not the schema. When no
@@ -170,8 +182,11 @@ function initialActiveTab(
 function resolveTabForProvider(
   state: ProviderCliState,
   preferred: ProviderTabKey,
+  hasNativeJudge: (providerId: ProviderId) => boolean,
 ): ProviderTabKey {
-  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  const tabs = resolveSupportedTabs(
+    providerTabInputs(state, hasNativeJudge(state.providerId)),
+  );
   if (tabs.includes(preferred)) return preferred;
   return tabs[0] ?? "general";
 }
@@ -686,10 +701,35 @@ function ProvidersRailLayout({
   // one field the CTA exists to reach. When the deep link is not consumed (no
   // focus, or a different host) `initialFocus.harnessId` is already null, so
   // this stays the rail's first provider.
+  // Which providers get a Permissions tab: the harness catalog's own
+  // `nativeAutoJudge`, read through the surface's host like the section that
+  // tab holds. A catalog that has not answered yet reads as "none yet", and
+  // the tab appears when it does; the active tab is re-resolved against the
+  // live list on every render, so a late answer never strands a selection.
+  const harnessesQuery = useGuiHarnessesQuery({
+    enabled: true,
+    subscribed: true,
+  });
+  const harnesses = harnessesQuery.data?.harnesses;
+  const nativeJudgeHarnessIds = useMemo(
+    () =>
+      new Set(
+        (harnesses ?? [])
+          .filter((harness) => harness.nativeAutoJudge)
+          .map((harness) => harness.id),
+      ),
+    [harnesses],
+  );
+  const hasNativeJudge = useCallback(
+    (providerId: ProviderId): boolean =>
+      nativeJudgeHarnessIds.has(providerIdToGuiHarnessId(providerId)),
+    [nativeJudgeHarnessIds],
+  );
   const [activeTab, setActiveTab] = useState<ProviderTabKey>(() =>
     initialActiveTab(
       orderedProviders,
       initialActiveProviderId(orderedProviders, initialFocus.harnessId),
+      hasNativeJudge,
     ),
   );
   useEffect(() => {
@@ -700,7 +740,7 @@ function ProvidersRailLayout({
   const active =
     orderedProviders.find((p) => p.providerId === activeId) ??
     orderedProviders[0];
-  const resolvedTab = resolveTabForProvider(active, activeTab);
+  const resolvedTab = resolveTabForProvider(active, activeTab, hasNativeJudge);
 
   // The rail's own view state. Resolved against `orderedProviders` for the ROWS
   // only - `active` above is deliberately unaffected, so narrowing the rail
@@ -722,7 +762,7 @@ function ProvidersRailLayout({
     const next =
       orderedProviders.find((p) => p.providerId === providerId) ??
       orderedProviders[0];
-    setActiveTab(resolveTabForProvider(next, activeTab));
+    setActiveTab(resolveTabForProvider(next, activeTab, hasNativeJudge));
   };
 
   return (
@@ -799,6 +839,7 @@ function ProvidersRailLayout({
           isSelectedHostLocal={isSelectedHostLocal}
           initialProfileId={initialFocus.profileId}
           initialSignIn={initialFocus.startSignIn}
+          nativeAutoJudge={hasNativeJudge(active.providerId)}
         />
       </div>
     </div>
@@ -982,6 +1023,7 @@ function ProviderDetail({
   isSelectedHostLocal,
   initialProfileId,
   initialSignIn,
+  nativeAutoJudge,
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
@@ -991,6 +1033,8 @@ function ProviderDetail({
   readonly isSelectedHostLocal: boolean;
   readonly initialProfileId: string | null;
   readonly initialSignIn: boolean;
+  /** Whether this provider's harness reports a native classifier (Permissions tab). */
+  readonly nativeAutoJudge: boolean;
 }) {
   const providerId = state.providerId;
   // Whichever host `useHostClient()` currently resolves to - the app-wide
@@ -1080,7 +1124,7 @@ function ProviderDetail({
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
   ).length;
-  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  const tabs = resolveSupportedTabs(providerTabInputs(state, nativeAutoJudge));
   // Bundled once here (rather than threaded as eight separate props) since
   // only the "usage" ("Profiles & Limits") tab body needs the profile-
   // management surface - the other tabs never see it.
@@ -1365,13 +1409,13 @@ function ProviderTabBody({
             key={state.terminalAgentArgs}
             state={state}
           />
-          {/* Keyed by provider, not by the stored value: this section holds a
-              local echo of the user's choice while the host's read-back is in
-              flight, and that echo belongs to one provider. Switching
-              providers must discard it. */}
-          <ProviderAutoJudgeSection key={state.providerId} state={state} />
         </div>
       );
+    case "permissions":
+      // Keyed by provider, not by the stored value: this section holds a local
+      // echo of the user's choice while the host's read-back is in flight, and
+      // that echo belongs to one provider. Switching providers must discard it.
+      return <ProviderAutoJudgeSection key={state.providerId} state={state} />;
     case "env":
       return (
         <ProviderEnvOverridesSection

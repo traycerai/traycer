@@ -75,8 +75,8 @@ export function ProviderAutoJudgeSection({
 
   return (
     <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border/60 p-3">
-      {/* Not "Auto mode judge": the row under Settings ▸ Agents carries that
-          name too, and THIS is the one that wins - `isProviderJudgedExecution`
+      {/* Not "Auto mode judge": the row under Settings ▸ Permissions carries
+          that name too, and THIS is the one that wins - `isProviderJudgedExecution`
           reads the provider's own `autoJudge` alone. Interpolated rather than
           hardcoded to "Claude Code" because the row draws for any provider
           whose catalog entry reports `nativeAutoJudge`; today that is Claude
@@ -122,8 +122,8 @@ export function ProviderAutoJudgeSection({
           because this is the switch that decides: a provider set to its own
           classifier is not "also using" Traycer's judge with a different
           model, it bypasses the judge and the policy entirely. Without it a
-          user who has written an Auto mode policy under Agents has no way to
-          learn that this control turns it off for this provider. */}
+          user who has written an Auto mode policy under Permissions has no way
+          to learn that this control turns it off for this provider. */}
       <p className="text-ui-xs text-muted-foreground">
         Who reviews commands while a conversation runs in Auto mode.
         Traycer&apos;s judge works the same way on every provider and follows
@@ -132,7 +132,7 @@ export function ProviderAutoJudgeSection({
         refusals still come to you as an approval. Choosing {providerName}
         &apos;s classifier means Auto mode chats on this provider skip
         Traycer&apos;s judge entirely — the judge and the policy you set under
-        Agents don&apos;t apply here.
+        Permissions don&apos;t apply here.
       </p>
     </div>
   );

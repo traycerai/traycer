@@ -96,6 +96,7 @@ export type AnalyticsSettingsSection =
   | "link-phone"
   | "notifications"
   | "opening-behavior"
+  | "permissions"
   | "providers"
   | "shell"
   | "usage"
@@ -1134,6 +1135,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     "link-phone": true,
     notifications: true,
     "opening-behavior": true,
+    permissions: true,
     providers: true,
     shell: true,
     usage: true,

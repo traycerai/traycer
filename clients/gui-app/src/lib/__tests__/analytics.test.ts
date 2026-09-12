@@ -130,6 +130,7 @@ describe("analytics", () => {
       "host",
       "keybindings",
       "notifications",
+      "permissions",
       "providers",
       "shell",
       "usage",

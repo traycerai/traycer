@@ -129,6 +129,7 @@ const SETTINGS_PATHS = new Set([
   "keybindings",
   "notifications",
   "opening-behavior",
+  "permissions",
   "providers",
   "service",
   "shell",

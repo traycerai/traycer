@@ -1,5 +1,5 @@
 /**
- * Docs: see ../SETTINGS.md (Agent selection → Auto mode).
+ * Docs: see ../SETTINGS.md (Permissions → Auto mode).
  * Update that file whenever this settings surface changes.
  */
 import { useCallback, useMemo, useState, type ReactNode } from "react";
@@ -8,6 +8,7 @@ import type {
   AutoPolicyGetResponse,
   AutoPolicyReadState,
 } from "@traycer/protocol/host/auto-mode/contracts";
+import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
@@ -19,7 +20,7 @@ import { useAutoJudgeQuery } from "@/hooks/auto-mode/use-auto-judge-query";
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
 import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
-import { AGENT_SELECTION } from "@/components/settings/panels/agents-settings.definitions";
+import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import { AutoJudgePicker } from "@/components/settings/panels/auto-judge-picker";
 import { AutoPolicyEditorDialog } from "@/components/settings/panels/auto-policy-editor-dialog";
 import { AutoPolicyShippedDialog } from "@/components/settings/panels/auto-policy-shipped-dialog";
@@ -37,26 +38,25 @@ import { useRelativeTimestamp } from "@/lib/relative-time";
  * before anyone writes a policy at all, rendered from the shipped document the
  * host sends alongside the account policy.
  *
- * Both are host RPCs, so this section is host-scoped like the agent-selection
- * guide below it - and it renders NOTHING rather than a notice of its own in
- * every state where that host cannot answer:
+ * Both are host RPCs, so this section is host-scoped. The Permissions panel
+ * wraps it in `HostScopeGate`, which owns the copy for a scope that is
+ * connecting, unreachable or vanished; this section still checks
+ * `isHostScopeUsable` itself so that the rows are not MOUNTED under a dead
+ * scope (the gate hides them in an `<Activity>`, and the hook's doc spells out
+ * why a hidden-but-mounted query is still the wrong host's query).
  *
- *   - a host that predates auto mode advertises neither method (they are
- *     optional capabilities with an `unsupported` degrade), and a row for a
- *     setting the machine has no notion of would be a control that silently
- *     does nothing;
- *   - a scope that is connecting, unreachable or vanished has no client to
- *     read through, so the rows are not MOUNTED (`isHostScopeUsable`, whose
- *     doc spells out why a hidden-but-mounted query is still the wrong host's
- *     query). The panel's copy for those states is the guide section's gate,
- *     one section down; a second identical notice here would just be the same
- *     sentence twice.
+ * A host that predates auto mode advertises neither method (they are optional
+ * capabilities with an `unsupported` degrade), and a row for a setting the
+ * machine has no notion of would be a control that silently does nothing. The
+ * section is the whole page, so it cannot render nothing there - an empty page
+ * reads as a broken one - and says so in a sentence instead.
  *
- * The cost of skipping the gate's hidden `<Activity>` is that a transient
- * same-host disconnect closes an open policy dialog and drops its draft. That
- * is accepted here and not elsewhere: the judge row holds no draft at all, and
- * the policy dialog is a deliberate, explicitly-saved editing session rather
- * than the always-open editor the guide's Activity was introduced for.
+ * The cost of unmounting under a dead scope rather than hiding is that a
+ * transient same-host disconnect closes an open policy dialog and drops its
+ * draft. That is accepted here and not elsewhere: the judge row holds no draft
+ * at all, and the policy dialog is a deliberate, explicitly-saved editing
+ * session rather than the always-open editor the guide's Activity was
+ * introduced for.
  */
 export function AutoModeSettingsSection(): ReactNode {
   const scope = useHostScope();
@@ -66,28 +66,39 @@ export function AutoModeSettingsSection(): ReactNode {
   const policySupported = useHostSupportsMethod(scope.hostId, "autoPolicy.get");
 
   if (!isHostScopeUsable(scope.status)) return null;
-  if (!judgeSupported && !policySupported) return null;
   const binding = scopedBinding ?? realBinding;
-  if (binding === null) return null;
+  if ((!judgeSupported && !policySupported) || binding === null) {
+    return (
+      <p
+        className="px-1 text-ui-sm text-muted-foreground"
+        data-testid="auto-mode-unsupported"
+      >
+        This machine&apos;s host predates Auto mode. Update it to choose a judge
+        and write a policy.
+      </p>
+    );
+  }
 
   return (
     <HostRuntimeContext.Provider value={binding}>
-      {/* An in-card heading, not a `SettingsGroup`: this panel's body IS one
-          card (it has to be - the guide editor fills its remaining height), so
-          a group here would nest a card inside a card. */}
-      <h2 className="border-b border-border/40 px-5 pt-4 pb-2 font-semibold text-ui-xs text-muted-foreground">
-        Auto mode
-      </h2>
-      {/* Keyed by host: both rows read one machine's settings, and a draft or
-          an in-flight pick must never carry across a host switch. A `null`
-          host is a key in its own right - no `?? ""` fallback, since the
-          transition to and from a real id remounts on its own. */}
-      <AutoModeRows
-        key={scope.hostId}
-        hostId={scope.hostId}
-        judgeSupported={judgeSupported}
-        policySupported={policySupported}
-      />
+      <SettingsGroup
+        group={PERMISSIONS.definitions.autoMode}
+        showTitle
+        tone="default"
+        dataTestId={undefined}
+        fill={false}
+      >
+        {/* Keyed by host: both rows read one machine's settings, and a draft
+            or an in-flight pick must never carry across a host switch. A
+            `null` host is a key in its own right - no `?? ""` fallback, since
+            the transition to and from a real id remounts on its own. */}
+        <AutoModeRows
+          key={scope.hostId}
+          hostId={scope.hostId}
+          judgeSupported={judgeSupported}
+          policySupported={policySupported}
+        />
+      </SettingsGroup>
     </HostRuntimeContext.Provider>
   );
 }
@@ -123,7 +134,7 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
 
   return (
     <SettingsRow
-      row={AGENT_SELECTION.definitions.autoModeJudge}
+      row={PERMISSIONS.definitions.autoModeJudge}
       hint={
         query.isError
           ? "Couldn't read this machine's judge. Reopen Settings to try again."
@@ -178,7 +189,7 @@ function AutoPolicyRow(): ReactNode {
   return (
     <>
       <SettingsRow
-        row={AGENT_SELECTION.definitions.autoModePolicy}
+        row={PERMISSIONS.definitions.autoModePolicy}
         hint={
           query.isError
             ? "Couldn't read your policy. Reopen Settings to try again."
@@ -194,7 +205,7 @@ function AutoPolicyRow(): ReactNode {
       />
       {hasShippedAutoPolicySections(shipped) ? (
         <SettingsRow
-          row={AGENT_SELECTION.definitions.autoModeShippedRules}
+          row={PERMISSIONS.definitions.autoModeShippedRules}
           control={
             <Button
               type="button"

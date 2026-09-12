@@ -40,15 +40,21 @@ describe("supportedTabsFor", () => {
     expect(
       supportedTabsFor({
         apiKeySupported: false,
+        nativeAutoJudge: false,
         advertised: ALL_TABS,
       }),
-    ).toEqual(PROVIDER_TAB_ORDER.filter((tab) => tab !== "account"));
+    ).toEqual(
+      PROVIDER_TAB_ORDER.filter(
+        (tab) => tab !== "account" && tab !== "permissions",
+      ),
+    );
   });
 
   it("honors the host's advertisement rather than showing every tab", () => {
     expect(
       supportedTabsFor({
         apiKeySupported: false,
+        nativeAutoJudge: false,
         advertised: ["env", "mcp"],
       }),
     ).toEqual(["env", "mcp"]);
@@ -65,6 +71,7 @@ describe("supportedTabsFor", () => {
     expect(
       supportedTabsFor({
         apiKeySupported: true,
+        nativeAutoJudge: false,
         advertised: ALL_TABS,
       }),
     ).toContain("general");
@@ -77,6 +84,7 @@ describe("supportedTabsFor", () => {
     // that advertisement.
     const tabs = supportedTabsFor({
       apiKeySupported: true,
+      nativeAutoJudge: false,
       advertised: ["general", "env", "mcp", "plugins", "skills"],
     });
     expect(tabs).toContain("account");
@@ -87,6 +95,7 @@ describe("supportedTabsFor", () => {
     expect(
       supportedTabsFor({
         apiKeySupported: false,
+        nativeAutoJudge: false,
         advertised: ["env", "mcp", "usage"],
       }),
     ).not.toContain("account");
@@ -97,6 +106,7 @@ describe("supportedTabsFor", () => {
     // half a given provider happened to have.
     const tabs = supportedTabsFor({
       apiKeySupported: true,
+      nativeAutoJudge: false,
       advertised: ALL_TABS,
     });
     expect(tabs).toContain("account");
@@ -109,6 +119,7 @@ describe("supportedTabsFor", () => {
     // setup is rarer. The first supported tab is also the default selection.
     const tabs = supportedTabsFor({
       apiKeySupported: true,
+      nativeAutoJudge: false,
       advertised: ALL_TABS,
     });
     expect(tabs[0]).toBe("account");
@@ -120,6 +131,7 @@ describe("supportedTabsFor", () => {
   it("opens on Profiles & Limits when Account is unsupported", () => {
     const tabs = supportedTabsFor({
       apiKeySupported: false,
+      nativeAutoJudge: false,
       advertised: ALL_TABS,
     });
     expect(tabs[0]).toBe("usage");
@@ -129,6 +141,7 @@ describe("supportedTabsFor", () => {
   it("falls through to the first supported non-account tab when neither account nor usage apply", () => {
     const tabs = supportedTabsFor({
       apiKeySupported: false,
+      nativeAutoJudge: false,
       advertised: ["env", "mcp"],
     });
     expect(tabs[0]).toBe("env");
@@ -144,11 +157,16 @@ describe("supportedTabsFor", () => {
     expect(
       supportedTabsFor({
         apiKeySupported: false,
+        nativeAutoJudge: false,
         advertised: WITHOUT_MODEL_PROVIDERS,
       }),
     ).not.toContain("modelProviders");
     expect(
-      supportedTabsFor({ apiKeySupported: false, advertised: ALL_TABS }),
+      supportedTabsFor({
+        apiKeySupported: false,
+        nativeAutoJudge: false,
+        advertised: ALL_TABS,
+      }),
     ).toContain("modelProviders");
   });
 
@@ -157,10 +175,12 @@ describe("supportedTabsFor", () => {
     // change which tab a provider opens on.
     const before = supportedTabsFor({
       apiKeySupported: false,
+      nativeAutoJudge: false,
       advertised: WITHOUT_MODEL_PROVIDERS,
     });
     const after = supportedTabsFor({
       apiKeySupported: false,
+      nativeAutoJudge: false,
       advertised: ALL_TABS,
     });
     expect(after[0]).toBe(before[0]);
@@ -170,12 +190,43 @@ describe("supportedTabsFor", () => {
     expect(after.indexOf("modelProviders")).toBeLessThan(after.indexOf("mcp"));
   });
 
+  it("shows Permissions only for a provider whose harness reports a native classifier", () => {
+    // Client-derived like `account`: the wire enum never names it. Today the
+    // catalog reports the flag for Claude Code alone, and a catalog that has
+    // not answered yet reads `false`, so the tab appears when it does.
+    expect(
+      supportedTabsFor({
+        apiKeySupported: false,
+        nativeAutoJudge: true,
+        advertised: ALL_TABS,
+      }),
+    ).toContain("permissions");
+    expect(
+      supportedTabsFor({
+        apiKeySupported: false,
+        nativeAutoJudge: false,
+        advertised: ALL_TABS,
+      }),
+    ).not.toContain("permissions");
+  });
+
+  it("places Permissions right after CLI & Args and never in the default-tab position", () => {
+    const tabs = supportedTabsFor({
+      apiKeySupported: true,
+      nativeAutoJudge: true,
+      advertised: ALL_TABS,
+    });
+    expect(tabs.indexOf("permissions")).toBe(tabs.indexOf("general") + 1);
+    expect(tabs[0]).toBe("account");
+  });
+
   it("leaves an API-key provider with at least one reachable tab", () => {
     // A provider advertising nothing at all: the derived Account tab is what
     // stops the pane rendering a bare tab rail.
     expect(
       supportedTabsFor({
         apiKeySupported: true,
+        nativeAutoJudge: false,
         advertised: [],
       }),
     ).toEqual(["account"]);
@@ -187,6 +238,7 @@ describe("supportedTabsFor", () => {
     // section that is not there on the other providers.
     const LABELS = {
       general: "CLI & Args",
+      permissions: "Permissions",
       account: "Account",
       usage: "Profiles & Limits",
       env: "Env",

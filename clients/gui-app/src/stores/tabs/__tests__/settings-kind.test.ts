@@ -29,6 +29,15 @@ describe("settings tab kind - host section", () => {
     expect(settingsSectionFromPath("/settings/agents")).toBe("agents");
   });
 
+  it("settingsSectionFromPath maps /settings/permissions to the permissions section", () => {
+    // The hand-maintained `SETTINGS_PATHS` allowlist is what recognises a
+    // remembered settings path; a section missing from it silently stops
+    // being a settings route (`devices` was, for months).
+    expect(settingsSectionFromPath("/settings/permissions")).toBe(
+      "permissions",
+    );
+  });
+
   it("settingsSectionFromPath maps /settings/devices to the devices section", () => {
     expect(settingsSectionFromPath("/settings/devices")).toBe("devices");
   });
