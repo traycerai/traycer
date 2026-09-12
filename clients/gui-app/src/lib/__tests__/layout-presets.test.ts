@@ -402,17 +402,6 @@ describe("layout presets", () => {
     }
   });
 
-  it("leaves Home's view alone", () => {
-    // `view` is a navigation choice the page itself writes; a preset that
-    // moved it would be changing something the user did not ask about.
-    useLayoutStore.getState().setHomeView("tasks");
-
-    for (const id of LAYOUT_PRESET_IDS) {
-      applyLayoutPreset(id);
-      expect(useLayoutStore.getState().home.view).toBe("tasks");
-    }
-  });
-
   it("keeps each preset's own shape", () => {
     // All three bundles asserted where a reader can see them next to each
     // other rather than one field at a time.

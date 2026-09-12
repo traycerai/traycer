@@ -1275,6 +1275,36 @@ describe("Layout page settings analytics", () => {
     }
   });
 
+  it("keeps Home's density id and has dropped its view id", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+        source: "direct_ui",
+        section: "layout",
+        setting: "layout.home.density",
+      }),
+    ).toEqual({
+      source: "direct_ui",
+      section: "layout",
+      setting: "layout.home.density",
+    });
+
+    // Home had two readings behind an in-page switch and that control reported
+    // here. It is gone, so nothing can emit this id - and the runtime
+    // allowlist is what a stray emit would be checked against, so it has to
+    // stop accepting it rather than merely stop being called. An unallowlisted
+    // setting id drops the whole event rather than the one property.
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+        source: "direct_ui",
+        section: "layout",
+        setting: "layout.home.view",
+      }),
+    ).toBeNull();
+  });
+
   it("tracks the sidebar resource metric picker under the layout section", async () => {
     const { AnalyticsEvent, sanitizeAnalyticsProperties } =
       await import("@/lib/analytics");

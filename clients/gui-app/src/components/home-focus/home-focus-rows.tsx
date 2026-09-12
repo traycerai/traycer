@@ -1,6 +1,6 @@
 /**
- * The four row shapes Home renders: a pending prompt, a task with its running
- * agents, a background job, and a browser tab.
+ * The pieces every Home row is assembled from: the prompt row, the glyph
+ * vocabulary, and the stop controls.
  *
  * They share the History list's row language (`epics-list-panel`'s row card) so
  * a task reads the same here as it does in History: one rounded card, `p-3`
@@ -17,7 +17,7 @@
  * announcement of a verb the row had already offered.
  */
 import { useState, type ReactNode } from "react";
-import { Globe, Layers, Square, Terminal } from "lucide-react";
+import { Globe, Square, Terminal } from "lucide-react";
 import {
   APPROVAL_TONE,
   INTERVIEW_TONE,
@@ -39,7 +39,6 @@ import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-
 import { useHomeDensity } from "@/hooks/home-focus/use-home-density";
 import { useHomeHostGrouped } from "@/components/home-focus/home-host-grouped-context";
 import {
-  homeChipRowClass,
   homeRowClass,
   ROW_BODY_CLASS,
 } from "@/components/home-focus/home-focus-row-style";
@@ -57,14 +56,6 @@ import {
   RowStatusDuration,
   RowStatusNote,
 } from "@/components/home-focus/home-focus-row-parts";
-import {
-  focusAgentState,
-  focusBrowserState,
-  focusJobState,
-  focusTaskState,
-  FOCUS_ROW_STATES,
-} from "@/lib/home-focus/focus-row-status";
-import { visibleAgents } from "@/lib/home-focus/focus-running";
 import { cn } from "@/lib/utils";
 import type {
   FocusAgentRow,
@@ -257,6 +248,18 @@ function OriginHostChip(props: {
 export function HomeFocusPromptRow(props: {
   readonly row: FocusPromptRow;
   readonly actions: HomeFocusRowActions;
+  /**
+   * Whether this row has to say WHERE it is - `· in <task>`.
+   *
+   * `false` under a chat row or a task row, which has already named the place
+   * and would be repeating itself on every child; `true` for a prompt listed
+   * beside the groups rather than inside one, where nothing above it says which
+   * task is asking.
+   *
+   * The browser tab is not governed by this and is never dropped: it names the
+   * page the prompt is ABOUT, which no parent row can say for it.
+   */
+  readonly showLocation: boolean;
 }): ReactNode {
   const { row, actions } = props;
   const density = useHomeDensity();
@@ -288,7 +291,7 @@ export function HomeFocusPromptRow(props: {
             names the page first and the task it belongs to second, the same
             nearest-first order a job row's chat and task follow. It is present
             only where the plane has the tab, which is the same mounted-only
-            limit the Browsers section carries. */}
+            limit every browser row carries. */}
         <RowContext
           parts={[
             // No `in`: the tab is not somewhere the prompt lives, it is the
@@ -298,7 +301,11 @@ export function HomeFocusPromptRow(props: {
               title: row.browserTabTitle,
               preposition: null,
             },
-            { role: "task", title: row.taskTitle, preposition: "in" },
+            {
+              role: "task",
+              title: props.showLocation ? row.taskTitle : null,
+              preposition: "in",
+            },
           ]}
           testId="home-focus-row-context"
         />
@@ -423,34 +430,6 @@ function taskTier(agents: ReadonlyArray<FocusAgentRow>): FocusAgentRow["tier"] {
   return agents.some((agent) => agent.tier === "turn") ? "turn" : "background";
 }
 
-function AgentChip(props: {
-  readonly epicId: string;
-  readonly agent: FocusAgentRow;
-  readonly actions: HomeFocusRowActions;
-}): ReactNode {
-  const { epicId, agent, actions } = props;
-  const name = focusAgentDisplayName(agent);
-  return (
-    <button
-      type="button"
-      onClick={() => actions.openAgent(epicId, agent.agentId)}
-      className="relative flex min-w-0 shrink-0 items-center gap-1.5 rounded-sm px-1.5 py-0.5 outline-none hover:bg-foreground/8 focus-visible:ring-2 focus-visible:ring-ring/50"
-      data-testid="home-focus-agent-chip"
-      data-agent-id={agent.agentId}
-    >
-      <ActivityDot tier={agent.tier} />
-      <AgentGlyph surface={agent.surface} className="size-3" />
-      <span className="truncate text-foreground">{name}</span>
-      {/* Through the shared registry rather than `agent.tier` directly: the
-          chip and the status column say the same word about the same agent,
-          and routing both through one table is what keeps that true. */}
-      <span className="shrink-0 text-ui-xs text-muted-foreground">
-        {FOCUS_ROW_STATES[focusAgentState(agent)].word}
-      </span>
-    </button>
-  );
-}
-
 /** What a cold task can say about itself: a count and a tier, with no names,
  * because agent titles only exist for epics mounted in this window. */
 export function ColdTaskAgents(props: {
@@ -474,78 +453,11 @@ export function ColdTaskAgents(props: {
   );
 }
 
-export function HomeFocusTaskRow(props: {
-  readonly row: FocusTaskRow;
-  readonly actions: HomeFocusRowActions;
-  /**
-   * Whether this window shows background rows for this task, which decides
-   * whether a background-tier agent is a DUPLICATE of a job row or the only
-   * trace of it. See `focus-running.ts`.
-   */
-  readonly hasVisibleJobs: boolean;
-  /** See `HomeFocusTaskStopCluster.hostLabel`. */
-  readonly stopAllHostLabel: string | null;
-}): ReactNode {
-  const { row, actions } = props;
-  const density = useHomeDensity();
-  const title = focusTaskTitleOf(row.taskTitle);
-  const agents = visibleAgents(row.agents, props.hasVisibleJobs);
-  return (
-    <li
-      className={homeRowClass(density)}
-      data-density={density}
-      data-testid="home-focus-task-row"
-    >
-      <button
-        type="button"
-        onClick={() => actions.openTask(row.epicId)}
-        className={cn(ROW_BODY_CLASS, "flex-initial")}
-        data-testid="home-focus-task-open-body"
-      >
-        {row.needsYou ? (
-          <TaskAttentionGlyph />
-        ) : (
-          <Layers
-            aria-hidden
-            className="size-4 shrink-0 text-muted-foreground"
-          />
-        )}
-        <RowItemName testId="home-focus-row-name">{title}</RowItemName>
-      </button>
-      {/* Deliberately NOT `relative`: the body button's stretched overlay must
-          stay above this container so a click on the row's blank space opens
-          the task, while each chip's own `relative` lifts it back above the
-          overlay. */}
-      <div className={homeChipRowClass(density)}>
-        {row.mountedHere ? (
-          agents.map((agent) => (
-            <AgentChip
-              key={agent.agentId}
-              epicId={row.epicId}
-              agent={agent}
-              actions={actions}
-            />
-          ))
-        ) : (
-          <ColdTaskAgents agents={row.agents} />
-        )}
-      </div>
-      <RowStatus state={focusTaskState(row, 0)} detail={null} />
-      <HomeFocusTaskStopCluster
-        row={row}
-        actions={actions}
-        hostLabel={props.stopAllHostLabel}
-      />
-    </li>
-  );
-}
-
 /**
  * A task's stop control and the confirmation it may open, as one unit.
  *
- * Both views mount it, which is why the confirm state lives here rather than in
- * either row: the dialog belongs to the decision, not to the shape of the row
- * that offered it.
+ * The confirm state lives here rather than in the task row: the dialog belongs
+ * to the decision, not to the shape of the row that offered it.
  */
 export function HomeFocusTaskStopCluster(props: {
   readonly row: FocusTaskRow;
@@ -705,67 +617,64 @@ function StopAllDialog(props: {
   );
 }
 
-export function HomeFocusBackgroundRow(props: {
+/**
+ * One chat's own stop, for a chat row that IS an agent run.
+ *
+ * Cascades like every other stop in the app, so a user who learned the gesture
+ * in chat gets the same behaviour here, and routes to the AGENT's host rather
+ * than to whichever machine this window is pointing at.
+ *
+ * Not offered at all for a chat that is merely hosting durable work: that row
+ * exists to parent its jobs, each of which carries its own stop below it, and a
+ * `Stop` on the conversation would be a bigger, vaguer version of the button
+ * one line down.
+ */
+export function HomeFocusAgentStop(props: {
+  readonly epicId: string;
+  readonly agent: FocusAgentRow;
+  readonly taskTitle: string;
+  readonly actions: HomeFocusRowActions;
+}): ReactNode {
+  const { agent, actions } = props;
+  const pending = actions.stopping.has(agent.agentId);
+  return (
+    <FocusStopButton
+      label="Stop"
+      ariaLabel={`Stop ${focusAgentDisplayName(agent)} in ${props.taskTitle}`}
+      reason={agent.stoppable ? null : UNREACHABLE_STOP_REASON}
+      disabled={pending || !agent.stoppable}
+      pending={pending}
+      onClick={() =>
+        actions.stopAgent({
+          epicId: props.epicId,
+          agentId: agent.agentId,
+          hostId: agent.hostId,
+          cascade: true,
+        })
+      }
+      testId="home-focus-agent-stop"
+    />
+  );
+}
+
+/** One durable job's own stop. Disabled with a reason rather than hidden, so
+ * the row still accounts for work it cannot end from here. */
+export function HomeFocusJobStop(props: {
   readonly row: FocusBackgroundRow;
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
   const { row, actions } = props;
-  const density = useHomeDensity();
+  const pending = actions.stopping.has(row.key);
   return (
-    <li
-      className={homeRowClass(density)}
-      data-density={density}
-      data-testid="home-focus-background-row"
-    >
-      <button
-        type="button"
-        onClick={() => actions.openBackground(row)}
-        className={ROW_BODY_CLASS}
-        data-testid="home-focus-background-open-body"
-      >
-        <BackgroundGlyph row={row} />
-        {/* The job's own name first, then the conversation hosting it, then
-            that conversation's task. Three different things, three nodes, two
-            tones - the row this replaced put the task and the job side by side
-            in the same weight and read as one name. */}
-        <RowItemName testId="home-focus-row-name">{row.label}</RowItemName>
-        <RowContext
-          parts={[
-            { role: "chat", title: row.chatTitle, preposition: "in" },
-            // `in` belongs to the FIRST location actually rendered, and a part
-            // with no title is dropped - so on a job whose chat this window
-            // cannot name, the task is that first location and takes the word.
-            // Without this the row read `· Storefront`, which names a place and
-            // does not say the job is in it.
-            {
-              role: "task",
-              title: row.taskTitle,
-              preposition: row.chatTitle === null ? "in" : null,
-            },
-          ]}
-          testId="home-focus-row-context"
-        />
-      </button>
-      <RowStatus
-        state={focusJobState(row)}
-        detail={
-          row.startedAtMs === null ? null : (
-            <RowStatusDuration startedAtMs={row.startedAtMs} />
-          )
-        }
-      />
-      <RowActionsCell>
-        <FocusStopButton
-          label="Stop"
-          ariaLabel={`Stop ${row.label}`}
-          reason={backgroundStopReason(row)}
-          disabled={actions.stopping.has(row.key) || !row.stoppable}
-          pending={actions.stopping.has(row.key)}
-          onClick={() => actions.stopManagedCommand(row)}
-          testId="home-focus-background-stop"
-        />
-      </RowActionsCell>
-    </li>
+    <FocusStopButton
+      label="Stop"
+      ariaLabel={`Stop ${row.label}`}
+      reason={backgroundStopReason(row)}
+      disabled={pending || !row.stoppable}
+      pending={pending}
+      onClick={() => actions.stopManagedCommand(row)}
+      testId="home-focus-background-stop"
+    />
   );
 }
 
@@ -801,66 +710,4 @@ export function BrowserStatusDetail(props: {
 }): ReactNode {
   if (props.row.drivenByAgentName === null) return null;
   return <RowStatusNote text={`driven by ${props.row.drivenByAgentName}`} />;
-}
-
-/**
- * One browser tab, and the click that goes there.
- *
- * The row body routes through the browser-session deep link, which focuses the
- * parked tile wherever it already is and opens the task on it otherwise - the
- * same path the bell's own browser hand-off takes, so a tab reached from Home
- * lands exactly where a tab reached from a notification does.
- *
- * NO stop control, and the actions cell is reserved anyway: closing a tab is a
- * canvas action on the tile, and every row on this page has to spend the same
- * width on actions or the status column above it moves.
- */
-export function HomeFocusBrowserRow(props: {
-  readonly row: FocusBrowserRow;
-  readonly actions: HomeFocusRowActions;
-}): ReactNode {
-  const { row, actions } = props;
-  const density = useHomeDensity();
-  return (
-    <li
-      className={homeRowClass(density)}
-      data-density={density}
-      data-testid="home-focus-browser-row"
-      data-status={row.status}
-    >
-      {/* The full url, which the row deliberately does not spend a line on:
-          the host is what identifies a page at a glance, the path is what you
-          check when you are unsure it is the right one. `asChild`, so the
-          tooltip adds no node between the `<li>` and its body button and the
-          row's grid is untouched. */}
-      <TooltipWrapper
-        label={row.url}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <button
-          type="button"
-          onClick={() => actions.openBrowser(row)}
-          className={ROW_BODY_CLASS}
-          data-testid="home-focus-browser-open-body"
-        >
-          <Globe
-            aria-hidden
-            className="size-4 shrink-0 text-muted-foreground"
-          />
-          <BrowserTabName row={row} />
-          <RowContext
-            parts={[{ role: "task", title: row.taskTitle, preposition: "in" }]}
-            testId="home-focus-row-context"
-          />
-        </button>
-      </TooltipWrapper>
-      <RowStatus
-        state={focusBrowserState(row)}
-        detail={<BrowserStatusDetail row={row} />}
-      />
-      <RowActionsCell>{null}</RowActionsCell>
-    </li>
-  );
 }

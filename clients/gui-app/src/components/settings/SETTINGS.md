@@ -1370,9 +1370,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       button hidden and now reads **Custom** until Compact is re-applied,
       which is the honest answer: it no longer matches the bundle.
 
-    - **What a preset never touches**: `homeTabEnabled` (a feature flag),
-      Home's `view` (the page's own navigation choice) and the status bar's
-      per-host visibility picks - none of those are levels of DETAIL.
+    - **What a preset never touches**: `homeTabEnabled` (a feature flag) and
+      the status bar's per-host visibility picks - neither is a level of
+      DETAIL.
       **Minimap position is not in that list**: every bundle
       carries it and every preset writes it back to `DEFAULT_MINIMAP_SIDE`,
       since it is a Chat-group row the match reads like any other. Moving the
@@ -1769,8 +1769,8 @@ md:top-0`): positioned against the nearest scrollport - the settings
     model-providers tab its sticky search.
   - **Tabs** (`panels/layout/tabs-layout-group.tsx`) - what the top-level tab
     strip carries. Two rows: `Home tab`
-    (`settings-store.homeTabEnabled`, default off), the fixed Home tab and its
-    focus view, and `Home density`
+    (`settings-store.homeTabEnabled`, default off), the fixed Home tab and the
+    task list it draws, and `Home density`
     (`layout-store.home.density`, default `Comfortable`). It is a GROUP rather
     than a row inside Status bar,
     because a tab is not part of the footer and the two collapse differently:
@@ -1988,25 +1988,30 @@ panel visibility` is enabled there - and reachable only from the rail.
     row Home owns is `Home density` above. Recorded here because this is
     where a reader goes looking for what that row governs
     (`components/home-focus/`, `lib/home-focus/`, `layout-store.home`).
-    - **View** (`focus` | `tasks`, default `focus`) is written by a segmented
-      control on the Home page itself and has NO Settings row. It persists its
-      last selection, so the page comes back as you left it, but the question
-      "which reading am I looking at" is answered where the reading is - a row
-      here would be a second answer to it, reachable only by leaving Home.
-      `Focus` is today's flat page (Needs you · Running · Background ·
-      Browsers). `Tasks`
-      keeps Needs you global and first, then regroups Running and Background
-      under one collapsible row per task; there is no separate Background
-      section under it, because a job belongs to the task it runs in and
-      listing it twice would be the same row under two headings. That holds
-      only because `selectTaskGroups` groups on the UNION of task epics and job
-      epics: `model.tasks` covers epics with a RUNNING AGENT and
-      `model.background` covers epics with a WARM CHAT, and the two are not
-      nested - so a durable shell in an idle chat is a group of its own, with a
-      `N bg` badge and no `N active`. On an intersection it would have been a
-      row with nowhere to go, and on an account whose only activity is a dev
-      server the page would have been blank. Emptiness is asked of the chosen
-      VIEW for the same reason (`viewIsEmpty`), never of the model.
+    - **Home is ONE reading, and it is the task list.** It offered two behind
+      an in-page `Focus | Tasks` switch: a flat page of four sections with a
+      task column, and the same activity grouped under its tasks. The flat one
+      is gone, and so are the switch, `layout-store.home.view`, its setter and
+      the `layout.home.view` analytics id. Two readings of one page is a choice
+      the reader has to make before they can read anything, and the flat one
+      lost: four sections plus a task column is more to hold than a list of
+      tasks, and every row on it had to name its task because nothing above it
+      did. The persisted `view` is READ PAST rather than migrated - one reading
+      means there is nothing for the old value to select, and the next write to
+      the slice drops the key.
+    - **Two sections, and a task is in exactly one.** `NEEDS YOU · N` leads,
+      then `RUNNING · N`. A task is in Needs you when it has an unresolved
+      prompt row OR the host's `needsYou` indicator with no row paged in yet
+      (`taskGroupNeedsYou`); everything else with a group is Running. There is
+      no flat prompt list any more, and that is the same de-duplication the
+      rest of this page is built on: a task waiting on an approval used to
+      appear twice, once as a prompt row and once as a task row, in two
+      vocabularies, with two counts that did not explain each other.
+      `selectTaskSections` partitions BEFORE the host split, never after -
+      `splitTaskGroupByHost` files a prompt under the machine it was raised on
+      and drops it from the others, so a two-host task with one prompt would
+      otherwise land in Needs you under one machine and Running under the
+      other.
     - **Density** (`Comfortable` | `Compact`, default `Comfortable`) IS the one
       row this page owns, because it is a preference about the app's chrome
       rather than about what is on screen right now. `Compact` tightens the
@@ -2014,6 +2019,123 @@ panel visibility` is enabled there - and reachable only from the rail.
       restored under `pointer-coarse:`, so a phone keeps the hit area H3 sized
       for a thumb and the `touch-chrome` that goes with it. Comfortable renders
       the identical class string it did before the slice existed.
+    - **Nesting is task → chat → the chat's own work, and stops there.** Level
+      one under a task is its CHATS - chat agents and terminal agents alike,
+      each with its own status cell. Level two is what that chat owns: the
+      prompts raised in it, the background jobs whose `chatId` is it, and the
+      browser tabs it is driving. A chat agent's id IS its chat id, which is
+      what lets all three be looked up in one map of agent ids. The third level
+      is the whole point of the change: a monitor listed BESIDE the chat
+      running it had to name its parent to make sense - `10min heartbeat · in
+Greeting and Introduction` - so the page read as a monitor name followed
+      by the conversation it was in, and the conversation's name appeared
+      twice, once as a row and once as a suffix. Under the chat, the structure
+      says it and the row is just the job.
+    - **Parentage does not take a level; work does.** An agent another listed
+      agent started stays beside it and says `via <parent>`, because the indent
+      under a chat is spoken for by that chat's own work. Anything whose owning
+      chat is not a row here hangs off the TASK at level one and keeps the
+      context that says where it lives: a job in a chat this window cannot
+      place keeps `· in <chat>`, a browser hand-off (which names a session and
+      a tab, never a conversation) keeps its tab title, an undriven tab keeps
+      neither. A child row never says `· in <task>` - the row above it already
+      did.
+    - **`selectTaskGroupBody` runs LAST, at the render site, and that is a
+      requirement rather than a convenience.** The chat set narrows twice after
+      a group is built - the cold-task rule drops every chat, and the host
+      split keeps one machine's - and every relationship in the body is a claim
+      about the rows beside it. A `via` naming a parent that is not there, or a
+      job nested under a chat that was filtered out, is worse than the flat
+      list it replaced. Pairing them after both narrowings makes that
+      impossible rather than merely fixed: there is no earlier value to go
+      stale. `FocusTaskGroup` therefore carries flat `agents` / `jobs` /
+      `browsers` / `prompts` and no parent links at all.
+    - **A cold task is one summary row.** Agent titles only exist for epics
+      mounted in this window, so a cold task contributes no chat rows and a
+      placeholder would name work nobody can open. It reads `n agents · not
+open in this window`, keeps a disclosure only for jobs and pages this
+      window can still see, and hangs those off the task. A cold task that is
+      in Needs you on the indicator alone shows the attention glyph and nests
+      no prompt - there is no row to nest.
+    - **Badges count the WHOLE subtree** (`taskGroupCounts`): `N need you`
+      (loaded prompt rows), `N active` (mid-turn agents), `N bg` (jobs at any
+      level), `N browsers`. They are read off the group's flat lists rather
+      than off the body, which is the same numbers by construction - the body
+      only redistributes rows across levels, it never adds or drops one.
+      Every badge is omitted at zero. `N bg` renders only where this window can
+      SEE the task's background - the warm-chat set the jobs come from, never
+      `mountedHere`, which is the wider "has a live Y.Doc projection here" and
+      would read `0 bg` at a task whose chats were simply never opened. `N
+browsers` is omitted at zero for a sharper reason still: that plane is
+      mounted-only, so a zero would mean "no coordinator in this window", which
+      is not a fact about the task.
+    - **Stop, per level.** The task row keeps `Stop all` (`Stop all on <host>`
+      under the host split), cascading over that task's - that host's - agent
+      ROOTS, once each. A chat row that is a real agent run carries its own
+      `Stop`, gated by `FocusAgentRow.stoppable` and routed to the agent's own
+      host. A chat that is idle and merely PARENTS its jobs (`○ background`
+      with jobs beneath) has no stop of its own: the work is those jobs, each
+      of which carries one, and a stop on the conversation would be a bigger,
+      vaguer version of the button one line down. A background-tier chat with
+      NO job row here is a different thing - a run this window has no durable
+      row for - and keeps its stop, or the page would offer no way to end it.
+      Browser rows have none in any case.
+    - **`selectTaskGroups` unions THREE sets**, and must: `model.tasks` covers
+      epics with a running agent, `model.background` covers epics with a warm
+      chat, `model.browsers` covers epics with a live page, and the three are
+      not nested. There is no Background or Browsers section to catch a row
+      whose epic is not a task row, so an intersection would drop it silently -
+      and on an account whose only activity is a dev server, or a task left
+      open at a page, the page would be blank. A durable shell in an idle chat
+      is therefore a group of its own, with `N bg` and no `N active`.
+    - **A prompt no group could carry stays in Needs you as its own row.** The
+      flat list is gone, and three things can leave a prompt unplaced: an
+      approval whose payload carried no epic id (they are optional on the
+      wire), an epic with a pending prompt and no running agent, warm chat or
+      open page to make a group out of, and the host split's own per-host
+      prompt filter. Home's tab badge counts prompts, so a prompt the page
+      cannot show is a badge reading `1` over a page showing nothing. The
+      leftovers are computed FROM the rendered slices rather than from a second
+      guess at the same rule, which is what makes that impossible instead of
+      merely unlikely; they render last, with `· in <task>` restored, since
+      nothing above them says where they are.
+    - **A section's heading counts the rows it lists at its TOP level** - task
+      groups plus any unplaced prompt rows - and the summary segment reads the
+      same number, so the two can never disagree. `NEEDS YOU · 2`, and any
+      coverage caption is a block-level `<p>` on its own line beneath it. Two
+      independent limits can bind Needs you - how far the notification feed
+      reaches (`this host only`) and how far the window-local background plane
+      does - so they get a line each rather than a separator between them.
+    - **Disclosure is one store above both sections** (`useTaskDisclosure`),
+      never row-local state, and the section split is why. Answering a task's
+      last prompt moves it from Needs you to Running, which unmounts its `<li>`
+      from one subtree and mounts a new one in the other - a React key is
+      stable within a parent, not across two - so a row the user had just
+      opened collapsed at the exact moment they acted on it. Entries are keyed
+      by epic AND host, so two machines' shares of one task open
+      independently; that key survives a section move, because prompts never
+      open a host group of their own and answering one therefore cannot change
+      which hosts a task is split across. Choices are pruned when their row
+      leaves the page, which keeps the self-pruning the row-local state gave
+      for free: a task that comes back comes back at the page's default.
+    - **The expand default is latched on the first render that HAS TASKS**, not
+      on mount. Three or fewer tasks in TOTAL expand all, otherwise everything
+      is collapsed; the reader scrolls one page, so a rule applied per section
+      would expand eight tasks whenever they happened to be four and four. The
+      latch waits for `groups.length > 0` rather than for the page to have
+      something on it, because the notification feed can answer before the
+      activity plane: a first frame holding one unplaced prompt and no tasks
+      would otherwise latch `0 <= 3` and throw twenty tasks open when they
+      landed. Both the latch and the prune are adjusted DURING render rather
+      than from an effect - the supported shape for state derived from props,
+      and idempotent, so the immediate re-run finds the latch set and nothing
+      stale left. Chat rows have no second disclosure: hiding a monitor behind
+      another click would make finding it a two-gesture job on a page whose
+      whole purpose is one glance.
+    - **No row carries a trailing `Open`**: the row body already spans the card
+      and opens the same thing, so the second control was one extra tab stop
+      per row announcing a verb the row had already offered. Stop / Stop all
+      stay.
     - **Icon vocabulary is row-level only; section headings stay text**, which
       is what keeps the screen-reader heading outline a list of names rather
       than of glyphs. Agents read off `EPIC_NODE_ICONS` (chat `MessageSquare`,
@@ -2024,27 +2146,6 @@ panel visibility` is enabled there - and reachable only from the rail.
       than restated, so a sub-agent is a `Bot` in both places. Prompts keep the
       notification tone glyphs. Colour is derived state only - there is no
       colour setting here and no identity palette.
-    - **Nesting is task → work row, and stops there.** A task expands into its
-      agents and its mounted jobs; an agent started by another listed agent
-      says `via <parent>` instead of taking a third indent. A Needs-you row is
-      never nested or duplicated under its task - the task carries a
-      noninteractive attention glyph and a count of LOADED prompt rows
-      (`selectTaskGroups`, never the `needsYou` boolean, which is also true for
-      a prompt the feed has not paged in). A cold task degrades to one summary
-      row with no agent names and no exposed disclosure, and keeps a disclosure
-      only for jobs this window can still see. `N bg` renders only
-      where this window can SEE the task's background - the warm-chat set the
-      jobs come from, never `mountedHere`, which is the wider "has a live Y.Doc
-      projection here" and would read `0 bg` at a task whose chats were simply
-      never opened. First entry expands all when there
-      are three tasks or fewer, otherwise all collapsed; the disclosure is each
-      row's own `useState`, which makes it session-lived and self-pruning - the
-      `<li>` is keyed by epic id, so a task leaving the model takes its
-      disclosure with it.
-    - **No row carries a trailing `Open`** in either view: the row body already
-      spans the card and opens the same thing, so the second control was one
-      extra tab stop per row announcing a verb the row had already offered.
-      Stop / Stop all stay.
     - **One row grammar, everywhere**:
       `[kind icon] [item name] [· in <context>] … [status] [actions]`
       (`home-focus-row-parts.tsx`). The item name is what the row IS - the
@@ -2052,11 +2153,7 @@ panel visibility` is enabled there - and reachable only from the rail.
       everything after it is muted CONTEXT, each part truncating on its own.
       Two names are never concatenated: the row that produced this rule read
       `General Conversation History 10min heartbeat`, a task and a monitor with
-      a space between them and nothing saying which was which. A job names its
-      chat before its task (`10min heartbeat · in Greeting and Introduction ·
-General Conversation History`) because the chat is what its Stop targets. A
-      child row under a task row omits the `in …` part - the row above it
-      already said it.
+      a space between them and nothing saying which was which.
     - **One status column** (`focus-row-status.ts`): a `size-2` dot in the
       state tone, the state word, and `· <duration>` where the model has a
       timestamp. `needs you` is warning-toned, `turn` / `running` carry a
@@ -2072,63 +2169,46 @@ General Conversation History`) because the chat is what its Stop targets. A
       `home-focus-row-style.ts`). Every row in a section reserves both
       right-hand tracks whether or not it has anything to put in them - the
       prompt row with nothing to stop still spends the width a `Stop all` takes
-      two rows below it. Without that, `Stop all` is wider than `Stop` is wider
-      than nothing and the column staircases down a section of mixed rows,
-      which is the one thing it exists not to do. Nested rows use the same
-      tracks: a nested list is indented on its LEFT only, so its right edge is
-      the parent's. These are deliberately fixed widths against the
-      fluid-sizing rule, on the same argument as the status-bar preview's
-      `w-[480px]` - a column track's whole job is to NOT adapt to its content,
-      and a label that outgrows one truncates rather than moving the column.
-      The cell's content is LEFT-aligned inside that track, which is what
-      freezes the dot and the word: right-aligning pins only the cell's right
-      edge, so a row carrying `· 41m` pushes its word left of a row carrying
-      none. `tabular-nums` keeps a ticking duration from rewidthing itself; it
-      was never what held the word still. The status cell is a DOM sibling of
-      the body button so it stays out of that button's accessible name, but it
-      is unpositioned and therefore still under its stretched overlay - by
-      design, since everything that is not a control opens the row.
+      two rows below it, and so does the idle chat row with no stop of its own.
+      Without that, `Stop all` is wider than `Stop` is wider than nothing and
+      the column staircases down a section of mixed rows, which is the one
+      thing it exists not to do. Nested rows use the same tracks: a nested list
+      is indented on its LEFT only, so its right edge is the parent's - which
+      is what lets a third level exist without a third set of columns. These
+      are deliberately fixed widths against the fluid-sizing rule, on the same
+      argument as the status-bar preview's `w-[480px]` - a column track's whole
+      job is to NOT adapt to its content, and a label that outgrows one
+      truncates rather than moving the column. The cell's content is
+      LEFT-aligned inside that track, which is what freezes the dot and the
+      word: right-aligning pins only the cell's right edge, so a row carrying
+      `· 41m` pushes its word left of a row carrying none. `tabular-nums` keeps
+      a ticking duration from rewidthing itself; it was never what held the
+      word still. The status cell is a DOM sibling of the body button so it
+      stays out of that button's accessible name, but it is unpositioned and
+      therefore still under its stretched overlay - by design, since everything
+      that is not a control opens the row.
     - **The duration hides on a narrow ROW, under Compact only.** An
       `@container` on the section and `@max-sm:hidden` on the duration, not a
       viewport breakpoint: a slim Home tile inside a wide window is exactly the
       case a viewport query gets backwards, and Comfortable's contract is that
       it never drops the duration at any width. The state word always survives.
-    - **Running is mid-turn agents only, wherever Background can show the rest**,
-      and this is the rule the others defer to (`focus-running.ts`). An agent
-      whose tier is `background` - an idle chat that merely hosts a running
-      monitor - is not a Running row, because its work is already a Background
-      row under its own name; the page used to show both and they were one
-      monitor. De-duplicating only makes sense against a row that EXISTS, so the
-      condition is not "is it mid-turn" but "does this window have a job row for
-      that task": with none, the agents stay and so does the Running row. That
-      is the cold background-only task, which would otherwise appear in neither
-      section - it reads `background` beside H3's `n agents · not open in this
-window`. `runningTasks` is deliberately the same predicate as
-      `visibleAgents` rather than a second one beside it, so a section and its
-      rows cannot disagree about what is running; `Running · N tasks` counts
-      that list, and in the Tasks view a group's children are its mid-turn
-      agents plus its jobs. None of this filters the MODEL -
-      `FocusTaskRow.agents` stays whole, because `Stop all` cascades over every
-      agent including background-tier ones, and a stop that honoured a
-      presentation rule would leave work running that the confirmation promised
-      to end.
-    - **Summary line** under the view control, and it names only sections the
-      CURRENT VIEW renders. Focus draws three sections and reads `2 need you ·
-3 running · 1 background`; Tasks draws two, so it reads `2 need you ·
-4 tasks` - running and background fold into the group count, because that
-      is where Tasks puts both. A `background` segment under Tasks pointed at a
-      region that view never mounts, so the click found no element and did
-      nothing; on a background-only account it was the only button on the line.
+    - **The disclosure twisty needs `z-10`, not `relative`.** `ROW_BODY_CLASS`
+      carries `before:absolute before:inset-0` and the body button is
+      unpositioned, so that overlay's containing block is the ROW and it
+      stretches across the twisty too. Overlay and twisty would then both be
+      `z-index: auto` positioned boxes painted in TREE ORDER, and the overlay
+      belongs to the later sibling - so it paints last and swallows every click
+      on the twisty. `RowActionsCell` gets away with bare `relative` only
+      because it comes AFTER the body button. Any control placed before it
+      needs the real stacking level.
+    - **Summary line** above the sections, reading `2 need you · 4 running`.
       Each segment is a button that scrolls to its section and moves focus onto
       it (the sections are `tabIndex={-1}` regions with `scroll-mt-4`, so a
       screen reader hears the heading on arrival). Zero segments are omitted;
-      all-zero is the empty state instead. Counts come from `focusCounts` and
-      from the grouping the Tasks section itself renders.
-    - **Section headings are count-only.** `NEEDS YOU · 2`, and any coverage
-      caption is a block-level `<p>` on its own line beneath it. The caption was
-      already a separate node before this change and still rendered
-      `BACKGROUND · 1 Only tasks open in this window`, because it sat on the
-      same baseline row - the fix is the line break, not the element.
+      all-zero is the empty state instead. Both counts come from the sections
+      the page actually mounts, so a segment can never point at a region that
+      is not there - the defect the old `background` segment had under the
+      Tasks view, where the click found no element and did nothing at all.
     - **Sections render a list of row GROUPS** - one unlabelled group when the
       page names a single host, and one per machine when it names several. The
       unlabelled shape renders its `<ul>` directly under the section with no
@@ -2137,13 +2217,14 @@ window`. `runningTasks` is deliberately the same predicate as
     - **Host grouping is automatic and has no setting**
       (`focus-host-groups.ts`, `use-home-host-groups.ts`). It turns on only
       when the model's rows name MORE THAN ONE host, counted across the whole
-      page rather than per section - headings appearing in Background and not
-      in Needs you would leave the reader working out why. A row with no host
+      page rather than per section - headings appearing in Running and not in
+      Needs you would leave the reader working out why. A row with no host
       of its own RESOLVES to the active host before anything is counted, since
       that is where its stop would be sent; without that, one unresolved row
       would split a single-host page into two groups that are the same
-      machine. A task hidden by the mid-turn rule is not counted either: it
-      must not be the reason headings appear that no visible row explains.
+      machine. Every task in the model is a group now, so the host set counts
+      every task's agents - there is no presentation rule left that could hide
+      a row and leave a heading with nothing to explain it.
     - **Ordering is active host, then registry order, then the rest by id.**
       The active host leads because it is what the user is working on and what
       an unnamed row resolved to; registry order follows because it is the
@@ -2155,19 +2236,25 @@ window`. `runningTasks` is deliberately the same predicate as
       their origin-host pill, which would otherwise repeat the heading on every
       line - `HomeHostGroupedContext` and its `useHomeHostGrouped` hook carry
       that, because the answer belongs to the section and the pill is several
-      components down.
+      components down. The context says "a heading above this row already names
+      its machine", so the ONE group that has no heading - the unplaced-prompt
+      tail - re-provides it as `false` and keeps its chips. Reading the page's
+      grouping flag there instead left a remote orphan prompt with no host
+      attribution at all, on the one row where nothing else could supply it.
     - **Grouping is by the ROW's own host, never by its task.** An epic is
       cloud-homed and can be worked from several machines at once, so a task has
       no single host to be filed under - asking for one answered `null` when its
       agents disagreed, and `null` resolved to whichever machine the user
       happened to be sitting at. So prompts group by origin host, agents by
-      their own `hostId`, jobs by their chat's. A task worked from two machines
-      appears once under EACH (`splitTaskByHost`, `splitTaskGroupByHost`),
-      holding only that host's agents, jobs and prompts, with that host's
-      counts; its `Stop all` reads `Stop all on <host>` and cascades over that
-      host's roots only. `FocusAgentRow.stoppable` exists for the re-fold: the
-      task's own flag is `every` over ALL agents, so a reachable host's row
-      would otherwise inherit an unreachable sibling's refusal.
+      their own `hostId`, jobs by their chat's, tabs by their session's. A task
+      worked from two machines appears once under EACH
+      (`splitTaskGroupByHost`), holding only that host's agents, jobs, pages and
+      prompts, with that host's counts; its `Stop all` reads `Stop all on
+<host>` and cascades over that host's roots only, and the label is per
+      TASK rather than per bucket - an A-only task beside an A/B one is not
+      split and must not claim to be. `FocusAgentRow.stoppable` exists for the
+      re-fold: the task's own flag is `every` over ALL agents, so a reachable
+      host's row would otherwise inherit an unreachable sibling's refusal.
     - **A row is never dropped for having no host.** With no active host to
       resolve against it lands in `UNKNOWN_HOST_ID`, whose group sorts last and
       reads `Unknown host`, so a section's groups always sum to its heading. The
@@ -2204,19 +2291,30 @@ window`. `runningTasks` is deliberately the same predicate as
       host is missing is less information in a louder place. A degraded host
       with no visible rows has no subheading, so the banner returns rather than
       dropping the warning: that host is precisely the one whose rows are
-      missing BECAUSE its stream is degraded.
+      missing BECAUSE its stream is degraded. Suppression is derived from the
+      LABELLED host groups the page actually renders, not from a second reading
+      of the model - `hostRowGroups` puts the notice on a subheading and
+      nowhere else, so the two can only agree if they are computed from the
+      same thing. Asking the model instead counted a prompt's origin host as
+      visible, and a degraded host present only as an unplaced prompt then
+      silenced a banner nothing had replaced: that tail has no subheading.
+      `unknown` is not a warning at all
+      - it is what a client that has never heard from the activity plane
+        reports at startup, and a notice on every cold open would train the user
+        to ignore the one that matters.
     - **The summary line stays one glance.** Each segment's TOOLTIP carries the
       per-host breakdown (`Laptop 2 · Remote Box 1`); the visible text never
       names a machine. A background-only group follows the host of the chats its
       jobs run in, and it can split across them like any other.
-    - **Browsers are their own plane, and the row is a TAB.** `BROWSERS · N`
-      is the last section under Focus - a page is not waiting on anyone, not
-      burning a turn, and not going away, so it sits below Background. Sessions
-      are deliberately NOT a level: a task running two browsers over four pages
-      is four rows, each with its own title and site, because the ask this
-      answers is "even if multiple browsers are running inside some task, I
-      should be able to view and directly click to go there". The row body
-      routes through the browser-session deep link
+    - **Browsers are their own plane, and the row is a TAB.** Sessions are
+      deliberately NOT a level: a task running two browsers over four pages is
+      four rows, each with its own title and site, because the ask this answers
+      is "even if multiple browsers are running inside some task, I should be
+      able to view and directly click to go there". A tab sits under the chat
+      driving it, or under its task when nothing here is - which is also the
+      reason a tab needs no `via` any more: placement says it, and a tab that
+      reached task level did so precisely because no row here drives it. The
+      row body routes through the browser-session deep link
       (`routeNotificationForHost`, `{kind: "browserSession", epicId, sessionId,
 tabId}`), which focuses the parked tile where it is already open and
       opens the task on it otherwise - the same path the bell's own browser
@@ -2229,11 +2327,10 @@ tabId}`), which focuses the parked tile where it is already open and
       `acquireBrowserSessionsCoordinator`: acquiring opens a `browser.sessions`
       stream and holds it, so a page that merely LISTS browsers would open one
       per task, on every host in the fleet, the moment the tab was opened. The
-      consequence is the caption - `Only tasks open in this window`, the same
-      sentence Background carries, recorded in the type as
-      `coverage.browsersAreMountedOnly` - and closing the last canvas that owned
-      a coordinator takes the rows with it, which is the honest reading of a
-      window-local inventory.
+      consequence is the caption - `Background shown for tasks open in this
+window`, recorded in the type as `coverage.browsersAreMountedOnly` -
+      and closing the last canvas that owned a coordinator takes the rows with
+      it, which is the honest reading of a window-local inventory.
     - **Three states, from six on the wire.** `provisioning`, `ready`,
       `navigating` and `closing` are moments in one tab's ordinary life and
       collapse into `live`; a page flickering between them would be reporting
@@ -2244,56 +2341,32 @@ tabId}`), which focuses the parked tile where it is already open and
       COLOURED, because a crashed tab is otherwise silent - no prompt, no
       notification - and the status column is the only place it can be found.
       The status cell's trailing slot carries `· driven by <agent>` where a
-      chat is working the page.
-    - **Under Tasks a tab is a child of its task, or of the agent driving it.**
-      Browsers come after the jobs, and a driven tab reads `via <agent>` at the
-      same depth rather than taking a third indent - the same two-level rule
-      the agent rows follow. That `via` is resolved against the group's OWN
-      agent rows **after both filters that narrow them** - the mid-turn rule and
-      the host split - and never against `FocusBrowserRow.drivenByAgentName`:
-      the model resolves that name for any chat open in this window, and a `via`
-      pointing at a row the reader cannot see is worse than none. So
-      `FocusTaskGroup.browsers` carries plain rows and `resolveBrowserVia` pairs
-      them at the render site; there is deliberately no earlier value that could
-      go stale. `driven by <agent>` in the status cell is the other half and is
-      unaffected - it is attribution, not navigation, and survives a hidden or
-      remote driver. The collapsed row
-      badges `N browsers`, omitted at zero - a zero here would mean "no
-      coordinator in this window" rather than "no pages open", which is not a
-      fact about the task. `selectTaskGroups` therefore unions THREE sets, and
-      a task whose only activity is a browser is a group of its own.
-    - **The summary segment is Focus-only.** `N browsers` joins the line under
-      Focus; Tasks draws no Browsers section, so a segment there would point at
-      a region that is never mounted and do nothing at all - the same defect
-      the `background` segment had before it was removed from that view.
+      chat is working the page, and it stays even on a tab nested under that
+      chat: placement is navigation, `driven by` is attribution, it survives a
+      driver on another machine that placement cannot follow, and a column with
+      a hole in it stops being scannable.
     - **A browser prompt names its tab.** A `browser.human.needed` row reads
-      `Needs you in the browser · <tab title> · in <task>`, with the tab as the
-      NEARER context, joined from the browser rows this same model carries
-      (`focusBrowserTabTitles`) so a prompt can never name a page the section
-      below it is not showing. Absent for a prompt whose task is not open here,
-      where the row reads exactly as it did before.
+      `Needs you in the browser · <tab title>`, joined from the browser rows
+      this same model carries (`focusBrowserTabTitles`) so a prompt can never
+      name a page the rows below it are not showing. Absent for a prompt whose
+      task is not open here.
     - **`in` is per context part, not "the first one".** `RowContextPart`
       carries its own `preposition`, because the two rules coincided for a job
-      (`in <chat> · <task>`) and came apart here: a tab is not somewhere a
-      prompt lives, it is the page the prompt is ABOUT, while the task after it
-      still is a location. The positional rule silently produced
+      (`in <chat> · <task>`) and came apart on the browser prompt: a tab is not
+      somewhere a prompt lives, it is the page the prompt is ABOUT, while a
+      task after it still is a location. The positional rule silently produced
       `in Checkout · Storefront`, which reads as a prompt inside a page inside
       nothing. The one thing a part cannot answer alone is that a `null` title
-      is DROPPED, so the next location becomes the first one rendered - a job
-      row whose chat this window cannot name gives the `in` to its task
-      (`row.chatTitle === null ? "in" : null`), rather than reading
-      `· Storefront` and naming a place without saying the job is in it.
-    - **Host grouping applies, and the coverage notice does not.** A tab is
-      filed under its session's host, and a browser on a second machine turns
-      grouping on like any other row. But `focusActivityHostIds` - not
-      `focusHostIds` - decides whether the page-wide `Some activity may be
-missing` banner may stand down: a degraded host whose only visible rows
-      are browser tabs has a heading and still cannot carry that sentence,
-      because browsers ride their own stream and are evidence about neither.
-    - **No Stop on a browser row**, in either view, and the actions track is
-      reserved anyway so the status column does not move. Closing a tab is a
-      canvas action on the tile itself; a cross-task page offering to close
-      pages it cannot show would be destroying state the reader cannot see.
+      is DROPPED, so the next location becomes the first one rendered - which
+      is how a row drops the context the page has already said above it while
+      keeping the part that no parent can say.
+    - **Host grouping applies to browsers.** A tab is filed under its session's
+      host, and a browser on a second machine turns grouping on like any other
+      row.
+    - **No Stop on a browser row**, and the actions track is reserved anyway so
+      the status column does not move. Closing a tab is a canvas action on the
+      tile itself; a cross-task page offering to close pages it cannot show
+      would be destroying state the reader cannot see.
 - `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
   / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the

@@ -816,28 +816,9 @@ describe("useLayoutStore", () => {
   });
 
   describe("home slice", () => {
-    it("starts on the flat Focus page at comfortable spacing", () => {
+    it("starts at comfortable spacing", () => {
       expect(useLayoutStore.getState().home).toEqual({
-        view: "focus",
         density: "comfortable",
-      });
-    });
-
-    it("writes and persists the view the in-page control picked", async () => {
-      useLayoutStore.getState().setHomeView("tasks");
-
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-      expect(useLayoutStore.getState().home.view).toBe("tasks");
-      expect(
-        JSON.parse(window.localStorage.getItem(PERSIST_KEY) ?? "{}"),
-      ).toEqual({
-        state: {
-          statusBar: DEFAULT_STATUS_BAR_LAYOUT,
-          composer: DEFAULT_COMPOSER_LAYOUT,
-          home: { view: "tasks", density: "comfortable" },
-        },
-        version: CURRENT_PERSIST_VERSION,
       });
     });
 
@@ -853,7 +834,7 @@ describe("useLayoutStore", () => {
         state: {
           statusBar: DEFAULT_STATUS_BAR_LAYOUT,
           composer: DEFAULT_COMPOSER_LAYOUT,
-          home: { view: "focus", density: "compact" },
+          home: { density: "compact" },
         },
         version: CURRENT_PERSIST_VERSION,
       });
@@ -861,32 +842,40 @@ describe("useLayoutStore", () => {
 
     it("does not mint a new slice when a setter is handed the value it already holds", () => {
       const before = useLayoutStore.getState().home;
-      useLayoutStore.getState().setHomeView("focus");
       useLayoutStore.getState().setHomeDensity("comfortable");
       expect(useLayoutStore.getState().home).toBe(before);
     });
 
     it("restores a persisted slice field by field", async () => {
-      await rehydrateFrom({ home: { view: "tasks", density: "compact" } });
-      expect(useLayoutStore.getState().home).toEqual({
-        view: "tasks",
-        density: "compact",
-      });
+      await rehydrateFrom({ home: { density: "compact" } });
+      expect(useLayoutStore.getState().home).toEqual({ density: "compact" });
     });
 
-    // Both values pick a branch on the render path, so an unrecognized one
+    // `density` picks a branch on the render path, so an unrecognized one
     // falls back rather than reaching a switch with no case for it.
     it("falls back per field on an unrecognized value", async () => {
-      await rehydrateFrom({ home: { view: "timeline", density: 3 } });
+      await rehydrateFrom({ home: { density: 3 } });
       expect(useLayoutStore.getState().home).toEqual(DEFAULT_HOME_LAYOUT);
     });
 
-    it("keeps a valid field when only its neighbour is corrupt", async () => {
-      await rehydrateFrom({ home: { view: "tasks", density: "cosy" } });
-      expect(useLayoutStore.getState().home).toEqual({
-        view: "tasks",
-        density: "comfortable",
+    // Home had a second reading behind an in-page switch, and the choice was
+    // persisted here. The page has one reading now, so a stored `view` selects
+    // nothing: it is read past rather than migrated, and the next write to this
+    // slice drops it.
+    it("ignores a `view` left behind by the two-reading Home", async () => {
+      await rehydrateFrom({ home: { view: "tasks", density: "compact" } });
+      expect(useLayoutStore.getState().home).toEqual({ density: "compact" });
+
+      useLayoutStore.getState().setHomeDensity("comfortable");
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      const persisted: unknown = JSON.parse(
+        window.localStorage.getItem(PERSIST_KEY) ?? "{}",
+      );
+      expect(persisted).toMatchObject({
+        state: { home: { density: "comfortable" } },
       });
+      expect(JSON.stringify(persisted)).not.toContain("tasks");
     });
 
     it("takes its own defaults when the slice is not an object at all", async () => {

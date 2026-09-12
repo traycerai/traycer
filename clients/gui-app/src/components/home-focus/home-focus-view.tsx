@@ -1,11 +1,20 @@
 /**
- * The Home tab's surface: everything happening across every task on the host,
- * with whatever wants the user first.
+ * The Home tab's surface: every task with something happening in it, whatever
+ * wants the user first.
+ *
+ * ONE reading, and that is the decision this page most recently made. It used
+ * to offer two - a flat list of everything, and the same activity grouped under
+ * its tasks - behind an in-page switch. The flat one asked the reader to hold
+ * four sections and a task column in their head, so it went, and with it the
+ * separate prompt list: a task waiting on an approval appeared twice, once as a
+ * prompt and once as a task, in two vocabularies with two counts. Now a task
+ * appears once, in the section that says whether it is waiting on the user, and
+ * everything under it hangs off the chat it belongs to.
  *
  * Sections are omitted when they hold nothing rather than rendered empty, so
  * the page shrinks to what is true right now, and the empty state only appears
- * when all three are empty. Ordering is the model's - this file renders, it
- * does not sort.
+ * when both are empty. Ordering is the model's - this file renders, it does not
+ * sort.
  *
  * Live updates arrive as new model values on the same mounted tree: rows carry
  * stable keys (a prompt's feed id, a task's epic id, a background job's key),
@@ -13,41 +22,31 @@
  * timestamps subscribe to the app's shared 60s clock inside their own leaves
  * rather than holding a timer here.
  */
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import {
-  SettingsSegmentedControl,
-  type SettingsSegmentedOption,
-} from "@/components/settings/controls/settings-segmented-control";
-import {
-  HomeFocusBackgroundRow,
-  HomeFocusBrowserRow,
   HomeFocusPromptRow,
-  HomeFocusTaskRow,
   type HomeFocusRowActions,
 } from "@/components/home-focus/home-focus-rows";
-import { HomeFocusTaskGroups } from "@/components/home-focus/home-focus-task-groups";
+import {
+  HomeFocusTaskGroups,
+  type HomeFocusTaskDisclosure,
+} from "@/components/home-focus/home-focus-task-groups";
 import { useFocusActions } from "@/hooks/home-focus/use-focus-actions";
 import { useFocusModel } from "@/hooks/home-focus/use-focus-model";
-import { trackSettingChanged } from "@/lib/analytics";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import {
   selectTaskGroups,
+  selectTaskSections,
   type FocusTaskGroup,
 } from "@/lib/home-focus/focus-task-groups";
-import {
-  epicIdsWithJobs,
-  focusCounts,
-  runningTasks,
-} from "@/lib/home-focus/focus-running";
-import { focusActivityHostIds } from "@/lib/home-focus/focus-host-groups";
 import {
   focusPromptHostId,
   groupRowsByHost,
   resolveFocusHostId,
-  splitTaskByHost,
   splitTaskGroupByHost,
+  type FocusTaskGroupHostSlice,
 } from "@/lib/home-focus/focus-host-groups";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
@@ -57,56 +56,44 @@ import {
 import { HomeHostGroupedContext } from "@/components/home-focus/home-host-grouped-context";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { historyTabIntent } from "@/lib/tab-navigation/intents";
-import { useLayoutStore, type HomeView } from "@/stores/settings/layout-store";
-import type { FocusModel } from "@/lib/home-focus/focus-model";
+import type { FocusModel, FocusPromptRow } from "@/lib/home-focus/focus-model";
 
-const BACKGROUND_CAPTION = "Only tasks open in this window";
-/** The Browsers section makes the same window-local claim, in the same words:
- * a browser inventory rides a coordinator a mounted canvas holds, so a task
- * nobody has opened here contributes no pages. */
-const BROWSERS_CAPTION = BACKGROUND_CAPTION;
 /**
- * The same window-local limit, said the way the Tasks section needs it said.
+ * The same window-local limit both sections carry, said the way a task list
+ * needs it said.
  *
- * Focus's caption sits on a section that IS the background list, so "only tasks
- * open in this window" scopes the rows under it. Under Tasks the heading covers
- * every task, background or not, and the limit binds a PART of each row - the
- * `N bg` badge and the job children - so the caption has to name what is
- * bounded rather than appear to bound the task list itself.
+ * The heading covers every task, background or not, and the limit binds a PART
+ * of each row - the `N bg` badge, the `N browsers` badge and the job and page
+ * children - so the caption has to name what is bounded rather than appear to
+ * bound the task list itself.
  */
-const TASKS_BACKGROUND_CAPTION =
-  "Background shown for tasks open in this window";
+const BACKGROUND_CAPTION = "Background shown for tasks open in this window";
+/** Frozen so the Running section hands the same array identity every render
+ * rather than a fresh one. */
+const RUNNING_CAPTIONS: ReadonlyArray<string> = Object.freeze([
+  BACKGROUND_CAPTION,
+]);
 const NOTIFICATIONS_LOCAL_CAPTION = "this host only";
 // Deliberately does not name other hosts: `disconnected` is also what THIS
-// client's own activity stream reports when it is closed, and then the Running
-// section can be empty outright rather than merely partial.
+// client's own activity stream reports when it is closed, and then a section
+// can be empty outright rather than merely partial.
 const ACTIVITY_NOTICE = "Some activity may be missing";
 
-const HOME_VIEW_OPTIONS: ReadonlyArray<SettingsSegmentedOption<HomeView>> = [
-  { value: "focus", label: "Focus" },
-  { value: "tasks", label: "Tasks" },
-];
-
-/** What Focus hands `viewIsEmpty` and `HomeFocusSections` in place of a
- * grouping neither of them reads. */
-const NO_TASK_GROUPS: ReadonlyArray<FocusTaskGroup> = Object.freeze([]);
-
-/** For a section whose rows cannot be evidence of an activity-plane gap. */
-const NO_DEGRADED_HOSTS: ReadonlyArray<string> = Object.freeze([]);
-
 /**
- * The anchors the summary line jumps to.
+ * How many tasks may open at once on first entry.
  *
- * `running` is one id across both views on purpose: Focus's `Running` and
- * Tasks's `Tasks` are the same band of the page answering the same question,
- * and only one of them is ever mounted, so a segment that means "take me to the
- * work" needs one target rather than a branch.
+ * Above it every row is collapsed, because an expand-all on a busy account is a
+ * page the user has to scroll before they can see how many tasks there even
+ * are - and the count in each section heading already tells them. Counted over
+ * the WHOLE page rather than per section: the reader scrolls one page, and a
+ * rule applied twice would expand eight tasks whenever they happened to be
+ * four and four.
  */
+const EXPAND_ALL_MAX_TASKS = 3;
+
 const SECTION_IDS = {
   needsYou: "home-focus-needs-you",
   running: "home-focus-running",
-  background: "home-focus-background",
-  browsers: "home-focus-browsers",
 } as const;
 
 interface HomeSummarySegment {
@@ -153,95 +140,41 @@ function summaryHostBreakdown(
  * The whole page in one line, and the one line a user reads before deciding
  * whether to read the page.
  *
- * **It names only sections the CURRENT VIEW renders**, which is why it takes
- * the view rather than just the model. Focus draws three sections and gets
- * three segments. Tasks draws two - the global Needs you, and one Tasks section
- * where running work and background work are grouped together - so it gets
- * `N need you · N tasks`, with the task count being the groups it actually
- * lists. A `background` segment there pointed at a region Tasks never mounts,
- * so the click found no element and did nothing at all; on a background-only
- * account it was the only button on the line and it was inert.
+ * It names the two sections the page draws and counts exactly what they list at
+ * their top level, so a segment can never promise a number the section under it
+ * does not show. A zero segment is omitted rather than greyed - "0 running" is
+ * a fact nobody came here for, and always-present segments would make the ones
+ * that matter harder to find.
  *
  * Each segment is a real button that moves focus to its section rather than an
  * anchor that only scrolls: on a long Home the keyboard user is the one who
  * most needs to skip, and `scroll-mt-4` on the section keeps the heading clear
  * of the top edge when it lands.
- *
- * A zero segment is omitted rather than greyed - "0 background" is a fact
- * nobody came here for, and always-present segments would make the ones that
- * matter harder to find. Counts come from `focusCounts` and from the same
- * grouping the Tasks section renders, so a segment can never promise a section
- * that is not there.
  */
 function HomeSummaryLine(props: {
-  readonly view: HomeView;
-  readonly model: FocusModel;
-  readonly groups: ReadonlyArray<FocusTaskGroup>;
+  readonly sections: HomeSections;
   readonly grouping: HomeHostGrouping;
 }): ReactNode {
-  const { model, grouping } = props;
-  const counts = focusCounts(model);
-  const needsYou: HomeSummarySegment = {
-    id: SECTION_IDS.needsYou,
-    count: counts.needsYou,
-    label: "need you",
-    perHost: model.prompts.map((row) => ({
-      hostId: focusPromptHostId(row),
-    })),
-  };
-  const segments: ReadonlyArray<HomeSummarySegment> = (
-    props.view === "tasks"
-      ? [
-          needsYou,
-          {
-            id: SECTION_IDS.running,
-            count: props.groups.length,
-            label: props.groups.length === 1 ? "task" : "tasks",
-            perHost: props.groups.flatMap((group) =>
-              splitTaskGroupByHost(group, {
-                enabled: grouping.enabled,
-                activeHostId: grouping.activeHostId,
-              }).map((slice) => ({ hostId: slice.hostId })),
-            ),
-          },
-        ]
-      : [
-          needsYou,
-          {
-            id: SECTION_IDS.running,
-            count: counts.running,
-            label: "running",
-            // One entry per task PER HOST, matching the rows the section
-            // draws: a two-host task contributes to both machines, while the
-            // visible number stays `counts.running`, which counts tasks.
-            perHost: runningTasks(
-              model.tasks,
-              epicIdsWithJobs(model.background),
-            ).flatMap((task) =>
-              splitTaskByHost(
-                task,
-                model.background.filter((job) => job.epicId === task.epicId),
-                {
-                  enabled: grouping.enabled,
-                  activeHostId: grouping.activeHostId,
-                },
-              ).map((slice) => ({ hostId: slice.hostId })),
-            ),
-          },
-          {
-            id: SECTION_IDS.background,
-            count: counts.background,
-            label: "background",
-            perHost: model.background.map((row) => ({ hostId: row.hostId })),
-          },
-          {
-            id: SECTION_IDS.browsers,
-            count: counts.browsers,
-            label: counts.browsers === 1 ? "browser" : "browsers",
-            perHost: model.browsers.map((row) => ({ hostId: row.hostId })),
-          },
-        ]
-  ).filter((segment) => segment.count > 0);
+  const { sections, grouping } = props;
+  const segments: ReadonlyArray<HomeSummarySegment> = [
+    {
+      id: SECTION_IDS.needsYou,
+      count: sectionCount(sections.needsYou),
+      label: "need you",
+      perHost: [
+        ...sliceHosts(sections.needsYou.slices),
+        ...sections.needsYou.prompts.map((row) => ({
+          hostId: focusPromptHostId(row),
+        })),
+      ],
+    },
+    {
+      id: SECTION_IDS.running,
+      count: sectionCount(sections.running),
+      label: "running",
+      perHost: sliceHosts(sections.running.slices),
+    },
+  ].filter((segment) => segment.count > 0);
   if (segments.length === 0) return null;
   return (
     <div
@@ -258,7 +191,7 @@ function HomeSummaryLine(props: {
             </span>
           )}
           <TooltipWrapper
-            label={summaryHostBreakdown(segment, props.grouping)}
+            label={summaryHostBreakdown(segment, grouping)}
             side="bottom"
             sideOffset={undefined}
             align={undefined}
@@ -270,9 +203,7 @@ function HomeSummaryLine(props: {
               data-testid="home-focus-summary-segment"
               data-segment={segment.label}
               data-target={segment.id}
-              data-hosts={
-                summaryHostBreakdown(segment, props.grouping) ?? undefined
-              }
+              data-hosts={summaryHostBreakdown(segment, grouping) ?? undefined}
             >
               {segment.count} {segment.label}
             </button>
@@ -281,6 +212,12 @@ function HomeSummaryLine(props: {
       ))}
     </div>
   );
+}
+
+function sliceHosts(
+  slices: ReadonlyArray<FocusTaskGroupHostSlice>,
+): ReadonlyArray<{ readonly hostId: string | null }> {
+  return slices.map((slice) => ({ hostId: slice.hostId }));
 }
 
 /**
@@ -298,71 +235,209 @@ function focusSection(id: string): void {
   section.focus({ preventScroll: true });
 }
 
+/**
+ * One section's rows as the page will draw them: the task slices, plus the
+ * prompt rows that belong to no task at all.
+ */
+interface HomeSection {
+  readonly slices: ReadonlyArray<FocusTaskGroupHostSlice>;
+  readonly prompts: ReadonlyArray<FocusPromptRow>;
+}
+
+interface HomeSections {
+  readonly needsYou: HomeSection;
+  readonly running: HomeSection;
+  /** Every task group on the page, before the host split - what the expand rule
+   * counts and what decides whether there is anything to draw. */
+  readonly groups: ReadonlyArray<FocusTaskGroup>;
+}
+
+/** A section's own number, which is what its heading and its summary segment
+ * both read: the rows it lists at its top level. */
+function sectionCount(section: HomeSection): number {
+  return section.slices.length + section.prompts.length;
+}
+
+/** The React key AND the disclosure key for one machine's share of a task. Two
+ * ids that cannot collide, joined on a byte neither can contain.
+ *
+ * Per HOST rather than per task, because a task worked from two machines is two
+ * rows the reader opens independently - and safe as a disclosure key across a
+ * section move, since prompts never open a host group of their own, so
+ * answering a prompt cannot change which hosts a task is split across. */
+function hostSliceKey(epicId: string, hostId: string): string {
+  return [epicId, hostId].join("\u0000");
+}
+
+/**
+ * Which task rows are open, held ABOVE the two sections.
+ *
+ * It has to live here rather than in the row, and the reason is the section
+ * split: answering a task's last prompt moves it from `Needs you` to `Running`,
+ * which unmounts its `<li>` from one subtree and mounts a new one in the other.
+ * A key is only stable within one parent, so row-local state collapsed a task
+ * the user had just opened, at the exact moment they had acted on it.
+ *
+ * Two pieces of state, and they answer different questions. `expandAll` is the
+ * page's default, LATCHED on the first render that actually has tasks - not on
+ * mount, because this component renders from the app's first frame, and the
+ * notification feed can arrive before the activity plane: a page holding one
+ * orphan prompt and no tasks would latch `0 <= 3` and then throw twenty tasks
+ * open when they landed. `overrides` is the rows the user has since touched.
+ *
+ * Both are adjusted DURING render rather than from an effect, which is the
+ * supported shape for state derived from props: React re-runs this component
+ * immediately, before committing, so nothing paints twice, and both writes are
+ * idempotent - the second pass finds the latch set and nothing stale to prune.
+ */
+const NO_OVERRIDES: ReadonlyMap<string, boolean> = new Map();
+
+function useTaskDisclosure(
+  sections: HomeSections,
+  /** Every row key the page is about to draw. Anything else in `overrides` is a
+   * task that has left the model, and its choice goes with it - so a task that
+   * comes back comes back at the page's default, which is the self-pruning the
+   * row-local state gave for free. */
+  liveKeys: ReadonlySet<string>,
+): HomeFocusTaskDisclosure {
+  const [expandAll, setExpandAll] = useState<boolean | null>(null);
+  const [overrides, setOverrides] =
+    useState<ReadonlyMap<string, boolean>>(NO_OVERRIDES);
+  const taskCount = sections.groups.length;
+  if (expandAll === null && taskCount > 0) {
+    setExpandAll(taskCount <= EXPAND_ALL_MAX_TASKS);
+  }
+  if (hasStaleKey(overrides, liveKeys)) {
+    setOverrides(
+      new Map(Array.from(overrides).filter(([key]) => liveKeys.has(key))),
+    );
+  }
+  const fallback = expandAll ?? true;
+  return {
+    isExpanded: (key) => overrides.get(key) ?? fallback,
+    toggle: (key) => {
+      setOverrides((previous) => {
+        const next = new Map(previous);
+        next.set(key, !(previous.get(key) ?? fallback));
+        return next;
+      });
+    },
+  };
+}
+
+function hasStaleKey(
+  overrides: ReadonlyMap<string, boolean>,
+  liveKeys: ReadonlySet<string>,
+): boolean {
+  for (const key of overrides.keys()) {
+    if (!liveKeys.has(key)) return true;
+  }
+  return false;
+}
+
+/** Every task row key the page is drawing, across both sections. */
+function liveSliceKeys(sections: HomeSections): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const section of [sections.needsYou, sections.running]) {
+    for (const slice of section.slices) {
+      keys.add(hostSliceKey(slice.group.epicId, slice.hostId));
+    }
+  }
+  return keys;
+}
+
+/**
+ * Splits the model into the two sections and their host slices, and files every
+ * prompt no slice ended up carrying.
+ *
+ * That last part is the honest half. A prompt reaches a task group by `epicId`,
+ * and three things can leave one unplaced: an approval whose payload carried no
+ * epic id (they are optional on the wire), an epic with a pending prompt and no
+ * running agent, warm chat or open page to make a group out of, and the host
+ * split, which files a prompt under the machine it was RAISED on and drops it
+ * from the slices of machines that did not raise it. Home's tab badge counts
+ * prompts, so a prompt the page cannot show is a badge reading `1` over a page
+ * showing nothing. Listing what no slice took - computed FROM the slices rather
+ * than from a second guess at the same rule - is what makes that impossible
+ * instead of merely unlikely.
+ */
+function selectHomeSections(
+  model: FocusModel,
+  grouping: HomeHostGrouping,
+): HomeSections {
+  const groups = selectTaskGroups(model);
+  const sections = selectTaskSections(groups);
+  const splitOptions = {
+    enabled: grouping.enabled,
+    activeHostId: grouping.activeHostId,
+  };
+  const needsYouSlices = sections.needsYou.flatMap((group) =>
+    splitTaskGroupByHost(group, splitOptions),
+  );
+  const runningSlices = sections.running.flatMap((group) =>
+    splitTaskGroupByHost(group, splitOptions),
+  );
+  const placed = new Set<string>();
+  for (const slice of [...needsYouSlices, ...runningSlices]) {
+    for (const prompt of slice.group.prompts) placed.add(prompt.key);
+  }
+  return {
+    needsYou: {
+      slices: needsYouSlices,
+      prompts: model.prompts.filter((prompt) => !placed.has(prompt.key)),
+    },
+    running: { slices: runningSlices, prompts: [] },
+    groups,
+  };
+}
+
 export function HomeFocusView(): ReactNode {
   const model = useFocusModel();
   const actions: HomeFocusRowActions = useFocusActions();
-  const view = useLayoutStore((state) => state.home.view);
-  const setHomeView = useLayoutStore((state) => state.setHomeView);
-  // Grouped only for the view that renders groups. Focus reads its emptiness
-  // off the model alone (`viewIsEmpty`) and draws none of these rows, so on the
-  // default view this is a pass over prompts and background rows that nothing
-  // consumes. The frozen empty array keeps the identity stable across Focus
-  // renders rather than handing consumers a fresh `[]` each time.
   const hostGrouping = useHomeHostGroups(model);
-  const groups = useMemo(
-    () => (view === "tasks" ? selectTaskGroups(model) : NO_TASK_GROUPS),
-    [model, view],
+  const sections = useMemo(
+    () => selectHomeSections(model, hostGrouping),
+    [model, hostGrouping],
   );
+  const liveKeys = useMemo(() => liveSliceKeys(sections), [sections]);
+  // Above the empty branch, because it is above the SECTION split: a hook that
+  // only ran while the page had rows would lose the latch and every open row
+  // the moment the model briefly emptied.
+  const disclosure = useTaskDisclosure(sections, liveKeys);
+  const empty =
+    sections.groups.length === 0 && sections.needsYou.prompts.length === 0;
   return (
     // One landmark for the whole page - the inner groups are plain containers
     // with `h2` headings so a screen reader gets a heading outline rather than
-    // three more regions to step through.
+    // two more regions to step through.
     <section
       aria-label="Home"
       data-testid="home-focus-view"
-      data-view={view}
       className="h-full w-full overflow-y-auto"
     >
       {/* `pb-safe-bottom-gutter`, not `pb-6`: the page scrolls to its own end,
           so the last row has to clear the home indicator on a phone and still
           keep a real gutter on a desktop where every inset is zero. */}
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-6 pb-safe-bottom-gutter">
-        {/* A control row rather than a title bar. Home's name is already on the
-            tab that opened it, so repeating it here would cost the first
-            section a line of vertical space and say nothing - the one thing
-            this row adds is the choice, and it is right-aligned so the page
-            still starts, visually, with Needs you. */}
-        <div className="flex items-center justify-end px-3">
-          <SettingsSegmentedControl
-            value={view}
-            options={HOME_VIEW_OPTIONS}
-            onChange={(next) => {
-              trackSettingChanged("layout", "layout.home.view");
-              setHomeView(next);
-            }}
-            ariaLabel="Home view"
-          />
-        </div>
-        <HomeSummaryLine
-          view={view}
-          model={model}
-          groups={groups}
-          grouping={hostGrouping}
-        />
+        <HomeSummaryLine sections={sections} grouping={hostGrouping} />
         <ActivityCoverageNotice
           activity={model.coverage.activity}
-          attributedPerHost={degradedHostsAreVisible(model, hostGrouping)}
+          attributedPerHost={degradedHostsAreVisible(
+            model,
+            hostGrouping,
+            sections,
+          )}
         />
-        {viewIsEmpty(view, model, groups) ? (
+        {empty ? (
           <HomeFocusEmptyState />
         ) : (
           <HomeHostGroupedContext.Provider value={hostGrouping.enabled}>
             <HomeFocusSections
-              view={view}
               model={model}
-              groups={groups}
+              sections={sections}
               actions={actions}
               grouping={hostGrouping}
+              disclosure={disclosure}
             />
           </HomeHostGroupedContext.Provider>
         )}
@@ -372,109 +447,97 @@ export function HomeFocusView(): ReactNode {
 }
 
 /**
- * Whether the CHOSEN VIEW has anything to draw - which is not the same question
- * as whether the model is empty, and the difference is a blank page.
- *
- * The two views render different projections of the same model, so "nothing to
- * show" has to be asked of the projection. Tasks draws prompts and groups and
- * has no Background section, so a model whose only content is background work
- * would pass a model-level emptiness check, suppress the empty state, and then
- * render both of its sections as `null`: a page with a segmented control and
- * nothing under it, saying neither what is running nor that anything is hidden.
- *
- * `selectTaskGroups` keeps the gap from being wide - it groups background-only
- * epics too, so Tasks is genuinely empty far less often than it would be on an
- * intersection - but "far less often" is not "never", and the empty state is
- * the honest thing to draw when it is.
- *
- * `groups` is READ ON THE TASKS BRANCH ONLY, and that is a requirement rather
- * than an accident: the caller does not compute a grouping for Focus, so under
- * Focus the argument is an empty array that says nothing about the model.
- * Focus's own answer comes off the model, exactly as it did before either view
- * existed.
+ * The two sections, in order. They share one disclosure store, owned above
+ * them, because a task moving between them must not lose the row the user just
+ * opened - see {@link useTaskDisclosure}.
  */
-function viewIsEmpty(
-  view: HomeView,
-  model: FocusModel,
-  groups: ReadonlyArray<FocusTaskGroup>,
-): boolean {
-  if (model.prompts.length > 0) return false;
-  if (view === "tasks") return groups.length === 0;
+function HomeFocusSections(props: {
+  readonly model: FocusModel;
+  readonly sections: HomeSections;
+  readonly actions: HomeFocusRowActions;
+  readonly grouping: HomeHostGrouping;
+  readonly disclosure: HomeFocusTaskDisclosure;
+}): ReactNode {
+  const { model, sections, actions, grouping, disclosure } = props;
   return (
-    model.tasks.length === 0 &&
-    model.background.length === 0 &&
-    model.browsers.length === 0
+    <>
+      <HomeTaskSection
+        title="Needs you"
+        id={SECTION_IDS.needsYou}
+        testId="home-focus-section-needs-you"
+        section={sections.needsYou}
+        // The feed's reach is stated HERE and nowhere else: it bounds which
+        // tasks can be in this section at all, and the section below it is not
+        // built from notifications.
+        captions={
+          model.coverage.notifications === "local"
+            ? [NOTIFICATIONS_LOCAL_CAPTION, BACKGROUND_CAPTION]
+            : [BACKGROUND_CAPTION]
+        }
+        actions={actions}
+        grouping={grouping}
+        degradedHostIds={model.coverage.degradedHostIds}
+        disclosure={disclosure}
+      />
+      <HomeTaskSection
+        title="Running"
+        id={SECTION_IDS.running}
+        testId="home-focus-section-running"
+        section={sections.running}
+        captions={RUNNING_CAPTIONS}
+        actions={actions}
+        grouping={grouping}
+        degradedHostIds={model.coverage.degradedHostIds}
+        disclosure={disclosure}
+      />
+    </>
   );
 }
 
 /**
- * What each view lists, and in what order.
+ * The machines this page draws a LABELLED host group for - which is exactly the
+ * set that can carry a coverage notice, because `hostRowGroups` puts the notice
+ * on a group's subheading and nowhere else.
  *
- * `Needs you` is FIRST AND GLOBAL in both, deliberately: the two views disagree
- * about how running work is arranged, never about where the things waiting on
- * the user live. Tasks has no Background section of its own - a job is listed
- * under the task it belongs to, including when that task has nothing running
- * and is on the page for its background work alone.
+ * Read off the rendered slices rather than off the model, and that is the whole
+ * point. Asking the model which hosts are "visible" answers a similar-sounding
+ * question with a different set: a prompt's origin host counts as a visible
+ * activity host there, but an UNPLACED prompt renders in the section's
+ * unlabelled tail, which has no subheading and therefore no notice. A degraded
+ * host present only as an orphan prompt then suppressed a banner that nothing
+ * had replaced.
  */
-function HomeFocusSections(props: {
-  readonly view: HomeView;
-  readonly model: FocusModel;
-  readonly groups: ReadonlyArray<FocusTaskGroup>;
-  readonly actions: HomeFocusRowActions;
-  readonly grouping: HomeHostGrouping;
-}): ReactNode {
-  const { model, actions, grouping } = props;
-  if (props.view === "tasks") {
-    return (
-      <>
-        <PromptsSection model={model} actions={actions} grouping={grouping} />
-        <TaskGroupsSection
-          groups={props.groups}
-          actions={actions}
-          grouping={grouping}
-          degradedHostIds={model.coverage.degradedHostIds}
-        />
-      </>
-    );
+function noticeBearingHostIds(sections: HomeSections): ReadonlySet<string> {
+  const hostIds = new Set<string>();
+  for (const section of [sections.needsYou, sections.running]) {
+    for (const slice of section.slices) hostIds.add(slice.hostId);
   }
-  return (
-    <>
-      <PromptsSection model={model} actions={actions} grouping={grouping} />
-      <TasksSection model={model} actions={actions} grouping={grouping} />
-      <BackgroundSection model={model} actions={actions} grouping={grouping} />
-      <BrowsersSection model={model} actions={actions} grouping={grouping} />
-    </>
-  );
+  return hostIds;
 }
 
 /**
  * Whether every degraded host has a group on this page to carry its notice.
  *
  * The page-wide banner stands down only when something downstream is saying the
- * same thing in a better place. A degraded host with NO visible rows has no
- * group and therefore no subheading, so suppressing the banner for it would
- * drop the warning entirely - and that host is exactly the one whose rows are
- * missing BECAUSE its stream is degraded, which is the case the notice exists
- * for.
+ * same thing in a better place. A degraded host with NO group has no subheading
+ * and therefore no notice, so suppressing the banner for it would drop the
+ * warning entirely - and that host is exactly the one whose rows are missing
+ * BECAUSE its stream is degraded, which is the case the notice exists for.
+ *
+ * Derived from what renders, so the two can never come apart: the banner stands
+ * down if and only if every degraded host has a subheading that is saying the
+ * sentence instead.
  */
 function degradedHostsAreVisible(
   model: FocusModel,
   grouping: HomeHostGrouping,
+  sections: HomeSections,
 ): boolean {
   if (!grouping.enabled) return false;
   const degraded = model.coverage.degradedHostIds;
   if (degraded.length === 0) return false;
-  // The ACTIVITY hosts, not every host on the page: a degraded host whose only
-  // rows here are browser tabs has a heading and still cannot carry this
-  // sentence, so the banner has to stay.
-  const visible = focusActivityHostIds(model, grouping.activeHostId);
+  const visible = noticeBearingHostIds(sections);
   return degraded.every((hostId) => visible.has(hostId));
-}
-
-/** The React key for one machine's share of a task. Two ids that cannot collide,
- * joined on the byte neither can contain. */
-function hostSliceKey(epicId: string, hostId: string): string {
-  return [epicId, hostId].join("\u0000");
 }
 
 /**
@@ -531,11 +594,7 @@ function ActivityCoverageNotice(props: {
  * Its own line, at `text-ui-xs`, is what makes the count scannable and the
  * caveat still available.
  *
- * Rows arrive as GROUPS rather than as children. There is exactly one group
- * today, unlabelled, so the DOM is what it was - the seam exists because the
- * next change subdivides these sections by host, and a section that already
- * renders a list of groups takes that as a label appearing rather than as a
- * rewrite of every section on the page.
+ * Rows arrive as GROUPS, one per machine once the page names more than one.
  */
 export interface HomeFocusRowGroup {
   readonly key: string;
@@ -557,7 +616,11 @@ export interface HomeFocusRowGroup {
 function HomeFocusSection(props: {
   readonly title: string;
   readonly count: string;
-  readonly caption: string | null;
+  /** Each caveat on its OWN line. Two sentences joined by a separator would be
+   * the same run-together defect the heading had, one level down - and the page
+   * genuinely has two independent limits to state under Needs you: the
+   * notification feed's reach, and the window-local background plane. */
+  readonly captions: ReadonlyArray<string>;
   readonly testId: string;
   readonly id: string;
   readonly groups: ReadonlyArray<HomeFocusRowGroup>;
@@ -581,15 +644,16 @@ function HomeFocusSection(props: {
         >
           {props.title} · {props.count}
         </h2>
-        {props.caption === null ? null : (
-          <p data-testid={`${props.testId}-caption`}>{props.caption}</p>
-        )}
+        {props.captions.map((caption) => (
+          <p key={caption} data-testid={`${props.testId}-caption`}>
+            {caption}
+          </p>
+        ))}
       </div>
       {props.groups.map((group) =>
-        // No wrapper for the unlabelled shape: today's single group has to
-        // render byte-for-byte what the section rendered before the seam
-        // existed, or "one group today, so the DOM is unchanged" is a claim
-        // rather than a fact. A labelled group brings its own box with it.
+        // No wrapper for the unlabelled shape, so a single-host install's DOM
+        // is unchanged by host grouping existing. A labelled group brings its
+        // own box with it.
         group.label === null ? (
           <ul key={group.key} className="flex flex-col">
             {group.rows}
@@ -603,7 +667,7 @@ function HomeFocusSection(props: {
             >
               <div className="flex flex-wrap items-center gap-x-2 text-ui-xs text-muted-foreground">
                 {/* `h3` under the section's `h2`: a reader stepping the heading
-                    outline gets "Background · 3" then the machines under it,
+                    outline gets "Running · 3" then the machines under it,
                     which is the shape the page actually has. */}
                 <h3
                   className="font-medium"
@@ -641,7 +705,7 @@ function HomeFocusSection(props: {
 /**
  * A section's rows, split by machine when the page spans more than one.
  *
- * Falls back to {@link oneRowGroup} whenever grouping is off, so a section's
+ * Falls back to one unlabelled group whenever grouping is off, so a section's
  * call site is the same shape either way and the single-host page keeps the
  * exact DOM it had before host grouping existed.
  *
@@ -689,252 +753,96 @@ function hostRowGroups<Row>(
   }));
 }
 
-function PromptsSection(props: {
-  readonly model: FocusModel;
-  readonly actions: HomeFocusRowActions;
-  readonly grouping: HomeHostGrouping;
-}): ReactNode {
-  const { prompts } = props.model;
-  if (prompts.length === 0) return null;
-  return (
-    <HomeFocusSection
-      title="Needs you"
-      count={String(prompts.length)}
-      caption={
-        props.model.coverage.notifications === "local"
-          ? NOTIFICATIONS_LOCAL_CAPTION
-          : null
-      }
-      testId="home-focus-section-prompts"
-      id={SECTION_IDS.needsYou}
-      groups={hostRowGroups(prompts, focusPromptHostId, {
-        grouping: props.grouping,
-        degradedHostIds: props.model.coverage.degradedHostIds,
-      }).map(({ items, ...group }) => ({
-        ...group,
-        rows: items.map((row) => (
-          <HomeFocusPromptRow key={row.key} row={row} actions={props.actions} />
-        )),
-      }))}
-    />
-  );
-}
-
 /**
- * Running is MID-TURN AGENTS ONLY, wherever Background can show the rest.
+ * One of the page's two task lists.
  *
- * A WARM task whose agents are all background-tier is not a Running row: its
- * work is a set of durable jobs, and those are listed once, in Background,
- * under their own names. Listing it here as well is what made the page show
- * `Running · Greeting and Introduction · background` and
- * `Background · 10min heartbeat · running 5h` about one monitor.
+ * The same component draws both, because they differ in exactly one thing -
+ * which tasks are in them - and every other question (host grouping, the
+ * background caveat, the disclosure default, what a row looks like) has the
+ * same answer in each. Two components would have been two places to keep that
+ * answer.
  *
- * A task this window has no job row for is the other case, and it keeps its
- * Running row: nothing in Background could stand in for it, so dropping it
- * would take the task off the page rather than de-duplicate it. That is the
- * cold background-only task, reading `background` beside H3's own
- * `n agents · not open in this window`.
- *
- * The heading counts this list rather than `model.tasks`, because a count that
- * included tasks the section does not draw is the same duplication in smaller
- * type.
+ * The trailing prompt rows are the Needs you section's own tail: prompts no
+ * task group could carry. They are LAST, under the tasks, because a row that
+ * cannot say which task it belongs to is the least locatable thing here, and
+ * they render outside the host groups because their own host is the one thing
+ * about them that is usually known and never useful - there is no task there to
+ * read them against.
  */
-function TasksSection(props: {
-  readonly model: FocusModel;
-  readonly actions: HomeFocusRowActions;
-  readonly grouping: HomeHostGrouping;
-}): ReactNode {
-  const jobEpicIds = epicIdsWithJobs(props.model.background);
-  const tasks = runningTasks(props.model.tasks, jobEpicIds);
-  if (tasks.length === 0) return null;
-  return (
-    <HomeFocusSection
-      title="Running"
-      count={tasks.length === 1 ? "1 task" : `${tasks.length} tasks`}
-      caption={null}
-      testId="home-focus-section-tasks"
-      id={SECTION_IDS.running}
-      groups={hostRowGroups(
-        // Split BEFORE grouping. An epic is cloud-homed and can be worked from
-        // several machines at once, so a task has no single host to be filed
-        // under; asking for one filed a two-host task under whichever machine
-        // the user happened to be sitting at. Each slice carries that host's
-        // agents, and a `Stop all` that reaches that host's roots only.
-        tasks.flatMap((task) =>
-          splitTaskByHost(
-            task,
-            props.model.background.filter((job) => job.epicId === task.epicId),
-            {
-              enabled: props.grouping.enabled,
-              activeHostId: props.grouping.activeHostId,
-            },
-          ),
-        ),
-        (slice) => slice.hostId,
-        {
-          grouping: props.grouping,
-          degradedHostIds: props.model.coverage.degradedHostIds,
-        },
-      ).map(({ items, ...group }) => ({
-        ...group,
-        rows: items.map((slice) => (
-          <HomeFocusTaskRow
-            key={hostSliceKey(slice.task.epicId, slice.hostId)}
-            row={slice.task}
-            actions={props.actions}
-            hasVisibleJobs={jobEpicIds.has(slice.task.epicId)}
-            stopAllHostLabel={
-              slice.splitAcrossHosts
-                ? props.grouping.labelOf(slice.hostId)
-                : null
-            }
-          />
-        )),
-      }))}
-    />
-  );
-}
-
-/**
- * The Tasks view's regrouping of Running and Background.
- *
- * There is no separate Background section under this view: a job belongs to the
- * task it runs in, and listing it twice would be the same row under two
- * headings. That only holds because `selectTaskGroups` groups on the UNION of
- * task epics and job epics - a task with a durable shell and no running agent
- * is a group of its own rather than a row with nowhere to go.
- *
- * It carries a Background caption of its own, because this section makes the
- * same window-local claim the Background section does and is the only place a
- * reader can now see it stated. Every `N bg` badge and every job child under it
- * is bounded by that sentence - and only those: the task list itself is not
- * window-local, which is why the wording is not Focus's.
- */
-function TaskGroupsSection(props: {
-  readonly groups: ReadonlyArray<FocusTaskGroup>;
+function HomeTaskSection(props: {
+  readonly title: string;
+  readonly id: string;
+  readonly testId: string;
+  readonly section: HomeSection;
+  readonly captions: ReadonlyArray<string>;
   readonly actions: HomeFocusRowActions;
   readonly grouping: HomeHostGrouping;
   readonly degradedHostIds: ReadonlyArray<string>;
+  readonly disclosure: HomeFocusTaskDisclosure;
 }): ReactNode {
-  const { groups } = props;
-  if (groups.length === 0) return null;
+  const { section, actions, disclosure } = props;
+  const count = sectionCount(section);
+  if (count === 0) return null;
+  const taskGroups = hostRowGroups(section.slices, (slice) => slice.hostId, {
+    grouping: props.grouping,
+    degradedHostIds: props.degradedHostIds,
+  }).map(({ items, ...group }) => ({
+    ...group,
+    rows: (
+      <HomeFocusTaskGroups
+        // Per task: only a task drawn under more than one host names the
+        // machine. A bucket-wide label made an A-only sibling of an A/B task
+        // read `Stop all on A` for a stop that was never scoped.
+        entries={items.map((slice) => ({
+          key: hostSliceKey(slice.group.epicId, slice.hostId),
+          group: slice.group,
+          stopAllHostLabel: slice.splitAcrossHosts
+            ? props.grouping.labelOf(slice.hostId)
+            : null,
+        }))}
+        actions={actions}
+        disclosure={disclosure}
+      />
+    ),
+  }));
+  const groups: ReadonlyArray<HomeFocusRowGroup> =
+    section.prompts.length === 0
+      ? taskGroups
+      : [
+          ...taskGroups,
+          {
+            key: "unplaced-prompts",
+            label: null,
+            count: null,
+            isActive: false,
+            notice: null,
+            // `false`, ALWAYS, and never the page's grouping. The context means
+            // "a host subheading above this row already names its machine", and
+            // this group is the one that deliberately has none - so on a
+            // multi-host page these rows would drop their origin chip and lose
+            // the only host attribution they have.
+            rows: (
+              <HomeHostGroupedContext.Provider value={false}>
+                {section.prompts.map((row) => (
+                  <HomeFocusPromptRow
+                    key={row.key}
+                    row={row}
+                    actions={actions}
+                    showLocation
+                  />
+                ))}
+              </HomeHostGroupedContext.Provider>
+            ),
+          },
+        ];
   return (
     <HomeFocusSection
-      title="Tasks"
-      count={groups.length === 1 ? "1 task" : `${groups.length} tasks`}
-      caption={TASKS_BACKGROUND_CAPTION}
-      testId="home-focus-section-task-groups"
-      id={SECTION_IDS.running}
-      groups={hostRowGroups(
-        // The same split one level up: a group worked from two machines
-        // appears under each, holding that host's agents, jobs and prompts. A
-        // background-only group follows each job's chat host, so it splits too.
-        groups.flatMap((group) =>
-          splitTaskGroupByHost(group, {
-            enabled: props.grouping.enabled,
-            activeHostId: props.grouping.activeHostId,
-          }),
-        ),
-        (slice) => slice.hostId,
-        {
-          grouping: props.grouping,
-          degradedHostIds: props.degradedHostIds,
-        },
-      ).map(({ items, ...group }) => ({
-        ...group,
-        rows: (
-          <HomeFocusTaskGroups
-            // Per task: only a task drawn under more than one host names the
-            // machine. A bucket-wide label made an A-only sibling of an A/B
-            // task read `Stop all on A` for a stop that was never scoped.
-            entries={items.map((slice) => ({
-              group: slice.group,
-              stopAllHostLabel: slice.splitAcrossHosts
-                ? props.grouping.labelOf(slice.hostId)
-                : null,
-            }))}
-            actions={props.actions}
-          />
-        ),
-      }))}
-    />
-  );
-}
-
-function BackgroundSection(props: {
-  readonly model: FocusModel;
-  readonly actions: HomeFocusRowActions;
-  readonly grouping: HomeHostGrouping;
-}): ReactNode {
-  const { background } = props.model;
-  if (background.length === 0) return null;
-  return (
-    <HomeFocusSection
-      title="Background"
-      count={String(background.length)}
-      caption={BACKGROUND_CAPTION}
-      testId="home-focus-section-background"
-      id={SECTION_IDS.background}
-      groups={hostRowGroups(background, (row) => row.hostId, {
-        grouping: props.grouping,
-        degradedHostIds: props.model.coverage.degradedHostIds,
-      }).map(({ items, ...group }) => ({
-        ...group,
-        rows: items.map((row) => (
-          <HomeFocusBackgroundRow
-            key={row.key}
-            row={row}
-            actions={props.actions}
-          />
-        )),
-      }))}
-    />
-  );
-}
-
-/**
- * Every browser tab open in this window, one row per page.
- *
- * LAST, under Background, and that placement is the claim: a page is the least
- * urgent thing on this list. It is not waiting on anyone, not burning a turn,
- * and not going away - it is there so that a user who knows an agent was
- * working in a browser can find that browser without opening the task and
- * hunting the canvas for it.
- *
- * Grouped by host like every other section, because a browser session is
- * host-local for life: a page open on the remote box is genuinely somewhere
- * else, and clicking it takes you there.
- */
-function BrowsersSection(props: {
-  readonly model: FocusModel;
-  readonly actions: HomeFocusRowActions;
-  readonly grouping: HomeHostGrouping;
-}): ReactNode {
-  const { browsers } = props.model;
-  if (browsers.length === 0) return null;
-  return (
-    <HomeFocusSection
-      title="Browsers"
-      count={String(browsers.length)}
-      caption={BROWSERS_CAPTION}
-      testId="home-focus-section-browsers"
-      id={SECTION_IDS.browsers}
-      groups={hostRowGroups(browsers, (row) => row.hostId, {
-        grouping: props.grouping,
-        // No coverage notice under these headings: it is the ACTIVITY plane's
-        // sentence, and a browser inventory rides its own stream. Saying it
-        // here would attribute a gap to the one section that does not have it.
-        degradedHostIds: NO_DEGRADED_HOSTS,
-      }).map(({ items, ...group }) => ({
-        ...group,
-        rows: items.map((row) => (
-          <HomeFocusBrowserRow
-            key={row.key}
-            row={row}
-            actions={props.actions}
-          />
-        )),
-      }))}
+      title={props.title}
+      count={String(count)}
+      captions={props.captions}
+      testId={props.testId}
+      id={props.id}
+      groups={groups}
     />
   );
 }

@@ -8,7 +8,6 @@ import {
   isUnknownHostId,
   resolveFocusHostId,
   shouldGroupByHost,
-  splitTaskByHost,
   UNKNOWN_HOST_ID,
 } from "@/lib/home-focus/focus-host-groups";
 import type {
@@ -19,7 +18,10 @@ import type {
   FocusPromptRow,
   FocusTaskRow,
 } from "@/lib/home-focus/focus-model";
-import { resolveBrowserVia } from "@/lib/home-focus/focus-task-groups";
+import {
+  selectTaskGroupBody,
+  type FocusTaskGroup,
+} from "@/lib/home-focus/focus-task-groups";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 let seq = 0;
@@ -132,6 +134,21 @@ function browserRow(overrides: Partial<FocusBrowserRow>): FocusBrowserRow {
   };
 }
 
+function groupRow(overrides: Partial<FocusTaskGroup>): FocusTaskGroup {
+  const task = overrides.task === undefined ? taskRow({}) : overrides.task;
+  return {
+    epicId: task?.epicId ?? "epic-1",
+    taskTitle: "Task",
+    task,
+    prompts: [],
+    agents: task?.agents ?? [],
+    jobs: [],
+    browsers: [],
+    backgroundVisible: false,
+    ...overrides,
+  };
+}
+
 function model(overrides: Partial<FocusModel>): FocusModel {
   return {
     prompts: [],
@@ -170,22 +187,23 @@ describe("resolveFocusHostId", () => {
   });
 });
 
-describe("splitTaskByHost", () => {
+describe("splitTaskGroupByHost", () => {
   // The defect this replaced: an epic is cloud-homed and can be worked from
   // two machines, so `agents` holds both - and asking for the task's one host
   // answered `null`, which resolved to whichever machine the user was at.
   it("splits a task worked from two hosts into one slice each", () => {
-    const task = taskRow({
-      epicId: "epic-shared",
-      agents: [
-        agentRow({ agentId: "agent-a", hostId: "host-a" }),
-        agentRow({ agentId: "agent-b", hostId: "host-b" }),
-      ],
-    });
-    const slices = splitTaskByHost(task, [], {
-      enabled: true,
-      activeHostId: "host-active",
-    });
+    const slices = splitTaskGroupByHost(
+      groupRow({
+        task: taskRow({
+          epicId: "epic-shared",
+          agents: [
+            agentRow({ agentId: "agent-a", hostId: "host-a" }),
+            agentRow({ agentId: "agent-b", hostId: "host-b" }),
+          ],
+        }),
+      }),
+      { enabled: true, activeHostId: "host-active" },
+    );
 
     expect(slices.map((slice) => slice.hostId).sort()).toEqual([
       "host-a",
@@ -193,90 +211,136 @@ describe("splitTaskByHost", () => {
     ]);
     for (const slice of slices) {
       expect(slice.splitAcrossHosts).toBe(true);
-      expect(slice.task.agents).toHaveLength(1);
-      expect(slice.task.agents[0].hostId).toBe(slice.hostId);
+      expect(slice.group.agents).toHaveLength(1);
+      expect(slice.group.agents[0].hostId).toBe(slice.hostId);
+      expect(slice.group.task?.agents).toEqual(slice.group.agents);
       // Never the active host: the task names two machines and neither is it.
       expect(slice.hostId).not.toBe("host-active");
     }
   });
 
   it("leaves a single-host task whole, by identity", () => {
-    const task = taskRow({
-      agents: [agentRow({ hostId: "host-a" }), agentRow({ hostId: "host-a" })],
+    const group = groupRow({
+      task: taskRow({
+        agents: [
+          agentRow({ hostId: "host-a" }),
+          agentRow({ hostId: "host-a" }),
+        ],
+      }),
     });
-    const slices = splitTaskByHost(task, [], {
+    const slices = splitTaskGroupByHost(group, {
       enabled: true,
       activeHostId: "host-active",
     });
 
     expect(slices).toHaveLength(1);
     expect(slices[0].splitAcrossHosts).toBe(false);
-    expect(slices[0].task).toBe(task);
+    expect(slices[0].group).toBe(group);
   });
 
   it("files each job under its own chat's host", () => {
-    const task = taskRow({
-      epicId: "epic-1",
-      agents: [agentRow({ hostId: "host-a" })],
-    });
-    const jobs = [
-      backgroundRow({ key: "a", epicId: "epic-1", hostId: "host-a" }),
-      backgroundRow({ key: "b", epicId: "epic-1", hostId: "host-b" }),
-    ];
-    const slices = splitTaskByHost(task, jobs, {
-      enabled: true,
-      activeHostId: "host-active",
-    });
+    const slices = splitTaskGroupByHost(
+      groupRow({
+        task: taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ hostId: "host-a" })],
+        }),
+        jobs: [
+          backgroundRow({ key: "a", epicId: "epic-1", hostId: "host-a" }),
+          backgroundRow({ key: "b", epicId: "epic-1", hostId: "host-b" }),
+        ],
+        backgroundVisible: true,
+      }),
+      { enabled: true, activeHostId: "host-active" },
+    );
 
     const byHost = new Map(slices.map((slice) => [slice.hostId, slice]));
-    expect(byHost.get("host-a")?.jobs.map((job) => job.key)).toEqual(["a"]);
-    expect(byHost.get("host-b")?.jobs.map((job) => job.key)).toEqual(["b"]);
+    expect(byHost.get("host-a")?.group.jobs.map((job) => job.key)).toEqual([
+      "a",
+    ]);
+    expect(byHost.get("host-b")?.group.jobs.map((job) => job.key)).toEqual([
+      "b",
+    ]);
     // The host that only has a job still gets a slice, with no agents.
-    expect(byHost.get("host-b")?.task.agents).toEqual([]);
+    expect(byHost.get("host-b")?.group.agents).toEqual([]);
   });
 
   // A reachable host's row must not inherit an unreachable sibling's refusal.
   it("re-folds stoppable from the agents that remain", () => {
-    const task = taskRow({
-      stoppable: false,
-      agents: [
-        agentRow({ agentId: "here", hostId: "host-a", stoppable: true }),
-        agentRow({ agentId: "gone", hostId: "host-b", stoppable: false }),
-      ],
-    });
     const byHost = new Map(
-      splitTaskByHost(task, [], {
-        enabled: true,
-        activeHostId: "host-active",
-      }).map((slice) => [slice.hostId, slice]),
+      splitTaskGroupByHost(
+        groupRow({
+          task: taskRow({
+            stoppable: false,
+            agents: [
+              agentRow({ agentId: "here", hostId: "host-a", stoppable: true }),
+              agentRow({ agentId: "gone", hostId: "host-b", stoppable: false }),
+            ],
+          }),
+        }),
+        { enabled: true, activeHostId: "host-active" },
+      ).map((slice) => [slice.hostId, slice]),
     );
-    expect(byHost.get("host-a")?.task.stoppable).toBe(true);
-    expect(byHost.get("host-b")?.task.stoppable).toBe(false);
+    expect(byHost.get("host-a")?.group.task?.stoppable).toBe(true);
+    expect(byHost.get("host-b")?.group.task?.stoppable).toBe(false);
   });
 
   // A single-host page must be byte-identical to the ungrouped one, so the
   // split does not run at all there - it would re-key rows and re-fold
   // `stoppable` for a distinction the page is not drawing.
-  it("returns the task untouched when grouping is off", () => {
-    const task = taskRow({
-      agents: [agentRow({ hostId: "host-a" }), agentRow({ hostId: "host-b" })],
+  it("returns the group untouched when grouping is off", () => {
+    const group = groupRow({
+      task: taskRow({
+        agents: [
+          agentRow({ hostId: "host-a" }),
+          agentRow({ hostId: "host-b" }),
+        ],
+      }),
     });
-    const slices = splitTaskByHost(task, [], {
+    const slices = splitTaskGroupByHost(group, {
       enabled: false,
       activeHostId: "host-active",
     });
     expect(slices).toHaveLength(1);
-    expect(slices[0].task).toBe(task);
+    expect(slices[0].group).toBe(group);
     expect(slices[0].splitAcrossHosts).toBe(false);
   });
 
   it("resolves an unnamed agent host to the active host", () => {
-    const slices = splitTaskByHost(
-      taskRow({ agents: [agentRow({ hostId: null })] }),
-      [],
+    const slices = splitTaskGroupByHost(
+      groupRow({ task: taskRow({ agents: [agentRow({ hostId: null })] }) }),
       { enabled: true, activeHostId: "host-active" },
     );
     expect(slices.map((slice) => slice.hostId)).toEqual(["host-active"]);
+  });
+
+  // A prompt is answered where it was raised, so it belongs to one slice - a
+  // "1 need you" badge under both machines would count one row twice.
+  it("files each prompt under the host it was raised on", () => {
+    const slices = splitTaskGroupByHost(
+      groupRow({
+        task: taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "agent-a", hostId: "host-a" }),
+            agentRow({ agentId: "agent-b", hostId: "host-b" }),
+          ],
+        }),
+        prompts: [
+          promptRow({ key: "p-a", originHostId: "host-a" }),
+          promptRow({ key: "p-b", originHostId: "host-b" }),
+        ],
+      }),
+      { enabled: true, activeHostId: "host-a" },
+    );
+
+    const byHost = new Map(slices.map((slice) => [slice.hostId, slice]));
+    expect(byHost.get("host-a")?.group.prompts.map((row) => row.key)).toEqual([
+      "p-a",
+    ]);
+    expect(byHost.get("host-b")?.group.prompts.map((row) => row.key)).toEqual([
+      "p-b",
+    ]);
   });
 });
 
@@ -316,9 +380,10 @@ describe("focusHostIds and shouldGroupByHost", () => {
     expect(shouldGroupByHost(hostIds)).toBe(true);
   });
 
-  // A task H6 hides must not be the reason the page splits: the reader would
-  // see headings with no row that explains them.
-  it("ignores a task the Running section does not draw", () => {
+  // Every task the model carries becomes a group now - no presentation rule
+  // hides one - so an idle chat on a second machine is a real row, and the
+  // page names its host like any other.
+  it("counts the host of an idle chat that only hosts a job", () => {
     const hostIds = focusHostIds(
       model({
         tasks: [
@@ -331,8 +396,8 @@ describe("focusHostIds and shouldGroupByHost", () => {
       }),
       "host-a",
     );
-    expect([...hostIds]).toEqual(["host-a"]);
-    expect(shouldGroupByHost(hostIds)).toBe(false);
+    expect([...hostIds].sort()).toEqual(["host-a", "host-b"]);
+    expect(shouldGroupByHost(hostIds)).toBe(true);
   });
 
   it("names no host on a page with nothing on it", () => {
@@ -515,11 +580,9 @@ describe("focusHostIds and the browser plane", () => {
 
 describe("splitTaskGroupByHost and browsers", () => {
   it("files each tab under the machine its page is open on", () => {
-    const group = {
+    const group = groupRow({
       epicId: "epic-1",
-      taskTitle: "Task",
       task: null,
-      prompts: [],
       agents: [],
       jobs: [backgroundRow({ epicId: "epic-1", hostId: "host-a" })],
       browsers: [
@@ -527,7 +590,7 @@ describe("splitTaskGroupByHost and browsers", () => {
         browserRow({ hostId: "host-b", tabId: "t2" }),
       ],
       backgroundVisible: true,
-    };
+    });
 
     const slices = splitTaskGroupByHost(group, {
       enabled: true,
@@ -545,29 +608,18 @@ describe("splitTaskGroupByHost and browsers", () => {
     ]);
   });
 
-  // The split is one of the two places the agent set narrows, so a slice must
-  // not be able to inherit a label for an agent that stayed on the other
-  // machine. It carries plain rows for exactly that reason.
-  it("hands each slice plain rows, never a label from the unsplit group", () => {
-    const group = {
+  // The split is one of the two places the chat set narrows, so a slice must
+  // not be able to nest a tab under a chat that stayed on the other machine.
+  // Placement is resolved at the render site for exactly that reason.
+  it("leaves a remote tab with no chat to hang under", () => {
+    const group = groupRow({
       epicId: "epic-1",
-      taskTitle: "Task",
       task: taskRow({
         epicId: "epic-1",
-        agents: [agentRow({ agentId: "chat-1", hostId: "host-a" })],
+        agents: [
+          agentRow({ agentId: "chat-1", hostId: "host-a", title: "Reviewer" }),
+        ],
       }),
-      prompts: [],
-      agents: [
-        {
-          agent: agentRow({
-            agentId: "chat-1",
-            hostId: "host-a",
-            title: "Reviewer",
-          }),
-          via: null,
-        },
-      ],
-      jobs: [],
       browsers: [
         browserRow({
           hostId: "host-b",
@@ -576,8 +628,7 @@ describe("splitTaskGroupByHost and browsers", () => {
           drivenByAgentName: "Reviewer",
         }),
       ],
-      backgroundVisible: false,
-    };
+    });
 
     const slices = splitTaskGroupByHost(group, {
       enabled: true,
@@ -585,18 +636,16 @@ describe("splitTaskGroupByHost and browsers", () => {
     });
     const remote = slices.find((slice) => slice.hostId === "host-b");
 
-    // The driver is on A; the page is on B. B's slice has no Reviewer row, and
-    // `resolveBrowserVia` at the render site is what will say so - there is no
-    // `via` here to carry over.
+    // The driver is on A; the page is on B. B's slice has no Reviewer row, so
+    // the tab sits at task level there.
     expect(remote?.group.agents).toEqual([]);
     expect(remote?.group.browsers.map((row) => row.tabId)).toEqual([
       "t-remote",
     ]);
-    expect(
-      resolveBrowserVia(
-        remote?.group.browsers ?? [],
-        remote?.group.agents ?? [],
-      ).map((entry) => entry.via),
-    ).toEqual([null]);
+    const body = selectTaskGroupBody(
+      remote?.group ?? groupRow({ task: null, agents: [] }),
+    );
+    expect(body.chats).toEqual([]);
+    expect(body.browsers.map((row) => row.tabId)).toEqual(["t-remote"]);
   });
 });

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  resolveBrowserVia,
+  selectTaskGroupBody,
   selectTaskGroups,
-  type FocusTaskGroupAgent,
+  selectTaskSections,
+  taskGroupCounts,
+  unattributedPrompts,
+  type FocusTaskGroupBody,
 } from "@/lib/home-focus/focus-task-groups";
 import type {
   FocusAgentRow,
@@ -15,10 +18,10 @@ import type {
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 /**
- * The join the Tasks view codes against. Everything here is a pure call on a
- * literal model, because the selector's whole job is to be decidable without a
- * store: the counts it produces end up in badges, and a badge that disagrees
- * with the section above it is the one defect this suite exists to catch.
+ * The join Home codes against. Everything here is a pure call on a literal
+ * model, because the selector's whole job is to be decidable without a store:
+ * the counts it produces end up in badges, and a badge that disagrees with the
+ * rows under it is the one defect this suite exists to catch.
  */
 
 let seq = 0;
@@ -334,91 +337,14 @@ describe("selectTaskGroups jobs", () => {
     expect(groups[0].jobs).toEqual([]);
     expect(groups[0].backgroundVisible).toBe(false);
     expect(groups[0].prompts.length).toBe(0);
+    // The agents are still on the group - the page's own cold rule is what
+    // declines to draw them, and it runs at the body.
     expect(groups[0].agents).toHaveLength(1);
-    expect(groups[0].agents[0].via).toBeNull();
-    expect(groups[0].agents[0].agent.title).toBeNull();
+    expect(groups[0].agents[0].title).toBeNull();
   });
 });
 
-describe("selectTaskGroups via labels", () => {
-  it("names the parent for an agent another listed agent started", () => {
-    const groups = selectTaskGroups(
-      model({
-        tasks: [
-          taskRow({
-            epicId: "epic-a",
-            agents: [
-              agentRow({ agentId: "root", title: "impl", parentId: null }),
-              agentRow({
-                agentId: "child",
-                title: "reviewer",
-                parentId: "root",
-              }),
-            ],
-          }),
-        ],
-      }),
-    );
-    expect(groups[0].agents.map((entry) => entry.via)).toEqual([null, "impl"]);
-  });
-
-  it("falls back to 'agent' when the parent has no known title", () => {
-    const groups = selectTaskGroups(
-      model({
-        tasks: [
-          taskRow({
-            epicId: "epic-a",
-            agents: [
-              agentRow({ agentId: "root", title: null }),
-              agentRow({ agentId: "child", title: "docs", parentId: "root" }),
-            ],
-          }),
-        ],
-      }),
-    );
-    expect(groups[0].agents[1].via).toBe("agent");
-  });
-
-  // A parent that is not itself running is not a row on this page, so there is
-  // nothing to say "via" about - the task IS what this agent hangs off.
-  it("leaves via null when the parent is not listed in the task", () => {
-    const groups = selectTaskGroups(
-      model({
-        tasks: [
-          taskRow({
-            epicId: "epic-a",
-            agents: [agentRow({ agentId: "orphan", parentId: "stopped" })],
-          }),
-        ],
-      }),
-    );
-    expect(groups[0].agents[0].via).toBeNull();
-  });
-
-  it("names the immediate parent for a grandchild rather than indenting it", () => {
-    const groups = selectTaskGroups(
-      model({
-        tasks: [
-          taskRow({
-            epicId: "epic-a",
-            agents: [
-              agentRow({ agentId: "root", title: "impl" }),
-              agentRow({ agentId: "mid", title: "reviewer", parentId: "root" }),
-              agentRow({ agentId: "leaf", title: "docs", parentId: "mid" }),
-            ],
-          }),
-        ],
-      }),
-    );
-    expect(groups[0].agents.map((entry) => entry.via)).toEqual([
-      null,
-      "impl",
-      "reviewer",
-    ]);
-  });
-});
-
-// H8: browsers join the union, and a driven tab hangs off the agent driving it.
+// Browsers join the union, and the group carries them flat.
 describe("selectTaskGroups and browsers", () => {
   it("attaches a task's tabs to its group", () => {
     const groups = selectTaskGroups(
@@ -436,8 +362,8 @@ describe("selectTaskGroups and browsers", () => {
       model({ browsers: [browserRow({ epicId: "epic-browser-only" })] }),
     );
 
-    // There is no Browsers section under Tasks, so an intersection would drop
-    // the row silently.
+    // There is no Browsers section, so an intersection would drop the row
+    // silently.
     expect(groups.map((group) => group.epicId)).toEqual(["epic-browser-only"]);
     expect(groups[0]?.task).toBeNull();
     expect(groups[0]?.backgroundVisible).toBe(false);
@@ -472,7 +398,9 @@ describe("selectTaskGroups and browsers", () => {
     expect(groups[0]?.browsers).toHaveLength(1);
   });
 
-  it("carries plain rows, so no `via` can be computed before the agents settle", () => {
+  // The agent set narrows after the group is built - the cold-task rule and
+  // the host split - so nothing here may claim which chat a tab hangs under.
+  it("carries plain rows, with no parent resolved before the chats settle", () => {
     const groups = selectTaskGroups(
       model({
         tasks: [
@@ -485,52 +413,367 @@ describe("selectTaskGroups and browsers", () => {
       }),
     );
 
-    // The agent set narrows twice after this point - the mid-turn rule and the
-    // host split - so the label is resolved at the render site instead. There
-    // is deliberately no earlier value here to go stale.
     expect(groups[0]?.browsers[0]).not.toHaveProperty("via");
+    expect(groups[0]?.agents[0]).not.toHaveProperty("via");
   });
 });
 
-describe("resolveBrowserVia", () => {
-  function agentEntry(agentId: string, title: string): FocusTaskGroupAgent {
-    return { agent: agentRow({ agentId, title }), via: null };
-  }
+describe("unattributedPrompts", () => {
+  // The page has no flat prompt list any more, so a prompt that names no task
+  // has no group to reach. It is still counted by the tab badge, so losing it
+  // would leave a badge over a page showing nothing.
+  it("returns the prompts that name no epic, in model order", () => {
+    const orphan = promptRow({ epicId: null, key: "orphan" });
+    const placed = promptRow({ epicId: "epic-a", key: "placed" });
 
-  it("names the driving agent when it is one of the rows being drawn", () => {
-    const paired = resolveBrowserVia(
-      [browserRow({ drivenByChatId: "chat-1" })],
-      [agentEntry("chat-1", "Reviewer")],
+    expect(
+      unattributedPrompts(model({ prompts: [orphan, placed] })).map(
+        (row) => row.key,
+      ),
+    ).toEqual(["orphan"]);
+  });
+});
+
+describe("selectTaskSections", () => {
+  it("files a task with a loaded prompt under Needs you and nowhere else", () => {
+    const sections = selectTaskSections(
+      selectTaskGroups(
+        model({
+          tasks: [taskRow({ epicId: "epic-a" }), taskRow({ epicId: "epic-b" })],
+          prompts: [promptRow({ epicId: "epic-a" })],
+        }),
+      ),
     );
 
-    expect(paired[0]?.via).toBe("Reviewer");
+    expect(sections.needsYou.map((group) => group.epicId)).toEqual(["epic-a"]);
+    expect(sections.running.map((group) => group.epicId)).toEqual(["epic-b"]);
   });
 
-  it("clears `via` when the driver was filtered out of the visible rows", () => {
-    const paired = resolveBrowserVia(
-      [
+  // The cold case: the host's indicator says a prompt is pending, the feed has
+  // not paged its row in. Reading only the rows would file the task under
+  // Running and tell the user nothing wants them.
+  it("files a task whose indicator says needsYou with no loaded row", () => {
+    const sections = selectTaskSections(
+      selectTaskGroups(
+        model({ tasks: [taskRow({ epicId: "epic-a", needsYou: true })] }),
+      ),
+    );
+
+    expect(sections.needsYou.map((group) => group.epicId)).toEqual(["epic-a"]);
+    expect(sections.running).toEqual([]);
+  });
+
+  it("keeps the model's order inside each section", () => {
+    const sections = selectTaskSections(
+      selectTaskGroups(
+        model({
+          tasks: [
+            taskRow({ epicId: "epic-a", needsYou: true }),
+            taskRow({ epicId: "epic-b" }),
+            taskRow({ epicId: "epic-c", needsYou: true }),
+            taskRow({ epicId: "epic-d" }),
+          ],
+        }),
+      ),
+    );
+
+    expect(sections.needsYou.map((group) => group.epicId)).toEqual([
+      "epic-a",
+      "epic-c",
+    ]);
+    expect(sections.running.map((group) => group.epicId)).toEqual([
+      "epic-b",
+      "epic-d",
+    ]);
+  });
+
+  it("files a background-only group under Running", () => {
+    const sections = selectTaskSections(
+      selectTaskGroups(
+        model({ background: [backgroundRow({ epicId: "epic-idle" })] }),
+      ),
+    );
+
+    expect(sections.running.map((group) => group.epicId)).toEqual([
+      "epic-idle",
+    ]);
+    expect(sections.needsYou).toEqual([]);
+  });
+});
+
+describe("selectTaskGroupBody nesting", () => {
+  function bodyOf(overrides: Partial<FocusModel>): FocusTaskGroupBody {
+    const groups = selectTaskGroups(model(overrides));
+    return selectTaskGroupBody(groups[0]);
+  }
+
+  it("puts a job under the chat whose id it names, and not at task level", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          agents: [agentRow({ agentId: "chat-1", title: "Monitor host" })],
+        }),
+      ],
+      background: [
+        backgroundRow({
+          epicId: "epic-a",
+          chatId: "chat-1",
+          label: "10min heartbeat",
+        }),
+      ],
+    });
+
+    expect(body.chats).toHaveLength(1);
+    expect(body.chats[0].jobs.map((job) => job.label)).toEqual([
+      "10min heartbeat",
+    ]);
+    expect(body.jobs).toEqual([]);
+  });
+
+  it("leaves a job whose chat is not a row here at task level", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          agents: [agentRow({ agentId: "chat-1" })],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-a", chatId: "chat-gone" })],
+    });
+
+    expect(body.chats[0].jobs).toEqual([]);
+    expect(body.jobs).toHaveLength(1);
+  });
+
+  // The chat that only hosts a monitor IS the parent row. The old
+  // rule hid it and listed the monitor beside the other agents, so the page
+  // named the conversation twice - once as a row, once as `in <chat>`.
+  it("keeps an idle chat that only hosts jobs as the parent row", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          agents: [
+            agentRow({
+              agentId: "chat-1",
+              title: "Greeting",
+              tier: "background",
+            }),
+          ],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-a", chatId: "chat-1" })],
+    });
+
+    expect(body.chats.map((chat) => chat.agent.agentId)).toEqual(["chat-1"]);
+    expect(body.chats[0].agent.tier).toBe("background");
+    expect(body.chats[0].jobs).toHaveLength(1);
+  });
+
+  it("puts a driven tab under its chat and an undriven one at task level", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          agents: [agentRow({ agentId: "chat-1", title: "Reviewer" })],
+        }),
+      ],
+      browsers: [
         browserRow({
+          epicId: "epic-a",
+          tabId: "driven",
           drivenByChatId: "chat-1",
+        }),
+        browserRow({ epicId: "epic-a", tabId: "loose", drivenByChatId: null }),
+      ],
+    });
+
+    expect(body.chats[0].browsers.map((row) => row.tabId)).toEqual(["driven"]);
+    expect(body.browsers.map((row) => row.tabId)).toEqual(["loose"]);
+  });
+
+  it("leaves a tab whose driver is not a row here at task level", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          agents: [agentRow({ agentId: "chat-1" })],
+        }),
+      ],
+      browsers: [
+        browserRow({
+          epicId: "epic-a",
+          drivenByChatId: "chat-elsewhere",
           // The model resolved a name - the chat IS open in this window - and
-          // the label still has to go, because the row it would point at is
-          // not being drawn.
+          // the tab still hangs off the task, because the row it would sit
+          // under is not being drawn.
           drivenByAgentName: "Reviewer",
         }),
       ],
-      [],
-    );
+    });
 
-    expect(paired[0]?.via).toBeNull();
-    // Attribution is a different question from navigation, and survives.
-    expect(paired[0]?.browser.drivenByAgentName).toBe("Reviewer");
+    expect(body.chats[0].browsers).toEqual([]);
+    expect(body.browsers).toHaveLength(1);
+    // Attribution is a different question from placement, and survives.
+    expect(body.browsers[0].drivenByAgentName).toBe("Reviewer");
   });
 
-  it("leaves an undriven tab at task level", () => {
-    const paired = resolveBrowserVia(
-      [browserRow({ drivenByChatId: null })],
-      [agentEntry("chat-1", "Reviewer")],
+  it("puts a prompt under the chat it was raised in", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          agents: [agentRow({ agentId: "chat-1", title: "Impl" })],
+        }),
+      ],
+      prompts: [promptRow({ epicId: "epic-a", chatId: "chat-1", key: "p1" })],
+    });
+
+    expect(body.chats[0].prompts.map((row) => row.key)).toEqual(["p1"]);
+    expect(body.prompts).toEqual([]);
+  });
+
+  // A browser hand-off names a session and a tab and never a conversation, so
+  // it has no chat to sit under and hangs off the task instead.
+  it("puts a chatless prompt at task level", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          agents: [agentRow({ agentId: "chat-1" })],
+        }),
+      ],
+      prompts: [
+        promptRow({
+          epicId: "epic-a",
+          chatId: null,
+          kind: "browser",
+          key: "p1",
+          browserTabTitle: "Checkout",
+        }),
+      ],
+    });
+
+    expect(body.chats[0].prompts).toEqual([]);
+    expect(body.prompts.map((row) => row.key)).toEqual(["p1"]);
+  });
+
+  it("draws no chat row for a cold task and hangs everything off the task", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          mountedHere: false,
+          agents: [agentRow({ agentId: "chat-1", title: null, surface: null })],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-a", chatId: "chat-1" })],
+      prompts: [promptRow({ epicId: "epic-a", chatId: "chat-1", key: "p1" })],
+    });
+
+    expect(body.chats).toEqual([]);
+    expect(body.jobs).toHaveLength(1);
+    expect(body.prompts.map((row) => row.key)).toEqual(["p1"]);
+  });
+});
+
+describe("selectTaskGroupBody via labels", () => {
+  function chatsOf(agents: ReadonlyArray<FocusAgentRow>) {
+    const groups = selectTaskGroups(
+      model({ tasks: [taskRow({ epicId: "epic-a", agents })] }),
+    );
+    return selectTaskGroupBody(groups[0]).chats;
+  }
+
+  it("names the parent for an agent another listed agent started", () => {
+    const chats = chatsOf([
+      agentRow({ agentId: "root", title: "impl", parentId: null }),
+      agentRow({ agentId: "child", title: "reviewer", parentId: "root" }),
+    ]);
+    expect(chats.map((chat) => chat.via)).toEqual([null, "impl"]);
+  });
+
+  it("falls back to 'agent' when the parent has no known title", () => {
+    const chats = chatsOf([
+      agentRow({ agentId: "root", title: null }),
+      agentRow({ agentId: "child", title: "docs", parentId: "root" }),
+    ]);
+    expect(chats[1].via).toBe("agent");
+  });
+
+  // A parent that is not itself a row here is nothing to say "via" about - the
+  // task IS what this chat hangs off.
+  it("leaves via null when the parent is not listed in the task", () => {
+    const chats = chatsOf([
+      agentRow({ agentId: "orphan", parentId: "stopped" }),
+    ]);
+    expect(chats[0].via).toBeNull();
+  });
+
+  it("names the immediate parent for a grandchild rather than indenting it", () => {
+    const chats = chatsOf([
+      agentRow({ agentId: "root", title: "impl" }),
+      agentRow({ agentId: "mid", title: "reviewer", parentId: "root" }),
+      agentRow({ agentId: "leaf", title: "docs", parentId: "mid" }),
+    ]);
+    expect(chats.map((chat) => chat.via)).toEqual([null, "impl", "reviewer"]);
+  });
+});
+
+describe("taskGroupCounts", () => {
+  it("counts mid-turn agents as active and every job as bg", () => {
+    const groups = selectTaskGroups(
+      model({
+        tasks: [
+          taskRow({
+            epicId: "epic-a",
+            agents: [
+              agentRow({ agentId: "chat-1", tier: "turn" }),
+              agentRow({ agentId: "chat-2", tier: "background" }),
+              agentRow({ agentId: "chat-3", tier: "turn" }),
+            ],
+          }),
+        ],
+        prompts: [promptRow({ epicId: "epic-a", chatId: "chat-1" })],
+        background: [
+          backgroundRow({ epicId: "epic-a", chatId: "chat-2", key: "j1" }),
+          backgroundRow({ epicId: "epic-a", chatId: "chat-9", key: "j2" }),
+        ],
+        browsers: [browserRow({ epicId: "epic-a" })],
+      }),
     );
 
-    expect(paired[0]?.via).toBeNull();
+    expect(taskGroupCounts(groups[0])).toEqual({
+      needsYou: 1,
+      active: 2,
+      jobs: 2,
+      browsers: 1,
+    });
+  });
+
+  // The badge stands in for the WHOLE subtree, so a job nested under a chat
+  // and a job at task level count the same. The body only redistributes rows
+  // across levels; it never adds or drops one.
+  it("counts the same rows the body spreads over three levels", () => {
+    const groups = selectTaskGroups(
+      model({
+        tasks: [
+          taskRow({
+            epicId: "epic-a",
+            agents: [agentRow({ agentId: "chat-1" })],
+          }),
+        ],
+        background: [
+          backgroundRow({ epicId: "epic-a", chatId: "chat-1", key: "nested" }),
+          backgroundRow({ epicId: "epic-a", chatId: "chat-x", key: "loose" }),
+        ],
+      }),
+    );
+    const body = selectTaskGroupBody(groups[0]);
+
+    expect(body.chats[0].jobs).toHaveLength(1);
+    expect(body.jobs).toHaveLength(1);
+    expect(taskGroupCounts(groups[0]).jobs).toBe(2);
   });
 });

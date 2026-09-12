@@ -39,11 +39,11 @@ export function warmRouteChunks(): void {
     // directly and warm for free. `surface-modules-are-warmed.test.ts` keeps
     // this list in sync with the `lazy()` calls in `stores/tabs/kinds/`.
     void import("@/components/epic-tabs/epic-surface");
+    void import("@/components/home-focus/home-focus-view");
     void import("@/components/home/landing-draft-surface");
     void import("@/providers/draft-surface-provider");
     void import("@/components/epics/history-surface");
     void import("@/components/settings/settings-surface");
-    void import("@/components/home-focus/home-focus-view");
   };
 
   if (typeof window.requestIdleCallback === "function") {

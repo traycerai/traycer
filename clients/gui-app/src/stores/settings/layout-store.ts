@@ -127,17 +127,6 @@ export interface ComposerLayoutPreferences {
 }
 
 /**
- * Which of the Home tab's two readings is showing. `focus` is the flat page -
- * Needs you, Running, Background; `tasks` keeps Needs you global and first and
- * regroups the rest under one collapsible row per task.
- *
- * Persisted even though it has no Settings row: the in-page control is the only
- * writer, and "the view I left Home in" is the thing a user expects back, not a
- * preference they went looking for.
- */
-export type HomeView = "focus" | "tasks";
-
-/**
  * How much room a Home row takes. `compact` tightens the DESKTOP row only - the
  * touch chrome a coarse pointer needs is restored by the row's own
  * `pointer-coarse:` variants, so this is a pointer-precision preference rather
@@ -146,7 +135,6 @@ export type HomeView = "focus" | "tasks";
 export type HomeDensity = "comfortable" | "compact";
 
 export interface HomeLayoutPreferences {
-  readonly view: HomeView;
   readonly density: HomeDensity;
 }
 
@@ -213,7 +201,6 @@ interface LayoutStoreState {
   readonly setComposerReasoningIndicator: (
     indicator: ComposerReasoningIndicator,
   ) => void;
-  readonly setHomeView: (view: HomeView) => void;
   readonly setHomeDensity: (density: HomeDensity) => void;
 }
 
@@ -276,7 +263,6 @@ export const DEFAULT_COMPOSER_LAYOUT: ComposerLayoutPreferences = {
  * slice existed.
  */
 export const DEFAULT_HOME_LAYOUT: HomeLayoutPreferences = {
-  view: "focus",
   density: "comfortable",
 };
 
@@ -587,24 +573,25 @@ function resolvePersistedComposer(value: unknown): ComposerLayoutPreferences {
 
 // ── home slice ──────────────────────────────────────────────────────────────
 
-function isHomeView(value: unknown): value is HomeView {
-  return value === "focus" || value === "tasks";
-}
-
 function isHomeDensity(value: unknown): value is HomeDensity {
   return value === "comfortable" || value === "compact";
 }
 
 /**
- * Field by field, like the two slices above. Both values pick a branch on the
- * render path - an unrecognized `view` would mount neither reading of the page,
- * and an unrecognized `density` would leave the rows with no spacing class at
- * all.
+ * Field by field, like the two slices above - `density` picks a branch on the
+ * render path, so an unrecognized one would leave the rows with no spacing
+ * class at all.
+ *
+ * A persisted `view` from the two-reading Home is READ AND DROPPED rather than
+ * migrated. Home has one reading now, so there is nothing for the old value to
+ * select; naming it here to delete it would only keep a field alive that
+ * nothing else in the app can still mean. The key survives in `localStorage`
+ * until the next write to this slice rewrites it from `partialize`, which is
+ * harmless - an unknown key in a persisted slice has never been an error here.
  */
 function resolvePersistedHome(value: unknown): HomeLayoutPreferences {
   const stored: Record<string, unknown> = isRecord(value) ? value : {};
   return {
-    view: isHomeView(stored.view) ? stored.view : DEFAULT_HOME_LAYOUT.view,
     density: isHomeDensity(stored.density)
       ? stored.density
       : DEFAULT_HOME_LAYOUT.density,
@@ -827,11 +814,6 @@ export const useLayoutStore = create<LayoutStoreState>()(
         const composer = get().composer;
         if (composer.reasoningIndicator === indicator) return;
         set({ composer: { ...composer, reasoningIndicator: indicator } });
-      },
-      setHomeView: (view) => {
-        const home = get().home;
-        if (home.view === view) return;
-        set({ home: { ...home, view } });
       },
       setHomeDensity: (density) => {
         const home = get().home;

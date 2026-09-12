@@ -118,8 +118,8 @@ describe("<TabsLayoutGroup /> Home density", () => {
     expect(entry?.keywords).toEqual(["home", "density", "compact", "rows"]);
   });
 
-  // The view is written by the page's own control, so Settings must not grow a
-  // second answer to the same question.
+  // Home has one reading and no view control of its own any more, so there is
+  // nothing here for a Settings row to answer.
   it("offers no row for the Home view", () => {
     render(<TabsLayoutGroup />);
     expect(screen.queryByRole("group", { name: "Home view" })).toBeNull();

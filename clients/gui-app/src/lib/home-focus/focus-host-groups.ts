@@ -1,16 +1,11 @@
 import { compareAscending } from "@/lib/home-focus/focus-identity";
-import { runningTasks } from "@/lib/home-focus/focus-running";
-import type {
-  FocusTaskGroup,
-  FocusTaskGroupAgent,
-} from "@/lib/home-focus/focus-task-groups";
+import type { FocusTaskGroup } from "@/lib/home-focus/focus-task-groups";
 import type {
   FocusAgentRow,
   FocusBackgroundRow,
   FocusBrowserRow,
   FocusModel,
   FocusPromptRow,
-  FocusTaskRow,
 } from "@/lib/home-focus/focus-model";
 
 /**
@@ -80,8 +75,8 @@ export function resolveFocusHostId(
 }
 
 /**
- * One task as ONE host sees it: the same task row carrying only that host's
- * agents, and only the jobs running in that host's chats.
+ * One task as ONE host sees it: one group per machine the group's own rows
+ * name, each holding that machine's agents, jobs, pages and prompts.
  *
  * An epic is cloud-homed and can be worked from several machines at once - the
  * model merges those slices into one task row holding every host's agents
@@ -100,82 +95,13 @@ export function resolveFocusHostId(
  * `FocusAgentRow` carries its own: the parent's flag is `every` over ALL
  * agents, so a reachable host's row would inherit an unreachable sibling's
  * refusal and disable a stop that would have worked.
- */
-export interface FocusTaskHostSlice {
-  readonly hostId: string;
-  readonly task: FocusTaskRow;
-  readonly jobs: ReadonlyArray<FocusBackgroundRow>;
-  /** Whether this task is drawn under more than one host, which is what makes
-   * `Stop all` name the machine it is about. */
-  readonly splitAcrossHosts: boolean;
-}
-
-export function splitTaskByHost(
-  task: FocusTaskRow,
-  jobs: ReadonlyArray<FocusBackgroundRow>,
-  options: {
-    /** `false` on a single-host page, where the whole point is that nothing
-     * changes: one slice carrying the task exactly as the model built it. A
-     * split there would re-key rows and re-fold `stoppable` for a distinction
-     * the page is not drawing. */
-    readonly enabled: boolean;
-    readonly activeHostId: string | null;
-  },
-): ReadonlyArray<FocusTaskHostSlice> {
-  const { activeHostId } = options;
-  if (!options.enabled) {
-    return [
-      {
-        hostId: resolveFocusHostId(null, activeHostId),
-        task,
-        jobs,
-        splitAcrossHosts: false,
-      },
-    ];
-  }
-  const agentsByHost = new Map<string, FocusAgentRow[]>();
-  for (const agent of task.agents) {
-    const hostId = focusAgentHostId(agent, activeHostId);
-    const existing = agentsByHost.get(hostId);
-    if (existing === undefined) {
-      agentsByHost.set(hostId, [agent]);
-    } else {
-      existing.push(agent);
-    }
-  }
-  const jobsByHost = new Map<string, FocusBackgroundRow[]>();
-  for (const job of jobs) {
-    const hostId = resolveFocusHostId(job.hostId, activeHostId);
-    const existing = jobsByHost.get(hostId);
-    if (existing === undefined) {
-      jobsByHost.set(hostId, [job]);
-    } else {
-      existing.push(job);
-    }
-  }
-  const hostIds = new Set([...agentsByHost.keys(), ...jobsByHost.keys()]);
-  const splitAcrossHosts = hostIds.size > 1;
-  return Array.from(hostIds).map((hostId) => {
-    const agents = agentsByHost.get(hostId) ?? [];
-    return {
-      hostId,
-      task: splitAcrossHosts
-        ? { ...task, agents, stoppable: agents.every((a) => a.stoppable) }
-        : task,
-      jobs: jobsByHost.get(hostId) ?? [],
-      splitAcrossHosts,
-    };
-  });
-}
-
-/**
- * The Tasks view's version of {@link splitTaskByHost}: one group per machine
- * the group's own rows name, each holding that machine's agents, jobs and
- * prompts.
  *
  * Prompts split by the host they were RAISED on rather than being repeated
  * whole, because a prompt is answered where it came from - and a "2 need you"
  * badge shown under both machines would be counting the same two rows twice.
+ * Which SECTION the task is in is decided before any of this, on the whole
+ * group (`selectTaskSections`), so a filter here can move a prompt between
+ * machines but never a task between sections.
  */
 export interface FocusTaskGroupHostSlice {
   readonly hostId: string;
@@ -201,13 +127,13 @@ export function splitTaskGroupByHost(
     ];
   }
   const hostIds = new Set<string>();
-  const agentsByHost = new Map<string, FocusTaskGroupAgent[]>();
-  for (const entry of group.agents) {
-    const hostId = focusAgentHostId(entry.agent, activeHostId);
+  const agentsByHost = new Map<string, FocusAgentRow[]>();
+  for (const agent of group.agents) {
+    const hostId = focusAgentHostId(agent, activeHostId);
     hostIds.add(hostId);
     const existing = agentsByHost.get(hostId);
-    if (existing === undefined) agentsByHost.set(hostId, [entry]);
-    else existing.push(entry);
+    if (existing === undefined) agentsByHost.set(hostId, [agent]);
+    else existing.push(agent);
   }
   const jobsByHost = new Map<string, FocusBackgroundRow[]>();
   for (const job of group.jobs) {
@@ -221,10 +147,10 @@ export function splitTaskGroupByHost(
   // machine the page is actually open on - and a task browsing from two
   // machines splits on that, like every other row.
   //
-  // These are plain rows carrying no `via`: the label names a VISIBLE sibling,
-  // and this split is one of the two places the sibling set narrows, so it is
-  // resolved after both (`resolveBrowserVia`). A slice must never inherit a
-  // label for an agent that stayed on the other machine.
+  // Which chat a tab hangs UNDER is deliberately not decided here: this split
+  // is one of the two places the chat set narrows, so a tab driven by an agent
+  // that stayed on the other machine must not inherit a parent that is no
+  // longer a row. `selectTaskGroupBody` pairs them after both narrowings.
   const browsersByHost = new Map<string, FocusBrowserRow[]>();
   for (const browser of group.browsers) {
     const hostId = browser.hostId;
@@ -284,8 +210,8 @@ export function splitTaskGroupByHost(
             ? null
             : {
                 ...group.task,
-                agents: agents.map((entry) => entry.agent),
-                stoppable: agents.every((entry) => entry.agent.stoppable),
+                agents,
+                stoppable: agents.every((agent) => agent.stoppable),
               },
       },
       splitAcrossHosts,
@@ -350,13 +276,10 @@ export function focusActivityHostIds(
     addResolved(resolveFocusHostId(hostId, activeHostId));
   };
   for (const prompt of model.prompts) add(focusPromptHostId(prompt));
-  // Each AGENT's own host, from the tasks the page actually draws - a task
-  // hidden by the mid-turn rule must not be the reason headings appear that no
-  // visible row explains, and a task worked from two machines names both.
-  for (const task of runningTasks(
-    model.tasks,
-    new Set(model.background.map((row) => row.epicId)),
-  )) {
+  // Each AGENT's own host, over every task - which is every task the page
+  // draws, since a group is built for each and no presentation rule hides one
+  // any more. A task worked from two machines names both.
+  for (const task of model.tasks) {
     // Through the agent resolver, so an unattributed agent lands in the
     // unknown bucket - which `add` then declines to count as a named machine.
     for (const agent of task.agents) {
