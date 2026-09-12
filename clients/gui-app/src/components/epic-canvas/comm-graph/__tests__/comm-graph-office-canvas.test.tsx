@@ -2063,7 +2063,7 @@ function tagBoxesFrom(
   for (const list of byBlock.values()) {
     const last = list[list.length - 1];
     if (last.font.startsWith("bold ")) continue;
-    const key = `${last.text} ${last.x} ${last.y}`;
+    const key = `${last.text}\0${last.x}\0${last.y}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const width = modelledTextWidth(last.text, last.font, last.letterSpacing);
@@ -2521,7 +2521,15 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     expect(paintedText()).toContain("Alpha Walker");
     // The control that makes it a walker case: the other agent is seated,
     // unselected and unhovered, so the middle band leaves it unnamed.
-    expect(paintedText()).not.toContain("Alpha Sitter");
+    //
+    // FIXUP 8: "Alpha Sitter" itself is no longer a possible reading at this
+    // zoom - a 1-tile seat's 16px budget only ever admits its initials, "AS"
+    // (the search-matched sibling case above proves that is exactly what a
+    // QUALIFIED sitter paints here). Asserting the absence of a string the
+    // fit ladder can never produce would pass whether or not the LOD-1
+    // guard exists at all, so the control has to be the reading the ladder
+    // WOULD paint if the guard were gone.
+    expect(paintedText()).not.toContain("AS");
   });
 
   it("F10: names a SEARCH-MATCHED walker at LOD 1", async () => {
@@ -2563,7 +2571,12 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     flushRaf(2);
 
     // Close-up names everything. Nobody is hovered, selected or matched here;
-    // at this zoom that is not a question anybody asks.
+    // at this zoom that is not a question anybody asks - `drawNameTags` only
+    // consults `isNameTagCalledFor` when `lod === 1`, so at LOD 2 there is no
+    // guard left to be vacuous about. This negative is real: it is the FIT
+    // ladder alone standing between "Alpha Sitter" and the canvas, and
+    // removing the fit (the seated tag drawing its written name, as it did
+    // before this fixup) paints it and reddens this line.
     //
     // FIXUP 8: the sitter's tag is fitted to its one-tile seat (32px at this
     // zoom), which admits "Alpha" (its first word) but not the written
@@ -2573,6 +2586,70 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     expect(painted).toContain("Alpha Walker");
     expect(painted).toContain("Alpha");
     expect(painted).not.toContain("Alpha Sitter");
+  });
+
+  const SIX_CHAR_FLOOR_CAMERA_VIEW: CommGraphTileViewState = {
+    ...FIXED_CAMERA_VIEW,
+    zoom: 2.5,
+  };
+
+  it("fixup 8: a name that cannot clear the six-character clip floor lands on initials, not a shorter clip", () => {
+    // NAME_TAG_MIN_CLIPPED_CHARS = 6 is a floor the clip rung enforces, not
+    // a number any existing renderer case pins - moving it to 5 changes
+    // zero expectations elsewhere in this file. This is the one boundary
+    // case built to land exactly on it, through the real render path.
+    //
+    // budget = officePlateWidthPx(1, 2.5) = max(1, 1) * 16 * 2.5 = 40px.
+    // 2.5 >= 1.6, so this is LOD 2 - everyone is named, no hover/select/
+    // match needed. Tag face in this harness is untracked, 10px * 0.6em =
+    // 6px/char.
+    //
+    // "Bartholomew Quigley" (19 chars = 114px) does not fit written. The
+    // clip rung tries the longest kept-prefix-plus-ellipsis that fits,
+    // stopping at the floor: kept=6 gives "Bartho…" (7 chars = 42px), which
+    // is OVER the 40px budget - and 6 is the last kept-length the rung will
+    // try, so the clip rung yields nothing rather than trying kept=5. The
+    // first word, "Bartholomew" (11 chars = 66px), also misses. Only the
+    // initials rung fits: "BQ" (2 chars = 12px).
+    const seat = seatAt({ seatId: "h/0/floor-seat", col: 2, row: 2, width: 1 });
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map([["floor-seat", { ...seat, agentId: "floor-seat" }]]),
+      seats: new Map([["h/0/floor-seat", seat]]),
+      signs: [],
+      rooms: [],
+      floors: [emptyFloor()],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    const view: OfficeView = { ...OFFICE_VIEWS.floor, plan: () => layout };
+    const floorAgent = agent("floor-seat", "Bartholomew Quigley");
+    render(
+      withQueryClient(
+        cloneElement(
+          officeElementWithView(
+            view,
+            new Set(["floor-seat"]),
+            [floorAgent],
+            {},
+          ),
+          { view: SIX_CHAR_FLOOR_CAMERA_VIEW },
+        ),
+      ),
+    );
+    setIntersecting(true);
+    flushRaf(2);
+
+    const painted = paintedText();
+    expect(painted).toContain("BQ");
+    expect(painted).not.toContain("Barth…");
   });
 
   it("F11 fixup 7: names all five of a wide HQ board's hottest, spelt out rather than lettered to initials", () => {
@@ -3216,19 +3293,23 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
 
   describe("CommGraphOfficeCanvas fixup 8 (name tags) - dense cubby rows never overprint their neighbours", () => {
     /**
-     * THE SITTING'S OWN REGRESSION, replayed from what each tag actually
-     * ASKED FOR rather than from `layoutNameTags`' placed output.
-     *
-     * `layoutNameTags` already staggers a colliding tag down one line height
-     * and drops one it finds no slot for, so boxes read off ITS OWN output
-     * never intersect a neighbour's - before this fix or after it. That is
-     * not what the finding was about: the finding was that a SEATED tag's
-     * own box, fourteen characters over a one-tile cubby, covered the
-     * cubbies either side before the layout pass ever looked at it. So this
-     * replays the raw `fillText` calls the frame actually made, computing
-     * each tag's box from its OWN anchor and its OWN resolved reading's
-     * measured width - the box the tag asks for, not the one it ends up
-     * with.
+     * THE SITTING'S OWN REGRESSION, replayed from the frame's recorded
+     * `fillText` calls - POST-`layoutNameTags`, the placed output, not what
+     * each tag asked for before layout touched it. That still catches the
+     * finding: `layoutNameTags` resolves a collision by shifting the loser
+     * down exactly one line height (`NAME_TAG_LINE_HEIGHT`) and checking the
+     * strict `<` in `overlaps()`, which only asks whether the two boxes'
+     * baselines coincide - a shift of exactly one line height already
+     * clears that strict check, so the tag is PLACED rather than dropped,
+     * still sitting horizontally on top of its neighbour. `collisions()`
+     * below reopens exactly that gap: its baseline window is INCLUSIVE
+     * (`dy <= NAME_TAG_LINE_HEIGHT`, not `<`), so a tag the layout pass
+     * staggered one line down still counts as a neighbour rather than
+     * reading as resolved. A case built from `layoutNameTags`' own strict
+     * check would never see this - it would have to reimplement the exact
+     * mechanism being tested, which begs the question - so this reads the
+     * canvas's actual painted boxes and checks them under the ticket's
+     * "centre ± measured width / 2" rule instead of the placer's own.
      *
      * ZOOM 3, not 2: at a one-tile budget of 16 px (zoom 2) the honest
      * ladder answer for this fixture's `team-N-lead` / `team-N-member-K`
@@ -3343,7 +3424,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       flushRaf(3);
     }
 
-    it("keeps every seated character's own asked-for tag box disjoint from its neighbours' (309 Building, zoom 3)", () => {
+    it("keeps every seated character's placed tag box disjoint from its neighbours', post-layout (309 Building, zoom 3)", () => {
       const epic = makeTestEpic("triage", 309, 1);
       const agents = epic.agents.map(canvasAgent);
       const probeAgents = agents.map(officeAgentInput);
@@ -4075,7 +4156,23 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
     ).toBe(true);
   });
 
-  it("does not draw unqualified real Towers name tags at office lod", () => {
+  it("draws NO tag-face reading of an unqualified real Towers agent at office lod (plates still paint)", () => {
+    // Filtering recorded `fillText` calls for the four agents' FULL names is
+    // vacuous: at office lod (zoom 1, below the close-up threshold) every
+    // one of these seats is two-tile (Towers has no cubbies at all - see
+    // the anchor describe below), so even an UNGUARDED tag would ladder
+    // down to something short of the written name - "Bay" for `Bay lead`/
+    // `Bay member`, nothing at all for the single-word `Orchestrator`/
+    // `Reviewer` - never the full name either filter checks for. Confirmed:
+    // deleting the LOD-1 `isNameTagCalledFor` guard block from the renderer
+    // left the whole suite (all 72 cases) passing. So this asserts over the
+    // TAG FACE instead - every reading the ladder could produce for these
+    // names, not just the written one - via the same replay/box machinery
+    // A.3 uses, which already separates tags from plates by the font the
+    // call was made under. THIS is what pins the guard: with it deleted,
+    // `Bay lead`/`Bay member` ladder down to "Bay" at the 32px office-lod
+    // budget and this case reddens on that reading; with the guard present,
+    // it stays green because nothing paints at all.
     const agents = [ORCHESTRATOR, REVIEWER, HOST_B_LEAD, HOST_B_MEMBER];
     const visibleIds = new Set(agents.map((person) => person.id));
     render(
@@ -4086,12 +4183,34 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
     setIntersecting(true);
     flushRaf(4);
 
-    const nameCalls = calls.filter(
-      (call) =>
-        call.method === "fillText" &&
-        agents.some((person) => call.args[0] === person.name),
+    // ANTI-VACUITY: the frame really rendered - some plate (bold face)
+    // painted. An empty recording (a broken render, a wrong zoom) must not
+    // pass this case by having nothing to check.
+    const records = replayFillText(calls);
+    expect(records.some((record) => record.font.startsWith("bold "))).toBe(
+      true,
     );
-    expect(nameCalls).toHaveLength(0);
+
+    function isReadingOf(text: string, name: string): boolean {
+      if (text === name) return true;
+      if (text.endsWith("…") && name.startsWith(text.slice(0, -1))) {
+        return true;
+      }
+      const firstWord = name.split(" ")[0] ?? name;
+      if (text === firstWord && firstWord !== name) return true;
+      const initials = name
+        .split(" ")
+        .filter((word) => word !== "")
+        .map((word) => word.slice(0, 1))
+        .join("");
+      return text === initials && initials.length >= 2;
+    }
+
+    const boxes = tagBoxesFrom(records);
+    const unqualifiedReadings = boxes.filter((box) =>
+      agents.some((person) => isReadingOf(box.text, person.name)),
+    );
+    expect(unqualifiedReadings).toEqual([]);
   });
 
   describe("CommGraphOfficeCanvas fixup 8 (name tags) - a character anchored off its seat's centre still never reaches a neighbour's tag", () => {
@@ -4154,26 +4273,46 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
       });
       const focus = scene.locate(HOST_B_MEMBER.id);
       if (focus === null) throw new Error("expected a real Towers seat");
-      return cloneElement(
-        officeElementWithView(
-          OFFICE_VIEWS.towers,
-          new Set(ANCHOR_AGENTS.map((person) => person.id)),
-          ANCHOR_AGENTS,
-          {},
-        ),
-        {
-          view: {
-            ...FIXED_CAMERA_VIEW,
-            zoom,
-            x: 600 - (focus.x + focus.width / 2) * zoom,
-            y: 400 - (focus.y + focus.height / 2) * zoom,
+      const neighbour = scene.locate(EXTRA_SOLO.id);
+      if (neighbour === null) throw new Error("expected a real Towers seat");
+      return {
+        element: cloneElement(
+          officeElementWithView(
+            OFFICE_VIEWS.towers,
+            new Set(ANCHOR_AGENTS.map((person) => person.id)),
+            ANCHOR_AGENTS,
+            {},
+          ),
+          {
+            view: {
+              ...FIXED_CAMERA_VIEW,
+              zoom,
+              x: 600 - (focus.x + focus.width / 2) * zoom,
+              y: 400 - (focus.y + focus.height / 2) * zoom,
+            },
           },
-        },
-      );
+        ),
+        focus,
+        neighbour,
+      };
     }
 
     it("keeps two adjacent Towers desks' maximal readings disjoint (zoom 2)", () => {
-      render(withQueryClient(anchorPairFocusedAtZoom(2)));
+      const { element, focus, neighbour } = anchorPairFocusedAtZoom(2);
+      // GUARD, not a red of its own: this case's whole premise is that
+      // `HOST_B_MEMBER` and `EXTRA_SOLO` land in CONSECUTIVE two-tile bullpen
+      // slots. That is a fixture accident, not something this test controls
+      // - a plan change that seats them apart would leave the collision
+      // assertion below green with two tags that were never neighbours,
+      // which is a pass for the wrong reason. Pin the premise directly: same
+      // storey (identical `y` and `height`) and exactly one two-tile pitch
+      // apart on `x`, so a future plan change that breaks the adjacency
+      // reddens HERE rather than silently voiding the case beneath it.
+      expect(neighbour.y).toBe(focus.y);
+      expect(neighbour.height).toBe(focus.height);
+      expect(Math.abs(neighbour.x - focus.x)).toBe(2 * OFFICE_TILE);
+
+      render(withQueryClient(element));
       setIntersecting(true);
       flushRaf(4);
 
