@@ -13,6 +13,13 @@ import {
 import type { DesktopZoomBridge } from "@/lib/windows/types";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
+// The Start page group's wallpaper gallery fetches its catalog from the CDN.
+// An empty catalog keeps this suite off the network without changing which
+// rows - and so which search anchors - the panel renders.
+vi.mock("@/lib/appearance/curated-wallpapers", () => ({
+  fetchCuratedWallpaperManifest: () => Promise.resolve([]),
+}));
+
 const zoomState: {
   bridge: FakeZoomBridge | null;
 } = {

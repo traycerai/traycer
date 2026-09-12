@@ -31,16 +31,62 @@
   [data-profile-usage-sidecar],
   [data-minimap-list-card],
   .tc-editor-bubble-menu,
-  .tc-node-block-toolbar,
-  .glass-with-insets::before
+  .tc-node-block-toolbar
 ) {
   --command-surface-background: transparent;
   background-color: color-mix(
     in srgb,
-    var(--popover) calc(var(--glass-opacity, 1) * 100%),
+    var(--popover)
+      calc(var(--surface-glass-opacity, var(--glass-opacity, 1)) * 100%),
     transparent
   );
-  backdrop-filter: blur(16px);
+  backdrop-filter: blur(28px) saturate(140%);
+}
+/*
+ * A retained opacity animation creates a backdrop root even after it ends, so
+ * every surface that gets a backdrop-filter above needs this guard. The two
+ * lists must stay identical; plain CSS cannot share one, so they are kept
+ * adjacent and glass-inset-surface.test.ts asserts they match.
+ */
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="hover-card-content"],
+  [data-slot="sheet-content"],
+  [data-slot="drawer-content"],
+  [data-slot="composer-menu"],
+  [data-slot="mention-preview-panel"],
+  [data-slot="artifact-link-popover"],
+  [data-slot="floating-draft-popover"],
+  [data-slot="thread-hover-popover"],
+  [data-slot="mention-suggestion"],
+  [data-slot="quote-selection-popover"],
+  [data-slot="office-legend-popover"],
+  [data-profile-usage-sidecar],
+  [data-minimap-list-card],
+  .tc-editor-bubble-menu,
+  .tc-node-block-toolbar
+)[data-state="open"] {
+  animation-fill-mode: backwards;
+}
+/*
+ * Dense reading surfaces keep a legibility floor. A custom property cannot be
+ * redefined in terms of itself, so the tint rules read --surface-glass-opacity
+ * and fall back to the raw --glass-opacity the applier writes on <html>.
+ * Menus and popovers never set it, so they keep the raw user value.
+ */
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="sheet-content"],
+  [data-slot="drawer-content"]
+) {
+  --surface-glass-opacity: max(var(--glass-opacity, 1), 0.8);
 }
 /* Radix's transformed wrapper anchors the glass outside the content's scroll area. */
 [data-radix-popper-content-wrapper]
@@ -66,26 +112,12 @@
     pointer-events: none;
     background-color: color-mix(
       in srgb,
-      var(--popover) calc(var(--glass-opacity, 1) * 100%),
+      var(--popover)
+        calc(var(--surface-glass-opacity, var(--glass-opacity, 1)) * 100%),
       transparent
     );
-    backdrop-filter: blur(16px);
+    backdrop-filter: blur(28px) saturate(140%);
   }
-}
-/* A retained opacity animation creates a backdrop root even after it ends. */
-:is(
-  [data-slot="dialog-content"],
-  [data-slot="popover-content"],
-  [data-slot="dropdown-menu-content"],
-  [data-slot="dropdown-menu-sub-content"],
-  [data-slot="context-menu-content"],
-  [data-slot="context-menu-sub-content"],
-  [data-slot="select-content"],
-  [data-slot="hover-card-content"],
-  [data-slot="sheet-content"],
-  [data-slot="drawer-content"]
-)[data-state="open"] {
-  animation-fill-mode: backwards;
 }
 .glass-inset {
   background-color: var(--popover);
@@ -94,7 +126,7 @@
 /* Blur scrolling content without applying a second layer of tint. */
 :root[data-glass-enabled] .glass-inset {
   background-color: transparent;
-  backdrop-filter: blur(16px);
+  backdrop-filter: blur(28px) saturate(140%);
 }
 /* Keep the dialog background separate from sticky insets and nested portals. */
 :is(
@@ -105,7 +137,12 @@
   background-color: transparent;
   backdrop-filter: none;
 }
-/* Popovers use the fixed background anchored by their Radix wrapper above. */
+/*
+ * Popovers use the fixed background anchored by their Radix wrapper above; the
+ * dialog paints its glass here instead. This selector cannot join the tint
+ * list above: a pseudo-element is invalid inside :is(), and lightningcss drops
+ * the offending entry silently, which left every dialog painting nothing.
+ */
 [data-slot="dialog-content"].glass-with-insets::before {
   content: "";
   position: absolute;
@@ -113,6 +150,13 @@
   z-index: -1;
   border-radius: inherit;
   pointer-events: none;
+  background-color: color-mix(
+    in srgb,
+    var(--popover)
+      calc(var(--surface-glass-opacity, var(--glass-opacity, 1)) * 100%),
+    transparent
+  );
+  backdrop-filter: blur(28px) saturate(140%);
 }
 [data-composer-shell] {
   background-color: color-mix(
@@ -120,7 +164,7 @@
     var(--canvas) calc(var(--glass-opacity, 1) * 100%),
     transparent
   );
-  backdrop-filter: blur(16px);
+  backdrop-filter: blur(28px) saturate(140%);
 }
 [data-composer-editor] {
   font-family: var(--traycer-font-prompt, var(--traycer-font-ui));
