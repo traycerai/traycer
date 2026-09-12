@@ -31,6 +31,12 @@ import {
  * writes both, and only through the three entry points below. Nothing else in the app writes either
  * half on its own, so "wallpaper set" and "wallpaper bytes present" can
  * never drift apart.
+ *
+ * Keeping the two halves paired needs more than one writer at a time: every
+ * write runs as one link of `writeQueue`, and each takes a `writeTicket` when
+ * its user action starts. A link whose ticket is stale has been superseded and
+ * writes nothing at all, so bytes and row are only ever written together, by
+ * the last action the user took.
  */
 const START_PAGE_WALLPAPER_KEY = "start-page-wallpaper";
 
@@ -67,11 +73,26 @@ function abortCuratedApply(): void {
   curatedApply = null;
 }
 
+let writeTicket = 0;
+let writeQueue: Promise<void> = Promise.resolve();
+
+/** Runs `write` after every write already queued, whether those failed or not. */
+function enqueueWrite(write: () => Promise<void>): Promise<void> {
+  const link = writeQueue.then(write);
+  writeQueue = link.catch(() => undefined);
+  return link;
+}
+
 /**
  * The half both entry points share: write the bytes, then the settings row,
  * then invalidate. Keeps the style/intensity/tint the user already picked if a
  * wallpaper was already set; a first choice seeds their defaults. The name and
  * the curated id always update, in the same write.
+ *
+ * The ticket is taken here, where the bytes are known to exist, so a store
+ * superseded before its turn writes neither half - and one that does get its
+ * turn runs alone, which is what pairs the bytes it writes with the row it
+ * writes.
  */
 async function storeStartPageWallpaper(args: {
   readonly blob: Blob;
@@ -79,30 +100,35 @@ async function storeStartPageWallpaper(args: {
   readonly curatedId: string | null;
   readonly signal: AbortSignal;
 }): Promise<void> {
-  try {
-    await writeAppearanceBlob(START_PAGE_WALLPAPER_KEY, args.blob);
-  } catch (error) {
-    // Keep bytes and settings consistent when storage fails.
-    await removeAppearanceBlob(START_PAGE_WALLPAPER_KEY).catch(() => undefined);
+  const ticket = ++writeTicket;
+  return enqueueWrite(async () => {
+    if (ticket !== writeTicket || args.signal.aborted) {
+      // Superseded (another pick, or Remove) while queued: the winner owns
+      // both halves, so this one must not touch the bytes. Whichever action
+      // wins the race owns the final invalidate.
+      invalidateStartPageWallpaper();
+      return;
+    }
+    try {
+      await writeAppearanceBlob(START_PAGE_WALLPAPER_KEY, args.blob);
+    } catch (error) {
+      // Keep bytes and settings consistent when storage fails.
+      await removeAppearanceBlob(START_PAGE_WALLPAPER_KEY).catch(
+        () => undefined,
+      );
+      invalidateStartPageWallpaper();
+      throw error;
+    }
+    const current = useSettingsStore.getState().startPageWallpaper;
+    useSettingsStore.getState().setStartPageWallpaper({
+      style: current?.style ?? "dither",
+      intensity: current?.intensity ?? DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
+      tintWithAccent: current?.tintWithAccent ?? true,
+      name: args.name,
+      curatedId: args.curatedId,
+    });
     invalidateStartPageWallpaper();
-    throw error;
-  }
-  if (args.signal.aborted) {
-    // Canceled (e.g. Remove was clicked mid-write): the settings row must
-    // not be resurrected out from under a concurrent removal. Whichever
-    // action wins the race owns the final invalidate.
-    invalidateStartPageWallpaper();
-    return;
-  }
-  const current = useSettingsStore.getState().startPageWallpaper;
-  useSettingsStore.getState().setStartPageWallpaper({
-    style: current?.style ?? "dither",
-    intensity: current?.intensity ?? DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
-    tintWithAccent: current?.tintWithAccent ?? true,
-    name: args.name,
-    curatedId: args.curatedId,
   });
-  invalidateStartPageWallpaper();
 }
 
 /**
@@ -157,8 +183,10 @@ export async function applyCuratedStartPageWallpaper(
       curatedId: entry.id,
       signal,
     });
-    // An apply that lost the race wrote nothing above; it must not report
-    // success either, or it is tracked as a setting the user never got.
+    // An apply that lost the race must not report success. It may still have
+    // committed - a store already past its ticket check finishes both halves
+    // rather than strand bytes under the previous row - but the user's last
+    // action was something else, so this one is not the setting to track.
     signal.throwIfAborted();
   } finally {
     if (curatedApply === controller) curatedApply = null;
@@ -168,12 +196,19 @@ export async function applyCuratedStartPageWallpaper(
 /** Clears both the settings row and the stored bytes. */
 export async function removeStartPageWallpaper(): Promise<void> {
   abortCuratedApply();
+  writeTicket += 1;
+  // Cleared twice deliberately: now, so the panel updates even with a store
+  // queued ahead, and again in the link, because a store already past its
+  // ticket check writes its row after this point.
   useSettingsStore.getState().setStartPageWallpaper(null);
-  try {
-    await removeAppearanceBlob(START_PAGE_WALLPAPER_KEY);
-  } finally {
-    invalidateStartPageWallpaper();
-  }
+  return enqueueWrite(async () => {
+    useSettingsStore.getState().setStartPageWallpaper(null);
+    try {
+      await removeAppearanceBlob(START_PAGE_WALLPAPER_KEY);
+    } finally {
+      invalidateStartPageWallpaper();
+    }
+  });
 }
 
 export interface StartPageWallpaperImage {

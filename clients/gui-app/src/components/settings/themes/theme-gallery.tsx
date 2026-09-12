@@ -699,6 +699,19 @@ function ThemeActions({
   );
 }
 
+// The keys a range input actually moves in response to; anything else
+// (Tab, a printable character, etc.) reaches the input but changes nothing.
+const RANGE_INPUT_KEYS = new Set([
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
+
 function GlassControl() {
   const opacity = useThemeLibraryStore((state) => state.glassOpacity);
   const setOpacity = useThemeLibraryStore((state) => state.setGlassOpacity);
@@ -718,6 +731,14 @@ function GlassControl() {
             onPointerUp={() =>
               trackSettingChanged("appearance", "glassOpacity")
             }
+            // Keyboard users never fire onPointerUp, so mirror it here -
+            // once per key press, not once per tick - filtered to the keys
+            // that actually move a range input.
+            onKeyUp={(event) => {
+              if (RANGE_INPUT_KEYS.has(event.key)) {
+                trackSettingChanged("appearance", "glassOpacity");
+              }
+            }}
             className="accent-primary"
           />
           <output className="text-ui-xs tabular-nums text-muted-foreground">

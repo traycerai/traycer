@@ -103,6 +103,7 @@ describe("theme applier", () => {
     expect(library.setAppearancePreference({ contrast: 70 })).toBe(true);
 
     const solidPopover = root.style.getPropertyValue("--popover-foreground");
+    const solidCard = root.style.getPropertyValue("--card-foreground");
     const pageForeground = root.style.getPropertyValue("--foreground");
     expect(solidPopover).not.toBe("");
 
@@ -117,6 +118,9 @@ describe("theme applier", () => {
     );
     // Rows already keyed off the page background are unaffected by glass.
     expect(root.style.getPropertyValue("--foreground")).toBe(pageForeground);
+    // Nothing glass tints from --card, so its foreground must never be
+    // pulled toward the page the way --popover-foreground just was.
+    expect(root.style.getPropertyValue("--card-foreground")).toBe(solidCard);
   });
 
   // Border visibility repair now runs once, at VS Code import time

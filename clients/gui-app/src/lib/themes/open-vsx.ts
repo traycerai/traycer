@@ -101,6 +101,9 @@ export async function readCappedResponse(
     await reader.cancel();
     reader.releaseLock();
   }
+  // A reader that yields no chunks is the same failure as no reader at all:
+  // empty bytes reach the caller as a parse error, or as a silent `null`.
+  if (size === 0) throw new Error("The server returned an empty response.");
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) {

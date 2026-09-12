@@ -407,6 +407,64 @@ describe("StartPageSettingsSection: curated wallpaper gallery", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
+  it("spins the newest tile when a second apply overlaps the first", async () => {
+    const finish: Array<() => void> = [];
+    wallpaperMocks.applyCurated.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish.push(() => resolve());
+        }),
+    );
+    renderSection();
+    const dunesTile = await screen.findByRole("button", { name: "Dunes" });
+    const ridgeTile = screen.getByRole("button", { name: "Ridge" });
+
+    fireEvent.click(dunesTile);
+    await vi.waitFor(() => expect(dunesTile.matches(":disabled")).toBe(true));
+    fireEvent.click(ridgeTile);
+
+    await vi.waitFor(() => expect(ridgeTile.matches(":disabled")).toBe(true));
+    expect(dunesTile.matches(":disabled")).toBe(false);
+    for (const resolve of finish) resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("aborts an in-flight local pick when a tile is applied", async () => {
+    const chosen = { signal: null as AbortSignal | null };
+    wallpaperMocks.choose.mockImplementation(
+      (_file: File, signal: AbortSignal) => {
+        chosen.signal = signal;
+        return new Promise<void>(() => undefined);
+      },
+    );
+    renderSection();
+    const dunesTile = await screen.findByRole("button", { name: "Dunes" });
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected wallpaper file input");
+    await userEvent.upload(
+      input,
+      new File(["image"], "new.png", { type: "image/png" }),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Choose image…" })
+        .matches(":disabled"),
+    ).toBe(true);
+
+    fireEvent.click(dunesTile);
+
+    expect(chosen.signal?.aborted).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "Choose image…" })
+        .matches(":disabled"),
+    ).toBe(false);
+    await vi.waitFor(() =>
+      expect(wallpaperMocks.applyCurated).toHaveBeenCalledWith(dunes),
+    );
+  });
+
   it("toasts an Error rejection's message", async () => {
     wallpaperMocks.applyCurated.mockRejectedValue(new Error("download failed"));
     renderSection();

@@ -71,7 +71,11 @@ function usePendingCuratedId(): string | null {
     },
     select: (mutation) => mutation.state.variables,
   });
-  for (const variables of pending) {
+  // Newest first: `useMutationState` yields matching mutations in invocation
+  // order, so with two applies overlapping the OLDEST would otherwise win the
+  // spinner - and the tile that is landing is the one clicked last.
+  for (let index = pending.length - 1; index >= 0; index -= 1) {
+    const variables = pending[index];
     if (
       typeof variables === "object" &&
       variables !== null &&
@@ -234,6 +238,12 @@ export function StartPageSettingsSection() {
                 pendingId={pendingCuratedId}
                 onRetry={() => void manifest.refetch()}
                 onApply={(entry) => {
+                  // A tile supersedes an in-flight local pick exactly as
+                  // Remove does: without this the slower local write lands
+                  // last, over the tile the user just chose, and `busy` never
+                  // clears because its own abort never fires.
+                  abortRef.current?.abort();
+                  setBusy(false);
                   applyCurated.mutate(entry);
                 }}
               />

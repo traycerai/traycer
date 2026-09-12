@@ -262,6 +262,59 @@ describe("applyCuratedStartPageWallpaper / chooseStartPageWallpaper", () => {
     );
   });
 
+  it("pairs the row with the bytes when the losing apply is the one that wrote them", async () => {
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "old.png",
+        curatedId: null,
+      },
+    });
+    const dunesBlob = new Blob(["dunes"], { type: "image/webp" });
+    curatedMocks.download.mockImplementation((entry: CuratedWallpaper) =>
+      entry.id === "dunes"
+        ? Promise.resolve(dunesBlob)
+        : Promise.reject(new Error("download failed")),
+    );
+    imageProcessingMocks.validate.mockResolvedValue({
+      width: 100,
+      height: 100,
+    });
+    // The blob write hangs, which is the window the race needs: Dunes is
+    // aborted while its bytes are already on their way to the store.
+    let finishWrite: () => void = () => undefined;
+    cacheMocks.write.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishWrite = () => resolve();
+      }),
+    );
+
+    const dunesApply = applyCuratedStartPageWallpaper(curatedEntry());
+    await vi.waitFor(() => expect(cacheMocks.write).toHaveBeenCalledTimes(1));
+    const ridgeApply = applyCuratedStartPageWallpaper(
+      curatedEntry({ id: "ridge", title: "Ridge" }),
+    );
+
+    await expect(ridgeApply).rejects.toThrow("download failed");
+    finishWrite();
+
+    await expect(dunesApply).rejects.toMatchObject({ name: "AbortError" });
+    // Ridge never got as far as storing anything, so the bytes in the store
+    // are Dunes' - and the row has to say so rather than still describing the
+    // wallpaper those bytes replaced.
+    expect(cacheMocks.write).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.write).toHaveBeenCalledWith(
+      "start-page-wallpaper",
+      dunesBlob,
+    );
+    expect(useSettingsStore.getState().startPageWallpaper).toMatchObject({
+      name: "Dunes",
+      curatedId: "dunes",
+    });
+  });
+
   it("writes curatedId: null when choosing a custom file", async () => {
     imageProcessingMocks.process.mockResolvedValue({
       blob: new Blob(["custom"], { type: "image/webp" }),

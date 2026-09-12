@@ -134,16 +134,6 @@ function applyFromState(): void {
   themeRevision += 1;
 }
 
-/**
- * Surfaces whose solid token never reaches the screen on its own: the glass
- * rules in `styles/theme-surfaces.css` tint them at `--glass-opacity` over the
- * page, so a foreground optimized against the solid value is optimized against
- * a colour that never ships. The raw (unfloored) opacity is used deliberately -
- * dialogs floor theirs at 0.8, so the most translucent case is the
- * conservative one for every surface sharing the token.
- */
-const GLASS_BACKGROUNDS = new Set(["card", "popover"]);
-
 function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
   return {
     mode: "rgb",
@@ -175,8 +165,17 @@ function applyContrast(
       const bg = parse(computed.getPropertyValue(`--${background}`).trim());
       if (!fg || !bg) continue;
       const source = rgb(fg);
+      // `popover` is the one solid token that never reaches the screen on
+      // its own: every glass rule in `styles/theme-surfaces.css` tints from
+      // `var(--popover)` at `--glass-opacity` over the page, so a foreground
+      // optimized against the solid value is optimized against a colour that
+      // never ships. Nothing glass tints from `--card`, and
+      // `text-card-foreground` only labels solid surfaces, so card is left
+      // alone. The raw (unfloored) opacity is deliberate - dialogs floor
+      // theirs at 0.8, so the most translucent case is the conservative one
+      // for every surface sharing the token.
       const surface =
-        glassOpacity < 1 && page && GLASS_BACKGROUNDS.has(background)
+        glassOpacity < 1 && page && background === "popover"
           ? mixRgb(rgb(page), rgb(bg), glassOpacity)
           : rgb(bg);
       const destination =

@@ -11,6 +11,7 @@ import {
   DEFAULT_CODE_FONT_SIZE,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
+import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 
 vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
   useDesktopZoomBridge: () => null,
@@ -21,6 +22,18 @@ vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
 // rows - and so which search anchors - the panel renders.
 vi.mock("@/lib/appearance/curated-wallpapers", () => ({
   fetchCuratedWallpaperManifest: () => Promise.resolve([]),
+}));
+
+const analyticsMocks = vi.hoisted(() => ({
+  trackSettingChanged: vi.fn(),
+}));
+
+// Only `trackSettingChanged` is stubbed: the panel also imports
+// `trackedSettingSetter` from this module, and replacing the whole module
+// leaves every other row's setter undefined.
+vi.mock("@/lib/analytics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/analytics")>()),
+  trackSettingChanged: analyticsMocks.trackSettingChanged,
 }));
 
 const GROUP_TITLES = [
@@ -52,12 +65,33 @@ describe("<AppearanceSettingsPanel /> groups", () => {
   beforeEach(() => {
     queryClient = createQueryClient();
     resetAppearanceSettings();
+    analyticsMocks.trackSettingChanged.mockReset();
+    useThemeLibraryStore.setState({ glassOpacity: 100 });
   });
 
   afterEach(() => {
     queryClient.clear();
     cleanup();
     resetAppearanceSettings();
+  });
+
+  it("emits exactly one glassOpacity analytics event for a keyboard change", () => {
+    renderPanel(queryClient);
+
+    const slider = screen.getByRole("slider", { name: "Background opacity" });
+    // A real browser moves the value on ArrowLeft before any key event
+    // reaches userspace; jsdom does not, so the change is simulated here
+    // the same way the pointer-drag path is simulated (fireEvent.change),
+    // leaving keyUp to answer only for the analytics side of the fix.
+    fireEvent.change(slider, { target: { value: "90" } });
+    fireEvent.keyUp(slider, { key: "ArrowLeft" });
+
+    expect(useThemeLibraryStore.getState().glassOpacity).toBe(90);
+    expect(analyticsMocks.trackSettingChanged).toHaveBeenCalledTimes(1);
+    expect(analyticsMocks.trackSettingChanged).toHaveBeenCalledWith(
+      "appearance",
+      "glassOpacity",
+    );
   });
 
   it("renders the named group headings in order", () => {
