@@ -766,6 +766,67 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
   });
 });
 
+/**
+ * CR2: `hqBoardText` used to slice the top five BY HEAT first, then drop any
+ * of the five missing from `nameById` - so an unnamed agent inside the top
+ * five cost the board a name rather than handing its slot to the next
+ * hottest agent who actually has one. The doc comment at `hqBoardText`
+ * ("All five are listed whatever the width") is the spec; this is what holds
+ * the code to it.
+ */
+describe("officeBoardText - CR2 an unnamed agent in the top five does not cost the board a name", () => {
+  /**
+   * Six agents, each a DISTINCT heat so the ranking cannot be mistaken for an
+   * id tie-break: attention through idle, one status apart, in roster order.
+   * "c" sits third-hottest - inside the top five - and is missing from
+   * `nameById` on purpose; "f" is sixth-hottest and named, so it is the one
+   * promotion has to find.
+   */
+  const ROSTER = ["a", "b", "c", "d", "e", "f"];
+  const STATUS_BY_ID = new Map<string, OfficeAgentStatus>([
+    ["a", "attention"],
+    ["b", "failure"],
+    ["c", "working"],
+    ["d", "awaiting"],
+    ["e", "background"],
+    ["f", "idle"],
+  ]);
+  /** "c" has no entry - the unnamed agent inside the top five. */
+  const NAME_BY_ID = new Map([
+    ["a", "Alpha One"],
+    ["b", "Beta Two"],
+    ["d", "Delta Four"],
+    ["e", "Epsilon Five"],
+    ["f", "Zeta Six"],
+  ]);
+
+  it("promotes the sixth-hottest NAMED agent into the slot the unnamed fifth leaves open", () => {
+    const sign = boardSign({
+      kind: "hq-board",
+      agentIds: ROSTER,
+      // Wide enough that the ladder spells every name out - this case is
+      // about WHICH five are chosen, not how far they get abbreviated.
+      widthTiles: 48,
+    });
+    const text = officeBoardText({
+      sign,
+      statusById: STATUS_BY_ID,
+      visibleAgentIds: new Set(ROSTER),
+      nameById: NAME_BY_ID,
+      available: boardWidthPx(48),
+      measure,
+    });
+
+    // FIVE NAMES. Today the board stops at four - "c" cost the board its own
+    // slot instead of handing it to "f" - which is exactly the defect this
+    // case exists to catch.
+    expect(text.split(" · ")).toHaveLength(5);
+    // The promoted agent is actually among them, not merely a count that
+    // happens to reach five some other way.
+    expect(text).toContain("Zeta Six");
+  });
+});
+
 describe("compareHeat - the comparator contract", () => {
   const statusById = new Map<string, OfficeAgentStatus>([
     ["a", "attention"],

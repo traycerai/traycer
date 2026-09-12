@@ -247,14 +247,20 @@ function hqBoardText(args: {
   readonly measure: OfficePlateMeasure;
 }): string {
   const { agentIds, available, measure, nameById, statusById } = args;
-  const hottest = [...agentIds]
-    .sort((left, right) => compareHeat(left, right, statusById))
-    .slice(0, HQ_BOARD_NAMES);
+  // NAMED FIRST, THEN THE TOP FIVE - not the other way round. Taking the five
+  // hottest and dropping the unnamed among them leaves a gap that the
+  // next-hottest NAMED agent should have filled, so a single agent the cursor
+  // has no name for yet costs the board a line it could have printed. That is
+  // precisely the "omitted name" the rule above refuses.
+  const byHeat = [...agentIds].sort((left, right) =>
+    compareHeat(left, right, statusById),
+  );
   const named: string[] = [];
-  for (const agentId of hottest) {
+  for (const agentId of byHeat) {
     const name = nameById.get(agentId);
     if (name === undefined) continue;
     named.push(name);
+    if (named.length === HQ_BOARD_NAMES) break;
   }
   // Nobody is named yet at this cursor: the board falls back to counting,
   // which is a true statement about the room rather than an empty plate.

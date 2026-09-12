@@ -13,6 +13,7 @@ import {
   OFFICE_SPRITE_LETTERS,
   type RasterizedSprite,
 } from "@/lib/comm-graph/office/office-pixel-art";
+import { OFFICE_ACCESSORY_MAPS_BY_NAME } from "@/lib/comm-graph/office/office-sprite-maps";
 import type {
   OfficeAppearance,
   OfficeSpriteName,
@@ -172,6 +173,34 @@ describe("sprite maps", () => {
       (name) => name !== "character" && !authored.has(name),
     );
     expect(missing).toEqual([]);
+  });
+
+  /**
+   * CR3: `OFFICE_ACCESSORY_MAPS` (the array `officeSpriteMaps()` enumerates)
+   * and the accessory lookup used to be two hand-written copies of the same
+   * roster - add an accessory to one and forget the other, and nothing here
+   * caught it, since the completeness test above only walks what it's handed.
+   *
+   * The stronger half of the fix is the type, not this case:
+   * `OFFICE_ACCESSORY_MAPS_BY_NAME` is keyed on `OfficeCharacterAccessory`, the
+   * same union the scene already uses for an accessory, so a member added to
+   * that union and forgotten here is a COMPILE ERROR, not a missing sprite -
+   * confirmed directly by adding `"lanyard"` to the union, which fails with
+   * `error TS2741: Property 'lanyard' is missing in type '{ headphones:
+   * SpriteMap; }'`. This case guards the OTHER direction: that the enumerated
+   * array stays DERIVED from the record rather than drifting back into a
+   * second hand-written copy.
+   *
+   * Reference equality against the record's own values - not a label-string
+   * match - is the point: a label-based assertion would still pass if someone
+   * enumerated a DIFFERENT map under the right label, which is exactly the
+   * drift being guarded against.
+   */
+  it("enumerates the exact map object the accessory lookup names for every accessory", () => {
+    for (const [name, map] of Object.entries(OFFICE_ACCESSORY_MAPS_BY_NAME)) {
+      const enumerated = officeSpriteMaps().some((entry) => entry.map === map);
+      expect(enumerated, name).toBe(true);
+    }
   });
 
   it("are rectangular and match the size declared for their sprite", () => {

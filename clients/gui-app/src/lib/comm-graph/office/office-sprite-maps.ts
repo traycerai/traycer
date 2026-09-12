@@ -16,6 +16,12 @@
  * Floor tiles deliberately have none - an outlined tile grid reads as a cage.
  */
 
+// TYPE-ONLY, and the only import this file has: the accessory record below is
+// keyed by the scene's own union so the type refuses a member it forgets. The
+// import is erased at compile time, so it adds no runtime edge to a module
+// that otherwise depends on nothing.
+import type { OfficeCharacterAccessory } from "@/lib/comm-graph/office/office-types";
+
 /** Rows of equal length, top to bottom. */
 export type SpriteMap = ReadonlyArray<string>;
 
@@ -601,10 +607,31 @@ export const OFFICE_SEATED_MAPS: ReadonlyArray<{
   { label: "seated-crash-down", facing: "down", map: SEATED_CRASH_DOWN },
 ];
 
+/**
+ * Every accessory the office draws, keyed by the name the scene asks for.
+ *
+ * THE ONE SOURCE. The enumerated list and the lookup below are both derived
+ * from this, because they used to be written out separately: add an accessory
+ * to only one and either `officeAccessoryMap` cannot resolve it or
+ * `officeSpriteMaps()` stops enumerating it, and the sprite-completeness test
+ * still passes - it only walks what it is handed. Keying on
+ * `OfficeCharacterAccessory` rather than on a local union is the other half:
+ * the type now refuses a member this record forgets, so the drift is a compile
+ * error instead of a missing sprite.
+ */
+export const OFFICE_ACCESSORY_MAPS_BY_NAME: Readonly<
+  Record<OfficeCharacterAccessory, SpriteMap>
+> = {
+  headphones: HEADPHONES,
+};
+
 export const OFFICE_ACCESSORY_MAPS: ReadonlyArray<{
   readonly label: string;
   readonly map: SpriteMap;
-}> = [{ label: "accessory-headphones", map: HEADPHONES }];
+}> = Object.entries(OFFICE_ACCESSORY_MAPS_BY_NAME).map(([name, map]) => ({
+  label: `accessory-${name}`,
+  map,
+}));
 
 /** Every seated pose the office draws, and how far its HEAD sits from the top. */
 export type OfficeSeatedPose =
@@ -637,12 +664,10 @@ export function officeHeadOffsetOf(pose: OfficeSeatedPose): number {
   return 1;
 }
 
-const ACCESSORY_MAPS: Readonly<Record<"headphones", SpriteMap>> = {
-  headphones: HEADPHONES,
-};
-
-export function officeAccessoryMap(accessory: "headphones"): SpriteMap {
-  return ACCESSORY_MAPS[accessory];
+export function officeAccessoryMap(
+  accessory: OfficeCharacterAccessory,
+): SpriteMap {
+  return OFFICE_ACCESSORY_MAPS_BY_NAME[accessory];
 }
 
 export function officeHeadMap(facing: "down" | "up" | "right"): SpriteMap {

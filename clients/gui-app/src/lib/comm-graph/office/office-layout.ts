@@ -3028,34 +3028,47 @@ function decorateFloorLayout(request: DecorationRequest): OfficeLayout {
 }
 
 /**
- * The grid this agent set would pack into, in TILES, and nothing else.
+ * The packed floors' bounding grid: widest floor, and the bottom of the last.
  *
- * `buildFloors` and the fold below are the whole of the Floor's size
- * arithmetic; everything after them in `layoutOffice` fills that grid in. Auto
- * needs the size to choose a view and never looks at what is inside it, so this
- * is exported for `views/floor/floor-measure.ts` to call - and shared with the
- * plan rather than restated, because a measure that disagreed with the plan
- * would pick a view the plan then contradicts.
+ * ONE COPY, called by both readers. This was written out twice - once in
+ * `officeFloorGrid` and once inside `layoutOffice` - and the duplication was a
+ * silent trap rather than a cosmetic one: the two were equal only by
+ * inspection, so a change to either would have made Auto measure a grid the
+ * plan does not produce, and nothing would fail until a view was chosen for a
+ * size the floor never has.
  */
-export function officeFloorGrid(agents: ReadonlyArray<OfficeAgentInput>): {
+function gridOfBuilds(builds: ReadonlyArray<FloorBuild>): {
   readonly cols: number;
   readonly rows: number;
 } {
-  const builds = buildFloors(agents);
   const last = builds[builds.length - 1];
   let cols = 0;
   for (const build of builds) cols = Math.max(cols, build.localCols);
   return { cols, rows: last.originRow + last.localRows };
 }
 
+/**
+ * The grid this agent set would pack into, in TILES, and nothing else.
+ *
+ * `buildFloors` and `gridOfBuilds` are the whole of the Floor's size
+ * arithmetic; everything after them in `layoutOffice` fills that grid in. Auto
+ * needs the size to choose a view and never looks at what is inside it, so this
+ * is exported for `views/floor/floor-measure.ts` to call - and it now shares
+ * the fold with the plan rather than restating it, because a measure that
+ * disagreed with the plan would pick a view the plan then contradicts.
+ */
+export function officeFloorGrid(agents: ReadonlyArray<OfficeAgentInput>): {
+  readonly cols: number;
+  readonly rows: number;
+} {
+  return gridOfBuilds(buildFloors(agents));
+}
+
 export function layoutOffice(
   agents: ReadonlyArray<OfficeAgentInput>,
 ): OfficeLayout {
   const builds = buildFloors(agents);
-  const last = builds[builds.length - 1];
-  let cols = 0;
-  for (const build of builds) cols = Math.max(cols, build.localCols);
-  const rows = last.originRow + last.localRows;
+  const { cols, rows } = gridOfBuilds(builds);
   const doorCol = Math.floor((cols - 1) / 2);
 
   const desks = new Map<string, PlacedDesk>();
