@@ -693,7 +693,7 @@ describe("ArtifactStreamClient (real, over a stub IStreamSession) - binary-paylo
       status: StreamConnectionStatus,
       reason: StreamCloseReason | null,
     ): void {
-      this.statusHandler?.(status, reason);
+      this.statusHandler?.(status, reason, null);
     }
   }
 

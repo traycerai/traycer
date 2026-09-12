@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import {
   useHostReachability,
   type HostReachability,
 } from "@/hooks/agent/use-host-reachability";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 interface ListState {
   readonly data: readonly HostDirectoryEntry[] | undefined;
@@ -41,7 +43,7 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
  */
 function remoteEntryWithConnectivity(
   hostId: string,
-  connectivity: "unknown" | "connectable",
+  connectivity: "unknown" | "connectable" | "offline",
   planAllowsRemote: boolean,
 ): HostDirectoryEntry {
   const listItem: HostListItem = {
@@ -204,5 +206,119 @@ describe("useHostReachability - starting-deadline basis", () => {
     expect(result.current.unavailability).toBe("plan-restricted");
     expect(result.current.unavailability).not.toBe("offline");
     expect(result.current.basis).toBe("directory");
+  });
+});
+
+/** Publishes host-a's lease the way the selection bridge does. */
+function publishLease(status: "restarting-expected" | "connecting"): void {
+  const lease: HostLeaseSnapshot = { hostId: "host-a", status, dead: null };
+  useSelectionAuthorityStore.getState().applyKernelSnapshot({
+    attached: true,
+    preferredHostId: "host-a",
+    targetHostId: "host-a",
+    effectiveHostId: "host-a",
+    leases: [lease],
+    selectionRevision: 1,
+  });
+}
+
+/**
+ * D4: an announced restart holds the wait on every tile. While the lease says
+ * `restarting-expected`, `host-starting` does not fall at the budget, and a
+ * directory `offline` reads `host-starting`. The lease's own bounds end the
+ * hold, and the budget starts when it stops vouching. The fall with no lease at
+ * all is the first test in the suite above.
+ */
+describe("useHostReachability - an expected restart holds the wait", () => {
+  afterEach(() => {
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  it("stays host-starting past the budget while the lease says restarting-expected", () => {
+    list.value = { data: [], fetchStatus: "idle" };
+    publishLease("restarting-expected");
+    const { result, rerender } = renderHook(() =>
+      useHostReachability("host-a"),
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(HOST_STARTING_BUDGET_MS * 4);
+    });
+    rerender();
+    expect(result.current.status).toBe("host-starting");
+    expect(result.current.basis).toBe("directory");
+  });
+
+  it("reads a remote host's directory offline as host-starting inside an episode", () => {
+    list.value = {
+      data: [remoteEntryWithConnectivity("host-a", "offline", true)],
+      fetchStatus: "idle",
+    };
+    publishLease("restarting-expected");
+    const { result } = renderHook(() => useHostReachability("host-a"));
+    expect(result.current).toMatchObject({
+      status: "host-starting",
+      unavailability: null,
+      basis: "directory",
+      hostKind: "remote",
+    });
+  });
+
+  it("still reads the same remote offline as unreachable with no episode", () => {
+    list.value = {
+      data: [remoteEntryWithConnectivity("host-a", "offline", true)],
+      fetchStatus: "idle",
+    };
+    const { result } = renderHook(() => useHostReachability("host-a"));
+    expect(result.current).toMatchObject({
+      status: "unreachable",
+      unavailability: "offline",
+      basis: "directory",
+      hostKind: "remote",
+    });
+  });
+
+  it("starts the budget when the lease stops vouching, and falls at its end", () => {
+    list.value = { data: [], fetchStatus: "idle" };
+    publishLease("restarting-expected");
+    const { result, rerender } = renderHook(() =>
+      useHostReachability("host-a"),
+    );
+    act(() => {
+      vi.advanceTimersByTime(HOST_STARTING_BUDGET_MS * 2);
+    });
+    rerender();
+    expect(result.current.status).toBe("host-starting");
+
+    act(() => {
+      publishLease("connecting");
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(HOST_STARTING_BUDGET_MS - 1);
+    });
+    rerender();
+    expect(result.current.status).toBe("host-starting");
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    rerender();
+    expect(result.current).toMatchObject({
+      status: "unreachable",
+      unavailability: "offline",
+      basis: "starting-deadline",
+    });
+  });
+
+  it("leaves plan-restricted unreachable while the lease vouches", () => {
+    list.value = {
+      data: [remoteEntryWithConnectivity("host-a", "connectable", false)],
+      fetchStatus: "idle",
+    };
+    publishLease("restarting-expected");
+    const { result } = renderHook(() => useHostReachability("host-a"));
+    expect(result.current.status).toBe("unreachable");
+    expect(result.current.unavailability).toBe("plan-restricted");
   });
 });

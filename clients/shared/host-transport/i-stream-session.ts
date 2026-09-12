@@ -1,6 +1,7 @@
 export {
   isIncompatibleCloseForMethod,
   isMethodIncompatibleClose,
+  isRetryableSessionLifecycleFatal,
   type IStreamSession,
   type ServerFrameHandler,
   type StatusChangeHandler,

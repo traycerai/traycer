@@ -17,6 +17,7 @@ import {
   type HistoryLandingDraft,
 } from "@/lib/history-landing-drafts";
 import { cn } from "@/lib/utils";
+import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 
 const DRAFTS_PREVIEW_LIMIT = 5;
@@ -27,14 +28,19 @@ export function HistoryDraftsList(props: {
 }): ReactNode {
   const { hostId, onBeforeOpen } = props;
   const drafts = useLandingDraftStore((state) => state.drafts);
+  // Non-null only under a start-task tab, where the composer above this list
+  // is editing that draft; the history page and modal mount outside any
+  // draft surface and list every retained draft.
+  const surfaceDraftId = useDraftSurfaceId();
   const items = useMemo(
     () =>
       listHistoryLandingDrafts({
         drafts,
         query: "",
         currentHostId: hostId,
+        excludeDraftId: surfaceDraftId,
       }),
-    [drafts, hostId],
+    [drafts, hostId, surfaceDraftId],
   );
   const navigate = useNavigate();
   const openDraft = useCallback(

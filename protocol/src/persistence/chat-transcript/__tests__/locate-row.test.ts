@@ -21,16 +21,17 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 
 /**
- * `locateTranscriptRowOrdinal` answers a cross-tile jump for the four target
+ * `locateTranscriptRowOrdinal` answers a cross-tile jump for the five target
  * kinds a windowed client cannot resolve on its own: a `block` (walking the
  * rendered segment tree), a `sent-message` (matching an `agentMessageSend`
  * enrichment), a `receipt` (matching an `agentMessageReceipt` enrichment),
- * and a `message` naming an ASSISTANT record, whose rows are
- * turn-keyed and therefore never named by the durable id. The invariant these
- * tests exist to pin is that the ordinal it returns is an index into the SAME
- * enumeration `buildRowSkeleton` publishes - by construction, since both are
- * built from `projectTranscriptRows` - so every assertion here is phrased
- * against the skeleton, never against a hand-counted ordinal.
+ * an `approval` (matching a plan block's `approvalId`), and a `message`
+ * naming an ASSISTANT record, whose rows are turn-keyed and therefore never
+ * named by the durable id. The invariant these tests exist to pin is that
+ * the ordinal it returns is an index into the SAME enumeration
+ * `buildRowSkeleton` publishes - by construction, since both are built from
+ * `projectTranscriptRows` - so every assertion here is phrased against the
+ * skeleton, never against a hand-counted ordinal.
  */
 
 const previewText: TranscriptPreviewProjection = (content: JsonContent) =>
@@ -781,6 +782,54 @@ describe("locateTranscriptRowOrdinal: message targets", () => {
       locateTranscriptRowOrdinal(
         { rows, messages: input.messages },
         { kind: "message", messageId: "m-trimmed-by-a-restore" },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("locateTranscriptRowOrdinal: approval targets", () => {
+  it("resolves a plan approval to the row that renders that plan block", () => {
+    const human = humanUserMessage({
+      messageId: "m-1",
+      timestamp: 1,
+      text: "plan this",
+    });
+    const assistant = assistantMessageWithBlocks({
+      messageId: "m-2",
+      timestamp: 2,
+      turnId: "turn-1",
+      blocks: [
+        {
+          type: "plan",
+          blockId: "plan-block-1",
+          status: "completed",
+          timestamp: 2,
+          planStatus: "awaiting_approval",
+          planId: "plan-1",
+          harnessId: "claude",
+          source: { harnessId: "claude", kind: "provider-plan" },
+          approvalId: "approval-plan",
+        },
+      ],
+    });
+    const input: TranscriptRowProjectionInput = {
+      messages: [human, assistant],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    };
+    const rows = projectTranscriptRows(input);
+    const skeleton = buildRowSkeleton(input, previewText, null);
+
+    const ordinal = locateOrThrow(rows, input.messages, {
+      kind: "approval",
+      approvalId: "approval-plan",
+    });
+    expect(skeleton[ordinal]?.rowId).toBe(rows[ordinal]?.rowId);
+    expect(
+      locateTranscriptRowOrdinal(
+        { rows, messages: input.messages },
+        { kind: "approval", approvalId: "missing" },
       ),
     ).toBeNull();
   });

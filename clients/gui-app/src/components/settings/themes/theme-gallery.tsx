@@ -47,6 +47,7 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
+import { trackSettingChanged } from "@/lib/analytics";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { THEME_PRESETS, findThemePreset } from "@/lib/theme-presets";
@@ -698,9 +699,33 @@ function ThemeActions({
   );
 }
 
+// The keys a range input actually moves in response to; anything else
+// (Tab, a printable character, etc.) reaches the input but changes nothing.
+const RANGE_INPUT_KEYS = new Set([
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
+
 function GlassControl() {
   const opacity = useThemeLibraryStore((state) => state.glassOpacity);
   const setOpacity = useThemeLibraryStore((state) => state.setGlassOpacity);
+  // The value the current interaction started from. The slider clamps at 30
+  // and 100, so an arrow key at either end - or a drag that returns where it
+  // began - ends on the value it started on and reports nothing.
+  const interactionStart = useRef(opacity);
+  const reportIfMoved = (): void => {
+    if (
+      useThemeLibraryStore.getState().glassOpacity === interactionStart.current
+    )
+      return;
+    trackSettingChanged("appearance", "glassOpacity");
+  };
   return (
     <SettingsRow
       row={APPEARANCE.definitions.backgroundOpacity}
@@ -713,12 +738,33 @@ function GlassControl() {
             max={100}
             value={opacity}
             onChange={(event) => setOpacity(Number(event.target.value))}
+            // Once per interaction, not once per tick. Keyboard users never
+            // fire the pointer pair, so the key pair mirrors it, filtered to
+            // the keys that actually move a range input.
+            onPointerDown={() => {
+              interactionStart.current = opacity;
+            }}
+            onPointerUp={reportIfMoved}
+            onKeyDown={(event) => {
+              if (RANGE_INPUT_KEYS.has(event.key))
+                interactionStart.current = opacity;
+            }}
+            onKeyUp={(event) => {
+              if (RANGE_INPUT_KEYS.has(event.key)) reportIfMoved();
+            }}
             className="accent-primary"
           />
           <output className="text-ui-xs tabular-nums text-muted-foreground">
             {opacity}%
           </output>
-          <Button size="sm" variant="ghost" onClick={() => setOpacity(100)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setOpacity(100);
+              trackSettingChanged("appearance", "glassOpacity");
+            }}
+          >
             Reset
           </Button>
         </div>

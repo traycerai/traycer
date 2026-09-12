@@ -147,7 +147,11 @@ export function AgentStopButton(props: {
     return (
       <StopButtonShell
         tooltip={
-          reachability.status === "unreachable"
+          // `host-starting` names the host too: while a host restarts, its
+          // agents are as far out of reach as an offline host's, and a
+          // disabled button with no reason reads as broken.
+          reachability.status === "unreachable" ||
+          reachability.status === "host-starting"
             ? `Runs on ${reachability.hostLabel}`
             : undefined
         }

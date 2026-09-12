@@ -16,6 +16,7 @@
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   IStreamClient,
   StreamParamsProvider,
@@ -62,6 +63,7 @@ export interface WorkerStreamClientHandle {
     streamId: number,
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    retryCause: FatalErrorDetails | null,
   ): void;
   /** The per-session negotiated version, pushed before its status. */
   deliverSessionVersion(streamId: number, version: SchemaVersion | null): void;
@@ -158,8 +160,8 @@ export function createWorkerStreamClient(
       deliverFrame: (envelope, binaryPayload) => {
         frameHandler?.(envelope, binaryPayload);
       },
-      deliverStatus: (status, reason) => {
-        statusHandler?.(status, reason);
+      deliverStatus: (status, reason, retryCause) => {
+        statusHandler?.(status, reason, retryCause);
       },
       setVersion: (version) => {
         negotiated = version;
@@ -226,10 +228,10 @@ export function createWorkerStreamClient(
         .get(parsed.frame.streamId)
         ?.deliverFrame(parsed.frame.envelope, parsed.frame.binaryPayload);
     },
-    deliverStatus(streamId, status, reason): void {
+    deliverStatus(streamId, status, reason, retryCause): void {
       const entry = sessions.get(streamId);
       if (entry === undefined) return;
-      entry.deliverStatus(status, reason);
+      entry.deliverStatus(status, reason, retryCause);
       // A status transition is when a re-declare becomes imminent, so it is
       // where a params provider is re-read. Pushed AFTER the handler runs: the
       // handler is what applies the state the provider reads, so reading first

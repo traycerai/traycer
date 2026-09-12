@@ -77,6 +77,24 @@
  * own revision included, so a snapshot that jumps past a patch cannot be rolled
  * back by a replay of it.
  *
+ * Both books gate PATCH ADMISSION and nothing else, which is narrower than it
+ * may read. Nothing gates a ROW WRITE against the patch book, so `updatedAt` is
+ * not monotonic here and is not claimed to be: with content at 11 and a patch
+ * having delivered recency 13, a row at revision 12 from any of the three write
+ * paths passes `12 > 11`, and `setRow` writes ITS `updatedAt` and clears the
+ * book. The sidebar orders on `updatedAt`, so that row moves down a place.
+ *
+ * Reachable - the three channels are unserialized (patches ride the poll,
+ * `applyUpsert` the stream, `applyPointRead` a mutation response) - and
+ * accepted. It is a transient the next quiet write's patch corrects, where the
+ * alternative was the permanent content freeze the paragraph above describes:
+ * the only way the old code avoided the wobble was by stamping revision 13 onto
+ * revision-11 content, which is the defect itself. If it ever needs closing, the
+ * shape is `setRow` keeping the remembered revision and its `updatedAt` when the
+ * incoming row's revision falls BELOW the book rather than clearing it - a
+ * change to this file alone, and deliberately not made until a real ordering
+ * complaint asks for it.
+ *
  * ## Declining a stamp: {@link RecordTable.snapshotIncompleteSeq}
  *
  * Rule 1 means an answer's rows are sometimes NOT what this table ends up
@@ -96,10 +114,30 @@
  * asks for a full snapshot. Self-healing, once, exactly as it was.
  *
  * It counts the FENCE skips alone. A row rule 2 rejected is a row this table
- * already holds at least as new a version of, and a row rule 3 filtered out is
- * one this session has permanently retracted by contract - neither is a gap the
- * next snapshot would fill, and counting them would put every session that has
- * ever absorbed a removal back on unconditional snapshots for good.
+ * DECIDED not to take, and a row rule 3 filtered out is one this session has
+ * permanently retracted by contract - neither is a gap the next snapshot would
+ * fill, because both are deterministic per row, so the answer after next
+ * rejects the same row for the same reason and an extra snapshot buys nothing.
+ *
+ * "Decided not to take" rather than "already holds something newer", which is
+ * the common case and not the only one - both planes declare a waiver
+ * ASYMMETRY that rule 2 can reject something other than a staler version
+ * through:
+ *
+ *  - the chat plane rejects a held `docResident: true` against a candidate
+ *    `docResident: false` at equal revision (clause 1 needs the HELD home
+ *    unknown, clause 2 needs the CANDIDATE doc-resident, so neither fires and a
+ *    doc row's perpetual `revision: 0` loses `0 > 0`). That is a doc-homed chat
+ *    being ADOPTED, and the row keeps a home that routes its writes to
+ *    `"unavailable"`;
+ *  - the terminal plane rejects every `cloud` candidate under a local held row,
+ *    which is a different POPULATION rather than an older version of one.
+ *
+ * Both predate revision gating and neither is a regression from it: rule 2 is
+ * deterministic, so the unconditional poll rejected them identically on every
+ * tick and the row never moved either. Counting them here would not repair them
+ * and would cost the whole feature - one doc-resident row in a session would
+ * decline every stamp forever, i.e. permanent unconditional snapshots.
  *
  * ## The other half: {@link RecordTable.deltaIncompleteSeq}
  *
