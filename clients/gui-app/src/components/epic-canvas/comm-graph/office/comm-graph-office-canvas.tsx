@@ -39,6 +39,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
+import { useThemeRevision } from "@/providers/use-theme-revision";
 import {
   useEpicAgentActivityTiers,
   useEpicAgentRoleClaimsByAgentId,
@@ -2164,6 +2165,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   );
 
   const { resolvedTheme } = useResolvedTheme();
+  const themeRevision = useThemeRevision();
   const speed = useCommGraphSpeed(epicId);
   // The cursor's capture time decides which agents read as archived AS OF the
   // floor being shown, and what the wall clock says during replay.
@@ -2719,6 +2721,19 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const trackLodBand = useEffectEvent((zoom: number): void => {
     syncLodBand(zoom);
   });
+  /**
+   * The cascade's revision, READ rather than reacted to.
+   *
+   * A custom theme repaints every token without changing the mode or the
+   * preset, so `resolvedTheme` cannot see it - and these pixels are baked into
+   * an offscreen surface, which no cascade repaints for us. So the revision
+   * belongs in the static layer's KEY rather than in the loop's dependency
+   * array: what a custom palette makes stale is one bitmap, not the frame
+   * gate, the listeners or the loop, and rebuilding that bitmap is the whole
+   * of the repair. Reacting to it here would spend a full teardown - frames
+   * stopped, listeners dropped, the floor released - to fix a repaint.
+   */
+  const readThemeRevision = useEffectEvent((): number => themeRevision);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -2910,6 +2925,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         key: {
           staticVersion: staticKeyOf(frame.staticVersion, lod),
           theme: resolvedTheme,
+          themeRevision: readThemeRevision(),
           width: frame.size.width,
           height: frame.size.height,
         },

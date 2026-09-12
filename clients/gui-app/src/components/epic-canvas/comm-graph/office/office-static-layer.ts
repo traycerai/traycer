@@ -86,6 +86,12 @@ export interface OfficeStaticLayerKey {
   readonly staticVersion: number;
   /** The palette is baked into the pixels, so a theme flip is a repaint. */
   readonly theme: OfficeTheme;
+  /**
+   * The cascade's own revision, which moves for a theme change the MODE cannot
+   * see: a custom palette repaints every token while `theme` stays "light".
+   * These pixels are baked, not CSS, so nothing repaints them on our behalf.
+   */
+  readonly themeRevision: number;
   /** The WORLD's size in sprite pixels, which is what the chunk grid covers. */
   readonly width: number;
   readonly height: number;
@@ -131,6 +137,7 @@ export function officeStaticLayerKeysMatch(
   return (
     a.staticVersion === b.staticVersion &&
     a.theme === b.theme &&
+    a.themeRevision === b.themeRevision &&
     a.width === b.width &&
     a.height === b.height
   );

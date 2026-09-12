@@ -117,6 +117,7 @@ import type { TileFindAdapter } from "@/stores/tile-find";
 import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
 import { OfficeStaticLayer } from "@/components/epic-canvas/comm-graph/office/office-static-layer";
+import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
 
@@ -2573,14 +2574,17 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * which is its own way of losing a floor's memory.
      */
     let mainCanvasContextCalls = 0;
+    let totalCanvasContextCalls = 0;
     let restoreMainCanvasGetContext: (() => void) | null = null;
     let releaseSpy: MockInstance<() => void>;
 
     beforeEach(() => {
       mainCanvasContextCalls = 0;
+      totalCanvasContextCalls = 0;
       restoreMainCanvasGetContext = stubGetContext(
         function (this: HTMLCanvasElement) {
           if (this.isConnected) mainCanvasContextCalls += 1;
+          totalCanvasContextCalls += 1;
           return createRecordingContext(calls);
         },
       );
@@ -2591,6 +2595,10 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       restoreMainCanvasGetContext?.();
       restoreMainCanvasGetContext = null;
       vi.useRealTimers();
+      // The custom-theme case writes to the REAL theme library store (it is
+      // not mocked, deliberately) to move a REAL revision - put back so a
+      // later test in this file does not inherit a non-default contrast.
+      useThemeLibraryStore.setState({ contrast: 100 });
     });
 
     const RESTART_VIEW: CommGraphTileViewState = { ...FIXED_CAMERA_VIEW };
@@ -2876,6 +2884,59 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
 
       expect(mainCanvasContextCalls).toBe(1);
       expect(releaseSpy).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * A CUSTOM theme repaints the whole cascade without moving the mode or
+     * the preset - `resolvedTheme` (the mocked hook above) never sees it, so
+     * the ONLY signal that a repaint happened is `useThemeRevision()`, which
+     * runs for real against the real applier (nothing in this file mocks it).
+     * Verified directly before building this on it: a real
+     * `useThemeLibraryStore.setState({ contrast: … })` does move
+     * `getThemeRevision()` under jsdom.
+     *
+     * `themeRevision` sits in the static layer's KEY, read through
+     * `useEffectEvent`, so the loop's own effect never restarts for it - the
+     * rebuild happens inside the SAME effect instance, on the next drawn
+     * frame's `sync()` call. That means neither of the two counters this
+     * describe already has can see it directly:
+     * `mainCanvasContextCalls` only counts `getContext` on the CONNECTED
+     * canvas (the loop's own, opened once per effect activation), and
+     * `releaseSpy` watches the PUBLIC `OfficeStaticLayer.release()`, which is
+     * only ever called at effect cleanup - a key mismatch inside `sync()`
+     * drops chunks through the class's PRIVATE `releaseChunks()` instead
+     * (confirmed by reading `office-static-layer.ts`), so neither fires here
+     * even on a genuine rebuild.
+     *
+     * What DOES change, confirmed empirically first: a dropped chunk with no
+     * held survivor is baked fresh on the next `hold()`, which allocates a
+     * brand-new offscreen canvas - one more `getContext` call, on a
+     * DISCONNECTED canvas this time. `totalCanvasContextCalls` (every
+     * `getContext` call, connected or not) is what makes that visible from
+     * outside the component: a delta of exactly 1 there, with
+     * `mainCanvasContextCalls` still 0, is "the layer rebuilt once and the
+     * loop did not restart" - the actual pair this case has to prove, not
+     * the release-spy pair the other positives use, since those restart the
+     * whole effect and this deliberately does not.
+     */
+    it("a custom-theme change rebuilds the layer exactly once and leaves the loop alone", () => {
+      renderLoop({});
+      const totalBefore = totalCanvasContextCalls;
+
+      act(() => {
+        // In the schema's own range (70-130), so this is a contrast a user
+        // can really pick - `setState` would take an out-of-range one, but
+        // then the case would rest on a state the store rejects.
+        useThemeLibraryStore.setState({ contrast: 120 });
+      });
+      flushRaf(1);
+
+      // Precondition: the revision actually moved, and not because of a
+      // mode change - `resolvedTheme` stays mocked to "light" throughout.
+      expect(resolvedThemeMock.current).toBe("light");
+      expect(totalCanvasContextCalls - totalBefore).toBe(1);
+      expect(mainCanvasContextCalls).toBe(0);
+      expect(releaseSpy).not.toHaveBeenCalled();
     });
   });
 });

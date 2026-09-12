@@ -20,6 +20,7 @@ import {
 const KEY: OfficeStaticLayerKey = {
   staticVersion: 1,
   theme: "dark",
+  themeRevision: 1,
   width: 320,
   height: 240,
 };
@@ -324,7 +325,7 @@ describe("OfficeStaticLayer", () => {
       });
       plannedCounts.push(chunks.length);
       layer.sync({
-        key: { ...world, staticVersion: 1, theme: "dark" },
+        key: { ...world, staticVersion: 1, theme: "dark", themeRevision: 1 },
         chunks,
         paint: () => undefined,
       });
