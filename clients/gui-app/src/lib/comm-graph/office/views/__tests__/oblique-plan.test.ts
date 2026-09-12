@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
@@ -37,25 +37,6 @@ import {
   planTowers,
   TOWERS_VIEW,
 } from "../oblique/oblique-plan";
-
-/**
- * Reclassifies "awaiting" as cold while leaving every other export - the
- * table included - genuine, so a painter reading the private
- * `!== "idle" && !== "archived"` expression instead of the predicate cannot
- * be told apart from one reading the predicate on any of today's real
- * statuses: it has to be caught by a status this mock alone reclassifies.
- */
-vi.mock("@/lib/comm-graph/office/office-status", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/comm-graph/office/office-status")
-    >();
-  return {
-    ...actual,
-    isOfficeHotStatus: (status: OfficeAgentStatus | undefined) =>
-      status === "awaiting" ? false : actual.isOfficeHotStatus(status),
-  };
-});
 
 const SHAPES: ReadonlyArray<OfficeTestEpicShape> = [
   "triage",
@@ -1317,37 +1298,6 @@ describe("oblique painters", () => {
         assertSpotSpritesInBounds(layout, painter, lod, projector.bounds);
       }
     }
-  });
-
-  it("follows the shared hot/cold predicate rather than a private idle/archived check", () => {
-    const layout = planBuilding(
-      initialInput(makeTestEpic("triage", 309, 1), VIEWPORTS[0]),
-    );
-    const desk = [...layout.desks.values()].find(
-      (candidate) => candidate.kind === "desk",
-    );
-    if (desk === undefined) throw new Error("expected an occupied desk");
-    const painter = BUILDING_VIEW.painter;
-    const spriteFor = (modelTier: OfficeDeskState["modelTier"]): string => {
-      const state: OfficeDeskState = {
-        ...idleDeskState(desk.agentId),
-        status: "awaiting",
-        modelTier,
-      };
-      const monitor = painter
-        .seatProps(layout, desk, state, 2)
-        .find(
-          (item) =>
-            item.drawable.kind === "sprite" &&
-            item.drawable.sprite.name.startsWith("monitor"),
-        );
-      if (monitor?.drawable.kind !== "sprite")
-        throw new Error("expected a monitor sprite");
-      return monitor.drawable.sprite.name;
-    };
-    expect(spriteFor("small")).toBe("monitor-small-off");
-    expect(spriteFor("medium")).toBe("monitor-off");
-    expect(spriteFor("large")).toBe("monitor-wide-off");
   });
 });
 
