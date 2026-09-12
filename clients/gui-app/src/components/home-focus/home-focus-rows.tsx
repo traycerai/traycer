@@ -17,7 +17,7 @@
  * announcement of a verb the row had already offered.
  */
 import { useState, type ReactNode } from "react";
-import { Globe, Square, Terminal } from "lucide-react";
+import { CircleDashed, Globe, Square, Terminal } from "lucide-react";
 import {
   APPROVAL_TONE,
   INTERVIEW_TONE,
@@ -164,22 +164,31 @@ export function TaskAttentionGlyph(): ReactNode {
  * - that glyph means "a shell" everywhere else on this page, and a TUI agent is
  * not one.
  *
- * `null` when the surface is unknown, which is every agent in a task no tile in
- * this window has open. A guessed glyph would be the one part of the row that
- * looks equally confident whether or not anything is known.
+ * A `null` surface is every agent in a task no tile in this window has open,
+ * and it gets `CircleDashed` - a glyph that MEANS "surface unknown" rather than
+ * one borrowed from a kind nobody here has established. The dashed ring is the
+ * point: it is legible as a deliberate placeholder at a glance, where the
+ * `MessageSquare` a guess would have reached for looks exactly as confident as
+ * a resolved row. It fills the same slot at the same size, because the
+ * alternative this replaced - rendering nothing - left the cold chat rows with
+ * their names hanging in the icon column, which reads as broken rather than as
+ * honest.
+ *
+ * `data-surface="unknown"` marks it, so a test can tell the placeholder from an
+ * absent glyph instead of asserting on the icon's own class.
  */
 export function AgentGlyph(props: {
   readonly surface: FocusAgentRow["surface"];
   readonly className: string;
 }): ReactNode {
-  if (props.surface === null) return null;
-  const Icon = EPIC_NODE_ICONS[props.surface];
+  const Icon =
+    props.surface === null ? CircleDashed : EPIC_NODE_ICONS[props.surface];
   return (
     <Icon
       aria-hidden
       className={cn("shrink-0 text-muted-foreground", props.className)}
       data-testid="home-focus-agent-glyph"
-      data-surface={props.surface}
+      data-surface={props.surface ?? "unknown"}
     />
   );
 }
@@ -430,8 +439,16 @@ function taskTier(agents: ReadonlyArray<FocusAgentRow>): FocusAgentRow["tier"] {
   return agents.some((agent) => agent.tier === "turn") ? "turn" : "background";
 }
 
-/** What a cold task can say about itself: a count and a tier, with no names,
- * because agent titles only exist for epics mounted in this window. */
+/**
+ * What a cold task says about itself on the row the reader actually meets: a
+ * count, a tier, and the caveat that this window is not the one the task is
+ * open in.
+ *
+ * Its agents ARE rows underneath it now, each with a borrowed name and a stop
+ * of its own - but the task starts collapsed, so this sentence is what stands
+ * in for them until someone asks. It is also the only place the caveat is said;
+ * the chat rows below do not repeat it.
+ */
 export function ColdTaskAgents(props: {
   readonly agents: ReadonlyArray<FocusAgentRow>;
 }): ReactNode {

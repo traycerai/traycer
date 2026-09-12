@@ -337,8 +337,8 @@ describe("selectTaskGroups jobs", () => {
     expect(groups[0].jobs).toEqual([]);
     expect(groups[0].backgroundVisible).toBe(false);
     expect(groups[0].prompts.length).toBe(0);
-    // The agents are still on the group - the page's own cold rule is what
-    // declines to draw them, and it runs at the body.
+    // The agents are on the group, unnamed, and the body draws them anyway -
+    // see `selectTaskGroupBody nesting`.
     expect(groups[0].agents).toHaveLength(1);
     expect(groups[0].agents[0].title).toBeNull();
   });
@@ -659,7 +659,31 @@ describe("selectTaskGroupBody nesting", () => {
     expect(body.prompts.map((row) => row.key)).toEqual(["p1"]);
   });
 
-  it("draws no chat row for a cold task and hangs everything off the task", () => {
+  // The correction: a cold task's agents used to be dropped here, so the task
+  // had no body, its twisty rendered invisible, and the only way to get a
+  // chevron was to open the task once and mount it.
+  it("keeps a cold task's agents as chats, under names borrowed from nothing", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          mountedHere: false,
+          agents: [
+            agentRow({ agentId: "chat-1", title: null, surface: null }),
+            agentRow({ agentId: "chat-2", title: null, surface: null }),
+          ],
+        }),
+      ],
+    });
+
+    expect(body.chats.map((chat) => chat.agent.agentId)).toEqual([
+      "chat-1",
+      "chat-2",
+    ]);
+    expect(body.chats.map((chat) => chat.agent.title)).toEqual([null, null]);
+  });
+
+  it("buckets a cold task's prompts and jobs under the chat id they name", () => {
     const body = bodyOf({
       tasks: [
         taskRow({
@@ -672,9 +696,28 @@ describe("selectTaskGroupBody nesting", () => {
       prompts: [promptRow({ epicId: "epic-a", chatId: "chat-1", key: "p1" })],
     });
 
-    expect(body.chats).toEqual([]);
+    expect(body.chats[0].jobs).toHaveLength(1);
+    expect(body.chats[0].prompts.map((row) => row.key)).toEqual(["p1"]);
+    expect(body.jobs).toEqual([]);
+    expect(body.prompts).toEqual([]);
+  });
+
+  // The window-local planes are the only thing a cold task still cannot show,
+  // and a row whose chat is not here keeps hanging off the task.
+  it("leaves a cold task's job at task level when no agent id matches it", () => {
+    const body = bodyOf({
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          mountedHere: false,
+          agents: [agentRow({ agentId: "chat-1", title: null, surface: null })],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-a", chatId: "chat-gone" })],
+    });
+
+    expect(body.chats[0].jobs).toEqual([]);
     expect(body.jobs).toHaveLength(1);
-    expect(body.prompts.map((row) => row.key)).toEqual(["p1"]);
   });
 });
 
@@ -694,12 +737,22 @@ describe("selectTaskGroupBody via labels", () => {
     expect(chats.map((chat) => chat.via)).toEqual([null, "impl"]);
   });
 
-  it("falls back to 'agent' when the parent has no known title", () => {
+  // The placeholder a nameless agent borrows is its SURFACE, and `via` reads
+  // it out of the same helper the chat row's own name comes from.
+  it("names an untitled parent by its surface", () => {
     const chats = chatsOf([
-      agentRow({ agentId: "root", title: null }),
+      agentRow({ agentId: "root", title: null, surface: "chat" }),
       agentRow({ agentId: "child", title: "docs", parentId: "root" }),
     ]);
-    expect(chats[1].via).toBe("agent");
+    expect(chats[1].via).toBe("Chat");
+  });
+
+  it("falls back to 'Agent' for a parent with no surface either", () => {
+    const chats = chatsOf([
+      agentRow({ agentId: "root", title: null, surface: null }),
+      agentRow({ agentId: "child", title: "docs", parentId: "root" }),
+    ]);
+    expect(chats[1].via).toBe("Agent");
   });
 
   // A parent that is not itself a row here is nothing to say "via" about - the

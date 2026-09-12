@@ -271,6 +271,24 @@ function taskGroups(): HTMLElement[] {
   return screen.queryAllByTestId("home-focus-task-group");
 }
 
+/**
+ * Opens every task row that has anything under it.
+ *
+ * The page starts fully COLLAPSED - there is no count-based expand-all any
+ * more - so a test about what hangs under a task has to get there first. The
+ * disclosure suites below deliberately do not call this: the closed state is
+ * what they are asserting.
+ */
+function openEveryTask(): void {
+  for (const twisty of screen.queryAllByTestId(
+    "home-focus-task-group-disclosure",
+  )) {
+    if (twisty.hasAttribute("disabled")) continue;
+    if (twisty.getAttribute("aria-expanded") === "true") continue;
+    fireEvent.click(twisty);
+  }
+}
+
 function taskGroup(epicId: string): HTMLElement {
   const found = taskGroups().find(
     (element) => element.getAttribute("data-epic-id") === epicId,
@@ -522,6 +540,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
     const job = within(chat).getByTestId("home-focus-task-group-job");
@@ -555,6 +574,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
     const row = within(chat).getByTestId("home-focus-task-group-agent");
@@ -591,6 +611,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const group = taskGroup("epic-1");
     const body = within(group).getByTestId("home-focus-task-group-body");
@@ -621,6 +642,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const group = taskGroup("epic-1");
     const chat = chatRow(group, "chat-1");
@@ -654,6 +676,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       badgeCount: 1,
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
     const prompt = within(chat).getByTestId("home-focus-prompt-row");
@@ -692,6 +715,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       badgeCount: 1,
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const group = taskGroup("epic-1");
     const body = within(group).getByTestId("home-focus-task-group-body");
@@ -718,6 +742,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       badgeCount: 1,
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-prompt-open-body"));
     expect(actionsMock.openPrompt).toHaveBeenCalledWith(row);
@@ -734,6 +759,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-open-body"));
     expect(actionsMock.openTask).toHaveBeenCalledWith("epic-1");
@@ -758,6 +784,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const group = taskGroup("epic-1");
     const child = chatRow(group, "child");
@@ -784,6 +811,7 @@ describe("<HomeFocusView /> stop controls", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-agent-stop"));
     expect(actionsMock.stopAgent).toHaveBeenCalledWith({
@@ -809,6 +837,7 @@ describe("<HomeFocusView /> stop controls", () => {
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
     const row = within(chat).getByTestId("home-focus-task-group-agent");
@@ -834,6 +863,7 @@ describe("<HomeFocusView /> stop controls", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     expect(screen.getByTestId("home-focus-agent-stop")).toBeDefined();
   });
@@ -850,6 +880,7 @@ describe("<HomeFocusView /> stop controls", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const stop = screen.getByTestId("home-focus-agent-stop");
     expect(stop.hasAttribute("disabled")).toBe(true);
@@ -868,6 +899,7 @@ describe("<HomeFocusView /> stop controls", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     expect(
       screen.getByTestId("home-focus-agent-stop").hasAttribute("disabled"),
@@ -886,6 +918,7 @@ describe("<HomeFocusView /> stop controls", () => {
       background: [job],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-background-stop"));
     expect(actionsMock.stopManagedCommand).toHaveBeenCalledWith(job);
@@ -912,6 +945,7 @@ describe("<HomeFocusView /> stop controls", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const stop = screen.getByTestId("home-focus-background-stop");
     expect(stop.hasAttribute("disabled")).toBe(true);
@@ -997,6 +1031,7 @@ describe("<HomeFocusView /> stop controls", () => {
       browsers: [browserRow({ epicId: "epic-1" })],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const browser = screen.getByTestId("home-focus-task-group-browser");
     expect(
@@ -1125,47 +1160,187 @@ describe("<HomeFocusView /> a cold task", () => {
     });
   }
 
-  it("gives it one summary row, no chat rows and no disclosure", () => {
+  // The defect this suite was rewritten for: a cold task drew one flat line
+  // with an `invisible` twisty, so the only way to get a chevron was to open
+  // the task once and mount it.
+  it("carries an enabled twisty, collapsed, with its agents hidden behind it", () => {
     coldTask({});
     render(<HomeFocusView />);
+
+    const group = taskGroup("epic-cold");
+    const twisty = within(group).getByTestId(
+      "home-focus-task-group-disclosure",
+    );
+    expect(twisty.className).not.toContain("invisible");
+    expect(twisty.hasAttribute("disabled")).toBe(false);
+    expect(twisty.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      within(group).queryAllByTestId("home-focus-task-group-chat"),
+    ).toHaveLength(0);
+  });
+
+  it("reveals one chat row per agent, under a borrowed name and its own tier", () => {
+    coldTask({});
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const group = taskGroup("epic-cold");
+    expect(
+      within(group)
+        .getAllByTestId("home-focus-task-group-chat")
+        .map((element) => element.getAttribute("data-agent-id")),
+    ).toEqual(["a", "b"]);
+    const row = chatRow(group, "a");
+    // No title and no surface is what the activity plane reports for a cold
+    // agent, so the row says what it is rather than what it is called.
+    expect(within(row).getByTestId("home-focus-row-name").textContent).toBe(
+      "Agent",
+    );
+    const status = within(row).getByTestId("home-focus-row-status");
+    expect(status.getAttribute("data-state")).toBe("turn");
+    expect(status.textContent).toBe("turn");
+    // The neutral placeholder, not an absent glyph and not a borrowed one: a
+    // name with nothing in the icon column reads as broken, and a
+    // `MessageSquare` would claim a surface nobody here established.
+    expect(
+      within(row)
+        .getByTestId("home-focus-agent-glyph")
+        .getAttribute("data-surface"),
+    ).toBe("unknown");
+  });
+
+  // Said once, on the row the reader actually meets, because the task is
+  // collapsed by default and a caveat behind a click is a caveat nobody sees.
+  it("keeps `not open in this window` on the summary and off the chat rows", () => {
+    coldTask({});
+    render(<HomeFocusView />);
+    openEveryTask();
 
     const group = taskGroup("epic-cold");
     expect(
       within(group).getByTestId("home-focus-cold-agents").textContent,
     ).toContain("2 agents");
     expect(
-      within(group).queryAllByTestId("home-focus-task-group-chat"),
-    ).toHaveLength(0);
-    expect(
-      within(group).getByTestId("home-focus-task-group-disclosure").className,
-    ).toContain("invisible");
+      within(chatRow(group, "a")).queryByTestId("home-focus-cold-agents"),
+    ).toBeNull();
+    expect(screen.getAllByText(/not open in this window/)).toHaveLength(1);
   });
 
-  it("still reveals its jobs, and invents no chat row to hang them on", () => {
-    coldTask({
-      background: [
-        backgroundRow({
+  it("opens the chat by id from a cold chat row", () => {
+    coldTask({});
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    fireEvent.click(
+      within(chatRow(taskGroup("epic-cold"), "b")).getByTestId(
+        "home-focus-task-group-agent-body",
+      ),
+    );
+    expect(actionsMock.openAgent).toHaveBeenCalledWith("epic-cold", "b");
+    expect(actionsMock.openTask).not.toHaveBeenCalled();
+  });
+
+  it("stops one cold agent from its own row, cascading, on its own host", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
           epicId: "epic-cold",
-          chatId: "chat-1",
-          chatTitle: "Warm chat",
-          label: "watch tests",
+          taskTitle: "Docs sweep",
+          mountedHere: false,
+          agents: [
+            agentRow({ agentId: "a", title: null, surface: null }),
+            agentRow({
+              agentId: "b",
+              title: null,
+              surface: null,
+              hostId: "host-remote",
+            }),
+          ],
         }),
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
+
+    fireEvent.click(
+      within(chatRow(taskGroup("epic-cold"), "b")).getByTestId(
+        "home-focus-agent-stop",
+      ),
+    );
+    expect(actionsMock.stopAgent).toHaveBeenCalledWith({
+      epicId: "epic-cold",
+      agentId: "b",
+      hostId: "host-remote",
+      cascade: true,
+    });
+  });
+
+  it("disables a cold agent's Stop when it cannot be routed", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-cold",
+          mountedHere: false,
+          stoppable: false,
+          agents: [
+            agentRow({ agentId: "a", title: null, surface: null }),
+            agentRow({
+              agentId: "b",
+              title: null,
+              surface: null,
+              stoppable: false,
+            }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const stop = within(chatRow(taskGroup("epic-cold"), "b")).getByTestId(
+      "home-focus-agent-stop",
+    );
+    expect(stop.hasAttribute("disabled")).toBe(true);
+    expect(stop.getAttribute("aria-label")).toContain("Runs on another device");
+  });
+
+  it("still reveals its jobs, and hangs one on the chat whose id it names", () => {
+    coldTask({
+      background: [
+        backgroundRow({
+          epicId: "epic-cold",
+          chatId: "a",
+          chatTitle: "Warm chat",
+          label: "watch tests",
+        }),
+        backgroundRow({
+          epicId: "epic-cold",
+          chatId: "chat-gone",
+          chatTitle: "Another chat",
+          label: "watch docs",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
 
     const group = taskGroup("epic-cold");
-    expect(
-      within(group).queryAllByTestId("home-focus-task-group-chat"),
-    ).toHaveLength(0);
-    const job = within(group).getByTestId("home-focus-task-group-job");
-    expect(within(job).getByTestId("home-focus-row-name").textContent).toBe(
+    // The nested one needs no `in <chat>`: the row above it says so.
+    const nested = within(chatRow(group, "a")).getByTestId(
+      "home-focus-task-group-job",
+    );
+    expect(within(nested).getByTestId("home-focus-row-name").textContent).toBe(
       "watch tests",
     );
-    // At task level, so it still has to name its conversation.
-    expect(within(job).getByTestId("home-focus-row-context").textContent).toBe(
-      "·in Warm chat",
-    );
+    expect(within(nested).queryByTestId("home-focus-row-context")).toBeNull();
+    // The one whose chat is not a row here stays at task level and keeps it.
+    const loose = within(group)
+      .getAllByTestId("home-focus-task-group-job")
+      .filter((element) => !chatRow(group, "a").contains(element));
+    expect(loose).toHaveLength(1);
+    expect(
+      within(loose[0]).getByTestId("home-focus-row-context").textContent,
+    ).toBe("·in Another chat");
   });
 
   it("shows the attention glyph and nests no prompt when only the indicator says so", () => {
@@ -1246,31 +1421,45 @@ describe("<HomeFocusView /> disclosure", () => {
     );
   }
 
-  it("expands every task when there are three or fewer in total", () => {
-    modelMock.value = model({ tasks: tasks(3) });
+  function expandedFlags(): ReadonlyArray<string | null> {
+    return screen
+      .getAllByTestId("home-focus-task-group-disclosure")
+      .map((element) => element.getAttribute("aria-expanded"));
+  }
+
+  // Replaces the old count-based default outright. A page whose rows open
+  // themselves below some threshold reads one way on a quiet morning and
+  // another way beside four other tasks, and the user asked for neither.
+  it("starts a lone task collapsed", () => {
+    modelMock.value = model({ tasks: tasks(1) });
     render(<HomeFocusView />);
 
-    expect(
-      screen
-        .getAllByTestId("home-focus-task-group-disclosure")
-        .map((element) => element.getAttribute("aria-expanded")),
-    ).toEqual(["true", "true", "true"]);
+    expect(expandedFlags()).toEqual(["false"]);
   });
 
-  it("collapses all of them once there are more than three", () => {
-    modelMock.value = model({ tasks: tasks(4) });
+  it("starts two tasks collapsed", () => {
+    modelMock.value = model({ tasks: tasks(2) });
     render(<HomeFocusView />);
 
-    expect(
-      screen
-        .getAllByTestId("home-focus-task-group-disclosure")
-        .map((element) => element.getAttribute("aria-expanded")),
-    ).toEqual(["false", "false", "false", "false"]);
+    expect(expandedFlags()).toEqual(["false", "false"]);
   });
 
-  // The rule counts the page, not a section: four tasks split two and two is
-  // still four tasks to scroll past.
-  it("counts both sections together", () => {
+  it("starts five tasks collapsed too", () => {
+    modelMock.value = model({ tasks: tasks(5) });
+    render(<HomeFocusView />);
+
+    expect(expandedFlags()).toEqual([
+      "false",
+      "false",
+      "false",
+      "false",
+      "false",
+    ]);
+  });
+
+  // Both sections, since the default is per row rather than per page and a
+  // section split cannot change it.
+  it("starts collapsed in Needs you as well as Running", () => {
     modelMock.value = model({
       tasks: [
         ...tasks(2).map((task) => ({ ...task, needsYou: true })),
@@ -1282,11 +1471,7 @@ describe("<HomeFocusView /> disclosure", () => {
     });
     render(<HomeFocusView />);
 
-    expect(
-      screen
-        .getAllByTestId("home-focus-task-group-disclosure")
-        .map((element) => element.getAttribute("aria-expanded")),
-    ).toEqual(["false", "false", "false", "false"]);
+    expect(expandedFlags()).toEqual(["false", "false", "false", "false"]);
   });
 
   it("toggles one row without touching its neighbours, and without opening the task", () => {
@@ -1295,18 +1480,51 @@ describe("<HomeFocusView /> disclosure", () => {
 
     const twisties = screen.getAllByTestId("home-focus-task-group-disclosure");
     fireEvent.click(twisties[0]);
-    expect(twisties[0].getAttribute("aria-expanded")).toBe("false");
-    expect(twisties[1].getAttribute("aria-expanded")).toBe("true");
+    expect(twisties[0].getAttribute("aria-expanded")).toBe("true");
+    expect(twisties[1].getAttribute("aria-expanded")).toBe("false");
     expect(actionsMock.openTask).not.toHaveBeenCalled();
+  });
+
+  it("closes a row the user opened when they press it again", () => {
+    modelMock.value = model({ tasks: tasks(1) });
+    render(<HomeFocusView />);
+
+    const twisty = screen.getByTestId("home-focus-task-group-disclosure");
+    fireEvent.click(twisty);
+    expect(screen.getByTestId("home-focus-task-group-body")).toBeDefined();
+    fireEvent.click(twisty);
+    expect(twisty.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("home-focus-task-group-body")).toBeNull();
   });
 
   it("points the disclosure at the body it controls", () => {
     modelMock.value = model({ tasks: tasks(1) });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const twisty = screen.getByTestId("home-focus-task-group-disclosure");
     const body = screen.getByTestId("home-focus-task-group-body");
     expect(twisty.getAttribute("aria-controls")).toBe(body.getAttribute("id"));
+  });
+
+  // The one row shape with nothing underneath: a task the indicator flags as
+  // waiting, whose agents this window can neither name nor list.
+  it("hides the twisty for a task with no child row at all", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-bare",
+          needsYou: true,
+          mountedHere: false,
+          agents: [],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const twisty = screen.getByTestId("home-focus-task-group-disclosure");
+    expect(twisty.className).toContain("invisible");
+    expect(twisty.hasAttribute("disabled")).toBe(true);
   });
 
   // `ROW_BODY_CLASS` stretches an overlay across the whole row, and the twisty
@@ -1344,6 +1562,7 @@ describe("<HomeFocusView /> density", () => {
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     for (const testId of [
       "home-focus-task-group-row",
@@ -1392,6 +1611,7 @@ describe("<HomeFocusView /> row vocabulary", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     expect(
       screen
@@ -1471,6 +1691,7 @@ describe("<HomeFocusView /> status column", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const group = taskGroup("epic-1");
     expect(
@@ -1502,6 +1723,7 @@ describe("<HomeFocusView /> status column", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     expect(screen.getByTestId("home-focus-row-status-note").textContent).toBe(
       "· driven by Reviewer",
@@ -1531,6 +1753,7 @@ describe("<HomeFocusView /> status column", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
     expect(
@@ -1544,6 +1767,7 @@ describe("<HomeFocusView /> browsers", () => {
     const tab = browserRow({ epicId: "epic-1", tabId: "t1" });
     modelMock.value = model({ browsers: [tab] });
     render(<HomeFocusView />);
+    openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-browser-body"));
     expect(actionsMock.openBrowser).toHaveBeenCalledWith(tab);
@@ -1569,6 +1793,7 @@ describe("<HomeFocusView /> browsers", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     expect(
       screen
@@ -1584,6 +1809,7 @@ describe("<HomeFocusView /> browsers", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const browser = screen.getByTestId("home-focus-task-group-browser");
     expect(within(browser).getByTestId("home-focus-row-name").textContent).toBe(
@@ -1650,6 +1876,7 @@ describe("<HomeFocusView /> host grouping", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     expect(taskGroups()).toHaveLength(2);
     expect(
@@ -1788,6 +2015,7 @@ describe("<HomeFocusView /> host grouping", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     const labels = screen
       .getAllByTestId("home-focus-section-running-group-label")
@@ -1916,7 +2144,7 @@ describe("<HomeFocusView /> live model updates", () => {
       screen
         .getByTestId("home-focus-task-group-disclosure")
         .getAttribute("aria-expanded"),
-    ).toBe("false");
+    ).toBe("true");
 
     modelMock.value = model({ tasks: [] });
     view.rerender(<HomeFocusView />);
@@ -1930,11 +2158,12 @@ describe("<HomeFocusView /> live model updates", () => {
     });
     view.rerender(<HomeFocusView />);
 
+    // Back at the page's default, which is closed.
     expect(
       screen
         .getByTestId("home-focus-task-group-disclosure")
         .getAttribute("aria-expanded"),
-    ).toBe("true");
+    ).toBe("false");
   });
 });
 
@@ -2147,9 +2376,21 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
   });
 });
 
-describe("<HomeFocusView /> expand latch", () => {
-  function fourTasks(): ReadonlyArray<FocusTaskRow> {
-    return Array.from({ length: 4 }, (_unused, index) =>
+/**
+ * The suite that used to guard the expand-all latch, rewritten for the rule
+ * that replaced it: nothing opens on its own, ever, and the only thing that
+ * survives a model refresh is what the user opened by hand.
+ *
+ * The latch's own hazard is worth remembering even though the latch is gone.
+ * This component renders from the app's first frame and the notification feed
+ * can answer before the activity plane, so a page's first frame is routinely
+ * task-less - a default read off the task COUNT had to wait for that frame and
+ * then never re-decide. A default that is simply "closed" cannot be wrong on
+ * any frame, which is the other half of why it replaced the latch.
+ */
+describe("<HomeFocusView /> no auto-expand", () => {
+  function someTasks(count: number): ReadonlyArray<FocusTaskRow> {
+    return Array.from({ length: count }, (_unused, index) =>
       taskRow({
         epicId: `epic-${String(index)}`,
         agents: [agentRow({ agentId: `chat-${String(index)}`, title: "impl" })],
@@ -2163,10 +2404,7 @@ describe("<HomeFocusView /> expand latch", () => {
       .map((element) => element.getAttribute("aria-expanded"));
   }
 
-  // The latch waits for TASKS, not for the page to have something on it. The
-  // notification feed can answer before the activity plane, and an orphan-only
-  // first frame used to latch `0 <= 3`.
-  it("does not latch on an orphan-prompt-only first frame", () => {
+  it("opens nothing when tasks arrive after an orphan-prompt-only first frame", () => {
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
       badgeCount: 1,
@@ -2176,36 +2414,65 @@ describe("<HomeFocusView /> expand latch", () => {
 
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
-      tasks: fourTasks(),
+      tasks: someTasks(2),
       badgeCount: 1,
     });
     view.rerender(<HomeFocusView />);
 
-    expect(expandedFlags()).toEqual(["false", "false", "false", "false"]);
+    expect(expandedFlags()).toEqual(["false", "false"]);
   });
 
-  it("does not latch on an empty first frame either", () => {
+  it("opens nothing when tasks arrive after an empty first frame either", () => {
     modelMock.value = model({});
     const view = render(<HomeFocusView />);
     expect(screen.getByTestId("home-focus-empty")).toBeDefined();
 
-    modelMock.value = model({ tasks: fourTasks() });
+    modelMock.value = model({ tasks: someTasks(2) });
     view.rerender(<HomeFocusView />);
 
-    expect(expandedFlags()).toEqual(["false", "false", "false", "false"]);
+    expect(expandedFlags()).toEqual(["false", "false"]);
   });
 
-  it("latches on the first frame that has tasks and keeps it", () => {
-    modelMock.value = model({ tasks: fourTasks().slice(0, 2) });
+  // Two, then five: the count the old latch turned on, on both sides of it.
+  it("leaves every task closed however few or many there are", () => {
+    modelMock.value = model({ tasks: someTasks(2) });
     const view = render(<HomeFocusView />);
-    expect(expandedFlags()).toEqual(["true", "true"]);
+    expect(expandedFlags()).toEqual(["false", "false"]);
 
-    // Growing past the threshold later must not re-decide: the page was
-    // already open, and closing rows under the reader is worse than a long
-    // page.
-    modelMock.value = model({ tasks: fourTasks() });
+    modelMock.value = model({ tasks: someTasks(5) });
     view.rerender(<HomeFocusView />);
-    expect(expandedFlags()).toEqual(["true", "true", "true", "true"]);
+    expect(expandedFlags()).toEqual([
+      "false",
+      "false",
+      "false",
+      "false",
+      "false",
+    ]);
+  });
+
+  // The one thing a refresh must not undo: the live model repaints rows in
+  // place, and a row the reader opened has to still be open afterwards.
+  it("keeps a hand-opened row open across a model refresh that adds tasks", () => {
+    modelMock.value = model({ tasks: someTasks(2) });
+    const view = render(<HomeFocusView />);
+    fireEvent.click(
+      screen.getAllByTestId("home-focus-task-group-disclosure")[0],
+    );
+    expect(expandedFlags()).toEqual(["true", "false"]);
+
+    modelMock.value = model({ tasks: someTasks(5) });
+    view.rerender(<HomeFocusView />);
+
+    expect(expandedFlags()).toEqual([
+      "true",
+      "false",
+      "false",
+      "false",
+      "false",
+    ]);
+    expect(
+      within(taskGroup("epic-0")).getAllByTestId("home-focus-task-group-chat"),
+    ).toHaveLength(1);
   });
 });
 
@@ -2348,7 +2615,7 @@ describe("<HomeFocusView /> disclosure across a section move", () => {
     fireEvent.click(twisties[0]);
     expect(
       twisties.map((element) => element.getAttribute("aria-expanded")),
-    ).toEqual(["false", "true"]);
+    ).toEqual(["true", "false"]);
   });
 });
 
@@ -2387,6 +2654,7 @@ describe("<HomeFocusView /> a split task with a prompt on one host", () => {
       badgeCount: 1,
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
     // Both slices under Needs you, none under Running, and nothing left over.
     expect(screen.queryByTestId("home-focus-section-running")).toBeNull();

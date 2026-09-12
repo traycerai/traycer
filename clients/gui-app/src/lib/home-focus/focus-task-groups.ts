@@ -257,27 +257,30 @@ export interface FocusTaskGroupBody {
  * ACTUALLY GOING TO DRAW.
  *
  * Deliberately not a field on {@link FocusTaskGroup}, and deliberately the last
- * thing to run. The agent set narrows after the group is built - the cold-task
- * rule drops every agent, and the host split keeps one machine's - and every
- * relationship here is a claim about the rows beside it: a `via` naming a
- * parent that is not there, or a job nested under a chat that was filtered out,
- * is worse than the flat list it replaced. Pairing them at the render site
- * makes that impossible rather than merely fixed - there is no earlier value to
- * go stale.
+ * thing to run. The agent set narrows after the group is built - the host split
+ * keeps one machine's - and every relationship here is a claim about the rows
+ * beside it: a `via` naming a parent that is not there, or a job nested under a
+ * chat that was filtered out, is worse than the flat list it replaced. Pairing
+ * them at the render site makes that impossible rather than merely fixed -
+ * there is no earlier value to go stale.
+ *
+ * A COLD task nests its agents like any other, and that is the correction this
+ * function most recently took. It used to drop every agent of an unmounted
+ * epic, on the grounds that a title only exists for an epic mounted here - so
+ * the task had no body, its twisty rendered `invisible`, and the only way to
+ * get a chevron was to open the task once and mount it. The premise was wrong:
+ * the activity plane carries an id, a tier, a parentage and a host for every
+ * agent on the account, and a row that can be opened, stopped and described as
+ * `○ background` is worth drawing under a name it borrows from its surface
+ * ({@link focusAgentDisplayName}). Only its jobs and pages stay absent, because
+ * those planes are window-local and genuinely have nothing to say here.
  *
  * A chat agent's id IS its chat id, which is what lets a job's `chatId`, a
  * prompt's `chatId` and a tab's `drivenByChatId` all be looked up in a map of
  * agent ids.
  */
 export function selectTaskGroupBody(group: FocusTaskGroup): FocusTaskGroupBody {
-  // A cold task names no agents - titles only exist for epics mounted here, and
-  // a placeholder chat would name work nobody can open - so it contributes
-  // none, and everything it does have hangs off the task itself. Its jobs still
-  // count: "mounted here" (a live Y.Doc projection) and "has a warm chat" are
-  // different questions, so an unmounted epic with warm background work has
-  // something to open even though it has no chat rows.
-  const cold = group.task !== null && !group.task.mountedHere;
-  const agents = cold ? [] : group.agents;
+  const agents = group.agents;
   const byAgentId = new Map(agents.map((agent) => [agent.agentId, agent]));
   const promptsByChatId = bucketByParent(group.prompts, (prompt) =>
     parentAgentId(prompt.chatId, byAgentId),

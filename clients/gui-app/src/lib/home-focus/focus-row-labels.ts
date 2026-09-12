@@ -15,9 +15,30 @@ export function focusTaskTitleOf(title: string | null): string {
   return title ?? UNTITLED_TASK;
 }
 
-/** `title` is `null` for every agent in an unmounted task - the activity stream
- * carries ids and tiers for every task on the host, and names for none of
- * them. */
+/**
+ * What a row calls an agent it has no name for.
+ *
+ * `title` is `null` for every agent in an unmounted task - the activity stream
+ * carries ids, tiers and parentage for every task on the host, and names for
+ * none of them - and those agents are rows now, so the fallback is a NAME
+ * rather than the lowercase `agent` it used to be, which only ever appeared
+ * mid-sentence as `via agent`.
+ *
+ * Read off the surface where the surface is known, which is the one other fact
+ * the row could put here. Cold agents carry no surface either (an identity is
+ * resolved or it is not), so in practice `Agent` is what a cold task's chats
+ * read as, and the two named cases cover a MOUNTED agent whose projection has
+ * not filled a title in yet.
+ */
+const AGENT_SURFACE_NAMES: Readonly<
+  Record<NonNullable<FocusAgentRow["surface"]>, string>
+> = {
+  chat: "Chat",
+  "terminal-agent": "Terminal agent",
+};
+
 export function focusAgentDisplayName(agent: FocusAgentRow): string {
-  return agent.title ?? "agent";
+  if (agent.title !== null) return agent.title;
+  if (agent.surface === null) return "Agent";
+  return AGENT_SURFACE_NAMES[agent.surface];
 }

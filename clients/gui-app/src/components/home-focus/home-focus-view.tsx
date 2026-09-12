@@ -79,18 +79,6 @@ const NOTIFICATIONS_LOCAL_CAPTION = "this host only";
 // can be empty outright rather than merely partial.
 const ACTIVITY_NOTICE = "Some activity may be missing";
 
-/**
- * How many tasks may open at once on first entry.
- *
- * Above it every row is collapsed, because an expand-all on a busy account is a
- * page the user has to scroll before they can see how many tasks there even
- * are - and the count in each section heading already tells them. Counted over
- * the WHOLE page rather than per section: the reader scrolls one page, and a
- * rule applied twice would expand eight tasks whenever they happened to be
- * four and four.
- */
-const EXPAND_ALL_MAX_TASKS = 3;
-
 const SECTION_IDS = {
   needsYou: "home-focus-needs-you",
   running: "home-focus-running",
@@ -247,8 +235,8 @@ interface HomeSection {
 interface HomeSections {
   readonly needsYou: HomeSection;
   readonly running: HomeSection;
-  /** Every task group on the page, before the host split - what the expand rule
-   * counts and what decides whether there is anything to draw. */
+  /** Every task group on the page, before the host split - what decides whether
+   * there is anything to draw at all. */
   readonly groups: ReadonlyArray<FocusTaskGroup>;
 }
 
@@ -278,47 +266,43 @@ function hostSliceKey(epicId: string, hostId: string): string {
  * A key is only stable within one parent, so row-local state collapsed a task
  * the user had just opened, at the exact moment they had acted on it.
  *
- * Two pieces of state, and they answer different questions. `expandAll` is the
- * page's default, LATCHED on the first render that actually has tasks - not on
- * mount, because this component renders from the app's first frame, and the
- * notification feed can arrive before the activity plane: a page holding one
- * orphan prompt and no tasks would latch `0 <= 3` and then throw twenty tasks
- * open when they landed. `overrides` is the rows the user has since touched.
+ * EVERY TASK STARTS COLLAPSED, whatever the page holds. There used to be a
+ * count-based default - three tasks or fewer opened themselves, latched on the
+ * first frame that had any - and it went for two reasons. The user asked for
+ * it ("I don't want expand auto"), and a default that depends on how many rows
+ * happen to be running is a page whose shape changes for reasons the reader
+ * cannot see: the same task reads one way on a quiet morning and another way
+ * beside four others. The section headings already say how much is there, and
+ * the twisty is one click.
  *
- * Both are adjusted DURING render rather than from an effect, which is the
- * supported shape for state derived from props: React re-runs this component
- * immediately, before committing, so nothing paints twice, and both writes are
- * idempotent - the second pass finds the latch set and nothing stale to prune.
+ * So there is one piece of state: the rows the user has touched this session.
+ * It is pruned DURING render rather than from an effect, which is the supported
+ * shape for state derived from props - React re-runs this component
+ * immediately, before committing, so nothing paints twice, and the write is
+ * idempotent, since the second pass finds nothing stale left.
  */
 const NO_OVERRIDES: ReadonlyMap<string, boolean> = new Map();
 
 function useTaskDisclosure(
-  sections: HomeSections,
   /** Every row key the page is about to draw. Anything else in `overrides` is a
    * task that has left the model, and its choice goes with it - so a task that
-   * comes back comes back at the page's default, which is the self-pruning the
-   * row-local state gave for free. */
+   * comes back comes back collapsed, which is the self-pruning the row-local
+   * state gave for free. */
   liveKeys: ReadonlySet<string>,
 ): HomeFocusTaskDisclosure {
-  const [expandAll, setExpandAll] = useState<boolean | null>(null);
   const [overrides, setOverrides] =
     useState<ReadonlyMap<string, boolean>>(NO_OVERRIDES);
-  const taskCount = sections.groups.length;
-  if (expandAll === null && taskCount > 0) {
-    setExpandAll(taskCount <= EXPAND_ALL_MAX_TASKS);
-  }
   if (hasStaleKey(overrides, liveKeys)) {
     setOverrides(
       new Map(Array.from(overrides).filter(([key]) => liveKeys.has(key))),
     );
   }
-  const fallback = expandAll ?? true;
   return {
-    isExpanded: (key) => overrides.get(key) ?? fallback,
+    isExpanded: (key) => overrides.get(key) ?? false,
     toggle: (key) => {
       setOverrides((previous) => {
         const next = new Map(previous);
-        next.set(key, !(previous.get(key) ?? fallback));
+        next.set(key, !(previous.get(key) ?? false));
         return next;
       });
     },
@@ -401,9 +385,9 @@ export function HomeFocusView(): ReactNode {
   );
   const liveKeys = useMemo(() => liveSliceKeys(sections), [sections]);
   // Above the empty branch, because it is above the SECTION split: a hook that
-  // only ran while the page had rows would lose the latch and every open row
-  // the moment the model briefly emptied.
-  const disclosure = useTaskDisclosure(sections, liveKeys);
+  // only ran while the page had rows would lose every open row the moment the
+  // model briefly emptied.
+  const disclosure = useTaskDisclosure(liveKeys);
   const empty =
     sections.groups.length === 0 && sections.needsYou.prompts.length === 0;
   return (
@@ -758,9 +742,8 @@ function hostRowGroups<Row>(
  *
  * The same component draws both, because they differ in exactly one thing -
  * which tasks are in them - and every other question (host grouping, the
- * background caveat, the disclosure default, what a row looks like) has the
- * same answer in each. Two components would have been two places to keep that
- * answer.
+ * background caveat, what a row looks like) has the same answer in each. Two
+ * components would have been two places to keep that answer.
  *
  * The trailing prompt rows are the Needs you section's own tail: prompts no
  * task group could carry. They are LAST, under the tasks, because a row that

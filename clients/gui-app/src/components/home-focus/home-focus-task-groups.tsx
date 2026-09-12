@@ -241,11 +241,17 @@ const BADGE_CLASS =
  * What the collapsed row still says about what it hides, counted over the whole
  * subtree rather than over the level immediately under it.
  *
- * A cold task keeps H3's honest sentence instead of a count of names it does
- * not have. Everything else gets badges: needs-you counts LOADED prompt rows
- * and is omitted at zero, so it never claims a number the rows below it cannot
- * show; `N active` counts mid-turn agents and is omitted at zero, which is the
- * task that is here for its durable work alone; `N bg` renders only where this
+ * A cold task keeps its own sentence instead of the `N active` badge, and that
+ * sentence is the ONE place `not open in this window` is said. It could equally
+ * have moved onto the cold chat rows now that a cold task has them; it stays
+ * here because the row is COLLAPSED by default, and a caveat that only appears
+ * after a click is a caveat the reader never meets. Said once either way -
+ * repeating it on every child would be the concatenation this design removes.
+ *
+ * Everything else gets badges: needs-you counts LOADED prompt rows and is
+ * omitted at zero, so it never claims a number the rows below it cannot show;
+ * `N active` counts mid-turn agents and is omitted at zero, which is the task
+ * that is here for its durable work alone; `N bg` renders only where this
  * window can actually see the task's background, rather than reading "0 bg" at
  * a task whose chats it has simply never opened.
  */
@@ -263,8 +269,8 @@ function TaskGroupSummary(props: {
           {counts.needsYou} need you
         </span>
       )}
-      {/* A cold task keeps H3's honest sentence in place of the agent count:
-          it has agents, and no names for them. */}
+      {/* The collapsed row's whole account of a cold task: how many agents,
+          what they are doing, and the one caveat this page owes the reader. */}
       {coldTask === null ? null : <ColdTaskAgents agents={coldTask.agents} />}
       {coldTask !== null || counts.active === 0 ? null : (
         <span
