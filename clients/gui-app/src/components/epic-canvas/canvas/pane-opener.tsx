@@ -1,3 +1,4 @@
+import { registerPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
 /**
  * Inline opener rendered directly inside an empty tile pane (no modal). The
  * empty pane IS the opener: it shows the search input + opener categories and
@@ -64,21 +65,28 @@ export function PaneOpener(props: PaneOpenerProps) {
   const { epicId, tabId, groupId, active } = props;
   const router = useCommandPaletteRouter();
   const [query, setQuery] = useState("");
-  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const focusedActivation = useRef<string | null>(null);
   const coarsePointer = useCoarsePointer();
 
   useEffect(() => {
-    // Suppress autofocus on coarse pointers: opening an empty pane on a touch
-    // device would otherwise pop the soft keyboard over the very list of
-    // things to open. A fine pointer is unchanged, including a desktop window
-    // narrow enough to look like a phone - what decides is whether focusing
-    // costs screen space, not how wide the window is.
-    if (!active || coarsePointer) return;
-    const input = containerRef.current?.querySelector<HTMLInputElement>(
-      'input[data-slot="command-input"]',
+    if (!active) {
+      focusedActivation.current = null;
+      return;
+    }
+    const activation = JSON.stringify([tabId, groupId, coarsePointer]);
+    // Effect replay must not repeat implicit autofocus after a cancelled
+    // explicit request. A real activation change gets a fresh autofocus.
+    const autofocus =
+      focusedActivation.current !== activation && !coarsePointer;
+    focusedActivation.current = activation;
+    return registerPaneOpenerFocus(
+      tabId,
+      groupId,
+      () => inputRef.current?.focus({ preventScroll: true }),
+      autofocus,
     );
-    input?.focus();
-  }, [active, coarsePointer]);
+  }, [active, coarsePointer, tabId, groupId]);
 
   const ctx = useMemo<CommandContext>(
     () => ({
@@ -182,7 +190,6 @@ export function PaneOpener(props: PaneOpenerProps) {
 
   return (
     <div
-      ref={containerRef}
       data-testid="pane-opener"
       data-group-id={groupId}
       className="flex h-full min-h-0 w-full flex-col"
@@ -200,6 +207,7 @@ export function PaneOpener(props: PaneOpenerProps) {
       >
         <PaletteQueryProvider value={query}>
           <CommandInput
+            ref={inputRef}
             value={query}
             onValueChange={handleQueryChange}
             leading={

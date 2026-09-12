@@ -1037,6 +1037,18 @@ export default tseslint.config(
     },
   },
 
+  {
+    // Closed-tab recovery owns placement reconstruction and either commits one
+    // nested navigation or deliberately preserves the current bulk-close focus.
+    files: ["src/lib/tab-recovery/reopen.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: [],
+        nestedFocus: ["restoreCanvasForRecovery"],
+        tabNavigation: null,
+      }),
+    },
+  },
   // ── Nested-focus-opener boundary allowlist ──────────────────────────────────
   // See eslint/traycer-nested-focus-boundary-rules.mjs for the contract this
   // enforces. Every entry below is a verified, empirical exception (grep the

@@ -17,6 +17,7 @@ import {
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { modLabel } from "@/lib/keybindings/platform";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -541,7 +542,7 @@ function createChatHarness(): ChatHarness {
       streamCreations += 1;
       if (snapshot !== null) {
         setTimeout(() => {
-          nextCallbacks.onConnectionStatus("open", null);
+          nextCallbacks.onConnectionStatus("open", null, null);
           emitChatSnapshotWithMessages({
             callbacks: nextCallbacks,
             access: snapshot.access,
@@ -1150,10 +1151,10 @@ function chatTileTestTree(
 
 async function waitForChatTileLoaded(): Promise<void> {
   await waitFor(() => {
-    expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
-    // Since invariant 6 the pre-session state is this one; without it the
-    // wait above would be vacuous (an id that never renders is always absent).
-    expect(screen.queryByTestId("chat-tile-load-chat-1")).toBeNull();
+    // One body covers the whole wait, before and after the session handle
+    // (`ChatTilePreContent`). The tests below assert it on screen, so this
+    // absence is not vacuous.
+    expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
   });
   // LegendList needs a few frames (plus its scroll-finish fallback) to
   // bootstrap its initial scroll position and measure rows in jsdom before
@@ -1289,6 +1290,7 @@ describe("<ChatTile />", () => {
     useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
     harness.teardown();
     chatHarness.teardown();
+    useSelectionAuthorityStore.getState().reset();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerDraftStore.setState({
       drafts: {},
@@ -1324,11 +1326,14 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
-    // The pre-session presentation is now the BOUNDED load state, not the
-    // unbounded spinner: with no session handle the tile renders
-    // `TileHostLoadState`, which says which host it is waiting on and stops
-    // waiting (redesign invariant 6). The gating claim above is unchanged.
-    expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
+    // The pre-session presentation is the chat's pre-content body, which says
+    // which host it is waiting on and stops waiting (invariant 6). The gating
+    // claim above is unchanged: no handle, so nothing to retry.
+    expect(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-has-handle"),
+    ).toBe("false");
   });
 
   it("opens chat.subscribe for a record-less chat that is still cloud-known (ticket 49)", async () => {
@@ -1373,11 +1378,140 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
-    // The pre-session presentation is now the BOUNDED load state, not the
-    // unbounded spinner: with no session handle the tile renders
-    // `TileHostLoadState`, which says which host it is waiting on and stops
-    // waiting (redesign invariant 6). The gating claim above is unchanged.
-    expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
+    // The pre-session presentation is the chat's pre-content body, which says
+    // which host it is waiting on and stops waiting (invariant 6). The gating
+    // claim above is unchanged: no handle, so nothing to retry.
+    expect(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-has-handle"),
+    ).toBe("false");
+  });
+
+  it("keeps the wait's start when the session handle arrives mid-wait (G2)", async () => {
+    // The body renders in two subtrees - before the handle, and inside the
+    // session view - so the wait is recorded above both, in `ChatTile`. A body
+    // that kept its own would start over here, and a handle that took 40 s
+    // would push the buttons out to 100 s.
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const rendered = renderSwitchableChatTile();
+    await advanceLegendListTime(0);
+
+    const before = screen.getByTestId("chat-tile-pre-content-chat-1");
+    expect(before.getAttribute("data-has-handle")).toBe("false");
+    const began = before.getAttribute("data-wait-began-at");
+    expect(began).not.toBeNull();
+
+    await advanceLegendListTime(5_000);
+    // The record-less chat becomes cloud-known, which opens the session gate.
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    rendered.setChatVisible(true);
+    await waitFor(() => {
+      expect(chatHarness.streamCreations()).toBe(1);
+    });
+
+    const after = screen.getByTestId("chat-tile-pre-content-chat-1");
+    expect(after.getAttribute("data-has-handle")).toBe("true");
+    expect(after.getAttribute("data-wait-began-at")).toBe(began);
+  });
+
+  it("starts a new wait when the tile is handed another chat (G2)", async () => {
+    // `ChatTile` is keyed by the chat, so the wait - like everything else it
+    // decides once per mount - belongs to one chat.
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const rendered = render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
+    await advanceLegendListTime(0);
+    const began = Number(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-wait-began-at"),
+    );
+
+    await advanceLegendListTime(5_000);
+    rendered.rerender(
+      chatTileTestTree(queryClient, true, { ...CHAT_ARTIFACT, id: "chat-2" }),
+    );
+    await advanceLegendListTime(0);
+
+    expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
+    expect(
+      Number(
+        screen
+          .getByTestId("chat-tile-pre-content-chat-2")
+          .getAttribute("data-wait-began-at"),
+      ),
+    ).toBe(began + 5_000);
+  });
+
+  it("escalates at once when Try again's redial cannot start, because nothing retries a closed store (G2)", async () => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: HOST_ID,
+      targetHostId: HOST_ID,
+      effectiveHostId: HOST_ID,
+      leases: [{ hostId: HOST_ID, status: "ready", dead: null }],
+      selectionRevision: 1,
+    });
+    chatHarness.teardown();
+    chatHarness.installDeferred();
+    renderChatTile();
+    await waitFor(() => {
+      expect(() => chatHarness.callbacks()).not.toThrow();
+    });
+
+    // Three refusals from a host that is up bring the buttons early.
+    act(() => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        chatHarness.callbacks().onConnectionStatus("reconnecting", null, {
+          code: "SESSION_CLOSED",
+          reason: "SESSION_CLOSED: chat session is closing",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+      }
+    });
+    const body = screen.getByTestId("chat-tile-pre-content-chat-1");
+    expect(body.getAttribute("data-arm")).toBe("taking-too-long");
+    expect(body.getAttribute("data-error-code")).toBe("SESSION_CLOSED");
+
+    // `retry()` restores `closed` when its stream factory throws, and rethrows.
+    __setChatStreamClientFactoryForTests(() => {
+      throw new Error("durable wiring failed");
+    });
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected chat session handle");
+    }
+    act(() => {
+      expect(() => handle.store.getState().retryFromUser()).toThrow(
+        "durable wiring failed",
+      );
+    });
+
+    const stalled = screen.getByTestId("chat-tile-pre-content-chat-1");
+    expect(stalled.getAttribute("data-arm")).toBe("taking-too-long");
+    expect(
+      within(stalled).getByText(/^The connection to .+ was lost\.$/),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId("chat-tile-pre-content-chat-1-spinner"),
+    ).toBeNull();
+    expect(
+      within(stalled).getByRole("button", { name: "Try again" }),
+    ).not.toBeNull();
   });
 
   it("keeps a cold sidebar-opened chat in one loading state until its first snapshot", async () => {
@@ -1390,8 +1524,10 @@ describe("<ChatTile />", () => {
       expect(chatHarness.streamCreations()).toBe(1);
     });
     expect(
-      screen.getByRole("status", { name: "Loading agent" }),
-    ).not.toBeNull();
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-has-handle"),
+    ).toBe("true");
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
@@ -1421,7 +1557,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
     expect(chatHarness.streamCreations()).toBe(1);
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
-    expect(screen.queryByRole("status", { name: "Loading agent" })).toBeNull();
+    expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
     expect(
       screen
         .getByTestId("host-workspace-selector")
@@ -2632,8 +2768,8 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null);
-      chatHarness.callbacks().onConnectionStatus("open", null);
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null);
     });
 
     expect(screen.getByText("Host chat content")).not.toBeNull();
@@ -2706,8 +2842,8 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null);
-      chatHarness.callbacks().onConnectionStatus("open", null);
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null);
     });
 
     expect(chatHarness.sent).toHaveLength(1);
@@ -4116,7 +4252,7 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent).toHaveLength(1);
   });
 
-  it("the pane Retry reaches retryFromUser", async () => {
+  it("the pane's Try again reaches retryFromUser", async () => {
     chatHarness.installDeferred();
     renderChatTile();
     await waitFor(() => {
@@ -4144,18 +4280,22 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: {
-          code: "UNAUTHORIZED",
-          reason: "CHAT_INVALID: gone",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
+      chatHarness.callbacks().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "UNAUTHORIZED",
+            reason: "CHAT_INVALID: gone",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
         },
-      });
+        null,
+      );
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     expect(retryFromUser).toHaveBeenCalledTimes(1);
   });
 

@@ -181,7 +181,7 @@ function emitLegacySnapshot(
   callbacks: ChatStreamCallbacks,
   lastFallbackOutcome: LastFallbackOutcome | undefined,
 ): void {
-  callbacks.onConnectionStatus("open", null);
+  callbacks.onConnectionStatus("open", null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,

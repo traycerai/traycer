@@ -208,7 +208,7 @@ function stepPlainHistory(history: RouterHistory, direction: -1 | 1): void {
  * sequence was over this repo's complexity ceiling; the checks and their order
  * are unchanged.
  */
-function preservedTileRecordIsLive(
+export function preservedTileRecordIsLive(
   preserved: ClosedTilePayload,
   epicId: string,
   pendingCreateArtifactIds: ReadonlySet<string>,

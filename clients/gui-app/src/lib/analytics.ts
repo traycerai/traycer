@@ -280,6 +280,7 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
+  | "glassOpacity"
   | "linkOpen"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
@@ -290,6 +291,7 @@ export type AnalyticsSetting =
   | "showNavigatorResourceStats"
   | "showRecentHistory"
   | "startPageWallpaper"
+  | "startPageWallpaperCurated"
   | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
   | "summonHotkeyChord"
@@ -1155,6 +1157,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "defaultSelection",
   "defaultServiceTier",
   "diffViewerPreferences",
+  "glassOpacity",
   "linkOpen",
   "pinContextUsageBreakdown",
   "pointerCursors",
@@ -1165,6 +1168,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "showNavigatorResourceStats",
   "showRecentHistory",
   "startPageWallpaper",
+  "startPageWallpaperCurated",
   "startPageWallpaperTint",
   "terminalCursorBlink",
   "terminalCursorStyle",

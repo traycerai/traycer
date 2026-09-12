@@ -85,7 +85,7 @@ function emptyChat(): Chat {
 }
 
 function emitSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null);
+  callbacks.onConnectionStatus("open", null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -148,7 +148,7 @@ describe("chat-session-store connectionEpoch", () => {
       emitSnapshot(callbacks);
       const afterSnapshot = harness.handle.store.getState().connectionEpoch;
 
-      callbacks.onConnectionStatus("reconnecting", null);
+      callbacks.onConnectionStatus("reconnecting", null, null);
       // Falsification: drop the `bumpConnectionEpoch()` call from the
       // `"reconnecting"` arm of `onConnectionStatus` and this stays at
       // `afterSnapshot` instead of incrementing.
@@ -156,7 +156,7 @@ describe("chat-session-store connectionEpoch", () => {
         afterSnapshot + 1,
       );
 
-      callbacks.onConnectionStatus("closed", null);
+      callbacks.onConnectionStatus("closed", null, null);
       // Falsification: same, for the `"closed"` arm - a SEPARATE increment,
       // not a no-op because one already fired this "incident".
       expect(harness.handle.store.getState().connectionEpoch).toBe(
@@ -165,7 +165,7 @@ describe("chat-session-store connectionEpoch", () => {
 
       // Negative half: `"open"` is neither reconnecting nor closed, so it
       // must NOT bump.
-      callbacks.onConnectionStatus("open", null);
+      callbacks.onConnectionStatus("open", null, null);
       expect(harness.handle.store.getState().connectionEpoch).toBe(
         afterSnapshot + 2,
       );
@@ -243,7 +243,7 @@ describe("chat-session-store - a connection status that settles during construct
       wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
-        nextCallbacks.onConnectionStatus("closed", reason);
+        nextCallbacks.onConnectionStatus("closed", reason, null);
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,

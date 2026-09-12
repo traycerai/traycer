@@ -179,7 +179,7 @@ function emitLegacySnapshot(
   pending: PendingFallback | undefined,
   returning: PendingReturn | undefined,
 ): void {
-  callbacks.onConnectionStatus("open", null);
+  callbacks.onConnectionStatus("open", null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,

@@ -138,7 +138,7 @@ function emitSnapshot(
   callbacks: ChatStreamCallbacks,
   pending: PendingFallback | undefined,
 ): void {
-  callbacks.onConnectionStatus("open", null);
+  callbacks.onConnectionStatus("open", null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -437,7 +437,7 @@ describe("chat-session-store fallbackChoiceLease", () => {
       );
 
       // A REAL detach: the connection drops.
-      callbacks.onConnectionStatus("reconnecting", null);
+      callbacks.onConnectionStatus("reconnecting", null, null);
       emitSnapshot(callbacks, CHOOSING);
 
       // Positive control: this is the one authoritative-frame case that MUST

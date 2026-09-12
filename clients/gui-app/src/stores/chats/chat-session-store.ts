@@ -829,7 +829,7 @@ function chatRecordWithoutTranscript(chat: Chat): ChatSessionRecord {
 
 /**
  * What the connection attempts BEFORE the first snapshot have produced - the
- * evidence the chat tile's bounded loading gate reads.
+ * evidence the chat tile's pre-content body reads (`chat-pre-content.ts`).
  *
  * It exists because a stream can fail forever without ever going terminal. A
  * host that refuses `chat.subscribe` with a RETRYABLE fatal (host 1.2.0 on a
@@ -850,14 +850,12 @@ export interface PreSnapshotRetryEvidence {
    * them - an attempt that carries none leaves the last pair standing rather
    * than erasing it.
    *
-   * `null` in the case this evidence exists for, and that is not an oversight:
-   * `WsStreamClient.handleFatalErrorFrame` consumes a retryable fatal and
-   * reports the drop as `reconnecting` with no reason at all (the remote
-   * transport re-keys the stream just as silently), so the host's sentence
-   * never leaves the transport. They are kept on the shape because a close
-   * that DOES arrive with details should be recorded rather than counted
-   * anonymously, and because an additive transport change that surfaces the
-   * retryable reason later then needs nothing here.
+   * Both transports publish a retryable close's details as the `retryCause`
+   * of the `reconnecting` transition it causes - a host's `CHAT_OPEN_FAILED`,
+   * or a chat session's lifecycle refusal such as `SESSION_NOT_READY` - and
+   * that is what fills these. A dropped socket or a failed dial has no cause,
+   * so it counts without touching them. They are what the tile's report
+   * carries as the host's code.
    */
   readonly code: string | null;
   readonly reason: string | null;
@@ -876,9 +874,10 @@ function countPreSnapshotRetry(
 ): PreSnapshotRetryEvidence {
   return {
     count: (previous?.count ?? 0) + 1,
-    // Stamped by the FIRST failure and never moved: it anchors the elapsed
-    // arm of the tile's gate, which asks how long this load has been failing,
-    // not how long ago the newest attempt died.
+    // Stamped by the FIRST failure and never moved: a tile that mounts into
+    // this streak dates its wait from here (`chatLoadWaitBeganAt`), which asks
+    // how long this load has been failing, not how long ago the newest
+    // attempt died.
     firstAt: previous?.firstAt ?? now,
     code: details?.code ?? previous?.code ?? null,
     reason: details?.reason ?? previous?.reason ?? null,
@@ -891,10 +890,10 @@ export interface ChatSessionState {
   readonly connectionStatus: StreamConnectionStatus;
   /**
    * Set when the host terminates the `chat.subscribe` stream with a
-   * `fatalError` (e.g. `CHAT_INVALID` / `CHAT_NOT_VISIBLE`, collapsed to code
-   * `UNAUTHORIZED` on the wire). Drives the tile's error state instead of an
-   * indefinite loading spinner when a snapshot never arrives. Cleared on every
-   * fresh (re)connect attempt.
+   * `fatalError` (e.g. `CHAT_INVALID` or `CHAT_NOT_VISIBLE`, each sent under
+   * its own code). Drives the tile's error state instead of an indefinite
+   * loading spinner when a snapshot never arrives. Cleared on every fresh
+   * (re)connect attempt.
    */
   readonly fatalClose: FatalErrorDetails | null;
   readonly snapshotLoaded: boolean;
@@ -903,6 +902,23 @@ export interface ChatSessionState {
    * a fresh session, or one whose snapshot has landed.
    */
   readonly preSnapshotRetries: PreSnapshotRetryEvidence | null;
+  /**
+   * When a LOADED session was last dropped back into a pre-snapshot wait, or
+   * `null` while this session has never finished one.
+   *
+   * `retry()` clears `snapshotLoaded`, and its three automatic callers - the
+   * wake pulse, the plan-restricted reprobe and the host-version move - all
+   * reach a session whose transcript is already on screen. The tile's own
+   * anchor is its FIRST render for the chat, so without this stamp a tile
+   * mounted longer than the deadline would declare the replacement
+   * subscription overdue on sight and put the "hasn't loaded yet" card over a
+   * fresh attempt that has had no time at all. See `chatLoadWaitBeganAt`.
+   *
+   * Stamped only when a snapshot HAD landed, so the ordinary first load - and
+   * a Try again pressed during one - keeps the tile's anchor and the
+   * handle-pending half of the wait still restarts nothing.
+   */
+  readonly preSnapshotReloadStartedAt: number | null;
   /**
    * The connection whose authoritative snapshot established the CURRENT
    * transcript, or `NO_TRANSCRIPT_BASELINE` before the first one lands.
@@ -6814,7 +6830,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               )),
         }));
       },
-      onConnectionStatus: (status, reason) => {
+      onConnectionStatus: (status, reason, retryCause) => {
         if (disposed) return;
         if (status === "reconnecting" || status === "closed") {
           // Frames dispatched on the lost connection can no longer be
@@ -6856,8 +6872,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           //
           // `reconnecting` is the whole trigger because it is what every such
           // failure looks like from here: the transport publishes it once per
-          // dropped socket, failed dial and swallowed retryable fatal, and
-          // then re-dials. The two statuses that are NOT counted each already
+          // dropped socket, failed dial and retryable fatal, and then
+          // re-dials. A retryable fatal's details come with it as
+          // `retryCause`. The two statuses that are NOT counted each already
           // have their own surface - a terminal `closed` carries
           // `fatalClose`, and `open`/`connecting` are attempts still in
           // flight.
@@ -6875,7 +6892,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             }
             return countPreSnapshotRetry(
               state.preSnapshotRetries,
-              reason?.kind === "fatalError" ? reason.details : null,
+              retryCause,
               Date.now(),
             );
           };
@@ -6934,6 +6951,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       const applyConnectionStatus = (
         status: StreamConnectionStatus,
         reason: StreamCloseReason | null,
+        retryCause: FatalErrorDetails | null,
       ): void => {
         if (!streamGuard.isCurrent(streamGeneration)) return;
         // A RETRYABLE fatalError is the transport saying "not now" - the client
@@ -6961,7 +6979,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               }),
             );
         }
-        callbacks.onConnectionStatus(status, reason);
+        callbacks.onConnectionStatus(status, reason, retryCause);
       };
       return {
         onSnapshot: (frame) => {
@@ -7035,9 +7053,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Nothing can interleave in the gap: construction runs to completion in
         // one task, so the only thing this reorders against is the rest of that
         // construction, and the epoch bump inside is counted either way.
-        onConnectionStatus: (status, reason) => {
+        onConnectionStatus: (status, reason, retryCause) => {
           if (storeReady) {
-            applyConnectionStatus(status, reason);
+            applyConnectionStatus(status, reason, retryCause);
             return;
           }
           queueMicrotask(() => {
@@ -7047,7 +7065,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // on, and running it would trade a synchronous throw for an
             // unhandled one in a microtask.
             if (!storeReady) return;
-            applyConnectionStatus(status, reason);
+            applyConnectionStatus(status, reason, retryCause);
           });
         },
       };
@@ -7097,6 +7115,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       fatalClose: null,
       snapshotLoaded: false,
       preSnapshotRetries: null,
+      preSnapshotReloadStartedAt: null,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
       // The live counter, not a literal `0`, because this field IS that
       // counter's mirror and the two must not be able to disagree. They are
@@ -7217,6 +7236,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           interviewDeliveryRetryProtocolSupported: false,
           fatalClose: null,
           snapshotLoaded: false,
+          // A LATER pre-snapshot wait begins here, and the tile's anchor
+          // describes one that already ended. Stamped only when a snapshot
+          // had landed: a retry before the first one is still the same wait,
+          // whose clock the tile owns (see `preSnapshotReloadStartedAt`).
+          preSnapshotReloadStartedAt: prior.snapshotLoaded
+            ? Date.now()
+            : prior.preSnapshotReloadStartedAt,
         });
         try {
           streamClient = createStreamClient();
@@ -7232,6 +7258,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             connectionStatus: "closed",
             fatalClose: prior.fatalClose,
             snapshotLoaded: prior.snapshotLoaded,
+            // No attempt began, so no later wait did either.
+            preSnapshotReloadStartedAt: prior.preSnapshotReloadStartedAt,
           });
           throw cause;
         }

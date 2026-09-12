@@ -127,7 +127,10 @@ describe("runtime messenger reset is scoped to auth-changed", () => {
     // The announcing entry point, named-host form - what the app-wide stream's
     // recovery wiring and every durable per-tab transport call. Post-P4.2 this
     // announces for ANY host, so an unfiltered listener would reset here.
-    client.notifyHostAvailabilityRecovered(mockLocalHostEntry.hostId);
+    client.notifyHostAvailabilityRecovered(
+      mockLocalHostEntry.hostId,
+      "reconnect",
+    );
     // Delivery is coalesced onto a microtask; flush before asserting absence,
     // or "did not fire" is just "has not fired yet".
     await Promise.resolve();

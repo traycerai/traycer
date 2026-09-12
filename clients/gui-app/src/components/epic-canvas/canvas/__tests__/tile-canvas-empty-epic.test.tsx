@@ -55,6 +55,7 @@ function resetCanvasStore(): void {
   useEpicCanvasStore.setState({
     tabsById: {},
     canvasByTabId: {},
+    closedTilePayloadsByTabId: {},
     openTabOrder: [],
     activeTabId: null,
     mostRecentTabIdByEpicId: {},
@@ -78,7 +79,7 @@ afterEach(() => {
 });
 
 describe("<TileCanvas /> empty epic", () => {
-  it("seeds the blank new-tab opener for a brand-new epic", async () => {
+  it("seeds an empty root pane for a brand-new epic", async () => {
     render(
       <StrictMode>
         <TileCanvas epicId={EPIC_ID} tabId={TAB_ID} />
@@ -94,11 +95,8 @@ describe("<TileCanvas /> empty epic", () => {
       if (root?.kind !== "pane") {
         throw new Error("expected a seeded root pane");
       }
-      expect(root.tabInstanceIds).toHaveLength(1);
-      const tabId = root.tabInstanceIds[0];
-      const tab = canvas.tilesByInstanceId[tabId];
-      expect(tab?.type).toBe("blank");
-      expect(tab === undefined ? null : tab.name).toBe("New tab");
+      expect(root.tabInstanceIds).toHaveLength(0);
+      expect(root.activeTabId).toBeNull();
     });
 
     expect(screen.getByTestId("tab-group-view")).not.toBeNull();

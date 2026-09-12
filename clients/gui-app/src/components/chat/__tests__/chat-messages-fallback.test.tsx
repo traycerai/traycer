@@ -610,7 +610,7 @@ function bootstrap(
   returning: PendingReturn | undefined,
   lastFallbackOutcome: LastFallbackOutcome | undefined,
 ): number {
-  harness.callbacks().onConnectionStatus("open", null);
+  harness.callbacks().onConnectionStatus("open", null, null);
   harness.callbacks().onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -1840,7 +1840,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // transition (chat-session-store.ts ~5680), NOT "connecting" - using
     // "connecting" here would leave `reconnectEpoch` identical to
     // `baselineEpoch` and this whole scenario would silently test nothing.
-    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null);
     const reconnectEpoch = bootstrap(
       harness,
       initialHold,
@@ -2491,7 +2491,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   } {
     const harness = createWindowedHarness();
     registerHarness(harness); // real registry lease, independent of any mount
-    harness.callbacks().onConnectionStatus("open", null);
+    harness.callbacks().onConnectionStatus("open", null, null);
     // A truly EMPTY snapshot (`rowCount: 0`, `tail.fromOrdinal: 0`) folds
     // immediately - `isTailHydrated` reads it TRUE with nothing to cover -
     // so this establishes a genuine AUTHORITATIVE baseline (the FOLD sets
@@ -2640,8 +2640,8 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // fires on "reconnecting"/"closed", advancing `connectionEpoch` while
     // `transcriptBaselineEpoch` still reads the OLD value. No component is
     // mounted to observe any of this.
-    harness.callbacks().onConnectionStatus("reconnecting", null);
-    harness.callbacks().onConnectionStatus("open", null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("open", null, null);
     expect(harness.handle.store.getState().connectionEpoch).not.toBe(epoch);
     expect(harness.handle.store.getState().transcriptBaselineEpoch).toBe(epoch);
 
@@ -2830,7 +2830,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   it("R1: independent outcome metadata speaks while its assistant row is unloaded, then a real onRange hydrates that SAME row/block through the REAL rendered-messages mapper - the already-spoken announcement is retained, not replayed", async () => {
     const harness = createWindowedHarness();
     registerHarness(harness);
-    harness.callbacks().onConnectionStatus("open", null);
+    harness.callbacks().onConnectionStatus("open", null, null);
     // A truly empty baseline folds immediately (same technique as D224).
     // `D224_WINDOW_EPOCH` is the WIRE epoch for every snapshot/range below -
     // an independent coordinate from `epoch` (`transcriptBaselineEpoch`,

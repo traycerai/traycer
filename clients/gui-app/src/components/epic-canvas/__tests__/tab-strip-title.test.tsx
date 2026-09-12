@@ -40,6 +40,11 @@ import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
+  useRouter: () => ({
+    state: { location: { pathname: "/" } },
+    history: {},
+    navigate: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/host", () => ({

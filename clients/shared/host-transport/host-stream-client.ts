@@ -4,6 +4,7 @@ import type {
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IStreamClient } from "./i-stream-client";
 import type { StreamMethodSupport } from "./ws-stream-client";
+import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
 
 /**
  * The stream-client lifecycle surface the app-wide/durable provider tree
@@ -157,14 +158,17 @@ export interface IHostStreamClient<
    * Positive host-recovery evidence: fires when a session (re)opens after a
    * drop or a stall-length silent gap - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
-   * points. Consumers drive `HostClient.notifyHostAvailabilityRecovered(hostId)`
-   * off it so stranded unary queries refetch. `RemoteStreamClient` delegates to
+   * points and the kind each reports. Consumers drive
+   * `HostClient.notifyHostAvailabilityRecovered(hostId, kind)` off it so
+   * stranded unary queries refetch. `RemoteStreamClient` delegates to
    * `RemoteSession.subscribeAvailabilityRecovered`, which fires at EVERY
    * ready boundary - including the clean first open, because a remote
    * session's first dial races (and strands) the very queries that created
-   * it.
+   * it - and reports each one as a `"reconnect"`.
    */
-  subscribeAvailabilityRecovered(listener: () => void): () => void;
+  subscribeAvailabilityRecovered(
+    listener: (kind: AvailabilityRecoveryKind) => void,
+  ): () => void;
 }
 
 /**

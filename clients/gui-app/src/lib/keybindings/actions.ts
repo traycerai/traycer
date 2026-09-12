@@ -24,6 +24,7 @@ export const ACTION_IDS = [
   "epic.next",
   "epic.prev",
   "epic.close",
+  "tab.reopen",
   "tab.new",
   "tab.close",
   "tab.close-others",
@@ -133,7 +134,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "epic.switch.byDigit",
     label: "Switch epic by number",
     description:
-      "Hold Option/Alt and type a tab number to jump to that Epic-level tab.",
+      "Hold the configured modifiers and type a tab number to jump to that Epic-level tab.",
     category: "epics",
     kind: "digit",
     defaultChord: "alt",
@@ -205,6 +206,18 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "epics",
     kind: "chord",
     defaultChord: "mod+shift+w",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+  },
+  "tab.reopen": {
+    id: "tab.reopen",
+    label: "Reopen closed tab",
+    description:
+      "Restore the last closed task, draft, inner tab, or group of tabs in this window.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+shift+t",
     secondaryChord: undefined,
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
@@ -557,7 +570,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "app.settings.section.byDigit",
     label: "Switch settings section by number",
     description:
-      "While on the settings screen, hold Option/Alt and press a digit to jump to that section. Settings takes precedence over the header tab strip while frontmost.",
+      "While on the settings screen, hold the configured modifiers and press a digit to jump to that section. Settings takes precedence over the header tab strip while frontmost.",
     category: "app",
     kind: "digit",
     defaultChord: "alt",
@@ -727,7 +740,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "model.reasoning.byDigit",
     label: "Switch thinking level by number",
     description:
-      "While the model picker is open and the selected model exposes thinking levels, hold Option/Alt and press a digit to set that level.",
+      "While the model picker is open and the selected model exposes thinking levels, hold the configured modifiers and press a digit to set that level.",
     category: "app",
     kind: "digit",
     defaultChord: "alt",
@@ -739,7 +752,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "model.profile.byDigit",
     label: "Switch profile by number",
     description:
-      "While the model picker is open and the active provider has 2+ profiles, hold the leader modifier + Shift and press a digit to switch to that profile chip.",
+      "While the model picker is open and the active provider has 2+ profiles, hold the configured modifiers and press a digit to switch to that profile chip.",
     category: "app",
     kind: "digit",
     defaultChord: "mod+shift",

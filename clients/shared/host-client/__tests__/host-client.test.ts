@@ -300,10 +300,12 @@ describe("HostClient", () => {
     // by THAT id. Pre-P4.2 this host was "not the active one" and was
     // deliberately invalidated WITHOUT an event, because an event meant "the
     // active host changed" and this was not it.
-    client.notifyHostAvailabilityRecovered("other-host");
+    client.notifyHostAvailabilityRecovered("other-host", "reconnect");
     await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual(["other-host"]);
-    expect(invalidator.options).toEqual([{ refetchActive: true }]);
+    expect(invalidator.options).toEqual([
+      { refetchActive: true, recovery: "reconnect" },
+    ]);
     // NOW IT ANNOUNCES, and the event names the host it is about. That is the
     // whole substitution: the active-host gate is replaced by a field
     // consumers filter on, so a reason-agnostic subscriber must be ready to
@@ -316,7 +318,7 @@ describe("HostClient", () => {
     });
 
     events.length = 0;
-    client.notifyHostAvailabilityRecovered("mock-local");
+    client.notifyHostAvailabilityRecovered("mock-local", "reconnect");
     await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual(["other-host", "mock-local"]);
     expect(events).toHaveLength(1);
@@ -342,7 +344,9 @@ describe("HostClient", () => {
     await flushAvailabilityCoalescing();
 
     expect(invalidator.calls).toEqual(["mock-local"]);
-    expect(invalidator.options).toEqual([{ refetchActive: true }]);
+    expect(invalidator.options).toEqual([
+      { refetchActive: true, recovery: "reconnect" },
+    ]);
     expect(events).toEqual([]);
   });
 
@@ -354,10 +358,10 @@ describe("HostClient", () => {
     // the runtime messenger delivers its change-event-free variant, and an
     // unrelated host's tab reports too. Per host: ONE invalidation; the
     // change event survives because at least one caller asked for it.
-    client.notifyHostAvailabilityRecovered("mock-local");
-    client.notifyHostAvailabilityRecovered("mock-local");
+    client.notifyHostAvailabilityRecovered("mock-local", "reconnect");
+    client.notifyHostAvailabilityRecovered("mock-local", "reconnect");
     client.invalidateHostScopeUnannounced("mock-local");
-    client.notifyHostAvailabilityRecovered("other-host");
+    client.notifyHostAvailabilityRecovered("other-host", "reconnect");
     await flushAvailabilityCoalescing();
 
     expect(invalidator.calls.sort()).toEqual(["mock-local", "other-host"]);
@@ -392,12 +396,12 @@ describe("HostClient", () => {
     try {
       const { client, invalidator, events } = buildHostClientWithMock();
 
-      client.notifyHostAvailabilityRecovered("mock-local");
+      client.notifyHostAvailabilityRecovered("mock-local", "reconnect");
       await flushAvailabilityCoalescing();
       expect(invalidator.calls).toEqual(["mock-local"]);
 
       await vi.advanceTimersByTimeAsync(HOST_AVAILABILITY_SWEEP_WINDOW_MS / 2);
-      client.notifyHostAvailabilityRecovered("mock-local");
+      client.notifyHostAvailabilityRecovered("mock-local", "reconnect");
       await flushAvailabilityCoalescing();
       expect(invalidator.calls).toHaveLength(1);
 
@@ -430,7 +434,7 @@ describe("HostClient", () => {
       // land in separate macrotasks - which is what the time-gated leading
       // edge, not the microtask merge, is holding to one call.
       for (let i = 0; i < 5; i += 1) {
-        client.notifyHostAvailabilityRecovered("mock-local");
+        client.notifyHostAvailabilityRecovered("mock-local", "reconnect");
         await vi.advanceTimersByTimeAsync(0);
       }
 
@@ -446,6 +450,93 @@ describe("HostClient", () => {
       vi.useRealTimers();
     }
   });
+
+  // G4: a sweep's kind decides what it re-asks, so every merge has to keep
+  // the widest one. Each merge case is paired with one made only of stalls,
+  // which must stay a stall, so "always sweep as a reconnect" fails too.
+  it("sweeps each host as the kind it was reported with", async () => {
+    const { client, invalidator } = buildHostClientWithMock();
+
+    client.notifyHostAvailabilityRecovered("mock-local", "stall");
+    client.notifyHostAvailabilityRecovered("other-host", "reconnect");
+    await flushAvailabilityCoalescing();
+
+    expect(invalidator.calls).toEqual(["mock-local", "other-host"]);
+    expect(invalidator.options).toEqual([
+      { refetchActive: true, recovery: "stall" },
+      { refetchActive: true, recovery: "reconnect" },
+    ]);
+  });
+
+  it.each([
+    [["stall", "reconnect"], "reconnect"],
+    [["reconnect", "stall"], "reconnect"],
+    [["stall", "stall"], "stall"],
+  ] as const)(
+    "same-tick reports %j sweep once, as a %s",
+    async (kinds, expected) => {
+      const { client, invalidator } = buildHostClientWithMock();
+
+      for (const kind of kinds) {
+        client.notifyHostAvailabilityRecovered("mock-local", kind);
+      }
+      await flushAvailabilityCoalescing();
+
+      expect(invalidator.calls).toEqual(["mock-local"]);
+      expect(invalidator.options).toEqual([
+        { refetchActive: true, recovery: expected },
+      ]);
+    },
+  );
+
+  it("an unannounced sweep runs as a reconnect, and a stall merged into it keeps it one", async () => {
+    const { client, invalidator, events } = buildHostClientWithMock();
+
+    client.notifyHostAvailabilityRecovered("mock-local", "stall");
+    client.invalidateHostScopeUnannounced("mock-local");
+    await flushAvailabilityCoalescing();
+
+    expect(invalidator.calls).toEqual(["mock-local"]);
+    expect(invalidator.options).toEqual([
+      { refetchActive: true, recovery: "reconnect" },
+    ]);
+    // The stall asked for the announcement, so the merged sweep still makes it.
+    expect(events).toHaveLength(1);
+  });
+
+  it.each([
+    ["stall", ["stall", "reconnect", "stall"], "reconnect"],
+    ["stall", ["stall", "stall"], "stall"],
+    ["reconnect", ["stall"], "stall"],
+  ] as const)(
+    "a window led by a %s ends with one trailing sweep as the widest kind it held back (%j → %s)",
+    async (lead, heldBack, expected) => {
+      vi.useFakeTimers();
+      try {
+        const { client, invalidator } = buildHostClientWithMock();
+
+        client.notifyHostAvailabilityRecovered("mock-local", lead);
+        await flushAvailabilityCoalescing();
+        for (const kind of heldBack) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          client.notifyHostAvailabilityRecovered("mock-local", kind);
+        }
+        await flushAvailabilityCoalescing();
+        expect(invalidator.calls).toEqual(["mock-local"]);
+
+        await vi.advanceTimersByTimeAsync(HOST_AVAILABILITY_SWEEP_WINDOW_MS);
+        // The lead's own kind does not leak into the trailing sweep: what the
+        // window held back is all the trailing sweep answers for.
+        expect(invalidator.options).toEqual([
+          { refetchActive: true, recovery: lead },
+          { refetchActive: true, recovery: expected },
+        ]);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("delegates a requester's unary request to the messenger under that host's authority", async () => {
     const { client, requester, messenger } = buildHostClientWithMock();

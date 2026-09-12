@@ -5,15 +5,46 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 const cacheMocks = vi.hoisted(() => ({
   read: vi.fn(),
   remove: vi.fn(),
+  write: vi.fn(),
 }));
 
 vi.mock("@/lib/appearance/appearance-cache", () => ({
   readAppearanceBlob: cacheMocks.read,
   removeAppearanceBlob: cacheMocks.remove,
-  writeAppearanceBlob: vi.fn(),
+  writeAppearanceBlob: cacheMocks.write,
 }));
 
-import { useStartPageWallpaperImage } from "@/lib/appearance/start-page-wallpaper";
+const curatedMocks = vi.hoisted(() => ({
+  download: vi.fn(),
+}));
+
+vi.mock("@/lib/appearance/curated-wallpapers", () => ({
+  downloadCuratedWallpaper: curatedMocks.download,
+}));
+
+const imageProcessingMocks = vi.hoisted(() => ({
+  validate: vi.fn(),
+  process: vi.fn(),
+}));
+
+vi.mock("@/lib/appearance/appearance-image-processing", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/lib/appearance/appearance-image-processing")
+  >("@/lib/appearance/appearance-image-processing");
+  return {
+    ...actual,
+    validateAppearanceImage: imageProcessingMocks.validate,
+    processStartPageWallpaperImage: imageProcessingMocks.process,
+  };
+});
+
+import {
+  applyCuratedStartPageWallpaper,
+  chooseStartPageWallpaper,
+  removeStartPageWallpaper,
+  useStartPageWallpaperImage,
+} from "@/lib/appearance/start-page-wallpaper";
+import type { CuratedWallpaper } from "@/lib/appearance/curated-wallpapers";
 
 describe("useStartPageWallpaperImage", () => {
   beforeEach(() => {
@@ -53,6 +84,7 @@ describe("useStartPageWallpaperImage", () => {
           intensity: 0.6,
           tintWithAccent: true,
           name: "latest.png",
+          curatedId: null,
         },
       });
       await Promise.resolve();
@@ -65,5 +97,270 @@ describe("useStartPageWallpaperImage", () => {
       await Promise.resolve();
     });
     expect(result.current).toEqual({ url: currentUrl, name: "latest.png" });
+  });
+});
+
+function curatedEntry(overrides: Partial<CuratedWallpaper>): CuratedWallpaper {
+  return {
+    id: "dunes",
+    title: "Dunes",
+    fullUrl: "https://assets.traycer.ai/start-page/wallpapers/dunes.webp",
+    thumbUrl:
+      "https://assets.traycer.ai/start-page/wallpapers/dunes-thumb.webp",
+    sha256: "a".repeat(64),
+    bytes: 1024,
+    ...overrides,
+  };
+}
+
+function deferredBlob(): {
+  readonly promise: Promise<Blob>;
+  resolve: (blob: Blob) => void;
+} {
+  let resolve: (blob: Blob) => void = () => undefined;
+  const promise = new Promise<Blob>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+describe("applyCuratedStartPageWallpaper / chooseStartPageWallpaper", () => {
+  beforeEach(() => {
+    cacheMocks.write.mockReset().mockResolvedValue(undefined);
+    cacheMocks.remove.mockReset().mockResolvedValue(undefined);
+    curatedMocks.download.mockReset();
+    imageProcessingMocks.validate.mockReset();
+    imageProcessingMocks.process.mockReset();
+    useSettingsStore.setState({ startPageWallpaper: null });
+  });
+
+  afterEach(() => {
+    useSettingsStore.setState({ startPageWallpaper: null });
+  });
+
+  it("stores a blob under the budget verbatim without re-encoding", async () => {
+    const blob = new Blob(["verbatim"], { type: "image/webp" });
+    curatedMocks.download.mockResolvedValue(blob);
+    imageProcessingMocks.validate.mockResolvedValue({
+      width: 2560,
+      height: 1600,
+    });
+
+    await applyCuratedStartPageWallpaper(curatedEntry({}));
+
+    expect(imageProcessingMocks.process).not.toHaveBeenCalled();
+    expect(cacheMocks.write).toHaveBeenCalledWith("start-page-wallpaper", blob);
+    expect(useSettingsStore.getState().startPageWallpaper).toEqual({
+      style: "dither",
+      intensity: 0.6,
+      tintWithAccent: true,
+      name: "Dunes",
+      curatedId: "dunes",
+    });
+  });
+
+  it("re-encodes a downloaded image whose edge exceeds the stored budget", async () => {
+    const downloaded = new Blob(["big"], { type: "image/webp" });
+    const reencoded = new Blob(["small"], { type: "image/webp" });
+    curatedMocks.download.mockResolvedValue(downloaded);
+    imageProcessingMocks.validate.mockResolvedValue({
+      width: 4000,
+      height: 2000,
+    });
+    imageProcessingMocks.process.mockResolvedValue({
+      blob: reencoded,
+      width: 2560,
+      height: 1280,
+    });
+
+    await applyCuratedStartPageWallpaper(curatedEntry({}));
+
+    expect(imageProcessingMocks.process).toHaveBeenCalledWith(
+      downloaded,
+      expect.any(AbortSignal),
+    );
+    expect(cacheMocks.write).toHaveBeenCalledWith(
+      "start-page-wallpaper",
+      reencoded,
+    );
+  });
+
+  it("keeps the existing style, intensity and tint when a wallpaper was already set", async () => {
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "grain",
+        intensity: 0.3,
+        tintWithAccent: false,
+        name: "old.png",
+        curatedId: null,
+      },
+    });
+    curatedMocks.download.mockResolvedValue(
+      new Blob(["x"], { type: "image/webp" }),
+    );
+    imageProcessingMocks.validate.mockResolvedValue({
+      width: 100,
+      height: 100,
+    });
+
+    await applyCuratedStartPageWallpaper(
+      curatedEntry({ id: "ridge", title: "Ridge" }),
+    );
+
+    expect(useSettingsStore.getState().startPageWallpaper).toEqual({
+      style: "grain",
+      intensity: 0.3,
+      tintWithAccent: false,
+      name: "Ridge",
+      curatedId: "ridge",
+    });
+  });
+
+  it("aborts an in-flight apply when removeStartPageWallpaper runs, leaving the row null", async () => {
+    const deferred = deferredBlob();
+    curatedMocks.download.mockReturnValue(deferred.promise);
+    imageProcessingMocks.validate.mockResolvedValue({
+      width: 100,
+      height: 100,
+    });
+
+    const applyPromise = applyCuratedStartPageWallpaper(curatedEntry({}));
+    await removeStartPageWallpaper();
+    deferred.resolve(new Blob(["x"], { type: "image/webp" }));
+
+    await expect(applyPromise).rejects.toMatchObject({ name: "AbortError" });
+    expect(useSettingsStore.getState().startPageWallpaper).toBeNull();
+  });
+
+  it("aborts the first apply when a second one starts, and the second lands", async () => {
+    const first = deferredBlob();
+    const second = deferredBlob();
+    curatedMocks.download.mockImplementation((entry: CuratedWallpaper) =>
+      entry.id === "first" ? first.promise : second.promise,
+    );
+    imageProcessingMocks.validate.mockResolvedValue({
+      width: 100,
+      height: 100,
+    });
+
+    const firstApply = applyCuratedStartPageWallpaper(
+      curatedEntry({ id: "first", title: "First" }),
+    );
+    const secondApply = applyCuratedStartPageWallpaper(
+      curatedEntry({ id: "second", title: "Second" }),
+    );
+
+    second.resolve(new Blob(["s"], { type: "image/webp" }));
+    await secondApply;
+    first.resolve(new Blob(["f"], { type: "image/webp" }));
+
+    await expect(firstApply).rejects.toMatchObject({ name: "AbortError" });
+    expect(useSettingsStore.getState().startPageWallpaper?.curatedId).toBe(
+      "second",
+    );
+  });
+
+  it("pairs the row with the bytes when the losing apply is the one that wrote them", async () => {
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "old.png",
+        curatedId: null,
+      },
+    });
+    const dunesBlob = new Blob(["dunes"], { type: "image/webp" });
+    curatedMocks.download.mockImplementation((entry: CuratedWallpaper) =>
+      entry.id === "dunes"
+        ? Promise.resolve(dunesBlob)
+        : Promise.reject(new Error("download failed")),
+    );
+    imageProcessingMocks.validate.mockResolvedValue({
+      width: 100,
+      height: 100,
+    });
+    // The blob write hangs, which is the window the race needs: Dunes is
+    // aborted while its bytes are already on their way to the store.
+    let finishWrite: () => void = () => undefined;
+    cacheMocks.write.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishWrite = () => resolve();
+      }),
+    );
+
+    const dunesApply = applyCuratedStartPageWallpaper(curatedEntry({}));
+    await vi.waitFor(() => expect(cacheMocks.write).toHaveBeenCalledTimes(1));
+    const ridgeApply = applyCuratedStartPageWallpaper(
+      curatedEntry({ id: "ridge", title: "Ridge" }),
+    );
+
+    await expect(ridgeApply).rejects.toThrow("download failed");
+    finishWrite();
+
+    await expect(dunesApply).rejects.toMatchObject({ name: "AbortError" });
+    // Ridge never got as far as storing anything, so the bytes in the store
+    // are Dunes' - and the row has to say so rather than still describing the
+    // wallpaper those bytes replaced.
+    expect(cacheMocks.write).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.write).toHaveBeenCalledWith(
+      "start-page-wallpaper",
+      dunesBlob,
+    );
+    expect(useSettingsStore.getState().startPageWallpaper).toMatchObject({
+      name: "Dunes",
+      curatedId: "dunes",
+    });
+  });
+
+  it("keeps the previous pair intact when the replacement write fails", async () => {
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "old.png",
+        curatedId: null,
+      },
+    });
+    imageProcessingMocks.process.mockResolvedValue({
+      blob: new Blob(["custom"], { type: "image/webp" }),
+      width: 800,
+      height: 600,
+    });
+    cacheMocks.write.mockRejectedValue(new Error("quota exceeded"));
+
+    await expect(
+      chooseStartPageWallpaper(
+        new File(["custom"], "new.png", { type: "image/png" }),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("quota exceeded");
+
+    // The blob store write is atomic per key, so the old bytes survived a
+    // failed replacement - deleting them here is what would strand the row
+    // that still describes them.
+    expect(cacheMocks.remove).not.toHaveBeenCalled();
+    expect(useSettingsStore.getState().startPageWallpaper).toMatchObject({
+      name: "old.png",
+      curatedId: null,
+    });
+  });
+
+  it("writes curatedId: null when choosing a custom file", async () => {
+    imageProcessingMocks.process.mockResolvedValue({
+      blob: new Blob(["custom"], { type: "image/webp" }),
+      width: 800,
+      height: 600,
+    });
+
+    await chooseStartPageWallpaper(
+      new File(["custom"], "custom.png", { type: "image/png" }),
+      new AbortController().signal,
+    );
+
+    expect(
+      useSettingsStore.getState().startPageWallpaper?.curatedId,
+    ).toBeNull();
   });
 });

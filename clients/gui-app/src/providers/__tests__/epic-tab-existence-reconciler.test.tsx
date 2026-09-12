@@ -590,7 +590,9 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
     });
 
     const key = reconcileQueryKeys(queryClient)[0];
-    expect(key.at(-1)).toBe(`${localSnapshot.hostId}:test-user:1`);
+    expect(key.at(-1)).toBe(
+      `${localSnapshot.hostId}:test-user:1:recovery=false`,
+    );
     queryClient.clear();
   });
 
