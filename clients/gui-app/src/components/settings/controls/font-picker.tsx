@@ -67,7 +67,7 @@ export function FontPicker(props: FontPickerProps) {
   };
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex min-w-0 max-w-full items-center gap-1.5">
       <div className="flex size-7 shrink-0 items-center justify-center">
         {value !== null ? (
           <TooltipWrapper
@@ -107,11 +107,11 @@ export function FontPicker(props: FontPickerProps) {
             ref={triggerRef}
             type="button"
             aria-label={ariaLabel}
-            className="inline-flex min-w-44 items-center justify-between gap-3 rounded-md border border-border bg-card px-2.5 py-1.5 text-ui-sm text-foreground transition-colors hover:bg-accent/50"
+            className="inline-flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card px-2.5 py-1.5 text-ui-sm text-foreground transition-colors hover:bg-accent/50"
           >
             <span
               className={cn(
-                "min-w-0 flex-1 truncate text-left",
+                "min-w-0 flex-1 break-words text-left",
                 value === null && "text-muted-foreground",
               )}
               style={
@@ -149,7 +149,7 @@ export function FontPicker(props: FontPickerProps) {
                   data-checked={value === null ? "true" : "false"}
                   onSelect={() => commit(null)}
                 >
-                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                  <span className="min-w-0 flex-1 break-words text-muted-foreground">
                     {defaultLabel}
                   </span>
                 </CommandItem>
@@ -160,8 +160,12 @@ export function FontPicker(props: FontPickerProps) {
                     value={`custom:${trimmedQuery}`}
                     onSelect={() => commit(trimmedQuery)}
                   >
-                    <span className="min-w-0 flex-1 truncate">
+                    <span className="min-w-0 flex-1 break-words">
                       {`Use "${trimmedQuery}"`}
+                      <span className="mt-1 block text-ui-xs text-muted-foreground">
+                        This font must already be installed on this device.
+                        Otherwise, the default font is used.
+                      </span>
                     </span>
                   </CommandItem>
                 </CommandGroup>
@@ -179,7 +183,7 @@ export function FontPicker(props: FontPickerProps) {
                       onSelect={() => commit(font.family)}
                     >
                       <span
-                        className="min-w-0 flex-1 truncate"
+                        className="min-w-0 flex-1 break-words"
                         style={{ fontFamily: quoteFontFamily(font.family) }}
                       >
                         {font.family}

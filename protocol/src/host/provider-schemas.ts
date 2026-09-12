@@ -1258,13 +1258,11 @@ const providerProfileShapeV70 = {
   // blocked (see the decision log's "Identity key" row); the GUI renders
   // "same account as <label>".
   duplicateOfProfileId: z.string().nullable().catch(null),
-  // Only ever non-null on the ambient profile entry. Set when the ambient
-  // login's identity changed behind Traycer's back (a user ran `/login` in a
-  // terminal) - carries the pre-change email and when the drift was detected
-  // so the GUI can rebadge and show a one-time dismissable notice ("Terminal
-  // account is now bob@, was alice@"). See the decision log's "Ambient
-  // identity drift" row; dismissal handling is host/GUI-side, this field only
-  // carries the notice.
+  // Only ever non-null on the ambient profile entry historically. Current
+  // hosts always project `null`: the GUI no longer renders ambient identity
+  // drift. The field stays on the wire so older peers still parse. Dismissal
+  // via `acknowledgeAmbientDrift` remains a no-op-capable host action for
+  // those older clients.
   ambientDriftNotice: z
     .object({
       previousEmail: z.string().nullable(),
@@ -1433,7 +1431,8 @@ export type ProvidersClearProfileApiKeyResponse = z.infer<
  * Rename/recolor apply to managed profiles and the ambient profile sentinel;
  * remove remains managed-only. `acknowledgeAmbientDrift` durably clears the
  * ambient profile's pending
- * `ambientDriftNotice` (see that field's comment below). No `profileId`:
+ * `ambientDriftNotice`. Current GUI never sends it (no drift UI); the
+ * variant stays so older clients can still ack. No `profileId`:
  * there is exactly one ambient identity per provider. It rides the same
  * `@2.1` minor as the other actions because
  * `@2.1` was still unreleased WHEN THIS LANDED (the released surface was then
@@ -2663,6 +2662,41 @@ export const providersStartLoginResponseSchemaV11 =
   });
 export type ProvidersStartLoginResponseV11 = z.infer<
   typeof providersStartLoginResponseSchemaV11
+>;
+
+/**
+ * Why a headless login did not start, when `started` is false for a reason
+ * the GUI can act on. Null on success and on the generic "did not start"
+ * path (unresolvable binary, cancelled before spawn, …).
+ *
+ * `device_auth_unavailable`: we spawned `login --device-auth` and the CLI
+ * printed the localhost-callback flow instead. Codex does this when ChatGPT
+ * device-code login is not enabled for the account/workspace.
+ *
+ * `device_code_missing`: we scraped an external device URL but no user code
+ * before the URL-grace timer. A slow Codex print must not read as "the
+ * provider tooling is unavailable".
+ */
+export const providerLoginFailureSchema = z.enum([
+  "device_auth_unavailable",
+  "device_code_missing",
+]);
+export type ProviderLoginFailure = z.infer<typeof providerLoginFailureSchema>;
+
+/**
+ * `providers.startLogin@1.2` response - adds the device-code user code and a
+ * typed failure. Request is unchanged from v1.1. Codex `--device-auth` prints
+ * `https://auth.openai.com/codex/device` and a separate one-time code; stuffing
+ * the code into `url` would break `openLink`. `.default(null)` so a v1.1 body
+ * is a valid v1.2 body.
+ */
+export const providersStartLoginResponseSchemaV12 =
+  providersStartLoginResponseSchemaV11.extend({
+    userCode: z.string().nullable().default(null),
+    failure: providerLoginFailureSchema.nullable().default(null),
+  });
+export type ProvidersStartLoginResponseV12 = z.infer<
+  typeof providersStartLoginResponseSchemaV12
 >;
 
 /**

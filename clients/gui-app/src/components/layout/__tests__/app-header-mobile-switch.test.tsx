@@ -24,6 +24,9 @@ vi.mock("@/components/layout/header/windows-menu-bar", () => ({
 vi.mock("@/components/layout/tabs/tab-strip", () => ({
   TabStrip: () => <div role="tablist" aria-label="Open tabs" />,
 }));
+vi.mock("@/hooks/appearance/use-header-tab-appearance", () => ({
+  useHeaderTabAppearance: () => null,
+}));
 vi.mock("@/components/layout/header/history-nav-buttons", () => ({
   HistoryNavButtons: () => null,
 }));

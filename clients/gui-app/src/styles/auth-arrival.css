@@ -1,0 +1,194 @@
+@keyframes brand-mark-arrive {
+  from {
+    opacity: 0;
+    transform: translate(var(--mark-arrival-x, 0%), var(--mark-arrival-y, 16%));
+  }
+  to {
+    opacity: 1;
+    transform: translate(0%, 0%);
+  }
+}
+
+@keyframes brand-copy-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* One animation for the whole splash: hold, then fade over its last 240ms.
+   89.29% of 2240ms is 2000ms - the frame the last piece lands on, where the
+   fade starts, so the surface is never still. Doing the fade and the input
+   hand-off here rather than in React is what keeps the component down to one
+   boolean.
+
+   THE 89.28% KEYFRAME IS LOAD-BEARING. `pointer-events` is not interpolable,
+   and a discrete property does not hold its value until the next keyframe: it
+   flips at the MIDPOINT of the interval between them. Declared only at 0% and
+   89.29%, the flip to `none` would land at ~44.6% - about 1000ms - so the
+   layer would stop swallowing taps while it is still fully opaque, and a tap
+   on the invisible sign-in controls underneath would fire.
+
+   Repeating `auto` at 89.28% shrinks that interval to 0.01% of the span, which
+   puts the midpoint within a fraction of a millisecond of the fade's first
+   frame. The layer blocks input for exactly as long as it hides the page. */
+@keyframes auth-splash-play {
+  0% {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  89.28% {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  89.29% {
+    opacity: 1;
+    pointer-events: none;
+  }
+  100% {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* The whole mark easing down onto its resting size while the pieces arrive
+   inside it - one settle across the assembly, not a second motion after it. */
+@keyframes auth-mark-settle {
+  0% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* The boot mark's shimmer wrapper is a box, not a line box: an inline span
+   around an SVG reserves descender space under it and would shift the card by
+   a few pixels depending on whether the motion rule below is applied. */
+.brand-entrance-mark-shimmer {
+  display: flex;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .brand-entrance-mark g > path {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: brand-mark-arrive 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .brand-entrance-mark g > path:nth-child(1) {
+    --mark-arrival-x: -30%;
+    --mark-arrival-y: 30%;
+
+    animation-delay: 140ms;
+  }
+
+  .brand-entrance-mark g > path:nth-child(2) {
+    --mark-arrival-x: 14%;
+    --mark-arrival-y: -14%;
+
+    animation-delay: 100ms;
+  }
+
+  .brand-entrance-mark g > path:nth-child(3) {
+    --mark-arrival-x: -8%;
+    --mark-arrival-y: -8%;
+  }
+
+  .brand-entrance-mark g > path:nth-child(4) {
+    --mark-arrival-x: -14%;
+    --mark-arrival-y: 14%;
+
+    animation-delay: 60ms;
+  }
+
+  .brand-entrance-copy {
+    animation: brand-copy-arrive 600ms 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  /* The boot card mark's highlight sweep - the STATIC half. The mask is three
+     times the box wide: the mark at a lowered alpha throughout, rising to full
+     in a narrow diagonal band around the centre (~30% of the mark's width
+     once the 115deg lean is accounted for). `BootMarkShimmer` slides
+     `mask-position` from 100% to 0% as an inline style from the shared status
+     animation clock; there is deliberately no `animation:` here - see
+     `status-animation-clock.ts` for what an always-on CSS animation costs on a
+     card that can stay up for minutes. 0% parks the band off the right edge,
+     which is where it rests between sweeps and before the first write.
+
+     Inside the no-preference block on purpose: under reduced motion nothing
+     writes the position, and a mask that never moves would hold the mark at
+     the lowered alpha for the whole wait. No rule here means no mask, so the
+     mark is simply drawn in full. */
+  .brand-entrance-mark-shimmer {
+    --boot-mark-rest: rgb(0 0 0 / 0.75);
+
+    mask-image: linear-gradient(
+      115deg,
+      var(--boot-mark-rest) 0%,
+      var(--boot-mark-rest) 45%,
+      #000 50%,
+      var(--boot-mark-rest) 55%,
+      var(--boot-mark-rest) 100%
+    );
+    mask-size: 300% 100%;
+    mask-repeat: no-repeat;
+    mask-position: 0% center;
+  }
+
+  .auth-splash {
+    animation: auth-splash-play 2240ms linear both;
+  }
+
+  /* The splash restates the per-piece animation rather than inheriting the
+     shorter one `BrandEntrance` applies elsewhere: on this surface the motion
+     has a whole launch to fill, and the same mark on the sign-in page behind it
+     keeps its own quicker arrival.
+
+     The FIRST piece starts at 0ms - a leading delay here is indistinguishable
+     from a slow launch, because the surface is already on screen and nothing is
+     moving on it. The stagger between pieces is what reads as sequence, so it
+     stays; the wait before any of it does not. The last piece lands at 2000ms
+     (270ms + 1730ms), which is where the fade begins. */
+  .auth-splash .brand-entrance-mark g > path {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: brand-mark-arrive 1730ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .auth-splash .brand-entrance-mark g > path:nth-child(1) {
+    --mark-arrival-x: -55%;
+    --mark-arrival-y: 55%;
+
+    animation-delay: 180ms;
+  }
+
+  .auth-splash .brand-entrance-mark g > path:nth-child(2) {
+    --mark-arrival-x: 30%;
+    --mark-arrival-y: -30%;
+
+    animation-delay: 90ms;
+  }
+
+  .auth-splash .brand-entrance-mark g > path:nth-child(3) {
+    --mark-arrival-x: -18%;
+    --mark-arrival-y: -18%;
+
+    animation-delay: 0ms;
+  }
+
+  .auth-splash .brand-entrance-mark g > path:nth-child(4) {
+    --mark-arrival-x: -30%;
+    --mark-arrival-y: 30%;
+
+    animation-delay: 270ms;
+  }
+
+  .auth-splash .brand-entrance-mark {
+    animation: auth-mark-settle 2000ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}

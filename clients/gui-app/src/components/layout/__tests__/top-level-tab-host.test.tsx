@@ -1,7 +1,15 @@
 import { use, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import type { InterviewQuestion } from "@traycer/protocol/persistence/epic/schemas";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -33,6 +41,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
+
+type EpicHeaderTab = Extract<HeaderTab, { readonly kind: "epic" }>;
 import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
@@ -190,6 +200,11 @@ vi.mock("@/components/home/home-hero", () => ({
 }));
 vi.mock("@/components/home/host-update-banner", () => ({
   HostUpdateBanner: () => null,
+}));
+// Reads the landing draft's repository identity through the host runtime,
+// which this suite mounts no provider for.
+vi.mock("@/components/home/landing-appearance-wallpaper", () => ({
+  LandingAppearanceWallpaper: () => null,
 }));
 vi.mock("@/components/epics/epics-list-panel", () => ({
   EpicsListPanel: () => null,
@@ -423,6 +438,24 @@ function setSingle(ref: TabRef, refs: ReadonlyArray<TabRef>) {
 }
 
 describe("<TopLevelTabHost />", () => {
+  // The draft tab kind renders through TWO chained `React.lazy()` boundaries
+  // (`draft-surface-provider` wrapping `landing-draft-surface`), each a real
+  // dynamic `import()` that must transform and evaluate before its Suspense
+  // fallback (`null`) is replaced by content - so a test that queries a draft
+  // pane's content is racing that resolution. Awaiting the SAME module
+  // specifiers here, once, up front, is the deterministic fact this suite
+  // needs: ESM caches by specifier, so by the time `render()` runs inside any
+  // `it`, `lazy()`'s own `import()` call resolves against an already-loaded
+  // module instead of paying transform+eval under whatever load the runner is
+  // under. This is not a longer wait - it moves the real async work earlier,
+  // to a point this file can already `await`.
+  beforeAll(async () => {
+    await Promise.all([
+      import("@/components/home/landing-draft-surface"),
+      import("@/providers/draft-surface-provider"),
+    ]);
+  });
+
   beforeEach(() => {
     window.localStorage.clear();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
@@ -812,7 +845,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
   }
 
   it("activates the hosted record's OWN owning epic tab, not a fixed one", () => {
-    const tabA: HeaderTab = {
+    const tabA: EpicHeaderTab = {
       kind: "epic",
       id: "epic-a",
       epicId: "epic-a",
@@ -823,6 +856,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
+      appearance: null,
     };
     const tabB: HeaderTab = { ...tabA, id: "epic-b", epicId: "epic-b" };
     const tabsByRefKey = new Map([
@@ -850,7 +884,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
   });
 
   it("does not re-activate the already-focused owning tab", () => {
-    const tabA: HeaderTab = {
+    const tabA: EpicHeaderTab = {
       kind: "epic",
       id: "epic-a",
       epicId: "epic-a",
@@ -861,6 +895,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
+      appearance: null,
     };
     const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
     const activeItem: StripItem = {
@@ -883,7 +918,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
   });
 
   it("respects defaultPrevented, a null activator, and a target outside any hosted record", () => {
-    const tabA: HeaderTab = {
+    const tabA: EpicHeaderTab = {
       kind: "epic",
       id: "epic-a",
       epicId: "epic-a",
@@ -894,6 +929,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
+      appearance: null,
     };
     const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
     const activeItem: StripItem | null = null;
@@ -1341,6 +1377,7 @@ describe("TopLevelTabHost: a background epic's pending interview card cannot sna
                     onSubmit={() => null}
                     onSkip={null}
                     onFork={null}
+                    navigationHighlighted={false}
                   />
                 </TooltipProvider>
               </TabBodySelectedContext.Provider>

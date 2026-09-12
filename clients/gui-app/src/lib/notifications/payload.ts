@@ -543,7 +543,10 @@ export function routeNotificationForHost(
         {
           targetHostId: originHostId,
           effectiveHostId,
-          transcriptTarget: null,
+          transcriptTarget:
+            payload.approvalId === undefined
+              ? null
+              : { kind: "approval", approvalId: payload.approvalId },
         },
       );
     case "interview":

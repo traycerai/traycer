@@ -37,6 +37,8 @@ describe("<AddProfileWaitingStep />", () => {
       render(
         <AddProfileWaitingStep
           loginUrl="https://auth.openai.com/oauth/authorize?state=test"
+          userCode={null}
+          isLocalHost={false}
           queuePending={false}
           cancelRequested={false}
           cancelPending={false}
@@ -63,10 +65,12 @@ describe("<AddProfileWaitingStep />", () => {
       expect(cancelButton.getAttribute("data-variant")).toBe("destructive");
       expect(cancelButton.textContent).toBe("Cancel");
 
-      fireEvent.click(openButton);
+      expect(onOpenExternalLink).toHaveBeenCalledTimes(1);
       expect(onOpenExternalLink).toHaveBeenCalledWith(
         "https://auth.openai.com/oauth/authorize?state=test",
       );
+      fireEvent.click(openButton);
+      expect(onOpenExternalLink).toHaveBeenCalledTimes(2);
 
       await act(async () => {
         fireEvent.click(copyButton);
@@ -89,5 +93,57 @@ describe("<AddProfileWaitingStep />", () => {
         Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
       }
     }
+  });
+
+  it("does not auto-open on a local host when there is no device code", () => {
+    const onOpenExternalLink = vi.fn();
+    render(
+      <AddProfileWaitingStep
+        loginUrl="https://claude.com/cai/oauth/authorize?code=true"
+        userCode={null}
+        isLocalHost
+        queuePending={false}
+        cancelRequested={false}
+        cancelPending={false}
+        cancelDisabled={false}
+        waiting
+        codePaste={DISABLED_CODE_PASTE}
+        onOpenExternalLink={onOpenExternalLink}
+        onCancel={() => {}}
+      />,
+    );
+    expect(onOpenExternalLink).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Open browser" })).toBeDefined();
+    cleanup();
+  });
+
+  it("shows the device code, hides the paste field, and auto-opens on a local host", () => {
+    const enabledPaste: ProviderProfileLoginFlowCodePaste = {
+      ...DISABLED_CODE_PASTE,
+      enabled: true,
+    };
+    const onOpenExternalLink = vi.fn();
+    render(
+      <AddProfileWaitingStep
+        loginUrl="https://auth.openai.com/codex/device"
+        userCode="7CH1-OXNVU"
+        isLocalHost
+        queuePending={false}
+        cancelRequested={false}
+        cancelPending={false}
+        cancelDisabled={false}
+        waiting
+        codePaste={enabledPaste}
+        onOpenExternalLink={onOpenExternalLink}
+        onCancel={() => {}}
+      />,
+    );
+    expect(onOpenExternalLink).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("7CH1-OXNVU")).toBeDefined();
+    expect(screen.queryByLabelText("Paste the code")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Open browser again" }),
+    ).toBeDefined();
+    cleanup();
   });
 });

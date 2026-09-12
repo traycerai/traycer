@@ -11,7 +11,7 @@ import { useCallback, type KeyboardEvent, type RefObject } from "react";
  * context menu), not listbox options, so virtual focus would have to reimplement
  * activation that Enter on the anchor already does natively.
  */
-const ROW_TARGET_SELECTOR = "[data-history-row-target]";
+export const ROW_TARGET_SELECTOR = "[data-history-row-target]";
 
 export interface HistoryListKeyboardNav {
   /** Bind to the search box: ArrowDown drops into the first result. */

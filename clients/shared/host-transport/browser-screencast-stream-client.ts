@@ -47,26 +47,13 @@ export type BrowserScreencastStreamClientOptions =
  * Typed wrapper over one `browser.screencast` subscription - a
  * scope-authorized, tab-addressed media stream for a single viewer.
  *
- * ## Two majors, and only the OPEN differs
+ * The frozen @1 and @2.0 lines share frames; @2.1 also reports the logical
+ * viewport for padded video capture. The live schema lifts older epochs with
+ * a null logicalViewport, retaining their original video geometry.
  *
- * `browser.screencast` is served on `@1.0` (the v1.3.0 release: addressed by
- * `epicId`, no placement handoff) and `@2.0` (the live line). Unlike its
- * sibling `browser.sessions`, the two lines' server and client FRAME unions are
- * identical - the whole divergence is the open request - so there is nothing to
- * lift here and every frame parses against the live schema on both. That is a
- * fact about the frozen contract, not an assumption: `contracts-v1.ts` names
- * exactly what the two lines differ on, and the protocol's own
- * `browser-contracts-v1-line` suite pins it.
- *
- * The open request is projected per session rather than per client, off the
- * version this session negotiated. Every viewer opens its own session (a tile,
- * a PiP mirror, a headless peek) and a reconnect may renegotiate one against a
- * new host incarnation, so a client-wide answer would describe some other
- * viewer's stream.
- *
- * The `independent` scope is pinned to `@2` instead of projected: `@1` can only
- * address an epic, and there is no honest epic to name for the device's
- * epic-less inventory - see {@link subscribeAtScopeAddressedBrowserVersion}.
+ * Epic requests are projected per negotiated session. Independent requests
+ * negotiate the newest scope-addressed minor; a @1 host refuses their strict
+ * scope-shaped params rather than serving another inventory.
  */
 export class BrowserScreencastStreamClient {
   private readonly session: IStreamSession;
@@ -88,6 +75,13 @@ export class BrowserScreencastStreamClient {
 
   sendClientFrame(frame: BrowserScreencastClientFrame): void {
     if (this.closed) return;
+    const version = this.session.getNegotiatedSchemaVersion();
+    if (
+      frame.kind === "viewport" &&
+      version !== null &&
+      (version.major > 2 || (version.major === 2 && version.minor >= 1))
+    )
+      return;
     this.session.sendClientFrame(frame, null);
   }
 

@@ -1,10 +1,13 @@
 import { useMemo, type ReactNode } from "react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import { hostIsLocalForLoginAutoOpen } from "@/components/providers/provider-signin-availability";
 import { AddProviderProfileDialog } from "@/components/settings/panels/add-provider-profile-dialog";
-import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
-import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 
 export function ProviderProfileAddFlowHost(): ReactNode {
   const harnessId = useProviderProfileAddFlowStore((state) => state.harnessId);
@@ -43,6 +46,13 @@ function ProviderProfileAddFlowSession({
 }): ReactNode {
   const close = useProviderProfileAddFlowStore((state) => state.close);
   const client = useHostClientForHostId(hostId);
+  const directory = useHostDirectoryList();
+  const defaultActiveHostId = useAddressableHostId();
+  const isLocalHost = hostIsLocalForLoginAutoOpen(
+    directory.data ?? [],
+    hostId,
+    defaultActiveHostId,
+  );
   const providersQuery = useProvidersListForClient(client, {
     enabled: true,
     subscribed: true,
@@ -63,6 +73,7 @@ function ProviderProfileAddFlowSession({
       key={state.providerId}
       state={state}
       client={client}
+      isLocalHost={isLocalHost}
       open
       onOpenChange={(open) => {
         if (!open) close();

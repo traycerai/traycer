@@ -1,4 +1,9 @@
 import type {
+  BrowserViewportIntent,
+  BrowserViewportState,
+  BrowserViewportGeometry,
+} from "@traycer/protocol/host/browser/viewport";
+import type {
   BrowserOpenedTab,
   BrowserSessionInfo,
   BrowserSessionsUxClientFrame,
@@ -40,6 +45,19 @@ import {
 } from "@/lib/browser-view/pip/pip-store";
 
 export interface BrowserSessionsState {
+  readonly viewports: Readonly<Partial<Record<string, BrowserViewportState>>>;
+  readonly setViewport: (
+    sessionId: string,
+    tabId: string,
+    intent: BrowserViewportIntent,
+  ) => Promise<void>;
+  readonly reportViewport: (input: {
+    readonly sessionId: string;
+    readonly tabId: string;
+    readonly viewerId: string;
+    readonly geometry: BrowserViewportGeometry;
+    readonly claim: boolean;
+  }) => void;
   readonly hostId: string | null;
   readonly lifecycle: BrowserSessionsLifecycle;
   /** True only after the current stream incarnation supplied its full snapshot. */
@@ -631,6 +649,7 @@ function createBrowserSessionsCoordinator(args: {
   const pendingCloses: PendingRequests<void> = new Map();
   const pendingAttaches: PendingRequests<void> = new Map();
   const pendingMoves: PendingRequests<void> = new Map();
+  const pendingViewports: PendingRequests<void> = new Map();
   const pendingOpens: PendingRequests<BrowserOpenedTab> = new Map();
   const pendingPreviews: PendingRequests<BrowserTabPreview> = new Map();
   const runtimes = new Map<symbol, BrowserSessionsCoordinatorRuntime>([
@@ -653,6 +672,7 @@ function createBrowserSessionsCoordinator(args: {
     patch: Partial<
       Pick<
         BrowserSessionsState,
+        | "viewports"
         | "canMaterializeElectron"
         | "connectionGeneration"
         | "errorMessage"
@@ -749,6 +769,31 @@ function createBrowserSessionsCoordinator(args: {
       tabId,
     }));
 
+  const setViewport = (
+    sessionId: string,
+    tabId: string,
+    intent: BrowserViewportIntent,
+  ): Promise<void> =>
+    sendRequest(pendingViewports, ATTACH_TAB_TIMEOUT_MS, (requestId) => ({
+      kind: "setViewport",
+      hasBinaryPayload: false,
+      requestId,
+      sessionId,
+      tabId,
+      intent,
+    }));
+
+  const reportViewport: BrowserSessionsState["reportViewport"] = (input) => {
+    if (session === null || lifecycle !== "live") return;
+    const { geometry, ...identity } = input;
+    session.send({
+      kind: "reportViewport",
+      hasBinaryPayload: false,
+      ...identity,
+      ...geometry,
+    });
+  };
+
   const openTab = (
     sessionId: string | null,
     url: string,
@@ -774,6 +819,7 @@ function createBrowserSessionsCoordinator(args: {
     rejectPendingRequests(pendingCloses, closed);
     rejectPendingRequests(pendingAttaches, closed);
     rejectPendingRequests(pendingMoves, closed);
+    rejectPendingRequests(pendingViewports, closed);
     rejectPendingRequests(pendingOpens, closed);
     rejectPendingRequests(pendingPreviews, closed);
   };
@@ -795,6 +841,7 @@ function createBrowserSessionsCoordinator(args: {
       removeOwnedElectronTabBindings(tabBindingOwner);
     }
     patchState({
+      viewports: next === "live" && wasLive ? coordinator.state.viewports : {},
       lifecycle: next,
       inventoryReady: next === "live" && coordinator.state.inventoryReady,
       errorMessage,
@@ -837,13 +884,30 @@ function createBrowserSessionsCoordinator(args: {
   };
 
   const onFrame = (frame: BrowserSessionsUxServerFrame): void => {
+    if (frame.kind === "viewportState") {
+      const current = coordinator.state.viewports[frame.tabId];
+      if (current !== undefined && current.revision > frame.revision) return;
+      const { kind: _kind, hasBinaryPayload: _binary, ...viewport } = frame;
+      patchState({
+        viewports: { ...coordinator.state.viewports, [frame.tabId]: viewport },
+      });
+      return;
+    }
     handleBrowserSessionsFrame({
       frame,
       scope: args.scope,
       hostId: args.owner.hostId,
       setItems: (items) => {
+        const tabIds = new Set(
+          items.flatMap((item) => item.tabs.map((tab) => tab.tabId)),
+        );
         patchState({
           items,
+          viewports: Object.fromEntries(
+            Object.entries(coordinator.state.viewports).filter(([tabId]) =>
+              tabIds.has(tabId),
+            ),
+          ),
           inventoryReady:
             frame.kind === "snapshot" || coordinator.state.inventoryReady,
         });
@@ -851,6 +915,7 @@ function createBrowserSessionsCoordinator(args: {
       pendingCloses,
       pendingAttaches,
       pendingMoves,
+      pendingViewports,
       pendingOpens,
       pendingPreviews,
       presenters: selectBrowserSessionsPresenters(runtimes),
@@ -928,6 +993,9 @@ function createBrowserSessionsCoordinator(args: {
       // every value the allocator hands out.
       connectionGeneration: 0,
       items: [],
+      viewports: {},
+      setViewport,
+      reportViewport,
       errorMessage: null,
       retry: restart,
       openTab,
@@ -1018,6 +1086,7 @@ function handleBrowserSessionsFrame(args: {
   readonly pendingCloses: PendingRequests<void>;
   readonly pendingAttaches: PendingRequests<void>;
   readonly pendingMoves: PendingRequests<void>;
+  readonly pendingViewports: PendingRequests<void>;
   readonly pendingOpens: PendingRequests<BrowserOpenedTab>;
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly presenters: readonly BrowserSessionsPresenter[];
@@ -1040,6 +1109,7 @@ function handleBrowserSessionsFrame(args: {
         args.pendingCloses,
         args.pendingAttaches,
         args.pendingMoves,
+        args.pendingViewports,
       ]);
       return;
     case "openTabResult":
@@ -1062,6 +1132,8 @@ function handleBrowserSessionsFrame(args: {
       return;
     case "tabOpened":
       surfaceTabOpenedFrame(frame, args.scope, args.hostId, args.presenters);
+      return;
+    case "viewportState":
       return;
     case "burstStarted":
     case "burstEnded":

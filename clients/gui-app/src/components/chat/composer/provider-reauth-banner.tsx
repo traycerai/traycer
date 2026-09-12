@@ -32,6 +32,10 @@ import {
   useProviderProfileLoginFlow,
   type ProviderProfileLoginFlow,
 } from "@/components/settings/panels/use-provider-profile-login-flow";
+import {
+  openBrowserLabel,
+  useAutoOpenLoginUrl,
+} from "@/components/settings/panels/use-auto-open-login-url";
 import { waitingStepCopy } from "@/components/settings/panels/waiting-step-copy";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -52,6 +56,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
+  providerLoginIsRemoteSafe,
   providerSupportsTerminalLogin,
   providerTerminalLoginPackBlock,
 } from "@/components/providers/provider-signin-availability";
@@ -274,7 +279,10 @@ function deriveLoginOptions(
   // guessing here instead stripped the OAuth option from the banner of the one
   // provider it was meant to serve. (The terminal row above has no such
   // constraint - a TUI is what it is for.)
-  const canOauth = !canTerminalLogin && isLocalHost && oauthArgs !== null;
+  const canOauth =
+    !canTerminalLogin &&
+    oauthArgs !== null &&
+    (isLocalHost || providerLoginIsRemoteSafe(loginCapability));
   return {
     envVars,
     canOauth,
@@ -488,6 +496,7 @@ function ReauthBannerInner({
           providerId={providerId}
           providerLabel={providerLabel}
           loginCapability={state?.loginCapability ?? null}
+          isLocalHost={isLocalHost}
         />
       ) : null}
       {terminalRow.kind === "button" ? (
@@ -590,10 +599,12 @@ function OAuthReauthForm({
   providerId,
   providerLabel,
   loginCapability,
+  isLocalHost,
 }: {
   readonly providerId: ProviderId;
   readonly providerLabel: string;
   readonly loginCapability: ProviderLoginCapability | null;
+  readonly isLocalHost: boolean;
 }) {
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useProvidersAwaitLogin();
@@ -630,6 +641,8 @@ function OAuthReauthForm({
     return (
       <OAuthWaitingRow
         loginUrl={flow.state.url}
+        userCode={flow.state.userCode}
+        isLocalHost={isLocalHost}
         codePaste={flow.codePaste}
         cancelPending={flow.cancelPending}
         cancelDisabled={flow.commitPending}
@@ -681,20 +694,123 @@ function OAuthReauthForm({
 // Compact counterpart of `AddProfileWaitingStep`: one browser-approval status
 // with code paste available as a conditional fallback. The same field, copy,
 // restart notice, and mutation-derived status are shared across all surfaces.
+function OAuthWaitingDetails(props: {
+  readonly processingCode: boolean;
+  readonly userCode: string | null;
+  readonly loginUrl: string | null;
+  readonly autoOpen: boolean;
+  readonly copied: boolean;
+  readonly copy: (value: string) => void;
+  readonly codePaste: ProviderProfileLoginFlow["codePaste"];
+  readonly openLink: (url: string, kind: "auth", event: null) => Promise<void>;
+}): ReactNode {
+  const {
+    processingCode,
+    userCode,
+    loginUrl,
+    autoOpen,
+    copied,
+    copy,
+    codePaste,
+    openLink,
+  } = props;
+  return (
+    <>
+      {processingCode || userCode === null ? null : (
+        <div className="flex items-center gap-1.5 pl-5">
+          <code className="rounded-md border border-border/60 bg-foreground/5 px-2 py-0.5 font-mono text-ui tracking-[0.12em] text-foreground">
+            {userCode}
+          </code>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
+            onClick={() => copy(userCode)}
+          >
+            {copied ? (
+              <Check className="size-3.5" />
+            ) : (
+              <Copy className="size-3.5" />
+            )}
+          </Button>
+        </div>
+      )}
+      {processingCode || loginUrl === null ? null : (
+        <div className="flex items-center gap-1.5 pl-5">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              void openLink(loginUrl, "auth", null);
+            }}
+          >
+            <ExternalLink className="size-3.5" />
+            {openBrowserLabel(autoOpen)}
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
+            onClick={() => copy(loginUrl)}
+          >
+            {copied ? (
+              <Check className="size-3.5" />
+            ) : (
+              <Copy className="size-3.5" />
+            )}
+          </Button>
+        </div>
+      )}
+      {codePaste.enabled && userCode === null ? (
+        <div className="border-t border-border/50 pt-2.5">
+          {processingCode ? null : (
+            <div className="mb-2">
+              <p className="text-ui-xs font-medium text-foreground">
+                Didn&apos;t return automatically?
+              </p>
+              <p className="mt-0.5 text-ui-xs text-muted-foreground">
+                If the browser shows a code, paste it here.
+              </p>
+            </div>
+          )}
+          <CodePasteField
+            key={codePaste.attemptId}
+            codePaste={codePaste}
+            disabled={false}
+            visibleLabel={false}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function OAuthWaitingRow({
   loginUrl,
+  userCode,
+  isLocalHost,
   codePaste,
   cancelPending,
   cancelDisabled,
   onCancel,
 }: {
   readonly loginUrl: string | null;
+  readonly userCode: string | null;
+  readonly isLocalHost: boolean;
   readonly codePaste: ProviderProfileLoginFlow["codePaste"];
   readonly cancelPending: boolean;
   readonly cancelDisabled: boolean;
   readonly onCancel: () => void;
 }) {
   const openLink = useOpenLink();
+  const autoOpen = useAutoOpenLoginUrl(
+    isLocalHost,
+    userCode,
+    loginUrl,
+    (url) => {
+      void openLink(url, "auth", null);
+    },
+  );
   const { copied, copy } = useClipboardCopy({
     resetMs: 1600,
     onSuccess: null,
@@ -705,6 +821,7 @@ function OAuthWaitingRow({
     phase: codePaste.phase,
     queuePending: false,
     cancelRequested: false,
+    deviceCode: userCode !== null,
   });
   return (
     <div className="flex flex-col gap-2.5" aria-live="polite">
@@ -722,52 +839,16 @@ function OAuthWaitingRow({
           ) : null}
         </div>
       </div>
-      {!processingCode && loginUrl !== null ? (
-        <div className="flex items-center gap-1.5 pl-5">
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => {
-              void openLink(loginUrl, "auth", null);
-            }}
-          >
-            <ExternalLink className="size-3.5" />
-            Open browser again
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-            onClick={() => copy(loginUrl)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
-        </div>
-      ) : null}
-      {codePaste.enabled ? (
-        <div className="border-t border-border/50 pt-2.5">
-          {!processingCode ? (
-            <div className="mb-2">
-              <p className="text-ui-xs font-medium text-foreground">
-                Didn&apos;t return automatically?
-              </p>
-              <p className="mt-0.5 text-ui-xs text-muted-foreground">
-                If the browser shows a code, paste it here.
-              </p>
-            </div>
-          ) : null}
-          <CodePasteField
-            key={codePaste.attemptId}
-            codePaste={codePaste}
-            disabled={false}
-            visibleLabel={false}
-          />
-        </div>
-      ) : null}
+      <OAuthWaitingDetails
+        processingCode={processingCode}
+        userCode={userCode}
+        loginUrl={loginUrl}
+        autoOpen={autoOpen}
+        copied={copied}
+        copy={copy}
+        codePaste={codePaste}
+        openLink={openLink}
+      />
       <div className="flex justify-end">
         <Button
           size="sm"

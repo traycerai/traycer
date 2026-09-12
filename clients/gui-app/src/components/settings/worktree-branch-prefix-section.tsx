@@ -8,6 +8,7 @@ import {
   DEFAULT_WORKTREE_BRANCH_PREFIX,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
+import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix-validation";
 import { pickFriendlyBranchSuffix } from "@/lib/worktree/random-friendly-name";
@@ -187,7 +188,12 @@ export function WorktreeBranchPrefixSection(): ReactNode {
 
   return (
     <div className="overflow-hidden rounded-lg border border-border/60 bg-card/40">
+      {/* Hand-built rather than a `SettingsRow`: the input and its live
+          preview sentence share a line the primitive does not offer. It still
+          reads its label and anchor from its definition, so it writes the
+          attribute settings search looks for itself. */}
       <div
+        data-settings-anchor={GENERAL.definitions.branchPrefix.anchor}
         className={cn(
           "flex flex-wrap items-center gap-3.5 px-3.5 py-2.5",
           SETTINGS_ROW_STACK.container,
@@ -196,7 +202,7 @@ export function WorktreeBranchPrefixSection(): ReactNode {
         <div className={cn("min-w-0 flex-1", SETTINGS_ROW_STACK.label)}>
           <div className="flex items-center gap-2">
             <span className="text-ui-sm font-medium text-foreground">
-              Default branch prefix
+              {GENERAL.definitions.branchPrefix.label}
             </span>
           </div>
           {/* One line beside the input from `md` up; below it the row is a

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
+import { BrandEntrance } from "@/components/auth/brand-entrance";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import {
   HOST_PROGRESS_IDLE_HEADING,
@@ -40,8 +41,8 @@ export interface BootstrapLogDisclosureProps {
  * Exported separately from {@link LocalHostLoadingContent} because the two are
  * true in different states. The log affordance is the one thing that lets a
  * user take a stuck startup somewhere else, so it belongs on the FAILED arm as
- * well - while the spinner and the progress heading belong only to a start that
- * is actually in progress. Composing it beside the failure diagnostics is how
+ * well - while the progress heading and bar belong only to a start that is
+ * actually in progress. Composing it beside the failure diagnostics is how
  * the failed arm gets the log without the "Starting local Traycer Host…" lie,
  * and it keeps `LocalHostLoadingContent`'s one-purpose rule intact rather than
  * regrowing the second face P3.4 deleted.
@@ -147,8 +148,9 @@ export interface LocalHostLoadingContentProps {
 }
 
 /**
- * The host-boot body: spinner + heading, the progress bar, and the
- * bootstrap-log disclosure (with the "Configure shell…" shortcut).
+ * The host-boot body: brand entrance, heading, a progress bar while the running
+ * stage reports a percentage, and the bootstrap-log disclosure (with the
+ * "Configure shell…" shortcut).
  * Deliberately has no outer chrome (no `min-h-svh` wrapper, no `<AppHeader>`,
  * no `<Card>`) so its caller provides its own bounded layout.
  *
@@ -161,16 +163,17 @@ export interface LocalHostLoadingContentProps {
  * body on the arm where they are true. A body with no branch cannot disagree
  * with the surface it sits in about what is happening.
  *
- * ONE HEIGHT, whatever the lane has said. Every member of this body is drawn
- * on every call - `progress: null` (no lane yet) draws the idle heading over
- * an indeterminate bar, a reporting lane draws its heading over a filling
- * bar - so the same body serves the two boot surfaces BEFORE the narrator
- * (`HostBootSurface`) and the narrator's healthy face itself, and the card is
- * one box from the first frame of a launch until a lane finishes. It used to
- * add the bar (and a lane-detail line) only once a lane reported, which made
- * the card grow mid-wait; on a centred card that moves both edges, and it was
- * reported after a real install as "3-4 different modals … the UI feels jumpy
- * when the modal size keeps changing".
+ * ONE ACTIVITY SIGNAL. The shimmering mark is what says the card is busy, and
+ * the heading says what it is busy with - so there is no spinner, and no bar
+ * without a position. `progress: null` (no lane yet) draws the idle heading
+ * alone; a lane draws its own heading, plus the progress bar only while its
+ * stage reports a measured percentage (the host download). A stage that
+ * reports none - `verify`, `swap`, `service-start`, anything added later - is
+ * the heading alone too: a bar with no position is a second "busy" signal that
+ * says nothing the mark does not. The same body serves the two boot surfaces
+ * BEFORE the narrator (`HostBootSurface`) and the narrator's healthy face
+ * itself, so every healthy wait is one card. The price is that the card
+ * changes height when a percentage starts or stops arriving.
  *
  * NO LANE-DETAIL LINE. `HostProgressView.detail` is the lane's own message -
  * "extracting host archive into ~/.traycer/…/staging", "atomically replacing
@@ -184,35 +187,36 @@ export function LocalHostLoadingContent(
   props: LocalHostLoadingContentProps,
 ): ReactNode {
   const progressView = props.progress;
+  const percent = progressView?.percent ?? null;
 
   return (
     <LocalHostBodyShell>
-      {/* THE ONE HEADING this surface has, and the spinner belongs TO it.
-          The healthy startup card renders no dialog title above this body
-          anymore - the old modal put "Setting up Traycer" 2px above this
-          line's "Setting up Traycer Host…" above the bar's "Setting up…", one
-          event announced three times by three layers.
+      <BrandEntrance size="boot">
+        <p className="brand-entrance-copy font-heading text-title-xs font-medium tracking-tight text-foreground">
+          traycer
+        </p>
+      </BrandEntrance>
+      {/* THE ONE HEADING this surface has. The healthy startup card renders
+          no dialog title above this body, and the bar below carries only a
+          position, so this line is the single voice for the event.
 
           Drawn through the SHARED boot headline so this phase is
           pixel-identical to the two boot surfaces before it (see
-          `HostBootCard`): a launch crosses three React trees, and the spinner
-          used to jump from small-and-muted-and-centred to
-          large-and-foreground-on-its-own-line as it did. The COPY still comes
-          from D10's shared table. */}
+          `HostBootCard`): a launch crosses three React trees. No spinner - the
+          mark above is the card's activity signal. The COPY comes from the
+          shared host-progress table. */}
       <HostBootHeadline
         message={progressView?.heading ?? HOST_PROGRESS_IDLE_HEADING}
-        spinnerVariant="sparkle"
-        spinnerTestId="local-host-loading-spinner"
+        spinnerVariant={null}
+        spinnerTestId={null}
         messageTestId="local-host-loading-stage"
       />
-      {/* THE CONTRACT, not a special case: no measured position => indeterminate.
-          That covers a lane that reports no percentage (`verify`, `swap`,
-          `service-start`, anything added later) AND the wait before any lane
-          has spoken - both are "busy, position unknown", which is exactly what
-          an indeterminate `progressbar` means. The block is the CURRENT
-          stage's, not "the download's": it stopped being that the moment the
-          carry-forward was scoped to one stage. */}
-      <HostProgress percent={progressView?.percent ?? null} />
+      {/* THE CONTRACT: a bar only with a measured position. No lane, or a
+          stage that reports no percentage, draws nothing here - the heading
+          already says what is happening, and the mark already says it is
+          happening. The percentage is the CURRENT stage's, never carried
+          forward from an earlier one. */}
+      {percent === null ? null : <HostProgress percent={percent} />}
       <BootstrapLogDisclosure
         onConfigureShell={props.onConfigureShell}
         trailing={props.footerTrailing}
@@ -222,23 +226,15 @@ export function LocalHostLoadingContent(
 }
 
 interface HostProgressProps {
-  /** `null` while nothing has a measured position - see the contract above. */
-  readonly percent: number | null;
+  /** The running stage's measured position, 0-100. */
+  readonly percent: number;
 }
 
 /**
- * The boot card's ONE progress bar: determinate when the running stage
- * reports a percentage, indeterminate otherwise - and present on EVERY wait
- * face, the idle "Starting Traycer…" included.
- *
- * WHY IT RENDERS AT ALL WITHOUT A NUMBER. Before this, the block was gated on
- * `percent !== null`, so at a stage transition the whole thing unmounted and the
- * card lost 48px - and because the modal is centred with `-translate-y-1/2`, both
- * of its edges moved 24px and the whole dialog jumped mid-install. Measured, on
- * the one surface this epic exists to fix. Holding the space is the point - and
- * it now holds it from the first frame of the launch (see
- * `LocalHostLoadingContent`), because a bar that appeared when the lane began
- * reporting was the same jump one phase earlier.
+ * The boot card's ONE progress bar, and it is always determinate: the body
+ * mounts it only while the running stage reports a percentage (see the
+ * contract in `LocalHostLoadingContent`), so it never has to draw a position
+ * nobody measured.
  *
  * NO BYTES. This row used to carry "100 MB of 239 MB" beside the percentage.
  * On a card that is on screen the moment the app opens, a byte count reads as
@@ -247,19 +243,17 @@ interface HostProgressProps {
  * transfer figures stay in the shared table (`HostProgressView.transferLabel`)
  * for Settings ▸ Host, where a user has gone looking for them.
  *
- * ⚠ AND IT MUST NOT HIDE A STALL. It cannot: stall detection is entirely the
- * staged wait's (`LOCAL_HOST_SLOW_START_THRESHOLD_MS` and
- * `laneProgressAdvanceKey`), which reads the lane's POSITION and promotes to the
- * Retry surface on its own clock. A genuinely wedged extract still gets there
- * while this animates. The two mechanisms compose and neither is load-bearing for
- * the other - worth knowing before anyone "fixes" this bar to stop after a while.
+ * ⚠ STALL DETECTION IS NOT THIS BAR'S JOB. It is entirely the staged wait's
+ * (`LOCAL_HOST_SLOW_START_THRESHOLD_MS` and `laneProgressAdvanceKey`), which
+ * reads the lane's POSITION and promotes to the Retry surface on its own
+ * clock - a download frozen at one percentage still gets there, and so does a
+ * stage that draws no bar at all. The two mechanisms compose and neither is
+ * load-bearing for the other.
  */
 function HostProgress(props: HostProgressProps) {
-  const indeterminate = props.percent === null;
   return (
     <div
       data-testid="local-host-download-progress"
-      data-indeterminate={indeterminate ? "true" : "false"}
       // `items-center`: the figure below the track centres, like everything
       // else on this card (heading above, footer below). A right-aligned
       // figure with nothing on its left - which is what dropping the byte
@@ -270,54 +264,25 @@ function HostProgress(props: HostProgressProps) {
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
-        // Omitted while indeterminate, which is what the ARIA role means by it -
-        // a `progressbar` with no `aria-valuenow` is announced as busy with an
-        // unknown position, rather than as a specific amount done.
-        aria-valuenow={props.percent ?? undefined}
-        // Thin, fully rounded, and CLIPPED: `overflow-hidden` is what keeps
-        // the sweeping segment (which travels from -100% to +340% of its own
-        // width) inside the track's rounded ends, and the track is `w-full`
-        // of the body column, so it can never run past the card's padding.
-        // The track's fill is an alpha of the foreground, which survives
-        // every preset theme on a raised surface (see AGENTS.md).
+        aria-valuenow={props.percent}
+        // Thin, fully rounded, and CLIPPED: `overflow-hidden` keeps the fill
+        // inside the track's rounded ends at small percentages, and the track
+        // is `w-full` of the body column, so it can never run past the card's
+        // padding. The track's fill is an alpha of the foreground, which
+        // survives every preset theme on a raised surface (see AGENTS.md).
         className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/8"
       >
-        {indeterminate ? (
-          // A SWEEPING SEGMENT, not a pulsing full-width fill: a full bar reads as
-          // finished however it is animated, which is the exact lie the scoped
-          // carry-forward removed. `w-2/5` + a translate keeps it obviously
-          // partial. `animation` inline because the keyframe is app CSS
-          // (`index.css`) and there is no utility for it.
-          <div
-            data-testid="local-host-progress-indeterminate"
-            className="h-full w-2/5 rounded-full bg-primary"
-            style={{
-              animation:
-                "host-progress-indeterminate 1.4s ease-in-out infinite",
-            }}
-          />
-        ) : (
-          <div
-            className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
-            style={{ width: `${String(props.percent)}%` }}
-          />
-        )}
+        <div
+          className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+          style={{ width: `${String(props.percent)}%` }}
+        />
       </div>
-      {/* The percentage ONLY, under the track. This slot used to sit above
-          the bar and fall back to the stage's short label ("Setting up…"),
-          which merely repeated the heading two lines up in fewer words - the
-          third of the three "Setting up"s - and later carried the byte count
-          (see above). The row keeps its height either way so a percentage
-          appearing at the download stage does not bounce the centred card,
-          and `tabular-nums` keeps "9%" -> "10%" from shifting as it counts.
-
-          `min-h-[1lh]`, not a fixed `min-h-4`: the reserved slot is exactly
-          one line OF THIS ROW, so it follows `text-ui-xs`'s line height
-          instead of restating today's value of it in `rem` - the two agree
-          now and a token change is where they would stop. The unit is
-          already used across the composer surfaces. */}
-      <div className="flex min-h-[1lh] items-center justify-center text-ui-xs text-muted-foreground tabular-nums">
-        {indeterminate ? null : <span>{props.percent}%</span>}
+      {/* The percentage ONLY, under the track - never the stage's short label
+          ("Setting up…"), which would repeat the heading two lines up in
+          fewer words. `tabular-nums` keeps "9%" -> "10%" from shifting as it
+          counts. */}
+      <div className="flex items-center justify-center text-ui-xs text-muted-foreground tabular-nums">
+        <span>{props.percent}%</span>
       </div>
     </div>
   );
@@ -334,7 +299,7 @@ interface DetailsDisclosureProps {
 /**
  * Tucks the bootstrap.log tail and the "Configure shell…" affordance
  * behind a single text toggle. The default loading card stays clean
- * (spinner + heading + optional Retry); users only see logs and the
+ * (mark + heading); users only see logs and the
  * shell-settings shortcut when they explicitly ask.
  */
 function DetailsDisclosure(props: DetailsDisclosureProps) {

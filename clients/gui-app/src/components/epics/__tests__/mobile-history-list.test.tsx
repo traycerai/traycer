@@ -667,7 +667,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Local only epic needs a newer host on the connected device; it is stored there",
+        name: "Pinning Local only epic needs a newer Traycer host",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 
@@ -686,7 +686,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only the connected device's edits remain",
+        name: "Pinning Orphaned epic is unavailable; the task was deleted and only its unsynced edits remain",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 
@@ -737,7 +737,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       const unavailable = await screen.findByTestId("epics-list-unavailable");
       expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
       expect(screen.queryByTestId("epics-list-unavailable-retry")).toBeNull();
-      expect(unavailable.textContent).toContain("Sign in again");
+      expect(unavailable.textContent).toMatch(/once it is/i);
+      expect(unavailable.textContent).not.toMatch(/sign in again/i);
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
     });
 
@@ -1304,6 +1305,114 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       fireTouchEnd(scroller);
 
       expect(testState.refetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("row provenance", () => {
+    it("renders the preserved-orphan provenance glyph with an export-oriented label", async () => {
+      testState.items = [
+        historyItem({
+          title: "Orphaned epic",
+          isPreservedOrphan: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const glyph = await screen.findByTestId(
+        "epics-list-row-provenance-preserved-orphan-epic-from-history",
+      );
+      expect(glyph.getAttribute("aria-label")).toMatch(/export/i);
+    });
+
+    it("renders the local-only provenance glyph for a local-home row", async () => {
+      testState.items = [
+        historyItem({
+          title: "Local only epic",
+          isLocalHome: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      expect(
+        await screen.findByTestId(
+          "epics-list-row-provenance-local-only-epic-from-history",
+        ),
+      ).not.toBeNull();
+    });
+
+    it("renders the local-only provenance label as text after the timestamp for a local-home row", async () => {
+      testState.items = [
+        historyItem({
+          title: "Local only epic",
+          isLocalHome: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const label = await screen.findByTestId(
+        "epics-list-row-provenance-label-local-only",
+      );
+      expect(label.textContent).toBe("· Not synced");
+      expect(label.className).toMatch(/\bshrink-0\b/);
+      expect(label.closest(".truncate")).toBeNull();
+
+      const metadataLine = label.parentElement;
+      if (metadataLine === null) {
+        throw new Error("expected the provenance label to have a parent");
+      }
+      expect(metadataLine.className).toMatch(/\bflex\b/);
+
+      const timestamp = label.previousElementSibling;
+      if (timestamp === null) {
+        throw new Error("expected a preceding timestamp sibling span");
+      }
+      expect(timestamp.className).toMatch(/\btruncate\b/);
+      expect(timestamp.textContent).toMatch(/^updated/);
+    });
+
+    it("renders the preserved-orphan provenance label with a destructive tint", async () => {
+      testState.items = [
+        historyItem({
+          title: "Orphaned epic",
+          isPreservedOrphan: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const label = await screen.findByTestId(
+        "epics-list-row-provenance-label-preserved-orphan",
+      );
+      expect(label.textContent).toBe("· Deleted, edits kept");
+      expect(label.className).toMatch(/text-destructive/);
+      expect(label.className).toMatch(/\bshrink-0\b/);
+      expect(label.closest(".truncate")).toBeNull();
+
+      const metadataLine = label.parentElement;
+      if (metadataLine === null) {
+        throw new Error("expected the provenance label to have a parent");
+      }
+      expect(metadataLine.className).toMatch(/\bflex\b/);
+
+      const timestamp = label.previousElementSibling;
+      if (timestamp === null) {
+        throw new Error("expected a preceding timestamp sibling span");
+      }
+      expect(timestamp.className).toMatch(/\btruncate\b/);
+      expect(timestamp.textContent).toMatch(/^updated/);
+    });
+
+    it("renders neither provenance label for an ordinary row carrying no marker", async () => {
+      renderPanel("embedded", "/");
+
+      await screen.findByTestId("epics-list-row-card");
+      expect(
+        screen.queryByTestId("epics-list-row-provenance-label-local-only"),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId(
+          "epics-list-row-provenance-label-preserved-orphan",
+        ),
+      ).toBeNull();
     });
   });
 

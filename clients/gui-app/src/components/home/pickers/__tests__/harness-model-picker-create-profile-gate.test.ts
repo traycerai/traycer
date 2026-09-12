@@ -50,6 +50,28 @@ describe("resolveCreateProfileGate", () => {
     expect(gate.reason).toBeUndefined();
   });
 
+  it("allows creating a profile on a remote host for --device-auth", () => {
+    const gate = resolveCreateProfileGate(false, {
+      oauthArgs: ["login", "--device-auth"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+    });
+    expect(gate.disabled).toBe(false);
+    expect(gate.reason).toBeUndefined();
+  });
+
+  it("allows creating a profile on a remote host for code-paste", () => {
+    const gate = resolveCreateProfileGate(false, {
+      oauthArgs: ["auth", "login"],
+      token: null,
+      codePaste: {},
+      terminalLogin: null,
+    });
+    expect(gate.disabled).toBe(false);
+    expect(gate.reason).toBeUndefined();
+  });
+
   it("still requires a local host when oauthArgs is empty but non-null", () => {
     // The host check is orthogonal and must survive the argv relaxation: an
     // empty argv is a sign-in the HOST performs, so the loopback constraint is
