@@ -4,8 +4,8 @@ import { isDraftsCapabilityMissing } from "./draft-capability";
 
 /**
  * Cloud-chat "absent section, not a broken tab". Any settled list error
- * hides the directory — including free-tier, which arrives as FORBIDDEN
- * (`EpicAccessForbiddenError`), not `FREE_TIER_NO_CLOUD_SYNC`.
+ * hides the directory — including an access refusal, which arrives as
+ * FORBIDDEN (`EpicAccessForbiddenError`).
  */
 export function cloudDraftsDirectoryIsVisible(input: {
   readonly scopeId: string | null;

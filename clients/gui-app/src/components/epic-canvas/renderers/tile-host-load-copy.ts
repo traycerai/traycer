@@ -61,6 +61,29 @@ const DEAD_MESSAGE: Record<
 };
 
 /**
+ * How tile copy names a host: its label, quoted, or "the host" when the
+ * directory has not resolved a label, instead of printing a raw uuid at a
+ * person. Shared with the chat tile's pre-content copy, so a chat and every
+ * other tile name one host the same way.
+ */
+export function tileHostName(hostLabel: string | null): string {
+  return hostLabel === null ? "the host" : `"${hostLabel}"`;
+}
+
+/**
+ * The dead-lease sentence on its own, for a surface that decides its own arms
+ * (the chat tile's pre-content presentation) but must word a dead host exactly
+ * as every other tile does.
+ */
+export function tileDeadMessage(
+  dead: HostLeaseDeadState,
+  noun: string,
+  hostLabel: string | null,
+): string {
+  return DEAD_MESSAGE[dead.reason](noun, tileHostName(hostLabel));
+}
+
+/**
  * The sentence for one bounded load state. Asserted directly by the S1-S6
  * catalog suite: "no spinner is on screen" passes vacuously when nothing
  * rendered at all, and that is the exact shape an empty mount produces, so
@@ -70,9 +93,7 @@ export function tileHostLoadMessage(
   load: Exclude<BoundedHostLoad, { kind: "ready" }>,
   noun: string,
 ): string {
-  // `null` means the directory has not resolved a label, so the sentence says
-  // "the host" instead of printing a raw uuid at a person.
-  const named = load.hostLabel === null ? "the host" : `"${load.hostLabel}"`;
+  const named = tileHostName(load.hostLabel);
   switch (load.kind) {
     case "connecting":
       return `Waiting for ${named} to start…`;

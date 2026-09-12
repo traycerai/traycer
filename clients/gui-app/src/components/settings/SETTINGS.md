@@ -234,7 +234,7 @@ different answers:
 - **Gated on DATA** ("Detected dev origins" and its Browser card, which render
   only once a terminal has printed a local URL; the start page's Wallpaper
   effect, Effect strength and Tint rows, which render only once a wallpaper is
-  chosen and each only for the effects it adjusts) — `contributesTo: "page"`.
+  chosen, and Tint only for the effect it adjusts) — `contributesTo: "page"`.
   No shell can promise the row, so no shell offers it. "Detected dev origins"
   shipped as a result that navigated to General and lit nothing.
 - **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
@@ -1072,26 +1072,60 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     `useThemeRevision()` (`providers/use-theme-revision.ts`) rather than to
     the mode/preset fields, because a custom theme repaints the cascade
     without changing either.
+    The group's last row is **Background opacity** (`glassOpacity`, 30..100),
+    which the applier writes as `--glass-opacity` for the glass surfaces in
+    `styles/theme-surfaces.css`. It is the one row in this group with a search
+    anchor (`appearance-background-opacity`); the rest of the theme library has
+    no stable per-row target, so its vocabulary rides on the Appearance page
+    entry's keywords instead.
   - **Start page** (`start-page-settings-section.tsx`): the personal landing
     backdrop. Plain rows only, like every other group here - the start page
     itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose
     image..." + Remove; secondary text is the stored file name, "Custom image"
     when the image has no stored name, or "None" when no image is loaded),
-    Wallpaper effect (segmented Photo / Dot pattern / Film grain, only once
+    Traycer team curated wallpapers (the tile gallery, below), Wallpaper
+    effect (segmented Photo / Dot pattern / Film grain, only once
     a wallpaper is set), Effect strength (0..100 range input with Subtle /
-    Strong endpoints, only for dot pattern and film grain), Tint wallpaper
+    Strong endpoints, for every effect: it sets the neutral veil behind the
+    composer, and for dot pattern and film grain the texture as well), Tint wallpaper
     with theme accent color (`Switch`, dot pattern only; off dithers each RGB channel on its
     own so the image keeps its own colours), Greeting and
     Recent tasks (`showGreeting` / `showRecentHistory` switches). The style,
-    intensity, tint and the chosen file's `name` all live in the settings store
-    (`startPageWallpaper`); the bytes live only in the appearance blob store.
+    intensity, tint, the chosen file's `name` and the `curatedId` all live in
+    the settings store (`startPageWallpaper`); the bytes live only in the
+    appearance blob store.
     `lib/appearance/start-page-wallpaper.ts` owns one entry point per user
-    action (`chooseStartPageWallpaper` / `removeStartPageWallpaper`), and each
+    action (`chooseStartPageWallpaper` / `applyCuratedStartPageWallpaper` /
+    `removeStartPageWallpaper`), and each
     writes BOTH stores - that is what keeps a name from outliving the bytes it
     describes, and is why the name can be an ordinary settings field rather
     than a `File` subclass smuggled through IndexedDB. The start
     page's own `Paintbrush` button opens this panel - there is no separate
     appearance editor.
+    - **Curated wallpapers.** A small set we host, catalogued by a remote
+      manifest (`lib/appearance/curated-wallpapers.ts`) so adding one needs no
+      app release.
+      The row's control is a fluid tile grid plus a `RefreshCw` ghost icon
+      button; the manifest is a `useQuery` held at `staleTime: Infinity` and
+      refetched only by that button, and nothing about it is persisted.
+      Tiles show the manifest's thumbnails through a plain `<img>`; only an
+      apply downloads the full image, verifies its SHA-256, and stores it in
+      the same single blob slot a custom pick uses.
+      Bytes already inside the stored budget (4 MiB, 2560 px edge) are kept
+      verbatim - they were encoded for it when published - and anything over it
+      goes through `processStartPageWallpaperImage`.
+      Apply is a `useMutation` keyed by
+      `appearanceMutationKeys.applyCuratedWallpaper()`, and the spinning tile is
+      read back off that key with `useMutationState` rather than from component
+      state: the abort controller for an apply lives at module scope in
+      `start-page-wallpaper.ts`, so a download outlives the panel and a reopened
+      panel has to be able to find it again.
+      A second tile, a custom pick, or Remove aborts an apply in flight - last
+      action wins, and an aborted apply writes no settings row and reports
+      nothing.
+      `curatedId` is what rings the applied tile; an id whose entry has since
+      left the manifest simply rings nothing, and the Wallpaper row keeps
+      showing the title it was applied under.
   - **Interface**: Zoom (`DesktopZoomSettingsRow` - desktop-only, renders
     nothing without a zoom bridge; backed by
     `useRunnerZoomPercentQuery`/`SetMutation`/`ResetMutation` against host/OS

@@ -214,6 +214,7 @@
         "eslint-plugin-react-refresh": "catalog:",
         "fake-indexeddb": "catalog:",
         "jsdom": "catalog:",
+        "lightningcss": "catalog:",
         "prettier": "catalog:",
         "typescript": "catalog:",
         "vite": "catalog:",
@@ -306,7 +307,7 @@
     },
     "protocol": {
       "name": "@traycer/protocol",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "dependencies": {
         "@noble/curves": "^2.4.0",
         "async-mutex": "^0.5.0",
@@ -454,6 +455,7 @@
     "hast-util-sanitize": "^5.0.2",
     "html-to-image": "^1.11.13",
     "jsdom": "^29.1.1",
+    "lightningcss": "^1.33.0",
     "lowlight": "^3.3.0",
     "lucide-react": "^1.40.0",
     "marked": "^17.0.6",
