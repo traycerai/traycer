@@ -15,6 +15,7 @@ import {
   OFFICE_SIGN_LETTER_SPACING_EM,
   OFFICE_SIGN_PADDING_X,
   OFFICE_SIGN_PLATE_MAX_CHARS,
+  nameTagTextThatFits,
   officeBoardText,
   officeBoardWidthPx,
   officeFloorSignsToDraw,
@@ -1503,5 +1504,89 @@ describe("officeSignsToDraw - fixup 6 rule 3: bullpen and solo plates come down 
       expect(drawn).toHaveLength(1);
       expect(drawn[0].text).toBe(expected);
     }
+  });
+});
+
+describe("nameTagTextThatFits - fixup 8 the tag ladder: written, clipped, first word, initials, nothing", () => {
+  /**
+   * The tag's OWN face - `LABEL_FONT` in the renderer, 10px monospace,
+   * untracked and unpadded - not the plate's (bold, tracked, padded) `measure`
+   * above. Every face in the monospace stack advances 0.6em a character, so
+   * ten pixels is six a character with nothing added, which is the same
+   * arithmetic the canvas suite's `modelledTextWidth` uses for this face.
+   */
+  function tagMeasure(text: string): number {
+    return text.length * 6;
+  }
+
+  it("rung 1: returns the name as written when the budget admits it whole", () => {
+    const name = "Alpha Sitter"; // 12 chars * 6px = 72px
+    expect(tagMeasure(name)).toBe(72);
+    expect(
+      nameTagTextThatFits({ name, widthPx: 72, measure: tagMeasure }),
+    ).toBe(name);
+  });
+
+  it("rung 2: clips to an ellipsis when the written name overflows but a 9-character prefix fits", () => {
+    const name = "Orchestrator"; // 12 chars, one word
+    // Written: 72px. Not admitted at 60px.
+    expect(tagMeasure(name)).toBeGreaterThan(60);
+    // "Orchestra…" is 10 chars = 60px, and is the LONGEST prefix (>= 6 kept
+    // characters) this budget admits: "Orchestrat…" (11 chars) is 66px.
+    expect(
+      nameTagTextThatFits({ name, widthPx: 60, measure: tagMeasure }),
+    ).toBe("Orchestra…");
+  });
+
+  it("rung 3: falls to the first word when the written name and every clip overflow", () => {
+    const name = "Alpha Sitter";
+    // 32px admits "Alpha" (5 * 6 = 30) but not "Alpha Sitter" (72) and not
+    // any clip: the narrowest clip this floor allows keeps 6 characters,
+    // "Alpha " -> trimmed to "Alpha" (5, under the floor) the moment the
+    // trailing space is dropped, so rung 2 never has a candidate here.
+    expect(
+      nameTagTextThatFits({ name, widthPx: 32, measure: tagMeasure }),
+    ).toBe("Alpha");
+  });
+
+  it("rung 4: falls to initials when even the first word overflows", () => {
+    const name = "Alpha Sitter";
+    // 16px (one tile at zoom 1): "Alpha" (30) overflows, "AS" (12) fits.
+    expect(
+      nameTagTextThatFits({ name, widthPx: 16, measure: tagMeasure }),
+    ).toBe("AS");
+  });
+
+  it("the six-character floor: a budget that would admit only a five-character clip skips rung 2 and lands on the first word", () => {
+    const name = "Ada Blackwellstein";
+    // Every clip this ladder will TRY keeps at least 6 characters, so its
+    // narrowest candidate is "Ada Bl…" (7 chars) at 42px. A 40px budget
+    // admits nothing narrower than that - a 5-character clip, "Ada B…" at
+    // 36px, would fit, but the floor never offers it - so rung 2 fails
+    // outright and the ladder falls all the way to the first word.
+    expect(
+      nameTagTextThatFits({ name, widthPx: 40, measure: tagMeasure }),
+    ).toBe("Ada");
+  });
+
+  it("never returns a one-letter initials set: a hyphenated single word's lone initial is refused even when it would fit", () => {
+    const name = "team-4-member-1"; // one word: no spaces to split on.
+    // "t" alone is 6px and would fit comfortably at 20px, but a single
+    // initial is not a rung - the ladder has nowhere else to go, so it
+    // returns null rather than a floor of identical single letters.
+    expect(tagMeasure("t")).toBeLessThanOrEqual(20);
+    expect(
+      nameTagTextThatFits({ name, widthPx: 20, measure: tagMeasure }),
+    ).toBeNull();
+  });
+
+  it("a hyphenated single word over a one-tile budget draws no tag at all", () => {
+    const name = "team-6-member-1";
+    // 16px (one tile at zoom 1): the written name overflows, its only "first
+    // word" IS the written name (no rung 3), and its initials are the single
+    // letter "t" (no rung 4 either). Nothing is left to draw.
+    expect(
+      nameTagTextThatFits({ name, widthPx: 16, measure: tagMeasure }),
+    ).toBeNull();
   });
 });

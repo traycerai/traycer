@@ -8203,3 +8203,81 @@ describe("OfficeScene fixup 8c - the book settles with the plan (D66)", () => {
     ).toEqual([]);
   });
 });
+
+describe("OfficeScene fixup 8 - a seated agent's name tag is fitted to its seat", () => {
+  type OfficeLabelDrawable = Extract<OfficeDrawable, { kind: "label" }>;
+
+  it("gives every seated character's label the effective seat's own width, cubby occupants included, and null to a walker (309 Building, lod 2)", () => {
+    const epic = makeTestEpic("triage", 309, 1);
+    // The walker: revealed on a SECOND, playing sync, the same recipe the
+    // canvas suite's `renderWithWalker` uses - it walks in from the door
+    // rather than appearing already seated.
+    const walker = epic.agents.find(
+      (candidate) => epic.statusById.get(candidate.id) !== "archived",
+    );
+    if (walker === undefined) {
+      throw new Error(
+        "expected the 309-agent triage epic to seat at least one non-archived agent",
+      );
+    }
+    const firstWave = epic.agents.filter((person) => person.id !== walker.id);
+    const scene = new OfficeScene(OFFICE_VIEWS.building, null);
+    scene.sync(
+      sceneInput({
+        agents: firstWave,
+        visibleAgentIds: new Set(firstWave.map((person) => person.id)),
+        statusById: epic.statusById,
+      }),
+    );
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
+        statusById: epic.statusById,
+        playing: true,
+      }),
+    );
+
+    const layout = layoutOf(scene);
+    const frame = scene.frame(2, WHOLE_WORLD);
+    const labelByAgentId = new Map<string, OfficeLabelDrawable>();
+    // The Building's own painter interleaves props and characters into one
+    // depth-ordered `world` stream rather than the flat `actors` list a
+    // "layered" painter fills - see `OfficeScene.frame`'s `layered` branch.
+    const drawables: ReadonlyArray<OfficeDrawable> = [
+      ...frame.actors,
+      ...(frame.world ?? []).map((entry) => entry.drawable),
+    ];
+    for (const drawable of drawables) {
+      if (drawable.kind !== "label") continue;
+      if (drawable.ownerAgentId === null) continue;
+      labelByAgentId.set(drawable.ownerAgentId, drawable);
+    }
+
+    // The walker really is still walking in, and its tag carries no fitTiles:
+    // it has left no seat behind to be fitted to.
+    expect(frame.awayAgentIds.has(walker.id)).toBe(true);
+    const walkerLabel = labelByAgentId.get(walker.id);
+    expect(walkerLabel).toBeDefined();
+    expect(walkerLabel?.fitTiles).toBeNull();
+
+    // Every OTHER seated character - the entire rest of the 309-agent
+    // Building - carries its effective seat's own tile width, with at least
+    // one cubby occupant (a one-tile seat) among them.
+    let checkedCubbyOccupant = false;
+    let checkedSeatedAgent = false;
+    for (const [agentId, seat] of layout.desks) {
+      if (agentId === walker.id) continue;
+      if (frame.awayAgentIds.has(agentId)) continue;
+      const label = labelByAgentId.get(agentId);
+      if (label === undefined) continue;
+      checkedSeatedAgent = true;
+      expect(label.fitTiles, `fitTiles for ${agentId}`).toBe(
+        seat.hitTiles.width,
+      );
+      if (seat.hitTiles.width === 1) checkedCubbyOccupant = true;
+    }
+    expect(checkedSeatedAgent).toBe(true);
+    expect(checkedCubbyOccupant).toBe(true);
+  });
+});
