@@ -1910,17 +1910,19 @@ md:top-0`): positioned against the nearest scrollport - the settings
     draws its own icon (`Bot`, or Background's per-kind glyph - a
     host-supervised shell is a `Terminal` whether it is running or held, never
     a pause) and shows activity ON that icon rather than replacing it: the
-    glyph and the count turn `primary`, the glyph shimmers (an opacity sweep),
-    and a filled dot at its corner throws the app's ping ring. A chip is
+    glyph and the count turn `primary`, and the glyph shimmers (an opacity
+    sweep on the shared status clock, never a CSS `animation:`). A chip is
     `[icon] N` at every width - it once printed the word for its state after
     the count (`1 running`) on a container query, and that word said what the
     icon already said, in the place the composer has least room, in a different
     vocabulary per chip; the sentence in the tooltip and the accessible name
-    still carries it. Three channels on the icon rather than one, because a
-    single blink read as idle beside a live PR watcher. The shimmer and the
-    ring share one cycle and one tick of the shared status clock (never a CSS
-    `animation:`), so they read as one pulse; under `prefers-reduced-motion`
-    neither moves and the tones and the corner dot carry it unchanged.
+    still carries it. **Nothing is drawn over the glyph.** A filled dot at its
+    corner throwing the app's ping ring was a third channel for a while; at
+    `size-3.5` the dot lands ON the icon rather than beside it, so the mark
+    meant to say "running" obscured the mark saying which section was running.
+    The tone is what carries the state under `prefers-reduced-motion`, where
+    the sweep holds still - two channels, one of them motionless, and no media
+    query in the chip's own markup.
     A chip prints what its row's own header prints - Files changed
     reads `3  +12 −4`, the file count then the accumulated line counts in the
     panel's added / removed tones, with a zero side omitted and the counts

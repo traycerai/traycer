@@ -94,7 +94,7 @@ describe("composer workspace row chip placement", () => {
     const chip = screen.getByTestId("chat-dock-chip-activeAgents");
     expect(chip.textContent).toBe("2");
     expect(chip.querySelector("[data-chip-working-word]")).toBeNull();
-    expect(chip.querySelector("[data-chip-activity]")).not.toBeNull();
+    expect(chip.querySelector("[data-chip-glyph-shimmer]")).not.toBeNull();
 
     const strip = screen.getByTestId("chat-dock-compact-strip");
     for (const element of [strip, ...strip.querySelectorAll("*")]) {

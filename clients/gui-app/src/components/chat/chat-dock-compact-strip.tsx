@@ -2,7 +2,6 @@ import { useCallback, useRef, type ReactNode } from "react";
 import { Bot, FileDiff, Layers, Terminal, type LucideIcon } from "lucide-react";
 import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
 import { ChatDockCompactChip } from "@/components/chat/chat-dock-compact-chip";
-import { PingRing } from "@/components/ui/ping-ring";
 import {
   STATUS_ANIMATION_PULSE_CADENCE_MS,
   useStatusAnimation,
@@ -45,12 +44,9 @@ const GLYPH_ICONS: Readonly<Record<ChatDockCompactChipGlyph, LucideIcon>> = {
   ...BACKGROUND_KIND_ICONS,
 };
 
-/** Strong enough to read against the composer's own chrome, short of a solid fill. */
-const ACTIVITY_RING_PEAK_OPACITY = 0.75;
-
 /**
- * One sweep per ring cycle, so the glyph and the ring at its corner are one
- * rhythm rather than two beating against each other on a 14px mark.
+ * One sweep a second - slow enough to read as breathing rather than blinking on
+ * a 14px mark, and the cadence the rest of the window's live indicators keep.
  */
 const GLYPH_SHIMMER_CYCLE_MS = 1000;
 
@@ -63,8 +59,8 @@ const GLYPH_SHIMMER_CYCLE_MS = 1000;
 const GLYPH_SHIMMER_TROUGH_OPACITY = 0.35;
 
 /**
- * The sweep: brightest at the top of the cycle - the instant the ring launches
- * - dimmest at its midpoint, on a cosine so neither end is a corner.
+ * The sweep: brightest at the top of the cycle, dimmest at its midpoint, on a
+ * cosine so neither end is a corner.
  */
 function glyphShimmerOpacity(elapsedMs: number): number {
   const phase = (elapsedMs / GLYPH_SHIMMER_CYCLE_MS) % 1;
@@ -75,15 +71,16 @@ function glyphShimmerOpacity(elapsedMs: number): number {
 /**
  * The lit glyph itself, shimmering on the shared status clock.
  *
- * The animated element is the lucide `<svg>`, not a wrapper around it: the
- * wrapper also holds the corner dot, and dimming that with the glyph would take
- * the ring's anchor down with it. `useStatusAnimation` takes an SVG ref for
- * exactly this.
+ * The animated element is the lucide `<svg>` itself, with no wrapper of its
+ * own: the sweep is the only thing drawn on top of the icon now, so there is
+ * nothing for a box around it to hold. `useStatusAnimation` takes an SVG ref
+ * for exactly this.
  *
  * Reduced motion needs no rule here. The hook never subscribes under the
  * preference and clears the inline `opacity` the moment it turns on, so the
- * glyph holds at the full `text-primary` its class gives it - tone and dot
- * intact, sweep gone - which is the fallback the ring makes for itself too.
+ * glyph holds at the full `text-primary` its class gives it - tone intact,
+ * sweep gone - and the chip still says "running" in the tone it shares with
+ * its count.
  */
 function ShimmeringGlyph(props: { readonly icon: LucideIcon }) {
   const ref = useRef<SVGSVGElement | null>(null);
@@ -113,28 +110,25 @@ function ShimmeringGlyph(props: { readonly icon: LucideIcon }) {
  * it for a spinner made two busy chips read as one repeated thing.
  *
  * And it is carried by the icon ALONE, now that the chip prints no word for it:
- * a chip is `[icon] N` at every width. So the glyph says it three ways at once
- * - `text-primary` displacing the chip's muted inherit, a shimmer sweeping that
- * tone, and a filled dot at its top-right corner throwing the app's `PingRing`.
- * The count beside it turns `primary` too, in `ChatDockCompactChip`, since it
- * is text.
+ * a chip is `[icon] N` at every width. The glyph says it twice over -
+ * `text-primary` displacing the chip's muted inherit, and a shimmer sweeping
+ * that tone - and the count beside it turns `primary` too, in
+ * `ChatDockCompactChip`, since it is text.
  *
- * Two motions, one rhythm: the shimmer and the ring share a cycle and a clock
- * tick, so they peak together and read as one pulse. What was rejected before
- * was an icon blinking on its OWN beat under an expanding ring - two rhythms
- * fighting on a glyph the size of a word - not motion on the glyph as such,
- * and one ring in the corner turned out to be too quiet on its own.
+ * It says it in those two channels and no more. A filled dot at the glyph's
+ * top-right corner, throwing the app's ping ring, was the third; at this size
+ * it landed ON the icon rather than beside it, so a terminal running under a
+ * mark obscuring its own corner read as neither. One mark, one meaning: the
+ * icon is the section AND the state, and nothing overlaps it.
  *
- * Both are clock-driven rather than CSS `animation`s - the always-on indicator
- * rule `status-animation-clock.ts` and `index.css` both record. Neither
- * subscribes under reduced motion, where the ring collapses to a static span
- * exactly the size of the dot it sits behind and the glyph holds its full tone.
- * The dot and the tones are unconditional, so the reduced-motion chip still
- * says "running" in two channels with no media query of its own.
+ * The shimmer is clock-driven rather than a CSS `animation` - the always-on
+ * indicator rule `status-animation-clock.ts` and `index.css` both record. It
+ * does not subscribe under reduced motion, where the glyph simply holds its
+ * full tone; the tones are unconditional, so the reduced-motion chip still
+ * says "running" with no media query of its own.
  *
- * `data-chip-activity` on the wrapper, `data-chip-glyph-shimmer` on the glyph
- * and `data-chip-activity-dot` on the corner mark are the hooks for the suites
- * that pin all of this; a resting chip renders the bare icon with none of them.
+ * `data-chip-glyph-shimmer` on the glyph is the hook for the suites that pin
+ * this; a resting chip renders the bare icon without it.
  */
 function ChipGlyph(props: {
   readonly glyph: ChatDockCompactChipGlyph;
@@ -144,24 +138,7 @@ function ChipGlyph(props: {
   if (!props.working) {
     return <Icon className="size-3.5 shrink-0" aria-hidden />;
   }
-  return (
-    <span data-chip-activity className="relative inline-flex">
-      <ShimmeringGlyph icon={Icon} />
-      {/* `absolute` is itself a containing block, so this IS the "relative
-          inline-flex box the size of the dot" the ring asks to sit inside. */}
-      <span
-        aria-hidden
-        data-chip-activity-dot
-        className="pointer-events-none absolute -top-0.5 -right-0.5 inline-flex size-1.5"
-      >
-        <PingRing
-          toneClass="bg-primary"
-          peakOpacity={ACTIVITY_RING_PEAK_OPACITY}
-        />
-        <span className="relative inline-flex h-full w-full rounded-full bg-primary ring-1 ring-background" />
-      </span>
-    </span>
-  );
+  return <ShimmeringGlyph icon={Icon} />;
 }
 
 /**

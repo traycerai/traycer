@@ -51,18 +51,18 @@ function iconClasses(chipElement: HTMLElement): string {
   return chipElement.querySelector("svg")?.getAttribute("class") ?? "";
 }
 
-/** The ping ring behind a working chip's corner dot, or null at rest. */
-function activityRing(section: string): HTMLElement | null {
-  const ring = screen
+/**
+ * The corner mark a working chip used to draw - a filled dot with the app's
+ * ping ring behind it, and the wrapper both hung off. Nothing draws one in any
+ * state now, so this looks for every part at once: putting the dot back
+ * without its ring, or the positioning wrapper on its own, has to fail too.
+ */
+function cornerMark(section: string): Element | null {
+  return screen
     .getByTestId(`chat-dock-chip-${section}`)
-    .querySelector(".status-ping");
-  return ring instanceof HTMLElement ? ring : null;
-}
-
-/** The ring's current scale factor, or NaN when it is not drawing one. */
-function ringScale(section: string): number {
-  const transform = activityRing(section)?.style.transform ?? "";
-  return Number(/scale\(([0-9.]+)\)/.exec(transform)?.[1] ?? Number.NaN);
+    .querySelector(
+      "[data-chip-activity-dot], [data-chip-activity], .status-ping",
+    );
 }
 
 /** The shimmering glyph of a working chip, or null when it draws a resting one. */
@@ -159,12 +159,11 @@ describe("<ChatDockCompactStrip />", () => {
     expect(drawnIcon(screen.getByTestId("chat-dock-chip-background"))).toBe(
       "layers",
     );
-    // A resting chip is the bare icon: no activity wrapper, no ring, no
-    // shimmer, and a number that keeps the chip's own muted tone.
+    // A resting chip is the bare icon: no corner mark, no shimmer, and a
+    // number that keeps the chip's own muted tone.
     for (const section of ["filesChanged", "activeAgents", "background"]) {
       const chipElement = screen.getByTestId(`chat-dock-chip-${section}`);
-      expect(chipElement.querySelector("[data-chip-activity]")).toBeNull();
-      expect(activityRing(section)).toBeNull();
+      expect(cornerMark(section)).toBeNull();
       expect(shimmerGlyph(section)).toBeNull();
       expect(iconClasses(chipElement)).not.toContain("text-primary");
     }
@@ -172,7 +171,7 @@ describe("<ChatDockCompactStrip />", () => {
 
   // The whole of this: a working chip keeps SAYING what it is. The icon is the
   // only thing that does - and, with the word gone, the only thing saying it is
-  // busy too, so it lights in three channels at once: tone, shimmer, ring.
+  // busy too, so it lights in both the channels it has: tone and shimmer.
   it("lights the section's own icon while a chip is working, and keeps its number", () => {
     renderStrip({
       chips: [
@@ -191,19 +190,15 @@ describe("<ChatDockCompactStrip />", () => {
     expect(drawnIcon(agents)).toBe("bot");
     // Displaces the chip's muted inherit, so the glyph itself reads as live.
     expect(iconClasses(agents)).toContain("text-primary");
-    const wrapper = agents.querySelector("[data-chip-activity]");
-    expect(wrapper).not.toBeNull();
-    // The corner mark below is absolutely positioned against this wrapper.
-    expect(wrapper?.getAttribute("class")).toContain("relative");
-    expect(activityRing("activeAgents")).not.toBeNull();
-    // The shimmer rides the glyph itself, not the wrapper the dot hangs off.
+    // The shimmer rides the glyph itself, and the glyph is the whole of what
+    // the working chip draws - no wrapper, nothing at its corner.
     expect(shimmerGlyph("activeAgents")).toBe(agents.querySelector("svg"));
+    expect(cornerMark("activeAgents")).toBeNull();
     expect(agents.textContent).toBe("2");
 
     const background = screen.getByTestId("chat-dock-chip-background");
     expect(drawnIcon(background)).toBe("alarm-clock");
     expect(iconClasses(background)).not.toContain("text-primary");
-    expect(background.querySelector("[data-chip-activity]")).toBeNull();
     expect(shimmerGlyph("background")).toBeNull();
   });
 
@@ -224,12 +219,8 @@ describe("<ChatDockCompactStrip />", () => {
     for (const section of ["activeAgents", "background"]) {
       const chipElement = screen.getByTestId(`chat-dock-chip-${section}`);
       expect(chipElement.textContent).toBe("1");
-      expect(chipElement.querySelector("[data-chip-activity]")).not.toBeNull();
-      expect(
-        chipElement.querySelector("[data-chip-activity-dot]"),
-      ).not.toBeNull();
       expect(shimmerGlyph(section)).not.toBeNull();
-      expect(activityRing(section)).not.toBeNull();
+      expect(cornerMark(section)).toBeNull();
       expect(iconClasses(chipElement)).toContain("text-primary");
     }
     // Different sections, so different glyphs - that is the ONE axis on which
@@ -242,12 +233,11 @@ describe("<ChatDockCompactStrip />", () => {
     );
   });
 
-  // The dot is the ring's anchor AND the reduced-motion statement in one: it
-  // is drawn unconditionally while working, so the chip needs no media query
-  // to stay legible when the ring cannot move. (The ring collapses to a static
-  // span exactly the dot's size, behind the dot - `useStatusAnimation` never
-  // subscribes under the preference.)
-  it("marks a working chip's corner whether or not the ring can move", () => {
+  // Nothing is drawn over the glyph, in either state. The corner dot that used
+  // to sit there was the size of a third of the icon it overlapped, so a
+  // running terminal read as a terminal with something stuck to it - and the
+  // tone and the shimmer were already saying what the dot was there to say.
+  it("draws nothing at a chip's corner, working or at rest", () => {
     renderStrip({
       chips: [
         { ...chipWithGlyph("activeAgents", "activeAgents"), working: true },
@@ -257,17 +247,12 @@ describe("<ChatDockCompactStrip />", () => {
       onToggle: vi.fn(),
     });
 
-    const dot = screen
-      .getByTestId("chat-dock-chip-activeAgents")
-      .querySelector("[data-chip-activity-dot]");
-    expect(dot).not.toBeNull();
-    expect(dot?.getAttribute("class")).not.toContain("hidden");
-    expect(dot?.getAttribute("class")).not.toContain("motion-reduce:");
-    expect(
-      screen
-        .getByTestId("chat-dock-chip-background")
-        .querySelector("[data-chip-activity-dot]"),
-    ).toBeNull();
+    expect(cornerMark("activeAgents")).toBeNull();
+    expect(cornerMark("background")).toBeNull();
+    // A working chip draws ONE element of its own: the glyph.
+    const agents = screen.getByTestId("chat-dock-chip-activeAgents");
+    expect(agents.querySelectorAll("svg")).toHaveLength(1);
+    expect(shimmerGlyph("activeAgents")).toBe(agents.querySelector("svg"));
   });
 
   // No braille anywhere in the strip: the spinner is what made `⋮ 2  ⋮ 1`.
@@ -295,12 +280,11 @@ describe("<ChatDockCompactStrip />", () => {
     }
   });
 
-  // The ring and the glyph's shimmer are driven from the app's one status
-  // clock, not from CSS: the ring is the shared `PingRing` and the shimmer is
-  // an inline `opacity` written by the same hook, so every live indicator in
-  // the window rides the same tick. Driven here exactly as the spinner's own
-  // suite drives it.
-  describe("clock-driven ring", () => {
+  // The glyph's shimmer is driven from the app's one status clock, not from
+  // CSS: an inline `opacity` written by the shared hook, so every live
+  // indicator in the window rides the same tick. Driven here exactly as the
+  // spinner's own suite drives it.
+  describe("clock-driven shimmer", () => {
     beforeEach(() => {
       vi.useFakeTimers();
       resetStatusAnimationClockForTests();
@@ -312,7 +296,10 @@ describe("<ChatDockCompactStrip />", () => {
       vi.useRealTimers();
     });
 
-    it("expands and fades the working chip's ring across the cycle", () => {
+    // The whole of the running treatment's motion, now that the corner is
+    // bare: one opacity sweep on the icon, a second per cycle. A resting chip
+    // is never written to at all.
+    it("sweeps the working glyph's opacity across the cycle", () => {
       renderStrip({
         chips: [
           { ...chipWithGlyph("activeAgents", "activeAgents"), working: true },
@@ -322,47 +309,7 @@ describe("<ChatDockCompactStrip />", () => {
         onToggle: vi.fn(),
       });
 
-      // Written pre-paint, so the first frame is already in place.
-      const ring = activityRing("activeAgents");
-      expect(ring?.style.transform).toBe("scale(1.000)");
-      expect(ring?.style.opacity).toBe("0.75");
-
-      // The ring finishes growing three quarters through the second, at which
-      // point it is twice the dot and fully faded.
-      act(() => {
-        vi.advanceTimersByTime(800);
-      });
-      expect(ring?.style.transform).toBe("scale(2.000)");
-      expect(ring?.style.opacity).toBe("0");
-
-      // Past the second it starts over, small and bright. The clock ticks
-      // every 80 ms, so the first frame of the new cycle lands at 1040 rather
-      // than on the second itself.
-      act(() => {
-        vi.advanceTimersByTime(240);
-      });
-      expect(ringScale("activeAgents")).toBeLessThan(1.2);
-      expect(Number(ring?.style.opacity)).toBeGreaterThan(0.6);
-
-      // A resting chip has no ring to write to, however long the clock runs.
-      expect(activityRing("background")).toBeNull();
-    });
-
-    // The glyph's own half of the treatment, on the same clock and the same
-    // 1 s cycle as the ring above - they peak together, so the chip pulses
-    // once rather than twice. A resting chip is never written to at all.
-    it("sweeps the working glyph's opacity on the same cycle as its ring", () => {
-      renderStrip({
-        chips: [
-          { ...chipWithGlyph("activeAgents", "activeAgents"), working: true },
-          chipWithGlyph("background", "wakeup"),
-        ],
-        expanded: new Set(),
-        onToggle: vi.fn(),
-      });
-
-      // Written pre-paint, at full strength: the top of the cycle, where the
-      // ring launches.
+      // Written pre-paint, at full strength: the top of the cycle.
       const glyph = shimmerGlyph("activeAgents");
       expect(Number(glyph?.style.opacity)).toBeCloseTo(1, 2);
 
@@ -372,14 +319,13 @@ describe("<ChatDockCompactStrip />", () => {
       });
       expect(Number(glyph?.style.opacity)).toBeCloseTo(0.35, 2);
 
-      // ...and back up as the second closes, in step with the ring starting
-      // its next expansion: both are written on the same 80 ms tick, so the
-      // first frame of the new cycle lands at 1040 for both of them.
+      // ...and back up as the second closes. The clock ticks every 80 ms, so
+      // the first frame of the new cycle lands at 1040 rather than on the
+      // second itself.
       act(() => {
         vi.advanceTimersByTime(540);
       });
       expect(Number(glyph?.style.opacity)).toBeGreaterThan(0.95);
-      expect(ringScale("activeAgents")).toBeLessThan(1.2);
 
       // The glyph never blinks out - it is the only thing saying WHICH section
       // the chip stands for, at every point of the sweep.
@@ -428,9 +374,9 @@ describe("<ChatDockCompactStrip />", () => {
   );
 
   // The state axis and the glyph axis are independent: a shell draws one
-  // terminal either way, and it is the ring, the shimmer and the tone that say
-  // which. A regression that reintroduced a state-dependent glyph would have
-  // to break this and the row above it together.
+  // terminal either way, and it is the shimmer and the tone that say which. A
+  // regression that reintroduced a state-dependent glyph would have to break
+  // this and the row above it together.
   it("keeps the terminal glyph on a running managed shell", () => {
     renderStrip({
       chips: [
@@ -443,8 +389,8 @@ describe("<ChatDockCompactStrip />", () => {
     const chipElement = screen.getByTestId("chat-dock-chip-background");
     expect(drawnIcon(chipElement)).toBe("terminal");
     expect(chipElement.querySelector("svg.lucide-circle-pause")).toBeNull();
-    expect(activityRing("background")).not.toBeNull();
     expect(shimmerGlyph("background")).not.toBeNull();
+    expect(iconClasses(chipElement)).toContain("text-primary");
   });
 
   // The model carries the deltas; the strip only has to hand them on, and

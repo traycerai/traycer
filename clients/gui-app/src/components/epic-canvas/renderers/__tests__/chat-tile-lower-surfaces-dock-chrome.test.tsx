@@ -433,13 +433,14 @@ function chipText(section: string): string | null {
 }
 
 /**
- * True when this chip is drawing the live treatment - a lit, shimmering icon
- * with a ring at its corner. All three arrive together, so the wrapper standing
- * for them is enough; `chat-dock-compact-strip.test.tsx` pins the parts.
+ * True when this chip is drawing the live treatment - a lit, shimmering icon.
+ * The tone and the sweep arrive together on the one element, so the shimmering
+ * glyph standing for them is enough; `chat-dock-compact-strip.test.tsx` pins
+ * the parts.
  */
 function chipWorking(section: string): boolean {
   const chipElement = screen.getByTestId(`chat-dock-chip-${section}`);
-  return chipElement.querySelector("[data-chip-activity]") !== null;
+  return chipElement.querySelector("[data-chip-glyph-shimmer]") !== null;
 }
 
 beforeEach(() => {
