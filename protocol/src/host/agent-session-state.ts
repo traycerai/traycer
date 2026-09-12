@@ -30,11 +30,18 @@ import { z } from "zod";
  * - `sleeping` - no live session, and the agent RESUMES on the next open or
  *   message. Every PTY exit lands here, whatever ended it: an idle reap, a
  *   user stop, a restart-shaped kill, or the CLI exiting on its own.
- * - `stopped`  - the agent is over as a RECORD: archived, or deleted. Written
+ * - `stopped`  - the agent ended as a RECORD: archived, or deleted. Written
  *   only by the record-level operations that end an agent, never by a session
  *   ending. Reporting `stopped` for a resumable agent is precisely the
  *   misreading above, so the two are kept structurally apart rather than
  *   distinguished by a second field.
+ *
+ *   Do NOT render this as "the agent is over", which is what a first pass at
+ *   the `agent.list` legend said. Archiving is the writer a reader will
+ *   essentially always be looking at - the delete arm stamps a record that is
+ *   tombstoned out of every listing before anyone can enumerate it - and an
+ *   archived agent stays ADDRESSABLE: the next user or A2A message unarchives
+ *   and wakes it. Only the deleted case is final.
  *
  * Carried NULLABLE everywhere it appears, and `null` is a real answer rather
  * than a gap to paper over: it means the serving host cannot know. A row
