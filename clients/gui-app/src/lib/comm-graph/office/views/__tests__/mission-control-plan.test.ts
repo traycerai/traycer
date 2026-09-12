@@ -906,13 +906,14 @@ class CountingSeatMap extends Map<string, OfficeSeat> {
 
   override forEach(
     callback: (
-      seat: OfficeSeat,
+      value: OfficeSeat,
       key: string,
       map: Map<string, OfficeSeat>,
     ) => void,
+    thisArg?: object,
   ): void {
     for (const [key, seat] of this.entries()) {
-      callback(seat, key, this);
+      callback.call(thisArg, seat, key, this);
     }
   }
 }
@@ -1240,6 +1241,26 @@ describe("mission-control cold-review findings", () => {
       void pair;
     }
     expect(visits).toBe(expected);
+  });
+
+  it("binds forEach callbacks to the supplied thisArg", () => {
+    const layout = planFresh(
+      makeTestEpic("one-team", 12, 1),
+      VIEWPORT_WIDE,
+    ).layout;
+    const countingMap: Map<string, OfficeSeat> = new CountingSeatMap(
+      layout.seats,
+      () => undefined,
+    );
+    const receiver = { seats: countingMap };
+    let visits = 0;
+    countingMap.forEach(function (this: typeof receiver) {
+      expect(this.seats).toBe(countingMap);
+      expect(this).toBe(receiver);
+      visits += 1;
+    }, receiver);
+    expect(visits).toBe(13);
+    expect(visits).toBe(layout.seats.size);
   });
 
   it("keeps a single-host floor hostless", () => {
