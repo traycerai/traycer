@@ -6,7 +6,6 @@ import {
   HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
   WAKE_RETRY_EPISODE_MS,
   isReopenableHostStreamClose,
-  isReopenableNotificationsStreamClose,
   processReconnectEngine,
   resetProcessReconnectEngineForTest,
   type HostReconnectEngine,
@@ -165,26 +164,7 @@ describe("close-reason predicates", () => {
     );
     expect(isReopenableHostStreamClose(fatalClose("INCOMPATIBLE"))).toBe(false);
     expect(isReopenableHostStreamClose(fatalClose("INTERNAL"))).toBe(true);
-    expect(
-      isReopenableHostStreamClose(fatalClose("FREE_TIER_NO_CLOUD_SYNC")),
-    ).toBe(true);
-  });
-
-  it("isReopenableNotificationsStreamClose additionally rejects FREE_TIER_NO_CLOUD_SYNC", () => {
-    expect(
-      isReopenableNotificationsStreamClose(
-        fatalClose("FREE_TIER_NO_CLOUD_SYNC"),
-      ),
-    ).toBe(false);
-    expect(
-      isReopenableNotificationsStreamClose(fatalClose("CLIENT_CLOSED")),
-    ).toBe(false);
-    expect(
-      isReopenableNotificationsStreamClose(fatalClose("INCOMPATIBLE")),
-    ).toBe(false);
-    expect(isReopenableNotificationsStreamClose(fatalClose("INTERNAL"))).toBe(
-      true,
-    );
+    expect(isReopenableHostStreamClose(fatalClose("UNAUTHORIZED"))).toBe(true);
   });
 });
 
