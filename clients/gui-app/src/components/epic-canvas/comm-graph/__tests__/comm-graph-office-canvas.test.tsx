@@ -123,15 +123,20 @@ import {
   OFFICE_TILE,
   type OfficeAgentInput,
   type OfficeAgentStatus,
+  type OfficeBlockFill,
+  type OfficeDrawable,
   type OfficeFloor,
   type OfficeHitRegion,
   type OfficeLayout,
+  type OfficeLod,
+  type OfficePoint,
   type OfficeRect,
   type OfficeSceneInput,
   type OfficeSeat,
   type OfficeSign,
   type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
+import { officePalette } from "@/lib/comm-graph/office/office-pixel-art";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
@@ -2231,6 +2236,151 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // same over an identical roster - the unfixed renderer gives both boards
     // the same officeBoardSummary text.
     expect(plateTexts[0]).not.toBe(plateTexts[1]);
+  });
+
+  /**
+   * T5 fixup 5: the block map's new `quad` drawable actually reaches the
+   * canvas as a filled path.
+   *
+   * D28/D58 rewrote what a lod-0 region emits - four PROJECTED corners
+   * instead of an axis-aligned box - but nothing upstream of the renderer
+   * proves the new `kind: "quad"` arm of `drawDrawableLayer` is wired at
+   * all. A painter that started emitting `quad` and a canvas that had not
+   * grown the case for it would drop every overview region silently: the
+   * frame would carry the drawable, `officeBakesIntoStaticFloor` would let
+   * it through same as today, and the screen would just show whatever was
+   * there before. Driven through the same `officeElementWithView` +
+   * `painter.floor` override F5 and F10 use above, rather than a real
+   * isometric plan and camera zoom, because what is under test is the
+   * SWITCH in `drawDrawableLayer` - `office-plan-perf.test.ts` and
+   * `office-overview-coverage.test.ts` already cover the isometric painter
+   * producing the right quads from a real Campus/City plan.
+   */
+  it("T5: paints a lod-0 quad drawable as one filled path, not a fillRect", () => {
+    // An arbitrary, deliberately non-axis-aligned quadrilateral - if the
+    // canvas silently fell back to treating this as a bounding box (as a
+    // `block` would be), the traced path below would not match it.
+    const quadPoints: readonly [
+      OfficePoint,
+      OfficePoint,
+      OfficePoint,
+      OfficePoint,
+    ] = [
+      { x: 120, y: 40 },
+      { x: 168, y: 64 },
+      { x: 120, y: 88 },
+      { x: 72, y: 64 },
+    ];
+    const quadFill: OfficeBlockFill = "room";
+    const quadDrawable: OfficeDrawable = {
+      kind: "quad",
+      points: quadPoints,
+      fill: quadFill,
+    };
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map(),
+      seats: new Map(),
+      signs: [],
+      rooms: [],
+      floors: [emptyFloor()],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    const view: OfficeView = {
+      ...OFFICE_VIEWS.floor,
+      plan: () => layout,
+      painter: {
+        ...OFFICE_VIEWS.floor.painter,
+        // The real floor painter never emits a `quad` (its projector is the
+        // identity, so `block` is all it needs) - this stands in for an
+        // isometric painter's lod-0 answer without standing up a real
+        // isometric plan, and only at lod 0: at lod 1/2 it falls back to the
+        // real painter so the case still exercises actual floor content
+        // (walls, ground) rather than an empty frame either way.
+        floor: (
+          floorLayout: OfficeLayout,
+          tiles: OfficeTileRect,
+          lod: OfficeLod,
+        ) =>
+          lod === 0
+            ? [quadDrawable]
+            : OFFICE_VIEWS.floor.painter.floor(floorLayout, tiles, lod),
+      },
+    };
+
+    render(
+      withQueryClient(
+        officeElementWithView(view, new Set<string>(), [], {
+          // Below `OFFICE_LOD_OFFICE_ZOOM` (0.7): the camera this suite's
+          // other cases hold at zoom 1 sits in the lod-1 band, which would
+          // route through the real painter and never reach the override.
+          view: { ...FIXED_CAMERA_VIEW, zoom: 0.5 },
+        }),
+      ),
+    );
+    setIntersecting(true);
+    flushRaf(3);
+
+    // Anti-vacuity: a frame that drew nothing would leave this array empty
+    // and every assertion below vacuously true.
+    expect(calls.length).toBeGreaterThan(0);
+
+    const drawCallIndex = calls.findIndex(
+      (call) => call.method === "beginPath",
+    );
+    // `beginPath` is used only by the quad path and Find's ring/underline in
+    // this frame; with no agents on screen and Find untouched, the block
+    // map's own call is the one this frame can produce.
+    expect(drawCallIndex).toBeGreaterThanOrEqual(0);
+    const fillStyleBefore = [...calls]
+      .slice(0, drawCallIndex)
+      .reverse()
+      .find((call) => call.method === "set:fillStyle");
+    // `blockColor("room", palette)` resolves to `palette.wallLight` - proving
+    // the fill the SCENE chose survives to the actual paint call, not just
+    // that some path got filled.
+    expect(fillStyleBefore?.args[0]).toBe(officePalette("light").wallLight);
+
+    const traced = calls.slice(drawCallIndex, drawCallIndex + 6);
+    expect(traced.map((call) => call.method)).toEqual([
+      "beginPath",
+      "moveTo",
+      "lineTo",
+      "lineTo",
+      "lineTo",
+      "closePath",
+    ]);
+    // The four corners, in the perimeter order `quadOf` builds them: the
+    // opening `moveTo` at the first point, then a `lineTo` per remaining
+    // corner - proving the renderer traces the drawable's own points rather
+    // than deriving a shape from a bounding box.
+    expect(traced[1]?.args).toEqual([quadPoints[0].x, quadPoints[0].y]);
+    expect(traced[2]?.args).toEqual([quadPoints[1].x, quadPoints[1].y]);
+    expect(traced[3]?.args).toEqual([quadPoints[2].x, quadPoints[2].y]);
+    expect(traced[4]?.args).toEqual([quadPoints[3].x, quadPoints[3].y]);
+    const fillAfter = calls
+      .slice(drawCallIndex)
+      .find((call) => call.method === "fill" || call.method === "fillRect");
+    // The close is followed by a `fill()` of the traced path - not a
+    // `fillRect`, which is what a `block` drawable (or a canvas that fell
+    // back to one) would call instead.
+    expect(fillAfter?.method).toBe("fill");
+
+    // The whole point of a `quad` over the old equal-area `block`: nothing in
+    // this frame paints a rectangle sized to the region. The one `fillRect`
+    // this frame is allowed is the background clear at frame top, which
+    // covers the full viewport and is unrelated to the quad's own bounds.
+    const rectCalls = calls.filter((call) => call.method === "fillRect");
+    expect(rectCalls).toHaveLength(1);
+    expect(rectCalls[0]?.args.slice(0, 2)).toEqual([0, 0]);
   });
 
   describe("CommGraphOfficeCanvas fixup 3 - N1 Find annotates an agent, not its parts", () => {

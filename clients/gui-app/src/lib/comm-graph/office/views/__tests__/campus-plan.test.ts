@@ -45,8 +45,10 @@ import {
 import {
   overviewBoundingBoxOf,
   overviewCentreOf,
+  overviewSamplePoints,
   overviewShapeContains,
   overviewShapeOf,
+  OVERVIEW_FRACTIONS,
   type OverviewShape,
 } from "@/lib/comm-graph/office/views/__tests__/overview-shapes";
 import {
@@ -1202,6 +1204,98 @@ describe("planCampus", () => {
     // their own room and 122 outside their own district.
     expect(outsideRoom.slice(0, 5)).toEqual([]);
     expect(outsideDistrict.slice(0, 5)).toEqual([]);
+  });
+
+  it("draws no two same-level, non-touching rooms overlapping on screen", () => {
+    // THE PROPERTY the projected quad exists for, and only half of what the
+    // old equal-area rectangle delivered: a diamond fills half its bounding
+    // box, so two rooms whose TILES never touch could still have boxes that
+    // overlap by up to half their width - which is exactly how a two-host
+    // City used to read as two overlapping rectangles rather than as two
+    // separate blocks. A `quad` is the exact ground its own tiles project
+    // to, so two regions whose tile rects are disjoint cannot paint over each
+    // other at all; this case is the ground-truth check for that, over a
+    // real plan with many rooms rather than a hand-built pair.
+    //
+    // `triage(1000, ...)` plans 32 Campus rooms (D38's HQ + 30 team cabins +
+    // 1 bullpen) - the same fixture the "reads only the index's own
+    // references" case below cites for that count - which is enough rooms to
+    // make a quadratic all-pairs sweep a real property check without being
+    // slow: 32 choose 2 is 496 pairs, each sampled at 9 points a side.
+    const input = inputFor("triage", 1000, VIEWPORT_1280);
+    const layout = planCampus(input);
+    expect(layout.rooms.length).toBe(32);
+
+    const tiles: OfficeTileRect = {
+      col: 0,
+      row: 0,
+      cols: layout.cols,
+      rows: layout.rows,
+    };
+    const drawables = ISO_PAINTER.floor(layout, tiles, 0);
+    expect(drawables.length).toBeGreaterThan(0);
+    // Rooms are keyed by the projection of their own tile-rect centre, the
+    // same match-by-centre the pip case above uses - it reads whichever
+    // shape the painter actually emitted (today a `quad`) without this case
+    // re-deriving the projection itself.
+    const projector = ISO_PAINTER.projector(layout);
+    const shapeByCentre = new Map<string, OverviewShape>();
+    for (const drawable of drawables) {
+      const shape = overviewShapeOf(drawable);
+      if (shape === null) continue;
+      const centre = overviewCentreOf(shape);
+      shapeByCentre.set(`${centre.x.toFixed(3)},${centre.y.toFixed(3)}`, shape);
+    }
+    const shapeFor = (bounds: OfficeTileRect): OverviewShape | undefined => {
+      const centre = projector.project(
+        bounds.col + bounds.cols / 2,
+        bounds.row + bounds.rows / 2,
+      );
+      return shapeByCentre.get(`${centre.x.toFixed(3)},${centre.y.toFixed(3)}`);
+    };
+
+    const overlaps: string[] = [];
+    let disjointPairs = 0;
+    for (let i = 0; i < layout.rooms.length; i += 1) {
+      const roomA = layout.rooms[i];
+      const shapeA = shapeFor(roomA.bounds);
+      if (shapeA === undefined) continue;
+      const pointsA = overviewSamplePoints(shapeA, OVERVIEW_FRACTIONS);
+      for (let j = i + 1; j < layout.rooms.length; j += 1) {
+        const roomB = layout.rooms[j];
+        // Rooms at the SAME level are supposed never to touch - an amenity
+        // sitting inside its district, or a room inside its district, is a
+        // deliberate nesting this case has nothing to say about, so pairing
+        // is over `layout.rooms` alone and skips any pair whose tile rects
+        // do overlap (which same-level rooms should not, but a pair that did
+        // would be a different bug from the one under test here).
+        if (isoRectsOverlap(roomA.bounds, roomB.bounds)) continue;
+        const shapeB = shapeFor(roomB.bounds);
+        if (shapeB === undefined) continue;
+        disjointPairs += 1;
+        const pointsB = overviewSamplePoints(shapeB, OVERVIEW_FRACTIONS);
+        for (const point of pointsA) {
+          if (overviewShapeContains(shapeB, point)) {
+            overlaps.push(
+              `${roomA.rootAgentId}'s point ${point.x},${point.y} inside ${roomB.rootAgentId}`,
+            );
+          }
+        }
+        for (const point of pointsB) {
+          if (overviewShapeContains(shapeA, point)) {
+            overlaps.push(
+              `${roomB.rootAgentId}'s point ${point.x},${point.y} inside ${roomA.rootAgentId}`,
+            );
+          }
+        }
+      }
+    }
+
+    // Anti-vacuity: a sweep that resolved no shape (a lookup miss on every
+    // room) or found no disjoint pair at all would leave `overlaps` empty for
+    // a reason that has nothing to do with the projected quad's shape.
+    expect(disjointPairs).toBeGreaterThan(400);
+    expect(overlaps.slice(0, 5)).toEqual([]);
   });
 
   it("reads only the index's own references at lod 2, never layout.rooms or layout.props whole", () => {
