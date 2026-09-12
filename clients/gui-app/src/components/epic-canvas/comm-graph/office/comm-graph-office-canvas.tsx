@@ -3129,6 +3129,40 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // epic to another kept painting the new office on the old floor.
   }, [epicId, officeView, resolvedTheme, runtime]);
 
+  /**
+   * A repainted cascade has to buy ONE frame, or the key above is never read.
+   *
+   * Putting the revision in the static layer's key says what a rebuild costs;
+   * it does not say when anyone looks. `bakeFloor` holds the only `sync` call
+   * there is, and the gate returns before it on a still floor - not animating,
+   * not settling, same minute, not panning. So a custom palette on an idle
+   * office repainted nothing until an agent moved or the clock's minute turned
+   * over, which is the common case and was the whole bug.
+   *
+   * `invalidateFrame` only clears the gate's last-drawn minute, so this stands
+   * the idle skip aside for a single frame rather than pinning the loop awake.
+   * It is the same rule the gate's own `invalidate` doc states for a resize:
+   * the skip's premise is that the canvas still holds the right picture, and a
+   * repainted cascade is exactly the case where it no longer does.
+   *
+   * DECLARED AFTER THE LOOP so the invalidation reaches the LIVE gate. The
+   * runtime keeps one mutable listener slot, and the loop's cleanup puts back
+   * a no-op; React runs every cleanup before any effect and then effects in
+   * declaration order, so on a MODE flip - where the loop is being rebuilt in
+   * this same commit - the loop's fresh listener is wired before this fires.
+   * Ahead of the loop it would land on the no-op and be dropped, harmlessly
+   * but for the wrong reason: the new gate draws its first frame regardless.
+   * On a CUSTOM theme, which is what this exists for, the loop does not
+   * restart at all and the listener in the slot is the live one throughout.
+   *
+   * On mount it fires once against a gate that has drawn nothing yet, whose
+   * last-drawn minute is already -1, so it asks for a frame that was coming
+   * anyway.
+   */
+  useEffect(() => {
+    runtime.invalidateFrame();
+  }, [runtime, themeRevision]);
+
   /** A client position in container screen pixels. */
   const toScreenPoint = useCallback(
     (clientX: number, clientY: number): OfficePoint | null => {

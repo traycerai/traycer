@@ -34,13 +34,33 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 // detail panel this suite opens reaches other selectors in the same module.
 vi.mock("@/lib/epic-selectors", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
+  /**
+   * ONE INSTANCE EACH, FOR THE LIFE OF THE MODULE - and that is load-bearing,
+   * not tidiness.
+   *
+   * Returning `new Map()` / `{}` per call handed the canvas a fresh identity on
+   * every render. Two effects push these at the runtime and then ask for a
+   * frame because nothing else would - role claims at `:2239`, scene input at
+   * `:2532` - so ANY re-render of the canvas, for any reason at all, quietly
+   * invalidated the frame gate. A case that then changed some unrelated state
+   * and watched the floor repaint was reading the mock, not the product.
+   *
+   * That is exactly how the idle-repaint bug hid: a theme change re-renders
+   * this component, the churn asked for a frame, and the office looked like it
+   * repainted itself. Production does no such thing - the real activity tiers
+   * are a cached empty singleton and the real role claims are stable - so the
+   * mock has to be stable too or every frame-gate case here is false
+   * confidence.
+   */
+  const activityTiers = new Map();
+  const roleClaims = {};
   return {
     ...actual,
-    useEpicAgentActivityTiers: () => new Map(),
+    useEpicAgentActivityTiers: () => activityTiers,
     // The office reads every agent's role claims in one bulk selector for the
     // door plates; like the activity tiers above, it resolves an epic session
     // this suite deliberately renders without.
-    useEpicAgentRoleClaimsByAgentId: () => ({}),
+    useEpicAgentRoleClaimsByAgentId: () => roleClaims,
     // The hover card resolves these per-agent, the same way the graph node
     // does - and this suite renders no `EpicSessionProvider` for the real
     // selector to read through.
@@ -2631,6 +2651,31 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     }
 
     /**
+     * Runs frames until the floor stops drawing, and PROVES it stopped.
+     *
+     * The office `renderLoop` builds is idle: despite the helper's name the
+     * first sync seats both agents, so nothing walks and `isAnimating` is
+     * false from the start. The gate still paints the first frame - its
+     * last-drawn minute begins at -1 - and only then refuses, so a case that
+     * measures straight after mount is measuring the settling frames, not a
+     * parked office.
+     *
+     * The trailing `expect` is the point: an extra frame that draws NOTHING is
+     * what "parked" means, and it is the precondition every case below rests
+     * on. Without it a fixture that quietly kept animating would make those
+     * cases pass while proving nothing.
+     */
+    function settleUntilParked(): number {
+      for (let settle = 0; settle < 8; settle += 1) {
+        flushRaf(1);
+      }
+      const parked = totalCanvasContextCalls;
+      flushRaf(1);
+      expect(totalCanvasContextCalls).toBe(parked);
+      return parked;
+    }
+
+    /**
      * A native wheel WITHOUT a modifier key pans; the camera it moves lives
      * on `runtime`, a `useState` initial value the render loop's effect does
      * not depend on, so this is a case where the real interaction and the
@@ -2921,7 +2966,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      */
     it("a custom-theme change rebuilds the layer exactly once and leaves the loop alone", () => {
       renderLoop({});
-      const totalBefore = totalCanvasContextCalls;
+      const totalBefore = settleUntilParked();
 
       act(() => {
         // In the schema's own range (70-130), so this is a contrast a user
@@ -2935,6 +2980,25 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // mode change - `resolvedTheme` stays mocked to "light" throughout.
       expect(resolvedThemeMock.current).toBe("light");
       expect(totalCanvasContextCalls - totalBefore).toBe(1);
+      expect(mainCanvasContextCalls).toBe(0);
+      expect(releaseSpy).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The control that stops the fix being "always draw".
+     *
+     * `invalidateFrame` on a revision change buys ONE frame. Nothing else may
+     * buy any: if a parked office drew even one frame per rAF without a reason,
+     * the case above would pass for the wrong reason and the tile would be
+     * burning a bake a frame forever. Deliberately several flushes, not one.
+     */
+    it("an idle office draws nothing while the revision holds still", () => {
+      renderLoop({});
+      const parked = settleUntilParked();
+
+      flushRaf(6);
+
+      expect(totalCanvasContextCalls).toBe(parked);
       expect(mainCanvasContextCalls).toBe(0);
       expect(releaseSpy).not.toHaveBeenCalled();
     });
