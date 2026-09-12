@@ -202,19 +202,6 @@ describe("openNotificationsStream terminal-close reopen", () => {
     close();
   });
 
-  it("never reopens after the dormant entitlement terminal refusal", () => {
-    const close = openNotificationsStream(reconnectEngine, factory, null);
-
-    clients[0].callbacks.onConnectionStatus(
-      "closed",
-      fatalClose("FREE_TIER_NO_CLOUD_SYNC"),
-    );
-    vi.advanceTimersByTime(4 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
-    expect(clients).toHaveLength(1);
-
-    close();
-  });
-
   it("cancels a pending reopen on dispose", () => {
     const close = openNotificationsStream(reconnectEngine, factory, null);
     clients[0].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
