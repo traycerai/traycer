@@ -1716,10 +1716,14 @@ describe("OfficeScene", () => {
     // TIME IN PLAY is the measure, not games started: two agents will
     // occasionally roll the table at the same moment on their own, so a test
     // that only asked whether a rally ever happened would pass with the bias
-    // deleted. Over four minutes this floor plays ~386 ticks with the open end
-    // outranking the draw and ~224 without it, so the threshold sits between
-    // the two rather than at a number that merely looked round.
-    expect(ralliedTicks).toBeGreaterThan(300);
+    // deleted. Over four minutes this floor plays 264 ticks with the open end
+    // outranking the draw and 0 without it - both re-measured on the storey
+    // the Floor plans now that its civic rooms stand in the amenity columns,
+    // which deepened it and lengthened the walk to the table. The unbiased arm
+    // managed ~224 on the shallower floor and manages none at all on this one,
+    // so the threshold sits between the two measurements rather than at a
+    // number that merely looked round.
+    expect(ralliedTicks).toBeGreaterThan(150);
   });
 
   it("gives up on the table when nobody takes the other end", () => {
@@ -2439,6 +2443,17 @@ describe("OfficeScene", () => {
     expect(clocks[0].y).toBe(face.y + size.height / 2);
   });
 
+  /**
+   * Long enough for the SECOND agent to cross this floor to the counter.
+   *
+   * Measured, not chosen: alpha's desk is the far one, and its walk to slot 1
+   * takes 100 ticks on the storey the Floor plans today - which grew deeper
+   * when the civic rooms joined the amenity columns, from a storey where 80
+   * was enough. The margin over the measurement is what keeps the case about
+   * arrival ORDER rather than about the exact depth of a floor plan.
+   */
+  const QUEUE_WALK_TICKS = 140;
+
   it("queues agents needing a person in arrival order and walks them back", () => {
     const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
@@ -2448,7 +2463,7 @@ describe("OfficeScene", () => {
         statusById: new Map<string, OfficeAgentStatus>([["beta", "attention"]]),
       }),
     );
-    for (let step = 0; step < 80; step += 1) scene.tick(100);
+    for (let step = 0; step < QUEUE_WALK_TICKS; step += 1) scene.tick(100);
 
     const floor = layoutOf(scene).floors[0];
     // Beta needed a person first, so it holds the nearest slot even once
@@ -2467,7 +2482,7 @@ describe("OfficeScene", () => {
         ]),
       }),
     );
-    for (let step = 0; step < 80; step += 1) scene.tick(100);
+    for (let step = 0; step < QUEUE_WALK_TICKS; step += 1) scene.tick(100);
 
     const queued = frameOf(scene);
     expect(characterRect(queued, "beta").x).toBe(
