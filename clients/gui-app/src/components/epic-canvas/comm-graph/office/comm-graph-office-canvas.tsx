@@ -23,6 +23,7 @@
  */
 import {
   useCallback,
+  useEffectEvent,
   useContext,
   useEffect,
   useMemo,
@@ -2688,6 +2689,33 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     };
   }, []);
 
+  /**
+   * The three the render loop READS rather than reacts to.
+   *
+   * `useEffectEvent` exists for exactly this shape: the loop wants each of
+   * these at its latest, and none of them is a reason to tear the loop down.
+   * Listed as ordinary dependencies they were - an identity change in any one
+   * would stop the frames, drop the listeners and RELEASE THE FLOOR'S BITMAP,
+   * which is the largest thing the tile holds and the most expensive thing it
+   * can rebuild.
+   *
+   * Measured before changing: across a pan, both lod-band crossings, a resize
+   * and a view pick on the real component, all three keep one identity
+   * throughout - `syncLodBand` closes over nothing, `peekScene` over `epicId`,
+   * and `applyCanvasSize` over `runtime`, which is a `useState` initial value.
+   * So no office is losing its floor today. What this removes is the standing
+   * hazard: any of those three gaining a dependency that moves would have
+   * turned a callback's re-creation into a dropped bitmap, silently and at a
+   * distance from the line that caused it.
+   */
+  const readScene = useEffectEvent((): OfficeScene | null => peekScene());
+  const resizeCanvas = useEffectEvent((): void => {
+    applyCanvasSize();
+  });
+  const trackLodBand = useEffectEvent((zoom: number): void => {
+    syncLodBand(zoom);
+  });
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
@@ -2918,7 +2946,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // condition that builds the scene - but the two are separate effects,
       // so the frame between them draws nothing rather than planning a floor
       // from inside an animation callback.
-      const scene = peekScene();
+      const scene = readScene();
       if (scene === null) {
         raf = requestAnimationFrame(step);
         return;
@@ -2931,7 +2959,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // is what invalidates the gate, and a still floor would otherwise never
       // reach the check. The compare is two property reads a frame.
       if ((window.devicePixelRatio || 1) !== appliedDprRef.current) {
-        applyCanvasSize();
+        resizeCanvas();
       }
 
       const synced = runtime.getSceneInput();
@@ -2986,7 +3014,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // An auto-fit or a playback pan moves the zoom without any handler
       // having touched it, so the chip is synced from the frame that results
       // rather than only from the gestures.
-      syncLodBand(camera.zoom);
+      trackLodBand(camera.zoom);
       const worldRect = worldRectOf(camera, viewport);
       const frame = scene.frame(lod, worldRect);
       runtime.setHitRegions(frame.hitRegions);
@@ -3027,7 +3055,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         pausedAt === null ? 0 : Date.now() - pausedAt,
       );
       pausedAt = null;
-      const scene = peekScene();
+      const scene = readScene();
       // Not for a SUSPENDED scene: `resume` is about to settle every walk and
       // flight anyway, so catching one up first is work whose result is thrown
       // away a moment later. The catch-up is for the loop being rebuilt under
@@ -3072,14 +3100,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // A floor's worth of pixels is real memory; it goes with the tile.
       staticLayer.release();
     };
-  }, [
-    applyCanvasSize,
-    officeView,
-    peekScene,
-    resolvedTheme,
-    runtime,
-    syncLodBand,
-  ]);
+  }, [officeView, resolvedTheme, runtime]);
 
   /** A client position in container screen pixels. */
   const toScreenPoint = useCallback(

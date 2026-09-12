@@ -13,9 +13,17 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
 }));
 
+// A plain constant here would make a theme flip untestable: the render loop's
+// effect depends on `resolvedTheme`, and proving a flip restarts it exactly
+// once needs a mock a test can change and then re-render against. `light` is
+// the default every other suite in this file was written assuming.
+const resolvedThemeMock = vi.hoisted(() => ({
+  current: "light" as "light" | "dark",
+}));
+
 vi.mock("@/providers/use-resolved-theme", () => ({
   useResolvedTheme: () => ({
-    resolvedTheme: "light" as const,
+    resolvedTheme: resolvedThemeMock.current,
     themePreset: "default",
   }),
 }));
@@ -158,6 +166,7 @@ function setIntersecting(value: boolean): void {
 beforeEach(() => {
   activeObserverCallbacks = [];
   vi.stubGlobal("IntersectionObserver", ControllableIntersectionObserver);
+  resolvedThemeMock.current = "light";
 });
 
 function agent(id: string, name: string): CommGraphAgentNode {
@@ -2524,6 +2533,169 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       flushRaf(1);
 
       expect(namePaints(placed)).toBe(PASSES_PER_LABEL);
+    });
+  });
+
+  /**
+   * The render loop's effect used to list `applyCanvasSize`, `peekScene` and
+   * `syncLodBand` as dependencies beside `officeView`, `resolvedTheme` and
+   * `runtime` - three callbacks whose own identity is stable across every
+   * interaction below, so the listing cost nothing YET. But an identity
+   * change in any one of them tears the whole loop down, and the cleanup
+   * calls `staticLayer.release()`, throwing away the floor's baked bitmap -
+   * the most expensive thing the tile holds. These cases pin the loop's
+   * actual restart count through real interactions, which is the fix's
+   * point: a callback identity change should not be able to cost the office
+   * its floor, whether or not one happens to change today.
+   */
+  describe("CommGraphOfficeCanvas fixup 5 - the render loop restarts only for a view pick or a theme flip", () => {
+    /**
+     * `getContext` is also how the floor's static layer bakes an offscreen
+     * chunk - a fresh `document.createElement("canvas")` per bake, never
+     * inserted into the document - so counting every call would drown the
+     * one this suite cares about in bakes that have nothing to do with the
+     * render loop restarting. Only a CONNECTED canvas is the one the loop's
+     * own `get2dContext` opened on mount, once per effect activation.
+     */
+    let mainCanvasContextCalls = 0;
+    let restoreMainCanvasGetContext: (() => void) | null = null;
+
+    beforeEach(() => {
+      mainCanvasContextCalls = 0;
+      restoreMainCanvasGetContext = stubGetContext(
+        function (this: HTMLCanvasElement) {
+          if (this.isConnected) mainCanvasContextCalls += 1;
+          return createRecordingContext(calls);
+        },
+      );
+    });
+
+    afterEach(() => {
+      restoreMainCanvasGetContext?.();
+      restoreMainCanvasGetContext = null;
+    });
+
+    const RESTART_VIEW: CommGraphTileViewState = { ...FIXED_CAMERA_VIEW };
+
+    function renderLoop(): {
+      readonly result: ReturnType<typeof render>;
+      readonly officeView: OfficeView;
+    } {
+      const officeView = walkInView();
+      const result = render(
+        withQueryClient(
+          officeElementWithView(
+            officeView,
+            new Set(["host", "worker"]),
+            [HOST_AGENT, WALKER_AGENT],
+            { view: RESTART_VIEW },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      flushRaf(1);
+      // The mount itself opened the canvas's one context; only what happens
+      // AFTER this point is an "interaction" for the cases below.
+      mainCanvasContextCalls = 0;
+      return { result, officeView };
+    }
+
+    it("a pan does not restart the loop", () => {
+      const { result, officeView } = renderLoop();
+      act(() => {
+        result.rerender(
+          withQueryClient(
+            officeElementWithView(
+              officeView,
+              new Set(["host", "worker"]),
+              [HOST_AGENT, WALKER_AGENT],
+              { view: { ...RESTART_VIEW, x: 400, y: 120 } },
+            ),
+          ),
+        );
+      });
+
+      expect(mainCanvasContextCalls).toBe(0);
+    });
+
+    it("a lod-band change does not restart the loop", () => {
+      const { result, officeView } = renderLoop();
+      // Crosses OFFICE_LOD_OFFICE_ZOOM (0.7) down into overview.
+      act(() => {
+        result.rerender(
+          withQueryClient(
+            officeElementWithView(
+              officeView,
+              new Set(["host", "worker"]),
+              [HOST_AGENT, WALKER_AGENT],
+              { view: { ...RESTART_VIEW, zoom: 0.5 } },
+            ),
+          ),
+        );
+      });
+      // Crosses OFFICE_LOD_CLOSEUP_ZOOM (1.6) up into close-up.
+      act(() => {
+        result.rerender(
+          withQueryClient(
+            officeElementWithView(
+              officeView,
+              new Set(["host", "worker"]),
+              [HOST_AGENT, WALKER_AGENT],
+              { view: { ...RESTART_VIEW, zoom: 2 } },
+            ),
+          ),
+        );
+      });
+
+      expect(mainCanvasContextCalls).toBe(0);
+    });
+
+    it("a resize does not restart the loop", () => {
+      renderLoop();
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+
+      expect(mainCanvasContextCalls).toBe(0);
+    });
+
+    it("a view pick restarts the loop exactly once", () => {
+      const { result } = renderLoop();
+      act(() => {
+        result.rerender(
+          withQueryClient(
+            // A distinct `OfficeView` identity - the picker's own contract -
+            // rather than a mutation of the one already mounted.
+            officeElementWithView(
+              OFFICE_VIEWS.towers,
+              new Set(["host", "worker"]),
+              [HOST_AGENT, WALKER_AGENT],
+              { view: RESTART_VIEW },
+            ),
+          ),
+        );
+      });
+
+      expect(mainCanvasContextCalls).toBe(1);
+    });
+
+    it("a theme flip restarts the loop exactly once", () => {
+      const { result, officeView } = renderLoop();
+      resolvedThemeMock.current = "dark";
+      act(() => {
+        result.rerender(
+          withQueryClient(
+            officeElementWithView(
+              officeView,
+              new Set(["host", "worker"]),
+              [HOST_AGENT, WALKER_AGENT],
+              { view: RESTART_VIEW },
+            ),
+          ),
+        );
+      });
+
+      expect(mainCanvasContextCalls).toBe(1);
     });
   });
 });
