@@ -162,10 +162,6 @@ interface DeleteEpicsVariables {
   } | null;
 }
 
-interface DeleteEpicsMutationOptions {
-  readonly onSuccess: () => void;
-}
-
 const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
   availableRepos: [] as string[],
@@ -183,16 +179,11 @@ const testState = vi.hoisted(() => ({
   worktreeCandidates: [] as WorktreeCleanupCandidateStub[],
   worktreeCandidatesFetching: false,
   worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
-  mutate:
-    vi.fn<
-      (
-        variables: DeleteEpicsVariables,
-        options: DeleteEpicsMutationOptions,
-      ) => void
-    >(),
+  mutate: vi.fn<(variables: DeleteEpicsVariables) => void>(),
   renameMutate: vi.fn<(variables: RenameEpicTitleVariables) => void>(),
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   pendingSetPinnedEpicIds: new Set<string>(),
+  pendingDeleteEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
   openLandingDraftFromHistory: vi.fn(),
@@ -232,6 +223,7 @@ vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
     isPending: false,
     mutate: testState.mutate,
   }),
+  usePendingDeleteEpicIds: () => testState.pendingDeleteEpicIds,
 }));
 
 vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
@@ -457,6 +449,7 @@ describe("<EpicsListPanel />", () => {
     testState.renameMutate.mockReset();
     testState.setPinnedMutate.mockReset();
     testState.pendingSetPinnedEpicIds = new Set();
+    testState.pendingDeleteEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
     testState.openLandingDraftFromHistory.mockReset();
@@ -501,6 +494,56 @@ describe("<EpicsListPanel />", () => {
     // must not open the destructive delete-confirmation flow.
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     expect(screen.queryByText("This action cannot be undone.")).toBeNull();
+  });
+
+  // Deletion runs in the background and the dialog closes at kickoff, so the
+  // row is back on screen with its controls while the host is still deleting
+  // it. Nothing on the wire deduplicates a second `epic.batchDelete` for the
+  // same id, so the row control, bulk selection and confirm must all refuse
+  // an id whose delete is still pending.
+  it("refuses a second delete of a Task whose deletion is still in flight", async () => {
+    testState.items = [
+      historyItem({}),
+      historyItem({
+        id: "history-epic-2",
+        epicId: "epic-two",
+        title: "Second history item",
+      }),
+    ];
+    testState.pendingDeleteEpicIds = new Set(["epic-from-history"]);
+    renderPanel("embedded", "/");
+
+    await screen.findByRole("link", { name: "Open task Open from landing" });
+
+    // The in-flight row renders the inert control; the other row stays live.
+    expect(
+      screen.getByRole("button", { name: "Cannot delete Open from landing" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Delete Second history item" }),
+    ).not.toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cannot delete Open from landing" }),
+    );
+    expect(screen.queryByTestId("delete-tasks-dialog")).toBeNull();
+
+    // "Select all" skips it, so a bulk delete never re-submits it.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epics-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
+
+    expect(testState.mutate).toHaveBeenCalledTimes(1);
+    const deleteCall = testState.mutate.mock.calls.at(0);
+    if (deleteCall === undefined) {
+      throw new Error("expected selected epic delete mutation call");
+    }
+    expect(deleteCall[0]).toEqual({
+      ids: ["epic-two"],
+      worktreeCleanup: null,
+    });
   });
 
   it("disables the row sweep affordance in the read-only picker variant", async () => {
@@ -2649,12 +2692,17 @@ describe("<EpicsListPanel />", () => {
     if (deleteCall === undefined) {
       throw new Error("expected selected epic delete mutation call");
     }
-    const [variables, options] = deleteCall;
+    const [variables] = deleteCall;
     expect(variables).toEqual({
       ids: ["epic-from-history", "epic-two"],
       worktreeCleanup: null,
     });
-    expect(typeof options.onSuccess).toBe("function");
+    // Deletion runs in the background off the mutation cache, like a Sweep:
+    // the dialog and selection mode are gone at confirm, before the host
+    // answers, and no per-call callback is what closes them.
+    expect(deleteCall.length).toBe(1);
+    expect(screen.queryByTestId("delete-tasks-dialog")).toBeNull();
+    expect(screen.queryByTestId("epics-list-delete-selected")).toBeNull();
   });
 
   // T13: the delete confirmation is an unbounded pause with a human in it, so
