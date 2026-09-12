@@ -382,6 +382,63 @@ function lastHitRegions(spy: SpiedResults): ReadonlyArray<OfficeHitRegion> {
   return hits;
 }
 
+/**
+ * `fitCamera`'s own formula, reproduced here because the function itself is
+ * module-private - `comm-graph-office-canvas.tsx` never exports it. The
+ * available box shrinks by `FIT_PADDING` (24px) on every side, the zoom that
+ * fits what is left is capped at `MAX_FIT_ZOOM` (6x), and the camera centres
+ * the floor inside the padded box. Both constants come straight off the
+ * fixup 10 ticket's citation of the source, not a guess.
+ */
+function fitCameraLike(
+  floor: { readonly width: number; readonly height: number },
+  viewport: { readonly width: number; readonly height: number },
+): { readonly x: number; readonly y: number; readonly zoom: number } {
+  const FIT_PADDING = 24;
+  const MAX_FIT_ZOOM = 6;
+  const availableWidth = viewport.width - FIT_PADDING * 2;
+  const availableHeight = viewport.height - FIT_PADDING * 2;
+  const zoom = Math.min(
+    MAX_FIT_ZOOM,
+    Math.min(availableWidth / floor.width, availableHeight / floor.height),
+  );
+  return {
+    zoom,
+    x: (viewport.width - floor.width * zoom) / 2,
+    y: (viewport.height - floor.height * zoom) / 2,
+  };
+}
+
+/**
+ * The two-agent fixture's floor (`ORCHESTRATOR` + `REVIEWER`), back-derived
+ * from the existing "fits the whole floor to the tile on F" case just above:
+ * at a 4200x1900 viewport it expects camera `{x: 36, y: 38, zoom: 6}`, and
+ * that fit is SATURATED (zoom is pinned at `MAX_FIT_ZOOM`), so inverting
+ * `fitCameraLike`'s own formula for zoom===6 gives
+ * `floor.width = (4200 - 2*36) / 6 = 688` and
+ * `floor.height = (1900 - 2*38) / 6 = 304`.
+ */
+const TWO_AGENT_FLOOR = { width: 688, height: 304 };
+
+/**
+ * Recovers the camera a frame was drawn with, given the viewport it was
+ * drawn at - the inverse of the component's own private `worldRectOf`
+ * (`x: -camera.x/zoom, y: -camera.y/zoom, width: viewport.width/zoom,
+ * height: viewport.height/zoom`). Nothing in this suite holds a reference to
+ * the runtime's camera object directly, so reading it back through the one
+ * thing that IS observed - what the scene was asked to frame - is what lets
+ * a case pin the exact camera a resize left behind, or prove it never moved.
+ */
+function cameraFromFrame(
+  spy: SpiedCalls,
+  viewport: { readonly width: number; readonly height: number },
+): { readonly x: number; readonly y: number; readonly zoom: number } | null {
+  const rect = lastFramedRect(spy);
+  if (rect === null || rect.width === 0) return null;
+  const zoom = viewport.width / rect.width;
+  return { zoom, x: -rect.x * zoom, y: -rect.y * zoom };
+}
+
 function withQueryClient(children: ReactNode) {
   return (
     <QueryClientProvider
@@ -1109,6 +1166,173 @@ describe("CommGraphOfficeCanvas", () => {
     });
 
     expect(onCameraChange).toHaveBeenCalledWith({ x: 36, y: 38, zoom: 6 });
+  });
+
+  /**
+   * Fixup 10 (L5, live sitting): pressing Fit used to be a one-off the moment
+   * a person had touched the camera even once beforehand, because
+   * `takeManualControl` (which every path into `fitToFloor` calls on the way
+   * in, to abandon a playback pan in flight) cleared auto-fit for good and
+   * the old `fitToFloor` never re-armed it. So zoom in, press Fit, then
+   * shrink the tile, and the camera kept the pre-shrink framing with the
+   * floor cropped off-screen. These three cases drive the runtime the same
+   * way `F`, the zoom buttons and a resize event do, and read the camera
+   * back through the drawn frame (`cameraFromFrame`) rather than through
+   * `onCameraChange`, because the claim under test is about the AUTOMATIC
+   * re-fit a resize triggers, and that re-fit deliberately does not persist -
+   * see the third case.
+   */
+  describe("fixup 10 - a Fit re-arms auto-fit for the next resize (L5)", () => {
+    // Both viewports are chosen large enough to saturate `fitCamera`'s zoom
+    // cap (6x) against this fixture's floor, which is what makes each
+    // expected camera an exact, packing-independent number instead of a
+    // fraction that would also have to reproduce `fitCamera`'s own packing
+    // choice. `RESIZE_VIEWPORT` also isn't the SAME aspect ratio as
+    // `FIT_VIEWPORT`, so a re-fit against it lands at a genuinely different
+    // camera - a same-ratio resize would move `x`/`y` by a common scale
+    // factor and could pass by coincidence even reading the wrong camera.
+    const FIT_VIEWPORT = { width: 4200, height: 1900 };
+    const RESIZE_VIEWPORT = { width: 4400, height: 2000 };
+
+    it("re-fits on a resize after Fit, even though a zoom took manual control first", () => {
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      render(
+        withQueryClient(
+          officeElement(
+            new Set([ORCHESTRATOR.id, REVIEWER.id]),
+            STATIC_OFFICE,
+            {},
+          ),
+        ),
+      );
+      // Eligible first, so a scene exists for `fitToFloor` to read a world
+      // size from - `peekScene()` returns null otherwise and Fit would be a
+      // no-op.
+      setIntersecting(true);
+      setCanvasSize(FIT_VIEWPORT);
+      step();
+
+      // The zoom is what takes manual control BEFORE the Fit - the sitting's
+      // own sequence, and the ordering that pins the requirement rather than
+      // a weaker version of it. `handleFit` takes manual control on the way
+      // in whatever the camera was doing, so a plain Fit-then-resize is red
+      // at `a73c629ba` as well; but that weaker sequence is also GREEN
+      // against a "fix" that merely stopped the Fit button from taking
+      // control at all - which would leave a playback pan in flight to
+      // overwrite the framing a frame later, and would still crop after a
+      // zoom. Only a Fit that re-arms auto-fit AFTER the take passes here.
+      fireEvent.click(screen.getByTestId("comm-graph-office-zoom-in"));
+      step();
+
+      fireEvent.click(screen.getByTestId("comm-graph-office-fit"));
+      step();
+
+      // The resize itself never touches the camera - only `applyAutoFit`,
+      // running inside the very next frame, does. Nothing repaints without a
+      // `step()` here: jsdom's canvas has no 2d context of its own, so
+      // `installCanvas` is what lets the frame loop run at all.
+      setCanvasSize(RESIZE_VIEWPORT);
+      step();
+
+      const camera = cameraFromFrame(frames, RESIZE_VIEWPORT);
+      if (camera === null) throw new Error("no frame drawn after the resize");
+      const expected = fitCameraLike(TWO_AGENT_FLOOR, RESIZE_VIEWPORT);
+      expect(camera.zoom).toBeCloseTo(expected.zoom);
+      expect(camera.x).toBeCloseTo(expected.x);
+      expect(camera.y).toBeCloseTo(expected.y);
+    });
+
+    it("leaves the camera exactly where a resize found it when the camera was taken again after Fit (guard on the standing rule; green before and after this fixup)", () => {
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      render(
+        withQueryClient(
+          officeElement(
+            new Set([ORCHESTRATOR.id, REVIEWER.id]),
+            STATIC_OFFICE,
+            {},
+          ),
+        ),
+      );
+      setIntersecting(true);
+      setCanvasSize(FIT_VIEWPORT);
+      step();
+
+      fireEvent.click(screen.getByTestId("comm-graph-office-fit"));
+      step();
+
+      // The zoom lands AFTER the Fit this time, so it is what takes manual
+      // control last - auto-fit stays off from here on, exactly as it always
+      // has, fixup 10 or not. This is the guard: nothing about re-arming Fit
+      // is supposed to touch a camera a person deliberately moved afterward.
+      fireEvent.click(screen.getByTestId("comm-graph-office-zoom-in"));
+      step();
+      const afterZoom = cameraFromFrame(frames, FIT_VIEWPORT);
+      if (afterZoom === null) throw new Error("no frame drawn after the zoom");
+
+      setCanvasSize(RESIZE_VIEWPORT);
+      step();
+      const afterResize = cameraFromFrame(frames, RESIZE_VIEWPORT);
+      if (afterResize === null) {
+        throw new Error("no frame drawn after the resize");
+      }
+
+      expect(afterResize.zoom).toBeCloseTo(afterZoom.zoom);
+      expect(afterResize.x).toBeCloseTo(afterZoom.x);
+      expect(afterResize.y).toBeCloseTo(afterZoom.y);
+    });
+
+    it("persists the camera once for the Fit, and not again when the resize re-fits it automatically", () => {
+      // `installCanvas` (which stubs `requestAnimationFrame` wholesale via
+      // `vi.stubGlobal`) is set up BEFORE fake timers, and the fake timers
+      // are restricted to `setTimeout`/`clearTimeout` - the same combination
+      // the "a pan does not restart the loop" case above uses - so the rAF
+      // stub `step()` drives stays untouched, and only the debounce
+      // (`window.setTimeout` in `persistView`) is faked.
+      const { step } = installCanvas();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const onCameraChange = vi.fn();
+      render(
+        withQueryClient(
+          officeElement(
+            new Set([ORCHESTRATOR.id, REVIEWER.id]),
+            STATIC_OFFICE,
+            { onCameraChange },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      setCanvasSize(FIT_VIEWPORT);
+      step();
+
+      fireEvent.click(screen.getByTestId("comm-graph-office-zoom-in"));
+      step();
+
+      fireEvent.click(screen.getByTestId("comm-graph-office-fit"));
+      step();
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      // The zoom's own persist and the Fit's own persist share one debounce
+      // timer (`persistView` clears whatever it last scheduled), so this is
+      // the ONE write either of them makes - not a claim about the zoom
+      // never persisting on its own.
+      expect(onCameraChange).toHaveBeenCalledTimes(1);
+      onCameraChange.mockClear();
+
+      // `applyAutoFit` runs inside the frame loop and never calls
+      // `persistView` - only `fitToFloor` (Fit itself) does. So the
+      // automatic re-fit this resize triggers must leave `onCameraChange`
+      // silent, debounce included.
+      setCanvasSize(RESIZE_VIEWPORT);
+      step();
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(onCameraChange).not.toHaveBeenCalled();
+    });
   });
 
   it("returns to 1x on 0, from the centre of the tile", () => {
