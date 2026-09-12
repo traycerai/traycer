@@ -142,7 +142,9 @@ import {
   OFFICE_SIGN_FONT_PX,
   OFFICE_SIGN_LETTER_SPACING_EM,
   OFFICE_SIGN_MONOSPACE_STACK,
+  OFFICE_SIGN_NARROW_PLATE_MAX_CHARS,
   OFFICE_SIGN_PADDING_X,
+  OFFICE_SIGN_PLATE_MAX_CHARS,
   officeFloorSignsToDraw,
   officeSignCenterX,
   officeSignsToDraw,
@@ -213,10 +215,6 @@ const CLOCK_MINUTE_HAND = 4;
 const CLOCK_HUB_RADIUS = 1.5;
 const DARK_LABEL_BACKING = "rgba(0, 0, 0, 0.85)";
 const LIGHT_LABEL_BACKING = "rgba(255, 255, 255, 0.85)";
-/** A cabin's sign is two tiles wide, so its name gets less room than a desk's. */
-const MAX_ROOM_LABEL_CHARS = 12;
-/** A pod's plate is ONE tile, so its name gets less room again. */
-const MAX_POD_LABEL_CHARS = 10;
 /** Baseline of a sign's name, measured down from the sign sprite's own top. */
 const SIGN_LABEL_BASELINE = 11;
 const SIGN_WIDTH_TILES = 2;
@@ -1368,11 +1366,21 @@ function signSpriteFor(sign: OfficeSign): "sign" | "pod-plate" | null {
   return null;
 }
 
-/** How many characters fit across a sign of this width, before the ellipsis. */
+/**
+ * How many characters fit across a sign of this width, before the ellipsis.
+ *
+ * A cabin's sign is two tiles wide and a pod's plate is ONE, so a pod's name
+ * gets less room. Both budgets come from `office-signs.ts` and are NOT a copy
+ * of them: the resolver picks a board's reading by measuring it against the
+ * same two numbers, so that it never offers a rung this cut would take an
+ * ellipsis out of - `BULLPEN · 9…` was that disagreement. One number in two
+ * files is the drift the shared constants exist to make impossible; only the
+ * two-valued step below is the renderer's own.
+ */
 function signMaxChars(widthTiles: number): number {
   return widthTiles >= SIGN_WIDTH_TILES
-    ? MAX_ROOM_LABEL_CHARS
-    : MAX_POD_LABEL_CHARS;
+    ? OFFICE_SIGN_PLATE_MAX_CHARS
+    : OFFICE_SIGN_NARROW_PLATE_MAX_CHARS;
 }
 
 function truncateSign(text: string, maxChars: number): string {
