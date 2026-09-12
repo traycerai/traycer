@@ -35,9 +35,17 @@ export function listHistoryLandingDrafts(input: {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly query: string;
   readonly currentHostId: string | null;
+  /**
+   * The draft the composer above this list is editing right now. Listing it
+   * would show the user the prompt they are typing as a row directly under
+   * the box they are typing it into, so it stays out; `null` when the list
+   * is not rendered beneath a composer (the history page and modal).
+   */
+  readonly excludeDraftId: string | null;
 }): ReadonlyArray<HistoryLandingDraft> {
   const needle = input.query.trim().toLowerCase();
   return input.drafts
+    .filter((draft) => draft.id !== input.excludeDraftId)
     .filter((draft) => isHistoryListedLandingDraft(draft, input.currentHostId))
     .map((draft) => ({
       id: draft.id,
