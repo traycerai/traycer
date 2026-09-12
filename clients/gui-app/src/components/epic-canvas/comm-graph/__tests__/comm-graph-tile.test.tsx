@@ -2441,14 +2441,24 @@ describe("CommGraphTile", () => {
     }
 
     it("retires the stale camera while still unresolved, and builds the first resolved Floor runtime neutral (Settings towers -> auto, stamped record)", async () => {
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
       useSettingsStore.getState().setAgentOfficeDefaultView("towers");
-      await renderSeededOffice(seededTowersToAutoTile("towers"));
-      expect(storedView()?.mode).toBe("graph");
-      expect(storedView()).toMatchObject({
-        x: DEFAULT_COMM_GRAPH_VIEW.x,
-        y: DEFAULT_COMM_GRAPH_VIEW.y,
-        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+      // Seeded at Finding B's own non-neutral numbers, not the default -
+      // zeroing an already-zero Graph camera would pass whether or not the
+      // newly-enabled unresolved-reset path also (wrongly) neutralised the
+      // GRAPH's fields, which is exactly the blind spot that hid Finding B.
+      // Asserted immediately below, before the Settings move, so a mis-seed
+      // fails loudly here instead of laundering into a false pass later.
+      await renderSeededOffice({
+        ...seededTowersToAutoTile("towers"),
+        x: 155,
+        y: 266,
+        zoom: 2,
       });
+      expect(storedView()?.mode).toBe("graph");
+      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
 
       // THE ARMING MOVE, reversed from the headline: Settings towers ->
       // auto while Graph is still up. `resolvedViewId` goes "towers" ->
@@ -2470,8 +2480,6 @@ describe("CommGraphTile", () => {
         officeCameraView: null,
       });
 
-      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
-
       // Switch to Office. `resolvedViewId` is still `null` - Auto has
       // nothing to decide from yet - so this mounts on the measuring view
       // first, exactly as every other "Auto has not answered" case in
@@ -2483,6 +2491,7 @@ describe("CommGraphTile", () => {
       setOfficeCanvasSize({ width: 1040, height: 700 });
       setIntersecting(true);
       caughtUp();
+      step();
 
       // REAL Auto, not a stub: this fixture's handful of agents fits the
       // Floor comfortably at 1040x700, the same fixture every other Auto
@@ -2491,21 +2500,39 @@ describe("CommGraphTile", () => {
         expect(storedView()?.officeAutoView).toBe("floor");
       });
 
-      // ASSERTION 2: the FIRST resolved Floor runtime is built from the
-      // neutral camera - not the stale Towers numbers the keep arm at
-      // `:631-640` preserves unconditionally today because the witness
-      // gets no say in that decision.
-      expect(lastCanvasCamera(office)).toMatchObject({ x: 0, y: 0, zoom: 1 });
+      // The Auto answer remounts the canvas (measuring -> floor), and that
+      // remount only reports its own eligibility on the frame this next
+      // `step()` drives - same two-step pattern as "keeps a resolved Floor
+      // camera when Auto answers" above.
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      step();
 
-      // ASSERTION 3: the Graph's own camera was never anyone's business
-      // in this sequence and has to read exactly as seeded throughout -
-      // this whole detour is about the OFFICE's `officeCamera`, a
-      // different field since D68.
-      expect(storedView()).toMatchObject({
-        x: DEFAULT_COMM_GRAPH_VIEW.x,
-        y: DEFAULT_COMM_GRAPH_VIEW.y,
-        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+      // ASSERTION 2: the FIRST resolved Floor runtime is read off the
+      // ACTUAL scene it painted, not off `lastCanvasCamera`'s last-render
+      // props (which answers a different, weaker question and never
+      // installs a canvas or steps a frame at all). With `officeCamera`
+      // retired to `null`, `isDefaultCommGraphView` is true and auto-fit
+      // arms, so the Floor frame lands on the fitted rect below; the keep
+      // arm's unconditional preservation of the stale Towers camera would
+      // instead have produced the far-off-screen frame the sibling "keeps a
+      // resolved Floor camera" case pins at `{ x: 2500, y: 5000, width:
+      // 260, height: 175 }` - not close to this one.
+      const state = lastFrameAndBounds(frames, sync);
+      expect(state.frame).toEqual({
+        x: -498.4049079754601,
+        y: -35.92638036809816,
+        width: 1556.8098159509202,
+        height: 1047.8527607361964,
       });
+
+      // ASSERTION 3: the Graph's own camera was never anyone's business in
+      // this sequence and has to read exactly as seeded throughout - not
+      // merely "still the default", which a wrongly-broadened reset could
+      // satisfy by coincidence, but the actual non-neutral numbers seeded
+      // above. This whole detour is about the OFFICE's `officeCamera`, a
+      // different field since D68.
+      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
     });
 
     it("retires the stale camera while still unresolved even with no stamp at all - the legacy variant with the same store-settlement gap", async () => {
@@ -2521,14 +2548,22 @@ describe("CommGraphTile", () => {
       // happened at all, so if store settlement is wired through the
       // record alone, this case still fails while the stamped case above
       // passes.
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
       useSettingsStore.getState().setAgentOfficeDefaultView("towers");
-      await renderSeededOffice(seededTowersToAutoTile(null));
-      expect(storedView()?.mode).toBe("graph");
-      expect(storedView()).toMatchObject({
-        x: DEFAULT_COMM_GRAPH_VIEW.x,
-        y: DEFAULT_COMM_GRAPH_VIEW.y,
-        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+      // Same Finding-B seed as the stamped case above, for the same reason:
+      // the default camera can't tell a wrongly-broad neutralisation of the
+      // GRAPH's fields from a correct no-op, and asserted immediately so a
+      // mis-seed is caught here rather than mistaken for a pass later.
+      await renderSeededOffice({
+        ...seededTowersToAutoTile(null),
+        x: 155,
+        y: 266,
+        zoom: 2,
       });
+      expect(storedView()?.mode).toBe("graph");
+      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
 
       act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
 
@@ -2542,8 +2577,6 @@ describe("CommGraphTile", () => {
         officeCameraView: null,
       });
 
-      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
-
       await act(async () => {
         fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
         await Promise.resolve();
@@ -2551,22 +2584,34 @@ describe("CommGraphTile", () => {
       setOfficeCanvasSize({ width: 1040, height: 700 });
       setIntersecting(true);
       caughtUp();
+      step();
 
       await waitFor(() => {
         expect(storedView()?.officeAutoView).toBe("floor");
       });
 
-      // ASSERTION 2: same as the stamped case - the first resolved Floor
-      // runtime has to be built neutral, not from the stale Towers camera
-      // a record-only fix would have no evidence to distrust.
-      expect(lastCanvasCamera(office)).toMatchObject({ x: 0, y: 0, zoom: 1 });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      step();
 
-      // ASSERTION 3: the Graph's camera, untouched throughout.
-      expect(storedView()).toMatchObject({
-        x: DEFAULT_COMM_GRAPH_VIEW.x,
-        y: DEFAULT_COMM_GRAPH_VIEW.y,
-        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+      // ASSERTION 2: same as the stamped case - read off the actual scene
+      // the first resolved Floor runtime painted, not `lastCanvasCamera`'s
+      // last-render props. Neutral retirement here means auto-fit arms and
+      // this lands on the same fitted frame as the stamped case; a
+      // record-only fix has no evidence to distrust in this legacy variant
+      // (no stamp at all) and would leave the stale Towers camera in place,
+      // producing the far-off-screen frame instead.
+      const state = lastFrameAndBounds(frames, sync);
+      expect(state.frame).toEqual({
+        x: -498.4049079754601,
+        y: -35.92638036809816,
+        width: 1556.8098159509202,
+        height: 1047.8527607361964,
       });
+
+      // ASSERTION 3: the Graph's camera, untouched throughout - the actual
+      // seeded numbers, not merely "still the default".
+      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
     });
 
     it("an explicit pick of the already-resolved view finds nothing left to preserve (pick sibling, ~687) - green by timing, not by rule", async () => {
