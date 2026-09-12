@@ -1776,25 +1776,13 @@ export function updateCommGraphTileView(
 }
 
 /**
- * Persist a comm-graph tile's viewport, and ONLY its viewport. Called on
- * gesture END (React Flow's `onMoveEnd`, the office's debounced persist),
- * never per animation frame - the canvas snapshot is serialized on every
- * write, so a per-frame pan would churn the whole persistence path.
- *
- * A PATCH, where the renderers used to build a whole view value and hand it
- * over. Both of them know the camera and nothing else; a whole-value write
- * from either would carry the mode and the view choice as they were when that
- * renderer last rendered, so a pan landing after a pick - which is exactly
- * what a debounced pan does - would put the old view back.
- */
-/**
  * The OFFICE's camera write: the numbers, plus the view they are about.
  *
- * Deliberately a second entry point rather than a flag on the one above. The
- * graph renderer has no idea what an office view is, so it must not be able to
- * say anything about one - not even `null`, which would quietly erase the
- * framing record on every debounced pan. Two writers, two paths, each saying
- * only what it knows.
+ * Deliberately a second entry point rather than a flag on
+ * {@link updateCommGraphTileCamera} below. The graph renderer has no idea what
+ * an office view is, so it must not be able to say anything about one - not
+ * even `null`, which would quietly erase the framing record on every debounced
+ * pan. Two writers, two paths, each saying only what it knows.
  */
 export function updateCommGraphTileOfficeCamera(
   state: EpicCanvasState,
@@ -1829,6 +1817,18 @@ export function updateCommGraphTileOfficeCamera(
   );
 }
 
+/**
+ * Persist a comm-graph tile's viewport, and ONLY its viewport. Called on
+ * gesture END (React Flow's `onMoveEnd`, the office's debounced persist),
+ * never per animation frame - the canvas snapshot is serialized on every
+ * write, so a per-frame pan would churn the whole persistence path.
+ *
+ * A PATCH, where the renderers used to build a whole view value and hand it
+ * over. Both of them know the camera and nothing else; a whole-value write
+ * from either would carry the mode and the view choice as they were when that
+ * renderer last rendered, so a pan landing after a pick - which is exactly
+ * what a debounced pan does - would put the old view back.
+ */
 export function updateCommGraphTileCamera(
   state: EpicCanvasState,
   tileId: string,

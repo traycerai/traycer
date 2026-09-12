@@ -18,6 +18,7 @@
  */
 import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/foundation";
 import type { CommGraphAgentKind } from "@/lib/comm-graph/comm-graph-model";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-view-vocabulary";
 import type {
   CommGraphPulse,
   CommGraphPulseKind,
@@ -276,18 +277,11 @@ export interface OfficeTileRect {
 // ---- Views ------------------------------------------------------------ //
 
 /**
- * Which office a layout is a layout OF. The union is the set of views that
- * SHIP: a view is registered here and in `views/office-view.ts` together, so
- * the picker, the persisted choice and the shared suites all follow one list
- * and a half-registered view cannot exist.
+ * Which office a layout is a layout OF, re-exported from the vocabulary module
+ * that owns it. It lives there because the settings store and the tile schema
+ * need the name without the renderer graph this module sits in front of.
  */
-export type OfficeViewId =
-  | "floor"
-  | "towers"
-  | "building"
-  | "mission-control"
-  | "campus"
-  | "city";
+export type { OfficeViewId };
 
 /**
  * Semantic zoom, decided by the camera: `0` overview (pips with state glyphs),

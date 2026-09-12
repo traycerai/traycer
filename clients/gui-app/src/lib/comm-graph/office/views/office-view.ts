@@ -45,6 +45,7 @@ import type {
   OfficeViewId,
   OfficeWorldDrawable,
 } from "@/lib/comm-graph/office/office-types";
+import { OFFICE_VIEW_IDS } from "@/lib/comm-graph/office/office-view-vocabulary";
 
 /**
  * Everything a plan is allowed to know. It is the whole input: a plan that
@@ -224,18 +225,12 @@ export const OFFICE_VIEWS: Readonly<Record<OfficeViewId, OfficeView>> = {
 };
 
 /**
- * The registry's order, which is the order the picker lists and every shared
- * suite enumerates. Derived rather than written down, so registering a view is
- * one edit and enrolling it in the tests is none.
+ * Re-exported from the vocabulary module, which OWNS the list so that reading
+ * it costs nothing: this file imports every planner, measurer and painter, and
+ * the settings store and the tile schema need the names without any of that.
+ *
+ * `OFFICE_VIEWS` below is typed against the same union, so a view named there
+ * and missing here does not compile; `office-view-registry-vocabulary.test.ts`
+ * pins the array against these keys, in order.
  */
-export const OFFICE_VIEW_IDS: ReadonlyArray<OfficeViewId> =
-  Object.keys(OFFICE_VIEWS).filter(isOfficeViewId);
-
-/**
- * Narrows a key of {@link OFFICE_VIEWS} back to its own type. `Object.keys`
- * erases to `string[]`, and a cast to put the type back would re-introduce
- * exactly the drift deriving the list removes.
- */
-function isOfficeViewId(id: string): id is OfficeViewId {
-  return Object.hasOwn(OFFICE_VIEWS, id);
-}
+export { OFFICE_VIEW_IDS };

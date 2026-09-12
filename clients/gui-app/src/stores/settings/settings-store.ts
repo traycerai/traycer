@@ -21,8 +21,10 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import { DEFAULT_THEME_PRESET, type ThemePreset } from "@/lib/theme-presets";
-import { OFFICE_VIEW_IDS } from "@/lib/comm-graph/office/views/office-view";
-import type { OfficeViewChoice } from "@/stores/epics/canvas/types";
+import {
+  OFFICE_VIEW_IDS,
+  type OfficeViewChoice,
+} from "@/lib/comm-graph/office/office-view-vocabulary";
 import {
   DEFAULT_DIFF_VIEWER_PREFERENCES,
   type DiffViewerPreferences,

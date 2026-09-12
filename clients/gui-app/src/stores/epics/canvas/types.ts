@@ -1,6 +1,9 @@
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
-import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
+import type {
+  OfficeViewChoice,
+  OfficeViewId,
+} from "@/lib/comm-graph/office/office-view-vocabulary";
 import { makeLiteralGuard } from "@/lib/type-guard";
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
 import type { DesktopJsonValue } from "@/lib/windows/types";
@@ -510,13 +513,14 @@ export interface CommGraphTileCamera {
 }
 
 /**
- * Which office view this tile draws, as the USER chose it.
+ * Which office view this tile draws, as the USER chose it - re-exported from
+ * the vocabulary module that owns it.
  *
  * `"auto"` is a choice like any other, not the absence of one: it means "pick
  * for me, by what fits", and its measured outcome is remembered separately in
  * `officeAutoView` so a remount cannot re-decide it.
  */
-export type OfficeViewChoice = "auto" | OfficeViewId;
+export type { OfficeViewChoice };
 
 export interface CommGraphTileViewState extends CommGraphTileCamera {
   readonly mode: "graph" | "office";

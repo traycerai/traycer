@@ -26,12 +26,13 @@ import {
   type OfficeAutoDecision,
 } from "@/lib/comm-graph/office/office-auto";
 import { OFFICE_LOD_OFFICE_ZOOM } from "@/lib/comm-graph/office/office-lod";
+import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 import {
-  OFFICE_VIEWS,
+  isOfficeViewChoice,
   OFFICE_VIEW_IDS,
-} from "@/lib/comm-graph/office/views/office-view";
-import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
-import type { OfficeViewChoice } from "@/stores/epics/canvas/types";
+  type OfficeViewChoice,
+  type OfficeViewId,
+} from "@/lib/comm-graph/office/office-view-vocabulary";
 
 export interface OfficeViewPickerProps {
   /** What this tile is set to - `"auto"` included, which is a choice. */
@@ -41,11 +42,6 @@ export interface OfficeViewPickerProps {
   /** The measurement behind that, if this tile still has it in hand. */
   readonly decision: OfficeAutoDecision | null;
   readonly onChoose: (choice: OfficeViewChoice) => void;
-}
-
-function isOfficeViewChoice(value: string): value is OfficeViewChoice {
-  if (value === "auto") return true;
-  return OFFICE_VIEW_IDS.some((id) => id === value);
 }
 
 /**
@@ -63,10 +59,17 @@ function autoReason(
       ? "Measuring this tile…"
       : "Picks by how much of the office fits this tile.";
   }
+  // "fits at" belongs to the view that WON, which is not the first one
+  // measured. `decideOfficeView` keeps `fits` in candidate order and takes the
+  // first entry that reaches the threshold, so a Floor that fails and a Towers
+  // that wins used to read "Floor fits at 0.2×, Towers at 0.8×" - the claim
+  // attached to the loser. When nothing reaches, the outcome is the fallback
+  // view, which is in no entry here, and then no entry says "fits" - which is
+  // the truth as well.
   const fits = decision.fits
     .map(
-      (fit, index) =>
-        `${OFFICE_VIEWS[fit.view].label} ${index === 0 ? "fits at" : "at"} ${officeZoomLabel(fit.zoom)}`,
+      (fit) =>
+        `${OFFICE_VIEWS[fit.view].label} ${fit.view === decision.view ? "fits at" : "at"} ${officeZoomLabel(fit.zoom)}`,
     )
     .join(", ");
   return `${fits}; office detail needs ${OFFICE_LOD_OFFICE_ZOOM}×. Choose Auto again to re-measure.`;

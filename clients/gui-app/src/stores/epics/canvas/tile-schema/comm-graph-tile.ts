@@ -14,7 +14,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
-import { OFFICE_VIEW_IDS } from "@/lib/comm-graph/office/views/office-view";
+import { OFFICE_VIEW_IDS } from "@/lib/comm-graph/office/office-view-vocabulary";
 import { TILE_KIND_COMM_GRAPH } from "../tile-kinds";
 import type {
   CommGraphTileRef,

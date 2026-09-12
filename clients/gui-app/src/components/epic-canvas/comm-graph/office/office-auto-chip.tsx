@@ -87,6 +87,13 @@ export function OfficeAutoChip(props: OfficeAutoChipProps) {
   return (
     <div
       data-testid="comm-graph-office-auto-chip"
+      // Its text changes with no gesture behind it - "Auto · measuring…"
+      // becomes the decided view when the measurement lands - so the outcome
+      // is announced rather than only drawn. The same `role="status"` +
+      // `aria-live="polite"` pairing the settings surfaces use for passive
+      // status text.
+      role="status"
+      aria-live="polite"
       className={cn(
         // Read-only: it must not take the pan or the click a person aims at
         // the floor underneath it.

@@ -42,11 +42,12 @@ import {
   type TerminalCursorStyle,
 } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
+import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 import {
-  OFFICE_VIEWS,
-  OFFICE_VIEW_IDS,
-} from "@/lib/comm-graph/office/views/office-view";
-import type { OfficeViewChoice } from "@/stores/epics/canvas/types";
+  isOfficeViewChoice,
+  OFFICE_VIEW_CHOICES,
+  type OfficeViewChoice,
+} from "@/lib/comm-graph/office/office-view-vocabulary";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
 import {
@@ -54,20 +55,6 @@ import {
   trackSettingChanged,
   type AnalyticsSetting,
 } from "@/lib/analytics";
-
-/**
- * Auto first, then every registered office view in the registry's own order -
- * the same order the tile's picker lists, because both read the registry
- * rather than a second list that would drift from it.
- */
-const OFFICE_VIEW_CHOICES: ReadonlyArray<OfficeViewChoice> = [
-  "auto",
-  ...OFFICE_VIEW_IDS,
-];
-
-function isOfficeViewChoice(value: string): value is OfficeViewChoice {
-  return OFFICE_VIEW_CHOICES.some((choice) => choice === value);
-}
 
 function officeViewChoiceLabel(choice: OfficeViewChoice): string {
   return choice === "auto" ? "Auto" : OFFICE_VIEWS[choice].label;
