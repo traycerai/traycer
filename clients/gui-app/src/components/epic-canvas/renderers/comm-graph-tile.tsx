@@ -96,15 +96,22 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
  * from a tile whose default never moved. The two differ by a fact about this
  * mount, so this mount is what holds it.
  *
- * `armedOn` holds the stored VIEW OBJECT rather than a flag, because "is the
- * camera still the old one" and "does the record name this view" are different
- * questions and only the first one is the one being asked. A record can
- * already name the arriving view without any writer having framed a camera for
- * it - a tile saved under a Settings default of Towers, reopened while the
- * default is Auto, carries `officeCameraView: "towers"` over a camera nothing
- * has touched. Identity answers it exactly: every writer that replaces the
- * camera replaces this object, and a Settings change - which writes nothing to
- * this tile at all - does not.
+ * `armed` IS A PLAIN FLAG, and the release is something a writer says rather
+ * than something the stored value implies. It used to hold the stored view
+ * OBJECT and release on identity: a writer had replaced it, and the record
+ * named the arriving view. Both can be true with no office writer having run -
+ * a mode switch replaces the object for free, and a record can have named that
+ * view since long before the move (a tile saved under a Settings default of
+ * Towers, reopened while the default is Auto, carries
+ * `officeCameraView: "towers"` over a camera nothing has touched). That was
+ * fixup 12's defect, and no cleverer key fixes it: a camera-object key leaks
+ * on the two the reviewer named - `officeCamera: null` is a legitimate armed
+ * value, so `null` cannot also be the unarmed sentinel, and a write the store
+ * collapses by value produces no new reference to notice.
+ *
+ * So every writer that can speak FOR the arriving view calls `releaseWitness`
+ * after its own write, and nothing else can release. A flag is enough once the
+ * release is explicit, which is why there is no camera token here to wrap.
  */
 interface OfficeCameraWitness {
   readonly view: OfficeViewId | null;
@@ -572,8 +579,10 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // fields with the Graph on screen and no office canvas mounted at all.
     // That is what stops the Graph-mode default move from reaching the office
     // as a stale camera in the first place.
-    if (resolvedViewId === null) return;
+    // The RECORD arm needs a destination to compare the stamp against, so it
+    // still waits for one. The WITNESS arm below does not - see there.
     const recordNamesAnotherView =
+      resolvedViewId !== null &&
       node.view.officeCameraView !== null &&
       node.view.officeCameraView !== resolvedViewId;
     // The case the record cannot answer: the default moved under this tile
@@ -585,6 +594,19 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // and a witnessed move over a `null` camera has nothing to retire - the
     // projection is neutral regardless, and a stale stamp with no camera is
     // the arm above's business.
+    //
+    // AND IT DOES NOT WAIT FOR A DESTINATION. A default that moves to Auto
+    // leaves `resolvedViewId` null until Auto answers, and this used to
+    // return there - so the stale camera stayed persisted across the whole
+    // interval, and Auto's keep arm then preserved it on a Floor outcome and
+    // stamped the result (Finding D). A held move over a real camera is stale
+    // whatever the destination turns out to be, so it is retired now and
+    // stamped `null`: nobody has framed a view that has not been chosen yet.
+    //
+    // Settling the STORE rather than teaching the keep arm to decline is the
+    // sufficient direction, and for the reason requirement 3 exists: a reload
+    // in that interval loses the witness entirely, and any rule that depends
+    // on it surviving is defeated by the reload the interval invites.
     const witnessDistrustsTheCamera =
       witnessedMove && node.view.officeCamera !== null;
     if (!recordNamesAnotherView && !witnessDistrustsTheCamera) return;
@@ -628,8 +650,18 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // camera framed for the Floor, and reopening it on a Building through
     // those numbers is a view of empty space. An outcome of Floor is the view
     // that camera was for, so it keeps it.
+    //
+    // AND ONLY A CAMERA NOTHING DISTRUSTS. Under shape (b) the held-witness
+    // arm has always retired a stale camera before Auto can answer - the move
+    // that arms it also sends `resolvedViewId` to `null`, which changes the
+    // canvas key, and Auto cannot decide until the remounted canvas reports a
+    // fresh probe a commit later. So this guard closes nothing today; it is
+    // here so the arm states the rule it relies on instead of resting on that
+    // ordering, which a change to the effect's gates would silently undo.
     const camera: CommGraphTileCamera | null =
-      decision.view === "floor" ? node.view.officeCamera : null;
+      decision.view === "floor" && !witnessedMove
+        ? node.view.officeCamera
+        : null;
     updateView(viewTabId, node.id, {
       ...node.view,
       officeCamera: camera,
@@ -647,6 +679,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     node.view,
     releaseWitness,
     updateView,
+    witnessedMove,
     viewTabId,
   ]);
 
@@ -683,8 +716,13 @@ export function CommGraphTile(props: CommGraphTileProps) {
       // landed here, and the person is nailing that down. The camera frames
       // that same office, so only a view that genuinely changes invalidates
       // it - the same reason the mode toggle guards its own reset.
+      // Same rule as Auto's keep arm above, and safe by the same ordering: a
+      // held witness over a real camera is retired by the effect before any
+      // pick can run. Stated rather than relied upon.
       const camera: CommGraphTileCamera | null =
-        next === resolvedViewId ? node.view.officeCamera : null;
+        next === resolvedViewId && !witnessedMove
+          ? node.view.officeCamera
+          : null;
       updateView(viewTabId, node.id, {
         ...node.view,
         officeCamera: camera,
@@ -693,7 +731,15 @@ export function CommGraphTile(props: CommGraphTileProps) {
       });
       releaseWitness();
     },
-    [node.id, node.view, releaseWitness, resolvedViewId, updateView, viewTabId],
+    [
+      node.id,
+      node.view,
+      releaseWitness,
+      resolvedViewId,
+      updateView,
+      viewTabId,
+      witnessedMove,
+    ],
   );
 
   const handleModeChange = useCallback(
