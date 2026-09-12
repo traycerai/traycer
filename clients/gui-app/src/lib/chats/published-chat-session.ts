@@ -266,6 +266,9 @@ export function publishedChatSessionState(
     // `connectionStatus: "closed"` above, in the vocabulary of the bounded
     // loading gate: there is nothing here that is still trying.
     preSnapshotRetries: null,
+    // And nothing will: `retry()` is what stamps this, and a frozen copy has
+    // no stream to re-subscribe.
+    preSnapshotReloadStartedAt: null,
     // A published copy is complete and frozen: this stands in for the
     // snapshot that established it, so the transcript is absorbed as
     // baseline history and nothing in it is ever announced as live.

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AvailabilityRecoveryKind } from "@traycer-clients/shared/host-transport/availability-recovery-kind";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -29,7 +30,10 @@ function fakeStreamSession(): IStreamSession {
 }
 
 interface FakeHostStreamClient extends IHostStreamClient<HostStreamRpcRegistry> {
-  /** Fires every listener registered through `subscribeAvailabilityRecovered`. */
+  /**
+   * Fires every listener registered through `subscribeAvailabilityRecovered`,
+   * as a reconnect. The store ignores the kind.
+   */
   fireAvailabilityRecovered(): void;
   /** Fires every listener registered through `onClosed`. */
   fireClosed(): void;
@@ -53,7 +57,9 @@ interface FakeHostStreamClient extends IHostStreamClient<HostStreamRpcRegistry> 
 function createFakeHostStreamClient(
   isReady: () => boolean,
 ): FakeHostStreamClient {
-  const recoveredListeners = new Set<() => void>();
+  const recoveredListeners = new Set<
+    (kind: AvailabilityRecoveryKind) => void
+  >();
   const closedListeners = new Set<() => void>();
   let closed = false;
   const client: FakeHostStreamClient = {
@@ -74,7 +80,7 @@ function createFakeHostStreamClient(
     subscribeMethodSupport: () => () => undefined,
     getMethodSchemaVersion: () => null,
     instanceId: "fake-stream-client",
-    subscribeAvailabilityRecovered: (listener: () => void) => {
+    subscribeAvailabilityRecovered: (listener) => {
       recoveredListeners.add(listener);
       return () => {
         recoveredListeners.delete(listener);
@@ -87,7 +93,7 @@ function createFakeHostStreamClient(
       };
     },
     fireAvailabilityRecovered: () => {
-      for (const listener of [...recoveredListeners]) listener();
+      for (const listener of [...recoveredListeners]) listener("reconnect");
     },
     fireClosed: () => {
       for (const listener of [...closedListeners]) listener();

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   QueryObserver,
   type QueryClient,
@@ -7,6 +7,7 @@ import {
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
+import { appLogger } from "@/lib/logger";
 import { queryKeys } from "@/lib/query-keys";
 
 const HOST_ID = "h1";
@@ -82,7 +83,10 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     await waitUntil(() => commands.fetches.count === 1);
     await waitUntil(() => control.fetches.count === 1);
 
-    invalidator.invalidateHostScope(HOST_ID, { refetchActive: true });
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
 
     // Non-catalog active observer must refetch (mutation probe: a plain
     // invalidateQueries({queryKey}) would also bump catalog counts, so this
@@ -226,7 +230,10 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     await waitUntil(() => epicTasks.fetches.count === 1);
     await waitUntil(() => control.fetches.count === 1);
 
-    invalidator.invalidateHostScope(HOST_ID, { refetchActive: true });
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
 
     await waitUntil(() => control.fetches.count === 2);
     expect(control.fetches.count).toBe(2);
@@ -263,7 +270,10 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     await waitUntil(() => control.fetches.count === 1);
     expect(queryClient.getQueryState(listModelsKey)?.error).toBeTruthy();
 
-    invalidator.invalidateHostScope(HOST_ID, { refetchActive: true });
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
 
     await waitUntil(() => control.fetches.count === 2);
     expect(control.fetches.count).toBe(2);
@@ -301,6 +311,304 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
       harnessId: "claude",
       models: [{ id: "m1", label: "Model 1" }],
     });
+  });
+});
+
+/**
+ * G4: what a recovery sweep re-asks. A read whose current attempt is in flight
+ * and has not failed is left to answer; a read that failed is re-asked by
+ * every sweep; a settled read is re-asked after a reconnect and left alone
+ * after a stall. Every case runs the real invalidator against the app's own
+ * `QueryClient` with real observers, so "re-asked" is a real second fetch.
+ */
+describe("createHostQueryInvalidator / what a recovery sweep re-asks", () => {
+  const stops: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const stop of stops.splice(0)) {
+      stop();
+    }
+  });
+
+  it.each(["stall", "reconnect"] as const)(
+    "a %s sweep neither cancels nor re-issues a read still on its first attempt",
+    async (recovery) => {
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
+      const answer = deferred();
+      const read = mountCountedQuery(queryClient, controlKey, {
+        staleTime: 0,
+        impl: () => answer.promise,
+      });
+      stops.push(read.stop);
+      await waitUntil(() => read.fetches.count === 1);
+      expect(queryClient.getQueryState(controlKey)?.fetchStatus).toBe(
+        "fetching",
+      );
+
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        recovery,
+      });
+      await settle(20);
+
+      // Not re-issued, and not even marked stale.
+      expect(read.fetches.count).toBe(1);
+      expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(false);
+      // Not cancelled either: the attempt already in flight is the one whose
+      // answer lands. A cancel would have dropped it and left the read pending.
+      answer.resolve({ capabilities: ["kept"] });
+      await waitUntil(
+        () => queryClient.getQueryState(controlKey)?.status === "success",
+      );
+      expect(queryClient.getQueryData(controlKey)).toEqual({
+        capabilities: ["kept"],
+      });
+      expect(read.fetches.count).toBe(1);
+    },
+  );
+
+  it("a reconnect sweep leaves a settled read's in-flight refetch alone too", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const read = mountCountedQuery(queryClient, controlKey, {
+      staleTime: 0,
+      impl: () => Promise.resolve({ capabilities: ["first"] }),
+    });
+    stops.push(read.stop);
+    await waitUntil(
+      () => queryClient.getQueryState(controlKey)?.status === "success",
+    );
+
+    const answer = deferred();
+    read.setImpl(() => answer.promise);
+    void read.observer.refetch();
+    await waitUntil(() => read.fetches.count === 2);
+
+    // A reconnect re-asks every SETTLED read. This one has data, but its
+    // current attempt is in flight and has not failed, so it is not settled.
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+    await settle(20);
+    expect(read.fetches.count).toBe(2);
+
+    answer.resolve({ capabilities: ["second"] });
+    await waitUntil(() => {
+      const data: unknown = queryClient.getQueryData(controlKey);
+      return (
+        JSON.stringify(data) === JSON.stringify({ capabilities: ["second"] })
+      );
+    });
+    expect(read.fetches.count).toBe(2);
+  });
+
+  it("a stall sweep leaves a read that failed alone while its next attempt is in flight", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const read = mountCountedQuery(queryClient, controlKey, {
+      staleTime: 0,
+      impl: () => Promise.resolve({ capabilities: ["first"] }),
+    });
+    stops.push(read.stop);
+    await waitUntil(
+      () => queryClient.getQueryState(controlKey)?.status === "success",
+    );
+    // A background refetch fails, so the read is `error` with its data kept.
+    read.setImpl(() => Promise.reject(new Error("host stalled")));
+    await read.observer.refetch();
+    expect(queryClient.getQueryState(controlKey)?.status).toBe("error");
+
+    const answer = deferred();
+    read.setImpl(() => answer.promise);
+    void read.observer.refetch();
+    await waitUntil(() => read.fetches.count === 3);
+    // Still `error` - a query with data keeps its status until an attempt
+    // settles - but the attempt now in flight has not failed. A stall sweep
+    // reaches failed reads, and this is the one it has to leave alone.
+    expect(queryClient.getQueryState(controlKey)).toMatchObject({
+      status: "error",
+      fetchStatus: "fetching",
+      fetchFailureCount: 0,
+    });
+
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "stall",
+    });
+    await settle(20);
+    expect(read.fetches.count).toBe(3);
+
+    answer.resolve({ capabilities: ["recovered"] });
+    await waitUntil(
+      () => queryClient.getQueryState(controlKey)?.status === "success",
+    );
+    expect(read.fetches.count).toBe(3);
+  });
+
+  it.each(["stall", "reconnect"] as const)(
+    "a %s sweep cancels a read parked in retry backoff and re-issues it at once",
+    async (recovery) => {
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
+      const key = capabilitiesKey("/backoff");
+      // One failure, then a retry TanStack would not start for a minute: the
+      // read sits in backoff as `fetching` with one failure counted.
+      const read = mountRetryingQuery(queryClient, key, {
+        retryDelayMs: 60_000,
+        impl: (attempt) =>
+          attempt === 1
+            ? Promise.reject(new Error("transport dropped"))
+            : Promise.resolve({ capabilities: ["retried"] }),
+      });
+      stops.push(read.stop);
+      await waitUntil(() => {
+        const state = queryClient.getQueryState(key);
+        return (
+          state?.fetchStatus === "fetching" && state.fetchFailureCount === 1
+        );
+      });
+      expect(read.fetches.count).toBe(1);
+
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        recovery,
+      });
+
+      // Re-issued by the sweep, not by the backoff timer a minute away.
+      await waitUntil(() => read.fetches.count === 2);
+      await waitUntil(
+        () => queryClient.getQueryState(key)?.status === "success",
+      );
+      expect(queryClient.getQueryData(key)).toEqual({
+        capabilities: ["retried"],
+      });
+    },
+  );
+
+  it.each(["stall", "reconnect"] as const)(
+    "a %s sweep re-issues a read that failed",
+    async (recovery) => {
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
+      const read = mountCountedQuery(queryClient, controlKey, {
+        staleTime: 0,
+        impl: () => Promise.reject(new Error("host stalled")),
+      });
+      stops.push(read.stop);
+      await waitUntil(
+        () => queryClient.getQueryState(controlKey)?.status === "error",
+      );
+      expect(queryClient.getQueryState(controlKey)?.fetchStatus).toBe("idle");
+
+      read.setImpl(() => Promise.resolve({ capabilities: ["recovered"] }));
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        recovery,
+      });
+
+      await waitUntil(() => read.fetches.count === 2);
+      await waitUntil(
+        () => queryClient.getQueryState(controlKey)?.status === "success",
+      );
+    },
+  );
+
+  it("a stall sweep leaves a settled read alone", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const read = mountCountedQuery(queryClient, controlKey, {
+      staleTime: 0,
+      impl: () => Promise.resolve({ capabilities: [] }),
+    });
+    stops.push(read.stop);
+    await waitUntil(
+      () => queryClient.getQueryState(controlKey)?.status === "success",
+    );
+
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "stall",
+    });
+    await settle(20);
+
+    // The socket survived, so the process that answered this read is the one
+    // answering now: nothing to re-ask, and nothing to mark stale.
+    expect(read.fetches.count).toBe(1);
+    expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(false);
+  });
+
+  it("a reconnect sweep re-issues a settled read", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const read = mountCountedQuery(queryClient, controlKey, {
+      staleTime: 0,
+      impl: () => Promise.resolve({ capabilities: [] }),
+    });
+    stops.push(read.stop);
+    await waitUntil(
+      () => queryClient.getQueryState(controlKey)?.status === "success",
+    );
+
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+
+    // The host may have restarted behind the new socket.
+    await waitUntil(() => read.fetches.count === 2);
+  });
+
+  it("logs each sweep with its kind and the reads it left in flight", async () => {
+    const infoSpy = vi.spyOn(appLogger, "info");
+    const answer = deferred();
+    try {
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
+      const inFlight = mountCountedQuery(
+        queryClient,
+        capabilitiesKey("/in-flight"),
+        { staleTime: 0, impl: () => answer.promise },
+      );
+      const failed = mountCountedQuery(
+        queryClient,
+        capabilitiesKey("/failed"),
+        { staleTime: 0, impl: () => Promise.reject(new Error("stalled")) },
+      );
+      const settledRead = mountCountedQuery(
+        queryClient,
+        capabilitiesKey("/settled"),
+        { staleTime: 0, impl: () => Promise.resolve({ capabilities: [] }) },
+      );
+      stops.push(inFlight.stop, failed.stop, settledRead.stop);
+      await waitUntil(
+        () =>
+          inFlight.fetches.count === 1 &&
+          queryClient.getQueryState(capabilitiesKey("/failed"))?.status ===
+            "error" &&
+          queryClient.getQueryState(capabilitiesKey("/settled"))?.status ===
+            "success",
+      );
+
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        recovery: "stall",
+      });
+
+      const sweeps = infoSpy.mock.calls.filter(
+        ([message]) => message === "[stream] host-scope sweep",
+      );
+      expect(sweeps).toEqual([
+        [
+          "[stream] host-scope sweep",
+          { hostId: HOST_ID, recovery: "stall", refetching: 1, inFlight: 1 },
+        ],
+      ]);
+    } finally {
+      answer.resolve({ capabilities: [] });
+      infoSpy.mockRestore();
+    }
   });
 });
 
@@ -355,4 +663,55 @@ async function waitUntil(check: () => boolean): Promise<void> {
 
 function settle(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Another non-exempt host-scoped key, one per `runningDir`. */
+function capabilitiesKey(runningDir: string): QueryKey {
+  return queryKeys.hostMethod<HostRpcRegistry, "git.getCapabilities">(
+    HOST_ID,
+    "git.getCapabilities",
+    { hostId: HOST_ID, runningDir, ignoreWhitespace: false },
+  );
+}
+
+function deferred(): {
+  readonly promise: Promise<unknown>;
+  readonly resolve: (value: unknown) => void;
+} {
+  let resolve: (value: unknown) => void = () => undefined;
+  const promise = new Promise<unknown>((settleWith) => {
+    resolve = settleWith;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * `mountCountedQuery` with one TanStack retry after `retryDelayMs`, so a read
+ * can be parked in retry backoff. `impl` receives the 1-based attempt number.
+ */
+function mountRetryingQuery(
+  queryClient: QueryClient,
+  queryKey: QueryKey,
+  options: {
+    readonly retryDelayMs: number;
+    readonly impl: (attempt: number) => Promise<unknown>;
+  },
+): {
+  readonly fetches: { count: number };
+  readonly stop: () => void;
+} {
+  const fetches = { count: 0 };
+  const countingQueryFn = (): Promise<unknown> => {
+    fetches.count += 1;
+    return options.impl(fetches.count);
+  };
+  const observer = new QueryObserver(queryClient, {
+    queryKey,
+    staleTime: 0,
+    retry: 1,
+    retryDelay: options.retryDelayMs,
+    queryFn: countingQueryFn,
+  });
+  const stop = observer.subscribe(() => undefined);
+  return { fetches, stop };
 }

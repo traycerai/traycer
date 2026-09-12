@@ -68,7 +68,7 @@ export class MockStreamSession<
     // fail here while working in the app, or pass here while broken in it.
     if (this.closed) return;
     this.closed = true;
-    this.statusChangeHandler?.("closed", { kind: "caller" });
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
   }
 
   emitFrame(frame: TFrame): void {
@@ -83,7 +83,7 @@ export class MockStreamSession<
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ): void {
-    this.statusChangeHandler?.(status, reason);
+    this.statusChangeHandler?.(status, reason, null);
   }
 }
 

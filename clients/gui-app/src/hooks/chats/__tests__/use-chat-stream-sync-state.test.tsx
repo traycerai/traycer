@@ -106,7 +106,7 @@ describe("useChatStreamSyncState", () => {
       useChatStreamSyncState(EPIC_ID, CHAT_ID, HOST_ID),
     );
     act(() => {
-      session.callbacks().onConnectionStatus("open", null);
+      session.callbacks().onConnectionStatus("open", null, null);
     });
     expect(result.current.status).toBe("open");
   });
@@ -121,12 +121,12 @@ describe("useChatStreamSyncState", () => {
       useChatStreamSyncState(EPIC_ID, CHAT_ID, HOST_ID),
     );
     act(() => {
-      session.callbacks().onConnectionStatus("open", null);
+      session.callbacks().onConnectionStatus("open", null, null);
     });
     expect(result.current.status).toBe("open");
 
     act(() => {
-      session.callbacks().onConnectionStatus("reconnecting", null);
+      session.callbacks().onConnectionStatus("reconnecting", null, null);
     });
     expect(result.current.status).toBe("reconnecting");
   });
@@ -145,7 +145,7 @@ describe("useChatStreamSyncState", () => {
       session = seedSession(CHAT_ID);
     });
     act(() => {
-      session?.callbacks().onConnectionStatus("reconnecting", null);
+      session?.callbacks().onConnectionStatus("reconnecting", null, null);
     });
     expect(result.current.status).toBe("reconnecting");
   });

@@ -15,6 +15,7 @@ import {
   planRestrictedClosedReason,
 } from "./config";
 import type { IRemoteSession } from "./remote-session";
+import type { AvailabilityRecoveryKind } from "../availability-recovery-kind";
 
 /** Monotonic source for `RemoteStreamClient.instanceId` (log correlation). */
 let nextRemoteStreamClientId = 0;
@@ -182,9 +183,20 @@ export class RemoteStreamClient<
    * host-scoped queries for a tab bound to a NON-active remote host, whose
    * only recovery evidence is its own transport (the registry-liveness +
    * relay-resume path only covers the active host).
+   *
+   * Every emission is reported as a `"reconnect"`. The session has one
+   * recovery edge, its ready boundary, and each one follows a new attach:
+   * the host may have restarted since the last one, so no read that settled
+   * before it can be vouched for. The session contract in `protocol/` stays
+   * kind-free, because with one edge a kind there would always read the
+   * same.
    */
-  subscribeAvailabilityRecovered(listener: () => void): () => void {
-    return this.session.subscribeAvailabilityRecovered(listener);
+  subscribeAvailabilityRecovered(
+    listener: (kind: AvailabilityRecoveryKind) => void,
+  ): () => void {
+    return this.session.subscribeAvailabilityRecovered(() => {
+      listener("reconnect");
+    });
   }
 
   getMethodSupport<Method extends keyof StreamRegistry & string>(
