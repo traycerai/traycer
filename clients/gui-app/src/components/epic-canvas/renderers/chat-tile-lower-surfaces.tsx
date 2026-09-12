@@ -622,9 +622,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
   // and a chip surviving on received A2A rows alone must not spin or name
   // agents over that zero.
   //
-  // Mid-turn is the only tier that spins. An agent kept alive by background
-  // work alone is counted, but nothing is being written on its behalf right
-  // now, and the sidebar's own row draws that tier without a spinner too.
+  // Mid-turn is the only tier that lights the chip. An agent kept alive by
+  // background work alone is counted, but nothing is being written on its
+  // behalf right now, and the sidebar's own row draws that tier at rest too.
   const agentsWorking =
     input.selfAgent !== null &&
     (input.selfAgent.activity === "turn" ||
@@ -675,7 +675,7 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     [backgroundRunning, input.heldManagedCommands, dedupedBackgroundItems],
   );
   // The chip's icon is the kind's own, running or not, so it always reads as
-  // what it stands for - activity pulses that icon rather than replacing it.
+  // what it stands for - activity lights that icon rather than replacing it.
   // Running and held shells are counted together: the sets overlap, and one of
   // either is enough to put a shell row in the section.
   const backgroundGlyph = useMemo(
@@ -752,7 +752,7 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "filesChanged",
         glyph: "filesChanged",
-        working: false,
+        workingWord: null,
         // The file count leads and the line counts follow, the same order and
         // the same tones the panel's own header uses - the chip stands in for
         // that header, so reading one after the other should feel like reading
@@ -773,7 +773,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "activeAgents",
         glyph: "activeAgents",
-        working: agentsWorking,
+        // The same word the roster gives a mid-turn agent, so the chip and the
+        // sentence it folds are one vocabulary.
+        workingWord: agentsWorking ? "working" : null,
         lineDeltas: null,
         text:
           receivedAgentCount > 0
@@ -793,7 +795,11 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "background",
         glyph: backgroundGlyph,
-        working: backgroundRunning > 0,
+        // The count IS the running count, so the word that qualifies it is the
+        // header's own - and a shell whose process is alive is in that count
+        // whether or not it is monitoring, since the host reports it as
+        // `running` either way (`managedCommandStatusSchema`).
+        workingWord: backgroundRunning > 0 ? "running" : null,
         lineDeltas: null,
         text: `${backgroundRunning}`,
         // The number on the chip is the running count, but the section can be

@@ -1,17 +1,8 @@
-import { useCallback, useRef, type ReactNode } from "react";
-import {
-  Bot,
-  FileDiff,
-  Layers,
-  PauseCircle,
-  type LucideIcon,
-} from "lucide-react";
-import {
-  STATUS_ANIMATION_PULSE_CADENCE_MS,
-  useStatusAnimation,
-} from "@/lib/animation/status-animation-clock";
+import { type ReactNode } from "react";
+import { Bot, FileDiff, Layers, Terminal, type LucideIcon } from "lucide-react";
 import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
 import { ChatDockCompactChip } from "@/components/chat/chat-dock-compact-chip";
+import { PingRing } from "@/components/ui/ping-ring";
 import {
   ChatDockCompactStripContext,
   useChatDockCompactStrip,
@@ -41,75 +32,43 @@ const GLYPH_ICONS: Readonly<Record<ChatDockCompactChipGlyph, LucideIcon>> = {
   filesChanged: FileDiff,
   activeAgents: Bot,
   mixed: Layers,
-  // A shell only rests once it is held, so this is the panel's held glyph -
-  // the one that row shows beside the word "Held" - and never the radar its
-  // running sibling draws.
-  managedShell: PauseCircle,
+  // A host-supervised shell is a terminal, whatever it is doing. It is
+  // deliberately NOT the panel's pause glyph: that glyph earns its meaning from
+  // the word "Held" printed beside it on the row, and a chip has no such word,
+  // so `PauseCircle` over a shell following a PR simply said the shell was
+  // paused. Held is stated in this chip's sentence instead.
+  managedShell: Terminal,
   ...BACKGROUND_KIND_ICONS,
 };
 
-/**
- * One blink: full opacity for the first half, dimmed for the second. A
- * multiple of the clock's 12.5 Hz pulse cadence, so both edges land exactly on
- * a tick rather than one tick late.
- */
-const BLINK_CYCLE_MS = 1280;
-const BLINK_DIM_OPACITY = "0.4";
+/** Strong enough to read against the composer's own chrome, short of a solid fill. */
+const ACTIVITY_RING_PEAK_OPACITY = 0.75;
 
 /**
- * The icon of a section with something in flight, blinking on the app's shared
- * status clock.
- *
- * Two opacities with no transition between them - it BLINKS rather than
- * breathing, which is what tells a glance "still going" on a 14px glyph - and
- * every working chip in the window is driven from the one clock, so N chips
- * cost one tick, not N.
- *
- * Deliberately not a CSS `animation` (nor `animate-pulse`): Blink samples
- * every running animation once per display frame and recalcs the element's
- * style against this stylesheet, which is the always-on-indicator regression
- * `status-animation-clock.ts` and `index.css` both record. An inline-style
- * write is also invisible to selector matching, so a `:has()` subject above
- * the composer cannot be invalidated by the blink the way a class swap could.
- *
- * `useStatusAnimation` never subscribes under reduced motion and clears what
- * it wrote the moment the preference turns on, so the icon rests at its
- * stylesheet opacity and the corner mark below carries the state instead.
- */
-function BlinkingChipIcon(props: { readonly glyph: ChatDockCompactChipGlyph }) {
-  const ref = useRef<SVGSVGElement | null>(null);
-  const write = useCallback((element: SVGSVGElement, elapsedMs: number) => {
-    const dim = elapsedMs % BLINK_CYCLE_MS >= BLINK_CYCLE_MS / 2;
-    element.style.opacity = dim ? BLINK_DIM_OPACITY : "1";
-  }, []);
-  const clear = useCallback((element: SVGSVGElement) => {
-    element.style.opacity = "";
-  }, []);
-  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
-  const Icon = GLYPH_ICONS[props.glyph];
-  return (
-    <Icon ref={ref} className="size-3.5 shrink-0 text-foreground" aria-hidden />
-  );
-}
-
-/**
- * The section's icon, blinking while its section is busy.
+ * The section's icon, lit while its section is busy.
  *
  * Activity is carried BY the icon rather than by a glyph that replaces it: the
  * icon is the only thing saying which section a chip stands for, and swapping
  * it for a spinner made two busy chips read as one repeated thing.
  *
- * Reduced motion gets a small filled dot at the icon's corner instead - the
- * same fact stated as presence rather than as movement, since an icon that
- * simply stopped blinking would read as idle. The two are exclusive: the clock
- * does not tick under the preference, and the dot is shown by the media query
- * alone, so the chip never carries both.
+ * Busy is stated three times over, because at 14px in the corner of a composer
+ * one statement is not enough - this chip blinked for a whole round of testing
+ * and read as idle. The icon takes `text-primary` (displacing the chip's muted
+ * inherit), a filled dot sits at its top-right corner, and that dot throws the
+ * app's `PingRing`. The count beside it turns `primary` too, and the chip adds
+ * the word for what is happening wherever the composer row has room; both of
+ * those live in `ChatDockCompactChip`, since they are text.
  *
- * A working icon also takes `text-foreground`, displacing the chip's muted
- * inherit: the blink's dim half is 40% opacity, so it needs a base strong
- * enough for that step to register at 14px. The chip already reads
- * `text-foreground` while expanded or hovered, so the tone is a second
- * statement of the blink rather than a channel of its own.
+ * One motion, not two: the ring is the whole of it, and the icon holds still.
+ * An icon that blinked UNDER an expanding ring was two rhythms fighting on a
+ * glyph the size of a word.
+ *
+ * `PingRing` is clock-driven rather than a CSS `animation` - the always-on
+ * indicator rule `status-animation-clock.ts` and `index.css` both record - and
+ * it never subscribes under reduced motion, where it collapses to a static span
+ * exactly the size of the dot it sits behind. The dot and the tones are
+ * unconditional, so the reduced-motion chip still says "running" in two
+ * channels with no media query of its own.
  *
  * `data-chip-activity` on the wrapper (and `data-chip-activity-dot` on the
  * corner mark) is the hook for the suites that pin all of this; a resting chip
@@ -119,18 +78,26 @@ function ChipGlyph(props: {
   readonly glyph: ChatDockCompactChipGlyph;
   readonly working: boolean;
 }) {
+  const Icon = GLYPH_ICONS[props.glyph];
   if (!props.working) {
-    const Icon = GLYPH_ICONS[props.glyph];
     return <Icon className="size-3.5 shrink-0" aria-hidden />;
   }
   return (
     <span data-chip-activity className="relative inline-flex">
-      <BlinkingChipIcon glyph={props.glyph} />
+      <Icon className="size-3.5 shrink-0 text-primary" aria-hidden />
+      {/* `absolute` is itself a containing block, so this IS the "relative
+          inline-flex box the size of the dot" the ring asks to sit inside. */}
       <span
         aria-hidden
         data-chip-activity-dot
-        className="pointer-events-none absolute -top-0.5 -right-0.5 hidden size-1.5 rounded-full bg-primary ring-1 ring-background motion-reduce:block"
-      />
+        className="pointer-events-none absolute -top-0.5 -right-0.5 inline-flex size-1.5"
+      >
+        <PingRing
+          toneClass="bg-primary"
+          peakOpacity={ACTIVITY_RING_PEAK_OPACITY}
+        />
+        <span className="relative inline-flex h-full w-full rounded-full bg-primary ring-1 ring-background" />
+      </span>
     </span>
   );
 }
@@ -155,8 +122,11 @@ export function ChatDockCompactStrip(): ReactNode {
       {value.chips.map((chip) => (
         <ChatDockCompactChip
           key={chip.section}
-          icon={<ChipGlyph glyph={chip.glyph} working={chip.working} />}
+          icon={
+            <ChipGlyph glyph={chip.glyph} working={chip.workingWord !== null} />
+          }
           text={chip.text}
+          workingWord={chip.workingWord}
           lineDeltas={chip.lineDeltas}
           label={chip.label}
           pulseToken={chip.pulseToken}

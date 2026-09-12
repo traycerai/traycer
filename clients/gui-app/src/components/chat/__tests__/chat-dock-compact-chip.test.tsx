@@ -8,6 +8,7 @@ import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 interface ChipProps {
   readonly icon: ReactElement;
   readonly text: string;
+  readonly workingWord: string | null;
   readonly lineDeltas: DiffLineCounts | null;
   readonly label: string;
   readonly pulseToken: string | null;
@@ -20,6 +21,7 @@ function baseProps(): ChipProps {
   return {
     icon: <span data-testid="chip-icon" />,
     text: "3",
+    workingWord: null,
     lineDeltas: null,
     label: "3 agents running. Show the active agents.",
     pulseToken: null,
@@ -122,6 +124,36 @@ describe("<ChatDockCompactChip />", () => {
     rerenderChip(rerender, { ...baseProps(), text: "3", lineDeltas: null });
     expect(chip.textContent).toBe("3");
     expect(chip.childElementCount).toBe(2);
+  });
+
+  // The number is the chip's loudest text, so it carries the state too - and
+  // the word after it names that state outright for the case an icon
+  // treatment alone did not carry. The word folds out on a container query,
+  // which is what keeps it from ever widening a cramped composer.
+  it("tones the number and prints the word while working", () => {
+    const { rerender } = renderChip({
+      ...baseProps(),
+      text: "1",
+      workingWord: "running",
+    });
+
+    const chip = screen.getByTestId("chip");
+    const word = chip.querySelector("[data-chip-working-word]");
+    expect(word?.textContent).toBe("running");
+    expect(word?.getAttribute("class")).toContain("hidden");
+    expect(word?.getAttribute("class")).toContain("@min-[24rem]:inline");
+    // Already in the accessible name, so drawing it must not say it twice.
+    expect(word?.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByText("1").getAttribute("class")).toContain(
+      "text-primary",
+    );
+
+    rerenderChip(rerender, { ...baseProps(), text: "1", workingWord: null });
+
+    expect(chip.querySelector("[data-chip-working-word]")).toBeNull();
+    expect(screen.getByText("1").getAttribute("class")).not.toContain(
+      "text-primary",
+    );
   });
 
   it("uses the whole sentence as the accessible name", () => {

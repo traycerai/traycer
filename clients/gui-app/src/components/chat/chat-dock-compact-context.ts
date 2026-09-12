@@ -7,7 +7,7 @@ export type ChatDockSection = "filesChanged" | "activeAgents" | "background";
 
 /**
  * What a chip draws ahead of its number - what the section IS, never what it
- * is doing. Activity rides on top of this glyph (see `working`) rather than
+ * is doing. Activity rides on top of this glyph (see `workingWord`) rather than
  * replacing it: a chip whose icon is swapped out while busy stops saying which
  * section it stands for at exactly the moment someone is scanning for it, and
  * two busy chips side by side then read as the same thing twice.
@@ -16,8 +16,11 @@ export type ChatDockSection = "filesChanged" | "activeAgents" | "background";
  * kind its rows share - a wake, a sub-agent - and shows a neutral stack
  * (`mixed`) when they differ, exactly as the panel's rows would draw them.
  * `managedShell` is the host-supervised shell, which the panel draws from its
- * own glyph family rather than from the kind icons; a shell that is not
- * running is a held one, which is the glyph that family rests on.
+ * own glyph family rather than from the kind icons; on the chip it is always a
+ * terminal, running or held. The panel keeps its pause glyph for the held ROW,
+ * where the word "Held" is right beside it; a chip has no such word, so a pause
+ * on a live watcher read as "this shell is paused" - which is how a shell
+ * following a PR came to be drawn as stopped.
  */
 export type ChatDockCompactChipGlyph =
   | "filesChanged"
@@ -30,11 +33,18 @@ export interface ChatDockCompactChipModel {
   readonly section: ChatDockSection;
   readonly glyph: ChatDockCompactChipGlyph;
   /**
-   * True while this section has something in flight - an agent mid-turn, a
-   * background job running. It pulses the icon; it never changes which icon,
-   * and the count beside it is unaffected.
+   * What this section's activity is CALLED - `running`, `working` - while
+   * something is in flight, and `null` at rest. One field rather than a boolean
+   * beside a word, because the two can then never disagree: a chip that draws
+   * the live treatment is by construction a chip with a word for it.
+   *
+   * The word is printed after the count when the composer row has room for it,
+   * and the same treatment lights up regardless: the kind icon in `primary`
+   * with a ping at its corner, and the count in `primary` too. It never changes
+   * WHICH icon - the glyph is the only thing saying which section a chip stands
+   * for.
    */
-  readonly working: boolean;
+  readonly workingWord: string | null;
   /** The short form the chip prints: `+395 −12`, `3`, `2 · 1`. */
   readonly text: string;
   /**

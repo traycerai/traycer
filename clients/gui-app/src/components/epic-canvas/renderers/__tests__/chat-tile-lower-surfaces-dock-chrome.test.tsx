@@ -15,6 +15,7 @@ import type {
   ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 
 /**
  * `useChatDockChrome` (`chat-tile-lower-surfaces.tsx`) is the piece deciding
@@ -246,6 +247,37 @@ function backgroundWakeupItem(taskId: string, title: string): BackgroundItem {
   };
 }
 
+/**
+ * A live host-supervised shell.
+ *
+ * `monitoring` is deliberately a parameter: it is what a watcher following a PR
+ * has on, and the point of the cases below is that it changes nothing about
+ * whether the shell counts as running. The host reports a shell whose process
+ * is alive as `running` either way - `monitoring` says where its OUTPUT goes,
+ * not whether it has any.
+ */
+function runningManagedCommand(args: {
+  readonly id: string;
+  readonly description: string;
+  readonly monitoring: boolean;
+}): ManagedCommand {
+  return {
+    id: args.id,
+    monitoring: args.monitoring,
+    description: args.description,
+    command: "gh pr checks --watch",
+    cwd: "/repo",
+    cadence: args.monitoring
+      ? { debounceMs: 500, maxWaitMs: 15000, throttleMs: 5000 }
+      : null,
+    status: { state: "running", pid: 4242, startedAtMs: 1 },
+    relaunchOnHostRestart: false,
+    chatId: CHAT_ID,
+    createdAtMs: 1,
+    updatedAtMs: 2,
+  };
+}
+
 function content(text: string): JsonContent {
   return {
     type: "doc",
@@ -395,14 +427,29 @@ function renderSurfaces(props: ChatLowerInteractionSurfacesProps) {
   return render(tile(props));
 }
 
+/** The chip's printed short form, with the trailing activity word dropped. */
 function chipText(section: string): string | null {
-  return screen.getByTestId(`chat-dock-chip-${section}`).textContent;
+  const clone = screen.getByTestId(`chat-dock-chip-${section}`).cloneNode(true);
+  if (!(clone instanceof HTMLElement)) {
+    throw new Error("cloning the chip did not produce an element");
+  }
+  clone.querySelector("[data-chip-working-word]")?.remove();
+  return clone.textContent;
 }
 
-/** True when this chip's icon is blinking - the strip's whole activity signal. */
+/** True when this chip is drawing the live treatment - lit icon, corner ring. */
 function chipWorking(section: string): boolean {
   const chipElement = screen.getByTestId(`chat-dock-chip-${section}`);
   return chipElement.querySelector("[data-chip-activity]") !== null;
+}
+
+/** The word the chip prints after its count while busy, or null at rest. */
+function chipWorkingWord(section: string): string | null {
+  return (
+    screen
+      .getByTestId(`chat-dock-chip-${section}`)
+      .querySelector("[data-chip-working-word]")?.textContent ?? null
+  );
 }
 
 beforeEach(() => {
@@ -590,7 +637,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
   });
 
-  it("pulses the active-agents icon while any agent is mid-turn, and stills it when every one is background-only", () => {
+  it("lights the active-agents icon while any agent is mid-turn, and rests it when every one is background-only", () => {
     useLayoutStore.setState({
       composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
     });
@@ -607,8 +654,11 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     const { rerender } = renderSurfaces(props);
 
     const chip = screen.getByTestId("chat-dock-chip-activeAgents");
-    // The icon stays `Bot` throughout - only the pulse comes and goes.
+    // The icon stays `Bot` throughout - only the live treatment comes and
+    // goes. The word is the agents' half of the same vocabulary the Background
+    // chip uses, so the two chips never describe activity differently.
     expect(chipWorking("activeAgents")).toBe(true);
+    expect(chipWorkingWord("activeAgents")).toBe("working");
     expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
     expect(chipText("activeAgents")).toBe("2");
 
@@ -619,6 +669,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     rerender(tile(props));
 
     expect(chipWorking("activeAgents")).toBe(false);
+    expect(chipWorkingWord("activeAgents")).toBeNull();
     expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
     expect(chipText("activeAgents")).toBe("2");
     expect(chip.getAttribute("aria-label")).toBe(
@@ -707,10 +758,49 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     expect(chip.querySelector("svg.lucide-layers")).not.toBeNull();
   });
 
-  // A running shell is excluded from the held set and forces the spinner, so a
-  // resting chip with shells in it is always HELD shells - which is the glyph
-  // the panel's own row draws beside the word "Held".
-  it("rests a shells-only background chip on the held glyph", () => {
+  // The report that started this: a Traycer shell following a PR drew `⏸ 1` -
+  // a pause glyph over a live process. The count was right all along (the host
+  // reports a monitoring shell as `running` like any other), so the glyph was
+  // the whole of the lie, and one blink was too quiet to contradict it.
+  //
+  // `monitoring: true` is the case that was reported, and it must be
+  // indistinguishable from any other live shell here.
+  it("draws a running monitor shell as a lit terminal that says it is running", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
+    });
+
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [],
+        backgroundItems: [],
+      }),
+    );
+    act(() => {
+      managedCommandSession.setCommands([
+        runningManagedCommand({
+          id: "cmd-1",
+          description: "PR checks",
+          monitoring: true,
+        }),
+      ]);
+    });
+
+    const chip = screen.getByTestId("chat-dock-chip-background");
+    expect(chipText("background")).toBe("1");
+    expect(chip.getAttribute("aria-label")).toBe("Background. 1 running.");
+    expect(chipWorking("background")).toBe(true);
+    expect(chipWorkingWord("background")).toBe("running");
+    expect(chip.querySelector("svg.lucide-terminal")).not.toBeNull();
+    expect(chip.querySelector("svg.lucide-circle-pause")).toBeNull();
+  });
+
+  // The resting half of the same pair. A shell that has exited and is holding
+  // its last output is the one thing on the chip that is genuinely NOT running,
+  // and it is told apart by the sentence and the tone - never by a second
+  // glyph, which is what made a live watcher read as paused.
+  it("rests a shells-only background chip on the same terminal, and says held", () => {
     useLayoutStore.setState({
       composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
     });
@@ -731,7 +821,9 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     const chip = screen.getByTestId("chat-dock-chip-background");
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 held.");
     expect(chipWorking("background")).toBe(false);
-    expect(chip.querySelector("svg.lucide-circle-pause")).not.toBeNull();
+    expect(chipWorkingWord("background")).toBeNull();
+    expect(chip.querySelector("svg.lucide-terminal")).not.toBeNull();
+    expect(chip.querySelector("svg.lucide-circle-pause")).toBeNull();
   });
 
   // `BackgroundItemsPanel` counts its own header on `dedupeByTaskId(items)`, so

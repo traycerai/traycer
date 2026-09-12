@@ -15,7 +15,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  * there - so it is asserted against the production component. Swapping them
  * there fails this suite.
  */
-function renderRow() {
+function renderRow(workingWord: string | null) {
   return render(
     <TooltipProvider delayDuration={0}>
       <ChatDockCompactStripProvider
@@ -24,7 +24,7 @@ function renderRow() {
             {
               section: "activeAgents",
               glyph: "activeAgents",
-              working: false,
+              workingWord,
               text: "2",
               lineDeltas: null,
               label: "Active agents. 2 running.",
@@ -56,7 +56,7 @@ describe("composer workspace row chip placement", () => {
   });
 
   it("puts the compact strip last in the left cell, after the picker", () => {
-    renderRow();
+    renderRow(null);
 
     const picker = screen.getByTestId("picker-stub");
     const strip = screen.getByTestId("chat-dock-compact-strip");
@@ -69,7 +69,7 @@ describe("composer workspace row chip placement", () => {
   });
 
   it("keeps the left cell ahead of the context-usage cluster", () => {
-    renderRow();
+    renderRow(null);
 
     const strip = screen.getByTestId("chat-dock-compact-strip");
     const usage = screen.getByTestId("usage-chip-stub");
@@ -80,6 +80,28 @@ describe("composer workspace row chip placement", () => {
     // The usage cluster is a direct child of the grid row, not of the cell the
     // chips live in - the pinned breakdown spans the row, so it has to be.
     expect(usage.parentElement).toBe(strip.parentElement?.parentElement);
+  });
+
+  // The activity word folds on a container query, and WHICH box that query
+  // measures is the whole of whether it ever appears. It must be the grid row -
+  // a box with a width of its own - and never the strip, which is
+  // `shrink-0`/`ml-auto` and so sized by the very word being folded. Pinned
+  // here rather than in the strip's own suite, because the answer lives in the
+  // ancestor chain the two components form, not in either one.
+  it("folds the activity word against the composer row, the nearest @container", () => {
+    renderRow("working");
+
+    const word = screen
+      .getByTestId("chat-dock-chip-activeAgents")
+      .querySelector("[data-chip-working-word]");
+    expect(word?.textContent).toBe("working");
+    expect(word?.getAttribute("class")).toContain("@min-[24rem]:inline");
+
+    const strip = screen.getByTestId("chat-dock-compact-strip");
+    expect(strip.className).not.toContain("@container");
+    const cell = strip.parentElement;
+    expect(cell?.className).not.toContain("@container");
+    expect(cell?.parentElement?.className).toContain("@container");
   });
 
   // The chips exist only while the chat has something to say, so their cell

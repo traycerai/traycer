@@ -273,15 +273,19 @@ export function backgroundHeaderSummary(input: {
  * section shows that kind's own icon when every row would draw the same one,
  * and a neutral stack when the rows differ - so a chip over a single pending
  * wake reads as a wake, and a chip over a wake and a held shell does not
- * pretend to be either. Activity pulses that icon; it never replaces it, so
+ * pretend to be either. Activity lights that icon; it never replaces it, so
  * this answer is owed for a busy section too.
  *
  * A managed shell is its OWN member rather than a `"command"`, because the
  * panel draws the two from different glyph families on purpose: a
  * harness-delivered `command` row gets the kind icon, and a host-supervised
- * shell gets the radar / play / pause glyphs that keep it apart from the
- * harness's own `Monitor` kind. Folding them together would let the chip claim
- * a shared kind over rows the panel draws differently.
+ * shell gets the glyph family that keeps it apart from the harness's own
+ * `Monitor` kind. Folding them together would let the chip claim a shared kind
+ * over rows the panel draws differently.
+ *
+ * What this member does NOT carry is the shell's state. The chip draws one
+ * terminal for a shell whether it is running or held and says which in its
+ * sentence; only the panel, which prints "Held" beside the row, draws the pause.
  *
  * Nothing present reads as `"mixed"` too. The section - and so the chip - does
  * not exist then, so the answer is never drawn; it is only the value that does

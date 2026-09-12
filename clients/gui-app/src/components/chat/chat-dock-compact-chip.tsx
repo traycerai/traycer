@@ -10,6 +10,19 @@ interface ChatDockCompactChipProps {
   /** The short form: `3`, `2 · 1`. Never a sentence. */
   readonly text: ReactNode;
   /**
+   * The word for what this section is doing - `running`, `working` - or `null`
+   * at rest. It tones the number and prints after it, so `1` becomes `1
+   * running`: the state named outright, for the case an icon treatment alone
+   * did not carry.
+   *
+   * The word itself is the first thing to go when the composer runs out of
+   * room, on a container query against the composer's own bottom row - not the
+   * viewport, and not this strip, which is shrink-to-fit and would therefore be
+   * measuring the very word it is deciding whether to draw. Every other channel
+   * survives that fold, and the chip's sentence carries the word regardless.
+   */
+  readonly workingWord: string | null;
+  /**
    * Added and removed lines to print after the short form, in the same tones
    * the accumulated-changes panel gives them, or `null` for a chip that counts
    * one thing only. Drawn from the shared component, so the chip and the panel
@@ -100,9 +113,26 @@ export function ChatDockCompactChip(props: ChatDockCompactChipProps) {
         )}
       >
         {props.icon}
-        <span className="font-mono text-code-xs tabular-nums">
+        <span
+          className={cn(
+            "font-mono text-code-xs tabular-nums",
+            props.workingWord !== null && "text-primary",
+          )}
+        >
           {props.text}
         </span>
+        {/* `aria-hidden` because `aria-label` above is already the whole
+            sentence, word included - this span is the same fact drawn, and a
+            screen reader repeating it would read the state twice. */}
+        {props.workingWord === null ? null : (
+          <span
+            aria-hidden
+            data-chip-working-word
+            className="hidden text-primary @min-[24rem]:inline"
+          >
+            {props.workingWord}
+          </span>
+        )}
         {/* Gated here rather than inside the component: the panel's header
             and rows keep an empty counts span so their row geometry does not
             twitch as summaries land, but on a chip it would be a bare `gap-1`

@@ -1796,9 +1796,15 @@ md:top-0`): positioned against the nearest scrollport - the settings
     and workspace pickers, hard against the context-usage cluster, so a chip
     coming and going never shifts those pickers - and one click opens the row
     again; the pill folds to its icon with the name on hover. A chip always
-    draws its own icon (`Bot`, or Background's per-kind glyph) and shows
-    activity by pulsing that icon rather than replacing it, falling back under
-    `prefers-reduced-motion` to a small filled dot at the icon's corner.
+    draws its own icon (`Bot`, or Background's per-kind glyph - a
+    host-supervised shell is a `Terminal` whether it is running or held, never
+    a pause) and shows activity ON that icon rather than replacing it: the
+    glyph and the count turn `primary`, a filled dot at the icon's corner
+    throws the app's clock-driven ping ring, and the word for what is happening
+    (`running`, `working`) prints after the count wherever the composer row is
+    at least 24rem wide. Three channels rather than one, because a single blink
+    read as idle beside a live PR watcher; under `prefers-reduced-motion` the
+    ring holds still and the other three carry it unchanged.
     A chip prints what its row's own header prints - Files changed
     reads `3  +12 −4`, the file count then the accumulated line counts in the
     panel's added / removed tones, with a zero side omitted and the counts
