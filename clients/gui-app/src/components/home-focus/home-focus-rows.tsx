@@ -51,6 +51,7 @@ import {
   RowActionsCell,
   RowContext,
   RowItemName,
+  RowMetaLine,
   RowStatus,
   RowStatusDuration,
   RowStatusNote,
@@ -314,10 +315,12 @@ export function HomeFocusPromptRow(props: {
         />
         <OriginHostChip originHostId={row.originHostId} />
       </button>
-      <RowStatus
-        state="needs-you"
-        detail={<RowStatusDuration startedAtMs={row.createdAt} />}
-      />
+      <RowMetaLine>
+        <RowStatus
+          state="needs-you"
+          detail={<RowStatusDuration startedAtMs={row.createdAt} />}
+        />
+      </RowMetaLine>
       {/* Nothing to stop, and the track is reserved anyway: this row has to
           spend the same width on actions as the rows around it, or their
           status column moves relative to this one. */}
@@ -340,6 +343,36 @@ export function HomeFocusPromptRow(props: {
  * tooltip. A Radix tooltip mounts on hover, so on the one control that can
  * never be hovered into usefulness - a disabled one - it is exactly the reader
  * who cannot hover that would be left with an unexplained dead button.
+ *
+ * ## Widths, which this button got wrong in two directions at once
+ *
+ * The visible label is the FIRST thing to go below `@max-[30rem]`: the row has
+ * folded to give the name its width back, and spending a third of the line on
+ * the word `Stop` would hand it straight to the control instead. The button
+ * keeps its full sentence in `aria-label` and gains it as a tooltip, so nothing
+ * is lost but the pixels - and the sentence it keeps is the scoped one
+ * (`Stop all agents in Checkout on remote-box`), which is strictly more than
+ * the label ever said.
+ *
+ * The label also has to TRUNCATE, at every width. `Stop all on <host>` with a
+ * 64-character hostname is a `whitespace-nowrap` button inside a `w-24`
+ * `justify-end` cell, so it overflowed leftwards across the status cell and the
+ * name and off the row - the second half of the Home screenshot's damage, and
+ * the exact failure `ROW_ACTIONS_CELL_CLASS` already documented itself as
+ * trading for. It only ever read as a spill because nothing between the label
+ * and the track could shrink: the `min-w-0` chain here is what makes the
+ * documented truncation actually happen.
+ *
+ * That chain has to include `shrink`, and this is the one class in it that is
+ * easy to miss: `Button`'s own base is `shrink-0`. Bounding the WRAPPER without
+ * it just moved the overflow - the wrapper shrank to the 96px track, the button
+ * kept its full 514px intrinsic width, and the sentence spilled RIGHT off the
+ * row from the wrapper's left edge instead of left from its right one.
+ * `min-w-0` cannot help there either: a flex item that may not shrink never
+ * consults it. It is `shrink` on the BUTTON that lets the truncation happen, at
+ * every width, and `cn()` is what makes it beat the variant - same modifier,
+ * later argument, so `tailwind-merge` drops the `shrink-0` outright rather than
+ * leaving the outcome to emit order.
  */
 function FocusStopButton(props: {
   readonly label: string;
@@ -352,12 +385,14 @@ function FocusStopButton(props: {
 }): ReactNode {
   return (
     <TooltipWrapper
-      label={props.reason}
+      // The scoped sentence whenever there is no reason to show instead, rather
+      // than nothing: folded, it is the only naming a sighted hover gets.
+      label={props.reason ?? props.ariaLabel}
       side="top"
       sideOffset={undefined}
       align={undefined}
     >
-      <span className="inline-flex">
+      <span className="inline-flex min-w-0">
         <Button
           type="button"
           variant="ghost"
@@ -369,6 +404,16 @@ function FocusStopButton(props: {
           }
           disabled={props.disabled}
           onClick={props.onClick}
+          // `shrink min-w-0` so the label below can truncate - see the two
+          // paragraphs above for why the `shrink` is the load-bearing half. The
+          // square shape and the dropped padding are what make the folded row's
+          // icon-only button an icon-only button rather than a labelless one
+          // with a label's padding. `pointer-coarse:min-*-9` is the thumb
+          // target - a floor rather than a size, so the labelled wide button,
+          // already far wider, is untouched by it, and it outranks the folded
+          // width because Tailwind emits plain media queries after container
+          // ones.
+          className="min-w-0 shrink @max-[30rem]:w-7 @max-[30rem]:px-0 pointer-coarse:min-h-9 pointer-coarse:min-w-9"
           data-testid={props.testId}
         >
           {/* The spinner REPLACES a resting glyph rather than appearing beside
@@ -384,7 +429,12 @@ function FocusStopButton(props: {
           ) : (
             <Square aria-hidden className="size-3" />
           )}
-          {props.label}
+          <span
+            className="min-w-0 truncate @max-[30rem]:hidden"
+            data-testid="home-focus-stop-label"
+          >
+            {props.label}
+          </span>
         </Button>
       </span>
     </TooltipWrapper>

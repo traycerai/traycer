@@ -18,6 +18,7 @@
 import type { ReactNode } from "react";
 import {
   ROW_ACTIONS_CELL_CLASS,
+  ROW_META_CLASS,
   ROW_STATUS_CELL_CLASS,
 } from "@/components/home-focus/home-focus-row-style";
 import {
@@ -31,6 +32,23 @@ import { cn } from "@/lib/utils";
  * What the row is. Truncates on its own rather than letting the context trail
  * decide - the name is the part a reader needs whole, so it holds its width
  * first and the context gives way.
+ *
+ * `@max-[30rem]:flex-1` is the folded row's whole point: once the badges and
+ * the status have moved to their own line, the only things left beside the name
+ * are the twisty and one icon, and the name should take everything they do not.
+ * At wide width it keeps `shrink-[2]`, where the chip row is the item that
+ * grows.
+ *
+ * `min-w-3/5` is not belt-and-braces - without it the variant above inverts the
+ * priority it exists to enforce. `flex-1` is `flex: 1 1 0%`, so the name's
+ * PREFERRED size is zero and it only ever grows out of leftover space. Its
+ * siblings keep an automatic basis - the chat row's `via …`, the prompt and job
+ * rows' `RowContext` - so a context longer than the line leaves no free space
+ * at all, the grow factor has nothing to act on, and the name renders at 0px
+ * with its context fully visible beside it. That is strictly worse than the
+ * four-character truncation the fold exists to prevent. The floor is a
+ * PERCENTAGE, per the fluid-sizing rule, and it is 60% because that is the
+ * share a level-two name keeps elsewhere.
  */
 export function RowItemName(props: {
   readonly children: ReactNode;
@@ -38,11 +56,34 @@ export function RowItemName(props: {
 }): ReactNode {
   return (
     <span
-      className="min-w-0 shrink-[2] truncate text-foreground"
+      className="min-w-0 shrink-[2] truncate text-foreground @max-[30rem]:min-w-3/5 @max-[30rem]:flex-1"
       data-testid={props.testId}
     >
       {props.children}
     </span>
+  );
+}
+
+/**
+ * A row's badges and status cell, which are cells of the row itself on a wide
+ * one and a second line under the name on a narrow one.
+ *
+ * Every row shape wraps its status in this, including the shapes with no badges
+ * at all: the fold is a property of the ROW, and a prompt row whose status
+ * stayed inline while the task row above it folded would be the staircase the
+ * status column exists to prevent, one width down.
+ *
+ * See {@link ROW_META_CLASS} for why the wide case is `display: contents` - the
+ * short version is that the wrapper has to be invisible to layout there, or
+ * this is a rewrite of the desktop row rather than an addition to it.
+ */
+export function RowMetaLine(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <div className={ROW_META_CLASS} data-testid="home-focus-row-meta">
+      {props.children}
+    </div>
   );
 }
 
@@ -189,7 +230,9 @@ export function RowStatusNote(props: { readonly text: string }): ReactNode {
  * An empty cell rather than no cell, because the point of the track is that
  * every row spends the same width on actions: a prompt row with nothing to stop
  * has to hold the space a `Stop all` takes two rows below it, or the status
- * column above it moves.
+ * column above it moves. Below `@max-[30rem]` there is no column to hold still
+ * - the status has folded onto its own line - so the track collapses to its
+ * content and an empty cell costs nothing.
  *
  * `relative` lifts it above the body button's stretched hit area so its own
  * clicks land on it - an invariant with two directions. The overlay is an

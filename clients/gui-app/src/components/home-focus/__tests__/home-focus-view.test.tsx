@@ -2683,3 +2683,428 @@ describe("<HomeFocusView /> a split task with a prompt on one host", () => {
     ).toBe("1 need you");
   });
 });
+
+/**
+ * The phone layout, asserted as STRUCTURE and CLASSES rather than as geometry.
+ *
+ * jsdom has no layout engine and no container queries, so nothing here can
+ * measure an overlap - which is the failure this suite is about. What it can
+ * pin down is the mechanism: the section is a container, every row carries the
+ * fold, the two fixed tracks release inside it, the badge cluster dissolves
+ * into the meta line instead of overflowing a collapsed box, and the name is
+ * the item that grows. Those five together are what the overlap was the absence
+ * of.
+ */
+/** 64 characters, which is what a GCE internal DNS name actually looks like -
+ * and the label that ran off the edge of the reported screenshot. */
+const LONG_HOST_LABEL =
+  "pranshu-remote-host-1.asia-south1-b.c.vivid-spot-418405.internal";
+
+/** 40 characters - long enough that the single-line row truncated it to four. */
+const LONG_TASK_TITLE = "Configure the release status bar presets";
+
+/** A name long enough to outgrow a phone row on its own, which is what a
+ * `via <parent>` trail and a `driven by <agent>` status note are made of. */
+const LONG_AGENT_NAME = "Status bar layout reviewer and final approver";
+
+describe("<HomeFocusView /> narrow rows", () => {
+  /** One task with every row shape under it, so a class assertion covers the
+   * whole family rather than the one shape that happened to be checked. */
+  function everyRowShape(): void {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          taskTitle: LONG_TASK_TITLE,
+          agents: [
+            agentRow({ agentId: "chat-1", title: "impl", tier: "turn" }),
+            agentRow({ agentId: "chat-2", title: "host", tier: "background" }),
+          ],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1", chatId: "chat-2" })],
+      browsers: [browserRow({ epicId: "epic-1" })],
+      prompts: [promptRow({ epicId: "epic-1", chatId: "chat-1" })],
+    });
+  }
+
+  it("makes each section the container the rows fold against", () => {
+    modelMock.value = model({ tasks: [taskRow({ epicId: "epic-1" })] });
+    render(<HomeFocusView />);
+
+    expect(sectionOf("running").className).toContain("@container");
+  });
+
+  it("folds every row shape onto a second line, and only below the fold", () => {
+    everyRowShape();
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    // The fold lives on the shared row class, so it reaches every shape at
+    // once - including the ones this file's `row spacing` suite pins to the
+    // constant byte for byte.
+    expect(ROW_CLASS).toContain("@max-[30rem]:flex-wrap");
+    for (const testId of [
+      "home-focus-task-group-row",
+      "home-focus-task-group-agent",
+      "home-focus-task-group-job",
+      "home-focus-task-group-browser",
+      "home-focus-prompt-row",
+    ]) {
+      expect(screen.getAllByTestId(testId)[0].className).toContain(
+        "@max-[30rem]:flex-wrap",
+      );
+    }
+  });
+
+  it("gives every row shape a meta line that is nothing at all when wide", () => {
+    everyRowShape();
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const metas = screen.getAllByTestId("home-focus-row-meta");
+    // Five shapes, one meta line each: task, two chats, the job, the browser
+    // tab and the prompt.
+    expect(metas).toHaveLength(6);
+    for (const meta of metas) {
+      // `contents` is what keeps the desktop row the row it already was: the
+      // wrapper generates no box, so the status cell stays a direct flex item.
+      expect(meta.className).toContain("contents");
+      expect(meta.className).toContain("@max-[30rem]:flex");
+      expect(meta.className).toContain("@max-[30rem]:w-full");
+      expect(meta.className).toContain("@max-[30rem]:flex-wrap");
+      // Declared before the Stop in the DOM, drawn after it - the Stop belongs
+      // on line one beside the name.
+      expect(meta.className).toContain("@max-[30rem]:order-last");
+      expect(within(meta).getAllByTestId("home-focus-row-status")).toHaveLength(
+        1,
+      );
+    }
+  });
+
+  it("puts the badges and the status in the same wrapping meta line", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", tier: "turn" }),
+            agentRow({ agentId: "chat-2", tier: "turn" }),
+          ],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
+      browsers: [browserRow({ epicId: "epic-1" })],
+    });
+    render(<HomeFocusView />);
+
+    const meta = screen.getAllByTestId("home-focus-row-meta")[0];
+    for (const testId of [
+      "home-focus-task-group-active",
+      "home-focus-task-group-jobs",
+      "home-focus-task-group-browsers",
+      "home-focus-row-status",
+    ]) {
+      expect(within(meta).getAllByTestId(testId)).not.toHaveLength(0);
+    }
+    // The cluster dissolves rather than nesting: a wrap container inside a wrap
+    // container can still be wider than its line, which is how the badges came
+    // to overflow their own box and paint over the status cell.
+    expect(
+      within(meta).getByTestId("home-focus-task-group-active").parentElement
+        ?.className,
+    ).toContain("@max-[30rem]:contents");
+  });
+
+  it("releases both fixed tracks below the fold", () => {
+    everyRowShape();
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    for (const cell of screen.getAllByTestId("home-focus-row-status")) {
+      expect(cell.className).toContain("@max-[30rem]:w-auto");
+      // Releasing a fixed track means releasing its `shrink-0` WITH it. Left
+      // unshrinkable and unbounded, the cell sized itself to its own sentence
+      // and a `driven by <agent>` note ran off the row - the badge overflow
+      // again, one cell to the right.
+      expect(cell.className).toContain("@max-[30rem]:shrink");
+      expect(cell.className).toContain("@max-[30rem]:min-w-0");
+      expect(cell.className).toContain("@max-[30rem]:max-w-full");
+    }
+    for (const cell of screen.getAllByTestId("home-focus-row-actions")) {
+      expect(cell.className).toContain("@max-[30rem]:w-auto");
+    }
+  });
+
+  it("bounds the folded status cell so a long driver name truncates in it", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ agentId: "chat-1", title: LONG_AGENT_NAME })],
+        }),
+      ],
+      browsers: [
+        browserRow({
+          epicId: "epic-1",
+          drivenByChatId: "chat-1",
+          drivenByAgentName: LONG_AGENT_NAME,
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const note = screen.getByTestId("home-focus-row-status-note");
+    expect(note.textContent).toBe(`· driven by ${LONG_AGENT_NAME}`);
+    // The note could always clip; what it lacked was a parent to clip inside.
+    expect(note.className).toContain("truncate");
+    expect(note.className).toContain("min-w-0");
+    const cell = note.closest("[data-testid='home-focus-row-status']");
+    expect(cell?.className).toContain("@max-[30rem]:max-w-full");
+  });
+
+  it("hands the folded row's width to the name", () => {
+    everyRowShape();
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const body = screen.getByTestId("home-focus-task-group-open-body");
+    expect(body.className).toContain("@max-[30rem]:flex-1");
+    for (const name of screen.getAllByTestId("home-focus-row-name")) {
+      expect(name.className).toContain("min-w-0");
+      expect(name.className).toContain("truncate");
+      expect(name.className).toContain("@max-[30rem]:flex-1");
+      // The floor, and it is not decoration: `flex-1` means basis ZERO, so
+      // without it the name grows only out of leftover space and a context
+      // longer than the line leaves none - rendering the name at 0px with its
+      // `via …` fully visible beside it.
+      expect(name.className).toContain("@max-[30rem]:min-w-3/5");
+    }
+    // The whole title is in the DOM - truncation is the browser's job, and a
+    // test that asserted four characters would be asserting the bug.
+    expect(
+      within(taskGroup("epic-1")).getAllByTestId("home-focus-row-name")[0]
+        .textContent,
+    ).toBe(LONG_TASK_TITLE);
+  });
+
+  it("keeps a name beside a context trail longer than the row", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          taskTitle: LONG_TASK_TITLE,
+          agents: [
+            agentRow({ agentId: "parent", title: LONG_AGENT_NAME }),
+            agentRow({
+              agentId: "child",
+              title: "worker",
+              parentId: "parent",
+            }),
+          ],
+        }),
+      ],
+      // A job row, so `RowContext` is on the page too - the other sibling that
+      // can outgrow the line.
+      background: [
+        backgroundRow({
+          epicId: "epic-1",
+          chatId: "chat-elsewhere",
+          chatTitle: LONG_AGENT_NAME,
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    // `via <long parent>` renders and keeps its own ability to give way.
+    const via = screen.getByTestId("home-focus-task-group-agent-via");
+    expect(via.textContent).toBe(`via ${LONG_AGENT_NAME}`);
+    expect(via.className).toContain("shrink");
+    expect(via.className).toContain("truncate");
+    // Every name on the page holds its floor, whatever sits beside it.
+    for (const name of screen.getAllByTestId("home-focus-row-name")) {
+      expect(name.className).toContain("@max-[30rem]:min-w-3/5");
+    }
+    const context = screen.getByTestId("home-focus-row-context");
+    expect(context.className).toContain("shrink");
+  });
+
+  it("shrinks the per-level indent so a level-two name keeps the row", () => {
+    everyRowShape();
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    for (const list of screen.getAllByTestId("home-focus-task-group-body")) {
+      expect(list.className).toContain("@max-[30rem]:ms-1.5");
+      expect(list.className).toContain("@max-[30rem]:pl-1.5");
+      // The vertical track survives the shrink - it is what says "this row
+      // belongs to the one above it".
+      expect(list.className).toContain("border-l");
+    }
+  });
+});
+
+describe("<HomeFocusView /> narrow stop controls", () => {
+  it("drops the Stop's visible label below the fold, keeping its sentence", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          taskTitle: "Checkout",
+          agents: [agentRow({ agentId: "chat-1", title: "impl" })],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const stop = screen.getByTestId("home-focus-task-stop");
+    const label = within(stop).getByTestId("home-focus-stop-label");
+    expect(label.textContent).toBe("Stop");
+    expect(label.className).toContain("@max-[30rem]:hidden");
+    // Square and padding-free when the word is gone, so it reads as an icon
+    // button rather than a labelless one.
+    expect(stop.className).toContain("@max-[30rem]:w-7");
+    expect(stop.className).toContain("@max-[30rem]:px-0");
+    // The naming a hidden label leaves behind, and it says more than the label
+    // did.
+    expect(stop.getAttribute("aria-label")).toBe("Stop impl in Checkout");
+  });
+
+  it("keeps the whole `Stop all on <host>` sentence out of the row's width", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-remote", label: LONG_HOST_LABEL },
+    ];
+    // Split across both machines, so the remote slice's `Stop all` is the
+    // SCOPED form - the only shape that names a host in its label at all.
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-shared",
+          taskTitle: "Checkout",
+          agents: [
+            agentRow({ agentId: "a", title: "impl", hostId: "host-local" }),
+            agentRow({ agentId: "b", title: "review", hostId: "host-remote" }),
+            agentRow({ agentId: "c", title: "docs", hostId: "host-remote" }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const stop = screen.getByTestId("home-focus-task-stop-all");
+    const label = within(stop).getByTestId("home-focus-stop-label");
+    // Unchanged when wide - the scope is what tells two rows of one task apart
+    // - but it truncates inside the actions track instead of spilling left
+    // across the status cell and off the row.
+    expect(label.textContent).toBe(`Stop all on ${LONG_HOST_LABEL}`);
+    expect(label.className).toContain("truncate");
+    expect(label.className).toContain("min-w-0");
+    expect(stop.className).toContain("min-w-0");
+    // The load-bearing one. `Button`'s own base is `shrink-0`, so bounding the
+    // wrapper alone left the button at its full intrinsic sentence width and
+    // merely turned a leftward spill into a rightward one - `min-w-0` is never
+    // consulted on an item that may not shrink. `cn()` has to have DROPPED the
+    // variant's class, not merely followed it, or the outcome would rest on
+    // stylesheet order.
+    expect(stop.classList.contains("shrink")).toBe(true);
+    expect(stop.classList.contains("shrink-0")).toBe(false);
+    expect(stop.getAttribute("aria-label")).toBe(
+      `Stop all agents in Checkout on ${LONG_HOST_LABEL}`,
+    );
+  });
+
+  it("gives the twisty and the Stop a thumb-sized hit area on touch", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ agentId: "chat-1", title: "impl" })],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-task-group-disclosure").className,
+    ).toContain("pointer-coarse:p-1");
+    const stop = screen.getByTestId("home-focus-task-stop");
+    expect(stop.className).toContain("pointer-coarse:min-h-9");
+    expect(stop.className).toContain("pointer-coarse:min-w-9");
+  });
+});
+
+describe("<HomeFocusView /> narrow host heading", () => {
+  function longHostFleet(): void {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-remote", label: LONG_HOST_LABEL },
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-here",
+          agents: [agentRow({ agentId: "a", hostId: "host-local" })],
+        }),
+        taskRow({
+          epicId: "epic-there",
+          agents: [agentRow({ agentId: "b", hostId: "host-remote" })],
+        }),
+      ],
+    });
+  }
+
+  it("truncates the hostname alone, and never its count or its pill", () => {
+    longHostFleet();
+    render(<HomeFocusView />);
+
+    const hosts = screen.getAllByTestId(
+      "home-focus-section-running-group-host",
+    );
+    expect(hosts.map((element) => element.textContent)).toEqual([
+      "Laptop",
+      LONG_HOST_LABEL,
+    ]);
+    for (const host of hosts) {
+      expect(host.className).toContain("truncate");
+      expect(host.className).toContain("min-w-0");
+    }
+    // The whole name stays reachable on a pointer, since the visible one is
+    // cut - a real `TooltipWrapper` rather than a native `title`, which this
+    // app bans outright. Radix marks its trigger, which is the only trace a
+    // closed tooltip leaves in the DOM.
+    expect(hosts[1].getAttribute("data-state")).toBe("closed");
+    // The count is the part that must not give way.
+    expect(hosts[1].nextElementSibling?.className).toContain("shrink-0");
+    expect(
+      screen.getByTestId("home-focus-section-running-group-active").className,
+    ).toContain("shrink-0");
+  });
+
+  it("reads the same sentence it always did, separator and all", () => {
+    longHostFleet();
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-section-running-group-label")
+        .map((element) => element.textContent),
+    ).toEqual(["Laptop · 1", `${LONG_HOST_LABEL} · 1`]);
+  });
+
+  it("wraps the section captions rather than clipping them", () => {
+    modelMock.value = model({ tasks: [taskRow({ epicId: "epic-1" })] });
+    render(<HomeFocusView />);
+
+    for (const caption of screen.getAllByTestId(
+      "home-focus-section-running-caption",
+    )) {
+      expect(caption.className).toContain("break-words");
+    }
+  });
+});

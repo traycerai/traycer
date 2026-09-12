@@ -558,7 +558,7 @@ function ActivityCoverageNotice(props: {
         <p
           data-testid="home-focus-activity-notice"
           data-activity={props.activity}
-          className="rounded-md bg-foreground/5 px-3 py-2 text-ui-xs text-muted-foreground"
+          className="rounded-md bg-foreground/5 px-3 py-2 text-ui-xs break-words text-muted-foreground"
         >
           {ACTIVITY_NOTICE}
         </p>
@@ -615,12 +615,14 @@ function HomeFocusSection(props: {
       id={props.id}
       aria-labelledby={`${props.id}-heading`}
       tabIndex={-1}
-      // `@container`: the rows' duration hides on a narrow ROW rather than a
-      // narrow viewport, so a slim Home tile in a wide window behaves like the
-      // slim thing it is.
+      // `@container`, and it is the ROW's query rather than the viewport's:
+      // every row in this section is a child of it at the section's own width,
+      // so a slim Home tile in a wide window folds its rows exactly as a phone
+      // does, and the mobile drawer needs no rule of its own. See
+      // `home-focus-row-style.ts` for what folding means.
       className="@container flex scroll-mt-4 flex-col gap-1 outline-none"
     >
-      <div className="flex flex-col gap-0.5 px-3 pt-4 pb-1 text-ui-xs text-muted-foreground">
+      <div className="flex min-w-0 flex-col gap-0.5 px-3 pt-4 pb-1 text-ui-xs text-muted-foreground">
         <h2
           id={`${props.id}-heading`}
           className="tracking-[0.08em] uppercase"
@@ -628,8 +630,16 @@ function HomeFocusSection(props: {
         >
           {props.title} · {props.count}
         </h2>
+        {/* `break-words` so a caption wraps rather than running off a phone.
+            These are ordinary sentences today, but they are the page's only
+            free prose and a caption is exactly where a host name or a path
+            would end up. */}
         {props.captions.map((caption) => (
-          <p key={caption} data-testid={`${props.testId}-caption`}>
+          <p
+            key={caption}
+            className="break-words"
+            data-testid={`${props.testId}-caption`}
+          >
             {caption}
           </p>
         ))}
@@ -649,20 +659,47 @@ function HomeFocusSection(props: {
               data-testid={`${props.testId}-group`}
               data-host-id={group.key}
             >
-              <div className="flex flex-wrap items-center gap-x-2 text-ui-xs text-muted-foreground">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-ui-xs text-muted-foreground">
                 {/* `h3` under the section's `h2`: a reader stepping the heading
                     outline gets "Running · 3" then the machines under it,
                     which is the shape the page actually has. */}
                 <h3
-                  className="font-medium"
+                  className="flex min-w-0 items-center font-medium"
                   data-testid={`${props.testId}-group-label`}
                 >
-                  {group.label}
-                  {group.count === null ? null : ` · ${String(group.count)}`}
+                  {/* A host LABEL can be a fully qualified internal name
+                      (`pranshu-remote-host.asia-south1-b.c.<project>.internal`),
+                      which ran to the edge of a phone and pushed its own count
+                      off the row. The name is the part that gives way, and the
+                      count and the `active` pill are the parts that must not -
+                      so only the name truncates, and the tooltip keeps the
+                      whole thing reachable on a pointer. */}
+                  <TooltipWrapper
+                    label={group.label}
+                    side="bottom"
+                    sideOffset={undefined}
+                    align={undefined}
+                  >
+                    <span
+                      className="min-w-0 truncate"
+                      data-testid={`${props.testId}-group-host`}
+                    >
+                      {group.label}
+                    </span>
+                  </TooltipWrapper>
+                  {group.count === null ? null : (
+                    // `whitespace-pre` holds the separator's leading space: the
+                    // `h3` is a flex container now, so each child starts its
+                    // own line box and normal white-space processing would drop
+                    // it, leaving `host· 2`.
+                    <span className="shrink-0 whitespace-pre">
+                      {` · ${String(group.count)}`}
+                    </span>
+                  )}
                 </h3>
                 {group.isActive ? (
                   <span
-                    className="rounded-sm bg-foreground/8 px-1.5 py-0.5"
+                    className="shrink-0 rounded-sm bg-foreground/8 px-1.5 py-0.5"
                     data-testid={`${props.testId}-group-active`}
                   >
                     active
@@ -671,7 +708,7 @@ function HomeFocusSection(props: {
               </div>
               {group.notice === null ? null : (
                 <p
-                  className="text-ui-xs text-muted-foreground"
+                  className="text-ui-xs break-words text-muted-foreground"
                   data-testid={`${props.testId}-group-notice`}
                 >
                   {group.notice}

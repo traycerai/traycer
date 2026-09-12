@@ -41,6 +41,7 @@ import {
   RowActionsCell,
   RowContext,
   RowItemName,
+  RowMetaLine,
   RowStatus,
   RowStatusDuration,
 } from "@/components/home-focus/home-focus-row-parts";
@@ -164,7 +165,12 @@ function HomeFocusTaskGroupRow(props: {
           disabled={!hasBody}
           onClick={props.onToggle}
           className={cn(
-            "relative z-10 flex shrink-0 items-center rounded-sm p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            // `pointer-coarse:p-1` takes the twisty from 1.25rem to the 1.5rem
+            // a finger needs. It is padding rather than a `size-*`, so the
+            // chevron inside it does not grow with the target - a bigger glyph
+            // would make the row read as louder on a phone than it does on a
+            // desktop, and the hit area is the only part that has to change.
+            "relative z-10 flex shrink-0 items-center rounded-sm p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 pointer-coarse:p-1",
             hasBody ? "hover:bg-foreground/8" : "invisible",
           )}
           data-testid="home-focus-task-group-disclosure"
@@ -180,19 +186,24 @@ function HomeFocusTaskGroupRow(props: {
         <button
           type="button"
           onClick={() => actions.openTask(group.epicId)}
-          className={cn(ROW_BODY_CLASS, "flex-initial")}
+          // `flex-initial` at wide width, because the chip row beside it is the
+          // item that should absorb the slack. Folded, the chip row is not
+          // beside it any more, so the name takes the slack instead.
+          className={cn(ROW_BODY_CLASS, "flex-initial @max-[30rem]:flex-1")}
           data-testid="home-focus-task-group-open-body"
         >
           <TaskGroupGlyph group={group} />
           <RowItemName testId="home-focus-row-name">{title}</RowItemName>
         </button>
-        <div className={CHIP_ROW_CLASS}>
-          <TaskGroupSummary group={group} />
-        </div>
-        <RowStatus
-          state={focusTaskState(group.task, group.prompts.length)}
-          detail={null}
-        />
+        <RowMetaLine>
+          <div className={CHIP_ROW_CLASS}>
+            <TaskGroupSummary group={group} />
+          </div>
+          <RowStatus
+            state={focusTaskState(group.task, group.prompts.length)}
+            detail={null}
+          />
+        </RowMetaLine>
         {group.task === null ? (
           <RowActionsCell>{null}</RowActionsCell>
         ) : (
@@ -347,8 +358,15 @@ function TaskGroupBody(props: {
 }
 
 /** Indented on the LEFT only, so a nested row's right edge is its parent's and
- * the status and actions tracks stay one column down the whole page. */
-const NESTED_LIST_CLASS = "ms-5 flex flex-col border-l border-border/60 pl-3";
+ * the status and actions tracks stay one column down the whole page.
+ *
+ * 2rem per level is a desktop number. On a phone three levels of it spend a
+ * quarter of the row before the deepest name starts, which is the same width
+ * the folded layout is trying to give that name back - so the step drops to
+ * 0.75rem below `@max-[30rem]`, split the same way (margin, then the border,
+ * then padding) so the vertical track still reads as one continuous line. */
+const NESTED_LIST_CLASS =
+  "ms-5 flex flex-col border-l border-border/60 pl-3 @max-[30rem]:ms-1.5 @max-[30rem]:pl-1.5";
 const BODY_TEST_ID = "home-focus-task-group-body";
 
 /**
@@ -397,7 +415,9 @@ function TaskGroupChatRow(props: {
             </span>
           )}
         </button>
-        <RowStatus state={focusAgentState(agent)} detail={null} />
+        <RowMetaLine>
+          <RowStatus state={focusAgentState(agent)} detail={null} />
+        </RowMetaLine>
         <RowActionsCell>
           {chatIsJobHostOnly(props.chat) ? null : (
             <HomeFocusAgentStop
@@ -490,14 +510,16 @@ function TaskGroupJobRow(props: {
           testId="home-focus-row-context"
         />
       </button>
-      <RowStatus
-        state={focusJobState(job)}
-        detail={
-          job.startedAtMs === null ? null : (
-            <RowStatusDuration startedAtMs={job.startedAtMs} />
-          )
-        }
-      />
+      <RowMetaLine>
+        <RowStatus
+          state={focusJobState(job)}
+          detail={
+            job.startedAtMs === null ? null : (
+              <RowStatusDuration startedAtMs={job.startedAtMs} />
+            )
+          }
+        />
+      </RowMetaLine>
       <RowActionsCell>
         <HomeFocusJobStop row={job} actions={actions} />
       </RowActionsCell>
@@ -549,10 +571,12 @@ function TaskGroupBrowserRow(props: {
           <BrowserTabName row={browser} />
         </button>
       </TooltipWrapper>
-      <RowStatus
-        state={focusBrowserState(browser)}
-        detail={<BrowserStatusDetail row={browser} />}
-      />
+      <RowMetaLine>
+        <RowStatus
+          state={focusBrowserState(browser)}
+          detail={<BrowserStatusDetail row={browser} />}
+        />
+      </RowMetaLine>
       <RowActionsCell>{null}</RowActionsCell>
     </li>
   );
