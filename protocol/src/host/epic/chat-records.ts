@@ -2,8 +2,14 @@ import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
 import {
+  recordListRecencyPatchSchema,
+  recordListRevisionSchema,
+  recordListStampSchema,
+} from "@traycer/protocol/host/epic/record-list-revision";
+import {
   tuiAgentRecordSummarySchema,
   tuiAgentRecordSummaryV12Schema,
+  tuiAgentRecordSummaryV13Schema,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 // The PERSISTED variant, with its `.default(...)` backstops, and not the
 // wire-strict one: this is a read of a record that may have been written before
@@ -423,6 +429,86 @@ export const listChatRecordsResponseV12Schema = z.object({
 });
 export type ListChatRecordsResponseV12 = z.infer<
   typeof listChatRecordsResponseV12Schema
+>;
+
+// ─── `epic.listChatRecords@1.3` - revision gating ───────────────────────────
+//
+// The chat half of the record-list revision gating, and it is
+// `epic.listTuiAgents@1.3`'s shape field for field - the two methods answer
+// the same question about two record populations, and two different gating
+// grammars would be a seam nobody could keep straight.
+//
+// ## What it costs today
+//
+// Both lists are polled on a fixed 20s cadence per open epic tab, and neither
+// request carries anything but `{ epicId, hasDocReplica }`. The host
+// re-assembles every row, re-parses it, JSON-encodes the body and ships it -
+// on a large epic a multi-MB answer that is almost always identical to the
+// previous one. Over a megabyte the transport classifies the body BULK, so
+// each answer also occupies the relay uplink for seconds and can mute other
+// subscribers behind it.
+//
+// ## The shape, and where the reasoning lives
+//
+// The client sends the stamp it holds; the host answers `snapshot` (the `@1.2`
+// body plus the new keys) or `unchanged` (the stamp plus recency patches).
+// `record-list-revision.ts` carries the vocabulary - why the epoch is
+// load-bearing, why quiet writes get a second counter - and
+// `listTuiAgentsResponseV13Schema` carries the argument for the arm shapes,
+// the nullable snapshot stamp and the emission gate. Restating either here
+// would be two copies of one rule.
+//
+// The row is UNCHANGED from `@1.2`. The session facet this minor adds to the
+// terminal-agent list has no chat counterpart: a chat has no PTY session to
+// be asleep.
+
+/**
+ * The `@1.3` response: a snapshot, or the statement that the client's rows are
+ * still current.
+ *
+ * The `snapshot` arm's `chats` is the `@1.2` row - `head` included - so a
+ * `@1.2` payload projects onto this arm with the two new keys stripped, which
+ * is what admits the widening as a minor. The `unchanged` arm is a new ROOT
+ * arm an older peer cannot parse, emitted only when the negotiated version is
+ * at this minor and the client's `knownRevision` matched; the registry entry's
+ * `responseGrowthProjectionGated: true` is the reviewed claim that it is.
+ *
+ * `listStamp` is nullable on the `snapshot` arm alone, so the `@1.2 -> @1.3`
+ * upgrade path can say "that host issued no stamp" instead of inventing an
+ * epoch a client would send back. See {@link listTuiAgentsResponseV13Schema}.
+ */
+export const listChatRecordsResponseV13Schema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("snapshot"),
+    listStamp: recordListStampSchema.nullable(),
+    chats: z.array(chatRecordSummaryV12Schema),
+  }),
+  z.object({
+    kind: z.literal("unchanged"),
+    listStamp: recordListStampSchema,
+    touched: z.array(recordListRecencyPatchSchema),
+  }),
+]);
+export type ListChatRecordsResponseV13 = z.infer<
+  typeof listChatRecordsResponseV13Schema
+>;
+
+/**
+ * The `@1.2` request plus the stamp the caller holds.
+ *
+ * REQUIRED and nullable on the `hasDocReplica` precedent: a `@1.3` caller
+ * always knows whether it holds one, and an absent field would have to be
+ * given a host-side default - the guess the field exists to remove. The value
+ * is whatever the last answer's `listStamp` carried, sent back verbatim; a
+ * client must never synthesize one, and must drop the one it holds when the
+ * store it was read into is replaced.
+ */
+export const listChatRecordsRequestV13Schema =
+  listChatRecordsRequestV11Schema.extend({
+    knownRevision: recordListStampSchema.nullable(),
+  });
+export type ListChatRecordsRequestV13 = z.infer<
+  typeof listChatRecordsRequestV13Schema
 >;
 
 /**
@@ -1010,6 +1096,87 @@ export type HostChatRecordsSubscribeServerFrameV13 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV13
 >;
 
+// ─── `host.chatRecords.subscribe@1.4` - the list revision on every delta ────
+//
+// Stage 2 of the record-list revision gating. Stage 1 makes the 20s poll cheap
+// when nothing changed; what it cannot do is make a CHANGE cheap - any
+// registry fact moving invalidates the client's stamp, so the next tick ships
+// a full snapshot per open tab. This minor closes that: every record delta
+// carries the list revision the write produced, so a client that applies the
+// delta advances its own stamp and the next poll answers `unchanged` again.
+// After it, a snapshot ships only on a genuine gap.
+//
+// The client's rule is `epoch` equal AND `revision === held + 1`. Anything
+// else is a gap - it invalidates and re-reads the list - which is why the
+// stamp must be the composite AFTER the write and why one registry change
+// must produce exactly one delta. `+ 1` rather than `>` deliberately: a
+// consumer that accepted any forward jump would silently skip the changes in
+// between, and those are precisely what it has no other way to learn.
+//
+// `pong` carries NO `listRevision`, and that is not an omission: it is a
+// liveness frame, not a record change, and stamping it would either repeat a
+// revision (inviting a consumer to treat a keepalive as progress) or claim one
+// no write produced.
+//
+// The `tuiUpsert` row grows to {@link tuiAgentRecordSummaryV13Schema} - the
+// session facet - for the reason the list minor ships the two together: the
+// facet is a registry fact, so without a delta carrying it every spawn and
+// every reap would cost a snapshot, which is the cost this minor exists to
+// remove.
+//
+// A NEW FROZEN SET beside `@1.3`, not an edit of it: streams freeze rather
+// than upgrade (there is no per-frame upgrade path to run), so a client that
+// negotiated `@1.3` must keep receiving exactly the frames `@1.3` promised.
+// Every arm is restated rather than spread from an older set for the same
+// reason `@1.3` restated `@1.0`'s: those sets embed the pre-stamp frames this
+// minor grows.
+export const hostChatRecordsSubscribeServerFrameSchemaV14 = z
+  .discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("upsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      listRevision: recordListRevisionSchema,
+      record: chatRecordSummaryStreamV13Schema,
+    }),
+    z.object({
+      kind: z.literal("remove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      listRevision: recordListRevisionSchema,
+      reason: chatRecordRemovalReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("tuiUpsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      listRevision: recordListRevisionSchema,
+      record: tuiAgentRecordSummaryV13Schema,
+    }),
+    z.object({
+      kind: z.literal("tuiRemove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      listRevision: recordListRevisionSchema,
+      reason: chatRecordRemovalReasonSchema,
+    }),
+  ])
+  .superRefine(refineChatUpsertEnvelope)
+  .superRefine(refineTuiUpsertEnvelope);
+export type HostChatRecordsSubscribeServerFrameV14 = z.infer<
+  typeof hostChatRecordsSubscribeServerFrameSchemaV14
+>;
+
 export const hostChatRecordsSubscribeClientFrameSchemaV10 =
   z.discriminatedUnion("kind", [
     z.object({
@@ -1050,5 +1217,18 @@ export const hostChatRecordsSubscribeV13 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV13,
+  clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
+});
+
+// The OPEN REQUEST is unchanged, and stays `@1.0`'s empty object: the stamp a
+// client holds is per (viewer, epic) and this stream is HOST-scoped, so there
+// is nothing one subscription could send that would mean anything for every
+// epic it covers. Resume is still the poll's job - see `@1.0`'s note on why
+// the list IS the snapshot.
+export const hostChatRecordsSubscribeV14 = defineStreamRpcContract({
+  method: "host.chatRecords.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV14,
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });

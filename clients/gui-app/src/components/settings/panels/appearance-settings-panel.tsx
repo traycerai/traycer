@@ -76,10 +76,6 @@ export function AppearanceSettingsPanel() {
   const setPointerCursors = useSettingsStore(
     (state) => state.setPointerCursors,
   );
-  const chatTurnMinimapSide = useSettingsStore(
-    (state) => state.chatTurnMinimapSide,
-  );
-  const setMinimapSide = useSettingsStore((state) => state.setMinimapSide);
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
   const codeFontSize = useSettingsStore((state) => state.codeFontSize);
@@ -172,38 +168,6 @@ export function AppearanceSettingsPanel() {
                 )}
                 aria-label="Show a hand cursor over clickable controls"
               />
-            }
-          />
-          <SettingsRow
-            row={APPEARANCE.definitions.minimapSide}
-            control={
-              <Select
-                value={chatTurnMinimapSide}
-                onValueChange={(value) => {
-                  if (
-                    value !== "left" &&
-                    value !== "right" &&
-                    value !== "hide"
-                  ) {
-                    return;
-                  }
-                  trackAppearanceSetting("chatTurnMinimapSide");
-                  setMinimapSide(value);
-                }}
-              >
-                <SelectTrigger
-                  size="sm"
-                  aria-label="Minimap position"
-                  className="w-[min(40vw,8rem)]"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="right">Right</SelectItem>
-                  <SelectItem value="left">Left</SelectItem>
-                  <SelectItem value="hide">Hidden</SelectItem>
-                </SelectContent>
-              </Select>
             }
           />
         </SettingsGroup>

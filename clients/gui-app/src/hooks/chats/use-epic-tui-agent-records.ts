@@ -18,7 +18,12 @@ import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-a
  * answer is applied. `null` when no session existed to read at dispatch.
  */
 interface TuiAgentListAnswer {
-  readonly tuiAgents: readonly TuiAgentRecordSummaryV12[];
+  /**
+   * `null` means the answer carried NO rows to apply - the `@1.3` `unchanged`
+   * arm. Distinct from `[]`, which is the positive claim that this epic has
+   * no terminal agents and retracts everything the fence allows.
+   */
+  readonly tuiAgents: readonly TuiAgentRecordSummaryV12[] | null;
   /**
    * Always this store's own counter - see the chat twin
    * (`ChatRecordListAnswer.issuedAtSeq`): the store generation is part of the
@@ -76,8 +81,19 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
   // remainder - see `GUI_PROJECTS_EPIC_DOC_REPLICA`. Declared by us because
   // only we know it: the host would have to infer it from `epic.subscribe`'s
   // negotiated major, which this method's own version cannot see.
+  //
+  // `knownRevision` is pinned to `null` - "I hold no list stamp" - so the host
+  // always answers with a full `snapshot`, exactly as it did before `@1.3`.
+  // Sending a held stamp needs a dispatch-time request seam, because `params`
+  // is both the query KEY and the wire payload today and the stamp has to
+  // vary per dispatch without changing the key; that is the revision-gated
+  // polling change, not this one.
   const params = useMemo(
-    () => ({ epicId, hasDocReplica: GUI_PROJECTS_EPIC_DOC_REPLICA }),
+    () => ({
+      epicId,
+      hasDocReplica: GUI_PROJECTS_EPIC_DOC_REPLICA,
+      knownRevision: null,
+    }),
     [epicId],
   );
   // Viewer-scoped: the response is one identity's own terminal agents, so two
@@ -123,7 +139,12 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
     mapResponse: ({ response, requestContext }) => {
       const context = requestContext ?? null;
       return {
-        tuiAgents: response.tuiAgents,
+        // `unchanged` is UNREACHABLE while `knownRevision` is `null` above -
+        // the host emits that arm only when a stamp the caller SENT matched -
+        // and it maps to `null`, never to `[]`: the store merges omissions
+        // against the dispatch fence, so an empty answer would RETRACT every
+        // row that landed before it. See the chat twin.
+        tuiAgents: response.kind === "snapshot" ? response.tuiAgents : null,
         issuedAtSeq: context === null ? null : context.seq,
       };
     },
@@ -131,7 +152,7 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
 
   const answer = query.data ?? null;
   useEffect(() => {
-    if (answer === null || store === null) return;
+    if (answer === null || answer.tuiAgents === null || store === null) return;
     // The fence is used as captured - it was read from THIS store, because the
     // generation is in the cache key. See `TuiAgentListAnswer.issuedAtSeq`.
     store.getState().applyTuiAgentRecords(answer.tuiAgents, answer.issuedAtSeq);

@@ -11,6 +11,7 @@ import {
   acquireBrowserSessionsCoordinator,
   browserSessionAcrossCoordinators,
   browserSessionsCoordinatorKey,
+  browserSessionsCoordinatorEntries,
   browserSessionsCoordinatorState,
   browserSessionsCoordinatorsForEpic,
   hasBrowserSessionsCoordinator,
@@ -541,6 +542,99 @@ describe("browser sessions coordinator registry", () => {
 
     const epicCoordinators = browserSessionsCoordinatorsForEpic("epic-1");
     expect(epicCoordinators.map((entry) => entry.key)).toEqual([epicKey]);
+  });
+
+  /**
+   * The cross-epic reader Home lists browsers through. Its two properties are
+   * the ones a per-epic reader cannot be asked about: which scopes it admits,
+   * and whether an entry survives the last release.
+   */
+  describe("browserSessionsCoordinatorEntries", () => {
+    it("enumerates every epic-scoped coordinator with the epic it belongs to", () => {
+      const harness = createTransportHarness();
+      const first = acquire({
+        scope: epicScope("epic-1"),
+        openTransport: harness.openTransport,
+      });
+      const second = acquire({
+        scope: epicScope("epic-2"),
+        openTransport: harness.openTransport,
+      });
+
+      expect(
+        browserSessionsCoordinatorEntries()
+          .map((entry) => [entry.epicId, entry.key])
+          .sort(),
+      ).toEqual(
+        [
+          ["epic-1", first.key],
+          ["epic-2", second.key],
+        ].sort(),
+      );
+    });
+
+    it("skips an independent coordinator, which belongs to no task", () => {
+      const harness = createTransportHarness();
+      acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const epic = acquire({
+        scope: epicScope("epic-1"),
+        openTransport: harness.openTransport,
+      });
+
+      // A Start Page browser session belongs to the device rather than to any
+      // task, so it has no task to be listed under on a cross-task page.
+      expect(
+        browserSessionsCoordinatorEntries().map((entry) => entry.key),
+      ).toEqual([epic.key]);
+    });
+
+    it("drops an entry once its last consumer releases", () => {
+      const harness = createTransportHarness();
+      const scope = epicScope("epic-1");
+      const canvas = acquire({ scope, openTransport: harness.openTransport });
+      const tile = acquire({ scope, openTransport: harness.openTransport });
+      expect(browserSessionsCoordinatorEntries()).toHaveLength(1);
+
+      // A reader of this list holds no consumer of its own, so it cannot keep
+      // one alive - which is what makes Home's rows honestly window-local.
+      canvas.release();
+      expect(browserSessionsCoordinatorEntries()).toHaveLength(1);
+
+      tile.release();
+      expect(browserSessionsCoordinatorEntries()).toEqual([]);
+    });
+
+    it("reports the coordinator's live state rather than a copy", () => {
+      const harness = createTransportHarness();
+      acquire({
+        scope: epicScope("epic-1"),
+        openTransport: harness.openTransport,
+      });
+      expect(
+        browserSessionsCoordinatorEntries().map(
+          (entry) => entry.state.inventoryReady,
+        ),
+      ).toEqual([false]);
+
+      soleSession(soleClient(harness.clients)).emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [sessionInfo({ sessionId: "session-1" })],
+        },
+        null,
+      );
+
+      expect(
+        browserSessionsCoordinatorEntries().map((entry) => [
+          entry.state.inventoryReady,
+          entry.state.items.map((item) => item.sessionId),
+        ]),
+      ).toEqual([[true, ["session-1"]]]);
+    });
   });
 
   it("does not resolve a chip's session id against an independent coordinator", () => {

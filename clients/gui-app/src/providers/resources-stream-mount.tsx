@@ -53,10 +53,10 @@ export function ResourcesStreamMount(
   const showGlobalResourceMonitor = useSettingsStore(
     (state) => state.showGlobalResourceMonitor,
   );
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
+  const navigatorChipsWanted = useSettingsStore(
+    (state) => state.navigatorResourceMetrics.length > 0,
   );
-  const streamWanted = showGlobalResourceMonitor || showNavigatorResourceStats;
+  const streamWanted = showGlobalResourceMonitor || navigatorChipsWanted;
 
   useEffect(() => {
     if (resourcesUnsupported || !streamWanted) return;

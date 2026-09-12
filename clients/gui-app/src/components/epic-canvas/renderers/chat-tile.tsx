@@ -264,7 +264,10 @@ import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
-import { ChatLowerInteractionSurfaces } from "./chat-tile-lower-surfaces";
+import {
+  ChatDockWorkspaceControls,
+  ChatLowerInteractionSurfaces,
+} from "./chat-tile-lower-surfaces";
 import { composerHasBlockingApprovals } from "./chat-approval-visibility";
 import {
   chatTileUiReducer,
@@ -3088,14 +3091,18 @@ function useChatTileSessionViewModel(
   // its output, the Background strip lists what is running, and the output
   // window is where a shell is stopped, started or deleted. A second index
   // over the same shells crowded the composer without adding a capability.
+  // The compact chips close the left cell, hard against the context-usage
+  // cluster: they describe what this chat is DOING and come and go with it,
+  // and the host / workspace pickers ahead of them describe where it runs and
+  // must not shift under the pointer when a chip appears. That ordering lives
+  // inside `ChatDockWorkspaceControls`, which has a suite on it - this memo
+  // only keeps the node's identity still while a count moves.
   const workspaceControls = useMemo(
     () => (
-      <>
-        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-          {hostWorkspaceSelector}
-        </div>
-        {usageChip}
-      </>
+      <ChatDockWorkspaceControls
+        hostWorkspaceSelector={hostWorkspaceSelector}
+        usageChip={usageChip}
+      />
     ),
     [hostWorkspaceSelector, usageChip],
   );
