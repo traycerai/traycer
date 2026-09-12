@@ -1,3 +1,4 @@
+import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 /**
  * One flat row per `chord`-kind action in `ACTION_META`. Runs as
  * a React source so rebinding a chord in the settings UI updates
@@ -29,15 +30,19 @@ export const actionsSource: ReactCommandSource = {
   id: "actions",
   useItems: () => {
     const bindings = useKeybindingStore((state) => state.bindings);
+    const canRecover = useTabRecoveryHistory(
+      (state) => state.ready && state.entries.length > 0,
+    );
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       const items: Array<CommandItem> = [];
       for (const id of ACTION_IDS) {
         const meta = ACTION_META[id];
-        if (!isPaletteEligible(meta)) continue;
+        if (!isPaletteEligible(meta) || (id === "tab.reopen" && !canRecover))
+          continue;
         items.push(buildActionItem(meta, bindings[id] ?? null));
       }
       return items;
-    }, [bindings]);
+    }, [bindings, canRecover]);
   },
 };
 

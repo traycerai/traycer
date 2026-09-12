@@ -177,9 +177,8 @@ function SubLeaderSection(props: SubLeaderSectionProps) {
           Sub-leader
         </h2>
         <p className="mt-1 text-ui-xs text-muted-foreground">
-          The primary leader (default <Kbd>⌘</Kbd>) drives the active Epic
-          group. The sub-leader (default <Kbd>⌥</Kbd>) drives the header tab
-          strip, and settings sections while Settings is frontmost.
+          The primary leader switches tabs within the active task. Configure
+          shortcuts for header tabs and Settings sections below.
         </p>
       </header>
       <KeybindingList

@@ -1,3 +1,4 @@
+import { resetTabRecoveryHistory } from "@/lib/tab-recovery/history";
 // Destructive "wipe all gui-app persisted state" utility.
 //
 // Bridge-agnostic by design: it takes the host `clear` RPC as a parameter so it
@@ -20,11 +21,11 @@
 //   4. Reload last             — re-hydrate from the now-cleared storage / host
 //      state without racing a pending write.
 
+import { PERSIST_PREFIX, persistKey } from "@/lib/persist/keys";
 import {
   APPEARANCE_DB_NAME,
   clearAppearanceCache,
 } from "@/lib/appearance/appearance-cache";
-import { PERSIST_PREFIX } from "@/lib/persist/keys";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -68,12 +69,8 @@ function sweepStorage(storage: Storage): number {
 }
 
 // Wrap `indexedDB.deleteDatabase` (an async `IDBOpenDBRequest`) in a promise
-// that settles on `onsuccess`/`onerror`/`onblocked`. `onblocked` fires when an
-// open connection still holds the db; we resolve (not reject) so one stuck
-// partition can't abort the rest of the wipe or the reload — the reload below
-// tears down every connection anyway. `onerror` rejects to surface a genuine
-// deletion failure; the sole caller treats deletion as best-effort (catches per
-// db) so an erroring partition still can't abort the reload.
+// A blocked request has not deleted anything. Shared databases must release
+// their connections on versionchange; a remaining blocker is a wipe failure.
 function deleteDatabaseAwaitable(
   factory: IDBFactory,
   name: string,
@@ -81,7 +78,8 @@ function deleteDatabaseAwaitable(
   return new Promise((resolve, reject) => {
     const request = factory.deleteDatabase(name);
     request.onsuccess = () => resolve();
-    request.onblocked = () => resolve();
+    request.onblocked = () =>
+      reject(new Error(`Database deletion blocked by another window: ${name}`));
     request.onerror = () =>
       reject(request.error ?? new Error(`deleteDatabase failed: ${name}`));
   });
@@ -145,10 +143,12 @@ async function deleteRendererDatabases(): Promise<boolean> {
   const enumerated = await enumeratedRendererDatabaseNames(factory);
   const names = new Set(enumerated);
   names.add(PROMPT_STASH_DB_NAME);
+  names.add(persistKey("tab-recovery"));
   names.add(APPEARANCE_DB_NAME);
-  // Best-effort per partition: a single db whose delete errors must not abort
+  // Recovery history must actually be deleted before reload. Other partitions
+  // remain best-effort: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the
-  // real recovery and tears down every connection anyway. The bytes are
+  // real recovery for this renderer. The bytes are
   // re-pasteable (landing), recoverable from disk (file-edit), or already
   // gone from the user's perspective (stash, whose entries the localStorage
   // sweep never touched but whose db this same step is the only thing that
@@ -158,6 +158,7 @@ async function deleteRendererDatabases(): Promise<boolean> {
   await Promise.all(
     Array.from(names).map((name) =>
       deleteDatabaseAwaitable(factory, name).catch((error: unknown) => {
+        if (name === persistKey("tab-recovery")) throw error;
         failedCount += 1;
         if (name === PROMPT_STASH_DB_NAME) promptStashDeleted = false;
         appLogger.warn("[persist] renderer database delete failed", {
@@ -206,6 +207,8 @@ export async function clearAllPersistedStores(args: {
   } else {
     appLogger.info("[persist] host-side state clear unavailable", {});
   }
+
+  await resetTabRecoveryHistory();
 
   // Stop edit timers before deleting their journal (step 3 below). Deferred
   // until after the failure-prone host clear above: if `hostClear` rejects,

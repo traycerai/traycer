@@ -251,7 +251,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     expect(set).not.toHaveBeenCalled();
     expect(
       screen.getByText(
-        "Global shortcuts need at least one modifier key (⌘, Ctrl, Shift, or Alt).",
+        "Global shortcuts need at least one modifier key, such as Ctrl or Shift.",
       ),
     ).toBeTruthy();
 
