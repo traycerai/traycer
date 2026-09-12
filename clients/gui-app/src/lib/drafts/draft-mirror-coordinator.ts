@@ -17,6 +17,8 @@ import {
   blobHashesFromContent,
   blobHashesOfDocument,
 } from "./draft-write-codec";
+import { draftKindIsHostBound } from "./draft-portability";
+import { resetCloudDraftKindsForTests } from "./cloud-draft-kinds";
 
 import { interviewDraftBindingKey } from "./draft-ids";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
@@ -748,6 +750,7 @@ export function resetDraftMirrorCoordinatorForTests(): void {
   warnedUnboundComposer.clear();
   warnedUnboundInterview.clear();
   resetDraftBlobTransportForTests();
+  resetCloudDraftKindsForTests();
   notifyCloudScopeListeners();
   // Re-bind production listeners. Tests that install their own must not
   // leave `routeLocalDelete` unbound for later files in the same worker.
@@ -803,6 +806,14 @@ export async function ingestCloudDraftSummary(input: {
   readonly document: DraftDocument;
 }): Promise<void> {
   if (input.summary.ownerHostId === input.hostId) return;
+  // A host-bound surface is never a replica here. `applyComposerHostDocument`
+  // keys on `target.chatId`, so ingesting another host's chat-composer draft
+  // overwrites the row for a chat that lives on THAT host - flipping the
+  // owning host's own live draft to `origin: "replica"`, which is what
+  // `draftRequiresClaim` reads to put the composer behind a read-only banner
+  // naming the tab's own host. Every tile mount re-ran this, which is why the
+  // banner came back on every tab switch.
+  if (draftKindIsHostBound(input.document.kind)) return;
   await applyHostDocument(input.document);
 }
 
