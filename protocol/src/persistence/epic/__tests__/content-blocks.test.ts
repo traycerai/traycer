@@ -1360,7 +1360,8 @@ describe("errorBlockSchemaPreFallback (frozen chat.subscribe@1.0-1.9) strips fai
   // in name only.
   it("contentBlockSchemaPreFallback strips failure from an error block via its frozen member", () => {
     const parsed = contentBlockSchemaPreFallback.parse(errorWithFailure);
-    expect(parsed.type === "error" && "failure" in parsed).toBe(false);
+    expect(parsed.type).toBe("error");
+    expect("failure" in parsed).toBe(false);
   });
 });
 

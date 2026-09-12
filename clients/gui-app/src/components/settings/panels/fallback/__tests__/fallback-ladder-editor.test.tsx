@@ -35,11 +35,12 @@ const ALL_ENABLED = new Set<FallbackRungKind>([
 function renderLadder(
   onMove: (fromIndex: number, toIndex: number) => void,
   onToggle: (rung: FallbackRungKind, next: boolean) => void,
+  enabled: ReadonlySet<FallbackRungKind>,
 ) {
   render(
     <FallbackLadderEditor
       displayOrder={DISPLAY_ORDER}
-      enabled={ALL_ENABLED}
+      enabled={enabled}
       onToggle={onToggle}
       onMove={onMove}
       profileStepHint={null}
@@ -51,7 +52,7 @@ function renderLadder(
 
 describe("FallbackLadderEditor", () => {
   it("renders `notify` at its stored position rather than forcing it to the end", () => {
-    renderLadder(vi.fn(), vi.fn());
+    renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     const rows = screen.getAllByRole("listitem");
     // `textContent`'s getter type is `string` (TS's DOM lib splits the
     // getter/setter types, and the setter alone accepts `null`), so a `?? ""`
@@ -74,7 +75,7 @@ describe("FallbackLadderEditor", () => {
     // Falsification: re-add `{...attributes}` to the handle span in
     // `fallback-ladder-editor.tsx` - the queries below would then resolve
     // dnd-kit's default handle affordances again.
-    renderLadder(vi.fn(), vi.fn());
+    renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     expect(
       screen.queryByLabelText(`Reorder ${FALLBACK_RUNG_COPY.notify.label}`),
     ).toBeNull();
@@ -122,7 +123,7 @@ describe("FallbackLadderEditor", () => {
   });
 
   it("renders no up/down controls at all for `notify` - absent, not merely disabled", () => {
-    renderLadder(vi.fn(), vi.fn());
+    renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     // Absence, not a disabled state: a disabled control says "not right now"
     // and invites the reader to look for what would enable it, which is the
     // same distinction the overrides matrix draws between an "off" chip and
@@ -171,7 +172,7 @@ describe("FallbackLadderEditor", () => {
   });
 
   it("clicking a movable row's down arrow calls onMove with indices among the MOVABLE steps, not into displayOrder", () => {
-    const { onMove } = renderLadder(vi.fn(), vi.fn());
+    const { onMove } = renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     // R5 RE-SPECIFIED which row this drives. It used to click "profile" down
     // and assert:
     //
@@ -196,7 +197,7 @@ describe("FallbackLadderEditor", () => {
     // a two-sided rule. Reaching it from below is refused as firmly as
     // reaching it from above, and neither is the ordinary "you are at the end
     // of the list" disable that a ladder with `notify` last would produce.
-    renderLadder(vi.fn(), vi.fn());
+    renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     // Above the slot, moving down: refused (and "profile" is not last).
     expect(
       screen.getByLabelText<HTMLButtonElement>(
@@ -217,7 +218,7 @@ describe("FallbackLadderEditor", () => {
   });
 
   it("toggling a step's switch calls onToggle for that step alone, leaving order to the caller", () => {
-    const { onToggle } = renderLadder(vi.fn(), vi.fn());
+    const { onToggle } = renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     fireEvent.click(
       screen.getByLabelText(`${FALLBACK_RUNG_COPY.tier.label} - run this step`),
     );
@@ -228,16 +229,7 @@ describe("FallbackLadderEditor", () => {
 
 describe("FallbackLadderEditor - F19 notify has no switch", () => {
   it("renders no `switch` role for notify at all, while every movable row DOES have one", () => {
-    render(
-      <FallbackLadderEditor
-        displayOrder={DISPLAY_ORDER}
-        enabled={ALL_ENABLED}
-        onToggle={vi.fn()}
-        onMove={vi.fn()}
-        profileStepHint={null}
-        tierStepHint={null}
-      />,
-    );
+    renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     // Falsification: render `<Switch>` for the fixed step too (undo the
     // `fixed ? <FixedStepControl .../> : <Switch .../>` branch in
     // `FallbackLadderRow`, `fallback-ladder-editor.tsx`) - this would then
@@ -257,17 +249,10 @@ describe("FallbackLadderEditor - F19 notify has no switch", () => {
   });
 
   it("with notify absent from `enabled`, the 'add this step back' link appears and calls onToggle(\"notify\", true)", () => {
-    const onToggle = vi.fn();
-    const enabled = new Set<FallbackRungKind>(["profile", "tier", "wait"]);
-    render(
-      <FallbackLadderEditor
-        displayOrder={DISPLAY_ORDER}
-        enabled={enabled}
-        onToggle={onToggle}
-        onMove={vi.fn()}
-        profileStepHint={null}
-        tierStepHint={null}
-      />,
+    const { onToggle } = renderLadder(
+      vi.fn(),
+      vi.fn(),
+      new Set<FallbackRungKind>(["profile", "tier", "wait"]),
     );
     const addBack = screen.getByRole("button", {
       name: `${FALLBACK_RUNG_COPY.notify.label} - add this step back`,
@@ -282,16 +267,7 @@ describe("FallbackLadderEditor - F19 notify has no switch", () => {
   });
 
   it("with notify present in `enabled`, 'Always' renders and the 'add this step back' link is absent", () => {
-    render(
-      <FallbackLadderEditor
-        displayOrder={DISPLAY_ORDER}
-        enabled={ALL_ENABLED}
-        onToggle={vi.fn()}
-        onMove={vi.fn()}
-        profileStepHint={null}
-        tierStepHint={null}
-      />,
-    );
+    renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     expect(screen.getByTestId("fallback-step-always-on")).not.toBeNull();
     expect(
       screen.queryByRole("button", {

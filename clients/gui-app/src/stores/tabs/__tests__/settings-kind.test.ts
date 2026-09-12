@@ -95,14 +95,18 @@ describe("settings tab kind - host section", () => {
 });
 
 /**
- * RG6: `store.ts`'s own `SETTINGS_PATHS` allowlist is hand-maintained and
- * deliberately NOT derived from `SETTINGS_SECTIONS` (see that file's own
- * comment - sharing removes the repeated-omission mechanism the comment
- * records: `devices`, then `app-notifications`/`link-phone`, each silently
- * unrecognised as a settings route until a later addition happened to sit
- * next to the gap). This sweep is what turns "silently dropped" into a red
- * test: it derives its EXPECTATION from `SETTINGS_SECTIONS`, but the
- * production allowlist stays hand-maintained.
+ * RG6: `SETTINGS_PATHS` (`stores/tabs/settings-paths.ts`) is a single
+ * hand-maintained allowlist, deliberately NOT derived from
+ * `SETTINGS_SECTIONS` (see that module's own comment - sharing removes the
+ * repeated-omission mechanism the comment records: `devices`, then
+ * `app-notifications`/`link-phone`, each silently unrecognised as a settings
+ * route until a later addition happened to sit next to the gap). This sweep
+ * is what turns "silently dropped" into a red test: it derives its
+ * EXPECTATION from `SETTINGS_SECTIONS`, but the production allowlist stays
+ * hand-maintained. It exercises `store.ts`'s OWN consumer of that allowlist
+ * (`migrateTabsPersistedState`'s route recognition); the sibling sweep in
+ * `desktop-tabs-persistence.test.ts` exercises a DIFFERENT consumer
+ * (`legacySystemTabs`) of the same shared set.
  */
 function persistedSettingsTab(sectionId: string): unknown {
   return {
@@ -124,10 +128,12 @@ describe("RG6: store.ts's migrateTabsPersistedState keeps every registered setti
       const migrated = migrateTabsPersistedState(
         persistedSettingsTab(sectionId),
       );
-      // Falsification: remove any one id from `SETTINGS_PATHS` in `store.ts` -
-      // exactly that section's case reddens here, and ONLY here (the sibling
-      // sweep in `desktop-tabs-persistence.test.ts` reads a SEPARATE
-      // hand-maintained copy of the same list and stays green).
+      // Falsification: remove any one id from the shared `SETTINGS_PATHS` -
+      // exactly that section's case reddens here AND in the sibling sweep in
+      // `desktop-tabs-persistence.test.ts`, since both now read the same
+      // constant. Each sweep still pins its OWN consumer's wiring to that
+      // constant, which is why unifying the DATA didn't make either sweep
+      // redundant.
       expect(migrated.systemTabs.settings?.lastPath).toBe(
         `/settings/${sectionId}`,
       );

@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import {
   AlarmClock,
@@ -723,11 +723,25 @@ function BackgroundTreeRow(props: {
 }) {
   const { node } = props;
   const item = node.item;
-  // The shared minute clock, read for the fallback-wait row's resume time:
-  // whether it is far enough out to need its weekday (`formatWaitTime`).
-  const now = useSampledNow();
+  // `now` matters only on the `fallback-wait` branch of
+  // `backgroundItemDisplayTitle` (whether the resume time is far enough out
+  // to need its weekday, via `formatWaitTime`) - every other kind ignores the
+  // parameter entirely, so `0` here is never a stand-in for "the wrong time",
+  // it is simply unread. Keeping the minute clock out of THIS component is
+  // the point: `BackgroundTreeRow` renders for every item in the panel, and
+  // subscribing here repainted every command, monitor, subagent, workflow,
+  // MCP and wake row each tick to change nothing. `BackgroundWaitTitle` below
+  // is where a fallback-wait row gets the live clock instead, isolated the
+  // same way `FallbackGraceHeadline` isolates its own countdown from
+  // `FallbackGraceCard`.
   const displayTitle =
-    item === null ? node.title : backgroundItemDisplayTitle(item, now);
+    item === null ? node.title : backgroundItemDisplayTitle(item, 0);
+  const titleNode: ReactNode =
+    item !== null && item.kind === "fallback-wait" ? (
+      <BackgroundWaitTitle item={item} />
+    ) : (
+      displayTitle
+    );
 
   return (
     <li className="m-0">
@@ -760,7 +774,7 @@ function BackgroundTreeRow(props: {
         ) : (
           <>
             <TooltipWrapper
-              label={displayTitle}
+              label={titleNode}
               side="top"
               sideOffset={undefined}
               align={undefined}
@@ -772,7 +786,7 @@ function BackgroundTreeRow(props: {
               >
                 <BackgroundKindIcon kind={item.kind} />
                 <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
-                  {displayTitle}
+                  {titleNode}
                 </span>
                 {item.kind === "mcp" && item.startedAt !== null ? (
                   <LiveElapsed startedAt={item.startedAt} />
@@ -816,6 +830,30 @@ function BackgroundTreeRow(props: {
       ) : null}
     </li>
   );
+}
+
+/**
+ * A fallback-wait row's title, isolated in its own leaf.
+ *
+ * The minute clock lives HERE and nowhere else in the row: this is the only
+ * kind whose title reads `now` (whether the resume time is far enough out to
+ * need its weekday, via `formatWaitTime`), so subscribing at this depth means
+ * the tick repaints this leaf alone - not the icon, the badge, the stop
+ * button, or any sibling row in the panel. Same shape `FallbackGraceHeadline`
+ * uses to isolate its own countdown from `FallbackGraceCard`.
+ *
+ * Returns a bare fragment rather than a `<span>`: the caller renders this
+ * both as the row's visible title AND as the tooltip's `label` (which takes a
+ * `ReactNode` for exactly this reason), and neither call site wants an extra
+ * wrapping element.
+ */
+function BackgroundWaitTitle({
+  item,
+}: {
+  readonly item: Extract<BackgroundItem, { kind: "fallback-wait" }>;
+}) {
+  const now = useSampledNow();
+  return <>{backgroundItemDisplayTitle(item, now)}</>;
 }
 
 export function BackgroundItemsPanel(props: {

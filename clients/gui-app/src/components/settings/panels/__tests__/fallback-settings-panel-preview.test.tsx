@@ -135,20 +135,60 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessModelsQuery: () => ({ data: undefined }),
 }));
 
-vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: () => ({
+/**
+ * Mutable so the shared-label cell below can put two profiles under the SAME
+ * label before rendering - the only way to reach the disambiguation branch
+ * `buildFallbackProfileLabels` implements. `beforeEach` resets this to the
+ * distinct-label default every other cell in this file relies on.
+ */
+const providersListMocks = vi.hoisted(
+  (): {
     data: {
-      providers: [
-        {
-          providerId: "claude",
-          profiles: [
-            { profileId: WORK_PROFILE_ID, label: "Work", kind: "managed" },
-            { profileId: HOME_PROFILE_ID, label: "Home", kind: "managed" },
-          ],
-        },
-      ],
-    },
+      providers: ReadonlyArray<{
+        readonly providerId: string;
+        readonly profiles: ReadonlyArray<{
+          readonly profileId: string;
+          readonly label: string;
+          readonly kind: "managed";
+        }>;
+      }>;
+    };
+  } => ({
+    data: { providers: [] },
   }),
+);
+
+function providersListData(
+  profiles: ReadonlyArray<{
+    readonly profileId: string;
+    readonly label: string;
+  }>,
+): {
+  readonly providers: ReadonlyArray<{
+    readonly providerId: string;
+    readonly profiles: ReadonlyArray<{
+      readonly profileId: string;
+      readonly label: string;
+      readonly kind: "managed";
+    }>;
+  }>;
+} {
+  return {
+    providers: [
+      {
+        providerId: "claude",
+        profiles: profiles.map((profile) => ({
+          profileId: profile.profileId,
+          label: profile.label,
+          kind: "managed",
+        })),
+      },
+    ],
+  };
+}
+
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => ({ data: providersListMocks.data }),
 }));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
@@ -236,6 +276,10 @@ beforeEach(() => {
   previewMocks.queryData = respond(policy({}));
   previewMocks.previewData = undefined;
   previewMocks.previewSpy.mockReset();
+  providersListMocks.data = providersListData([
+    { profileId: WORK_PROFILE_ID, label: "Work" },
+    { profileId: HOME_PROFILE_ID, label: "Home" },
+  ]);
 });
 
 afterEach(() => {
@@ -383,7 +427,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     expect(lines[2].textContent).not.toContain(" on ");
   });
 
-  it("disambiguates two accounts that share a label, the way the host does", () => {
+  it("prints the plain label when no other account shares it", () => {
     previewMocks.previewData = {
       candidates: [
         previewRow(0, {
@@ -393,12 +437,36 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
       ],
     };
     renderPanel();
-    // "Work" and "Home" are distinct here, so the plain label is what shows -
-    // the control for the shared-label branch, which appends a bracketed prefix.
-    // Stated as an equality on the rendered clause rather than a `toContain`, so
-    // a resolver that appended a suffix regardless would fail.
+    // "Work" and "Home" are distinct here, so the plain label is what shows.
+    // The shared-label branch, which appends a bracketed prefix, is the
+    // separate cell below.
     expect(previewLines()[0].textContent).toContain("on Work");
     expect(previewLines()[0].textContent).not.toContain("[");
+  });
+
+  it("appends a bracketed id prefix when two accounts share a label, the way the host does", () => {
+    // Overrides the file's default Work/Home fixture: both profiles now read
+    // "Work", which is the only roster shape that reaches
+    // `buildFallbackProfileLabels`'s disambiguation branch.
+    providersListMocks.data = providersListData([
+      { profileId: WORK_PROFILE_ID, label: "Work" },
+      { profileId: HOME_PROFILE_ID, label: "Work" },
+    ]);
+    previewMocks.previewData = {
+      candidates: [
+        previewRow(0, {
+          resolvedModel: "claude-opus-5",
+          profileId: WORK_PROFILE_ID,
+        }),
+      ],
+    };
+    renderPanel();
+    // Falsification: a resolver that never disambiguates (always the plain
+    // label, whatever the roster looks like) passes every OTHER cell in this
+    // file unchanged and reddens only here.
+    expect(previewLines()[0].textContent).toContain(
+      `on Work [${WORK_PROFILE_ID.slice(0, 8)}]`,
+    );
   });
 
   it("asks only while the groups on screen are the groups the host has", () => {

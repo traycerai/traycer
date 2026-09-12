@@ -7,8 +7,11 @@ import type {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { fallbackPolicyWriteScope } from "@/hooks/providers/use-fallback-policy-set-mutation";
-import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import {
+  fallbackPolicyWriteScope,
+  hostQueryKeys,
+  providersMutationKeys,
+} from "@/lib/query-keys";
 
 interface FallbackRestoreContext {
   readonly hostId: string | null;

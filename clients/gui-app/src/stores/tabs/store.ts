@@ -18,6 +18,7 @@ import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
 } from "@/stores/tabs/registry";
+import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import {
   createEmptySplit,
   DEFAULT_LEFT_RATIO,
@@ -110,39 +111,6 @@ export interface TabsStoreState extends PersistedTabsStoreState {
 }
 
 const TABS_PERSIST_KEY = persistKey(STORE_KEYS.tabs);
-// Hand-maintained, and duplicated verbatim in `desktop-tabs-persistence.ts`.
-// It is NOT derived from `SETTINGS_SECTIONS` because it also has to accept
-// `service`, the retired id that `settings.service.tsx` still redirects, and
-// because a persisted path from an older build is exactly the input this
-// guards. The cost of hand-maintaining it is that a new section can be
-// forgotten here and silently stop being recognised as a settings route -
-// `devices` was, from the day it was added until `app-diagnostics` arrived and
-// the omission was noticed next to it.
-const SETTINGS_PATHS = new Set([
-  "agents",
-  "app-diagnostics",
-  // `app-notifications` and `link-phone` were missing here and in the copy
-  // below for their whole lives - the same omission the comment above records
-  // for `devices`, twice over. Found while adding `fallback`; fixed with it,
-  // because a sweep that adds one id and leaves two broken is how the list got
-  // into this state.
-  "app-notifications",
-  "appearance",
-  "devices",
-  "diagnostics",
-  "fallback",
-  "general",
-  "host",
-  "keybindings",
-  "link-phone",
-  "notifications",
-  "opening-behavior",
-  "providers",
-  "service",
-  "shell",
-  "usage",
-  "worktrees",
-]);
 
 let tabsLocalPersistenceEnabled = true;
 let pendingLegacySourceActiveSelection = false;

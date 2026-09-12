@@ -419,24 +419,26 @@ describe("desktop tabs persistence", () => {
 });
 
 /**
- * RG6: the SECOND hand-maintained `SETTINGS_PATHS` allowlist, local to this
- * module's own `legacySystemTabs` (see that constant's comment - deliberately
- * NOT shared with `store.ts`'s copy or derived from `SETTINGS_SECTIONS`, for
- * the reason stated there: sharing removes the repeated-omission mechanism).
- * `hydrateDesktopTabs` reaches `legacySystemTabs` only on the LEGACY path -
- * no persisted v2 layout - via a legacy HISTORY ROUTE, so a settings tab here
- * comes from that route rather than from `systemTabs` in the snapshot.
+ * RG6: this module's own `legacySystemTabs` consumes the SAME shared
+ * `SETTINGS_PATHS` allowlist (`stores/tabs/settings-paths.ts`) that
+ * `store.ts` does - deliberately NOT derived from `SETTINGS_SECTIONS`, for
+ * the reason stated on that shared constant: sharing removes the
+ * repeated-omission mechanism. `hydrateDesktopTabs` reaches
+ * `legacySystemTabs` only on the LEGACY path - no persisted v2 layout - via a
+ * legacy HISTORY ROUTE, so a settings tab here comes from that route rather
+ * than from `systemTabs` in the snapshot.
  */
 describe("RG6: desktop-tabs-persistence's own legacySystemTabs recognizes every registered settings route", () => {
   it.each(SETTINGS_SECTIONS.map((section) => section.id))(
     "a legacy history route of /settings/%s hydrates a settings system tab at that route",
     (sectionId) => {
       hydrateDesktopTabs(emptySnapshot(), true, `/settings/${sectionId}`);
-      // Falsification: remove any one id from THIS module's own
-      // `SETTINGS_PATHS` copy - exactly that section's case reddens here,
-      // and ONLY here (the sibling sweep in `settings-kind.test.ts` reads
-      // `store.ts`'s separate hand-maintained copy and stays green). That
-      // asymmetry is the point of keeping the two lists unshared.
+      // Falsification: remove any one id from the shared `SETTINGS_PATHS` -
+      // exactly that section's case reddens here AND in the sibling sweep in
+      // `settings-kind.test.ts`, since both this module's `legacySystemTabs`
+      // and `store.ts`'s migration path now read the same constant. Each
+      // sweep still pins its own consumer's wiring to it, which is why
+      // unifying the DATA didn't make either sweep redundant.
       expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
         `/settings/${sectionId}`,
       );

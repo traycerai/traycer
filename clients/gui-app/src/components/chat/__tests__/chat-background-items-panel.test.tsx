@@ -858,15 +858,33 @@ describe("<BackgroundItemsPanel />", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /Background/ }));
 
+    // Derived from the SAME formatter `formatClockTime` uses, rather than a
+    // hard-coded Latin "AM"/"PM": `toLocaleTimeString(undefined, …)` resolves
+    // the runner's own ICU locale, and ja-JP renders "午後3:00" - the
+    // designator leads and is never "AM"/"PM". A literal `[AP]M` regex asserts
+    // English specifically and goes red on a formatter doing exactly what it
+    // is documented to do. Same style of anchor this file already uses for
+    // the weekday form below, and `relative-time.test.ts` uses for
+    // `formatClockTime` itself.
+    const dayPeriod = new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+      .formatToParts(new Date(at))
+      .find((part) => part.type === "dayPeriod")?.value;
+    if (dayPeriod === undefined) {
+      throw new Error("the format produced no dayPeriod part to anchor on");
+    }
     const waitTitle = screen.getByText(
       /Waiting for Claude Code · work-account's limit/,
     ).textContent;
-    expect(waitTitle).toMatch(/resumes \d{1,2}:\d{2}\s?[AP]M/i);
+    expect(waitTitle).toContain("resumes ");
+    expect(waitTitle).toContain(dayPeriod);
     // Falsification: use item.providerId directly instead of fallbackProviderLabelFor and THIS assertion must go red.
     expect(waitTitle).toContain("Claude Code");
     expect(waitTitle).not.toContain("claude-code");
     // Falsification: swap formatClockTime for formatWakeupTime in that branch and THIS assertion must go red.
-    expect(waitTitle).toMatch(/[AP]M/i);
     expect(waitTitle).not.toMatch(/\b\d{2}:\d{2}\b/);
 
     const wakeupTitle = screen.getByText(/Waiting until/).textContent;

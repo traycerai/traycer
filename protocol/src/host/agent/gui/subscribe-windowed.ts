@@ -699,7 +699,16 @@ export const chatTranscriptWindowSchema = z.object({
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
 
 /**
- * Wire-freeze copy of the tail bound to `chat.subscribe@1.8`.
+ * Wire-freeze copy of the tail bound to `chat.subscribe@1.9`.
+ *
+ * `@1.9`, not `@1.8`: this copy binds `messageSchemaPreFallback` and
+ * `transcriptRowContextSchemaPreFallback` below, which is 1.9's contract.
+ * 1.8 has its own pair - `chatTranscriptWindowSchemaV18` /
+ * `chatRangeResponseSchemaV18` in `subscribe.ts`, carrying
+ * `transcriptRowContextSchemaPreAntigravity` - because 1.8 predates the
+ * Antigravity session-anchor arm and 1.9 does not. Naming the wrong minor here
+ * is not cosmetic: these two lines are frozen against DIFFERENT byte shapes,
+ * and the checkpoint digests are per minor.
  *
  * The windowed line is the reason round-4 finding F1 exists: a notice kind is
  * carried by MESSAGE BODIES, and on this line bodies arrive on three channels,

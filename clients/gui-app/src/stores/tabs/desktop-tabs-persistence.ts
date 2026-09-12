@@ -26,33 +26,13 @@ import {
   useTabsStore,
 } from "@/stores/tabs/store";
 import { isRegisteredTabKind } from "@/stores/tabs/registry";
+import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import { setTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { tabSourceRefs } from "@/stores/tabs/source-refs";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 
 const DEBOUNCE_MS = 100;
-/** The second copy of `store.ts`'s list — see the note there before editing. */
-const SETTINGS_PATHS = new Set([
-  "agents",
-  "app-diagnostics",
-  "app-notifications",
-  "appearance",
-  "devices",
-  "diagnostics",
-  "fallback",
-  "general",
-  "host",
-  "keybindings",
-  "link-phone",
-  "notifications",
-  "opening-behavior",
-  "providers",
-  "service",
-  "shell",
-  "usage",
-  "worktrees",
-]);
 
 interface DesktopTabsPersistenceController {
   setActiveRoute(route: string): void;

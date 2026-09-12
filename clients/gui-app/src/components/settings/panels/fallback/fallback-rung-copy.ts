@@ -48,7 +48,14 @@ export const FALLBACK_RUNG_COPY: Record<FallbackRungKind, FallbackRungCopy> = {
   },
   notify: {
     label: "Notify me",
-    description: "Always runs when nothing else worked.",
+    // NOT "Always runs when nothing else worked". This description renders for
+    // the row whatever the stored ladder holds, including a ladder that omits
+    // `notify` entirely - the state where the editor offers "Add this step
+    // back" precisely because the step does NOT run. `FixedStepControl` is
+    // where "Always" belongs, and it already says it only in the `enabled`
+    // branch; saying it here too put the claim beside its own contradiction,
+    // which `fallback-ladder-editor.tsx` documents at its `FixedStepControl`.
+    description: "Runs at the end of the plan, once the steps above are spent.",
     chipLabel: "notify",
   },
 };

@@ -24,6 +24,7 @@ import {
 } from "@/components/chat/fallback/fallback-card-menus";
 import {
   COUNTDOWN_NOT_PAUSED_LABEL,
+  FINDING_DESTINATIONS_LABEL,
   HOST_UNREACHABLE_LABEL,
   NO_DESTINATIONS_LABEL,
   NO_SELECTABLE_DESTINATIONS_LABEL,
@@ -57,6 +58,7 @@ const listHarness = vi.hoisted(() => ({
   }>,
   data: undefined as ChatFallbackListTargetsResponse | undefined,
   isPending: false,
+  isFetching: false,
   isError: false,
 }));
 
@@ -84,6 +86,7 @@ vi.mock("@/components/chat/fallback/use-fallback-targets", () => ({
     return {
       data: listHarness.data,
       isPending: listHarness.isPending,
+      isFetching: listHarness.isFetching,
       isError: listHarness.isError,
     };
   },
@@ -261,6 +264,7 @@ describe("FallbackDestinationMenu", () => {
     listHarness.calls = [];
     listHarness.data = undefined;
     listHarness.isPending = false;
+    listHarness.isFetching = false;
     listHarness.isError = false;
     actionHarness.mutate.mockReset();
     actionHarness.openSettings.mockReset();
@@ -1190,6 +1194,51 @@ describe("FallbackDestinationMenu", () => {
     expect(listHarness.calls.every((call) => !call.enabled)).toBe(true);
   });
 
+  // The dangerous reopen `MenuBody`'s own doc calls out: a reopen inside
+  // `gcTime` resolves `status: "success"` carrying the PREVIOUS open's rows on
+  // the very first render, with a fresh fetch still in flight - `isPending`
+  // reads false, `data` is defined, and only `isFetching` says the rows are
+  // stale. Without a harness that can express `isFetching: true` beside real
+  // `data`, nothing in this file could ever put the component in that state.
+  it("keeps retained rows off screen and the announcement region silent while a reopen's refetch is in flight", () => {
+    listHarness.isPending = false;
+    listHarness.isFetching = true;
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [
+          profileRow({
+            profileId: "work-profile",
+            label: "stale-retained-account",
+            severity: "ok",
+            usedPercent: 10,
+            selectable: true,
+            skip: null,
+          }),
+        ],
+        modelTargets: [],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+    // Falsification: drop `|| isFetching` from MenuBody's loading gate in
+    // `fallback-destination-menu.tsx` - the retained row would then render.
+    expect(screen.getByText(FINDING_DESTINATIONS_LABEL)).toBeDefined();
+    expect(screen.queryByText("stale-retained-account")).toBeNull();
+    // And the live region stays silent, per `menuStatusAnnouncement`'s
+    // `isFetching` guard - not the "N destinations" count computed against
+    // the retained rows.
+    const [, announcement] = screen.getAllByRole("status");
+    expect(announcement.textContent).toBe("");
+  });
+
   it("keeps an inline refusal on screen while the menu stays open, and closes on applied", () => {
     const onOpenChange = vi.fn();
     const { rerender } = render(
@@ -1318,6 +1367,7 @@ describe("FallbackGraceMenu", () => {
       modelTargetsSkip: null,
     });
     listHarness.isPending = false;
+    listHarness.isFetching = false;
     listHarness.isError = false;
     actionHarness.mutate.mockReset();
     leaseHarness.hold.mockReset();
@@ -1997,6 +2047,7 @@ describe("FallbackGraceMenu", () => {
 describe("FallbackWaitingMenu", () => {
   beforeEach(() => {
     listHarness.calls = [];
+    listHarness.isFetching = false;
     listHarness.data = listed({
       failedTuple: FAILED_CLAUDE_TUPLE,
       profileTargets: [],

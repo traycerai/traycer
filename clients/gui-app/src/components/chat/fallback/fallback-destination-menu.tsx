@@ -634,7 +634,16 @@ function TargetSections({
           </h3>
           {data.modelTargets.map((target) => (
             <ModelRow
-              key={`${target.groupId}:${target.harnessId}:${target.modelFamily}:${target.profileId ?? "ambient"}`}
+              // Keyed by everything the ROW TITLE distinguishes, which is more
+              // than the tuple's identity fields: `tierCandidateSchema` permits
+              // two candidates in one group with the same harness and family but
+              // a different effort (`claude`/`opus`/`high` beside
+              // `claude`/`opus`/`low`), and both resolve to the same profile. On
+              // the identity fields alone those are one key for two siblings, so
+              // React warns and can carry the wrong row instance across a
+              // re-render. `model` joins for the same reason - it is the
+              // resolved slug the title leads with.
+              key={`${target.groupId}:${target.harnessId}:${target.modelFamily}:${target.model ?? "unresolved"}:${target.reasoningEffort ?? "default"}:${target.profileId ?? "ambient"}`}
               target={target}
               labelFor={labelFor}
               picking={picking}

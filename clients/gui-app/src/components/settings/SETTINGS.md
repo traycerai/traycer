@@ -43,21 +43,23 @@ which maps each `SettingsSectionId` to its panel in a `switch`. A new section
 must be added in BOTH places - the route file under `src/routes/` AND the modal
 `switch` - or the modal renders a blank pane for that section.
 
-Six other places enumerate section ids, and four of them fail loudly when one
+Five other places enumerate section ids, and four of them fail loudly when one
 is missed. `settings-modal-content.tsx`, `stores/tabs/kinds/settings.tsx`
 and `report-issue-dialog.tsx`'s `ROUTE_TEMPLATE_LABELS` are exhaustive over a
 union or over `FileRouteTypes["fullPaths"]`, so a compile error catches them.
 `lib/analytics.ts` is exhaustive only because `ANALYTICS_SETTINGS_SECTIONS` is
 built through `satisfies Record<AnalyticsSettingsSection, true>` - that
 `satisfies` is doing real work, and without it a missing id silently drops the
-navigation event. The two `SETTINGS_PATHS` sets (`stores/tabs/store.ts` and
-`stores/tabs/desktop-tabs-persistence.ts`) are hand-written string sets with no
-gate at all: a section absent from them stops being recognised as a settings
-route for persistence. `devices` was missing from both for its whole life - and
-so, it turned out, were `app-notifications` and `link-phone`, found while
-adding `fallback` and fixed alongside it. Three misses on one ungated pair is
-the argument for checking these two by hand whenever a section is added, not a
-run of bad luck.
+navigation event. `SETTINGS_PATHS` (`stores/tabs/settings-paths.ts`), imported
+by both `stores/tabs/store.ts` and `stores/tabs/desktop-tabs-persistence.ts`,
+is a hand-written string set with no gate at all: a section absent from it
+stops being recognised as a settings route for persistence, in BOTH consumers
+at once now that they share it. `devices` was missing from it for its whole
+life - and so, it turned out, were `app-notifications` and `link-phone`, found
+while adding `fallback` and fixed alongside it, back when this was still two
+hand-copied sets. Three misses on one ungated pair is the argument for
+checking this constant by hand whenever a section is added, not a run of bad
+luck.
 
 ## Search
 
@@ -2335,9 +2337,13 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     exclusion is not a preference - and `Reset overrides only` clears
     `reasonOverrides` alone, leaving the ladder and Behavior untouched.
     **What the matrix cannot express, disclosed rather than left to be
-    discovered (RF5, D142/D146).** Turning every override chip off preserves
-    that failure's pre-retry/hold behavior and terminal Notify; Settings does
-    not author the wire's per-reason `off` value, and Notify stays last. The
+    discovered (RF5, D142/D146).** Turning every override chip off leaves the
+    brief retry that outages and connection failures start with, and the
+    notification at the end - but **no cancellation window**: the all-off shape
+    arms no grace hold, so there is no countdown to cancel. Settings does not
+    author the wire's per-reason `off` value, and Notify stays last. That is
+    `FALLBACK_OVERRIDES_DISCLOSURE`'s promise in substance, and the two are
+    meant to stay in step. The
     wire schema permits both - `reasonOverrides` accepts the literal `"off"`,
     and `fallbackLadderSchema` checks length and uniqueness only, so an early
     `notify` is a valid stored ladder - and the panel deliberately writes
