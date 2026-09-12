@@ -275,6 +275,17 @@ interface RoomReadCounter {
 }
 
 /**
+ * How many times the scene actually asked the painter for a fresh overhang,
+ * as opposed to answering out of `overhangCache`. A memo keyed correctly on
+ * `layoutVersion` ticks this once per re-plan and never again until the next
+ * one; a memo that forgot to check the version ticks it once ever, however
+ * many re-plans follow.
+ */
+interface OverhangRecomputeCounter {
+  recomputes: number;
+}
+
+/**
  * A transparent numeric-index counting Proxy over `layout.rooms`: the wrapped
  * array reads back the identical objects, in the identical order, and the
  * plan's own frozen index over it sees nothing different - only every INDEX
@@ -294,15 +305,29 @@ function countedRooms<T>(
   });
 }
 
+/**
+ * One instrumented view: the plan's rooms count reads the same way
+ * `countedRooms` always has, and the painter's `blockOverhangPx` counts its
+ * own calls alongside it - one wrapper for both signals a case might want,
+ * rather than a second parallel proxy over the painter.
+ */
 function withCountedRooms(
   view: OfficeView,
-  counter: RoomReadCounter,
+  roomCounter: RoomReadCounter,
+  overhangCounter: OverhangRecomputeCounter,
 ): OfficeView {
   return {
     ...view,
     plan: (planInput: OfficePlanInput): OfficeLayout => {
       const layout = view.plan(planInput);
-      return { ...layout, rooms: countedRooms(layout.rooms, counter) };
+      return { ...layout, rooms: countedRooms(layout.rooms, roomCounter) };
+    },
+    painter: {
+      ...view.painter,
+      blockOverhangPx: (layout: OfficeLayout): number => {
+        overhangCounter.recomputes += 1;
+        return view.painter.blockOverhangPx(layout);
+      },
     },
   };
 }
@@ -343,7 +368,10 @@ describe("the per-frame room-population memo (H2)", () => {
       for (const count of MANY_ROOTS_COUNTS) {
         const { agents, statusById } = manyRootsAgents(count);
         const counter: RoomReadCounter = { reads: 0 };
-        const countedView = withCountedRooms(view, counter);
+        // This case is only about room reads; the overhang side of the
+        // instrumented view is exercised by the H2-fixup cases below.
+        const overhangCounter: OverhangRecomputeCounter = { recomputes: 0 };
+        const countedView = withCountedRooms(view, counter, overhangCounter);
         const scene = new OfficeScene(countedView, null);
         scene.sync(sceneInputFor(agents, statusById, null));
         const layout = scene.layout();
@@ -386,4 +414,177 @@ describe("the per-frame room-population memo (H2)", () => {
       }
     });
   }
+});
+
+// ---- H2 fixup: the overhang memo's own invalidation --------------------- //
+
+/**
+ * `blockOverhangPx` memoizes a scalar property of the LAYOUT alone, keyed on
+ * `layoutVersion` - so its lifecycle has to survive three things the room-
+ * population memo above never has to: a plan that replaces the layout
+ * outright (growth or shrink), a sync that replaces nothing (a status flip,
+ * which `agentSetSignature` never reads), and a suspend that drops every
+ * derived cache while leaving the layout itself in force. A memo that
+ * dropped the version half of its check would still pass every H2 case
+ * above - each builds a fresh scene for one population - because none of
+ * them ever re-plan a scene that has already painted a frame.
+ *
+ * `OfficeFrame.staticVersion` IS `layoutVersion`, so every check below reads
+ * it off a frame already being taken rather than reaching into the scene.
+ */
+const LIFECYCLE_RESYNC_COUNTS: ReadonlyArray<number> = [10, 1000, 10];
+
+/** The same far-off rect the room-population memo above warms with: guaranteed empty, so nothing about the floor's CONTENT can mask a wrong call count. */
+const OFF_MAP_OVERVIEW_RECT: OfficeRect = {
+  x: -100_000,
+  y: -100_000,
+  width: 1280,
+  height: 700,
+};
+
+describe("the block-overhang memo's own invalidation (H2 fixup)", () => {
+  for (const view of VIEWS) {
+    it(`${view.id}: reuses the scalar through status changes, recomputes once per growth/shrink, and drops it on suspend`, () => {
+      const roomCounter: RoomReadCounter = { reads: 0 };
+      const overhangCounter: OverhangRecomputeCounter = { recomputes: 0 };
+      const countedView = withCountedRooms(view, roomCounter, overhangCounter);
+      const scene = new OfficeScene(countedView, null);
+      let previous: OfficePopulation | null = null;
+      let currentInput: OfficeSceneInput | null = null;
+      // No frame has run yet to read `staticVersion` off; the scene's own
+      // `layoutVersion` starts at 0, which is exactly what `emptyFrame()`
+      // reports before the first sync.
+      let versionBefore = 0;
+      const roomReadsByPopulation: number[] = [];
+      for (const count of LIFECYCLE_RESYNC_COUNTS) {
+        const { agents, statusById } = manyRootsAgents(count);
+        const growthInput = sceneInputFor(agents, statusById, previous);
+        scene.sync(growthInput);
+
+        // ONE frame both proves the re-plan happened (the version moved) and
+        // is the call THE MUTATION answers wrong on the second and third
+        // iterations: with the version check deleted, this returns whatever
+        // was cached for the population before it instead of recomputing.
+        const callsBeforeGrowthFrame = overhangCounter.recomputes;
+        const growthFrame = scene.frame(0, OFF_MAP_OVERVIEW_RECT);
+        expect(growthFrame.staticVersion).toBeGreaterThan(versionBefore);
+        expect(overhangCounter.recomputes - callsBeforeGrowthFrame).toBe(1);
+
+        // Five more identical frames must neither re-walk the rooms (H2's
+        // own regression, above) nor recompute the overhang again (this
+        // fixup's).
+        roomCounter.reads = 0;
+        for (let frame = 0; frame < 5; frame += 1) {
+          expect(scene.frame(0, OFF_MAP_OVERVIEW_RECT).floor).toEqual([]);
+        }
+        expect(overhangCounter.recomputes - callsBeforeGrowthFrame).toBe(1);
+        roomReadsByPopulation.push(roomCounter.reads);
+
+        // A status-only sync: `agentSetSignature` never reads status, so
+        // `adoptLayout` re-plans nothing and the SAME layout object comes
+        // back - the version cannot have moved under it either.
+        const layoutBefore = scene.layout();
+        const movedStatusById = new Map(growthInput.statusById);
+        movedStatusById.set(agents[0].id, "attention");
+        const statusInput = sceneInputFor(
+          agents,
+          movedStatusById,
+          growthInput.partition,
+        );
+        scene.sync(statusInput);
+        expect(scene.layout()).toBe(layoutBefore);
+
+        const callsBeforeStatusFrames = overhangCounter.recomputes;
+        for (let frame = 0; frame < 5; frame += 1) {
+          const statusFrame = scene.frame(0, OFF_MAP_OVERVIEW_RECT);
+          expect(statusFrame.staticVersion).toBe(growthFrame.staticVersion);
+        }
+        expect(overhangCounter.recomputes).toBe(callsBeforeStatusFrames);
+
+        previous = statusInput.partition;
+        currentInput = statusInput;
+        versionBefore = growthFrame.staticVersion;
+      }
+      expect(roomReadsByPopulation).toEqual([0, 0, 0]);
+
+      // `suspend()` drops the cache but touches no layout: the next frame
+      // recomputes, exactly once, and the version is untouched.
+      const callsBeforeFirstSuspend = overhangCounter.recomputes;
+      scene.suspend();
+      const suspendFrame1 = scene.frame(0, OFF_MAP_OVERVIEW_RECT);
+      const suspendFrame2 = scene.frame(0, OFF_MAP_OVERVIEW_RECT);
+      expect(suspendFrame1.staticVersion).toBe(versionBefore);
+      expect(suspendFrame2.staticVersion).toBe(versionBefore);
+      expect(overhangCounter.recomputes - callsBeforeFirstSuspend).toBe(1);
+
+      // A second suspend, this time recovered through `resume` rather than a
+      // bare `sync`, drops the memo exactly the same way.
+      if (currentInput === null) throw new Error("no input");
+      scene.suspend();
+      scene.resume(currentInput);
+      scene.frame(0, OFF_MAP_OVERVIEW_RECT);
+      scene.frame(0, OFF_MAP_OVERVIEW_RECT);
+      expect(overhangCounter.recomputes - callsBeforeFirstSuspend).toBe(2);
+    });
+  }
+});
+
+describe("the overhang memo across a live City append (H2 fixup)", () => {
+  it("keeps a real block visible at every population as the district grows past an already-cached overhang", () => {
+    const view = OFFICE_VIEWS.city;
+    const base = makeTestEpic("one-team", 3, 1);
+    const extras = makeTestEpic("many-roots", 1000, 1).agents.map(
+      (agent, index): OfficeAgentInput => ({
+        ...agent,
+        id: `appended-${index}`,
+        name: `Appended ${index}`,
+        createdAt: 10_000 + index,
+        archived: false,
+        archivedAt: null,
+      }),
+    );
+    const scene = new OfficeScene(view, null);
+    let previous: OfficePopulation | null = null;
+    // Frames at EVERY population, not only the last - that is what makes
+    // this scene ALREADY PAINTED before it grows. At n=0 the small district
+    // puts roughly 64px of overhang in the cache; the mutation's failure is
+    // that same 64px still being cached at n=1000, which needs roughly
+    // 2,037px to keep this exact block on screen.
+    for (const count of [0, 90, 1000]) {
+      const agents = [...base.agents, ...extras.slice(0, count)];
+      const statusById = new Map<string, OfficeAgentStatus>(
+        agents.map((agent) => [agent.id, "working"]),
+      );
+      const input = sceneInputFor(agents, statusById, previous);
+      previous = input.partition;
+      scene.sync(input);
+
+      const layout = scene.layout();
+      if (layout === null) throw new Error("no layout");
+      const block = wholeMapBlocks(view, layout).find(
+        (candidate) => candidate.fill === "storey",
+      );
+      if (block === undefined) throw new Error("no storey block");
+      // A point 20px inside the block's own corner, and a 2560x1400 camera -
+      // a real viewport's world rect at zoom 0.5 - positioned so that same
+      // point sits 10px inside the camera's own far corner.
+      const point: OfficeRect = {
+        x: block.x + 20,
+        y: block.y + 20,
+        width: 1,
+        height: 1,
+      };
+      const camera: OfficeRect = {
+        x: point.x + 10 - 2560,
+        y: point.y + 10 - 1400,
+        width: 2560,
+        height: 1400,
+      };
+      const actual = scene
+        .frame(0, camera)
+        .floor.filter(isBlockDrawable)
+        .findLast((candidate) => rectsOverlap(candidate, point));
+      expect(actual).toEqual(block);
+    }
+  });
 });
