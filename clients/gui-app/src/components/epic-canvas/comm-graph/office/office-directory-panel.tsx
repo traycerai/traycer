@@ -246,8 +246,23 @@ function buildSections(args: {
           statusById: args.statusById,
         }),
       );
-    const live = teams.filter((team) =>
-      team.members.some((member) => isOfficeHotStatus(member.status)),
+    // Liveness decided ONCE per team, then read twice. The listed rows and the
+    // quiet tally used to come from two separate passes, the second asking
+    // `live.includes(team)` for every team - a membership test inside a filter,
+    // quadratic in the team count, re-run on every render of the directory
+    // including every keystroke in the search box. Order is carried through
+    // `map`/`filter` untouched, so the rows come out in the same sorted order.
+    const ranked = teams.map((team) => ({
+      team,
+      live: team.members.some((member) => isOfficeHotStatus(member.status)),
+    }));
+    const live = ranked
+      .filter((entry) => entry.live)
+      .map((entry) => entry.team);
+    const quietTeamMembers = ranked.reduce(
+      (total, entry) =>
+        entry.live ? total : total + entry.team.members.length,
+      0,
     );
     const hqId = host.hqAgentId;
     const hq =
@@ -272,9 +287,7 @@ function buildSections(args: {
       // teams' members and the quiet solos, counted rather than listed.
       quietAgents:
         solos.filter((member) => !isOfficeHotStatus(member.status)).length +
-        teams
-          .filter((team) => !live.includes(team))
-          .reduce((total, team) => total + team.members.length, 0),
+        quietTeamMembers,
       quietTeams: teams.length - live.length,
     };
   });

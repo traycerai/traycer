@@ -100,6 +100,7 @@ import type { TileFindAdapter } from "@/stores/tile-find";
 import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
+import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
 
 const OFFICE_VIEW: CommGraphTileViewState = {
   x: 0,
@@ -2732,5 +2733,84 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
         agents.some((person) => call.args[0] === person.name),
     );
     expect(nameCalls).toHaveLength(0);
+  });
+});
+
+describe("CommGraphOfficeCanvas fixup 5 - the directory's quiet tally", () => {
+  it("counts every cold team's members and the quiet solos in the footer's quiet total", () => {
+    // `buildSections` used to compute the quiet tally as
+    // `teams.filter((team) => !live.includes(team))` - a membership test
+    // inside a filter over every team, quadratic in the team count and
+    // re-run on every render including every keystroke in the search box
+    // (react-doctor's `js-set-map-lookups`, T7's acceptance pass). The fix
+    // decides liveness once per team and reads it twice; this pins the
+    // OUTCOME of that read, not the mechanism, so it stays green across a
+    // rewrite that keeps the number right.
+    //
+    // The existing "renders directory rows from the partition and
+    // statusById" case only ever asserts the quiet count against a fixture
+    // with NO TEAMS AT ALL - the team half of the sum (`quietTeamMembers`)
+    // is `0` there and dropping it entirely still leaves that case green.
+    // This fixture has teams, all of them cold, specifically to close that
+    // gap: it goes red if the team tally is ever dropped back to just the
+    // quiet solos.
+    const fixture = makeTestEpic("triage", 15, 1);
+    // Every member idle: `isOfficeHotStatus` is true for `working`,
+    // `awaiting`, `attention`, `failure` and `background`, and false only for
+    // `idle` and `archived` - so this makes every team on the floor cold and
+    // every solo quiet, with nobody left to populate a bullpen.
+    const statusById = new Map(
+      fixture.agents.map((agent) => [agent.id, "idle" as const]),
+    );
+    const partition = partitionOfficePopulation({
+      agents: fixture.agents,
+      statusById,
+      previous: null,
+    });
+    const teams = partition.hosts.flatMap((host) => host.teams);
+    // Asserted rather than assumed: if `makeTestEpic`'s shape ever changes
+    // and stops producing more than one team at this count, this case must
+    // fail loudly instead of quietly degrading into the zero-team situation
+    // the existing case already covers.
+    expect(teams.length).toBeGreaterThanOrEqual(2);
+    expect(teams.every((team) => !team.live)).toBe(true);
+
+    const visibleAgentIds = new Set(fixture.agents.map((agent) => agent.id));
+    const coldTeamMembers = teams.reduce(
+      (total, team) => total + team.memberAgentIds.length,
+      0,
+    );
+    const quietSolos = partition.hosts
+      .flatMap((host) => host.solos)
+      .filter(
+        (solo) => !isOfficeHotStatus(statusById.get(solo.agentId)),
+      ).length;
+    // The host's HQ (`agent-root` here) gets its own row and is never folded
+    // into Quiet - the existing F5-adjacent case's own comment makes the
+    // same point about why a visible HQ does not inflate this count.
+    const expectedQuiet = coldTeamMembers + quietSolos;
+
+    render(
+      <OfficeDirectoryPanel
+        partition={partition}
+        visibleAgentIds={visibleAgentIds}
+        statusById={statusById}
+        nameById={
+          new Map(fixture.agents.map((agent) => [agent.id, agent.name]))
+        }
+        hostNameById={new Map()}
+        selectedAgentId={null}
+        onSelectAgent={vi.fn()}
+        onHoverAgent={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByTestId("comm-graph-office-directory-quiet").textContent,
+    ).toBe(
+      `Quiet · ${expectedQuiet} idle or archived · ${teams.length} cold ` +
+        `${teams.length === 1 ? "team" : "teams"}`,
+    );
   });
 });
