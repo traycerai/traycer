@@ -752,7 +752,7 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "filesChanged",
         glyph: "filesChanged",
-        workingWord: null,
+        working: false,
         // The file count leads and the line counts follow, the same order and
         // the same tones the panel's own header uses - the chip stands in for
         // that header, so reading one after the other should feel like reading
@@ -773,9 +773,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "activeAgents",
         glyph: "activeAgents",
-        // The same word the roster gives a mid-turn agent, so the chip and the
-        // sentence it folds are one vocabulary.
-        workingWord: agentsWorking ? "working" : null,
+        // Mid-turn is the live state here, exactly as the roster in `label`
+        // words it - the chip draws it, the sentence says it.
+        working: agentsWorking,
         lineDeltas: null,
         text:
           receivedAgentCount > 0
@@ -795,11 +795,11 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "background",
         glyph: backgroundGlyph,
-        // The count IS the running count, so the word that qualifies it is the
-        // header's own - and a shell whose process is alive is in that count
-        // whether or not it is monitoring, since the host reports it as
-        // `running` either way (`managedCommandStatusSchema`).
-        workingWord: backgroundRunning > 0 ? "running" : null,
+        // The count IS the running count, so anything in it lights the chip -
+        // and a shell whose process is alive is in that count whether or not it
+        // is monitoring, since the host reports it as `running` either way
+        // (`managedCommandStatusSchema`).
+        working: backgroundRunning > 0,
         lineDeltas: null,
         text: `${backgroundRunning}`,
         // The number on the chip is the running count, but the section can be

@@ -427,29 +427,19 @@ function renderSurfaces(props: ChatLowerInteractionSurfacesProps) {
   return render(tile(props));
 }
 
-/** The chip's printed short form, with the trailing activity word dropped. */
+/** The chip's printed short form - which is the whole of what it prints. */
 function chipText(section: string): string | null {
-  const clone = screen.getByTestId(`chat-dock-chip-${section}`).cloneNode(true);
-  if (!(clone instanceof HTMLElement)) {
-    throw new Error("cloning the chip did not produce an element");
-  }
-  clone.querySelector("[data-chip-working-word]")?.remove();
-  return clone.textContent;
+  return screen.getByTestId(`chat-dock-chip-${section}`).textContent;
 }
 
-/** True when this chip is drawing the live treatment - lit icon, corner ring. */
+/**
+ * True when this chip is drawing the live treatment - a lit, shimmering icon
+ * with a ring at its corner. All three arrive together, so the wrapper standing
+ * for them is enough; `chat-dock-compact-strip.test.tsx` pins the parts.
+ */
 function chipWorking(section: string): boolean {
   const chipElement = screen.getByTestId(`chat-dock-chip-${section}`);
   return chipElement.querySelector("[data-chip-activity]") !== null;
-}
-
-/** The word the chip prints after its count while busy, or null at rest. */
-function chipWorkingWord(section: string): string | null {
-  return (
-    screen
-      .getByTestId(`chat-dock-chip-${section}`)
-      .querySelector("[data-chip-working-word]")?.textContent ?? null
-  );
 }
 
 beforeEach(() => {
@@ -655,10 +645,10 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
 
     const chip = screen.getByTestId("chat-dock-chip-activeAgents");
     // The icon stays `Bot` throughout - only the live treatment comes and
-    // goes. The word is the agents' half of the same vocabulary the Background
-    // chip uses, so the two chips never describe activity differently.
+    // goes. Nothing the chip PRINTS changes with the state: the count is the
+    // whole of its text either way, and the state it is in is the icon's to
+    // say (and the sentence's).
     expect(chipWorking("activeAgents")).toBe(true);
-    expect(chipWorkingWord("activeAgents")).toBe("working");
     expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
     expect(chipText("activeAgents")).toBe("2");
 
@@ -669,7 +659,6 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     rerender(tile(props));
 
     expect(chipWorking("activeAgents")).toBe(false);
-    expect(chipWorkingWord("activeAgents")).toBeNull();
     expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
     expect(chipText("activeAgents")).toBe("2");
     expect(chip.getAttribute("aria-label")).toBe(
@@ -791,7 +780,8 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     expect(chipText("background")).toBe("1");
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 running.");
     expect(chipWorking("background")).toBe(true);
-    expect(chipWorkingWord("background")).toBe("running");
+    // "running" is said in the sentence and nowhere in the chip's own text.
+    expect(chipText("background")).toBe("1");
     expect(chip.querySelector("svg.lucide-terminal")).not.toBeNull();
     expect(chip.querySelector("svg.lucide-circle-pause")).toBeNull();
   });
@@ -821,7 +811,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     const chip = screen.getByTestId("chat-dock-chip-background");
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 held.");
     expect(chipWorking("background")).toBe(false);
-    expect(chipWorkingWord("background")).toBeNull();
+    expect(chipText("background")).toBe("0");
     expect(chip.querySelector("svg.lucide-terminal")).not.toBeNull();
     expect(chip.querySelector("svg.lucide-circle-pause")).toBeNull();
   });

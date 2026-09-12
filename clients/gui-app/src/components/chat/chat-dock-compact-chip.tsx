@@ -10,18 +10,15 @@ interface ChatDockCompactChipProps {
   /** The short form: `3`, `2 · 1`. Never a sentence. */
   readonly text: ReactNode;
   /**
-   * The word for what this section is doing - `running`, `working` - or `null`
-   * at rest. It tones the number and prints after it, so `1` becomes `1
-   * running`: the state named outright, for the case an icon treatment alone
-   * did not carry.
+   * True while this section has something in flight. Here it tones the number
+   * `primary`; the rest of the live treatment belongs to `icon`.
    *
-   * The word itself is the first thing to go when the composer runs out of
-   * room, on a container query against the composer's own bottom row - not the
-   * viewport, and not this strip, which is shrink-to-fit and would therefore be
-   * measuring the very word it is deciding whether to draw. Every other channel
-   * survives that fold, and the chip's sentence carries the word regardless.
+   * Nothing is printed for it. A chip is `[icon] N` at every width - the word
+   * that used to follow the number (`1 running`) is gone, along with the
+   * container query that folded it away on a narrow composer. `label` is where
+   * the state is still said in words.
    */
-  readonly workingWord: string | null;
+  readonly working: boolean;
   /**
    * Added and removed lines to print after the short form, in the same tones
    * the accumulated-changes panel gives them, or `null` for a chip that counts
@@ -116,23 +113,11 @@ export function ChatDockCompactChip(props: ChatDockCompactChipProps) {
         <span
           className={cn(
             "font-mono text-code-xs tabular-nums",
-            props.workingWord !== null && "text-primary",
+            props.working && "text-primary",
           )}
         >
           {props.text}
         </span>
-        {/* `aria-hidden` because `aria-label` above is already the whole
-            sentence, word included - this span is the same fact drawn, and a
-            screen reader repeating it would read the state twice. */}
-        {props.workingWord === null ? null : (
-          <span
-            aria-hidden
-            data-chip-working-word
-            className="hidden text-primary @min-[24rem]:inline"
-          >
-            {props.workingWord}
-          </span>
-        )}
         {/* Gated here rather than inside the component: the panel's header
             and rows keep an empty counts span so their row geometry does not
             twitch as summaries land, but on a chip it would be a bare `gap-1`

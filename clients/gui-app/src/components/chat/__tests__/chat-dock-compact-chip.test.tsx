@@ -8,7 +8,7 @@ import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 interface ChipProps {
   readonly icon: ReactElement;
   readonly text: string;
-  readonly workingWord: string | null;
+  readonly working: boolean;
   readonly lineDeltas: DiffLineCounts | null;
   readonly label: string;
   readonly pulseToken: string | null;
@@ -21,7 +21,7 @@ function baseProps(): ChipProps {
   return {
     icon: <span data-testid="chip-icon" />,
     text: "3",
-    workingWord: null,
+    working: false,
     lineDeltas: null,
     label: "3 agents running. Show the active agents.",
     pulseToken: null,
@@ -126,34 +126,55 @@ describe("<ChatDockCompactChip />", () => {
     expect(chip.childElementCount).toBe(2);
   });
 
-  // The number is the chip's loudest text, so it carries the state too - and
-  // the word after it names that state outright for the case an icon
-  // treatment alone did not carry. The word folds out on a container query,
-  // which is what keeps it from ever widening a cramped composer.
-  it("tones the number and prints the word while working", () => {
+  // The number is the chip's loudest text, so it carries the state too - as a
+  // tone, which costs no width. The chip's only other text is the deltas.
+  it("tones the number while working", () => {
     const { rerender } = renderChip({
       ...baseProps(),
       text: "1",
-      workingWord: "running",
+      working: true,
     });
 
     const chip = screen.getByTestId("chip");
-    const word = chip.querySelector("[data-chip-working-word]");
-    expect(word?.textContent).toBe("running");
-    expect(word?.getAttribute("class")).toContain("hidden");
-    expect(word?.getAttribute("class")).toContain("@min-[24rem]:inline");
-    // Already in the accessible name, so drawing it must not say it twice.
-    expect(word?.getAttribute("aria-hidden")).toBe("true");
     expect(screen.getByText("1").getAttribute("class")).toContain(
       "text-primary",
     );
+    expect(chip.textContent).toBe("1");
 
-    rerenderChip(rerender, { ...baseProps(), text: "1", workingWord: null });
+    rerenderChip(rerender, { ...baseProps(), text: "1", working: false });
 
-    expect(chip.querySelector("[data-chip-working-word]")).toBeNull();
     expect(screen.getByText("1").getAttribute("class")).not.toContain(
       "text-primary",
     );
+  });
+
+  // The word that used to follow the number (`1 running`) is gone: a chip is
+  // `[icon] N` at every width, so nothing here may be width-conditional and
+  // there is no container query left to fold. The state is the icon's job, and
+  // `label`'s.
+  it("prints no working word, and no width-gated node, at any width", () => {
+    const { rerender } = renderChip({
+      ...baseProps(),
+      text: "1",
+      working: true,
+      label: "Background. 1 running.",
+    });
+
+    const chip = screen.getByTestId("chip");
+    expect(chip.querySelector("[data-chip-working-word]")).toBeNull();
+    expect(chip.textContent).toBe("1");
+    expect(chip.childElementCount).toBe(2);
+    for (const element of [chip, ...chip.querySelectorAll("*")]) {
+      expect(element.getAttribute("class") ?? "").not.toMatch(/@(min|max)-/);
+    }
+    // The sentence is unchanged - it is the one channel that still says it.
+    expect(chip.getAttribute("aria-label")).toBe("Background. 1 running.");
+
+    // ...and an idle chip is the same shape, one tone lighter.
+    rerenderChip(rerender, { ...baseProps(), text: "1", working: false });
+    expect(chip.querySelector("[data-chip-working-word]")).toBeNull();
+    expect(chip.textContent).toBe("1");
+    expect(chip.childElementCount).toBe(2);
   });
 
   it("uses the whole sentence as the accessible name", () => {

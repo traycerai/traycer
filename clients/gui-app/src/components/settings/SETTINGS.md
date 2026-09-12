@@ -1840,12 +1840,17 @@ md:top-0`): positioned against the nearest scrollport - the settings
     draws its own icon (`Bot`, or Background's per-kind glyph - a
     host-supervised shell is a `Terminal` whether it is running or held, never
     a pause) and shows activity ON that icon rather than replacing it: the
-    glyph and the count turn `primary`, a filled dot at the icon's corner
-    throws the app's clock-driven ping ring, and the word for what is happening
-    (`running`, `working`) prints after the count wherever the composer row is
-    at least 24rem wide. Three channels rather than one, because a single blink
-    read as idle beside a live PR watcher; under `prefers-reduced-motion` the
-    ring holds still and the other three carry it unchanged.
+    glyph and the count turn `primary`, the glyph shimmers (an opacity sweep),
+    and a filled dot at its corner throws the app's ping ring. A chip is
+    `[icon] N` at every width - it once printed the word for its state after
+    the count (`1 running`) on a container query, and that word said what the
+    icon already said, in the place the composer has least room, in a different
+    vocabulary per chip; the sentence in the tooltip and the accessible name
+    still carries it. Three channels on the icon rather than one, because a
+    single blink read as idle beside a live PR watcher. The shimmer and the
+    ring share one cycle and one tick of the shared status clock (never a CSS
+    `animation:`), so they read as one pulse; under `prefers-reduced-motion`
+    neither moves and the tones and the corner dot carry it unchanged.
     A chip prints what its row's own header prints - Files changed
     reads `3  +12 −4`, the file count then the accumulated line counts in the
     panel's added / removed tones, with a zero side omitted and the counts

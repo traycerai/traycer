@@ -7,7 +7,7 @@ export type ChatDockSection = "filesChanged" | "activeAgents" | "background";
 
 /**
  * What a chip draws ahead of its number - what the section IS, never what it
- * is doing. Activity rides on top of this glyph (see `workingWord`) rather than
+ * is doing. Activity rides on top of this glyph (see `working`) rather than
  * replacing it: a chip whose icon is swapped out while busy stops saying which
  * section it stands for at exactly the moment someone is scanning for it, and
  * two busy chips side by side then read as the same thing twice.
@@ -33,18 +33,21 @@ export interface ChatDockCompactChipModel {
   readonly section: ChatDockSection;
   readonly glyph: ChatDockCompactChipGlyph;
   /**
-   * What this section's activity is CALLED - `running`, `working` - while
-   * something is in flight, and `null` at rest. One field rather than a boolean
-   * beside a word, because the two can then never disagree: a chip that draws
-   * the live treatment is by construction a chip with a word for it.
+   * True while something in this section is in flight.
    *
-   * The word is printed after the count when the composer row has room for it,
-   * and the same treatment lights up regardless: the kind icon in `primary`
-   * with a ping at its corner, and the count in `primary` too. It never changes
-   * WHICH icon - the glyph is the only thing saying which section a chip stands
-   * for.
+   * A chip is `[icon] N` and nothing else, so the state is carried by the icon:
+   * the glyph in `primary`, shimmering on the shared status clock, with a ping
+   * at its corner, and the count in `primary` beside it. It never changes WHICH
+   * icon - the glyph is the only thing saying which section a chip stands for.
+   *
+   * The chip used to print the word for it too (`1 running`), on a container
+   * query against the composer row. That word is gone: it said what three
+   * channels of the icon already say, in the one place the composer has least
+   * room, and it gave the two chips two vocabularies for one state. The
+   * sentence in `label` still carries it, which is the channel that cannot show
+   * a tone or a pulse.
    */
-  readonly workingWord: string | null;
+  readonly working: boolean;
   /** The short form the chip prints: `+395 −12`, `3`, `2 · 1`. */
   readonly text: string;
   /**
