@@ -537,12 +537,15 @@ function growPacking(packing: ObliquePacking, input: OfficePlanInput): void {
       packing.cubby.delete(id);
     }
   }
+  const buildingIndexByHost = new Map(
+    packing.buildings.map((building, index) => [building.hostId, index]),
+  );
   for (const host of input.partition.hosts) {
-    const index = packing.buildings.findIndex(
-      (building) => building.hostId === host.hostId,
-    );
-    if (index < 0) {
+    const index = buildingIndexByHost.get(host.hostId);
+    if (index === undefined) {
+      const addedIndex = packing.buildings.length;
       addBuilding(packing, host, input);
+      buildingIndexByHost.set(host.hostId, addedIndex);
       continue;
     }
     growHost(packing, input, index, host);
