@@ -50,8 +50,10 @@ import {
 import {
   OFFICE_VIEW_IDS,
   OFFICE_VIEWS,
+  type OfficePainter,
   type OfficePlanInput,
   type OfficeProjector,
+  type OfficeView,
 } from "@/lib/comm-graph/office/views/office-view";
 import {
   planOfficeStaticChunks,
@@ -401,6 +403,33 @@ function viewRectsOver(world: OfficeSize): ReadonlyArray<OfficeRect> {
   return rects;
 }
 
+/**
+ * Wraps a view's painter so every drawable its `seatProps` emits is recorded
+ * against the seat it came from, keyed on the drawable OBJECT rather than on
+ * anything about it - the scene caches a seat's props (`buildSeatProps`) and
+ * hands the very same array back on a later frame instead of asking the
+ * painter again, so identity is what keeps a cached return counted against
+ * its seat. Counting calls to `seatProps` in place of this would not survive
+ * that cache.
+ */
+function seatIdTrackedView(view: OfficeView): {
+  readonly view: OfficeView;
+  readonly seatIdByDrawable: WeakMap<OfficeDrawable, string>;
+} {
+  const seatIdByDrawable = new WeakMap<OfficeDrawable, string>();
+  const trackedPainter: OfficePainter = {
+    ...view.painter,
+    seatProps: (layout, seat, state, lod) => {
+      const emitted = view.painter.seatProps(layout, seat, state, lod);
+      for (const entry of emitted) {
+        seatIdByDrawable.set(entry.drawable, seat.seatId);
+      }
+      return emitted;
+    },
+  };
+  return { view: { ...view, painter: trackedPainter }, seatIdByDrawable };
+}
+
 describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
   const view = OFFICE_VIEWS[viewId];
   const input = planInputFor({
@@ -554,6 +583,50 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
     // Anti-vacuity: a frame that built nothing anywhere would pass every
     // bound above and draw an empty office.
     expect(worst).toBeGreaterThan(0);
+  });
+
+  it("counts exactly the seats the painter emitted this frame, not merely bounds them", () => {
+    // THE DENOMINATOR ITSELF, not another ceiling on it. The case above only
+    // ever uses `paintedSeatsIn` as the multiplier in an upper bound, so a
+    // version that recomputed it as "every occupied desk" - dropping the
+    // reserves Mission Control, the Building and Campus all paint for - would
+    // still pass every budget above, just against a smaller number. This
+    // watches the painter directly: `seatProps` is wrapped so every drawable
+    // it returns is recorded, BY OBJECT IDENTITY, against the seat it came
+    // from - identity, because the scene caches a seat's props and hands the
+    // very same objects back on a later frame, and counting calls to
+    // `seatProps` instead would miss every one of those cached returns.
+    const { view: trackedView, seatIdByDrawable } = seatIdTrackedView(view);
+    const scene = new OfficeScene(trackedView, null);
+    scene.sync(
+      sceneInputFor({ agents: EPIC.agents, statusById: EPIC.statusById }),
+    );
+    const layout = layoutOf(scene);
+    const projector = trackedView.painter.projector(layout);
+    let sawSeats = false;
+
+    for (const rect of viewRectsOver(scene.worldSize())) {
+      const denominator = paintedSeatsIn({ layout, projector, rect });
+      const frame = scene.frame(1, rect);
+      const seatDrawables: OfficeDrawable[] = [
+        ...frame.props,
+        ...(frame.world === null
+          ? []
+          : frame.world.map((entry) => entry.drawable)),
+      ];
+      const seatIds = new Set<string>();
+      for (const drawable of seatDrawables) {
+        const seatId = seatIdByDrawable.get(drawable);
+        if (seatId === undefined) continue;
+        seatIds.add(seatId);
+      }
+      expect(denominator).toBe(seatIds.size);
+      if (seatIds.size > 0) sawSeats = true;
+    }
+
+    // Anti-vacuity: a sweep that never framed a seat would pass on 0 === 0
+    // everywhere.
+    expect(sawSeats).toBe(true);
   });
 
   it("is one pip per character and a block map at overview, and nothing else", () => {

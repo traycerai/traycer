@@ -176,6 +176,30 @@ function paperBallCount(frame: OfficeFrame): number {
 }
 
 /**
+ * The fixture's OWN agreement, pinned before anything reads it.
+ *
+ * `input` resolves one status map and hands that same map to the partitioner.
+ * Nothing else in this file would notice if the partition were built from an
+ * empty map instead: every case below asserts on motion, and a partition with
+ * nobody hot in it still produces a floor that moves for other reasons. So the
+ * agreement is asserted directly - the members this fixture marks working and
+ * attention have to come back hot from the partition it produced.
+ */
+describe("the animating fixture", () => {
+  it("partitions the statuses the case passed in, not an empty map", () => {
+    const statusById = new Map<string, OfficeAgentStatus>([
+      ["alpha", "working"],
+      ["beta", "attention"],
+    ]);
+
+    const { partition } = input({ statusById });
+
+    expect(partition.members.get("alpha")?.hot).toBe(true);
+    expect(partition.members.get("beta")?.hot).toBe(true);
+  });
+});
+
+/**
  * The renderer skips a frame entirely when this says nothing is moving, so a
  * false NEGATIVE freezes the floor - which is why the predicate is deliberately
  * conservative and why both directions are pinned here.

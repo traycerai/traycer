@@ -292,6 +292,65 @@ describe("OfficeStaticLayer", () => {
     expect(paint).toHaveBeenCalledTimes(OFFICE_STATIC_CHUNK_BUDGET + 2);
   });
 
+  it("admits a plan up to the budget it was constructed with, not the module's default ceiling", () => {
+    // THE CONSTRUCTOR'S OWN NUMBER, not `OFFICE_STATIC_CHUNK_BUDGET`. Every
+    // other case in this suite passes 24 for both, so a `sync` that measured
+    // the plan against the module constant instead of `this.budget` would be
+    // invisible here - a caller planning with a LARGER budget is the only
+    // camera position that can tell the two apart, and this is it.
+    const { create } = fakeSurfaces();
+    const key: OfficeStaticLayerKey = {
+      staticVersion: 1,
+      theme: "dark",
+      themeRevision: 0,
+      width: 5120,
+      height: 5120,
+    };
+    const chunks = planOfficeStaticChunks({
+      world: key,
+      view: { x: 512, y: 512, width: 1536, height: 1536 },
+      lod: 1,
+      budget: 25,
+    });
+    expect(chunks).toHaveLength(25);
+
+    const layer = new OfficeStaticLayer(create, 25);
+    const paint = vi.fn();
+
+    const drawn = layer.sync({ key, chunks, paint });
+
+    // Reverted to the module constant, `sync` would measure this legal
+    // 25-chunk plan against 24, refuse the whole set, and draw nothing.
+    expect(drawn).toHaveLength(25);
+  });
+
+  it("evicts down to the budget it was constructed with, not the module's default ceiling", () => {
+    // THE CONSTRUCTOR'S OWN NUMBER, not `OFFICE_STATIC_CHUNK_BUDGET`, on the
+    // other side of the same seam: a budget SMALLER than the module constant
+    // is the only camera position that can tell `evictFor` apart from a
+    // version that spared room for 24 regardless of what this layer was built
+    // with.
+    const { create } = fakeSurfaces();
+    const layer = new OfficeStaticLayer(create, 2);
+    const key: OfficeStaticLayerKey = { ...KEY, width: 65_536, height: 1024 };
+    const paint = vi.fn();
+    const chunkAt = (col: number): OfficeStaticChunk => ({
+      chunkCol: col,
+      chunkRow: 0,
+    });
+
+    // A pan along a long floor, a chunk at a time, well past this layer's own
+    // two-chunk budget.
+    for (let col = 0; col < 6; col += 1) {
+      layer.sync({ key, chunks: [chunkAt(col)], paint });
+    }
+
+    // Reverted to the module constant, `evictFor` would spare room for 24 and
+    // this six-chunk pan would still be sitting in it whole.
+    expect(layer.heldPixels).toBe(2 * OFFICE_STATIC_CHUNK_PX ** 2);
+    expect(layer.chunkCount).toBe(2);
+  });
+
   it("never lets live surfaces exceed the budget while a sync is allocating, not only once it returns", () => {
     // THE PEAK DURING SYNC, not the retained total after. `sync()` used to
     // create every newly requested surface BEFORE evicting the ones the new
