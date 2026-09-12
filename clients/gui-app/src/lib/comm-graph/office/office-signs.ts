@@ -95,8 +95,9 @@ const BOARD_OVERFLOW_GLYPH = "…";
  *
  * These are the renderer's own two numbers, and the threshold between them is
  * its own: a plate narrower than two tiles gets the smaller budget. They live
- * here because the fit is decided here; the renderer still holds a copy of
- * them, and the day it reads these instead, this paragraph is what goes.
+ * here because the fit is decided here, and the renderer reads them from here
+ * rather than keeping a second copy - one number in two files is the same
+ * disagreement in slower motion.
  */
 export const OFFICE_SIGN_PLATE_MAX_CHARS = 12;
 export const OFFICE_SIGN_NARROW_PLATE_MAX_CHARS = 10;
