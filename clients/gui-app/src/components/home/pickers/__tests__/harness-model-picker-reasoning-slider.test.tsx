@@ -242,6 +242,158 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     expect(thumb().getAttribute("aria-valuenow")).toBe("3");
   });
 
+  // The track may not move when the name beside it does: the label cell holds
+  // the width of the WIDEST name in the catalog, so every stop keeps its
+  // position for the model's whole ladder.
+  describe("fixed-width level label", () => {
+    function sizers(): ReadonlyArray<HTMLElement> {
+      return screen.getAllByTestId("model-reasoning-level-sizer");
+    }
+
+    it("reserves one sizer per catalog level, whichever level is selected", () => {
+      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+
+      expect(sizers().map((sizer) => sizer.textContent)).toEqual([
+        "Low",
+        "Medium",
+        "High",
+        "Max",
+      ]);
+    });
+
+    it("shows only the selected name and hides the sizers from sight and from AT", () => {
+      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+
+      for (const sizer of sizers()) {
+        expect(sizer.classList.contains("invisible")).toBe(true);
+        expect(sizer.getAttribute("aria-hidden")).toBe("true");
+      }
+
+      const name = screen.getByTestId("model-reasoning-level-name");
+      expect(name.textContent).toBe("High");
+      expect(name.classList.contains("invisible")).toBe(false);
+      expect(name.getAttribute("aria-hidden")).toBeNull();
+    });
+
+    // The width comes from the cell, not from the class list: if the selected
+    // level could change either, it could change the width.
+    it("gives the label cell the same classes at the first level as at the last", () => {
+      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+      const atFirst = screen.getByTestId(
+        "model-reasoning-level-name",
+      ).className;
+      const firstSizers = sizers().map((sizer) => sizer.className);
+      cleanup();
+
+      renderFooter(reasoningConfig("max", FOUR_OPTIONS, vi.fn()));
+
+      expect(screen.getByTestId("model-reasoning-level-name").className).toBe(
+        atFirst,
+      );
+      expect(sizers().map((sizer) => sizer.className)).toEqual(firstSizers);
+    });
+
+    it("keeps the reserved set intact across a level change, name and value with it", () => {
+      const { rerender } = render(
+        <HarnessModelPickerModelSettingsFooter
+          reasoningMax={null}
+          reasoning={reasoningConfig("low", FOUR_OPTIONS, vi.fn())}
+          serviceTier={null}
+        />,
+      );
+      const before = sizers().map((sizer) => sizer.textContent);
+
+      rerender(
+        <HarnessModelPickerModelSettingsFooter
+          reasoningMax={null}
+          reasoning={reasoningConfig("max", FOUR_OPTIONS, vi.fn())}
+          serviceTier={null}
+        />,
+      );
+
+      expect(sizers().map((sizer) => sizer.textContent)).toEqual(before);
+      expect(screen.getByTestId("model-reasoning-level-name").textContent).toBe(
+        "Max",
+      );
+      expect(thumb().getAttribute("aria-valuetext")).toBe("Max");
+    });
+
+    // A remembered level from another model still prints its raw id, which has
+    // no sizer of its own - so the visible node cannot be one of the sizers.
+    it("still names a level the catalog does not list", () => {
+      renderFooter(reasoningConfig("ultra", FOUR_OPTIONS, vi.fn()));
+
+      expect(screen.getByTestId("model-reasoning-level-name").textContent).toBe(
+        "ultra",
+      );
+      expect(sizers()).toHaveLength(FOUR_OPTIONS.length);
+      expect(thumb().getAttribute("aria-valuenow")).toBe("0");
+      expect(thumb().getAttribute("aria-valuetext")).toBe("ultra");
+    });
+
+    // The other end of the same problem: a raw id LONGER than every catalog
+    // label would widen an in-flow name node, and selecting a real level again
+    // would shrink it - the movement the sizers exist to prevent, arriving by
+    // the one name they do not reserve for. So the name is out of flow and the
+    // cell is measured from the sizers alone.
+    it("is not widened by an unknown level whose raw id is longer than every label", () => {
+      const remembered = "a-remembered-level-nobody-advertises-any-more";
+      const { rerender } = render(
+        <HarnessModelPickerModelSettingsFooter
+          reasoningMax={null}
+          reasoning={reasoningConfig(remembered, FOUR_OPTIONS, vi.fn())}
+          serviceTier={null}
+        />,
+      );
+      const name = screen.getByTestId("model-reasoning-level-name");
+      // Out of flow, so it contributes nothing to the grid's intrinsic width
+      // and can only truncate inside it.
+      expect(name.className).toContain("absolute");
+      expect(name.className).toContain("truncate");
+      expect(name.textContent).toBe(remembered);
+      const cell = name.parentElement;
+      const structure = {
+        cell: cell?.className,
+        name: name.className,
+        sizers: sizers().map((sizer) => sizer.className),
+        texts: sizers().map((sizer) => sizer.textContent),
+      };
+
+      rerender(
+        <HarnessModelPickerModelSettingsFooter
+          reasoningMax={null}
+          reasoning={reasoningConfig("low", FOUR_OPTIONS, vi.fn())}
+          serviceTier={null}
+        />,
+      );
+
+      const after = screen.getByTestId("model-reasoning-level-name");
+      expect({
+        cell: after.parentElement?.className,
+        name: after.className,
+        sizers: sizers().map((sizer) => sizer.className),
+        texts: sizers().map((sizer) => sizer.textContent),
+      }).toEqual(structure);
+      expect(after.textContent).toBe("Low");
+    });
+
+    it("leaves the list control without a label cell at all", () => {
+      useLayoutStore.setState({
+        composer: {
+          ...DEFAULT_COMPOSER_LAYOUT,
+          reasoningFooterControl: "list",
+        },
+      });
+
+      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+
+      expect(screen.queryByTestId("model-reasoning-level-name")).toBeNull();
+      expect(screen.queryAllByTestId("model-reasoning-level-sizer")).toEqual(
+        [],
+      );
+    });
+  });
+
   it("falls back to the list for a model that advertises a single level", () => {
     renderFooter(
       reasoningConfig(

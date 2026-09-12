@@ -221,6 +221,19 @@ function ReasoningLevelList(props: ReasoningLevelStripProps) {
   );
 }
 
+// The sizers, which are the ONLY things the cell's width is measured from:
+// stacked in one grid cell, so the column is as wide as the widest of them.
+const REASONING_LEVEL_LABEL_SIZER =
+  "col-start-1 row-start-1 invisible truncate";
+
+// The name the user reads, laid over that cell and out of flow, so it cannot
+// widen what the sizers reserved. A level the catalog does not list prints its
+// raw id here, and a long one would otherwise be the widest thing in the grid -
+// the cell would grow for it and SHRINK again on the next real selection, which
+// is the exact track movement the sizers exist to prevent. Out of flow it
+// truncates inside the reserved width instead.
+const REASONING_LEVEL_LABEL_NAME = "absolute inset-0 truncate";
+
 /**
  * One stop per catalog level, in the catalog's own order and never sorted -
  * including a zero-effort level (`off` / `none`), which is the leftmost stop
@@ -276,11 +289,45 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2 px-2">
-      <span
-        data-testid="model-reasoning-level-name"
-        className="max-w-[min(30vw,7rem)] shrink-0 truncate text-ui-xs text-muted-foreground"
-      >
-        {findReasoningLabel(value, options)}
+      {/* The label is sized by the catalog, not by the level currently on:
+          "Low" and "Medium" are different widths, so a cell that fits only the
+          selected name moves the track - and every stop with it - each time the
+          level changes, which is exactly what the control is being dragged to
+          do. So every label the catalog offers is stacked in ONE grid cell
+          (`col-start-1 row-start-1`), invisible and `aria-hidden`, and THEY are
+          what the cell is measured from: it is as wide as the widest name this
+          harness can show, for the model's whole ladder, with no measurement,
+          no layout effect and no second render.
+
+          The name the user reads is laid over that cell rather than being one
+          of the stack: a level the catalog does not list prints its raw id
+          (see `thumbIndex`), which has no sizer of its own, so in flow it could
+          be wider than every one of them - the cell would grow for it and
+          shrink again on the next real selection, reintroducing the movement
+          from the other end. Out of flow it can only truncate inside what the
+          sizers reserved.
+
+          The cap is on the cell and `truncate` on every node alike, so a
+          harness with a sentence for a label shortens the cell rather than
+          starving the track - and shortens it to the same width whichever
+          level is on. */}
+      <span className="relative grid max-w-[min(30vw,7rem)] shrink-0 text-ui-xs text-muted-foreground">
+        {options.map((option) => (
+          <span
+            key={option.id}
+            aria-hidden="true"
+            data-testid="model-reasoning-level-sizer"
+            className={REASONING_LEVEL_LABEL_SIZER}
+          >
+            {option.label}
+          </span>
+        ))}
+        <span
+          data-testid="model-reasoning-level-name"
+          className={REASONING_LEVEL_LABEL_NAME}
+        >
+          {findReasoningLabel(value, options)}
+        </span>
       </span>
       {/* `py-3` is the bloom's room, not spacing: the ring reaches ~20px from
           the thumb's centre (a 16px thumb, `inset:-4px`, scaled to 1.65), and
