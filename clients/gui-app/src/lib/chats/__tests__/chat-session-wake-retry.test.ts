@@ -74,15 +74,19 @@ function createHarness(chatId: string): Harness {
 }
 
 function driveTerminallyClosed(harness: Harness): void {
-  harness.callbacks().onConnectionStatus("closed", {
-    kind: "fatalError",
-    details: {
-      code: "UNAUTHORIZED",
-      reason: "no-progress UNAUTHORIZED reconnects exhausted",
-      incompatibleMethods: null,
-      upgradeGuidance: null,
+  harness.callbacks().onConnectionStatus(
+    "closed",
+    {
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "no-progress UNAUTHORIZED reconnects exhausted",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
     },
-  });
+    null,
+  );
 }
 
 function makeRunnerHost(): MockRunnerHost {
@@ -120,7 +124,7 @@ describe("retryClosedChatSessions", () => {
 
   it("leaves live sessions untouched - only closed ones get the wake dial", () => {
     const harness = createHarness(CHAT_ID);
-    harness.callbacks().onConnectionStatus("open", null);
+    harness.callbacks().onConnectionStatus("open", null, null);
 
     const attempted = retryClosedChatSessions([harness.handle], "wake-resume");
 
@@ -228,7 +232,7 @@ describe("subscribeChatSessionWakeRetry", () => {
       },
       () => harness.handle,
     );
-    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null);
 
     const dispose = subscribeChatSessionWakeRetry(runnerHost);
 
@@ -267,12 +271,12 @@ describe("subscribeChatSessionWakeRetry", () => {
       },
       () => harness.handle,
     );
-    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null);
 
     const dispose = subscribeChatSessionWakeRetry(runnerHost);
 
     fireResume();
-    harness.callbacks().onConnectionStatus("open", null);
+    harness.callbacks().onConnectionStatus("open", null, null);
 
     // Once the wake reconnect succeeds, a later unrelated terminal close must
     // not consume a stale wake recovery attempt.
@@ -298,14 +302,14 @@ describe("subscribeChatSessionWakeRetry", () => {
       },
       () => harness.handle,
     );
-    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null);
 
     const dispose = subscribeChatSessionWakeRetry(runnerHost);
 
     fireResume();
-    harness.callbacks().onConnectionStatus("open", null);
+    harness.callbacks().onConnectionStatus("open", null, null);
     nowMs += 100;
-    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null);
 
     // Once re-armed inside the bounded episode, the in-flight reconnect may
     // resolve terminally after the episode window without losing its one retry.
@@ -336,14 +340,14 @@ describe("subscribeChatSessionWakeRetry", () => {
       },
       () => harness.handle,
     );
-    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null);
 
     const dispose = subscribeChatSessionWakeRetry(runnerHost);
 
     fireResume();
-    harness.callbacks().onConnectionStatus("open", null);
+    harness.callbacks().onConnectionStatus("open", null, null);
     nowMs += WAKE_RETRY_EPISODE_MS;
-    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null);
     driveTerminallyClosed(harness);
 
     expect(harness.factoryRuns()).toBe(1);

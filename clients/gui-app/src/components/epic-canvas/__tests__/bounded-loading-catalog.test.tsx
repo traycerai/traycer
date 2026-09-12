@@ -1,6 +1,6 @@
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -292,5 +292,43 @@ describe("S2 — host-starting is bounded, and Clone arrives AT the deadline", (
     expect(banner).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
     expect(banner.textContent).toContain("view-only access");
+  });
+});
+
+/**
+ * S2's body half (G2). Under either strip the body says what happens to THIS
+ * agent and never repeats the strip, and the handle-pending wait no longer
+ * ends at the shared 15 s tile budget: only the strip falls there.
+ */
+describe("S2 — the body under the strip", () => {
+  it("says the agent will open once the host is ready, then available - never a terminal body at the 15 s budget", async () => {
+    renderChatTile();
+    await settleEpicSession();
+    const testId = `chat-tile-pre-content-${CHAT_ARTIFACT.id}`;
+
+    const starting = screen.getByTestId(testId);
+    expect(starting.getAttribute("data-arm")).toBe("waiting-for-host");
+    expect(
+      within(starting).getByText(
+        `This agent will open once "${CHAT_ARTIFACT.hostId}" is ready.`,
+      ),
+    ).not.toBeNull();
+    expect(starting.textContent).not.toContain("Waiting for the host to start");
+
+    act(() => {
+      vi.advanceTimersByTime(HOST_STARTING_BUDGET_MS);
+    });
+
+    const offline = screen.getByTestId(testId);
+    expect(offline.getAttribute("data-arm")).toBe("waiting-for-host");
+    expect(
+      within(offline).getByText(
+        `This agent will open once "${CHAT_ARTIFACT.hostId}" is available.`,
+      ),
+    ).not.toBeNull();
+    expect(offline.textContent).not.toMatch(/Waiting|Loading/);
+    expect(within(offline).queryByRole("button")).toBeNull();
+    // Nothing is running under an offline strip with no handle.
+    expect(screen.queryByTestId(`${testId}-spinner`)).toBeNull();
   });
 });

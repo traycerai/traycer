@@ -7,7 +7,7 @@ import { getClientAppVersion } from "@/lib/app-version";
 import { hostAppVersionFromDirectoryEntry } from "@/lib/host/version-skew-copy";
 
 /**
- * What a chat tile's pre-snapshot panes need in order to offer a host update:
+ * What a chat tile's pre-content body needs in order to offer a host update:
  * the two versions `describeVersionSkew` compares, and the one gesture that
  * takes the reader to where the update actually happens.
  */

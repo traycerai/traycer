@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type {
   IStreamSession,
+  StatusChangeHandler,
   StreamCloseReason,
   StreamConnectionStatus,
   StreamFrameEnvelope,
@@ -197,12 +198,7 @@ function fakeHostStreamClient(): {
         binaryPayload: Uint8Array | null,
       ) => void)
     | null = null;
-  let onStatusChange:
-    | ((
-        status: StreamConnectionStatus,
-        reason: StreamCloseReason | null,
-      ) => void)
-    | null = null;
+  let onStatusChange: StatusChangeHandler | null = null;
   const state = { closed: false };
   const session: IStreamSession = {
     sendClientFrame: () => undefined,
@@ -241,7 +237,7 @@ function fakeHostStreamClient(): {
       onServerFrame?.(envelope, binaryPayload);
     },
     emitStatus: (status, reason) => {
-      onStatusChange?.(status, reason);
+      onStatusChange?.(status, reason, null);
     },
     get closed() {
       return state.closed;
