@@ -408,6 +408,16 @@ export interface OpenEpicState {
   readonly chatIngestSeq: number;
   readonly tuiAgentIngestSeq: number;
   /**
+   * Projected incomplete-apply counters - see `EpicRecordsProjection`.
+   *
+   * Read at DISPATCH by the revision-gated record polls, alongside the ingest
+   * fence, and compared at the next dispatch: a stamp captured before one of
+   * these moved describes an answer this store did not take whole, so the poll
+   * declines it and asks for a snapshot instead.
+   */
+  readonly chatSnapshotIncompleteSeq: number;
+  readonly tuiAgentSnapshotIncompleteSeq: number;
+  /**
    * Chats the record plane RETRACTED while this session was open, and why.
    *
    * The only signal that distinguishes the two honest end states an OPEN tab

@@ -1,10 +1,11 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useRecordListStamp } from "@/hooks/chats/use-record-list-stamp";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projection-helpers";
@@ -55,6 +56,13 @@ interface TuiAgentListAnswer {
    * not fire, and an unreachable guard reads as protection without being any.
    */
   readonly issuedAtSeq: number | null;
+  /**
+   * Where the store's incomplete-apply counter stood at dispatch - see the chat
+   * twin (`ChatRecordListAnswer.snapshotIncompleteSeqAtDispatch`). It is what
+   * decides whether this answer's `listStamp` may be sent back as a claim about
+   * the rows this client holds.
+   */
+  readonly snapshotIncompleteSeqAtDispatch: number | null;
 }
 
 /**
@@ -128,14 +136,32 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
   // rendering a row. Read straight through rather than memoized: minted once
   // per store construction, so it is a constant for a given `store`.
   const fenceIdentity = store?.getState().ingestFenceIdentity ?? null;
-  // Keyed on the same three facts the cache entry is, so the stamp dies with
+  // The SESSION's serving host, which is also what `useHostQuery` keys this
+  // query on - see the chat twin.
+  const hostId = useReactiveHostReadiness(client).hostId;
+  // Read at DISPATCH, from the same store the fence comes from - see the chat
+  // twin for why it is a getter and why `store` is its only input.
+  const readTuiAgentSnapshotIncompleteSeq = useCallback(
+    () => store?.getState().tuiAgentSnapshotIncompleteSeq ?? null,
+    [store],
+  );
+  // Keyed on the same four facts the cache entry is, so the stamp dies with
   // the row set it describes - see {@link useRecordListStamp}.
-  const stamp = useRecordListStamp(epicId, viewerUserId, fenceIdentity);
+  const stamp = useRecordListStamp({
+    epicId,
+    viewerUserId,
+    hostId,
+    storeGeneration: fenceIdentity,
+    readSnapshotIncompleteSeq: readTuiAgentSnapshotIncompleteSeq,
+  });
   const query = useHostQueryWithResponseMap<
     HostRpcRegistry,
     "epic.listTuiAgents",
     TuiAgentListAnswer,
-    { readonly seq: number } | null
+    {
+      readonly seq: number;
+      readonly snapshotIncompleteSeq: number;
+    } | null
   >({
     cacheKeyIdentity: [viewerUserId, fenceIdentity],
     client,
@@ -161,7 +187,11 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
     // the store knows the answer could not have carried that row.
     captureRequestContext: () => {
       if (store === null) return null;
-      return { seq: store.getState().peekTuiAgentIngestSeq() };
+      const state = store.getState();
+      return {
+        seq: state.peekTuiAgentIngestSeq(),
+        snapshotIncompleteSeq: state.tuiAgentSnapshotIncompleteSeq,
+      };
     },
     mapResponse: ({ response, requestContext }) => {
       const context = requestContext ?? null;
@@ -174,6 +204,8 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
         touched: response.kind === "unchanged" ? response.touched : [],
         listStamp: response.listStamp,
         issuedAtSeq: context === null ? null : context.seq,
+        snapshotIncompleteSeqAtDispatch:
+          context === null ? null : context.snapshotIncompleteSeq,
       };
     },
   });
@@ -195,8 +227,9 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
       store.getState().applyTuiAgentRecordTouches(answer.touched);
     }
     // AFTER the apply, and only for an answer that reached a store - see the
-    // chat twin for why an unapplied stamp is worse than none.
-    stamp.hold(answer.listStamp);
+    // chat twin for why an unapplied stamp is worse than none, and why reaching
+    // a store is not yet proof the store took the answer whole.
+    stamp.hold(answer.listStamp, answer.snapshotIncompleteSeqAtDispatch);
   }, [answer, stamp, store]);
 }
 

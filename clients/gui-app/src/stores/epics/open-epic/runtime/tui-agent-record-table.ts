@@ -52,6 +52,11 @@ export interface TuiAgentRecordTable {
   current(): TerminalAgentsSlice;
   ingestSeq(): number;
   /**
+   * The terminal twin of the chat table's - see
+   * {@link RecordTable.snapshotIncompleteSeq}.
+   */
+  snapshotIncompleteSeq(): number;
+  /**
    * The `@1.3` row, which is the `@1.2` row plus the SESSION FACET
    * (`sessionState` / `lastExit`). Typed up to it rather than left at `@1.2`
    * so the facet survives in the retained rows: a reaped agent reads as asleep
@@ -190,12 +195,13 @@ export function createTuiAgentRecordTable(
            * mentioned it (and {@link tuiAgentRowSupersedes} reads authority
            * first for exactly that reason), and blanking `sessionState` would
            * report a sleeping agent as unknown every time it emits a token.
+           *
+           * `revision` is untouched too, and that one is the shared table's
+           * rule rather than this plane's: it describes the row's CONTENT,
+           * which a quiet write did not move. See `record-table.ts`'s module
+           * doc.
            */
-          withPatch: (row, patch) => ({
-            ...row,
-            updatedAt: patch.updatedAt,
-            revision: patch.revision,
-          }),
+          withPatch: (row, patch) => ({ ...row, updatedAt: patch.updatedAt }),
         },
         buildSlice: (visibleRows) => {
           const next = tuiAgentRecordsSlice(visibleRows);
@@ -235,6 +241,7 @@ export function createTuiAgentRecordTable(
   return {
     current: () => table.current(),
     ingestSeq: () => table.ingestSeq(),
+    snapshotIncompleteSeq: () => table.snapshotIncompleteSeq(),
 
     applyRecords: (records, issuedAtSeq) =>
       published(table.applySnapshot(records, issuedAtSeq)),
@@ -265,15 +272,24 @@ export function createTuiAgentRecordTable(
       // point is that `tuiUpsert` can carry a cross-host replica - the same
       // premise that {@link tuiAgentRowSupersedes} had to stop relying on.
       //
-      // The SESSION FACET is the one thing this frame cannot state and the
-      // table nonetheless holds: the stream's row is the `@1.2` one, and
-      // `host.chatRecords.subscribe@1.4` - which stamps the facet on
-      // `tuiUpsert` - is not parsed by this client yet. So carry forward what
-      // the last ANSWER stated for this agent and admit ignorance when nothing
-      // has, exactly as the chat twin does for `docResident`. Stamping `null`
-      // instead would report a sleeping agent as unknown on every unrelated
-      // rename until the next snapshot; read by the FULL record identity, not
-      // off the published slice, for the reason that twin gives.
+      // The SESSION FACET is the one thing this delta does not deliver and the
+      // table nonetheless holds: `ChatRecordDelta`'s `tuiUpsert` row is the
+      // `@1.2` one. `host.chatRecords.subscribe@1.4` DOES stamp the facet on
+      // that frame, and this client now parses `@1.4` rather than absorbing it
+      // under the `@1.3` schema, but carrying the value onto the delta is stage
+      // 2's (it is what advances the list stamp from a delta, and the facet
+      // rides the same plumbing). So: carry forward what the last ANSWER stated
+      // for this agent and admit ignorance when nothing has, exactly as the
+      // chat twin does for `docResident`. Stamping `null` instead would report
+      // a sleeping agent as unknown on every unrelated rename until the next
+      // snapshot; read by the FULL record identity, not off the published
+      // slice, for the reason that twin gives.
+      //
+      // Bounded to one poll interval, not to the session: the write that
+      // produced this delta moved the host's list revision, so the next gated
+      // poll cannot answer `unchanged` and the snapshot it answers states the
+      // facet. That is the same guarantee `snapshotIncompleteSeq` restores for
+      // a fence-skipped row - see `record-table.ts`.
       const held = table.retainedRow(
         ownerScopedRowKey(delta.record.ownerUserId, delta.record.tuiAgentId),
       );

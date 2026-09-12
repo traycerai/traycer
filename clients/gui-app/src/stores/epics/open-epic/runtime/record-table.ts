@@ -64,6 +64,43 @@
  * an applied patch advances `rowSeq`, so a snapshot already in flight when the
  * quiet write landed cannot roll the recency back.
  *
+ * A patch does NOT write the row's `revision`, and the separate
+ * {@link recencyRevision} book is why. A patch moves recency while leaving
+ * CONTENT untouched, so the row it produces is content-of-11 carrying
+ * recency-of-13 - not any single revision the host ever served. Stamping 13
+ * onto it would make rule 2 reject the genuine revision-13 row when it does
+ * arrive (`13 > 13` is false), and that rejection outlives every repair channel
+ * the design has: the list stamp can be dropped, the fence moves on, and the
+ * row's content stays at 11 for the life of the session. So `revision` keeps
+ * describing the CONTENT, the patch's own revision is remembered beside it, and
+ * the patch gate compares against whichever of the two is higher - the row's
+ * own revision included, so a snapshot that jumps past a patch cannot be rolled
+ * back by a replay of it.
+ *
+ * ## Declining a stamp: {@link RecordTable.snapshotIncompleteSeq}
+ *
+ * Rule 1 means an answer's rows are sometimes NOT what this table ends up
+ * holding - a carried row is skipped, an omitted row is kept. Before the list
+ * read was revision-gated that cost one poll interval and nothing else: the
+ * next unconditional answer re-served the row, the fence had moved past it, and
+ * the row landed one tick late. The comment at the carried-half fence still
+ * says so - "nothing owed to restore the row until the next poll" - because the
+ * POLL WAS THE REPAIR CHANNEL.
+ *
+ * A revision-gated poll can answer `unchanged` instead, which re-serves
+ * nothing, so that channel only exists while the client declines to claim it
+ * holds what the answer described. This counter is that claim, inverted: it
+ * moves once per apply that ended up holding a different row set than the
+ * answer carried, the caller (`useRecordListStamp`, through the projected
+ * counter) drops any stamp it captured before the move, and the next request
+ * asks for a full snapshot. Self-healing, once, exactly as it was.
+ *
+ * It counts the FENCE skips alone. A row rule 2 rejected is a row this table
+ * already holds at least as new a version of, and a row rule 3 filtered out is
+ * one this session has permanently retracted by contract - neither is a gap the
+ * next snapshot would fill, and counting them would put every session that has
+ * ever absorbed a removal back on unconditional snapshots for good.
+ *
  * ## What is shared and what is declared
  *
  * The mechanism above is shared. Everything a plane can legitimately differ on
@@ -144,7 +181,7 @@ export interface RecordTableRecencyRules<TRow> {
    */
   readonly rowKeyOfPatch: (patch: RecordListRecencyPatch) => string;
   /**
-   * Where this plane's row keeps the monotonic revision the guard compares.
+   * Where this plane's row keeps the monotonic revision of its CONTENT.
    *
    * Read here rather than through {@link RecordTablePlane.supersedesOnSnapshot}
    * because a patch must be judged on the revision ALONE. Both record planes
@@ -152,15 +189,21 @@ export interface RecordTableRecencyRules<TRow> {
    * of those waivers is about two rows of different provenance; a patch has no
    * provenance to weigh - it is the held row's own recency, restated - so a
    * waiver would license applying a stale one.
+   *
+   * One of the two numbers the patch gate compares against, not the whole of
+   * it: an applied patch's own revision is remembered separately (see the
+   * module doc), because a patch moves recency without moving content and so
+   * cannot write this field. Keeping it here is what lets a later snapshot at
+   * the patch's revision still be admitted as news about the content.
    */
   readonly revisionOf: (row: TRow) => number;
   /**
    * The held row with a patch's recency facts written onto it.
    *
    * The plane's job because only it knows the row type. A quiet write cannot
-   * have changed anything else, so this writes `updatedAt` and `revision` and
-   * nothing more - `recordListRecencyPatchSchema` carries nothing more to
-   * write.
+   * have changed anything else, so this writes `updatedAt` and NOTHING else -
+   * `recordListRecencyPatchSchema` carries only one other field, `revision`,
+   * and that one deliberately does not land on the row (module doc).
    */
   readonly withPatch: (row: TRow, patch: RecordListRecencyPatch) => TRow;
 }
@@ -300,6 +343,18 @@ export interface RecordTable<TRow, TSlice> {
    * accepted row write advances it.
    */
   ingestSeq(): number;
+  /**
+   * How many snapshot applies have ended up holding a row set the answer did
+   * not describe - monotonic, per session. See the module doc's "Declining a
+   * stamp".
+   *
+   * A COUNTER rather than a boolean, for the same reason `ingestSeq` is one: it
+   * is read by a caller on the other side of a fire-and-forget bridge, and only
+   * a value that moves lets that caller tell "the apply I am holding a stamp
+   * for was complete" from "one of them was not". A flag would either have to be
+   * cleared by somebody (and the clear would race the read) or latch forever.
+   */
+  snapshotIncompleteSeq(): number;
   /** Whether a removal for `retractionId` has been absorbed this session. */
   isRetracted(retractionId: string): boolean;
   applySnapshot(
@@ -403,6 +458,49 @@ export function createRecordTable<TRow, TSlice>(
   const rowSeq = new Map<string, number>();
   let ingestSeq = 0;
   let snapshotFence = 0;
+  let snapshotIncompleteSeq = 0;
+
+  /**
+   * The revision of the last RECENCY PATCH applied to a row, for rows whose
+   * patched recency is newer than their content.
+   *
+   * Held beside the rows rather than on them because it is not a fact about the
+   * row: the row is content-of-N, and this is "a patch told me N+k moved the
+   * recency". See the module doc for what stamping it onto the row costs.
+   *
+   * Dropped the moment the row itself is written or deleted - a served row
+   * carries its own revision AND its own `updatedAt`, so there is nothing left
+   * for a remembered patch revision to gate.
+   */
+  const recencyRevision = new Map<string, number>();
+
+  /**
+   * Write a row and stamp it with the next ingest sequence - the ONE place a
+   * row enters the map, so the three books that have to move together (the row,
+   * its ingest order, and the patch revision this supersedes) cannot drift.
+   */
+  function setRow(key: string, row: TRow): void {
+    rows.set(key, row);
+    recencyRevision.delete(key);
+    ingestSeq += 1;
+    rowSeq.set(key, ingestSeq);
+  }
+
+  /** The counterpart: forget a row and everything keyed alongside it. */
+  function dropRow(key: string): void {
+    rows.delete(key);
+    rowSeq.delete(key);
+    recencyRevision.delete(key);
+  }
+
+  /** The newest revision anything has told this table about `key`'s recency. */
+  function heldRecencyRevision(
+    key: string,
+    held: TRow,
+    recency: RecordTableRecencyRules<TRow>,
+  ): number {
+    return Math.max(recency.revisionOf(held), recencyRevision.get(key) ?? 0);
+  }
 
   function recompute(
     withRetractions: boolean,
@@ -429,6 +527,7 @@ export function createRecordTable<TRow, TSlice>(
     current: () => slice,
     retainedRow: (rowKey: string) => rows.get(rowKey) ?? null,
     ingestSeq: () => ingestSeq,
+    snapshotIncompleteSeq: () => snapshotIncompleteSeq,
     isRetracted: (retractionId) => retractions.has(retractionId),
 
     forgetRetractions(): void {
@@ -441,6 +540,10 @@ export function createRecordTable<TRow, TSlice>(
         if (retractions.has(plane.retractionIdOf(row))) continue;
         admitted.set(plane.rowKey(row), row);
       }
+      // Whether the fence held a row back from this answer, on either half.
+      // What it licenses is a caller DECLINING the answer's list stamp - see
+      // `snapshotIncompleteSeq` and the module doc.
+      let fenceHeldBack = false;
       // Omissions first, against the fence - see rule 1 in the module doc.
       // Anything ingested since the answer was issued (a push delta, a faster
       // later answer) is newer than this snapshot by construction and survives
@@ -448,9 +551,11 @@ export function createRecordTable<TRow, TSlice>(
       const fence = issuedAtSeq ?? snapshotFence;
       for (const key of [...rows.keys()]) {
         if (admitted.has(key)) continue;
-        if ((rowSeq.get(key) ?? 0) > fence) continue;
-        rows.delete(key);
-        rowSeq.delete(key);
+        if ((rowSeq.get(key) ?? 0) > fence) {
+          fenceHeldBack = true;
+          continue;
+        }
+        dropRow(key);
       }
       for (const [key, row] of admitted) {
         hooks.onRowServed(row);
@@ -468,14 +573,20 @@ export function createRecordTable<TRow, TSlice>(
           // newer push: an upsert seeding `docResident: null` at revision 6,
           // then a list answer issued before it landing at revision 5, rolled
           // the row back with nothing owed to restore it until the next poll.
-          if ((rowSeq.get(key) ?? 0) > fence) continue;
+          //
+          // "Until the next poll" is what `snapshotIncompleteSeq` keeps true
+          // now that a poll can answer `unchanged`: the skip stands, and the
+          // caller declines this answer's stamp so the next poll is a snapshot.
+          if ((rowSeq.get(key) ?? 0) > fence) {
+            fenceHeldBack = true;
+            continue;
+          }
           if (!plane.supersedesOnSnapshot(row, held)) continue;
         }
-        rows.set(key, row);
-        ingestSeq += 1;
-        rowSeq.set(key, ingestSeq);
+        setRow(key, row);
       }
       snapshotFence = ingestSeq;
+      if (fenceHeldBack) snapshotIncompleteSeq += 1;
       return recompute(false);
     },
 
@@ -492,9 +603,18 @@ export function createRecordTable<TRow, TSlice>(
         // retracted row is gone from the map, so an absorbed removal cannot be
         // undone by a patch that was already in flight for it.
         if (held === undefined) continue;
-        // Rule 2, on the revision alone - see `revisionOf`.
-        if (patch.revision <= recency.revisionOf(held)) continue;
+        // Rule 2, on the revision alone - see `revisionOf` - against the HIGHER
+        // of the row's content revision and the last patch applied to it. Both,
+        // because either can be the newer of the two: a patch moves only this
+        // book, and a snapshot that jumps past it moves only the row's own, so
+        // comparing against one alone would let a replayed patch roll the
+        // recency back to a version the other book has already passed.
+        if (patch.revision <= heldRecencyRevision(key, held, recency)) continue;
         rows.set(key, recency.withPatch(held, patch));
+        // NOT `setRow`: this is the one write that leaves the row's content -
+        // and so its `revision` - exactly where it was, which is why the
+        // patch's own revision has to be remembered here instead.
+        recencyRevision.set(key, patch.revision);
         // Rule 1's carried half. A snapshot issued before this quiet write
         // cannot know about it and would otherwise roll the recency back
         // through a plane that waives the revision guard.
@@ -518,12 +638,10 @@ export function createRecordTable<TRow, TSlice>(
       if (held !== undefined && !plane.supersedesOnUpsert(row, held)) {
         return null;
       }
-      rows.set(key, row);
       // Past the fence the last snapshot left: an answer already in flight
       // cannot carry this row's new version, so its omission - or its stale
       // copy, via the revision test above - must not defeat it.
-      ingestSeq += 1;
-      rowSeq.set(key, ingestSeq);
+      setRow(key, row);
       hooks.onUpsertAdmitted(row);
       return recompute(false);
     },
@@ -533,15 +651,13 @@ export function createRecordTable<TRow, TSlice>(
       const key = plane.rowKey(row);
       const held = rows.get(key);
       if (held === undefined || plane.supersedesOnSnapshot(row, held)) {
-        rows.set(key, row);
-        ingestSeq += 1;
-        rowSeq.set(key, ingestSeq);
+        setRow(key, row);
       }
       return recompute(false);
     },
     removeRow(rowKey) {
-      if (!rows.delete(rowKey)) return null;
-      rowSeq.delete(rowKey);
+      if (!rows.has(rowKey)) return null;
+      dropRow(rowKey);
       return recompute(false);
     },
 
@@ -565,10 +681,7 @@ export function createRecordTable<TRow, TSlice>(
         return null;
       }
       retractions.set(retractionId, reason);
-      for (const key of doomed) {
-        rows.delete(key);
-        rowSeq.delete(key);
-      }
+      for (const key of doomed) dropRow(key);
       return recompute(true);
     },
 
