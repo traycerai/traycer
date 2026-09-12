@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -15,6 +16,7 @@ import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktre
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
@@ -418,6 +420,70 @@ function renderControl(layout: "inline" | "stacked") {
   return queryClient;
 }
 
+const WORKSPACE_ROW_HOST_TEST_ID = "composer-workspace-row-host";
+// Either side of the composer's 512px narrow breakpoint.
+const NARROW_ROW_WIDTH = 390;
+const WIDE_ROW_WIDTH = 720;
+
+/**
+ * Mounts the controls inside the composer's real workspace row and gives that
+ * row a measured width, so the narrow read comes from the row's own observer
+ * rather than a hand-set provider. jsdom measures every element at 0px, which
+ * would otherwise make every row narrow.
+ */
+function renderControlInWorkspaceRow(rowWidth: number): QueryClient {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function measure(this: HTMLElement): DOMRect {
+      if (this.parentElement?.dataset.testid === WORKSPACE_ROW_HOST_TEST_ID) {
+        return new DOMRect(0, 0, rowWidth, 28);
+      }
+      return new DOMRect(0, 0, 0, 0);
+    },
+  );
+  const rowHost = document.createElement("div");
+  rowHost.dataset.testid = WORKSPACE_ROW_HOST_TEST_ID;
+  document.body.appendChild(rowHost);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <ComposerWorkspaceRow
+          workspaceControls={
+            <ActiveHostWorkspaceControls
+              disabled={false}
+              stagingKey={{
+                surface: "landing",
+                hostId: "host-home",
+                draftId: null,
+              }}
+              workspaceSeed={null}
+              seedIntent={null}
+              seedIntentOverride={null}
+              layout="inline"
+              hostScope={{ kind: "active" }}
+            />
+          }
+        />
+      </TooltipProvider>
+    </QueryClientProvider>,
+    { container: rowHost },
+  );
+  return queryClient;
+}
+
+function seedOneRecentWorkspace(): void {
+  mocks.negotiatedVersion.current = { major: 1, minor: 2 };
+  mocks.recentsQuery.current = {
+    data: {
+      recentWorkspaces: [
+        { path: "/workspace/recent", lastOpenedAt: "2026-08-18T00:00:00.000Z" },
+      ],
+    },
+  };
+}
+
 /** The composer's resolved placement (P1.2), pointed at the mocked host. */
 function useTestPlacementTarget(): LandingPlacementTarget {
   return {
@@ -640,6 +706,71 @@ describe("landing workspace summary empty state", () => {
     expect(mocks.pickAndPrepareFolders).toHaveBeenCalledTimes(1);
 
     queryClient.clear();
+  });
+
+  describe("inside a narrow composer workspace row", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("folds the Add folder word into its icon and keeps the name on hover", async () => {
+      const queryClient = renderControlInWorkspaceRow(NARROW_ROW_WIDTH);
+
+      const addFolder = screen.getByRole("button", { name: "Add folder" });
+      expect(addFolder).toBe(screen.getByTestId("folder-add"));
+      expect(screen.queryByText("Add folder")).toBeNull();
+      expect(addFolder.querySelector("svg")).not.toBeNull();
+
+      fireEvent.focus(addFolder);
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Add folder",
+      );
+
+      fireEvent.click(addFolder);
+      expect(mocks.pickAndPrepareFolders).toHaveBeenCalledTimes(1);
+      queryClient.clear();
+    });
+
+    it("keeps the Add folder word when the row is wide", () => {
+      const queryClient = renderControlInWorkspaceRow(WIDE_ROW_WIDTH);
+
+      const addFolder = screen.getByTestId("folder-add");
+      expect(addFolder.textContent).toContain("Add folder");
+      expect(addFolder.hasAttribute("aria-label")).toBe(false);
+      queryClient.clear();
+    });
+
+    it("folds the recent-folders trigger too, but not the picker's own Add folder row", async () => {
+      seedOneRecentWorkspace();
+      const queryClient = renderControlInWorkspaceRow(NARROW_ROW_WIDTH);
+
+      const trigger = screen.getByRole("button", { name: "Add folder" });
+      expect(trigger).toBe(screen.getByTestId("folder-add"));
+      expect(trigger.textContent).toBe("");
+      expect(trigger.querySelector("svg")).not.toBeNull();
+
+      fireEvent.focus(trigger);
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Add folder",
+      );
+
+      fireEvent.click(trigger);
+      const popover = await screen.findByTestId("home-workspace-rows-popover");
+      expect(within(popover).getByTestId("folder-add").textContent).toContain(
+        "Add folder",
+      );
+      queryClient.clear();
+    });
+
+    it("keeps the recent-folders trigger's word when the row is wide", () => {
+      seedOneRecentWorkspace();
+      const queryClient = renderControlInWorkspaceRow(WIDE_ROW_WIDTH);
+
+      const trigger = screen.getByTestId("folder-add");
+      expect(trigger.textContent).toContain("Add folder");
+      expect(trigger.hasAttribute("aria-label")).toBe(false);
+      queryClient.clear();
+    });
   });
 
   it("keeps a folder active when moving it to Recent fails", async () => {
