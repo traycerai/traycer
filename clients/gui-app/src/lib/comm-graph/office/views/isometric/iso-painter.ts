@@ -689,11 +689,11 @@ function citySeatProps(args: CitySeatArgs): ReadonlyArray<OfficeWorldDrawable> {
   const depth = tileDepth(projector, seat.deskTile, "prop");
   const storeys = frozen.storeysBySeatId.get(seat.seatId) ?? 1;
   const out: OfficeWorldDrawable[] = [];
+  // `archived` is one of the cold ones the predicate already answers for, so
+  // naming it here again said nothing and quietly reopened the question of
+  // who decides. An archived desk still reads dark, through the predicate.
   const lit =
-    state.agentId !== null &&
-    !state.sheeted &&
-    state.status !== "archived" &&
-    isOfficeHotStatus(state.status);
+    state.agentId !== null && !state.sheeted && isOfficeHotStatus(state.status);
   const windowName: OfficeSpriteName = lit ? "window-lit" : "window-dark";
   for (let storey = 0; storey < storeys; storey += 1) {
     const y = corner.y - storey * ISO_STOREY_HEIGHT;

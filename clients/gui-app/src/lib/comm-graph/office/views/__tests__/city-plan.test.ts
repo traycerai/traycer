@@ -1398,6 +1398,43 @@ describe("planCity", () => {
     }
   });
 
+  it("darkens an archived or idle desk through the shared predicate, not a private archived check", () => {
+    const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+    // Asserted rather than guarded: indexing is typed here as a hit, so a
+    // `=== undefined` check reads as impossible and the lint rejects it.
+    expect(layout.seats.size).toBeGreaterThan(0);
+    const seat = [...layout.seats.values()][0];
+    const windowNamesFor = (status: OfficeAgentStatus): Array<string> =>
+      ISO_PAINTER.seatProps(
+        layout,
+        seat,
+        { ...CLOSE_UP_WORKING, status },
+        2,
+      ).flatMap((item) =>
+        item.drawable.kind === "sprite" &&
+        item.drawable.sprite.name.startsWith("window")
+          ? [item.drawable.sprite.name]
+          : [],
+      );
+
+    // A hot status still lights the windows.
+    const hot = windowNamesFor("working");
+    expect(hot.length).toBeGreaterThan(0);
+    expect(hot.every((name) => name === "window-lit")).toBe(true);
+
+    // `archived` is cold: dark through the predicate.
+    const archived = windowNamesFor("archived");
+    expect(archived.length).toBe(hot.length);
+    expect(archived.every((name) => name === "window-dark")).toBe(true);
+
+    // `idle` is cold too, and the predicate never named `archived`
+    // specially - so a status the deleted private literal never mentioned
+    // reads exactly as dark, proving the predicate alone decides it.
+    const idle = windowNamesFor("idle");
+    expect(idle.length).toBe(hot.length);
+    expect(idle.every((name) => name === "window-dark")).toBe(true);
+  });
+
   it("locates a City seat by its own D53 building box, not the old hitTiles box", () => {
     const epic = makeTestEpic("one-team", 3, 1);
     const statusById = new Map<string, OfficeAgentStatus>();

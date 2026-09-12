@@ -1,6 +1,7 @@
 /** Oblique art shares the simulation's tile grid; only foreground depth differs. */
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
+import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
 import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import type {
   OfficeBlockFill,
@@ -173,9 +174,21 @@ function entry(
     ownerAgentId: paint.ownerAgentId,
   };
 }
+/**
+ * A crashed screen first, then lit or dark by WHETHER THE AGENT IS HOT - the
+ * shared reading of that, not a list of the cold ones spelled out again here.
+ *
+ * This view's screen really is the hot/cold boolean, which is what makes the
+ * shared predicate the right thing to ask; Floor and Mission control light
+ * their monitors by their own per-status art rules and are not asking this
+ * question at all. Restating the cold members locally passed for as long as
+ * the two agreed, and would have gone on passing: a status added to the union
+ * and classified cold would be dark everywhere the predicate is read and lit
+ * on this one view, with every existing sprite expectation still green.
+ */
 function screen(state: OfficeDeskState): OfficeSpriteName {
   if (state.status === "failure") return "monitor-crash";
-  const lit = state.status !== "idle" && state.status !== "archived";
+  const lit = isOfficeHotStatus(state.status);
   if (state.modelTier === "small")
     return lit ? "monitor-small-on" : "monitor-small-off";
   if (state.modelTier === "large") {
