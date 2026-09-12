@@ -1,16 +1,32 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  queryOptions,
+  useMutation,
+  useMutationState,
+  useQuery,
+} from "@tanstack/react-query";
+import { Check, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
+  fetchCuratedWallpaperManifest,
+  type CuratedWallpaper,
+} from "@/lib/appearance/curated-wallpapers";
+import {
+  applyCuratedStartPageWallpaper,
   chooseStartPageWallpaper,
   removeStartPageWallpaper,
   useStartPageWallpaperImage,
 } from "@/lib/appearance/start-page-wallpaper";
 import { trackSettingChanged } from "@/lib/analytics";
+import { appearanceMutationKeys } from "@/lib/query-keys/appearance-mutation-keys";
+import { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
 import { cn } from "@/lib/utils";
 import {
   useSettingsStore,
@@ -18,6 +34,15 @@ import {
 } from "@/stores/settings/settings-store";
 
 const ACCEPTED_TYPES = "image/png,image/jpeg,image/webp";
+
+/**
+ * Viewport-capped rather than `w-full`: the gallery sits in a `SettingsRow`
+ * control, which sizes to its content, and an `auto-fill` track list repeats
+ * only once against an indefinite width - a full-width grid there would
+ * collapse to a single column. A definite width is what gives `auto-fill` a
+ * column count to compute.
+ */
+const GALLERY_WIDTH = "w-[min(70vw,26rem)]";
 
 const STYLES: ReadonlyArray<{
   readonly id: StartPageWallpaperStyle;
@@ -27,6 +52,40 @@ const STYLES: ReadonlyArray<{
   { id: "dither", label: "Dot pattern" },
   { id: "grain", label: "Film grain" },
 ];
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+/**
+ * The curated wallpaper whose apply is in flight, read off the mutation cache
+ * rather than component state. The download outlives this panel (the abort
+ * controller lives in `lib/appearance/start-page-wallpaper.ts`), so a reopened
+ * panel has to be able to find it again.
+ */
+function usePendingCuratedId(): string | null {
+  const pending = useMutationState({
+    filters: {
+      mutationKey: appearanceMutationKeys.applyCuratedWallpaper(),
+      status: "pending",
+    },
+    select: (mutation) => mutation.state.variables,
+  });
+  // Newest first: `useMutationState` yields matching mutations in invocation
+  // order, so with two applies overlapping the OLDEST would otherwise win the
+  // spinner - and the tile that is landing is the one clicked last.
+  for (let index = pending.length - 1; index >= 0; index -= 1) {
+    const variables = pending[index];
+    if (
+      typeof variables === "object" &&
+      variables !== null &&
+      "id" in variables &&
+      typeof variables.id === "string"
+    )
+      return variables.id;
+  }
+  return null;
+}
 
 /**
  * Settings > Appearance > Start page. Plain rows like every other group in the
@@ -48,6 +107,30 @@ export function StartPageSettingsSection() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  const manifest = useQuery(
+    queryOptions({
+      queryKey: appearanceQueryKeys.curatedWallpapers(),
+      queryFn: ({ signal }) => fetchCuratedWallpaperManifest(signal),
+      staleTime: Infinity,
+      retry: 1,
+    }),
+  );
+  const applyCurated = useMutation({
+    mutationKey: appearanceMutationKeys.applyCuratedWallpaper(),
+    mutationFn: (entry: CuratedWallpaper) =>
+      applyCuratedStartPageWallpaper(entry),
+    onSuccess: () => {
+      trackSettingChanged("appearance", "startPageWallpaperCurated");
+    },
+    onError: (error: Error) => {
+      // A superseded apply (another tile, a custom pick, Remove) is the user's
+      // own next action, not a failure to report.
+      if (isAbortError(error)) return;
+      toast.error(error.message);
+    },
+  });
+  const pendingCuratedId = usePendingCuratedId();
 
   useEffect(
     () => () => {
@@ -143,6 +226,42 @@ export function StartPageSettingsSection() {
         }
       />
 
+      <SettingsRow
+        row={APPEARANCE.definitions.curatedWallpapers}
+        control={
+          <div className="flex items-start gap-1.5">
+            <div className={GALLERY_WIDTH}>
+              <CuratedWallpaperGallery
+                wallpapers={manifest.data}
+                error={manifest.isError ? manifest.error.message : null}
+                appliedId={wallpaper?.curatedId ?? null}
+                pendingId={pendingCuratedId}
+                onRetry={() => void manifest.refetch()}
+                onApply={(entry) => {
+                  // A tile supersedes an in-flight local pick exactly as
+                  // Remove does: without this the slower local write lands
+                  // last, over the tile the user just chose, and `busy` never
+                  // clears because its own abort never fires.
+                  abortRef.current?.abort();
+                  setBusy(false);
+                  applyCurated.mutate(entry);
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Refresh wallpapers"
+              disabled={manifest.isFetching}
+              onClick={() => void manifest.refetch()}
+            >
+              <RefreshCw className="size-3.5" />
+            </Button>
+          </div>
+        }
+      />
+
       {wallpaper === null ? null : (
         <>
           <SettingsRow
@@ -172,40 +291,38 @@ export function StartPageSettingsSection() {
             }
           />
 
-          {wallpaper.style === "photo" ? null : (
-            <SettingsRow
-              row={APPEARANCE.definitions.effectStrength}
-              control={
-                <div className="space-y-1">
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    aria-label="Effect strength"
-                    value={Math.round(wallpaper.intensity * 100)}
-                    onChange={(event) => {
-                      setWallpaper({
-                        ...wallpaper,
-                        intensity: event.target.valueAsNumber / 100,
-                      });
-                    }}
-                    onPointerUp={() =>
-                      trackSettingChanged("appearance", "startPageWallpaper")
-                    }
-                    className="w-[min(40vw,10rem)] accent-primary"
-                  />
-                  <div
-                    aria-hidden
-                    className="flex justify-between text-ui-xs text-muted-foreground"
-                  >
-                    <span>Subtle</span>
-                    <span>Strong</span>
-                  </div>
+          <SettingsRow
+            row={APPEARANCE.definitions.effectStrength}
+            control={
+              <div className="space-y-1">
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  aria-label="Effect strength"
+                  value={Math.round(wallpaper.intensity * 100)}
+                  onChange={(event) => {
+                    setWallpaper({
+                      ...wallpaper,
+                      intensity: event.target.valueAsNumber / 100,
+                    });
+                  }}
+                  onPointerUp={() =>
+                    trackSettingChanged("appearance", "startPageWallpaper")
+                  }
+                  className="w-[min(40vw,10rem)] accent-primary"
+                />
+                <div
+                  aria-hidden
+                  className="flex justify-between text-ui-xs text-muted-foreground"
+                >
+                  <span>Subtle</span>
+                  <span>Strong</span>
                 </div>
-              }
-            />
-          )}
+              </div>
+            }
+          />
 
           {wallpaper.style !== "dither" ? null : (
             <SettingsRow
@@ -252,5 +369,108 @@ export function StartPageSettingsSection() {
         }
       />
     </SettingsGroup>
+  );
+}
+
+const TILE_GRID = "grid w-full grid-cols-[repeat(auto-fill,minmax(7rem,1fr))]";
+
+function CuratedWallpaperGallery(props: {
+  readonly wallpapers: ReadonlyArray<CuratedWallpaper> | undefined;
+  readonly error: string | null;
+  readonly appliedId: string | null;
+  readonly pendingId: string | null;
+  readonly onRetry: () => void;
+  readonly onApply: (entry: CuratedWallpaper) => void;
+}): ReactNode {
+  if (props.error !== null) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 p-3 text-ui-sm text-destructive"
+      >
+        {props.error}
+        <Button variant="ghost" size="sm" onClick={props.onRetry}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+  if (props.wallpapers === undefined) {
+    return (
+      <div className={cn(TILE_GRID, "gap-2")}>
+        {[0, 1, 2].map((slot) => (
+          <Skeleton key={slot} className="aspect-[16/10] w-full" />
+        ))}
+      </div>
+    );
+  }
+  if (props.wallpapers.length === 0) {
+    return (
+      <p className="text-ui-sm text-muted-foreground">
+        No wallpapers available.
+      </p>
+    );
+  }
+  return (
+    <div className={cn(TILE_GRID, "gap-2")}>
+      {props.wallpapers.map((entry) => {
+        const applied = entry.id === props.appliedId;
+        const pending = entry.id === props.pendingId;
+        return (
+          <button
+            key={entry.id}
+            type="button"
+            aria-pressed={applied}
+            aria-label={entry.title}
+            // Only the downloading tile is disabled: another tile is how the
+            // user changes their mind, and that click aborts the one in
+            // flight (last action wins). The APPLIED tile stays enabled - a
+            // control a screen reader can reach and a pointer cannot press
+            // reads as broken - and no-ops instead.
+            disabled={pending}
+            onClick={() => {
+              if (applied) return;
+              props.onApply(entry);
+            }}
+            className="block w-full text-left"
+          >
+            <div
+              className={cn(
+                // Foreground alpha, never `bg-muted`: this is the skeleton the tile
+                // shows until its thumbnail paints.
+                "relative aspect-[16/10] w-full overflow-hidden rounded-md border border-border/60 bg-foreground/10",
+                applied && "ring-2 ring-primary",
+              )}
+            >
+              <img
+                src={entry.thumbUrl}
+                alt=""
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                draggable={false}
+                className="size-full object-cover"
+              />
+              {applied ? (
+                <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                  <Check className="size-2.5" />
+                </span>
+              ) : null}
+              {pending ? (
+                <span className="absolute inset-0 flex items-center justify-center bg-background/60">
+                  <AgentSpinningDots
+                    className={undefined}
+                    testId={undefined}
+                    variant={undefined}
+                  />
+                </span>
+              ) : null}
+            </div>
+            <span className="mt-1 block truncate text-ui-xs text-muted-foreground">
+              {entry.title}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }

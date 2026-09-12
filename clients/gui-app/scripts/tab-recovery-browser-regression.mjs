@@ -38,6 +38,7 @@ const vitePort = await freePort();
 let chrome;
 let chromeProfilePath;
 let client;
+let peerClient;
 let viteProcess;
 let viteError = "";
 const runtimeExceptions = [];
@@ -164,7 +165,7 @@ function splitItem(snapshot, splitId) {
 }
 
 try {
-  const pageUrl = `http://127.0.0.1:${vitePort}${fixtureUrlPath}`;
+  const pageUrl = `http://127.0.0.1:${vitePort}${fixtureUrlPath}?windowId=browser-recovery-window-a`;
   const requireFromHere = createRequire(import.meta.url);
   const viteManifestPath = requireFromHere.resolve("vite/package.json");
   const viteManifest = requireFromHere(viteManifestPath);
@@ -206,28 +207,7 @@ try {
     launched.readError,
     "Chrome DevTools",
   );
-  const targetResponse = await fetch(
-    new URL(`/json/new?${encodeURIComponent(pageUrl)}`, devtoolsUrl),
-    { method: "PUT" },
-  );
-  if (!targetResponse.ok) {
-    throw new Error(
-      `Chrome could not open the fixture: ${targetResponse.status}`,
-    );
-  }
-  const target = await targetResponse.json();
-  if (typeof target.webSocketDebuggerUrl !== "string") {
-    throw new Error("Chrome did not return a page debugger URL");
-  }
-  client = await connect(target.webSocketDebuggerUrl);
-  await client.send("Runtime.enable");
-  await client.send("Page.enable");
-  await client.send("Emulation.setDeviceMetricsOverride", {
-    width: 1200,
-    height: 800,
-    deviceScaleFactor: 1,
-    mobile: false,
-  });
+  client = await openFixtureTarget(devtoolsUrl, pageUrl);
   await waitFor(
     client,
     "the tab recovery fixture to mount",
@@ -611,6 +591,73 @@ try {
     "reopening without history changed the header tabs",
   );
 
+  const peerPageUrl = `http://127.0.0.1:${vitePort}${fixtureUrlPath}?windowId=browser-recovery-window-b`;
+  peerClient = await openFixtureTarget(devtoolsUrl, peerPageUrl);
+  await waitFor(
+    peerClient,
+    "the peer tab recovery fixture to mount",
+    `Boolean(document.querySelector('[data-testid="tab-recovery-browser-fixture"]')) && typeof window.__traycerTabRecovery === "object"`,
+  );
+  await waitForRecoveryReady(peerClient, "peer tab recovery history");
+  await callBridge(peerClient, "reset", []);
+  await callBridge(peerClient, "flush", []);
+
+  const oldFirstDraft = await callBridge(client, "createDraft", []);
+  await clickSelector(client, '[data-testid="recovery-close-active"]');
+  await callBridge(client, "flush", []);
+  const oldPeerDraft = await callBridge(peerClient, "createDraft", []);
+  await clickSelector(peerClient, '[data-testid="recovery-close-active"]');
+  await callBridge(peerClient, "flush", []);
+  assert(
+    headerEntry(await callBridge(client, "snapshot", []))?.items.some(
+      (item) => item.id === oldFirstDraft,
+    ),
+    "first recovery partition was not populated",
+  );
+  assert(
+    headerEntry(await callBridge(peerClient, "snapshot", []))?.items.some(
+      (item) => item.id === oldPeerDraft,
+    ),
+    "peer recovery partition was not populated",
+  );
+
+  assert.equal(
+    await callBridge(client, "wipeRecovery", []),
+    true,
+    "recovery database deletion did not report success",
+  );
+  await waitFor(
+    peerClient,
+    "peer recovery memory to clear after database deletion",
+    `window.__traycerTabRecovery?.snapshot().ready === true && window.__traycerTabRecovery?.snapshot().entries.length === 0`,
+  );
+  const freshPeerDraft = await callBridge(peerClient, "createDraft", []);
+  await clickSelector(peerClient, '[data-testid="recovery-close-active"]');
+  await callBridge(peerClient, "flush", []);
+  let peerState = await callBridge(peerClient, "snapshot", []);
+  assert(
+    headerEntry(peerState)
+      ?.items.map((item) => item.id)
+      .join(",") === freshPeerDraft,
+    "fresh peer recovery journal retained deleted history",
+  );
+  await peerClient.send("Page.reload", { ignoreCache: false });
+  await waitFor(
+    peerClient,
+    "the peer tab recovery fixture to remount after database deletion",
+    `Boolean(document.querySelector('[data-testid="tab-recovery-browser-fixture"]')) && typeof window.__traycerTabRecovery === "object"`,
+  );
+  await waitForRecoveryReady(peerClient, "reloaded peer recovery history");
+  peerState = await callBridge(peerClient, "snapshot", []);
+  assert(
+    headerEntry(peerState)
+      ?.items.map((item) => item.id)
+      .join(",") === freshPeerDraft,
+    "deleted recovery history resurrected after peer reload",
+  );
+  peerClient.close();
+  peerClient = undefined;
+
   console.log(
     JSON.stringify(
       {
@@ -626,6 +673,7 @@ try {
           "empty-pane-recovery-and-persistence",
           "reload-persisted-history",
           "duplicate-reopen-no-op",
+          "cross-window-database-deletion-and-reload",
         ],
       },
       null,
@@ -649,6 +697,7 @@ try {
   process.exitCode = 1;
 } finally {
   client?.close();
+  peerClient?.close();
   if (chrome !== undefined) {
     await terminateProcessTree(chrome);
   }
@@ -706,6 +755,28 @@ async function evaluate(client, expression) {
     );
   }
   return response.result?.value;
+}
+
+async function openFixtureTarget(devtoolsUrl, pageUrl) {
+  const targetResponse = await fetch(
+    new URL(`/json/new?${encodeURIComponent(pageUrl)}`, devtoolsUrl),
+    { method: "PUT" },
+  );
+  if (!targetResponse.ok)
+    throw new Error(`Chrome could not open fixture: ${targetResponse.status}`);
+  const target = await targetResponse.json();
+  if (typeof target.webSocketDebuggerUrl !== "string")
+    throw new Error("Chrome did not return a page debugger URL");
+  const targetClient = await connect(target.webSocketDebuggerUrl);
+  await targetClient.send("Runtime.enable");
+  await targetClient.send("Page.enable");
+  await targetClient.send("Emulation.setDeviceMetricsOverride", {
+    width: 1200,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  return targetClient;
 }
 
 async function waitFor(client, label, expression) {

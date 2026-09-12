@@ -3,7 +3,6 @@ import {
   isBrowserCanvasHydrated,
   subscribeBrowserCanvasHydration,
 } from "@/lib/tab-sync/browser-canvas-hydration";
-import { flushTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import {
   useLayoutEffect,
   useMemo,
@@ -195,7 +194,6 @@ function installMissingDesktopWindowsBridge(): () => void {
   // the draft (only in renderer memory, never reaching the IndexedDB journal).
   const flushFileEditRecovery = (): void => {
     void fileEditRuntimeRegistry.flushRecovery().catch(() => undefined);
-    void flushTabRecoveryHistory();
   };
   if (typeof window !== "undefined") {
     window.addEventListener("pagehide", flushFileEditRecovery);
@@ -242,7 +240,6 @@ function installDesktopWindowsBridge(
     void projectionBridge.flush().catch(() => undefined);
     void drainDesktopTabsPersistence().catch(() => undefined);
     void fileEditRuntimeRegistry.flushRecovery().catch(() => undefined);
-    void flushTabRecoveryHistory();
   };
   setDesktopEpicOwnershipBridge(bridge);
   // Renderer parking's cross-window arm (plan C, C6). Installed beside the

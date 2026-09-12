@@ -6,7 +6,7 @@ import {
 } from "./header-layout";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { create } from "zustand";
-import { createStore, get, set, del } from "idb-keyval";
+import { createStore, get, set, del, type UseStore } from "idb-keyval";
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { parseEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
@@ -122,6 +122,8 @@ let batch: {
   readonly layout: PersistedTabStripLayout;
 } | null = null;
 let writes: Promise<void> = Promise.resolve();
+// Account switches preserve queued writes; a database wipe cancels them.
+let resetEpoch = 0;
 const pendingEpicPrunes = new Set<string>();
 const pendingDraftPrunes = new Set<string>();
 let pendingTilePrunes: Array<
@@ -177,9 +179,24 @@ function activateRecoveryBucket(
   applyPendingHistoryWork(pending ?? EMPTY_PENDING_HISTORY_WORK, next === null);
 }
 
-let recoveryDatabase: import("idb-keyval").UseStore | null = null;
-function database() {
-  recoveryDatabase ??= createStore(persistKey("tab-recovery"), "history");
+let recoveryDatabase: UseStore | null = null;
+function database(): UseStore {
+  if (recoveryDatabase !== null) return recoveryDatabase;
+  const connection = createStore(persistKey("tab-recovery"), "history");
+  const store: UseStore = (mode, callback) =>
+    connection(mode, (objectStore) => {
+      const db = objectStore.transaction.db;
+      db.onversionchange = () => {
+        db.close();
+        if (recoveryDatabase !== store) return;
+        recoveryDatabase = null;
+        // A peer is deleting the shared database. Keep this window's account
+        // binding, but forget its journal and cancel pre-wipe async work.
+        invalidateRecoveryHistory();
+      };
+      return callback(objectStore);
+    });
+  recoveryDatabase = store;
   return recoveryDatabase;
 }
 function meaningfulEntry(entry: TabRecoveryEntry): TabRecoveryEntry[] {
@@ -233,8 +250,13 @@ function persistHistory(): void {
   const key = bucket;
   if (key === null || !useTabRecoveryHistory.getState().ready) return;
   const entries = useTabRecoveryHistory.getState().entries;
+  const epoch = resetEpoch;
   writes = writes
-    .then(() => set(key, { version: 2, entries }, database()))
+    .then(() =>
+      epoch === resetEpoch
+        ? set(key, { version: 2, entries }, database())
+        : undefined,
+    )
     .catch((error: unknown) => {
       appLogger.warn("[tab-recovery] history persistence failed", {
         error: describeLogError(error),
@@ -245,18 +267,6 @@ function replaceEntries(entries: readonly TabRecoveryEntry[]): void {
   useTabRecoveryHistory.setState({ entries: bounded(entries) });
   persistHistory();
 }
-// A failed open is cached inside idb-keyval's store closure. Retry with a fresh
-// connection, closing the old one when possible, without modifying its data.
-async function discardFailedHistoryConnection(): Promise<void> {
-  const connection = recoveryDatabase;
-  recoveryDatabase = null;
-  if (connection === null) return;
-  await connection("readonly", (transaction) => {
-    transaction.transaction.db.close();
-    return Promise.resolve();
-  }).catch(() => undefined);
-}
-
 const HISTORY_READ_RETRY_DELAYS = [100, 300] as const;
 async function readRecoveryJournal(
   key: string,
@@ -273,7 +283,6 @@ async function readRecoveryJournal(
       if (token !== generation) return undefined;
       const delay = HISTORY_READ_RETRY_DELAYS.at(attempt);
       if (delay === undefined) throw error;
-      await discardFailedHistoryConnection();
       await new Promise<void>((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -295,8 +304,11 @@ export async function configureTabRecoveryHistory(
   activateRecoveryBucket(previous, next);
   if (next === null) {
     if (previous !== null) {
+      const epoch = resetEpoch;
       writes = writes
-        .then(() => del(previous, database()))
+        .then(() =>
+          epoch === resetEpoch ? del(previous, database()) : undefined,
+        )
         .catch(() => undefined);
     }
     return;
@@ -633,13 +645,17 @@ export function recoveryTiles(): ReadonlyArray<{
   });
 }
 
-/** Drain queued writes before the app deletes local databases and reloads. */
-export async function resetTabRecoveryHistory(): Promise<void> {
+function invalidateRecoveryHistory(): void {
   suspendedHistoryWork.clear();
-  pendingDraftPrunes.clear();
-  bucket = null;
+  resetEpoch += 1;
   generation += 1;
-  useTabRecoveryHistory.setState({ entries: [], ready: true });
+  applyPendingHistoryWork(EMPTY_PENDING_HISTORY_WORK, true);
+}
+
+/** Cancel queued history work and release this renderer before database deletion. */
+export async function resetTabRecoveryHistory(): Promise<void> {
+  bucket = null;
+  invalidateRecoveryHistory();
   await writes;
   const connection = recoveryDatabase;
   recoveryDatabase = null;

@@ -19,9 +19,9 @@ payload for liveness, so an authoritative snapshot that has not received the new
 record yet does not erase recovery. Explicit deletion still takes precedence.
 Host-confirmed deletion also prunes an evicted local mirror; an unknown local
 delete request does not remove recovery history.
-Initial history reads retry at most twice (after 100 ms and 300 ms), reopening
-a failed database connection and checking the account generation before each
-attempt. Exhausted reads leave persistence disabled for that bucket until a
+Initial history reads retry at most twice (after 100 ms and 300 ms), checking
+the account generation before each attempt. The storage library resets failed
+opens itself. Exhausted reads leave persistence disabled for that bucket until a
 successful hydration. Retrying configuration merges pending closes and applies
 pending deletions without overwriting the unread journal.
 
@@ -91,6 +91,14 @@ The journal retains at most 50 closing actions with a 32 MiB approximate JSON
 budget (the newest action is always kept). Pruning retains unchanged entry
 objects so the cached size of unrelated history is reused. Shutdown drains
 queued journal writes; resetting local application state clears the journal too.
+Peer windows release the shared database on `versionchange`, clear their in-memory
+history and pending operations, and cancel queued pre-reset writes. New closes
+can then use a fresh database. A blocked recovery database deletion rejects the
+wipe instead of reporting success and reloading over an uncleared journal.
+
+Authoritative record sweeps prune historical tiles using the same liveness
+verdict as open tabs, scoped to their task and bound host. This includes older
+instances and tasks with an empty canvas; pending-create payloads remain protected.
 
 Browser startup waits for the account-scoped canvas to hydrate before resolving
 saved tab routes or reconciling the strip. The initial empty anonymous canvas

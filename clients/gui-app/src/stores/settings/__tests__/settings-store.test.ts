@@ -943,6 +943,7 @@ describe("useSettingsStore", () => {
       intensity: 0.8,
       tintWithAccent: false,
       name: "wallpaper.png",
+      curatedId: null,
     } satisfies StartPageWallpaper;
     useSettingsStore.getState().setStartPageWallpaper(wallpaper);
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
@@ -1010,6 +1011,7 @@ describe("useSettingsStore", () => {
       intensity: 0.6,
       tintWithAccent: true,
       name: null,
+      curatedId: null,
     });
   });
 
@@ -1023,6 +1025,7 @@ describe("useSettingsStore", () => {
       intensity: 0.5,
       tintWithAccent: true,
       name: null,
+      curatedId: null,
     });
   });
 
@@ -1032,6 +1035,37 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().startPageWallpaper).toBeNull();
     expect(useSettingsStore.getState().showGreeting).toBe(true);
     expect(useSettingsStore.getState().showRecentHistory).toBe(true);
+  });
+
+  it("rehydrates a persisted wallpaper with no curatedId to null", async () => {
+    await rehydrateFrom({
+      startPageWallpaper: { style: "photo", name: "custom.png" },
+    });
+
+    expect(
+      useSettingsStore.getState().startPageWallpaper?.curatedId,
+    ).toBeNull();
+  });
+
+  it("caps a persisted curatedId over 64 characters", async () => {
+    const longId = "a".repeat(100);
+    await rehydrateFrom({
+      startPageWallpaper: { style: "photo", curatedId: longId },
+    });
+
+    expect(useSettingsStore.getState().startPageWallpaper?.curatedId).toBe(
+      "a".repeat(64),
+    );
+  });
+
+  it("rehydrates a non-string persisted curatedId to null", async () => {
+    await rehydrateFrom({
+      startPageWallpaper: { style: "photo", curatedId: 42 },
+    });
+
+    expect(
+      useSettingsStore.getState().startPageWallpaper?.curatedId,
+    ).toBeNull();
   });
 
   it("picks up another window's settings write via the cross-window storage listener", async () => {

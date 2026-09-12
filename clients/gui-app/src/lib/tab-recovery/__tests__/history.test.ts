@@ -35,6 +35,7 @@ vi.mock("idb-keyval", async (importOriginal) => {
   return {
     ...actual,
     get: vi.fn(actual.get),
+    set: vi.fn(actual.set),
   };
 });
 
@@ -557,5 +558,90 @@ describe("tab recovery history", () => {
       .entries.flatMap((entry) => (entry.kind === "header" ? entry.items : []));
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "draft", draftId: "draft-to-keep" });
+  });
+
+  it("closes peer connections on database deletion and drops stale queued writes", async () => {
+    await resetTabRecoveryHistory();
+    installFreshIndexedDb();
+
+    vi.resetModules();
+    const peerIdbKeyval = await import("idb-keyval");
+    const peerA = await import("../history");
+    vi.resetModules();
+    const peerB = await import("../history");
+    let verificationStore: ReturnType<typeof createStore> | null = null;
+    try {
+      const account = "recovery-peer-account";
+      const windowId = "recovery-peer-window";
+      setWindow(windowId);
+
+      await peerA.configureTabRecoveryHistory(account);
+      peerA.useTabRecoveryHistory.setState({ entries: [], ready: true });
+      const persisted = draft("before-peer-delete");
+      peerA.recordClosedHeaderTab(persisted);
+      await peerA.flushTabRecoveryHistory();
+
+      await peerB.configureTabRecoveryHistory(account);
+      expect(peerB.useTabRecoveryHistory.getState().entries).toHaveLength(1);
+
+      const deferredSet = Promise.withResolvers<void>();
+      const setMock = vi.mocked(peerIdbKeyval.set);
+      setMock.mockImplementationOnce(() => deferredSet.promise);
+      peerA.recordClosedHeaderTab(draft("queued-before-peer-delete"));
+      const stale = draft("stale-after-peer-delete");
+      peerA.recordClosedHeaderTab(stale);
+
+      const deleteRequest = indexedDB.deleteDatabase(
+        persistKey("tab-recovery"),
+      );
+      const deletion = new Promise<void>((resolve, reject) => {
+        deleteRequest.onsuccess = () => resolve();
+        deleteRequest.onerror = () =>
+          reject(
+            deleteRequest.error ??
+              new Error("Recovery database deletion failed"),
+          );
+      });
+      await deletion;
+      deferredSet.resolve();
+      await peerA.flushTabRecoveryHistory();
+      await peerB.flushTabRecoveryHistory();
+
+      expect(peerA.useTabRecoveryHistory.getState().entries).toEqual([]);
+      expect(peerB.useTabRecoveryHistory.getState().entries).toEqual([]);
+      const store = createStore(persistKey("tab-recovery"), "history");
+      verificationStore = store;
+      expect(
+        await idbGet<unknown>(tabRecoveryKey(account, windowId), store),
+      ).toBe(undefined);
+
+      peerB.recordClosedHeaderTab(draft("fresh-after-peer-delete"));
+      await peerB.flushTabRecoveryHistory();
+      const fresh = await idbGet<unknown>(
+        tabRecoveryKey(account, windowId),
+        store,
+      );
+      expect(fresh).toEqual(
+        expect.objectContaining({
+          entries: [
+            expect.objectContaining({
+              items: [
+                expect.objectContaining({ draftId: "fresh-after-peer-delete" }),
+              ],
+            }),
+          ],
+        }),
+      );
+      expect(JSON.stringify(fresh)).not.toContain("stale-after-peer-delete");
+    } finally {
+      await peerA.resetTabRecoveryHistory();
+      await peerB.resetTabRecoveryHistory();
+      if (verificationStore !== null) {
+        await verificationStore("readonly", (transaction) => {
+          transaction.transaction.db.close();
+          return Promise.resolve();
+        });
+      }
+    }
   });
 });

@@ -296,18 +296,18 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     expect(teardownIndex).toBeLessThan(sweepIndex);
   });
 
-  it("continues the wipe when tab-recovery reset fails", async () => {
+  it("stops before the sweep and reload when tab-recovery reset fails", async () => {
     resetTabRecoveryHistory.mockRejectedValueOnce(
       new Error("tab recovery reset failed"),
     );
 
-    await expect(
-      clearAllPersistedStores({ hostClear: null }),
-    ).resolves.toBeUndefined();
+    await expect(clearAllPersistedStores({ hostClear: null })).rejects.toThrow(
+      "tab recovery reset failed",
+    );
 
     expect(resetTabRecoveryHistory).toHaveBeenCalledTimes(1);
-    expect(localStorageMock.getItem("traycer-gui-app:settings")).toBeNull();
-    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    expect(localStorageMock.getItem("traycer-gui-app:settings")).toBe("{}");
+    expect(reloadSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -592,21 +592,25 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("deleteDatabase onblocked resolves so the wipe still reloads", async () => {
+  it("rejects and does not reload when tab-recovery deletion is blocked", async () => {
     const value = {
       databases: vi.fn(() =>
         Promise.resolve([{ name: "traycer-gui-app:default:landing-images" }]),
       ),
-      deleteDatabase: vi.fn((_name: string) => {
+      deleteDatabase: vi.fn((name: string) => {
         const request = {
           onsuccess: null as (() => void) | null,
           onerror: null as (() => void) | null,
           onblocked: null as (() => void) | null,
           error: null as DOMException | null,
         };
-        // Blocked path: resolve (not reject) so a stuck connection can't abort
-        // the rest of the wipe/reload sequence.
-        queueMicrotask(() => request.onblocked?.());
+        // Other renderer stores remain best effort, while recovery deletion is
+        // authoritative: a stuck recovery connection must stop before reload.
+        queueMicrotask(() =>
+          name === "traycer-gui-app:tab-recovery"
+            ? request.onblocked?.()
+            : request.onsuccess?.(),
+        );
         return request;
       }),
     };
@@ -616,9 +620,9 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
       value,
     });
 
-    await expect(
-      clearAllPersistedStores({ hostClear: null }),
-    ).resolves.toBeUndefined();
-    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    await expect(clearAllPersistedStores({ hostClear: null })).rejects.toThrow(
+      "blocked",
+    );
+    expect(reloadSpy).not.toHaveBeenCalled();
   });
 });

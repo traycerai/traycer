@@ -35,8 +35,10 @@ import {
   batchHeaderTabRecovery,
   configureTabRecoveryHistory,
   flushTabRecoveryHistory,
+  resetTabRecoveryHistory,
   useTabRecoveryHistory,
 } from "@/lib/tab-recovery/history";
+import { persistKey } from "@/lib/persist/keys";
 import { useTabRecovery } from "@/lib/tab-recovery/use-tab-recovery";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -56,6 +58,12 @@ import "@/index.css";
 
 const ACCOUNT_ID = "browser-tab-recovery-account";
 const windowsBridgeValue = { bridge: null, hasHydrated: true } as const;
+const browserWindowId =
+  new URLSearchParams(window.location.search).get("windowId") ??
+  "browser-recovery-window";
+Reflect.set(globalThis, "runnerHost", {
+  windows: { windowId: browserWindowId },
+});
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
@@ -371,6 +379,20 @@ function installBridge(reopen: () => Promise<void>): void {
       await flushTabRecoveryHistory();
     },
     flush: () => flushTabRecoveryHistory(),
+    wipeRecovery: async () => {
+      await resetTabRecoveryHistory();
+      await new Promise<void>((resolve, reject) => {
+        const request = indexedDB.deleteDatabase(persistKey("tab-recovery"));
+        request.onsuccess = () => resolve();
+        request.onerror = () =>
+          reject(
+            request.error ?? new Error("recovery database deletion failed"),
+          );
+        request.onblocked = () =>
+          reject(new Error("recovery database deletion was blocked"));
+      });
+      return true;
+    },
     snapshot,
   };
   Reflect.set(window, "__traycerTabRecovery", bridge);

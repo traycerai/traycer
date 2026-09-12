@@ -112,18 +112,6 @@ function headerIsOpen(item: ClosedHeaderTab): boolean {
     (existing !== undefined && existing.epicId !== item.tab.epicId)
   );
 }
-async function prepareHeaderItem(
-  item: ClosedHeaderTab,
-  stillCurrent: () => boolean,
-): Promise<ClosedHeaderTab | null> {
-  if (item.kind === "draft") {
-    if (!(await prepareSavedDraft(item, stillCurrent))) return null;
-    return item;
-  }
-  const canvas =
-    useEpicCanvasStore.getState().canvasByTabId[item.tab.tabId] ?? item.canvas;
-  return { ...item, canvas: cleanCanvas(canvas, item.tab) };
-}
 async function restoreHeader(
   entry: Extract<TabRecoveryEntry, { kind: "header" }>,
   router: KeybindingRouter,
@@ -146,8 +134,12 @@ async function restoreHeader(
   for (const item of entry.items) {
     if (headerIsOpen(item)) continue;
     try {
-      const ready = await prepareHeaderItem(item, () => stillCurrent(item));
-      if (ready !== null) prepared.push(ready);
+      if (
+        item.kind === "draft" &&
+        !(await prepareSavedDraft(item, () => stillCurrent(item)))
+      )
+        continue;
+      prepared.push(item);
     } catch {
       failed.push(item);
     }
