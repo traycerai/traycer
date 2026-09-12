@@ -398,25 +398,45 @@ export function CommGraphTile(props: CommGraphTileProps) {
   );
 
   /**
-   * READY: the tile knows which view this is, and the inputs behind that are
-   * the real ones.
+   * DRAW READY: there is an office to draw, and a box to draw it in.
    *
-   * Three conditions, each of which was wrong on its own. The agent snapshot
-   * has loaded (a non-empty set: `EmptyCommGraph` below is what distinguishes
-   * an empty epic from a pending one), the comm-graph feed has replayed its
-   * initial batch, and the canvas has reported a probe - which it only does
-   * once it is eligible and laid out, after the directory and any panel have
-   * taken their width.
+   * The agent snapshot has loaded (a non-empty set: `EmptyCommGraph` below is
+   * what distinguishes an empty epic from a pending one), the canvas has
+   * reported a probe - which it only does once it is eligible and laid out,
+   * after the directory and any panel have taken their width - and the office
+   * is the mode this tile is in.
+   *
+   * The CAUGHT-UP FEED is deliberately NOT one of them. It was, and an office
+   * that waits for it is only as available as the feed: when the local server
+   * lost its database the tile drew nothing in any view for twenty-five
+   * minutes while the Graph beside it drew every node from this same snapshot.
+   * The office is a drawing of the AGENT LIST, which is a different input with
+   * a different owner - the events decide who is busy, not who exists - so a
+   * feed that is behind is a fact to say out loud (the chip below), not a
+   * reason to draw nothing. Auto's own gate is the one the feed belongs to,
+   * and it keeps it.
    */
-  const inputsReady =
+  const drawReady =
     agents.length > 0 &&
-    snapshot.initialHistoryCaughtUp &&
     // Derived, not stored: the moment the mounted canvas changes, the old
     // canvas's measurement stops being about anything on screen.
     probeKey === canvasKey &&
     // The office is what is being measured; a tile showing the Graph has no
     // office canvas, and the last one's numbers describe a box that is gone.
     node.view.mode === "office";
+
+  /**
+   * MEASURE READY: drawable, and the population Auto measures is the settled
+   * one.
+   *
+   * Auto partitions the office to measure how much of it fits, so a partition
+   * built while the feed is still replaying would choose a view by the shape
+   * of an office that is about to change - and the outcome is PERSISTED, so it
+   * would outlive the half-replayed statuses it was taken from. The chip reads
+   * `measuring…` for as long as this is false, which is the state the plan
+   * asks for.
+   */
+  const measureReady = drawReady && snapshot.initialHistoryCaughtUp;
 
   // The live half of the evidence below: a `null` record cannot carry a
   // default change this tile is watching happen, so the tile remembers it.
@@ -532,7 +552,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
    */
   useEffect(() => {
     if (choice !== "auto" || node.view.officeAutoView !== null) return;
-    if (!inputsReady) return;
+    if (!measureReady) return;
     const probe = probeRef.current;
     if (probe === null) return;
     const decision = decideOfficeView(probe.input, probe.canvas);
@@ -555,7 +575,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
       // just made for it.
       officeCameraView: decision.view,
     });
-  }, [choice, inputsReady, node.id, node.view, updateView, viewTabId]);
+  }, [choice, measureReady, node.id, node.view, updateView, viewTabId]);
 
   /**
    * A pick. Choosing the view you are already on is a no-op - EXCEPT Auto,
@@ -697,7 +717,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
             {...canvasProps}
             onCameraChange={handleOfficeCameraChange}
             officeView={OFFICE_VIEWS[resolvedViewId ?? MEASURING_VIEW_ID]}
-            ready={resolvedViewId !== null && inputsReady}
+            ready={resolvedViewId !== null && drawReady}
             onAutoProbe={handleAutoProbe}
             viewPicker={
               <OfficeViewPicker

@@ -78,6 +78,7 @@ import {
 } from "@/components/epic-canvas/comm-graph/office/office-hover-follow";
 import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
+import { OfficeCatchingUpChip } from "@/components/epic-canvas/comm-graph/office/office-catching-up-chip";
 import { OfficeLodChip } from "@/components/epic-canvas/comm-graph/office/office-lod-chip";
 import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
 import {
@@ -2051,6 +2052,14 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    * (they are what make the probe possible, and they are cheap), but nothing
    * is PLANNED - a floor planned for a view that is about to be replaced is a
    * whole layout thrown away a moment later.
+   *
+   * It does NOT mean the event feed has caught up. An explicit view - picked
+   * on the tile, or resolved from the Settings default - is ready as soon as
+   * the agent snapshot and the box are there, because that is everything a
+   * plan reads; `initialHistoryCaughtUp` arrives separately and says who among
+   * those agents is busy. The two readiness rules that still hold the feed as
+   * an input are Auto's measurement (in the tile, which owns it) and the
+   * partition commit below.
    */
   readonly ready: boolean;
   /**
@@ -2376,9 +2385,20 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // partition of the same finished input has `true`. Gating the scene sync
     // alone does not help - this commit happens first and poisons the input
     // the sync later reads.
-    if (!ready) return;
+    //
+    // THE FEED IS STILL PART OF "REAL" HERE, and only here. Drawing an
+    // explicit view no longer waits for it: an office is a drawing of the
+    // agent list, and the events only decide who among them is busy. But a
+    // CLASSIFICATION is frozen for the life of the mount, so a partition
+    // taken while the feed is behind would make "not busy yet" permanent for
+    // everyone the replay had not reached. So the office draws from the
+    // uncommitted partition - recomputed from scratch, `previous` still null,
+    // while the feed catches up - and the first one committed is the first
+    // one taken from a settled feed. The re-plan that follows is the same
+    // population change any arrival causes.
+    if (!ready || !initialHistoryCaughtUp) return;
     runtime.setPartition(partition);
-  }, [partition, ready, runtime]);
+  }, [initialHistoryCaughtUp, partition, ready, runtime]);
 
   // WHAT AUTO WOULD MEASURE, pushed up whenever it changes. Reported even
   // while `ready` is false - it is the thing that MAKES the tile ready - but
@@ -3738,6 +3758,17 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           )}
         >
           {autoChip}
+          {/*
+            Shown only while an office is actually ON SCREEN from a feed that
+            is behind - the chip itself decides, on these two facts, because
+            this component is at its complexity ceiling. Auto's own
+            `measuring…` covers the state where nothing is drawn yet, and two
+            chips explaining the same wait would be one too many.
+          */}
+          <OfficeCatchingUpChip
+            officeDrawn={ready}
+            initialHistoryCaughtUp={initialHistoryCaughtUp}
+          />
           <OfficeLodChip lod={lodBand} />
           <div
             className={cn(
