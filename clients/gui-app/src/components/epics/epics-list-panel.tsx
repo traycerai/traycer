@@ -589,11 +589,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const handleConfirmDelete = () => {
     if (pendingDeleteIds === null) return;
     // The host-wide census is asynchronous. Confirming before it settles lets
-    // the Task deletion start with zero approved worktrees; its rows can then
-    // arrive during the mutation and flash briefly before success closes the
-    // dialog. Hold confirmation until the choices the person is approving are
-    // stable. A disabled query (host unavailable) is not fetching, so cleanup
-    // remains additive and never blocks Task deletion indefinitely.
+    // the Task deletion start with zero approved worktrees, silently skipping
+    // rows that were about to be offered. Hold confirmation until the choices
+    // the person is approving are stable. A disabled query (host unavailable)
+    // is not fetching, so cleanup remains additive and never blocks Task
+    // deletion indefinitely.
     if (worktreeCandidatesFetching) return;
     // The verdict is re-read HERE, from the store, rather than trusted from the
     // render that opened this dialog. A confirmation is an unbounded pause with
@@ -628,30 +628,29 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         worktreePath: candidate.worktreePath,
         ownerEpicIds: candidate.ownerEpicIds,
       }));
-    deleteMutation.mutate(
-      {
-        ids: [...ids],
-        worktreeCleanup:
-          approvedWorktrees.length > 0
-            ? { candidates: approvedWorktrees }
-            : null,
-      },
-      {
-        onSuccess: () => {
-          setSelectedIds((prev) => {
-            let next: Set<string> | null = null;
-            for (const id of ids) {
-              if (!prev.has(id)) continue;
-              if (next === null) next = new Set(prev);
-              next.delete(id);
-            }
-            return next ?? prev;
-          });
-          setSelectionMode(false);
-          closeDeleteDialog();
-        },
-      },
-    );
+    deleteMutation.mutate({
+      ids: [...ids],
+      worktreeCleanup:
+        approvedWorktrees.length > 0 ? { candidates: approvedWorktrees } : null,
+    });
+    // The mutation cache owns the deletion after kickoff, exactly as the
+    // Sweep flow's kickoff does. Do not hold the person in the modal while the
+    // host deletes the Task(s) and streams the approved worktree cleanup: the
+    // hook's own `onSuccess` / `onError` toast the outcome and prune the rows
+    // wherever they are by then. No per-call callbacks either - TanStack
+    // drops `mutate(vars, { onSuccess })` callbacks on unmount, and this
+    // panel can be left before the host answers.
+    setSelectedIds((prev) => {
+      let next: Set<string> | null = null;
+      for (const id of ids) {
+        if (!prev.has(id)) continue;
+        if (next === null) next = new Set(prev);
+        next.delete(id);
+      }
+      return next ?? prev;
+    });
+    setSelectionMode(false);
+    closeDeleteDialog();
   };
 
   const hasActiveFilters = hasActiveHistoryFilters(search);
@@ -814,7 +813,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         }}
         title={describeDeleteTitle(pendingDeleteIds, items)}
         description="This action cannot be undone."
-        isPending={deleteMutation.isPending}
         isCheckingWorktrees={worktreeCandidatesFetching}
         onConfirm={handleConfirmDelete}
         candidates={worktreeCandidates}

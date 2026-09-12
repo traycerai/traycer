@@ -156,10 +156,6 @@ interface DeleteEpicsVariables {
   } | null;
 }
 
-interface DeleteEpicsMutationOptions {
-  readonly onSuccess: () => void;
-}
-
 const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
   availableRepos: [] as string[],
@@ -177,13 +173,7 @@ const testState = vi.hoisted(() => ({
   worktreeCandidates: [] as WorktreeCleanupCandidateStub[],
   worktreeCandidatesFetching: false,
   worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
-  mutate:
-    vi.fn<
-      (
-        variables: DeleteEpicsVariables,
-        options: DeleteEpicsMutationOptions,
-      ) => void
-    >(),
+  mutate: vi.fn<(variables: DeleteEpicsVariables) => void>(),
   renameMutate: vi.fn<(variables: RenameEpicTitleVariables) => void>(),
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   pendingSetPinnedEpicIds: new Set<string>(),
@@ -1399,12 +1389,17 @@ describe("<EpicsListPanel />", () => {
     if (deleteCall === undefined) {
       throw new Error("expected selected epic delete mutation call");
     }
-    const [variables, options] = deleteCall;
+    const [variables] = deleteCall;
     expect(variables).toEqual({
       ids: ["epic-from-history", "epic-two"],
       worktreeCleanup: null,
     });
-    expect(typeof options.onSuccess).toBe("function");
+    // Deletion runs in the background off the mutation cache, like a Sweep:
+    // the dialog and selection mode are gone at confirm, before the host
+    // answers, and no per-call callback is what closes them.
+    expect(deleteCall.length).toBe(1);
+    expect(screen.queryByTestId("delete-tasks-dialog")).toBeNull();
+    expect(screen.queryByTestId("epics-list-delete-selected")).toBeNull();
   });
 
   // T13: the delete confirmation is an unbounded pause with a human in it, so
