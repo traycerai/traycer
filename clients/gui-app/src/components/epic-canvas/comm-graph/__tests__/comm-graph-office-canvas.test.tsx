@@ -2595,7 +2595,10 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
 
     const RESTART_VIEW: CommGraphTileViewState = { ...FIXED_CAMERA_VIEW };
 
-    function renderLoop(overrides: Partial<CommGraphOfficeCanvasProps> = {}): {
+    // REQUIRED, with `{}` written out at every caller that wants nothing.
+    // A parameter default is the same ban as an optional parameter: the root
+    // AGENTS list has both, and neither linter carries either.
+    function renderLoop(overrides: Partial<CommGraphOfficeCanvasProps>): {
       readonly result: RenderResult;
       readonly officeView: OfficeView;
     } {
@@ -2653,7 +2656,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * precondition, not a flushed frame.
      */
     it("a lod-band change does not restart the loop", () => {
-      renderLoop();
+      renderLoop({});
       const surface = screen.getByTestId("comm-graph-office-canvas");
       const chip = screen.getByTestId("comm-graph-office-lod-chip");
       expect(chip.textContent).toBe("Office");
@@ -2689,7 +2692,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * `dispatchEvent` proves nothing without it.
      */
     it("a resize does not restart the loop", () => {
-      renderLoop();
+      renderLoop({});
       const canvas = document.querySelector("canvas");
       if (canvas === null) throw new Error("canvas did not render");
       expect(canvas.width).toBe(1200);
@@ -2715,7 +2718,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     });
 
     it("a view pick restarts the loop exactly once", () => {
-      const { result } = renderLoop();
+      const { result } = renderLoop({});
       act(() => {
         result.rerender(
           withQueryClient(
@@ -2736,7 +2739,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     });
 
     it("a theme flip restarts the loop exactly once", () => {
-      const { result, officeView } = renderLoop();
+      const { result, officeView } = renderLoop({});
       resolvedThemeMock.current = "dark";
       act(() => {
         result.rerender(
