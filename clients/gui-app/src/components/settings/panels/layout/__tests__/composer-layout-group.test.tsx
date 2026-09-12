@@ -184,6 +184,33 @@ describe("<ComposerLayoutGroup />", () => {
     expect(useLayoutStore.getState().composer.reasoningIndicator).toBe("bars");
   });
 
+  it("writes Reasoning control to the store and tracks layout.composer.reasoningFooterControl", async () => {
+    const { trackSettingChanged } = await import("@/lib/analytics");
+    render(<ComposerLayoutGroup />);
+
+    const group = screen.getByRole("group", { name: "Reasoning control" });
+    expect(
+      within(group)
+        .getByRole("button", { name: "Slider" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(within(group).getByRole("button", { name: "List" }));
+
+    expect(useLayoutStore.getState().composer.reasoningFooterControl).toBe(
+      "list",
+    );
+    expect(trackSettingChanged).toHaveBeenCalledWith(
+      "layout",
+      "layout.composer.reasoningFooterControl",
+    );
+    await expectSettingIdAccepted("layout.composer.reasoningFooterControl");
+
+    fireEvent.click(within(group).getByRole("button", { name: "Slider" }));
+    expect(useLayoutStore.getState().composer.reasoningFooterControl).toBe(
+      "slider",
+    );
+  });
+
   it("does not track or write when the already-active option is clicked again", async () => {
     const { trackSettingChanged } = await import("@/lib/analytics");
     render(<ComposerLayoutGroup />);

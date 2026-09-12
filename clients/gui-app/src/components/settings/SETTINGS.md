@@ -1371,17 +1371,23 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       button hidden and now reads **Custom** until Compact is re-applied,
       which is the honest answer: it no longer matches the bundle.
 
-    - **What a preset never touches**: `homeTabEnabled` (a feature flag) and
-      the status bar's per-host visibility picks - neither is a level of
-      DETAIL.
+    - **What a preset never touches**: `homeTabEnabled` (a feature flag), the
+      status bar's per-host visibility picks, and the picker footer's
+      `reasoningFooterControl` - none is a level of
+      DETAIL. That last one is why `LayoutPresetComposerValues` is the
+      slice's eight detail rows rather than the whole
+      `ComposerLayoutPreferences`; `Reasoning level` (the CHIP's shape) is a
+      detail row and stays in every bundle.
       **Minimap position is not in that list**: every bundle
       carries it and every preset writes it back to `DEFAULT_MINIMAP_SIDE`,
       since it is a Chat-group row the match reads like any other. Moving the
       minimap therefore reads `Custom`, and any preset puts it back.
-    - **The two STRUCTURAL settings are restored by Reset only**: the status
-      bar's `placement`, and the sidebar's panel order + per-panel visibility
-      (the latter through the same two resets the Sidebar group's own buttons
-      call). Both answer "which surface hosts this" / "how is the rail
+    - **The STRUCTURAL settings are restored by Reset only**: the status
+      bar's `placement`, the model picker footer's `reasoningFooterControl`,
+      and the sidebar's panel order + per-panel visibility
+      (the last through the same two resets the Sidebar group's own buttons
+      call). Each answers "which surface hosts this" / "which control offers
+      it" / "how is the rail
       arranged" rather than "how much detail", so NO bundle carries them -
       `Default` included. A reader on footer placement who asks for a density
       gets that density, not their header back, whichever of the three they
@@ -1392,10 +1398,11 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       two subjects rather than the whole `StatusBarLayoutPreferences`.
     - **So the segment and the button are different gestures**, deliberately.
       `Default` is the third density bundle (`applyLayoutPreset("default")`);
-      `Reset to defaults` is that bundle PLUS the structural pair
+      `Reset to defaults` is that bundle PLUS the structural settings
       (`resetLayoutToDefaults`). The button therefore stays enabled on a page
-      already reading `Default` whose strip has been moved or whose rail
-      rearranged - `useLayoutIsFullyDefault` is the match AND those two, which
+      already reading `Default` whose strip has been moved, whose picker
+      footer is on its list, or whose rail has been
+      rearranged - `useLayoutIsFullyDefault` is the match AND those, which
       is a different question from the one the segment answers. Both report
       `layout.preset.default`: one gesture's worth of intent, differing in what
       they restore rather than in what they are about.
@@ -1872,6 +1879,28 @@ md:top-0`): positioned against the nearest scrollport - the settings
     the terminal launcher - the two surfaces that mount it - cannot disagree.
     The tooltip's Effort row spells out `High (3 of 4)` while the glyph shows,
     and the bare name in `text`, which renders exactly today's chip.
+  - **Reasoning control** (`composer.reasoningFooterControl`: `slider` or
+    `list`, default `slider`) is the picker FOOTER's half of the same subject,
+    and the one composer row whose default is not what the app rendered
+    before it existed. The footer draws one stop per level the model
+    advertises, in the catalog's order and never sorted, with a zero-effort
+    level (`off` / `none`) as the LEFTMOST stop rather than excluded the way
+    the chip's ladder excludes it - on a slider the position is the control,
+    so "no thinking" has to be somewhere the thumb can land. The thumb is the
+    RANGE control and the only tab stop (Radix `role="slider"`: arrows step one
+    level, Home/End go to the ends, `aria-valuetext` is the level's NAME, not
+    its index); the dots are direct selection beside it - labelled buttons a
+    pointer or an assistive technology can pick by name, kept out of the tab
+    order but not out of the accessibility tree, each with a tooltip. A drag
+    that starts on a dot ends with a click on that dot, so a gesture that
+    already moved the value swallows its own trailing click rather than
+    snapping the level back to where the drag began. The selected level's name renders beside the
+    track, so the dots never stand alone. `list` renders exactly the strip of
+    buttons the footer had before, and a model advertising a single level
+    renders that strip whatever the setting says - a slider with one stop is a
+    control that cannot be moved. The ⌥-digit chord still sets a level in
+    either mode (it lives in `usePickerLeaderScope`, not in the strip); only
+    its per-button badges are a thing the list has and the slider does not.
   - **The glyph's slot per bar is fixed, and the box grows sideways**
     (`h-3.5 w-auto`, `viewBox` width = count × slot). Harnesses advertise
     anywhere from two graded levels to seven, and dividing a fixed width by

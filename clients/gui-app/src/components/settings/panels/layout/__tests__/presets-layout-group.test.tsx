@@ -114,9 +114,12 @@ describe("<PresetsLayoutGroup />", () => {
     );
     expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
     expect(pressed()).toEqual(["Compact"]);
-    expect(useLayoutStore.getState().composer).toEqual(
-      LAYOUT_PRESETS.compact.composer,
-    );
+    // The bundle's own eight rows, plus the footer's reasoning control left
+    // exactly where it was - no bundle carries that one.
+    expect(useLayoutStore.getState().composer).toEqual({
+      ...LAYOUT_PRESETS.compact.composer,
+      reasoningFooterControl: "slider",
+    });
     expect(useSettingsStore.getState().contextIndicatorStyle).toBe("ring-only");
     expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
     expect(trackSettingChanged).toHaveBeenCalledWith(

@@ -648,6 +648,7 @@ describe("useLayoutStore", () => {
       store.setComposerMic("hidden");
       store.setComposerCompactButton("hidden");
       store.setComposerReasoningIndicator("bars");
+      store.setComposerReasoningFooterControl("list");
 
       expect(useLayoutStore.getState().composer).toEqual({
         filesChanged: "compact",
@@ -658,6 +659,7 @@ describe("useLayoutStore", () => {
         mic: "hidden",
         compactButton: "hidden",
         reasoningIndicator: "bars",
+        reasoningFooterControl: "list",
       });
     });
 
@@ -681,6 +683,7 @@ describe("useLayoutStore", () => {
           mic: "hidden",
           compactButton: "hidden",
           reasoningIndicator: "bars-text",
+          reasoningFooterControl: "list",
         },
       });
 
@@ -693,6 +696,7 @@ describe("useLayoutStore", () => {
         mic: "hidden",
         compactButton: "hidden",
         reasoningIndicator: "bars-text",
+        reasoningFooterControl: "list",
       });
     });
 
@@ -722,6 +726,7 @@ describe("useLayoutStore", () => {
           mic: "loud",
           compactButton: "hidden",
           reasoningIndicator: "dots",
+          reasoningFooterControl: "knob",
         },
       });
 
@@ -734,6 +739,7 @@ describe("useLayoutStore", () => {
         mic: "visible",
         compactButton: "hidden",
         reasoningIndicator: "text",
+        reasoningFooterControl: "slider",
       });
     });
 
@@ -751,6 +757,43 @@ describe("useLayoutStore", () => {
           ...DEFAULT_COMPOSER_LAYOUT,
           reasoningIndicator: indicator,
         });
+      },
+    );
+
+    // The picker footer's own control, which is the one composer field whose
+    // default is NOT what the app rendered before it existed.
+    it("starts the picker footer on the slider", () => {
+      expect(useLayoutStore.getState().composer.reasoningFooterControl).toBe(
+        "slider",
+      );
+      expect(DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl).toBe("slider");
+    });
+
+    it.each(["slider", "list"] as const)(
+      "round-trips reasoningFooterControl %s through the persisted slice",
+      async (control) => {
+        useLayoutStore.getState().setComposerReasoningFooterControl(control);
+        expect(useLayoutStore.getState().composer.reasoningFooterControl).toBe(
+          control,
+        );
+
+        await rehydrateFrom({ composer: { reasoningFooterControl: control } });
+
+        expect(useLayoutStore.getState().composer).toEqual({
+          ...DEFAULT_COMPOSER_LAYOUT,
+          reasoningFooterControl: control,
+        });
+      },
+    );
+
+    it.each(["knob", "bars", "visible", 3, null])(
+      "falls back to the slider for a persisted reasoningFooterControl of %s",
+      async (control) => {
+        await rehydrateFrom({ composer: { reasoningFooterControl: control } });
+
+        expect(useLayoutStore.getState().composer.reasoningFooterControl).toBe(
+          "slider",
+        );
       },
     );
 

@@ -13,6 +13,7 @@ import {
   useLayoutStore,
   type ComposerCompactableMode,
   type ComposerHideableMode,
+  type ComposerReasoningFooterControl,
   type ComposerReasoningIndicator,
 } from "@/stores/settings/layout-store";
 
@@ -36,6 +37,13 @@ const REASONING_INDICATOR_OPTIONS: ReadonlyArray<
   { value: "text", label: "Text" },
   { value: "bars", label: "Bars" },
   { value: "bars-text", label: "Bars + text" },
+];
+
+const REASONING_FOOTER_CONTROL_OPTIONS: ReadonlyArray<
+  SettingsSegmentedOption<ComposerReasoningFooterControl>
+> = [
+  { value: "slider", label: "Slider" },
+  { value: "list", label: "List" },
 ];
 
 /**
@@ -70,6 +78,9 @@ export function ComposerLayoutGroup(): ReactNode {
   );
   const setReasoningIndicator = useLayoutStore(
     (state) => state.setComposerReasoningIndicator,
+  );
+  const setReasoningFooterControl = useLayoutStore(
+    (state) => state.setComposerReasoningFooterControl,
   );
 
   return (
@@ -192,6 +203,20 @@ export function ComposerLayoutGroup(): ReactNode {
               setReasoningIndicator(indicator);
             }}
             ariaLabel="Reasoning level"
+          />
+        }
+      />
+      <SettingsRow
+        row={LAYOUT.definitions.composerReasoningControl}
+        control={
+          <SettingsSegmentedControl
+            value={composer.reasoningFooterControl}
+            options={REASONING_FOOTER_CONTROL_OPTIONS}
+            onChange={(control) => {
+              trackLayoutSetting("layout.composer.reasoningFooterControl");
+              setReasoningFooterControl(control);
+            }}
+            ariaLabel="Reasoning control"
           />
         }
       />

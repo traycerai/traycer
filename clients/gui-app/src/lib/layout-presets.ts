@@ -7,7 +7,9 @@ import {
   DEFAULT_COMPOSER_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
-  type ComposerLayoutPreferences,
+  type ComposerCompactableMode,
+  type ComposerHideableMode,
+  type ComposerReasoningIndicator,
   type StatusBarProviderLimitSelections,
   type StatusBarRateLimitPreferences,
   type StatusBarResourcePreferences,
@@ -59,6 +61,29 @@ export interface LayoutPresetStatusBarValues {
   readonly resources: StatusBarResourcePreferences;
 }
 
+/**
+ * The composer's contribution, which is its detail rows and NOT
+ * `reasoningFooterControl`.
+ *
+ * Same treatment as the status bar's `placement` just above, for the same
+ * reason: which control the model picker's footer offers for the thinking
+ * effort is a SHAPE - the same levels, the same setter - rather than an amount
+ * of detail, so no density bundle has an opinion about it, it is not part of
+ * the match, and `resetLayoutToDefaults` alone puts it back. A user who
+ * switched the footer back to its list and then asks for Compact gets Compact,
+ * not the slider.
+ */
+export interface LayoutPresetComposerValues {
+  readonly filesChanged: ComposerCompactableMode;
+  readonly activeAgents: ComposerCompactableMode;
+  readonly background: ComposerCompactableMode;
+  readonly attachImage: ComposerHideableMode;
+  readonly access: ComposerCompactableMode;
+  readonly mic: ComposerHideableMode;
+  readonly compactButton: ComposerHideableMode;
+  readonly reasoningIndicator: ComposerReasoningIndicator;
+}
+
 /** The Chat group's rows, all four of them `settings-store` keys. */
 export interface LayoutPresetChatValues {
   readonly pinContextUsageBreakdown: boolean;
@@ -93,7 +118,7 @@ export interface LayoutPresetSidebarValues {
  */
 export interface LayoutPresetBundle {
   readonly statusBar: LayoutPresetStatusBarValues;
-  readonly composer: ComposerLayoutPreferences;
+  readonly composer: LayoutPresetComposerValues;
   readonly chat: LayoutPresetChatValues;
   readonly sidebar: LayoutPresetSidebarValues;
 }
@@ -130,7 +155,19 @@ const DEFAULT_PRESET: LayoutPresetBundle = {
     rateLimits: DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
     resources: DEFAULT_STATUS_BAR_LAYOUT.resources,
   },
-  composer: DEFAULT_COMPOSER_LAYOUT,
+  // Each VALUE still comes from the constant; only the field list is named
+  // here, because the bundle carries the eight detail rows and not the
+  // footer's reasoning control.
+  composer: {
+    filesChanged: DEFAULT_COMPOSER_LAYOUT.filesChanged,
+    activeAgents: DEFAULT_COMPOSER_LAYOUT.activeAgents,
+    background: DEFAULT_COMPOSER_LAYOUT.background,
+    attachImage: DEFAULT_COMPOSER_LAYOUT.attachImage,
+    access: DEFAULT_COMPOSER_LAYOUT.access,
+    mic: DEFAULT_COMPOSER_LAYOUT.mic,
+    compactButton: DEFAULT_COMPOSER_LAYOUT.compactButton,
+    reasoningIndicator: DEFAULT_COMPOSER_LAYOUT.reasoningIndicator,
+  },
   chat: {
     pinContextUsageBreakdown: DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
     pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
@@ -263,13 +300,15 @@ export const LAYOUT_PRESET_LABELS: Readonly<Record<LayoutPresetMatch, string>> =
  * page, and nothing else.
  *
  * This includes `default`: the Default preset is the third density bundle, not
- * a reset, so it leaves the two STRUCTURAL settings exactly where they are -
- * the status bar's `placement`, and the rail's panel order and per-panel
- * visibility. Those answer which surface hosts a thing and how the rail is
- * arranged, which is a different question from how much of it shows, and
- * `resetLayoutToDefaults` is the gesture that answers it.
+ * a reset, so it leaves the STRUCTURAL settings exactly where they are - the
+ * status bar's `placement`, the model picker footer's
+ * `reasoningFooterControl`, and the rail's panel order and per-panel
+ * visibility. Those answer which surface hosts a thing, which control offers
+ * it, and how the rail is arranged, which is a different question from how
+ * much of it shows, and `resetLayoutToDefaults` is the gesture that answers
+ * it.
  *
- * That is also why all three are absent from the bundle and from the match: a
+ * That is also why all of them are absent from the bundle and from the match: a
  * preset only claims the values it assigns, so a Compact install with the
  * strip in the footer and a reordered rail is still Compact - and a page on
  * default densities reads Default wherever its strip lives.
@@ -284,7 +323,12 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
     rateLimits: bundle.statusBar.rateLimits,
     resources: bundle.statusBar.resources,
   });
-  layout.setComposerPreferences(bundle.composer);
+  layout.setComposerPreferences({
+    ...bundle.composer,
+    // Carried over for the same reason `placement` is: no bundle has an
+    // opinion about which control the picker's footer offers.
+    reasoningFooterControl: layout.composer.reasoningFooterControl,
+  });
   const settings = useSettingsStore.getState();
   settings.setPinContextUsageBreakdown(bundle.chat.pinContextUsageBreakdown);
   settings.setPinnedContextBreakdownFields(
@@ -296,8 +340,9 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
 }
 
 /**
- * Every Layout value back to its default: the Default bundle, PLUS the two
- * structural settings no bundle carries.
+ * Every Layout value back to its default: the Default bundle, PLUS the
+ * structural settings no bundle carries - the status bar's placement, the
+ * picker footer's reasoning control, and the rail's arrangement.
  *
  * This is where the button and the `Default` segment deliberately part
  * company. The segment answers "which density bundle am I on", so it has to
@@ -314,9 +359,11 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
  */
 export function resetLayoutToDefaults(): void {
   applyLayoutPreset("default");
-  useLayoutStore
-    .getState()
-    .setStatusBarPlacement(DEFAULT_STATUS_BAR_LAYOUT.placement);
+  const layout = useLayoutStore.getState();
+  layout.setStatusBarPlacement(DEFAULT_STATUS_BAR_LAYOUT.placement);
+  layout.setComposerReasoningFooterControl(
+    DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl,
+  );
   const panels = useLeftPanelStore.getState();
   panels.applyPanelGroups(DEFAULT_LEFT_PANEL_GROUPS);
   panels.clearPanelVisibilityOverrides();
@@ -416,8 +463,8 @@ function selectionFor(
 }
 
 function composerEqual(
-  bundle: ComposerLayoutPreferences,
-  snapshot: ComposerLayoutPreferences,
+  bundle: LayoutPresetComposerValues,
+  snapshot: LayoutPresetComposerValues,
 ): boolean {
   return (
     bundle.filesChanged === snapshot.filesChanged &&

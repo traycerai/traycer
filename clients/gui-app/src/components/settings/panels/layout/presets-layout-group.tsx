@@ -24,6 +24,7 @@ import {
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
 import {
+  DEFAULT_COMPOSER_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
@@ -167,7 +168,7 @@ const PRESET_ANALYTICS_SETTINGS: Readonly<
 };
 
 /**
- * Whether Reset has anything left to do: the Default densities AND the two
+ * Whether Reset has anything left to do: the Default densities AND the
  * structural settings the bundles do not carry.
  *
  * Read here rather than folded into `matchLayoutPreset`, because the two
@@ -176,6 +177,9 @@ const PRESET_ANALYTICS_SETTINGS: Readonly<
  */
 function useLayoutIsFullyDefault(match: LayoutPresetMatch): boolean {
   const placement = useLayoutStore((state) => state.statusBar.placement);
+  const reasoningFooterControl = useLayoutStore(
+    (state) => state.composer.reasoningFooterControl,
+  );
   const panelGroups = useLeftPanelStore((state) => state.panelGroups);
   const visibilityOverrides = useLeftPanelStore(
     (state) => state.panelVisibilityOverrideById,
@@ -183,6 +187,7 @@ function useLayoutIsFullyDefault(match: LayoutPresetMatch): boolean {
   return (
     match === "default" &&
     placement === DEFAULT_STATUS_BAR_LAYOUT.placement &&
+    reasoningFooterControl === DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl &&
     areLeftPanelGroupsEqual(panelGroups, DEFAULT_LEFT_PANEL_GROUPS) &&
     Object.keys(visibilityOverrides).length === 0
   );

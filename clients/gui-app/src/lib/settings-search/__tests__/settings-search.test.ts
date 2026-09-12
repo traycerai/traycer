@@ -213,6 +213,22 @@ describe("settings search", () => {
       );
     });
 
+    it("tells the picker footer's reasoning control from the chip's reasoning level", () => {
+      // Two rows about the same subject, one word apart. Each has to be
+      // reachable by the name it goes by on the page.
+      expect(landingFor("reasoning control", DESKTOP)).toBe(
+        "layout#layout-composer-reasoning-control",
+      );
+      expect(landingFor("reasoning level", DESKTOP)).toBe(
+        "layout#layout-composer-reasoning-indicator",
+      );
+      // And by the word for the control itself, which is what a reader
+      // looking for "that slider" will type.
+      expect(landingsFor("slider", DESKTOP)).toContain(
+        "layout#layout-composer-reasoning-control",
+      );
+    });
+
     it("offers the footer controls on desktop and withholds them in the mobile app", () => {
       for (const label of ["Placement", "Usage limits", "Resource monitor"]) {
         expect(labelsFor(label, DESKTOP), label).toContain(label);

@@ -322,6 +322,7 @@ export type AnalyticsSetting =
   | "layout.composer.mic"
   | "layout.composer.compactButton"
   | "layout.composer.reasoningIndicator"
+  | "layout.composer.reasoningFooterControl"
   | "layout.sidebar.resourceMetrics"
   | "linkOpen"
   | "pinContextUsageBreakdown"
@@ -1242,6 +1243,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     "layout.composer.mic": true,
     "layout.composer.compactButton": true,
     "layout.composer.reasoningIndicator": true,
+    "layout.composer.reasoningFooterControl": true,
     "layout.sidebar.resourceMetrics": true,
     linkOpen: true,
     pinContextUsageBreakdown: true,

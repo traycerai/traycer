@@ -345,6 +345,25 @@ export const LAYOUT = defineSettingsSection("layout", {
       "model chip",
     ],
   },
+  composerReasoningControl: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-composer-reasoning-control" },
+    label: "Reasoning control",
+    description:
+      "How the model picker offers reasoning levels. List shows every level as a button.",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "thinking",
+      "effort",
+      "reasoning",
+      "slider",
+      "list",
+      "stops",
+      "model picker",
+      "footer",
+    ],
+  },
   chat: {
     kind: "group",
     search: { anchor: "layout-chat" },

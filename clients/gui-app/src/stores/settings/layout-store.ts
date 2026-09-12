@@ -115,6 +115,15 @@ export type ComposerHideableMode = "visible" | "hidden";
  */
 export type ComposerReasoningIndicator = "text" | "bars" | "bars-text";
 
+/**
+ * Which control the model picker's footer offers for the thinking effort: a
+ * stepped slider with one stop per level, or the horizontal list of buttons it
+ * offered before. A shape rather than an amount of detail - the same catalog,
+ * the same setter and the same selected level reach the harness either way -
+ * which is why no density preset carries it (see `lib/layout-presets.ts`).
+ */
+export type ComposerReasoningFooterControl = "slider" | "list";
+
 export interface ComposerLayoutPreferences {
   readonly filesChanged: ComposerCompactableMode;
   readonly activeAgents: ComposerCompactableMode;
@@ -124,6 +133,7 @@ export interface ComposerLayoutPreferences {
   readonly mic: ComposerHideableMode;
   readonly compactButton: ComposerHideableMode;
   readonly reasoningIndicator: ComposerReasoningIndicator;
+  readonly reasoningFooterControl: ComposerReasoningFooterControl;
 }
 
 interface LayoutStoreState {
@@ -188,6 +198,9 @@ interface LayoutStoreState {
   readonly setComposerReasoningIndicator: (
     indicator: ComposerReasoningIndicator,
   ) => void;
+  readonly setComposerReasoningFooterControl: (
+    control: ComposerReasoningFooterControl,
+  ) => void;
 }
 
 /**
@@ -230,7 +243,12 @@ export const DEFAULT_STATUS_BAR_LAYOUT: StatusBarLayoutPreferences = {
   resources: DEFAULT_STATUS_BAR_RESOURCES,
 };
 
-/** Every element as it renders today, so an untouched install sees no change. */
+/**
+ * Every element as it renders today, so an untouched install sees no change -
+ * with the one deliberate exception of `reasoningFooterControl`, whose default
+ * is the NEW control. The footer's list is what an install that wants the old
+ * shape switches back to.
+ */
 export const DEFAULT_COMPOSER_LAYOUT: ComposerLayoutPreferences = {
   filesChanged: "visible",
   activeAgents: "visible",
@@ -240,6 +258,7 @@ export const DEFAULT_COMPOSER_LAYOUT: ComposerLayoutPreferences = {
   mic: "visible",
   compactButton: "visible",
   reasoningIndicator: "text",
+  reasoningFooterControl: "slider",
 };
 
 const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
@@ -509,6 +528,19 @@ function reasoningIndicator(
   return isComposerReasoningIndicator(value) ? value : fallback;
 }
 
+function isComposerReasoningFooterControl(
+  value: unknown,
+): value is ComposerReasoningFooterControl {
+  return value === "slider" || value === "list";
+}
+
+function reasoningFooterControl(
+  value: unknown,
+  fallback: ComposerReasoningFooterControl,
+): ComposerReasoningFooterControl {
+  return isComposerReasoningFooterControl(value) ? value : fallback;
+}
+
 /**
  * Field by field, like the status bar slice above and for the same reason: each
  * value picks a branch on a render path, and the two unions are NOT
@@ -543,6 +575,10 @@ function resolvePersistedComposer(value: unknown): ComposerLayoutPreferences {
     reasoningIndicator: reasoningIndicator(
       stored.reasoningIndicator,
       DEFAULT_COMPOSER_LAYOUT.reasoningIndicator,
+    ),
+    reasoningFooterControl: reasoningFooterControl(
+      stored.reasoningFooterControl,
+      DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl,
     ),
   };
 }
@@ -762,6 +798,11 @@ export const useLayoutStore = create<LayoutStoreState>()(
         const composer = get().composer;
         if (composer.reasoningIndicator === indicator) return;
         set({ composer: { ...composer, reasoningIndicator: indicator } });
+      },
+      setComposerReasoningFooterControl: (control) => {
+        const composer = get().composer;
+        if (composer.reasoningFooterControl === control) return;
+        set({ composer: { ...composer, reasoningFooterControl: control } });
       },
     }),
     {

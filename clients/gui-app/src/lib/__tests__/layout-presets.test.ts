@@ -38,7 +38,19 @@ function currentSnapshot(): LayoutPresetBundle {
       rateLimits: layout.statusBar.rateLimits,
       resources: layout.statusBar.resources,
     },
-    composer: layout.composer,
+    // Nor is the picker footer's reasoning CONTROL - see
+    // `LayoutPresetComposerValues` - so the snapshot names the eight detail
+    // rows a bundle does carry.
+    composer: {
+      filesChanged: layout.composer.filesChanged,
+      activeAgents: layout.composer.activeAgents,
+      background: layout.composer.background,
+      attachImage: layout.composer.attachImage,
+      access: layout.composer.access,
+      mic: layout.composer.mic,
+      compactButton: layout.composer.compactButton,
+      reasoningIndicator: layout.composer.reasoningIndicator,
+    },
     chat: {
       pinContextUsageBreakdown: settings.pinContextUsageBreakdown,
       pinnedContextBreakdownFields: settings.pinnedContextBreakdownFields,
@@ -105,7 +117,18 @@ describe("layout presets", () => {
         rateLimits: DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
         resources: DEFAULT_STATUS_BAR_LAYOUT.resources,
       },
-      composer: DEFAULT_COMPOSER_LAYOUT,
+      // Every value read from the constant, minus the one field no bundle
+      // carries.
+      composer: {
+        filesChanged: DEFAULT_COMPOSER_LAYOUT.filesChanged,
+        activeAgents: DEFAULT_COMPOSER_LAYOUT.activeAgents,
+        background: DEFAULT_COMPOSER_LAYOUT.background,
+        attachImage: DEFAULT_COMPOSER_LAYOUT.attachImage,
+        access: DEFAULT_COMPOSER_LAYOUT.access,
+        mic: DEFAULT_COMPOSER_LAYOUT.mic,
+        compactButton: DEFAULT_COMPOSER_LAYOUT.compactButton,
+        reasoningIndicator: DEFAULT_COMPOSER_LAYOUT.reasoningIndicator,
+      },
       chat: {
         pinContextUsageBreakdown: DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
         pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
@@ -377,6 +400,34 @@ describe("layout presets", () => {
     );
     expect(useLeftPanelStore.getState().panelVisibilityOverrideById.chats).toBe(
       false,
+    );
+  });
+
+  it("leaves the picker footer's reasoning control alone for every preset, and matches on neither", () => {
+    // Structural in exactly the sense placement is: which CONTROL offers the
+    // thinking levels, not how much of them shows. A reader who switched the
+    // footer back to its list and then asks for a density keeps the list.
+    for (const id of LAYOUT_PRESET_IDS) {
+      resetStores();
+      useLayoutStore.getState().setComposerReasoningFooterControl("list");
+
+      applyLayoutPreset(id);
+
+      expect(useLayoutStore.getState().composer.reasoningFooterControl).toBe(
+        "list",
+      );
+      expect(matchLayoutPreset(currentSnapshot())).toBe(id);
+    }
+  });
+
+  it("restores the picker footer's reasoning control on Reset, since no bundle carries it", () => {
+    useLayoutStore.getState().setComposerReasoningFooterControl("list");
+    applyLayoutPreset("compact");
+
+    resetLayoutToDefaults();
+
+    expect(useLayoutStore.getState().composer.reasoningFooterControl).toBe(
+      DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl,
     );
   });
 

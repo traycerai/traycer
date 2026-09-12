@@ -3937,7 +3937,36 @@ describe("<HarnessModelPicker />", () => {
     expect(selections.at(-1)?.harnessId).toBe("claude");
   });
 
-  it("renders thinking effort controls in the picker footer", async () => {
+  it("renders the thinking-effort slider in the picker footer", async () => {
+    const { reasoningChanges } = renderPicker({
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+
+    expect(
+      screen.getByRole("group", { name: "Thinking effort" }),
+    ).not.toBeNull();
+    const slider = screen.getByRole("slider", { name: "Thinking effort" });
+    expect(slider.getAttribute("aria-valuetext")).toBe("High");
+
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+
+    expect(reasoningChanges).toEqual(["low"]);
+  });
+
+  it("renders thinking effort buttons in the picker footer under the list setting", async () => {
+    useLayoutStore.getState().setComposerReasoningFooterControl("list");
     const { reasoningChanges } = renderPicker({
       reasoning: "high",
       storeModels: [

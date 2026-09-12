@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HarnessModelPickerModelSettingsFooter,
   type ReasoningFooterConfig,
@@ -9,6 +9,10 @@ import type {
   ModelOption,
   ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
+import {
+  DEFAULT_COMPOSER_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 
 // Harness-reported reasoning levels are unbounded (some harnesses advertise
 // many more than a footer row can lay out side by side), so the fixture
@@ -60,8 +64,20 @@ function serviceTierConfig(
   return { selectedModel, value, onChange };
 }
 
+// The overflowing STRIP is the `list` control's problem - the slider has one
+// track whatever the level count - so this suite pins the setting rather than
+// riding the default, which is `slider`.
 describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
-  afterEach(() => cleanup());
+  beforeEach(() => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, reasoningFooterControl: "list" },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+  });
 
   it("renders and lets you select every harness-reported level even when more levels exist than fit in a narrow row", () => {
     const onChange = vi.fn<(next: string) => void>();
