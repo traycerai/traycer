@@ -658,8 +658,20 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // fresh probe a commit later. So this guard closes nothing today; it is
     // here so the arm states the rule it relies on instead of resting on that
     // ordering, which a change to the effect's gates would silently undo.
+    //
+    // AND ONLY A CAMERA THE RECORD DOES NOT CONTRADICT. D52's exception is a
+    // legacy camera with NO stamp - one that names ANOTHER view is not that
+    // exception, it is the record vouching against the camera, and preserving
+    // through it also overwrites the stamp, destroying the only evidence there
+    // was. That is reachable with no witness at all: a tile evicted before the
+    // default moved to Auto reopens stamped `towers` over a Towers camera, a
+    // fresh mount arms nothing, and the record arm below waits for a
+    // destination Auto has not chosen yet (Finding E).
+    const recordVouchesForTheCamera =
+      node.view.officeCameraView === null ||
+      node.view.officeCameraView === decision.view;
     const camera: CommGraphTileCamera | null =
-      decision.view === "floor" && !witnessedMove
+      decision.view === "floor" && recordVouchesForTheCamera && !witnessedMove
         ? node.view.officeCamera
         : null;
     updateView(viewTabId, node.id, {
@@ -716,11 +728,15 @@ export function CommGraphTile(props: CommGraphTileProps) {
       // landed here, and the person is nailing that down. The camera frames
       // that same office, so only a view that genuinely changes invalidates
       // it - the same reason the mode toggle guards its own reset.
-      // Same rule as Auto's keep arm above, and safe by the same ordering: a
-      // held witness over a real camera is retired by the effect before any
+      // The same three questions Auto's keep arm asks, and safe by the same
+      // ordering: whether the distrust comes from a held witness or from a
+      // record naming another view, the effect retires the camera before any
       // pick can run. Stated rather than relied upon.
+      const recordVouchesForTheCamera =
+        node.view.officeCameraView === null ||
+        node.view.officeCameraView === next;
       const camera: CommGraphTileCamera | null =
-        next === resolvedViewId && !witnessedMove
+        next === resolvedViewId && recordVouchesForTheCamera && !witnessedMove
           ? node.view.officeCamera
           : null;
       updateView(viewTabId, node.id, {
