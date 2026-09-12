@@ -7980,17 +7980,27 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         ...buildSessionOptions(relay, lease, null),
         streamRegistry: cursorStreamRegistry,
       });
-      const stream = session.subscribe("cursor.subscribe", { cursor: null });
-      const transitions: RecordedTransition[] = [];
-      stream.onStatusChange((status, reason, retryCause) => {
-        transitions.push({ status, reason, retryCause });
+      // TWO streams, because "every live stream" is the claim: with one, an
+      // implementation that hands the cause to whichever stream it happens to
+      // reach first passes unchanged.
+      const streams = [
+        session.subscribe("cursor.subscribe", { cursor: null }),
+        session.subscribe("cursor.subscribe", { cursor: null }),
+      ];
+      const transitionsByStream = streams.map(() => [] as RecordedTransition[]);
+      streams.forEach((stream, index) => {
+        stream.onStatusChange((status, reason, retryCause) => {
+          transitionsByStream[index].push({ status, reason, retryCause });
+        });
       });
       try {
         await vi.waitFor(
-          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
           WAIT,
         );
-        const before = transitions.length;
+        const before = transitionsByStream.map(
+          (transitions) => transitions.length,
+        );
         const details: FatalErrorDetails = {
           code: "SOME_TRANSIENT_CODE",
           reason: "a transient host-side rejection",
@@ -8001,22 +8011,30 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
 
         await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, details);
 
+        const since = (index: number): RecordedTransition[] =>
+          transitionsByStream[index].slice(before[index]);
         await vi.waitFor(
           () =>
             expect(
-              transitions.slice(before).map((transition) => transition.status),
-            ).toContain("reconnecting"),
+              streams.map((_stream, index) =>
+                since(index)
+                  .map((transition) => transition.status)
+                  .includes("reconnecting"),
+              ),
+            ).toEqual([true, true]),
           WAIT,
         );
+        // Each stream is told once, and told WHY - not just moved.
         expect(
-          transitions
-            .slice(before)
-            .find((transition) => transition.status === "reconnecting"),
-        ).toEqual({
-          status: "reconnecting",
-          reason: null,
-          retryCause: details,
-        });
+          streams.map((_stream, index) =>
+            since(index).filter(
+              (transition) => transition.status === "reconnecting",
+            ),
+          ),
+        ).toEqual([
+          [{ status: "reconnecting", reason: null, retryCause: details }],
+          [{ status: "reconnecting", reason: null, retryCause: details }],
+        ]);
       } finally {
         session.close();
       }

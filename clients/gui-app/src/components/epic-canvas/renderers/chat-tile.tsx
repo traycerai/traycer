@@ -1441,6 +1441,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 connectionStatus={view.connectionStatus}
                 fatalClose={view.fatalClose}
                 preSnapshotRetries={view.preSnapshotRetries}
+                preSnapshotReloadStartedAt={view.preSnapshotReloadStartedAt}
                 onRetry={view.onChatRetryFromUser}
                 preContent={view.preContent}
                 restoreContext={view.restoreContext}
@@ -1735,6 +1736,9 @@ function useChatTileSessionViewModel(
       // Written only while `snapshotLoaded` is false and cleared by the
       // snapshot, so a loaded tile's renders never move with it.
       preSnapshotRetries: s.preSnapshotRetries,
+      // Written only by an automatic `retry()` on a LOADED session, which is
+      // the same render that clears `snapshotLoaded` above.
+      preSnapshotReloadStartedAt: s.preSnapshotReloadStartedAt,
       transcriptBaselineEpoch: s.transcriptBaselineEpoch,
       transcriptHydrationSequence: s.transcriptHydrationSequence,
       coldRewrittenMessageIds: s.coldRewrittenMessageIds,
@@ -3322,6 +3326,7 @@ function useChatTileSessionViewModel(
     connectionStatus: state.connectionStatus,
     fatalClose: state.fatalClose,
     preSnapshotRetries: state.preSnapshotRetries,
+    preSnapshotReloadStartedAt: state.preSnapshotReloadStartedAt,
     preContent: props.preContent,
     // TWO retries, deliberately, and they are not interchangeable.
     //
@@ -3460,6 +3465,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly fatalClose: FatalErrorDetails | null;
   /** Failed pre-snapshot attempts; see `ChatTilePreContent`. */
   readonly preSnapshotRetries: PreSnapshotRetryEvidence | null;
+  /** When a later pre-snapshot wait began; see `chatLoadWaitBeganAt`. */
+  readonly preSnapshotReloadStartedAt: number | null;
   readonly onRetry: () => void;
   /** See `ChatTileSessionViewProps.preContent`. */
   readonly preContent: ChatTilePreContentFrame | null;
@@ -3555,6 +3562,7 @@ function ChatSessionMessagesSurface(
           fatalClose: props.fatalClose,
           connectionStatus: props.connectionStatus,
           retries: props.preSnapshotRetries,
+          reloadStartedAt: props.preSnapshotReloadStartedAt,
           onRetry: props.onRetry,
         }}
       />

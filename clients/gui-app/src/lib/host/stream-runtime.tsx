@@ -395,7 +395,15 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // for the same reason it is now spelled `notifyRecoveredForNamedHost`: the
   // host is captured in this closure, not read from anywhere. The kind it does
   // carry is the transport's, passed through untouched.
-  const recoveredHostId = readiness.hostId;
+  //
+  // Taken from the same `StreamRuntimeBinding` as `wsStreamClient`, and NOT
+  // from `readiness.hostId`, for the reason the build effect states at
+  // `target.hostId` above: the render's answer and the host this client
+  // actually dialed are the same only while no swap is in flight. Reading the
+  // render's would let this stream's recovery un-strand the OTHER host's
+  // queries and leave its own stranded - the id and the client it describes
+  // have to come from one object or the pair means nothing.
+  const recoveredHostId = value?.hostId ?? null;
   useEffect(() => {
     if (
       wsStreamClient === null ||

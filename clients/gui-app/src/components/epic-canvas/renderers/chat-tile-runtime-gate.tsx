@@ -43,6 +43,12 @@ export interface ChatTilePreContentSession {
   readonly connectionStatus: StreamConnectionStatus;
   readonly retries: PreSnapshotRetryEvidence | null;
   /**
+   * The store's `preSnapshotReloadStartedAt`: when an automatic `retry()` last
+   * put this session's loaded transcript back into a wait. See
+   * `chatLoadWaitBeganAt`.
+   */
+  readonly reloadStartedAt: number | null;
+  /**
    * A person's retry: the store's `retryFromUser`, never the automatic
    * `retry` (see `onChatRetryFromUser` in `chat-tile.tsx`). It can throw. The
    * store rethrows a stream factory's failure after restoring a `closed`
@@ -75,7 +81,8 @@ export function ChatTilePreContent(props: {
   const lease = useHostLease(tabHostId);
   const hostUpdate = useChatTileHostUpdate();
   const retries = session?.retries ?? null;
-  const waitBeganAt = chatLoadWaitBeganAt(frame.wait, retries);
+  const reloadStartedAt = session?.reloadStartedAt ?? null;
+  const waitBeganAt = chatLoadWaitBeganAt(frame.wait, retries, reloadStartedAt);
   // Both deadlines hang off the one anchor. They are evaluated here rather
   // than in the session store, which records instants and never reads a clock
   // to compare against them.
@@ -89,7 +96,11 @@ export function ChatTilePreContent(props: {
             fatalClose: session.fatalClose,
             connectionStatus: session.connectionStatus,
             retries,
-            attemptsThisWait: chatLoadAttemptsThisWait(frame.wait, retries),
+            attemptsThisWait: chatLoadAttemptsThisWait(
+              frame.wait,
+              retries,
+              reloadStartedAt,
+            ),
           },
     lease,
     reachabilityStatus: frame.reachability.status,
@@ -149,8 +160,13 @@ export function ChatTilePreContent(props: {
       data-has-handle={session === null ? "false" : "true"}
       data-wait-began-at={waitBeganAt}
       data-error-code={view.code ?? undefined}
-      role={view.settled ? undefined : "status"}
-      aria-live={view.settled ? undefined : "polite"}
+      // The wait and the verdict share this one element, so it has to stay a
+      // live region ACROSS the swap: dropping the attributes at the moment the
+      // content changes is the one arrangement in which a reader hears
+      // nothing. Escalated rather than kept polite, because a settled failure
+      // is the end of the attempt and there is nothing further to wait for.
+      role={view.settled ? "alert" : "status"}
+      aria-live={view.settled ? "assertive" : "polite"}
       className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-3 px-6 py-8 text-center"
     >
       {view.layout === "card" ? (

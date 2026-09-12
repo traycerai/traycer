@@ -224,22 +224,30 @@ describe("the wait anchor", () => {
       inheritsStreak: true,
     };
     expect(
-      chatLoadWaitBeganAt(first, {
-        count: 1,
-        firstAt: 4_000,
-        code: null,
-        reason: null,
-      }),
+      chatLoadWaitBeganAt(
+        first,
+        {
+          count: 1,
+          firstAt: 4_000,
+          code: null,
+          reason: null,
+        },
+        null,
+      ),
     ).toBe(4_000);
     expect(
-      chatLoadWaitBeganAt(first, {
-        count: 1,
-        firstAt: 12_000,
-        code: null,
-        reason: null,
-      }),
+      chatLoadWaitBeganAt(
+        first,
+        {
+          count: 1,
+          firstAt: 12_000,
+          code: null,
+          reason: null,
+        },
+        null,
+      ),
     ).toBe(10_000);
-    expect(chatLoadWaitBeganAt(first, null)).toBe(10_000);
+    expect(chatLoadWaitBeganAt(first, null, null)).toBe(10_000);
   });
 
   it("dates a Try again's wait from the click, however old the kept streak is", () => {
@@ -247,8 +255,40 @@ describe("the wait anchor", () => {
       chatLoadWaitBeganAt(
         { startedAt: 10_000, attemptsBefore: 3, inheritsStreak: false },
         { count: 3, firstAt: 4_000, code: null, reason: null },
+        null,
       ),
     ).toBe(10_000);
+  });
+
+  // An automatic `retry()` on a LOADED session starts a wait the tile never
+  // saw begin. Without the stamp the anchor is the tile's first render, which
+  // for a tile open longer than the deadline makes the replacement
+  // subscription overdue on its first frame.
+  it("dates an automatic reload's wait from the reload, not the tile's first render", () => {
+    const first = {
+      startedAt: 10_000,
+      attemptsBefore: 0,
+      inheritsStreak: true,
+    };
+    expect(chatLoadWaitBeganAt(first, null, 600_000)).toBe(600_000);
+    // The streak cleared at the snapshot, so a stale one cannot pull it back.
+    expect(
+      chatLoadWaitBeganAt(
+        first,
+        { count: 9, firstAt: 4_000, code: null, reason: null },
+        600_000,
+      ),
+    ).toBe(600_000);
+  });
+
+  it("keeps a Try again pressed inside a reload episode anchored at the click", () => {
+    expect(
+      chatLoadWaitBeganAt(
+        { startedAt: 620_000, attemptsBefore: 2, inheritsStreak: false },
+        { count: 2, firstAt: 605_000, code: null, reason: null },
+        600_000,
+      ),
+    ).toBe(620_000);
   });
 
   it("counts only the refusals since the wait began", () => {
@@ -258,23 +298,45 @@ describe("the wait anchor", () => {
       inheritsStreak: false,
     };
     expect(
-      chatLoadAttemptsThisWait(afterClick, {
-        count: 5,
-        firstAt: 4_000,
-        code: null,
-        reason: null,
-      }),
+      chatLoadAttemptsThisWait(
+        afterClick,
+        {
+          count: 5,
+          firstAt: 4_000,
+          code: null,
+          reason: null,
+        },
+        null,
+      ),
     ).toBe(2);
     // A rebuilt store starts its own streak below the old count.
     expect(
-      chatLoadAttemptsThisWait(afterClick, {
-        count: 1,
-        firstAt: 11_000,
-        code: null,
-        reason: null,
-      }),
+      chatLoadAttemptsThisWait(
+        afterClick,
+        {
+          count: 1,
+          firstAt: 11_000,
+          code: null,
+          reason: null,
+        },
+        null,
+      ),
     ).toBe(0);
-    expect(chatLoadAttemptsThisWait(afterClick, null)).toBe(0);
+    expect(chatLoadAttemptsThisWait(afterClick, null, null)).toBe(0);
+  });
+
+  // Both halves of the anchor move together: a reload episode's streak starts
+  // from zero, so subtracting the earlier wait's `attemptsBefore` would hide
+  // this episode's own refusals behind a count that is no longer about
+  // anything.
+  it("counts a reload episode's refusals from zero, ignoring the superseded anchor", () => {
+    expect(
+      chatLoadAttemptsThisWait(
+        { startedAt: 10_000, attemptsBefore: 5, inheritsStreak: false },
+        { count: 3, firstAt: 601_000, code: null, reason: null },
+        600_000,
+      ),
+    ).toBe(3);
   });
 });
 

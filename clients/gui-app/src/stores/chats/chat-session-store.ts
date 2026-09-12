@@ -763,6 +763,23 @@ export interface ChatSessionState {
    */
   readonly preSnapshotRetries: PreSnapshotRetryEvidence | null;
   /**
+   * When a LOADED session was last dropped back into a pre-snapshot wait, or
+   * `null` while this session has never finished one.
+   *
+   * `retry()` clears `snapshotLoaded`, and its three automatic callers - the
+   * wake pulse, the plan-restricted reprobe and the host-version move - all
+   * reach a session whose transcript is already on screen. The tile's own
+   * anchor is its FIRST render for the chat, so without this stamp a tile
+   * mounted longer than the deadline would declare the replacement
+   * subscription overdue on sight and put the "hasn't loaded yet" card over a
+   * fresh attempt that has had no time at all. See `chatLoadWaitBeganAt`.
+   *
+   * Stamped only when a snapshot HAD landed, so the ordinary first load - and
+   * a Try again pressed during one - keeps the tile's anchor and the
+   * handle-pending half of the wait still restarts nothing.
+   */
+  readonly preSnapshotReloadStartedAt: number | null;
+  /**
    * The connection whose authoritative snapshot established the CURRENT
    * transcript, or `NO_TRANSCRIPT_BASELINE` before the first one lands.
    *
@@ -6497,6 +6514,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       fatalClose: null,
       snapshotLoaded: false,
       preSnapshotRetries: null,
+      preSnapshotReloadStartedAt: null,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
       transcriptHydrationSequence: 0,
       transcriptRowContext: {},
@@ -6601,6 +6619,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           interviewDeliveryRetryProtocolSupported: false,
           fatalClose: null,
           snapshotLoaded: false,
+          // A LATER pre-snapshot wait begins here, and the tile's anchor
+          // describes one that already ended. Stamped only when a snapshot
+          // had landed: a retry before the first one is still the same wait,
+          // whose clock the tile owns (see `preSnapshotReloadStartedAt`).
+          preSnapshotReloadStartedAt: prior.snapshotLoaded
+            ? Date.now()
+            : prior.preSnapshotReloadStartedAt,
         });
         try {
           streamClient = createStreamClient();
@@ -6616,6 +6641,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             connectionStatus: "closed",
             fatalClose: prior.fatalClose,
             snapshotLoaded: prior.snapshotLoaded,
+            // No attempt began, so no later wait did either.
+            preSnapshotReloadStartedAt: prior.preSnapshotReloadStartedAt,
           });
           throw cause;
         }

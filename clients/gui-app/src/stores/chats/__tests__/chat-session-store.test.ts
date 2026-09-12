@@ -13569,4 +13569,35 @@ describe("preSnapshotRetries", () => {
     });
     harness.handle.dispose();
   });
+
+  // The tile anchors a wait at its own first render, and it cannot see a wait
+  // that an automatic `retry()` begins under a transcript already on screen.
+  // The stamp is what lets that later wait have its own clock.
+  it("retry() stamps a later wait only once a snapshot has landed", () => {
+    const harness = createHarness();
+    const reloadStartedAt = () =>
+      harness.handle.store.getState().preSnapshotReloadStartedAt;
+
+    // Before the first snapshot every retry is still the SAME wait: the tile
+    // owns its clock, and stamping here would restart it under the reader.
+    expect(reloadStartedAt()).toBeNull();
+    harness.handle.store.getState().retry();
+    expect(reloadStartedAt()).toBeNull();
+
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(harness.handle.store.getState().snapshotLoaded).toBe(true);
+
+    const before = Date.now();
+    harness.handle.store.getState().retry();
+    expect(harness.handle.store.getState().snapshotLoaded).toBe(false);
+    const stamped = reloadStartedAt();
+    expect(stamped).not.toBeNull();
+    expect(stamped).toBeGreaterThanOrEqual(before);
+
+    // A retry INSIDE that episode does not re-stamp: it is the same wait, and
+    // a Try again's own anchor is newer than this one either way.
+    harness.handle.store.getState().retry();
+    expect(reloadStartedAt()).toBe(stamped);
+    harness.handle.dispose();
+  });
 });

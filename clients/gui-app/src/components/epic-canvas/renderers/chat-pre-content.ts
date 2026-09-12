@@ -100,7 +100,13 @@ export interface ChatTileFatalDetails {
  * arrived, and a handle that took 40s would push the buttons out to 100s.
  */
 export interface ChatLoadWait {
-  /** The tile's first render for this chat, or the last Try again. */
+  /**
+   * The tile's first render for this chat, or the last Try again.
+   *
+   * The tile can only anchor the waits it can see. A `retry()` from one of the
+   * three automatic callers begins a later wait without a click, and the
+   * SESSION stamps that one - see `chatLoadWaitBeganAt`.
+   */
   readonly startedAt: number;
   /**
    * Failed attempts the store had already counted when this wait began.
@@ -138,11 +144,31 @@ export interface ChatTilePreContentFrame {
   readonly reachability: HostReachability;
 }
 
-/** When the wait began: the anchor, or an older streak the anchor inherits. */
+/**
+ * When the wait began: the anchor, a LATER episode that supersedes it, or an
+ * older streak the anchor inherits.
+ *
+ * The anchor is the tile's first render for this chat, which is the start of
+ * the FIRST wait and of no other. `retry()` puts a loaded session back into a
+ * pre-snapshot wait - the wake pulse, the plan-restricted reprobe and the
+ * host-version move all do it to a tile whose transcript is on screen - and
+ * the session stamps that instant (`preSnapshotReloadStartedAt`). A tile
+ * mounted longer ago than the deadline would otherwise call the replacement
+ * subscription overdue on its first frame, which is the one thing this whole
+ * body exists not to do.
+ *
+ * Later wins, both ways round: a Try again pressed inside such an episode
+ * anchors the wait at the click, which is newer than the stamp.
+ */
 export function chatLoadWaitBeganAt(
   wait: ChatLoadWait,
   retries: PreSnapshotRetryEvidence | null,
+  reloadStartedAt: number | null,
 ): number {
+  if (supersededByReload(wait, reloadStartedAt)) {
+    // A streak cannot reach back past an episode that began after it.
+    return reloadStartedAt;
+  }
   if (!wait.inheritsStreak || retries === null) return wait.startedAt;
   return Math.min(wait.startedAt, retries.firstAt);
 }
@@ -151,8 +177,27 @@ export function chatLoadWaitBeganAt(
 export function chatLoadAttemptsThisWait(
   wait: ChatLoadWait,
   retries: PreSnapshotRetryEvidence | null,
+  reloadStartedAt: number | null,
 ): number {
-  return Math.max(0, (retries?.count ?? 0) - wait.attemptsBefore);
+  const count = retries?.count ?? 0;
+  // Both halves of the anchor move together, or the arms disagree about which
+  // wait they are in. A later episode's streak starts from zero - the snapshot
+  // that ended the previous wait cleared `preSnapshotRetries` - so subtracting
+  // an earlier wait's `attemptsBefore` would hide this episode's own refusals
+  // until they passed a count that is no longer about anything.
+  if (supersededByReload(wait, reloadStartedAt)) return count;
+  return Math.max(0, count - wait.attemptsBefore);
+}
+
+/**
+ * Whether a later pre-content episode has superseded the tile's anchor - the
+ * one condition both halves of {@link ChatLoadWait} are read through.
+ */
+function supersededByReload(
+  wait: ChatLoadWait,
+  reloadStartedAt: number | null,
+): reloadStartedAt is number {
+  return reloadStartedAt !== null && reloadStartedAt > wait.startedAt;
 }
 
 /**
@@ -354,8 +399,11 @@ export interface ChatPreContentView {
   /**
    * Whether this attempt is over, which only a host verdict can say. It
    * decides the two things that follow from that one fact and must not
-   * disagree: a settled failure is announced once under a warning mark, and a
-   * wait keeps the polite live region, so a reader hears it change.
+   * disagree: a settled failure is announced assertively under a warning mark,
+   * and a wait is announced politely, so a reader hears it change either way.
+   * The element is a live region in BOTH states - it is the same element, and
+   * a region that stops being live at the instant its content changes
+   * announces nothing at all.
    */
   readonly settled: boolean;
   /** Whether something is still running, and so whether the spinner shows. */

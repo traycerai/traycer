@@ -111,6 +111,7 @@ function session(
     fatalClose: null,
     connectionStatus: "connecting",
     retries: null,
+    reloadStartedAt: null,
     onRetry: vi.fn(),
     ...overrides,
   };
@@ -258,6 +259,54 @@ describe("<ChatTilePreContent />: the calm waits", () => {
     act(() => {
       vi.advanceTimersByTime(1);
     });
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  // The wake pulse, the plan-restricted reprobe and the host-version move all
+  // call the store's automatic `retry()`, which clears `snapshotLoaded` on a
+  // tile whose transcript is on screen. The tile's anchor is its first render,
+  // so a tile open for an hour would otherwise show the "hasn't loaded yet"
+  // card on the replacement subscription's FIRST frame.
+  it("gives an automatic reload its own 60 s, however long the tile has been open", () => {
+    vi.useFakeTimers();
+    const frame = frameFor(firstRenderWait(), "reachable", vi.fn());
+    const { rerender } = renderPreContent(frame, session({}));
+    const firstWaitBeganAt = body().getAttribute("data-wait-began-at");
+
+    // An hour of transcript on screen, then the stream goes terminal and the
+    // wake pulse re-subscribes.
+    act(() => {
+      vi.advanceTimersByTime(3_600_000);
+    });
+    const reloadStartedAt = Date.now();
+    rerender(
+      <ChatTilePreContent
+        testId={TEST_ID}
+        frame={frame}
+        session={session({ reloadStartedAt })}
+      />,
+    );
+
+    expect(body().getAttribute("data-wait-began-at")).toBe(
+      String(reloadStartedAt),
+    );
+    expect(body().getAttribute("data-wait-began-at")).not.toBe(
+      firstWaitBeganAt,
+    );
+    expect(arm()).toBe("loading");
+    expect(
+      screen.getByText(`Loading this agent from "${LABEL}"…`),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(CHAT_LOAD_DEADLINE_MS - 1);
+    });
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(arm()).toBe("taking-too-long");
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
@@ -561,9 +610,12 @@ describe("<ChatTilePreContent />: verdicts", () => {
     expect(screen.getByText("This agent could not be opened.")).toBeTruthy();
     expect(screen.getByText("this agent no longer exists")).toBeTruthy();
     expect(body().getAttribute("data-error-code")).toBe("CHAT_INVALID");
-    // The attempt is over: no spinner and no live region.
+    // The attempt is over: no spinner, and the live region ESCALATES rather
+    // than going away. The wait and the verdict are the same element, so a
+    // region that stops being live at the swap announces nothing.
     expect(screen.queryByTestId(SPINNER_ID)).toBeNull();
-    expect(body().getAttribute("role")).toBeNull();
+    expect(body().getAttribute("role")).toBe("alert");
+    expect(body().getAttribute("aria-live")).toBe("assertive");
   });
 
   it("offers the host update and Try again for HOST_OLDER_THAN_DATA", () => {
