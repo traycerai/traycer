@@ -38,6 +38,25 @@ function parse(frame: Record<string, unknown>): boolean {
  * list written here that could quietly drift from it.
  */
 const RENDERER_FRAMES: Record<string, Record<string, unknown>> = {
+  setViewport: {
+    kind: "setViewport",
+    hasBinaryPayload: false,
+    requestId: "request-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    intent: { mode: "fit" },
+  },
+  reportViewport: {
+    kind: "reportViewport",
+    hasBinaryPayload: false,
+    sessionId: "session-1",
+    tabId: "tab-1",
+    viewerId: "viewer-1",
+    width: 1280,
+    height: 720,
+    dpr: 1,
+    claim: true,
+  },
   openTab: {
     kind: "openTab",
     hasBinaryPayload: false,

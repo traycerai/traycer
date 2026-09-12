@@ -84,19 +84,19 @@ describe("settings search", () => {
   });
 
   it("finds a row by its exact name", () => {
-    expect(labelsFor("minimap side", DESKTOP)[0]).toBe("Minimap side");
+    expect(labelsFor("minimap side", DESKTOP)[0]).toBe("Minimap position");
   });
 
   it("tolerates a typo", () => {
     // The whole reason this runs through Fuse rather than `includes`.
-    expect(labelsFor("minmap", DESKTOP)[0]).toBe("Minimap side");
-    expect(labelsFor("typograpy", DESKTOP)).toContain("Typography");
+    expect(labelsFor("minmap", DESKTOP)[0]).toBe("Minimap position");
+    expect(labelsFor("typograpy", DESKTOP)).toContain("Fonts and text");
   });
 
   it("finds a setting by a word its label does not contain", () => {
     // The keyword list earning its keep. None of these queries appear in the
     // label of the thing they must reach.
-    // The theme gallery is bespoke, so "dark mode" lands on the page.
+    // "dark mode" is the page's vocabulary, not a row's, so it lands on the page.
     expect(landingFor("dark mode", DESKTOP)).toBe("appearance#<top>");
     expect(landingFor("caffeinate", DESKTOP)).toBe(
       "general#general-prevent-sleep",
@@ -137,6 +137,27 @@ describe("settings search", () => {
       .map((result) => result.scopeLabel);
     expect(scopes).toContain("Application");
     expect(scopes).toContain("Host");
+  });
+
+  it("reaches the ported Agent office default view row, group breadcrumb included", () => {
+    // T6's `agentOffice` group and `agentOfficeDefaultView` row were ported
+    // onto main's declarative model by hand - a row cannot exist in that
+    // model without becoming a search entry, but a typo in its anchor or a
+    // group id that does not resolve would still compile and render. This
+    // proves the entry the port actually produced, not merely that some
+    // entry with this row's words exists.
+    expect(landingFor("office default view", DESKTOP)).toBe(
+      "appearance#appearance-agent-office-default-view",
+    );
+    const results = searchSettings("office default view", DESKTOP);
+    expect(results[0].entry.kind).toBe("setting");
+    expect(results[0].entry.label).toBe("Default view");
+    expect(results[0].entry.group).toBe("Agent office");
+
+    // "layout" is a keyword, not a word the label contains - the same
+    // distinction "finds a setting by a word its label does not contain"
+    // makes above, pinned for this row specifically.
+    expect(labelsFor("layout", DESKTOP)).toContain("Default view");
   });
 
   it("matches on a two-word query that spans the page and the row", () => {

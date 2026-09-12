@@ -1,4 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ElectronTabSurface } from "@/components/browser-tile/agent-browser-tile";
@@ -31,6 +32,7 @@ vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
 });
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useMaybeBrowserSessionsContext: () => null,
+  useMaybeBrowserSessionsCoordinatorKey: () => null,
 }));
 vi.mock("@/components/browser-tile/browser-start-page", () => ({
   BrowserStartPage: () => <div>Local servers</div>,
@@ -56,20 +58,28 @@ function binding(): ElectronTabBinding {
 }
 
 function renderLandingSurface(): void {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
   render(
-    <ElectronTabSurface
-      node={NODE}
-      binding={binding()}
-      placement={{ kind: "landing", landingPageId: "landing-1" }}
-      visible
-      pageSessionId="browser-session:session-1:tab-1"
-      onRequestClose={() => undefined}
-      persistViewportPreset={null}
-      onOpenLinkInNewTile={null}
-      onRequestNewTab={null}
-      onConvertToPip={null}
-      onNativeTileFocused={null}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <ElectronTabSurface
+        node={NODE}
+        binding={binding()}
+        placement={{ kind: "landing", landingPageId: "landing-1" }}
+        visible
+        pageSessionId="browser-session:session-1:tab-1"
+        onRequestClose={() => undefined}
+        persistViewportPreset={null}
+        onOpenLinkInNewTile={null}
+        onRequestNewTab={null}
+        onConvertToPip={null}
+        onNativeTileFocused={null}
+      />
+    </QueryClientProvider>,
   );
 }
 

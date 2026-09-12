@@ -11,7 +11,11 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { ServerClockSkewSignal } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
-import { RemoteSession, type IRemoteSession } from "./remote-session";
+import {
+  HOST_STATUS_LIVENESS_PROBE,
+  RemoteSession,
+  type IRemoteSession,
+} from "./remote-session";
 import { RemoteHostMessenger } from "./remote-host-messenger";
 import { RemoteStreamClient } from "./remote-stream-client";
 import { createAttachGrantProvider } from "./grant-client";
@@ -264,6 +268,10 @@ export function createRemoteHostTransport<
         requestId: options.requestId,
         evidence: options.evidence,
         clientIdentity: options.clientIdentity,
+        // The one production fill. Every client session gets the silence
+        // verdict; a composition that should not make silence claims (a
+        // host-to-host dialer) passes `null` at its own constructor.
+        livenessProbe: HOST_STATUS_LIVENESS_PROBE,
       });
     },
   );

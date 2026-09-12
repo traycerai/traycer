@@ -59,7 +59,13 @@ export type ChatTranscriptJumpTarget =
    * (for an A2A-created child, the first message IS its task). Resolves to
    * the first message once the transcript has one.
    */
-  | { readonly kind: "first-message" };
+  | { readonly kind: "first-message" }
+  /**
+   * A pending approval in the composer slot (tool, file-edit, or a plan
+   * approval that the generic queue hides). Named by the host's `approvalId`,
+   * which is not a transcript block id.
+   */
+  | { readonly kind: "approval"; readonly approvalId: string };
 
 export interface ChatTranscriptJumpRequest {
   readonly target: ChatTranscriptJumpTarget;

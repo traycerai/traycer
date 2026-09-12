@@ -1,3 +1,4 @@
+import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import {
@@ -15,34 +16,20 @@ import {
   type NotificationChimeSound,
   playNotificationChimeSound,
 } from "@/lib/notifications/notification-chime";
+import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const EVENT_ROWS: ReadonlyArray<{
-  readonly description: string;
   readonly eventType: NotificationChimeEventType;
-  readonly label: string;
+  readonly row: SettingsRowDefinition;
 }> = [
   {
     eventType: "needs_action",
-    label: "Needs action",
-    description: "Approvals and interviews.",
+    row: APP_NOTIFICATIONS.definitions.chimeNeedsAction,
   },
-  {
-    eventType: "failure",
-    label: "Failure",
-    description: "Errored turns, stalls, crashes, and rate limits.",
-  },
-  {
-    eventType: "done",
-    label: "Done",
-    description: "Completed or intentionally stopped turns.",
-  },
-  {
-    eventType: "info",
-    label: "Info",
-    description:
-      "Sharing, comments, access changes, and other informational notifications.",
-  },
+  { eventType: "failure", row: APP_NOTIFICATIONS.definitions.chimeFailure },
+  { eventType: "done", row: APP_NOTIFICATIONS.definitions.chimeDone },
+  { eventType: "info", row: APP_NOTIFICATIONS.definitions.chimeInfo },
 ];
 
 export function NotificationChimeSettingsSection() {
@@ -56,21 +43,21 @@ export function NotificationChimeSettingsSection() {
       // The page is already titled Sounds; a group heading (Sound, Chimes)
       // would be a second name for the same four dropdowns. System / Events
       // below keep titles because they are different destinations.
-      title={undefined}
+      group={APP_NOTIFICATIONS.definitions.chimes}
+      showTitle={false}
       tone="default"
       dataTestId="notification-chime-section"
       fill={false}
     >
-      {EVENT_ROWS.map((row) => (
+      {EVENT_ROWS.map((event) => (
         <SettingsRow
-          key={row.eventType}
-          label={row.label}
-          description={row.description}
+          key={event.eventType}
+          row={event.row}
           control={
             <NotificationChimeSelect
-              label={row.label}
-              eventType={row.eventType}
-              sound={sounds[row.eventType]}
+              label={event.row.label}
+              eventType={event.eventType}
+              sound={sounds[event.eventType]}
               setSoundForEvent={setSoundForEvent}
             />
           }

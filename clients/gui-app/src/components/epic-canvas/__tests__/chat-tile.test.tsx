@@ -56,6 +56,9 @@ const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   canMaterializeElectron: false,
   connectionGeneration: 0,
   items: [],
+  viewports: {},
+  setViewport: () => Promise.reject(new Error("not used")),
+  reportViewport: () => undefined,
   errorMessage: null,
   retry: () => undefined,
   openTab: () => Promise.reject(new Error("not used")),
@@ -4106,6 +4109,49 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
     expect(chatHarness.sent).toHaveLength(1);
+  });
+
+  it("the pane Retry reaches retryFromUser", async () => {
+    chatHarness.installDeferred();
+    renderChatTile();
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-tile")).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(() => chatHarness.callbacks()).not.toThrow();
+    });
+
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected chat session handle");
+    }
+    const retryFromUser = vi.fn();
+    const original = handle.store.getState().retryFromUser;
+    handle.store.setState({
+      retryFromUser: () => {
+        retryFromUser();
+        original();
+      },
+    });
+
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("closed", {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "CHAT_INVALID: gone",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(retryFromUser).toHaveBeenCalledTimes(1);
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

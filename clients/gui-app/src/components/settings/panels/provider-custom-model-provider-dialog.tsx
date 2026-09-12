@@ -186,7 +186,7 @@ export function ProviderCustomModelProviderDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-y-auto">
+      <DialogContent className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {/* Always the generic mark: a provider the user declared has no
@@ -214,7 +214,7 @@ export function ProviderCustomModelProviderDialog(props: {
         </DialogHeader>
 
         <form
-          className="flex w-full flex-col gap-6"
+          className="flex min-h-0 w-full flex-col gap-6 overflow-y-auto"
           onSubmit={(event) => {
             event.preventDefault();
             handleSubmit();

@@ -10,7 +10,7 @@ import { isMobileApp } from "@/lib/mobile-app";
  * draws before the runtime binding exists, i.e. before any app chrome.
  *
  * Deliberately the same component as the two after it - same card, same
- * sentence, same bar, same controls (`HostBootSurface`). Giving each phase its
+ * sentence, same controls (`HostBootSurface`). Giving each phase its
  * own shape and its own phrasing is what made one continuous wait look like a
  * sequence of unrelated modals.
  *
@@ -33,8 +33,7 @@ export function HostRuntimeBootFallback(props: {
   // the same ground as the native launch image so the handoff is invisible.
   //
   // Desktop is untouched: there the same window really is a host starting, and
-  // the card's heading, progress bar and `Open settings` escape hatch all mean
-  // what they say.
+  // the card's heading and `Open settings` escape hatch mean what they say.
   if (isMobileApp()) {
     return (
       <div

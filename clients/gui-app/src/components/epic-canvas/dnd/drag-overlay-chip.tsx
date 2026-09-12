@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 /**
  * Drag previews mount at the app shell, outside epic session providers.
@@ -24,13 +25,16 @@ import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-comma
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
 import { SplitTabDragOverlay } from "@/components/layout/tabs/split-tab-drag-overlay";
 import {
-  useHeaderStripItem,
+  useAppearanceHeaderStripItem,
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
 import { useHeaderTabIndicators } from "@/components/layout/tabs/header-tab-presentation";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useTabsStore } from "@/stores/tabs/store";
-import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  useEpicDndStore,
+  useActiveHeaderTabGhost,
+} from "@/components/epic-canvas/dnd/dnd-store";
 import {
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   WORKSPACE_FOLDER_DND_TYPE,
@@ -191,28 +195,47 @@ function HeaderTabOverlayChip(props: {
   readonly tab: HeaderTabDragData;
   readonly width: number | null;
 }) {
-  const item = useHeaderStripItem(props.tab.stripItemId);
+  const item = useAppearanceHeaderStripItem(props.tab.stripItemId);
+  const ghost = useActiveHeaderTabGhost();
   const tearOff = useEpicDndStore((state) => state.headerTearOffPreview);
   const isActive = useTabsStore(
     (state) => state.activeItemId === props.tab.stripItemId,
   );
+  if (item === null) return null;
+  if (item.kind === "tab" && ghost !== null) {
+    return (
+      <HeaderTabDragOverlay tab={item.tab} ghost={ghost} width={props.width} />
+    );
+  }
+  return (
+    <HeaderTabOverlayIndicators>
+      {item.kind === "tab" ? (
+        <HeaderTabDragOverlay
+          tab={item.tab}
+          ghost={ghost}
+          width={props.width}
+        />
+      ) : (
+        <SplitTabDragOverlay
+          item={item}
+          ghost={ghost}
+          width={props.width}
+          source={props.tab}
+          isActive={isActive}
+          tearOff={tearOff}
+        />
+      )}
+    </HeaderTabOverlayIndicators>
+  );
+}
+
+function HeaderTabOverlayIndicators(props: { readonly children: ReactNode }) {
   const tabs = useHeaderTabs();
   const { indicators, chatEpicIds, chatScopes } = useHeaderTabIndicators(tabs);
-  if (item === null) return null;
   return (
     <NotificationIndicatorsProvider indicators={indicators}>
       <ChatIndicatorHostScopes scopes={chatScopes} chatEpicIds={chatEpicIds}>
-        {item.kind === "split" ? (
-          <SplitTabDragOverlay
-            item={item}
-            width={props.width}
-            source={props.tab}
-            isActive={isActive}
-            tearOff={tearOff}
-          />
-        ) : (
-          <HeaderTabDragOverlay tab={item.tab} width={props.width} />
-        )}
+        {props.children}
       </ChatIndicatorHostScopes>
     </NotificationIndicatorsProvider>
   );

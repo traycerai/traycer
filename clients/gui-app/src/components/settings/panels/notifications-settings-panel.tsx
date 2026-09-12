@@ -11,6 +11,7 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -36,6 +37,7 @@ import {
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 
@@ -55,29 +57,15 @@ type NotificationSetConfigMutation = UseMutationResult<
 >;
 const SEVERITY_ROWS: ReadonlyArray<{
   readonly id: HostNotificationSeverity;
-  readonly label: string;
-  readonly description: string;
+  readonly row: SettingsRowDefinition;
 }> = [
   {
     id: "needs_action",
-    label: "Needs action",
-    description: "Approvals and interviews.",
+    row: HOST_NOTIFICATIONS.definitions.severityNeedsAction,
   },
-  {
-    id: "failure",
-    label: "Failure",
-    description: "Errored turns, stalls, crashes, and rate limits.",
-  },
-  {
-    id: "done",
-    label: "Done",
-    description: "Completed or intentionally stopped turns.",
-  },
-  {
-    id: "info",
-    label: "Info",
-    description: "Background host operations, including worktree cleanup.",
-  },
+  { id: "failure", row: HOST_NOTIFICATIONS.definitions.severityFailure },
+  { id: "done", row: HOST_NOTIFICATIONS.definitions.severityDone },
+  { id: "info", row: HOST_NOTIFICATIONS.definitions.severityInfo },
 ];
 
 const EMPTY_RENDERER_CONFIG = {};
@@ -148,7 +136,8 @@ function NotificationsSettingsPanelContent(props: {
         // Was "In-app notifications · Current host" — a title whose only
         // qualifier was the one fact the screen refused to resolve. The sidebar
         // names the host now, so the title is free to name the setting.
-        title="In-app notifications"
+        group={HOST_NOTIFICATIONS.definitions.inAppNotifications}
+        showTitle
         tone="default"
         dataTestId="notifications-severity-policy"
         fill={false}
@@ -257,13 +246,12 @@ function NotificationSeverityList(props: {
       {SEVERITY_ROWS.map((severity) => (
         <SettingsRow
           key={severity.id}
-          label={severity.label}
-          description={severity.description}
+          row={severity.row}
           control={
             <Switch
               checked={matrixValue(props.config, severity.id, "renderer")}
               disabled={props.setConfig.isPending || props.configIsFetching}
-              aria-label={`${severity.label} In-app notifications`}
+              aria-label={`${severity.row.label} In-app notifications`}
               data-testid={`notifications-severity-${severity.id}`}
               onCheckedChange={(checked) => {
                 props.setConfig.mutate(

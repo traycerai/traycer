@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
@@ -58,7 +59,8 @@ export function HostDangerZone(props: {
   // that installed it, in the one state anyone wants it.
   return (
     <SettingsGroup
-      title="Danger zone"
+      group={HOST_OVERVIEW.definitions.dangerZone}
+      showTitle
       tone="danger"
       dataTestId="host-danger-zone"
       fill={false}
@@ -150,8 +152,8 @@ function RemoveFromAccountRow(props: {
   return (
     <>
       <SettingsRow
-        label="Remove from account"
-        description={`Removes ${hostName} from this account's host list and drops its presence. Nothing is uninstalled and no data is deleted.`}
+        row={HOST_OVERVIEW.definitions.removeFromAccount}
+        status={`Removes ${hostName} from this account's host list and drops its presence. Nothing is uninstalled and no data is deleted.`}
         control={
           <Button
             type="button"
@@ -266,8 +268,8 @@ function ClearFileEditSnapshotsRow(props: {
   return (
     <>
       <SettingsRow
-        label="File edit snapshots"
-        description={`Pre-edit file snapshots for Undo, and cached long plan content, stored on ${hostLabel}. This data stays on that host and is never synced.`}
+        row={HOST_OVERVIEW.definitions.fileEditSnapshots}
+        status={`Pre-edit file snapshots for Undo, and cached long plan content, stored on ${hostLabel}. This data stays on that host and is never synced.`}
         control={
           <div className="flex flex-col items-end gap-2">
             <div
@@ -333,7 +335,8 @@ export function LocalRecoveryDangerZone(): ReactNode {
   if (hostManagement === null) return null;
   return (
     <SettingsGroup
-      title="Danger zone"
+      group={HOST_OVERVIEW.definitions.dangerZone}
+      showTitle
       tone="danger"
       dataTestId="host-danger-zone"
       fill={false}
@@ -358,8 +361,7 @@ function RemoveTraycerRow(): ReactNode {
     if (uninstall.data.serviceRegistrationRetained === true) {
       return (
         <SettingsRow
-          label="Traycer removal incomplete"
-          description="The background service is still registered. Traycer has not been fully removed; try again before quitting the app."
+          row={HOST_OVERVIEW.definitions.removalIncomplete}
           control={
             <Button
               type="button"
@@ -377,8 +379,7 @@ function RemoveTraycerRow(): ReactNode {
     if (uninstall.data.serviceRegistrationRetained === null) {
       return (
         <SettingsRow
-          label="Traycer removal unverified"
-          description="The removal commands finished, but Traycer could not verify whether the background service remains registered. Run traycer host service status in a terminal and resolve any remaining service before quitting the app."
+          row={HOST_OVERVIEW.definitions.removalUnverified}
           control={
             <span className="text-muted-foreground text-xs">
               Check terminal
@@ -389,8 +390,7 @@ function RemoveTraycerRow(): ReactNode {
     }
     return (
       <SettingsRow
-        label="Traycer removed"
-        description="Background components were removed. Your agents, history and credentials are preserved on this computer. To finish, quit Traycer and drag it from Applications to the Trash."
+        row={HOST_OVERVIEW.definitions.removed}
         control={
           <Button
             type="button"
@@ -409,8 +409,7 @@ function RemoveTraycerRow(): ReactNode {
   return (
     <>
       <SettingsRow
-        label="Remove Traycer from this computer"
-        description="Stops the background host and services and removes the installed components. Your agents and history are preserved, and the host won't reinstall itself."
+        row={HOST_OVERVIEW.definitions.removeTraycer}
         control={
           <Button
             type="button"

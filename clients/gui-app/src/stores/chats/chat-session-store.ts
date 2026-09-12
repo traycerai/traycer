@@ -131,6 +131,7 @@ import type {
   ChatStreamCallbacks,
   ChatStreamClient,
 } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { SESSION_SILENCE_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/remote/config";
 import {
   createLegacyChatTranscriptAdapter,
   type LegacyChatTranscriptSnapshotEvent,
@@ -1139,6 +1140,25 @@ export interface ChatSessionState {
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   retry: () => void;
   /**
+   * {@link retry}, escalated to a transport re-dial first when - and only
+   * when - this chat's own transport reports itself SILENT.
+   *
+   * The entry point for a PERSON: the pane's Retry button. `retry()` alone
+   * re-subscribes on the existing session, which is the right answer for every
+   * automatic caller and the wrong one for the state this exists for - a
+   * session whose host stopped answering, where a fresh `chat.subscribe` would
+   * be sent down the same dead channel and the person would press the button
+   * again.
+   *
+   * Deliberately a SECOND action rather than a gate inside `retry()`.
+   * `retry()` has three automatic callers - the wake pulse, the plan-restricted
+   * reprobe, and the host-version move - and none of them may drop a socket:
+   * they fire on their own schedule, against sessions that are usually
+   * healthy, and a gate inside `retry()` would hand all three a redial as a
+   * side effect.
+   */
+  retryFromUser: () => void;
+  /**
    * Stops this session's transport waiting out its backoff and re-dials now.
    *
    * Keeps the transcript, the snapshot and every pending action exactly as
@@ -1355,6 +1375,24 @@ export interface ChatSessionStoreOptions {
    * nothing to wake.
    */
   readonly wakeTransport: (() => void) | null;
+  /**
+   * Whether this chat's own transport has been READY and silent for `ms` - the
+   * gate on {@link ChatSessionState.retryFromUser}'s escalation.
+   *
+   * Injected for the same reason as {@link wakeTransport}, and answered by the
+   * same socket: the store owns the session, the registry owns the connection,
+   * and a predicate resolved anywhere else would report on a transport the
+   * person is not waiting for.
+   *
+   * OPTIONAL, unlike `wakeTransport`, and the asymmetry is deliberate: this is
+   * a read whose ABSENCE has a correct answer ("not measured", i.e. never
+   * silent, i.e. no escalation), while a missing wake would silently disable a
+   * button that exists. Absent and `null` mean the same thing here, so the
+   * forty-odd suites that build these options by hand keep the plain
+   * re-subscribe without stating it - the same call the transport layer's own
+   * `IHostStreamClient.isSilentFor?` makes for the same reason.
+   */
+  readonly transportSilentFor?: ((ms: number) => boolean) | null;
 }
 
 /**
@@ -6532,6 +6570,25 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Writing an optimistic "connecting" here would claim progress this
         // has no way to observe.
         options.wakeTransport?.();
+      },
+      retryFromUser: () => {
+        if (disposed) return;
+        // The escalation, in this order and no other: drop the socket FIRST,
+        // then re-subscribe. `wake` writes no store state and drops the
+        // session synchronously, so the fresh `chat.subscribe` below is
+        // adopted by the same session while it is reconnecting and released at
+        // its open-ack - a re-subscribe sent before the drop would be enqueued
+        // onto the very channel the drop is about to discard.
+        //
+        // The gate is the TRANSPORT's verdict, not a timestamp of our own:
+        // `isSilentFor` includes the session's readiness, so a Retry pressed
+        // while the relay reports the host merely DETACHED stays a plain
+        // re-subscribe. Forcing there would put a fresh handshake in front of a
+        // host that blipped, and its timeout would bank a refusal against it.
+        if (options.transportSilentFor?.(SESSION_SILENCE_TIMEOUT_MS) === true) {
+          get().wake();
+        }
+        get().retry();
       },
       retry: () => {
         if (disposed) return;

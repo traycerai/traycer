@@ -135,7 +135,47 @@ export const DEFAULT_CODE_FONT_SIZE = 12;
 // source of truth.
 export const DEFAULT_WORKTREE_BRANCH_PREFIX = "traycer/";
 
+export const START_PAGE_WALLPAPER_STYLES = [
+  "photo",
+  "dither",
+  "grain",
+] as const;
+export type StartPageWallpaperStyle =
+  (typeof START_PAGE_WALLPAPER_STYLES)[number];
+export const DEFAULT_START_PAGE_WALLPAPER_INTENSITY = 0.6;
+
+/**
+ * The personal start-page wallpaper's SETTINGS. `null` means no wallpaper. The
+ * image bytes live in the appearance blob store
+ * (`lib/appearance/start-page-wallpaper.ts`), never here.
+ */
+export interface StartPageWallpaper {
+  readonly style: StartPageWallpaperStyle;
+  /** 0..1. Applies to `dither` and `grain` only. */
+  readonly intensity: number;
+  /**
+   * `dither` only: paint the tones from the accent ramp. Off dithers each RGB
+   * channel on its own, so the image keeps its own colours.
+   */
+  readonly tintWithAccent: boolean;
+  /**
+   * The chosen file's name, or `null` when none is stored. Lives here rather
+   * than beside the bytes (the appearance blob store) so metadata is all in
+   * one place; `lib/appearance/start-page-wallpaper.ts` writes this row and
+   * the blob together from a single entry point per user action, which is
+   * what makes it safe to keep here without risking a name left over for an
+   * image that is gone.
+   */
+  readonly name: string | null;
+}
+
 export interface SettingsState {
+  startPageWallpaper: StartPageWallpaper | null;
+  showGreeting: boolean;
+  showRecentHistory: boolean;
+  setStartPageWallpaper: (wallpaper: StartPageWallpaper | null) => void;
+  setShowGreeting: (visible: boolean) => void;
+  setShowRecentHistory: (visible: boolean) => void;
   theme: ThemeMode;
   themePreset: ThemePreset;
   defaultSelection: HarnessModelSelection;
@@ -298,6 +338,9 @@ export interface SettingsState {
 
 type PersistedSettingsState = Pick<
   SettingsState,
+  | "startPageWallpaper"
+  | "showGreeting"
+  | "showRecentHistory"
   | "theme"
   | "themePreset"
   | "defaultSelection"
@@ -373,6 +416,9 @@ function clampCodeFontSize(value: number): number {
 
 function partializeSettingsState(state: SettingsState): PersistedSettingsState {
   return {
+    startPageWallpaper: state.startPageWallpaper,
+    showGreeting: state.showGreeting,
+    showRecentHistory: state.showRecentHistory,
     theme: state.theme,
     themePreset: state.themePreset,
     defaultSelection: state.defaultSelection,
@@ -416,6 +462,12 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
+      startPageWallpaper: null,
+      showGreeting: true,
+      showRecentHistory: true,
+      setStartPageWallpaper: makeSetter(set, "startPageWallpaper"),
+      setShowGreeting: makeSetter(set, "showGreeting"),
+      setShowRecentHistory: makeSetter(set, "showRecentHistory"),
       theme: "system",
       themePreset: DEFAULT_THEME_PRESET,
       defaultSelection: DEFAULT_SELECTION,
@@ -601,6 +653,17 @@ export const useSettingsStore = create<SettingsState>()(
         const merged: SettingsState = { ...currentState, ...persisted };
         return {
           ...merged,
+          startPageWallpaper: parseStartPageWallpaper(
+            persisted.startPageWallpaper,
+          ),
+          showGreeting:
+            typeof persisted.showGreeting === "boolean"
+              ? persisted.showGreeting
+              : true,
+          showRecentHistory:
+            typeof persisted.showRecentHistory === "boolean"
+              ? persisted.showRecentHistory
+              : true,
           worktreeBranchPrefix:
             typeof merged.worktreeBranchPrefix === "string" &&
             worktreeBranchPrefixError(merged.worktreeBranchPrefix) === null
@@ -639,6 +702,30 @@ export const useSettingsStore = create<SettingsState>()(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseStartPageWallpaper(value: unknown): StartPageWallpaper | null {
+  if (!isRecord(value)) return null;
+  const style = START_PAGE_WALLPAPER_STYLES.find(
+    (candidate) => candidate === value.style,
+  );
+  if (style === undefined) return null;
+  const intensity = value.intensity;
+  return {
+    style,
+    intensity:
+      typeof intensity === "number" &&
+      Number.isFinite(intensity) &&
+      intensity >= 0 &&
+      intensity <= 1
+        ? intensity
+        : DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
+    tintWithAccent:
+      typeof value.tintWithAccent === "boolean" ? value.tintWithAccent : true,
+    // Untrusted input (a chosen file's name): cap its length the way theme
+    // names and other user-authored strings are capped elsewhere.
+    name: typeof value.name === "string" ? value.name.slice(0, 256) : null,
+  };
 }
 
 function resolvePersistedNotificationChimeSounds(
@@ -841,3 +928,25 @@ function resolvePersistedAgentTabSurfacing(
   if (legacy === "pip" || legacy === "tile") return "surface";
   return DEFAULT_AGENT_TAB_SURFACING;
 }
+
+let crossWindowSyncInstalled = false;
+
+/**
+ * Rehydrate this store when another window writes its persisted key (or
+ * clears storage entirely - a `null` event key). Exported and guarded
+ * (idempotent, no-op outside a DOM) rather than a bare module-scope
+ * `window.addEventListener`, so it is callable from app bootstrap and from a
+ * test without relying on import order to have wired it up.
+ */
+export function initSettingsCrossWindowSync(): void {
+  if (crossWindowSyncInstalled) return;
+  if (typeof window === "undefined") return;
+  crossWindowSyncInstalled = true;
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key === persistKey(STORE_KEYS.settings)) {
+      void useSettingsStore.persist.rehydrate();
+    }
+  });
+}
+
+initSettingsCrossWindowSync();
