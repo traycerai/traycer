@@ -18,6 +18,7 @@ import {
   type StatusBarMenuProvider,
 } from "@/components/layout/status-bar/status-bar-visibility-menu";
 import { useWatchHostScope } from "@/hooks/host-scope/use-watch-host-scope";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import {
   useRateLimitProfileSelection,
@@ -30,6 +31,7 @@ import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /** Stable identity, so a strip with no list to offer never re-renders on one. */
 const NO_MENU_PROVIDERS: ReadonlyArray<StatusBarMenuProvider> = [];
@@ -81,7 +83,22 @@ function ScopedAppStatusBar(props: {
   readonly hasExplicitPick: boolean;
 }): ReactNode {
   const barRef = useRef<HTMLDivElement | null>(null);
-  const density = useStatusBarDensity(barRef);
+  const measuredDensity = useStatusBarDensity(barRef);
+  // A mobile viewport takes the `compact` rung whatever it measures, which is
+  // the one place the strip overrides its own measurement.
+  //
+  // Measured, a phone is `icon-only` (its bar is the viewport, and every phone
+  // is under 500px), and an icon-only strip says nothing the mobile header's
+  // rate-limit button is not already saying one row up - so the opt-in footer
+  // would draw a second copy of the header's icons and no readings. `compact`
+  // caps the ladder at `no-timers`: percentages and their labels, no mode
+  // word, no mini bars, no countdowns. The ladder is untouched below that and
+  // still folds whole providers into the `+N` chip when they do not fit, so a
+  // narrow phone converges on its own rather than on a second width table.
+  const narrowViewport = useIsMobileViewport();
+  const density: StatusBarDensity = narrowViewport
+    ? "compact"
+    : measuredDensity;
   const rateLimitsEnabled = useLayoutStore(
     (state) => state.statusBar.rateLimits.enabled,
   );
@@ -105,19 +122,42 @@ function ScopedAppStatusBar(props: {
   // where both can reach it - the same shape the header trigger uses.
   const profileSelection = useRateLimitProfileSelection();
   // `app.rate-limits.open` has one handler slot and two possible owners, and
-  // they are mutually exclusive by placement: `RateLimitIconButton` owns it in
-  // the header and is not mounted while the usage controls live down here.
-  useEffect(
-    () =>
-      registerDynamicActionHandler("app.rate-limits.open", () => {
-        setUsageOpen(true);
-      }),
-    [],
+  // on desktop they are mutually exclusive by placement: `RateLimitIconButton`
+  // owns it in the header and is not mounted while the usage controls live
+  // down here.
+  //
+  // A mobile viewport is the one shell where BOTH are on screen - the mobile
+  // header keeps its gauge whatever the footer does - so the strip stands
+  // down and leaves the slot to the header. It is not a coin toss: the slot
+  // holds ONE handler and an unregister only clears its own, so the later
+  // registrant would silently displace the header's and then, on unmounting
+  // for the keyboard or the drawer, take the chord away entirely - the header
+  // button still on screen would have no handler and no way to get one back,
+  // since its effect does not re-run. Nothing is lost by standing down: the
+  // cluster's own `PopoverTrigger` is a tap away, and the two panels are the
+  // same panel.
+  useEffect(() => {
+    if (narrowViewport) return;
+    return registerDynamicActionHandler("app.rate-limits.open", () => {
+      setUsageOpen(true);
+    });
+  }, [narrowViewport]);
+  // The resource panel's half of the same question, and it needs one more fact
+  // because the popover is mounted by the HEADER too rather than only beside
+  // the button it replaces. On desktop `placement` keeps the two mounts
+  // mutually exclusive, so the strip always owns the action. On a mobile
+  // viewport both can be on screen, and the header's monitor is the survivor -
+  // it is still there with the keyboard up - so the strip owns the action only
+  // when the header is drawing no monitor to own it. With both off nobody
+  // registers, which is correct: there is no panel to open.
+  const headerResourceMonitor = useSettingsStore(
+    (state) => state.showGlobalResourceMonitor,
   );
+  const claimsResourcesAction = !narrowViewport || !headerResourceMonitor;
   // While the panel is open, let the header drop its title-bar drag regions so
   // a click on the (otherwise event-swallowing) drag area dismisses it. The id
-  // is the header trigger's own: the two are mutually exclusive by placement,
-  // so they can never both be claiming it.
+  // is the header trigger's own: the two are mutually exclusive by placement
+  // wherever a title bar exists at all, so they can never both be claiming it.
   useTitleBarDragSuppression("rate-limits", usageOpen);
   const scope = props.scope;
   // A PICK that has not resolved to its own client leaves this subtree on the
@@ -164,6 +204,10 @@ function ScopedAppStatusBar(props: {
       <div
         ref={barRef}
         data-testid="app-status-bar"
+        // The rung the strip settled on, published for the same reason the
+        // preview publishes its own: which rung is live is otherwise only
+        // visible as the absence of things.
+        data-density={density}
         className="shrink-0 border-t border-border/90 bg-canvas pb-safe-bottom text-canvas-foreground"
       >
         <div className="flex h-6 items-center gap-2 px-2 text-ui-xs tabular-nums">
@@ -222,8 +266,8 @@ function ScopedAppStatusBar(props: {
           </Popover>
           {/*
             Gated on the PREFERENCE only, never on the pick - the mirror of the
-            usage panel above, and for the same reason. This component is the
-            sole registrant of `app.resources.open` and the only thing that
+            usage panel above, and for the same reason. Wherever this is the
+            registrant of `app.resources.open` it is also the only thing that
             renders the resource panel's own "can't reach this host" notice, so
             unmounting it under an unresolved pick would take the chord and the
             explanation away exactly when they are wanted, and would lose a
@@ -238,6 +282,7 @@ function ScopedAppStatusBar(props: {
             <ResourceMonitorPopover
               trigger="custom"
               contentSide="top"
+              claimsOpenAction={claimsResourcesAction}
               triggerNode={
                 <StatusBarResourceSegment
                   {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}

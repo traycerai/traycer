@@ -248,7 +248,28 @@ export type ResourceMonitorPopoverTrigger =
       readonly contentSide: "top" | "bottom";
     };
 
-type ResourceMonitorPopoverProps = ResourceMonitorPopoverTrigger;
+/**
+ * Whether THIS mount owns `app.resources.open`.
+ *
+ * The action has one handler slot and several possible mounts, and an
+ * unregister only clears its own handler - so two live mounts are not a tie,
+ * they are the later one silently displacing the earlier and then, on
+ * unmounting, deleting the slot outright and leaving the survivor chordless
+ * with no way to re-arm (its effect is long past re-running).
+ *
+ * On desktop the mounts are mutually exclusive by `placement`, so this is
+ * simply `true` everywhere. It exists for the MOBILE viewport, where the
+ * header's monitor and the footer's both draw at once and the header is the
+ * one that stays: the caller that is not the owner passes `false`. Required
+ * rather than defaulted, because "who holds the chord" is a fact about the
+ * arrangement of surfaces and only a call site can know it.
+ */
+interface ResourceMonitorPopoverOwnProps {
+  readonly claimsOpenAction: boolean;
+}
+
+type ResourceMonitorPopoverProps = ResourceMonitorPopoverTrigger &
+  ResourceMonitorPopoverOwnProps;
 
 interface CanvasResourceSnapshot {
   readonly openTabOrder: readonly string[];
@@ -478,6 +499,7 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
     >
       <ScopedResourceMonitorPopover
         trigger={props}
+        claimsOpenAction={props.claimsOpenAction}
         scope={scope}
         hasExplicitPick={hasExplicitPick}
         streamBoundToScope={
@@ -492,6 +514,7 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
 
 function ScopedResourceMonitorPopover(props: {
   readonly trigger: ResourceMonitorPopoverTrigger;
+  readonly claimsOpenAction: boolean;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
   /** The provided stream client is the picked host's, not a fallback. */
@@ -500,13 +523,17 @@ function ScopedResourceMonitorPopover(props: {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const chord = useBindingForAction("app.resources.open");
-  useEffect(
-    () =>
-      registerDynamicActionHandler("app.resources.open", () => {
-        setOpen(true);
-      }),
-    [],
-  );
+  // See `ResourceMonitorPopoverOwnProps`: one slot, several possible mounts,
+  // and an unregister that clears only its own handler. A mount that is not
+  // the owner registers nothing rather than registering and hoping to lose the
+  // race - its own `PopoverTrigger` still opens this panel on a click.
+  const claimsOpenAction = props.claimsOpenAction;
+  useEffect(() => {
+    if (!claimsOpenAction) return;
+    return registerDynamicActionHandler("app.resources.open", () => {
+      setOpen(true);
+    });
+  }, [claimsOpenAction]);
   // While the panel is open, let the header drop its title-bar drag regions so a
   // click on the (otherwise event-swallowing) drag area dismisses the popover.
   useTitleBarDragSuppression("resource-monitor", open);

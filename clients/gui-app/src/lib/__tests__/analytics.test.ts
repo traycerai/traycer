@@ -1212,6 +1212,7 @@ describe("Layout page settings analytics", () => {
 
     const statusBarSettings = [
       "layout.statusBar.placement",
+      "layout.statusBar.mobileFooter",
       "layout.statusBar.rateLimits.enabled",
       "layout.statusBar.rateLimits.percentMode",
       "layout.statusBar.rateLimits.provider",

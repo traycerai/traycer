@@ -18,6 +18,10 @@ import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-av
 import { setMobileApp } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import {
+  DEFAULT_STATUS_BAR_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 
 // Layout's provider list is read through the WATCHED host's scope. It carries
 // no anchors - the set exists only for providers a host has reported - so the
@@ -71,6 +75,7 @@ afterEach(() => {
   cleanup();
   setMobileApp(false);
   setFeatureSettingsBridge(null);
+  setMobileFooter(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter);
 });
 
 describe("settings search fixtures", () => {
@@ -116,6 +121,7 @@ function mountInShell(
 ): HTMLElement {
   setMobileApp(context.mobileApp);
   setFeatureSettingsBridge(context.featureSettings);
+  setMobileFooter(context.mobileFooter);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -153,4 +159,17 @@ function setFeatureSettingsBridge(
 ): void {
   (globalThis as { runnerHost?: unknown }).runnerHost =
     featureSettings === null ? undefined : { platform: { featureSettings } };
+}
+
+/**
+ * The one shell fact that lives in a store rather than on the window or the
+ * runner host. Written straight into `layout-store` so the panel and the
+ * probe below resolve the same value the registry names - the mobile footer
+ * decides whether that build has a strip at all, and the whole group's gate
+ * reads it.
+ */
+function setMobileFooter(mobileFooter: boolean): void {
+  useLayoutStore.setState((state) => ({
+    statusBar: { ...state.statusBar, mobileFooter },
+  }));
 }

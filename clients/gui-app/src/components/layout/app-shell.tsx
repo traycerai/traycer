@@ -17,6 +17,7 @@ import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { useSystemBack } from "@/components/layout/shell/use-system-back";
 import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
+import { MobileAppStatusBar } from "@/components/layout/status-bar/mobile-app-status-bar";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -46,11 +47,20 @@ export function AppShell(props: AppShellProps) {
   // desktop mounts nothing extra and stays unchanged.
   const isMobile = useIsMobileViewport();
   // A mobile VIEWPORT, not a mobile build: a narrow desktop window behaves the
-  // same way. The footer would compete with the software keyboard and the nav
-  // drawer, so mobile ignores `placement` entirely and keeps its header
-  // controls.
-  const showStatusBar = useLayoutStore(
-    (state) => state.statusBar.placement === "status-bar" && !isMobile,
+  // same way.
+  //
+  // Mobile ignores `placement` entirely and answers with its own switch, which
+  // is off by default. `placement` names which of two surfaces hosts the usage
+  // gauge and the resource monitor, and on a phone that question has no second
+  // answer: `MobileAppHeader` keeps both controls whatever the strip does, so
+  // a phone reading `placement` would be reading a preference about a surface
+  // it does not have. The footer still competes with the software keyboard and
+  // the nav drawer, which is what `MobileAppStatusBar` gates on and why it is
+  // off until asked for.
+  const showStatusBar = useLayoutStore((state) =>
+    isMobile
+      ? state.statusBar.mobileFooter
+      : state.statusBar.placement === "status-bar",
   );
   // Observed, never rendered. A publication fork resolves itself now - the
   // banner and the dialog that used to read this query are gone - but the
@@ -146,8 +156,13 @@ export function AppShell(props: AppShellProps) {
                 A React gate, never CSS hiding. The mobile header keeps its own
                 gauge and resource controls, and the dynamic action registry is
                 single-handler - a hidden second mount would take
-                `app.rate-limits.open` from the header that is still on screen. */}
-              {showStatusBar ? <AppStatusBar /> : null}
+                `app.rate-limits.open` from the header that is still on screen.
+
+                Mobile goes through `MobileAppStatusBar`, which owns the two
+                further gates that only exist there (the software keyboard and
+                the nav drawer) so their subscriptions stay out of this root. */}
+              {showStatusBar && isMobile ? <MobileAppStatusBar /> : null}
+              {showStatusBar && !isMobile ? <AppStatusBar /> : null}
               <OpenFolderDialog />
               <RemoteFolderPickerDialog />
               <QuitInterceptBridge />

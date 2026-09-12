@@ -69,7 +69,11 @@ import {
   type RateLimitWindowSeverity,
 } from "@/lib/rate-limits/window-severity";
 import { useSampledNow } from "@/lib/relative-time";
-import { isStatusBarControlsAvailable } from "@/lib/settings/settings-availability";
+import {
+  isMobileFooterRowAvailable,
+  isStatusBarControlsAvailable,
+  isStatusBarPlacementAvailable,
+} from "@/lib/settings/settings-availability";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import {
@@ -93,13 +97,15 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * screen rather than one placement flip and one window resize away.
  */
 export function StatusBarLayoutGroup(): ReactNode {
-  // The footer cannot render in the installed mobile app at all (the mobile
-  // header keeps the gauge and the resource monitor), so every control about
-  // the footer would configure a surface that is never drawn. The group stays
-  // present rather than vanishing, because a page whose first heading differs
-  // per build reads as a broken build. The gate is the same predicate the
-  // search index reads, so search never offers a footer control this build
-  // does not draw.
+  // The footer does not render in the installed mobile app until its own
+  // switch is on (the mobile header keeps the gauge and the resource monitor
+  // regardless), so until then every control about the footer would configure
+  // a surface that is never drawn. The group stays present rather than
+  // vanishing, because a page whose first heading differs per build reads as a
+  // broken build. The gate is the same predicate the search index reads, so
+  // search never offers a footer control this build does not draw - and
+  // because the context subscribes to the switch, flipping it re-answers this
+  // in the same commit.
   const availability = useSettingsAvailabilityContext();
   if (!isStatusBarControlsAvailable(availability)) {
     return <MobileStatusBarLayoutGroup />;
@@ -108,8 +114,39 @@ export function StatusBarLayoutGroup(): ReactNode {
 }
 
 /**
- * What is left of the group on a build with no footer: the note, plus the one
- * row that was never about the footer.
+ * The switch that puts the strip at the bottom of a phone, and the one row of
+ * this group that is about the VIEWPORT rather than about the strip.
+ *
+ * Its own component so the two arms of the group above render the same control
+ * rather than two copies of it: the reduced arm is what a phone sees with the
+ * switch off, and the full arm is what the same phone sees a tap later, so a
+ * row that differed between them would move under the finger that flipped it.
+ */
+function MobileFooterRow(): ReactNode {
+  const mobileFooter = useLayoutStore((state) => state.statusBar.mobileFooter);
+  const setMobileFooter = useLayoutStore(
+    (state) => state.setStatusBarMobileFooter,
+  );
+  return (
+    <SettingsRow
+      row={LAYOUT.definitions.mobileFooter}
+      control={
+        <Switch
+          checked={mobileFooter}
+          onCheckedChange={(value) => {
+            trackLayoutSetting("layout.statusBar.mobileFooter");
+            setMobileFooter(value);
+          }}
+          aria-label="Footer status bar"
+        />
+      }
+    />
+  );
+}
+
+/**
+ * What is left of the group while the footer is switched off: the switch that
+ * turns it on, the note, plus the one row that was never about the footer.
  *
  * `Show resource monitor in header` governs `MobileAppHeader`'s own
  * `ResourceMonitorPopover`, which that build genuinely draws - and its store
@@ -136,6 +173,7 @@ function MobileStatusBarLayoutGroup(): ReactNode {
       dataTestId="layout-status-bar-group"
       fill={false}
     >
+      <MobileFooterRow />
       <SettingsRow row={LAYOUT.definitions.desktopOnlyNote} control={null} />
       <SettingsRow
         row={LAYOUT.definitions.headerResourceMonitor}
@@ -178,6 +216,18 @@ function StatusBarLayoutGroupContent(): ReactNode {
     (state) => state.setShowGlobalResourceMonitor,
   );
   const narrowViewport = useIsMobileViewport();
+  const availability = useSettingsAvailabilityContext();
+  // Drawn wherever the shell withholds the footer by default - the installed
+  // app, and any window narrow enough that `AppShell` answers with this switch
+  // instead of with `placement`. The build half is the indexed one; see the
+  // definition.
+  const showMobileFooterRow =
+    isMobileFooterRowAvailable(availability) || narrowViewport;
+  // The mirror image, and gated on the same two facts so the two rows can
+  // never both be absent: wherever the switch above is the live answer, the
+  // segment below has nothing left to pick.
+  const showPlacementRow =
+    isStatusBarPlacementAvailable(availability) && !narrowViewport;
   const { scope, hasExplicitPick } = useRateLimitResolveHostScope();
   const scopedBinding = useScopedHostBinding(scope);
   const ambientBinding = useHostBinding();
@@ -199,26 +249,34 @@ function StatusBarLayoutGroupContent(): ReactNode {
         {scopedToOwnHost ? (
           <StatusBarPreview scope={scope} hasExplicitPick={hasExplicitPick} />
         ) : null}
-        <SettingsRow
-          row={LAYOUT.definitions.placement}
-          control={
-            <SettingsSegmentedControl
-              value={statusBar.placement}
-              // Default first. The segment renders no default hint of its
-              // own, so order is the only place the page can say which one an
-              // untouched install is on.
-              options={[
-                { value: "status-bar", label: "Status bar" },
-                { value: "header", label: "Header" },
-              ]}
-              onChange={(placement) => {
-                trackLayoutSetting("layout.statusBar.placement");
-                setPlacement(placement);
-              }}
-              ariaLabel="Placement"
-            />
-          }
-        />
+        {showMobileFooterRow ? <MobileFooterRow /> : null}
+        {/* Hidden wherever the mobile switch above is the live answer, because
+          there is nothing left for it to pick: `placement` names which of two
+          surfaces hosts the usage gauge and the resource monitor, and there
+          `MobileAppHeader` keeps both whatever it says. A segment whose two
+          options do the same thing is one of them lying. */}
+        {showPlacementRow ? (
+          <SettingsRow
+            row={LAYOUT.definitions.placement}
+            control={
+              <SettingsSegmentedControl
+                value={statusBar.placement}
+                // Default first. The segment renders no default hint of its
+                // own, so order is the only place the page can say which one an
+                // untouched install is on.
+                options={[
+                  { value: "status-bar", label: "Status bar" },
+                  { value: "header", label: "Header" },
+                ]}
+                onChange={(placement) => {
+                  trackLayoutSetting("layout.statusBar.placement");
+                  setPlacement(placement);
+                }}
+                ariaLabel="Placement"
+              />
+            }
+          />
+        ) : null}
         {/* Relocated from General, and shown whenever the HEADER is the
           surface drawing that monitor: in the status bar the group's own
           `Show resource monitor` governs the same thing, and two switches over

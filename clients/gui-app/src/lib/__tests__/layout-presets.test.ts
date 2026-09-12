@@ -419,6 +419,37 @@ describe("layout presets", () => {
     );
   });
 
+  // Structural in the same sense placement is, and the failure mode is worse:
+  // a bundle that wrote this would turn a phone's footer ON (or off) as a side
+  // effect of picking a density on a machine that has no phone viewport at
+  // all - the key is device-local, so the flip would land wherever it was
+  // made.
+  it("leaves the mobile footer alone for every preset, and matches on neither", () => {
+    for (const id of LAYOUT_PRESET_IDS) {
+      for (const mobileFooter of [false, true]) {
+        useLayoutStore.getState().setStatusBarMobileFooter(mobileFooter);
+
+        applyLayoutPreset(id);
+
+        expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(
+          mobileFooter,
+        );
+        expect(matchLayoutPreset(currentSnapshot())).toBe(id);
+      }
+    }
+  });
+
+  it("resets the mobile footer back off", () => {
+    useLayoutStore.getState().setStatusBarMobileFooter(true);
+
+    resetLayoutToDefaults();
+
+    expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(
+      DEFAULT_STATUS_BAR_LAYOUT.mobileFooter,
+    );
+    expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(false);
+  });
+
   it("leaves the picker footer's reasoning control alone for every preset, and matches on neither", () => {
     // Structural in exactly the sense placement is: which CONTROL offers the
     // thinking levels, not how much of them shows. A reader who switched the

@@ -303,6 +303,7 @@ export type AnalyticsSetting =
   | "layout.sidebar.resetOrder"
   | "layout.sidebar.resetVisibility"
   | "layout.statusBar.placement"
+  | "layout.statusBar.mobileFooter"
   | "layout.statusBar.rateLimits.enabled"
   | "layout.statusBar.rateLimits.percentMode"
   | "layout.statusBar.rateLimits.provider"
@@ -1224,6 +1225,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     "layout.sidebar.resetOrder": true,
     "layout.sidebar.resetVisibility": true,
     "layout.statusBar.placement": true,
+    "layout.statusBar.mobileFooter": true,
     "layout.statusBar.rateLimits.enabled": true,
     "layout.statusBar.rateLimits.percentMode": true,
     "layout.statusBar.rateLimits.provider": true,

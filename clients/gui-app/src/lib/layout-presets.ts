@@ -47,10 +47,10 @@ export const LAYOUT_PRESET_IDS: ReadonlyArray<LayoutPresetId> = [
 
 /**
  * The status bar's contribution, which is its two subjects and NOT its
- * `placement`.
+ * `placement` or its `mobileFooter` switch.
  *
- * Placement is a structural choice - which surface hosts the usage gauge and
- * the resource monitor - rather than a level of detail, so it is treated
+ * Both are a structural choice - which surface hosts the usage gauge and
+ * the resource monitor - rather than a level of detail, so they are treated
  * exactly as the sidebar's panel order is: carried by no bundle, `default`
  * included, restored by `resetLayoutToDefaults` alone, and not part of the
  * match. A user who moved the strip to the header and then asks for a density
@@ -320,6 +320,10 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
     // Carried over rather than assigned: no bundle has an opinion about which
     // surface hosts the strip. Only `resetLayoutToDefaults` restores it.
     placement: layout.statusBar.placement,
+    // Carried over for the same reason, and it is the same KIND of value:
+    // whether a phone draws the strip at all is which surface hosts it on that
+    // device, not how much detail the strip spells out.
+    mobileFooter: layout.statusBar.mobileFooter,
     rateLimits: bundle.statusBar.rateLimits,
     resources: bundle.statusBar.resources,
   });
@@ -341,8 +345,9 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
 
 /**
  * Every Layout value back to its default: the Default bundle, PLUS the
- * structural settings no bundle carries - the status bar's placement, the
- * picker footer's reasoning control, and the rail's arrangement.
+ * structural settings no bundle carries - the status bar's placement and its
+ * mobile-footer switch, the picker footer's reasoning control, and the rail's
+ * arrangement.
  *
  * This is where the button and the `Default` segment deliberately part
  * company. The segment answers "which density bundle am I on", so it has to
@@ -361,6 +366,7 @@ export function resetLayoutToDefaults(): void {
   applyLayoutPreset("default");
   const layout = useLayoutStore.getState();
   layout.setStatusBarPlacement(DEFAULT_STATUS_BAR_LAYOUT.placement);
+  layout.setStatusBarMobileFooter(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter);
   layout.setComposerReasoningFooterControl(
     DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl,
   );

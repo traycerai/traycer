@@ -162,8 +162,10 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
  * and this renders nothing.
  *
  * The DESKTOP header's half only: `MobileAppHeader` keeps both controls
- * unconditionally, because the footer is desktop-only and a mobile viewport
- * that respected `status-bar` would end up with neither.
+ * unconditionally, because a mobile viewport does not answer this question
+ * with `placement` at all - the footer there is its own opt-in switch, and a
+ * header that respected `status-bar` would leave a phone with neither control
+ * until someone found that switch.
  *
  * `showGlobalResourceMonitor` still gates the resource button on top of this —
  * the two settings answer different questions ("do I want a resource monitor
@@ -182,7 +184,14 @@ function HeaderUsageControls(): ReactNode {
     <>
       <RateLimitIconButton />
       {showGlobalResourceMonitor ? (
-        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+        // Unconditionally the owner of `app.resources.open`: this whole
+        // component is behind `inHeader`, so the strip's own popover is not
+        // mounted while this one is.
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       ) : null}
     </>
   );

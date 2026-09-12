@@ -92,6 +92,17 @@ export interface StatusBarResourcePreferences {
 
 export interface StatusBarLayoutPreferences {
   readonly placement: UsageControlsPlacement;
+  /**
+   * Whether the footer strip is drawn on a mobile VIEWPORT, where the shell
+   * otherwise withholds it whatever `placement` says. Off by default: the
+   * footer competes with the software keyboard and the nav drawer, and the
+   * mobile header already carries the usage gauge and the resource monitor,
+   * so a phone that never opens Settings keeps exactly the chrome it has.
+   *
+   * Device-local like every other key here, so the phone answers this for
+   * itself and a flip made on a desktop never reaches it.
+   */
+  readonly mobileFooter: boolean;
   readonly rateLimits: StatusBarRateLimitPreferences;
   readonly resources: StatusBarResourcePreferences;
 }
@@ -166,6 +177,7 @@ interface LayoutStoreState {
     preferences: ComposerLayoutPreferences,
   ) => void;
   readonly setStatusBarPlacement: (placement: UsageControlsPlacement) => void;
+  readonly setStatusBarMobileFooter: (mobileFooter: boolean) => void;
   readonly setStatusBarRateLimitsEnabled: (enabled: boolean) => void;
   /** Flips one provider's membership in the deny-list. */
   readonly toggleStatusBarProvider: (providerId: RateLimitProviderId) => void;
@@ -251,9 +263,15 @@ const DEFAULT_STATUS_BAR_RESOURCES: StatusBarResourcePreferences = {
  * an explicit pick made under the old default survives - it is a choice, and
  * rewriting it would be the store overruling the user. Reset and the footer
  * option are the two ways back.
+ *
+ * None of that reaches a PHONE, which does not read `placement` at all: below
+ * `md` the shell asks `mobileFooter`, and that one starts off. A default about
+ * which of two surfaces hosts the gauge has nothing to say on a viewport with
+ * only one of them.
  */
 export const DEFAULT_STATUS_BAR_LAYOUT: StatusBarLayoutPreferences = {
   placement: "status-bar",
+  mobileFooter: false,
   rateLimits: DEFAULT_STATUS_BAR_RATE_LIMITS,
   resources: DEFAULT_STATUS_BAR_RESOURCES,
 };
@@ -499,6 +517,10 @@ function resolvePersistedStatusBar(value: unknown): StatusBarLayoutPreferences {
     placement: isUsageControlsPlacement(stored.placement)
       ? stored.placement
       : DEFAULT_STATUS_BAR_LAYOUT.placement,
+    mobileFooter: persistedBoolean(
+      stored.mobileFooter,
+      DEFAULT_STATUS_BAR_LAYOUT.mobileFooter,
+    ),
     rateLimits: persistedRateLimits(stored.rateLimits),
     resources: persistedResources(stored.resources),
   };
@@ -622,6 +644,11 @@ export const useLayoutStore = create<LayoutStoreState>()(
         const statusBar = get().statusBar;
         if (statusBar.placement === placement) return;
         set({ statusBar: { ...statusBar, placement } });
+      },
+      setStatusBarMobileFooter: (mobileFooter) => {
+        const statusBar = get().statusBar;
+        if (statusBar.mobileFooter === mobileFooter) return;
+        set({ statusBar: { ...statusBar, mobileFooter } });
       },
       setStatusBarRateLimitsEnabled: (enabled) => {
         const statusBar = get().statusBar;

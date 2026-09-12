@@ -1123,14 +1123,49 @@ describe("<StatusBarPreview />", () => {
       ).toContain("opacity-50");
       expect(
         screen.getByText(
-          "The strip is not shown at this window width; the header keeps its controls.",
+          "Shown at this window width when Footer status bar is on.",
         ),
       ).toBeTruthy();
       // The placement sentence would be a false promise here: flipping
-      // placement changes nothing at this width.
+      // placement changes nothing at this width, and the caption names the
+      // switch that does.
       expect(
         screen.queryByText("Shown when placement is Status bar."),
       ).toBeNull();
+    });
+
+    it("draws the frame undimmed at this width once the mobile footer is on", () => {
+      // Below `md` the strip's existence is that switch and nothing else, so
+      // the preview is a picture of a surface that IS drawn there.
+      mocks.providers = [];
+      useLayoutStore.setState({
+        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, mobileFooter: true },
+      });
+
+      renderPreview(false);
+
+      expect(
+        screen.getByTestId("status-bar-preview-frame").className,
+      ).not.toContain("opacity-50");
+      expect(
+        screen.queryByText(
+          "Shown at this window width when Footer status bar is on.",
+        ),
+      ).toBeNull();
+    });
+
+    it("starts at the nominal width whose rung the phone's own strip draws", () => {
+      // The strip forces `compact` on a mobile viewport whatever it measures,
+      // and 880 is the nominal width inside that band - so a phone opening
+      // this group sees the rung its footer draws rather than one two steps
+      // more detailed. Only a STARTING width: the control still moves freely.
+      mocks.providers = [];
+
+      renderPreview(false);
+
+      const frame = screen.getByTestId("status-bar-preview-frame");
+      expect(frame.getAttribute("data-preview-width")).toBe("normal");
+      expect(frame.getAttribute("data-preview-density")).toBe("compact");
     });
 
     it("does not pin the block, which here is a dimmed picture of a strip that is not drawn", () => {

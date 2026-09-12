@@ -760,6 +760,7 @@ describe("GeneralSettingsPanel", () => {
         runnerHost: null,
         featureSettings: null,
         mobileApp: false,
+        mobileFooter: false,
       };
       expect(isExperimentalGroupAvailable(context)).toBe(false);
       const { container } = render(panelTree());
@@ -781,6 +782,7 @@ describe("GeneralSettingsPanel", () => {
         runnerHost: null,
         featureSettings,
         mobileApp: false,
+        mobileFooter: false,
       };
       expect(isExperimentalGroupAvailable(context)).toBe(true);
       const { container } = render(panelTree());
@@ -794,6 +796,7 @@ describe("GeneralSettingsPanel", () => {
         runnerHost: null,
         featureSettings: null,
         mobileApp: true,
+        mobileFooter: false,
       };
       expect(isVoiceInputRowAvailable(context)).toBe(false);
       expect(isPreventSleepRowAvailable(context)).toBe(false);

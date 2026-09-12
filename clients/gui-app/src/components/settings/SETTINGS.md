@@ -238,9 +238,17 @@ different answers:
 
 - **Gated on a MODE** (the per-kind Link rows, the per-category Tile rows,
   which render only once their parent is switched off the default; Layout's
-  header resource-monitor row, drawn only under header placement; the rows
+  header resource-monitor row, drawn only under header placement; Layout's
+  **Placement** row itself, hidden below `md` where the shell reads
+  `mobileFooter` in its place; the rows
   inside a `SettingsSubgroup`, which its title switch hides) — not indexed;
   the vocabulary rides on the parent row's, group's or subgroup's keywords.
+  **A VIEWPORT is a mode, not a shell**, and that is the trap: a row gated on
+  one can carry a perfectly good shell predicate and still resolve to nothing
+  in a narrow window, because no predicate can see a width. Placement was
+  anchored until it started hiding below `md`; searching it in a narrow
+  desktop window then landed on an empty page. A row whose drawing condition
+  mentions the viewport at all belongs here.
   A subgroup IS indexed, anchored on its inset card, so a result for one of
   its rows lands on the switch that reveals the row.
 - **Gated on DATA** ("Detected dev origins" and its Browser card, which render
@@ -252,8 +260,12 @@ different answers:
   promise the row, so no shell offers it. "Detected dev origins" shipped as a
   result that navigated to General and lit nothing.
 - **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
-  desktop bridge; This phone needs `pushPermission`; Voice input, Prevent
-  sleep and Layout's footer controls hide in the mobile app) — indexed, with
+  desktop bridge; This phone needs `pushPermission`; Voice input and Prevent
+  sleep hide in the mobile app, and Layout's
+  footer controls hide there until `Footer status bar` is on — the one
+  preference admitted to `SettingsAvailabilityContext`, because it decides
+  whether a surface exists, is device-local, and is subscribed to so the
+  context re-answers when it flips) — indexed, with
   the definition's
   `availableWhen` set to the gate's **named predicate** in
   `lib/settings/settings-availability.ts`. The panel gates the row (or group)
@@ -415,13 +427,32 @@ join.
   one gate hides both. The panel gates nothing (the `BrowserSettingsSection`
   shape); a second gate there would stay on the build identity the day this one
   narrows to the capability it is really about, and the empty card would return.
-- **Layout's Status bar GROUP** - the footer is never drawn in the installed
-  mobile app (its header keeps the usage gauge and the resource monitor), so
-  every control ABOUT THE FOOTER would configure an absent surface. This one
-  collapses to a one-line "Status bar is desktop-only" note rather than
+- **Layout's Status bar GROUP** - the footer is not drawn in the installed
+  mobile app until **`Footer status bar`** is switched on (its header keeps the
+  usage gauge and the resource monitor either way), so until then every control
+  ABOUT THE FOOTER would configure an absent surface. This one collapses to
+  that switch plus a one-line "Off by default on phones" note rather than
   vanishing: the rest of the page is mobile-relevant, and a page whose first
-  heading differs per build reads as a broken build. **`Show resource monitor
-in header` survives the collapse and renders beside the note**, because it is
+  heading differs per build reads as a broken build. The switch is the group's
+  FIRST row in both arms - on a phone every other row in the group is
+  downstream of it, and a control that moved when it was flipped would move
+  under the finger that flipped it. Its gate is
+  `isStatusBarControlsAvailable = !mobileApp || mobileFooter`, and the
+  availability context subscribes to the store key
+  (`useSettingsAvailabilityContext`) so the whole group and the search index
+  re-answer in the same commit the switch writes. **`Placement` does NOT come
+  back with the rest** (`isStatusBarPlacementAvailable = !mobileApp`): turning
+  the strip on gives the phone every other footer control and still no second
+  surface to move the gauge to, since the mobile header keeps both regardless -
+  and below `md` `AppShell` reads `mobileFooter` in place of `placement`
+  entirely, so the segment is hidden on a narrow desktop window too. That
+  second half is why the row **contributes to the group instead of owning an
+  anchor**: its predicate is a shell and its other gate is a width, and no
+  predicate can see a width, so an anchored entry resolved to nothing in any
+  narrow window. Searching "placement" lands on the Status bar card, which
+  every shell draws. **`Show
+resource monitor in header` survives the collapse and renders beside the
+  note**, because it is
   not a footer control - `MobileAppHeader` draws exactly that monitor, and
   `showGlobalResourceMonitor` is device-local, so collapsing it would strand
   the preference at its default on the one build where header width is
@@ -1383,7 +1414,8 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       since it is a Chat-group row the match reads like any other. Moving the
       minimap therefore reads `Custom`, and any preset puts it back.
     - **The STRUCTURAL settings are restored by Reset only**: the status
-      bar's `placement`, the model picker footer's `reasoningFooterControl`,
+      bar's `placement` and its `mobileFooter` switch, the model picker
+      footer's `reasoningFooterControl`,
       and the sidebar's panel order + per-panel visibility
       (the last through the same two resets the Sidebar group's own buttons
       call). Each answers "which surface hosts this" / "which control offers
@@ -1422,17 +1454,25 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
   - **Status bar** (`panels/layout/status-bar-layout-group.tsx`; one
     `SettingsGroup`, and INSIDE it a `SettingsSubgroup` per subject rather than
     a flat row list - the bar is ONE layout slice, and its subjects nest two
-    deep). Reading down: the **preview**; Placement (Status bar / Header, the
-    DEFAULT first - the segment renders no default hint, so order is the only
-    place the page says which one an untouched install is on);
-    `Show resource monitor in header`, drawn while placement is `header` **or
-    the viewport is below `md`** - in the other placement the group's own
-    `Show resource monitor` governs the same thing, but below `md` `AppShell`
-    drops the strip whatever the placement says and `MobileAppHeader` keeps
-    this monitor, so the row would otherwise be the only control over the only
-    monitor on screen and be missing. The GROUP still keys on the BUILD
-    (`isMobileApp()`): a temporarily narrow window must not hide the placement
-    setting. Ask which question a row's absence answers, not which gate is
+    deep). Reading down: the **preview**; `Footer status bar` (the mobile
+    opt-in, drawn in the installed app **or** below `md`); Placement (Status
+    bar / Header, the DEFAULT first - the segment renders no default hint, so
+    order is the only place the page says which one an untouched install is
+    on), drawn only in the complement of the switch above - not the installed
+    app, and not below `md`, because those are exactly the shells where
+    `AppShell` reads `mobileFooter` in place of `placement` and
+    `MobileAppHeader` keeps both controls whatever a placement says;
+    `Show resource monitor in header`,
+    drawn while placement is `header` **or the viewport is below `md`** - in
+    the other placement the group's own `Show resource monitor` governs the
+    same thing, but below `md` `AppShell` draws the strip only on the switch
+    above and `MobileAppHeader` keeps this monitor, so the row would otherwise
+    be the only control over the only monitor on screen and be missing. The
+    GROUP keys on the BUILD and the switch
+    (`isStatusBarControlsAvailable = !mobileApp || mobileFooter`), never on the
+    viewport: a temporarily narrow window must not hide the usage and resource
+    settings, which describe a strip that window still has when it is widened.
+    Ask which question a row's absence answers, not which gate is
     nearest; **Usage limits** (subgroup, title switch =
     `rateLimits.enabled`) holding **Display** (percentage used / remaining, the
     used / remaining WORD after each percentage, reset timer, mini bar) and a
@@ -1452,7 +1492,10 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     old header default still opens on the header until they Reset or pick
     `Status bar`. That asymmetry is the point: the resolver falls back to the
     constant only for a value that is absent or unreadable, which is the one
-    case where nobody has chosen.
+    case where nobody has chosen. **None of it reaches a phone**, which does
+    not read `placement`: below `md` the shell asks `mobileFooter`, whose own
+    default is `false`. A default about which of two surfaces hosts the gauge
+    has nothing to say on a viewport that has only one of them.
   - **Which of a provider's limits the strip draws is ONE checkbox list per
     provider** (`controls/settings-checkbox-list.tsx`): `Tightest limit
 (automatic)` first, then one entry per limit the provider currently
@@ -1739,9 +1782,13 @@ settings…`.
     strip having fetched them. Wherever the strip is not the surface currently drawn the frame
     is greyed rather than hidden - a preview that vanished would read as the
     settings having no effect - and the caption says WHICH reason: `Shown when
-placement is Status bar.` in `header` placement, and `The strip is not shown
-at this window width; the header keeps its controls.` below `md`, where the
-    placement sentence would be a false promise.
+placement is Status bar.` in `header` placement, and `Shown at this window
+width when Footer status bar is on.` below `md`, where the placement sentence
+    would be a false promise and the switch is what actually answers. The
+    width control also STARTS at `normal` below `md` rather than `wide`,
+    because the strip forces the `compact` rung on a mobile viewport and 880 is
+    the nominal width inside that band - a phone opening the group sees the
+    rung its own footer draws.
   - **`inert` is why the frame's own tooltips are not the explanation.** It
     removes the subtree from hit testing, so no `TooltipWrapper` inside it can
     open - and the states those tooltips exist for (three bare dashes, a dimmed
@@ -1985,13 +2032,18 @@ md:top-0`): positioned against the nearest scrollport - the settings
     first reading" subtitle instead.
   - **Mobile app**: the section stays listed (Chat and Sidebar are as relevant
     on a phone as anywhere), but the Status bar group collapses under
-    `isMobileApp()` to the "Status bar is desktop-only" note - the footer is
-    never drawn there, so every control ABOUT IT would configure an absent
-    surface. One row survives beside the note: `Show resource monitor in
-header`, which describes `MobileAppHeader`'s own monitor rather than the
-    footer, and whose device-local key no desktop can set on the phone's
-    behalf. It carries no placement condition there, since that build has no
-    other placement. The `app.status-bar.toggle` action does collapse: it is
+    `isMobileApp() && !mobileFooter` to `Footer status bar` plus the "Off by
+    default on phones" note - the footer is not drawn there until that switch
+    is on, so until it is, every control ABOUT IT would configure an absent
+    surface. Two rows survive beside the note: the switch itself, and `Show
+resource monitor in header`, which describes `MobileAppHeader`'s own monitor
+    rather than the footer, and whose device-local key no desktop can set on
+    the phone's behalf. The monitor row carries no placement condition there,
+    since that build has no other placement - which is also why `Placement`
+    alone stays withheld once the switch is flipped on. The switch's own key
+    (`statusBar.mobileFooter`) is device-local like the rest of the slice, is
+    carried over by every preset the way `placement` is, and is restored to
+    `false` by `resetLayoutToDefaults` alone. The `app.status-bar.toggle` action does collapse: it is
     the one `desktopOnly: true` entry in `ACTION_META`, and both the palette
     filter and `StatusBarKeybindingBridge` READ that flag rather than testing
     the build, so the pair follows from the field.

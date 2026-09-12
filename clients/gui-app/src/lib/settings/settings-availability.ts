@@ -20,6 +20,18 @@
  * RPC — a shell-level context has no stable answer to either, so rows gated
  * on them are not indexed and their enclosing page is. The existing bridge resolvers stay the source of truth for each
  * bridge; a predicate only names which bridge its row needs.
+ *
+ * `mobileFooter` is the one member that is a PREFERENCE rather than a fact
+ * about the shell, and it is here because it decides the same thing a bridge
+ * decides: whether a surface exists. The installed mobile app draws the footer
+ * strip only when that switch is on, so the rows that configure the strip are
+ * present exactly when it is — and withholding them from search while the
+ * strip is on screen would be the same dead end the rule above exists to
+ * prevent. It is admissible because it satisfies the property the rule is
+ * really about: it is device-local, a stable answer for the whole shell, and
+ * the context re-evaluates when it flips (`useSettingsAvailabilityContext`
+ * subscribes to it). Do not read a preference here that fails any of those —
+ * a per-host or per-surface value has no shell-wide answer.
  */
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { FeatureSettingsBridge } from "@/lib/desktop-feature-settings";
@@ -40,6 +52,12 @@ export interface SettingsAvailabilityContext {
    * evaluated earlier than that would freeze the wrong answer.
    */
   readonly mobileApp: boolean;
+  /**
+   * `layout-store`'s `statusBar.mobileFooter`, read reactively by the caller.
+   * Only ever consulted together with `mobileApp`: on a build that draws the
+   * footer unconditionally it decides nothing.
+   */
+  readonly mobileFooter: boolean;
 }
 
 /** Rendered in every shell. */
@@ -70,14 +88,46 @@ export function isPreventSleepRowAvailable(
 }
 
 /**
- * Layout › Status bar's footer controls — the installed mobile app never
- * draws the footer (its header keeps the usage gauge and the resource
- * monitor), so the group collapses to a note and the one header row there.
+ * Layout › Status bar's footer controls — the installed mobile app draws the
+ * footer only when `Footer status bar` is switched on, so with it off the
+ * group collapses to that switch, a note and the one header row. Every other
+ * build draws the footer whenever placement says so and keeps the full group.
  */
 export function isStatusBarControlsAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
+  return !context.mobileApp || context.mobileFooter;
+}
+
+/**
+ * Layout › Status bar ▸ Placement — which of two surfaces hosts the usage
+ * gauge and the resource monitor, a question the installed mobile app does not
+ * have: its header keeps both controls whatever the strip does, so the switch
+ * above is that build's whole answer and the segment would pick between two
+ * identical outcomes.
+ *
+ * Narrower than `isStatusBarControlsAvailable` on purpose, and it is the one
+ * gate that does NOT widen with the mobile footer: turning the strip on gives
+ * the phone every other footer control, and still no second surface to move
+ * the gauge to.
+ */
+export function isStatusBarPlacementAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
   return !context.mobileApp;
+}
+
+/**
+ * Layout › Status bar ▸ Footer status bar — the switch itself, which exists
+ * only where the footer is withheld by default. It is available in BOTH of
+ * that build's states, on and off: it is the control that flips the gate above,
+ * so a predicate that went away with the rows it governs would leave no way
+ * back.
+ */
+export function isMobileFooterRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return context.mobileApp;
 }
 
 /** General › Experimental — the desktop feature-settings bridge. */

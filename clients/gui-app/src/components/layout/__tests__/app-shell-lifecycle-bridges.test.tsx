@@ -7,6 +7,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
+  type UsageControlsPlacement,
 } from "@/stores/settings/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -117,6 +118,14 @@ vi.mock("@/components/auth/user-menu", () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
+// Router-dependent like TabStrip, and only mounted on the mobile path: an OPEN
+// drawer renders a recent-task list that reads `useRouterState`. What this
+// suite asks of the drawer is its open STATE, which lives in
+// `mobile-nav-store` and is untouched by this stub.
+vi.mock("@/components/layout/shell/mobile-nav-drawer", () => ({
+  MobileNavDrawer: () => <div data-testid="mobile-nav-drawer-stub" />,
+}));
+
 // Rendered unconditionally so the surface row's clipping contract can be
 // asserted; the real host self-gates on a focused/visible draft surface.
 vi.mock("@/components/home/terminal-panel/landing-terminal-host", () => ({
@@ -142,7 +151,9 @@ import {
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
 import { setMobileApp } from "@/lib/mobile-app";
+import { setNativeKeyboardState } from "@/lib/native-keyboard";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useTabsStore } from "@/stores/tabs/store";
 
 // The status-bar toggle is a dynamic handler, and dynamic dispatch never
@@ -246,6 +257,8 @@ describe("<AppShell />", () => {
     });
     useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
     setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    setNativeKeyboardState({ open: false, transitioning: false });
+    useMobileNavStore.getState().setOpen(false);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
@@ -254,6 +267,15 @@ describe("<AppShell />", () => {
   function selectHeaderPlacement(): void {
     useLayoutStore.setState({
       statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "header" },
+    });
+  }
+
+  // Its counterpart, for a case that has to NAME the footer placement rather
+  // than inherit it: a test whose whole point is that some other gate decides
+  // the strip must not go quiet the day the default moves again.
+  function selectFooterPlacement(): void {
+    useLayoutStore.setState({
+      statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "status-bar" },
     });
   }
 
@@ -414,9 +436,11 @@ describe("<AppShell />", () => {
 
   it("ignores the status-bar placement on a mobile viewport", async () => {
     // Not an `isMobileApp` gate: a narrow DESKTOP window behaves the same, and
-    // the mobile header keeps its own controls — so respecting `placement`
-    // here would leave that viewport with neither surface. The store is on the
-    // default `status-bar` placement, which is exactly the one being ignored.
+    // the mobile header keeps its own controls — so `placement` is not the
+    // question there at all. `mobileFooter` is, and it is off. Set explicitly
+    // rather than left to the default: the placement being ignored here is the
+    // one an untouched install is on, which is the whole point.
+    selectFooterPlacement();
     setViewportWidth(MOBILE_VIEWPORT_WIDTH);
 
     queryClient = renderAppShell();
@@ -426,6 +450,128 @@ describe("<AppShell />", () => {
     expect(screen.queryByTestId("app-status-bar")).toBeNull();
     expect(screen.getByTestId("rate-limit-header-button")).not.toBeNull();
     expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
+  });
+
+  // The opt-in footer. Every case here is about the ONE question `AppShell`
+  // asks on a narrow viewport - is there a strip - so they all assert the
+  // mount and never the strip's contents, which the strip's own suite owns.
+  describe("mobile footer", () => {
+    /**
+     * The switch on, with `placement` NAMED rather than inherited. Most of
+     * these cases exist to show that the two answers are independent, and a
+     * fixture resting on whichever placement happens to be the default cannot
+     * show that - it also silently changes meaning the day the default moves.
+     */
+    function selectMobileFooter(placement: UsageControlsPlacement): void {
+      useLayoutStore.setState({
+        statusBar: {
+          ...DEFAULT_STATUS_BAR_LAYOUT,
+          mobileFooter: true,
+          placement,
+        },
+      });
+    }
+
+    it("draws the strip on a mobile viewport once the switch is on", async () => {
+      selectMobileFooter("status-bar");
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+
+      queryClient = renderAppShell();
+
+      await screen.findByTestId("app-shell-child");
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    });
+
+    it("draws it under the header placement, which withholds the strip everywhere else", async () => {
+      // `placement` names which of two surfaces hosts the gauge, and this
+      // viewport has only one of them: the mobile header keeps its controls
+      // either way, so a strip gated on `placement` here would be off for
+      // every phone whose device-local store happens to say `header`.
+      selectMobileFooter("header");
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+      expect(useLayoutStore.getState().statusBar.placement).toBe("header");
+
+      queryClient = renderAppShell();
+
+      await screen.findByTestId("app-shell-child");
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+      // And the header keeps both of its own controls beside it - the strip
+      // does not displace them the way it does under desktop `placement`.
+      expect(screen.getByTestId("rate-limit-header-button")).not.toBeNull();
+      expect(
+        screen.getByTestId("resource-monitor-header-button"),
+      ).not.toBeNull();
+    });
+
+    it("unmounts the strip while the software keyboard is up", async () => {
+      selectMobileFooter("status-bar");
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+
+      queryClient = renderAppShell();
+      await screen.findByTestId("app-shell-child");
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+
+      act(() => {
+        setNativeKeyboardState({ open: true, transitioning: false });
+      });
+
+      expect(screen.queryByTestId("app-status-bar")).toBeNull();
+
+      // And back when it goes down: a React gate, so the strip returns rather
+      // than a hidden one being revealed.
+      act(() => {
+        setNativeKeyboardState({ open: false, transitioning: false });
+      });
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    });
+
+    it("unmounts the strip while the nav drawer is open", async () => {
+      selectMobileFooter("status-bar");
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+
+      queryClient = renderAppShell();
+      await screen.findByTestId("app-shell-child");
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+
+      act(() => {
+        useMobileNavStore.getState().setOpen(true);
+      });
+
+      expect(screen.queryByTestId("app-status-bar")).toBeNull();
+
+      act(() => {
+        useMobileNavStore.getState().setOpen(false);
+      });
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    });
+
+    it("leaves the desktop shell alone, whatever the switch says", async () => {
+      // The switch is about a viewport the desktop is not in. Placement stays
+      // the only thing that moves the strip there, and it is `header` here -
+      // so the switch being ON is not enough to draw one.
+      selectMobileFooter("header");
+
+      queryClient = renderAppShell();
+      await screen.findByTestId("app-shell-child");
+
+      expect(screen.queryByTestId("app-status-bar")).toBeNull();
+
+      act(() => {
+        useLayoutStore.setState({
+          statusBar: {
+            ...DEFAULT_STATUS_BAR_LAYOUT,
+            mobileFooter: true,
+            placement: "status-bar",
+          },
+        });
+      });
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    });
   });
 
   // `TopLevelTabHost` mounts the whole time - `AppShell` renders it directly,

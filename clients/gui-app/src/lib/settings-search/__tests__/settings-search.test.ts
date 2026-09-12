@@ -33,6 +33,7 @@ const DESKTOP: SettingsAvailabilityContext = {
   }),
   featureSettings: null,
   mobileApp: false,
+  mobileFooter: false,
 };
 
 /** The installed mobile app: no desktop bridges, push permission present. */
@@ -47,6 +48,7 @@ const MOBILE: SettingsAvailabilityContext = {
   }),
   featureSettings: null,
   mobileApp: true,
+  mobileFooter: false,
 };
 
 /** A desktop feature-settings bridge: only its presence gates Experimental. */
@@ -230,13 +232,50 @@ describe("settings search", () => {
     });
 
     it("offers the footer controls on desktop and withholds them in the mobile app", () => {
-      for (const label of ["Placement", "Usage limits", "Resource monitor"]) {
+      for (const label of ["Usage limits", "Resource monitor"]) {
         expect(labelsFor(label, DESKTOP), label).toContain(label);
         expect(labelsFor(label, MOBILE), label).not.toContain(label);
       }
       // The group itself stays: the mobile build collapses it to a note, and
       // the page's first heading is the same on every build.
       expect(labelsFor("status bar", MOBILE)).toContain("Status bar");
+    });
+
+    it("gives those controls back to the mobile app once the footer is on", () => {
+      const mobileWithFooter = { ...MOBILE, mobileFooter: true };
+      for (const label of ["Usage limits", "Resource monitor"]) {
+        expect(labelsFor(label, mobileWithFooter), label).toContain(label);
+      }
+    });
+
+    it("lands Placement on the group rather than on a row a resize can take away", () => {
+      // Two facts decide whether the row is drawn and only one is a shell: the
+      // build, and the VIEWPORT - below `md` the shell reads `mobileFooter` in
+      // place of `placement`, so the segment is hidden in any narrow window
+      // including a desktop one. An anchored entry would resolve to nothing
+      // there, so the word reaches the group instead and its result lands on a
+      // card every shell draws.
+      const results = labelsFor("placement", DESKTOP);
+      expect(results).not.toContain("Placement");
+      expect(results).toContain("Status bar");
+      // Still findable on the build that never draws the row at all, for the
+      // same reason: the destination is the group.
+      expect(labelsFor("placement", MOBILE)).toContain("Status bar");
+    });
+
+    it("indexes the mobile footer switch in the installed app only", () => {
+      expect(labelsFor("Footer status bar", MOBILE)).toContain(
+        "Footer status bar",
+      );
+      // On both sides of its own gate - it is the control that flips it.
+      expect(
+        labelsFor("Footer status bar", { ...MOBILE, mobileFooter: true }),
+      ).toContain("Footer status bar");
+      // Not on desktop: the row is drawn there only below `md`, which is a
+      // mode no index can promise.
+      expect(labelsFor("Footer status bar", DESKTOP)).not.toContain(
+        "Footer status bar",
+      );
     });
   });
 

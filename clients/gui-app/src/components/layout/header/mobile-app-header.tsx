@@ -85,9 +85,14 @@ export function MobileAppHeader(): ReactNode {
       <div className="flex shrink-0 items-center gap-1">
         <RateLimitIconButton />
         {showGlobalResourceMonitor ? (
+          // The owner of `app.resources.open` on this viewport. The footer
+          // strip can be on screen at the same time (it is opt-in here rather
+          // than a placement), and it stands down for this mount - the header
+          // is the one that survives an open keyboard or nav drawer.
           <ResourceMonitorPopover
             trigger="header-button"
             className={undefined}
+            claimsOpenAction
           />
         ) : null}
         {/* Last of the global controls, matching the desktop header's order

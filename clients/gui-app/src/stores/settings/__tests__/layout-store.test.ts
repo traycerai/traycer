@@ -32,6 +32,7 @@ describe("useLayoutStore", () => {
     it("starts with the usage controls in the footer, everything visible", () => {
       expect(useLayoutStore.getState().statusBar).toEqual({
         placement: "status-bar",
+        mobileFooter: false,
         rateLimits: {
           enabled: true,
           hiddenProviders: [],
@@ -80,10 +81,44 @@ describe("useLayoutStore", () => {
       expect(useLayoutStore.getState().statusBar.placement).toBe("header");
     });
 
+    // The phone's own answer to "is there a strip at all", and the one value
+    // on this slice a fresh install must read `false` for: the footer is
+    // opt-in there, so a default that drifted would ship the surface to every
+    // phone that has never opened Settings.
+    it("starts with the mobile footer off", () => {
+      expect(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter).toBe(false);
+      expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(false);
+    });
+
+    it("persists a mobile-footer flip under the slice", async () => {
+      useLayoutStore.getState().setStatusBarMobileFooter(true);
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(
+        JSON.parse(window.localStorage.getItem(PERSIST_KEY) ?? "{}"),
+      ).toEqual({
+        state: {
+          statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, mobileFooter: true },
+          composer: DEFAULT_COMPOSER_LAYOUT,
+        },
+        version: CURRENT_PERSIST_VERSION,
+      });
+    });
+
+    it("leaves state untouched when setStatusBarMobileFooter is handed the value already held", () => {
+      const before = useLayoutStore.getState().statusBar;
+
+      useLayoutStore.getState().setStatusBarMobileFooter(false);
+
+      expect(useLayoutStore.getState().statusBar).toBe(before);
+    });
+
     it("rehydrates a fully valid slice verbatim", async () => {
       await rehydrateFrom({
         statusBar: {
           placement: "status-bar",
+          mobileFooter: true,
           rateLimits: {
             enabled: false,
             hiddenProviders: ["codex"],
@@ -109,6 +144,7 @@ describe("useLayoutStore", () => {
 
       expect(useLayoutStore.getState().statusBar).toEqual({
         placement: "status-bar",
+        mobileFooter: true,
         rateLimits: {
           enabled: false,
           hiddenProviders: ["codex"],
@@ -138,6 +174,7 @@ describe("useLayoutStore", () => {
       await rehydrateFrom({
         statusBar: {
           placement: "footer",
+          mobileFooter: "yes",
           rateLimits: {
             enabled: "yes",
             hiddenProviders: "codex",
@@ -153,6 +190,7 @@ describe("useLayoutStore", () => {
 
       expect(useLayoutStore.getState().statusBar).toEqual({
         placement: "status-bar",
+        mobileFooter: false,
         rateLimits: {
           enabled: true,
           hiddenProviders: [],

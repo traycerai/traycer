@@ -1,6 +1,8 @@
 import {
   alwaysAvailable,
+  isMobileFooterRowAvailable,
   isStatusBarControlsAvailable,
+  isStatusBarPlacementAvailable,
 } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
@@ -14,8 +16,9 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
  * word a reader who remembers the old home will type.
  *
  * The footer controls are gated on the BUILD: the installed mobile app draws
- * no status bar, so `isStatusBarControlsAvailable` withholds them and the
- * group collapses to a note plus the one row that was never about the footer.
+ * the status bar only once `Footer status bar` is switched on, so until it is
+ * `isStatusBarControlsAvailable` withholds them and the group collapses to
+ * that switch, a note, and the one row that was never about the footer.
  */
 export const LAYOUT = defineSettingsSection("layout", {
   page: {
@@ -69,16 +72,44 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: alwaysAvailable,
     keywords: ["footer", "bottom bar", "strip", "usage", "rate limits"],
   },
-  // The note that stands in for the group's contents on a build with no
-  // footer. It has no entry of its own: a search result promising it would
-  // land on nothing wherever the footer IS drawn.
+  // The group's first row wherever the footer is withheld by default, which is
+  // why it sits above the note rather than under the controls it unlocks: on a
+  // phone every other row in this group is downstream of this answer.
+  //
+  // It owns an entry, gated on the installed app - the one shell where it is
+  // unconditional. A narrow desktop WINDOW draws it too (the footer is
+  // withheld at that width as well), and that half is a MODE rather than a
+  // shell, the same argument `headerResourceMonitor` makes one row down: no
+  // index can promise a row that a resize takes away.
+  mobileFooter: {
+    kind: "row",
+    group: "statusBar",
+    search: { anchor: "layout-status-bar-mobile-footer" },
+    label: "Footer status bar",
+    description:
+      "Show the status bar at the bottom on phones and narrow windows. Hidden while the keyboard or the navigation drawer is open.",
+    availableWhen: isMobileFooterRowAvailable,
+    keywords: [
+      "mobile",
+      "phone",
+      "footer",
+      "bottom",
+      "strip",
+      "narrow",
+      "keyboard",
+      "drawer",
+    ],
+  },
+  // The note that stands in for the group's contents while the footer is off.
+  // It has no entry of its own: a search result promising it would land on
+  // nothing wherever the footer IS drawn.
   desktopOnlyNote: {
     kind: "row",
     group: "statusBar",
     search: { contributesTo: "statusBar" },
-    label: "Status bar is desktop-only",
+    label: "Off by default on phones",
     description:
-      "The mobile app keeps usage limits and the resource monitor in its header.",
+      "The header keeps usage limits and the resource monitor either way.",
     availableWhen: alwaysAvailable,
     keywords: ["mobile", "phone", "desktop"],
   },
@@ -102,13 +133,28 @@ export const LAYOUT = defineSettingsSection("layout", {
       "show global resources button",
     ],
   },
+  // A MODE now, so it folds into the group rather than promising an anchor a
+  // resize takes away - exactly the shape `headerResourceMonitor` above has,
+  // and it lost its own entry for the same reason.
+  //
+  // Two facts decide whether this row is drawn and only one of them is a
+  // shell: the BUILD (`isStatusBarPlacementAvailable` - the installed app has
+  // no second surface to move the gauge to), and the VIEWPORT, since below
+  // `md` the shell reads `mobileFooter` in place of `placement` and the
+  // segment's two options do the same thing. No predicate can carry the
+  // second, so an anchored entry here resolved to nothing in any window
+  // narrower than `md`.
   placement: {
     kind: "row",
     group: "statusBar",
-    search: { anchor: "layout-status-bar-placement" },
+    search: { contributesTo: "statusBar" },
     label: "Placement",
     description: "Where usage limits and the resource monitor live.",
-    availableWhen: isStatusBarControlsAvailable,
+    // NOT `isStatusBarControlsAvailable`: switching the phone's footer on
+    // hands it every other footer control and still no second surface to move
+    // the gauge to. Kept even though search no longer reads it - the PANEL
+    // gates on this, and the gate belongs beside the row it governs.
+    availableWhen: isStatusBarPlacementAvailable,
     keywords: ["header", "footer", "bottom", "position", "move"],
   },
   percentMode: {

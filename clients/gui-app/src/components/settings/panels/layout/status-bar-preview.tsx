@@ -63,7 +63,9 @@ import { useLayoutStore } from "@/stores/settings/layout-store";
  * leaves the frame ~944px at most: a nominal the pane can never draw would put
  * the resource cluster off the right edge at the DEFAULT width, which is the
  * reported bug moved one cluster over. `wide` is the default, so the first
- * thing a reader sees is every switch doing something.
+ * thing a reader sees is every switch doing something - except below `md`,
+ * where `normal` is, because that is the band the strip's own forced `compact`
+ * rung sits in and a phone should open on a picture of ITS strip.
  */
 export type StatusBarPreviewWidth = "narrow" | "normal" | "wide";
 
@@ -133,15 +135,24 @@ export function StatusBarPreview(props: {
   readonly hasExplicitPick: boolean;
 }): ReactNode {
   const compact = useSettingsDensity() === "compact";
-  const [width, setWidth] = useState<StatusBarPreviewWidth>("wide");
   const placement = useLayoutStore((state) => state.statusBar.placement);
-  // Placement is only half of "is the strip on screen". Below `md` the shell
-  // does not mount it whatever placement says, and the header keeps both
-  // controls (`AppShell`) - so the frame is a picture of a surface that is not
-  // drawn at this width either, and saying so is the same honesty the
-  // header-placement caption already owes.
+  const mobileFooter = useLayoutStore((state) => state.statusBar.mobileFooter);
+  // Below `md` the shell answers with `mobileFooter` and ignores placement
+  // entirely (`AppShell`), because the header keeps both controls at that
+  // width whatever placement says - so the frame is a picture of a surface
+  // that is only drawn there once the switch is on, and saying so is the same
+  // honesty the header-placement caption already owes.
   const narrowViewport = useIsMobileViewport();
-  const stripDrawn = placement === "status-bar" && !narrowViewport;
+  const stripDrawn = narrowViewport ? mobileFooter : placement === "status-bar";
+  // `normal` rather than `wide` below `md`, and only as the STARTING width: the
+  // strip forces the `compact` rung on a mobile viewport whatever it measures
+  // (`ScopedAppStatusBar`), and 880 is the nominal width inside that band. A
+  // phone opening this group therefore sees the rung its own footer draws
+  // rather than one two steps more detailed. The control still moves freely
+  // from there - it is a way of looking at the strip, not a claim about it.
+  const [width, setWidth] = useState<StatusBarPreviewWidth>(
+    narrowViewport ? "normal" : "wide",
+  );
   const { sentinelRef, stickyRef } = useStuckAttribute();
   const widthOption = PREVIEW_WIDTHS[width];
   const density = statusBarDensityForWidth(widthOption.widthPx);
@@ -326,9 +337,10 @@ export function StatusBarPreview(props: {
           <p className="text-ui-sm text-muted-foreground">
             {/* The narrow case gets its own sentence because the other one
               would be a false promise there: flipping placement changes
-              nothing at this width. */}
+              nothing at this width, and the switch that does is the one named
+              here. */}
             {narrowViewport
-              ? "The strip is not shown at this window width; the header keeps its controls."
+              ? "Shown at this window width when Footer status bar is on."
               : "Shown when placement is Status bar."}
           </p>
         )}

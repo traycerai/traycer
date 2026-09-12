@@ -19,6 +19,7 @@ import {
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   dispatchAction,
   type KeybindingRouter,
@@ -142,8 +143,16 @@ vi.mock("@/components/resources/resource-monitor-popover", () => ({
     readonly trigger: string;
     readonly triggerNode?: React.ReactNode;
     readonly contentSide?: string;
+    readonly claimsOpenAction: boolean;
   }) => (
-    <div data-testid="resource-monitor-popover" data-side={props.contentSide}>
+    <div
+      data-testid="resource-monitor-popover"
+      data-side={props.contentSide}
+      // Whether THIS mount registers `app.resources.open` is the strip's
+      // decision, made here and honoured there; the popover's own suite owns
+      // the honouring half.
+      data-claims-open-action={String(props.claimsOpenAction)}
+    >
       {props.triggerNode}
     </div>
   ),
@@ -774,5 +783,195 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
     );
 
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+/**
+ * The strip on a phone, where it is opt-in and the mobile header keeps its own
+ * gauge beside it. Both facts below follow from that second half: the strip is
+ * no longer the only surface on screen, so it neither draws at its measured
+ * width nor claims a chord the header is still holding.
+ */
+describe("<AppStatusBar /> on a mobile viewport", () => {
+  const DESKTOP_VIEWPORT_WIDTH = 1280;
+  const MOBILE_VIEWPORT_WIDTH = 390;
+
+  function setViewportWidth(width: number): void {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: width,
+    });
+  }
+
+  beforeEach(() => {
+    scope = hostScopeFixture({});
+    useWatchHostStore.setState({ scopedHostId: null });
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    resetRateLimitMocks();
+    resourceProjection.value = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    useWatchHostStore.setState({ scopedHostId: null });
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    resetRateLimitMocks();
+    resourceProjection.value = null;
+  });
+
+  it("draws at the compact rung whatever it measures", () => {
+    // Measured, a phone is `icon-only` - its bar IS the viewport, and every
+    // phone is under 500px - which would leave the opt-in footer drawing the
+    // same provider icons the mobile header already shows and no readings at
+    // all. `compact` caps the ladder at `no-timers` instead: percentages and
+    // their labels, no mode word, no mini bars, no countdowns.
+    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+
+    render(<AppStatusBar />);
+
+    expect(
+      screen.getByTestId("app-status-bar").getAttribute("data-density"),
+    ).toBe("compact");
+  });
+
+  it("keeps the measured rung on a desktop window", () => {
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+
+    render(<AppStatusBar />);
+
+    expect(
+      screen.getByTestId("app-status-bar").getAttribute("data-density"),
+    ).toBe("full");
+  });
+
+  it("leaves app.rate-limits.open to the header it is sharing the screen with", () => {
+    // The slot holds ONE handler and an unregister clears only its own, so a
+    // strip that registered here would displace the mobile header's and then
+    // - unmounting for the keyboard or the drawer - take the chord away
+    // outright, with the header button still on screen and its effect long
+    // past re-running. Nothing is lost: the cluster's own trigger is a tap
+    // away, and it opens the same panel.
+    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+
+    render(<AppStatusBar />);
+
+    act(() => {
+      expect(
+        dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER),
+      ).toBe(false);
+    });
+
+    expect(screen.queryByTestId("rate-limit-popover-stub")).toBeNull();
+  });
+
+  it("takes the chord back when the window is no longer narrow", () => {
+    // The registration follows the viewport rather than the mount, so a
+    // desktop window narrowed and widened again is not left chordless.
+    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+    const view = render(<AppStatusBar />);
+
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    act(() => {
+      view.rerender(<AppStatusBar />);
+    });
+
+    act(() => {
+      expect(
+        dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER),
+      ).toBe(true);
+    });
+
+    expect(screen.getByTestId("rate-limit-popover-stub")).not.toBeNull();
+  });
+});
+
+/**
+ * Which mount holds `app.resources.open`, decided by the strip and handed to
+ * the popover as a prop (the popover's own suite owns honouring it).
+ *
+ * The resource popover is mounted by the HEADER as well as by the strip, so
+ * unlike the usage chord this cannot be a flat "stand down when narrow": with
+ * the header's monitor switched off there is no other mount, and standing
+ * down would leave the action with no owner at all.
+ */
+describe("<AppStatusBar /> resource action ownership", () => {
+  const DESKTOP_VIEWPORT_WIDTH = 1280;
+  const MOBILE_VIEWPORT_WIDTH = 390;
+
+  function setViewportWidth(width: number): void {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: width,
+    });
+  }
+
+  function claimsOpenAction(): string | null {
+    return screen
+      .getByTestId("resource-monitor-popover")
+      .getAttribute("data-claims-open-action");
+  }
+
+  beforeEach(() => {
+    scope = hostScopeFixture({});
+    useWatchHostStore.setState({ scopedHostId: null });
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useSettingsStore.setState({ showGlobalResourceMonitor: true });
+    resetRateLimitMocks();
+    resourceProjection.value = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    useWatchHostStore.setState({ scopedHostId: null });
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+    resetRateLimitMocks();
+    resourceProjection.value = null;
+  });
+
+  it("claims it on a desktop window, where placement keeps the two mounts apart", () => {
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+
+    render(<AppStatusBar />);
+
+    expect(claimsOpenAction()).toBe("true");
+  });
+
+  it("stands down on a mobile viewport while the header draws its own monitor", () => {
+    // Both are on screen there - the header keeps its monitor whatever the
+    // footer does - and the header is the one that survives an open keyboard
+    // or nav drawer, so the strip must not displace its handler and then
+    // delete the slot on the way out.
+    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+
+    render(<AppStatusBar />);
+
+    expect(claimsOpenAction()).toBe("false");
+  });
+
+  it("takes it on a mobile viewport when the header draws no monitor", () => {
+    // Nothing to collide with: standing down here would leave the action with
+    // no owner at all.
+    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+    useSettingsStore.setState({ showGlobalResourceMonitor: false });
+
+    render(<AppStatusBar />);
+
+    expect(claimsOpenAction()).toBe("true");
+  });
+
+  it("takes it back when the window is no longer narrow", () => {
+    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+    const view = render(<AppStatusBar />);
+    expect(claimsOpenAction()).toBe("false");
+
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    act(() => {
+      view.rerender(<AppStatusBar />);
+    });
+
+    expect(claimsOpenAction()).toBe("true");
   });
 });

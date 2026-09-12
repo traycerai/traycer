@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
+import { SETTINGS_SEARCH_ENTRIES } from "@/lib/settings-search/settings-search-entries";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
@@ -468,8 +469,18 @@ describe("<LayoutSettingsPanel />", () => {
 
       expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
       // The GROUP stays on the build, not the viewport: a temporarily narrow
-      // window must not hide the placement setting.
-      expect(screen.getByRole("button", { name: "Status bar" })).toBeTruthy();
+      // window must not hide the usage and resource settings, which describe a
+      // strip this window still has as soon as it is widened.
+      expect(
+        screen.getByRole("switch", { name: "Show usage limits" }),
+      ).toBeTruthy();
+      // Placement is the one row that DOES follow the viewport, because below
+      // `md` it decides nothing: `AppShell` reads `mobileFooter` instead, and
+      // that switch takes its place.
+      expect(screen.queryByRole("button", { name: "Status bar" })).toBeNull();
+      expect(
+        screen.getByRole("switch", { name: "Footer status bar" }),
+      ).toBeTruthy();
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -1032,11 +1043,96 @@ describe("<LayoutSettingsPanel />", () => {
     );
   });
 
+  // The mobile footer's opt-in switch, and the three things it moves: the
+  // group it unlocks, the row order it sits at the top of, and the search
+  // index, which re-answers because the availability context subscribes to it.
+  describe("mobile footer switch", () => {
+    function footerSwitch(): HTMLElement {
+      return screen.getByRole("switch", { name: "Footer status bar" });
+    }
+
+    it("is the group's first row in the installed mobile app, above the note", () => {
+      // On a phone every other row in this group is downstream of this
+      // answer, so it reads first - and a control that moved when it was
+      // flipped would move under the finger that flipped it.
+      setMobileApp(true);
+      render(<LayoutSettingsPanel />);
+
+      const group = screen.getByTestId("layout-status-bar-group");
+      const note = screen.getByText("Off by default on phones");
+      expect(
+        footerSwitch().compareDocumentPosition(note) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(group.contains(footerSwitch())).toBe(true);
+    });
+
+    it("opens the whole group when flipped on, without the placement segment", () => {
+      setMobileApp(true);
+      render(<LayoutSettingsPanel />);
+      expect(
+        screen.queryByRole("switch", { name: "Show usage limits" }),
+      ).toBeNull();
+
+      fireEvent.click(footerSwitch());
+
+      expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(true);
+      expect(trackSettingChanged).toHaveBeenCalledWith(
+        "layout",
+        "layout.statusBar.mobileFooter",
+      );
+      // The availability context subscribes to the store key, so the gate that
+      // collapses the group re-answers in the same commit - no remount, no
+      // second render pass to wait on.
+      expect(
+        screen.getByRole("switch", { name: "Show usage limits" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("switch", { name: "Show resource monitor" }),
+      ).toBeTruthy();
+      expect(screen.getByTestId("status-bar-preview-frame")).toBeTruthy();
+      // Placement does NOT come back: the mobile header keeps both controls
+      // whatever it says, so the segment would pick between two identical
+      // outcomes.
+      expect(screen.queryByRole("button", { name: "Header" })).toBeNull();
+      // And the switch is still there to turn it off again - it is the one
+      // control that survives its own gate.
+      expect(footerSwitch()).toBeTruthy();
+    });
+
+    it("closes the group again when flipped back off", () => {
+      setMobileApp(true);
+      useLayoutStore.setState({
+        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, mobileFooter: true },
+      });
+      render(<LayoutSettingsPanel />);
+
+      fireEvent.click(footerSwitch());
+
+      expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(false);
+      expect(
+        screen.queryByRole("switch", { name: "Show usage limits" }),
+      ).toBeNull();
+      expect(screen.getByText("Off by default on phones")).toBeTruthy();
+    });
+
+    it("is absent on a desktop build at a desktop width", () => {
+      // The switch is about a viewport this window is not in, and `placement`
+      // is the live question here instead.
+      render(<LayoutSettingsPanel />);
+
+      expect(
+        screen.queryByRole("switch", { name: "Footer status bar" }),
+      ).toBeNull();
+      expect(screen.getByRole("button", { name: "Header" })).toBeTruthy();
+    });
+  });
+
   it("collapses the status bar group to the note and the header resource-monitor row in the installed mobile app, with no preview", () => {
     setMobileApp(true);
     render(<LayoutSettingsPanel />);
 
-    expect(screen.getByText("Status bar is desktop-only")).toBeTruthy();
+    expect(screen.getByText("Off by default on phones")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Placement" })).toBeNull();
     expect(
       screen.queryByRole("switch", { name: "Show usage limits" }),
@@ -1416,6 +1512,7 @@ describe("<LayoutSettingsPanel />", () => {
         runnerHost: null,
         featureSettings: null,
         mobileApp: false,
+        mobileFooter: false,
       };
       expect(isStatusBarControlsAvailable(context)).toBe(true);
       const { container } = render(<LayoutSettingsPanel />);
@@ -1429,11 +1526,66 @@ describe("<LayoutSettingsPanel />", () => {
         runnerHost: null,
         featureSettings: null,
         mobileApp: true,
+        mobileFooter: false,
       };
       expect(isStatusBarControlsAvailable(context)).toBe(false);
       const { container } = render(<LayoutSettingsPanel />);
 
       assertSettingsSearchTargets("layout", context, container);
+    });
+
+    it("matches the index in the installed mobile app with the footer on", () => {
+      setMobileApp(true);
+      useLayoutStore.setState({
+        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, mobileFooter: true },
+      });
+      const context: SettingsAvailabilityContext = {
+        runnerHost: null,
+        featureSettings: null,
+        mobileApp: true,
+        mobileFooter: true,
+      };
+      expect(isStatusBarControlsAvailable(context)).toBe(true);
+      const { container } = render(<LayoutSettingsPanel />);
+
+      assertSettingsSearchTargets("layout", context, container);
+    });
+
+    it("promises no Placement anchor on a desktop build narrowed below md", () => {
+      // The case that made `Placement` give up its own anchor: the segment is
+      // hidden at this width (the shell reads `mobileFooter` instead) while
+      // every shell-level predicate still says "desktop", so an anchored entry
+      // would be indexed here and resolve to nothing.
+      //
+      // Asserted row by row rather than through `assertSettingsSearchTargets`,
+      // which is a contract about SHELLS: several rows on this page are gated
+      // on the viewport (the sidebar's Panels group, the mobile switch itself),
+      // and a width is a mode every one of them answers differently.
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 400,
+      });
+      try {
+        const { container } = render(<LayoutSettingsPanel />);
+
+        expect(screen.queryByRole("button", { name: "Header" })).toBeNull();
+        expect(
+          container.querySelector(
+            '[data-settings-anchor="layout-status-bar-placement"]',
+          ),
+        ).toBeNull();
+        // And nothing in the index still points at it, in any shell.
+        expect(
+          SETTINGS_SEARCH_ENTRIES.some(
+            (entry) => entry.anchor === "layout-status-bar-placement",
+          ),
+        ).toBe(false);
+      } finally {
+        Object.defineProperty(window, "innerWidth", {
+          configurable: true,
+          value: 1024,
+        });
+      }
     });
   });
 
@@ -1479,7 +1631,7 @@ describe("<LayoutSettingsPanel />", () => {
       setMobileApp(true);
       render(<LayoutSettingsPanel />);
 
-      expect(screen.getByText("Status bar is desktop-only")).toBeTruthy();
+      expect(screen.getByText("Off by default on phones")).toBeTruthy();
       const tabsGroup = screen.getByTestId("layout-tabs-group");
 
       fireEvent.click(

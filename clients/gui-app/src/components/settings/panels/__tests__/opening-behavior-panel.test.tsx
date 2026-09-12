@@ -240,7 +240,12 @@ describe("<OpeningBehaviorPanel /> search targets", () => {
 
     assertSettingsSearchTargets(
       "opening-behavior",
-      { runnerHost: null, featureSettings: null, mobileApp: false },
+      {
+        runnerHost: null,
+        featureSettings: null,
+        mobileApp: false,
+        mobileFooter: false,
+      },
       container,
     );
   });

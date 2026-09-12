@@ -832,7 +832,11 @@ function renderPopover(): void {
   render(
     <TooltipProvider>
       <ResourcesStreamMount epicId="epic-1" />
-      <ResourceMonitorPopover trigger="header-button" className={undefined} />
+      <ResourceMonitorPopover
+        trigger="header-button"
+        className={undefined}
+        claimsOpenAction
+      />
     </TooltipProvider>,
   );
 }
@@ -911,6 +915,41 @@ describe("ResourceMonitorPopover", () => {
         true,
       );
     });
+    expect(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+    ).not.toBeNull();
+  });
+
+  it("registers no handler for that action when it is not the claimant", () => {
+    // One slot, several possible mounts, and an unregister that clears only
+    // its own handler - so a mount that is not the owner must register
+    // NOTHING rather than register and hope to lose the race. Registering
+    // would displace the owner's handler and then, on unmount, delete the slot
+    // and leave the owner chordless with no way to re-arm.
+    installStubFactory();
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction={false}
+        />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      expect(dispatchAction("app.resources.open", DYNAMIC_ACTION_ROUTER)).toBe(
+        false,
+      );
+    });
+    expect(
+      screen.queryByRole("searchbox", { name: "Search resources" }),
+    ).toBeNull();
+
+    // And the panel is still reachable the way that mount's own user reaches
+    // it - standing down costs the chord, never the surface.
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     expect(
       screen.getByRole("searchbox", { name: "Search resources" }),
     ).not.toBeNull();
@@ -2353,7 +2392,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3562,7 +3605,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3589,7 +3636,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3645,7 +3696,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3670,7 +3725,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3741,7 +3800,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -3783,7 +3846,11 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -4593,7 +4660,11 @@ describe("ResourceMonitorPopover · host picker", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
       </TooltipProvider>,
     );
 
@@ -5021,6 +5092,7 @@ describe("ResourceMonitorPopover · custom trigger", () => {
         <ResourcesStreamMount epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="custom"
+          claimsOpenAction
           contentSide="top"
           triggerNode={
             <button type="button" data-testid="status-bar-trigger">
