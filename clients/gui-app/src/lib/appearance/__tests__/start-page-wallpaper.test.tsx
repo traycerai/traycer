@@ -315,6 +315,40 @@ describe("applyCuratedStartPageWallpaper / chooseStartPageWallpaper", () => {
     });
   });
 
+  it("keeps the previous pair intact when the replacement write fails", async () => {
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "old.png",
+        curatedId: null,
+      },
+    });
+    imageProcessingMocks.process.mockResolvedValue({
+      blob: new Blob(["custom"], { type: "image/webp" }),
+      width: 800,
+      height: 600,
+    });
+    cacheMocks.write.mockRejectedValue(new Error("quota exceeded"));
+
+    await expect(
+      chooseStartPageWallpaper(
+        new File(["custom"], "new.png", { type: "image/png" }),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("quota exceeded");
+
+    // The blob store write is atomic per key, so the old bytes survived a
+    // failed replacement - deleting them here is what would strand the row
+    // that still describes them.
+    expect(cacheMocks.remove).not.toHaveBeenCalled();
+    expect(useSettingsStore.getState().startPageWallpaper).toMatchObject({
+      name: "old.png",
+      curatedId: null,
+    });
+  });
+
   it("writes curatedId: null when choosing a custom file", async () => {
     imageProcessingMocks.process.mockResolvedValue({
       blob: new Blob(["custom"], { type: "image/webp" }),

@@ -715,6 +715,17 @@ const RANGE_INPUT_KEYS = new Set([
 function GlassControl() {
   const opacity = useThemeLibraryStore((state) => state.glassOpacity);
   const setOpacity = useThemeLibraryStore((state) => state.setGlassOpacity);
+  // The value the current interaction started from. The slider clamps at 30
+  // and 100, so an arrow key at either end - or a drag that returns where it
+  // began - ends on the value it started on and reports nothing.
+  const interactionStart = useRef(opacity);
+  const reportIfMoved = (): void => {
+    if (
+      useThemeLibraryStore.getState().glassOpacity === interactionStart.current
+    )
+      return;
+    trackSettingChanged("appearance", "glassOpacity");
+  };
   return (
     <SettingsRow
       row={APPEARANCE.definitions.backgroundOpacity}
@@ -727,17 +738,19 @@ function GlassControl() {
             max={100}
             value={opacity}
             onChange={(event) => setOpacity(Number(event.target.value))}
-            // Once per drag, not once per tick.
-            onPointerUp={() =>
-              trackSettingChanged("appearance", "glassOpacity")
-            }
-            // Keyboard users never fire onPointerUp, so mirror it here -
-            // once per key press, not once per tick - filtered to the keys
-            // that actually move a range input.
+            // Once per interaction, not once per tick. Keyboard users never
+            // fire the pointer pair, so the key pair mirrors it, filtered to
+            // the keys that actually move a range input.
+            onPointerDown={() => {
+              interactionStart.current = opacity;
+            }}
+            onPointerUp={reportIfMoved}
+            onKeyDown={(event) => {
+              if (RANGE_INPUT_KEYS.has(event.key))
+                interactionStart.current = opacity;
+            }}
             onKeyUp={(event) => {
-              if (RANGE_INPUT_KEYS.has(event.key)) {
-                trackSettingChanged("appearance", "glassOpacity");
-              }
+              if (RANGE_INPUT_KEYS.has(event.key)) reportIfMoved();
             }}
             className="accent-primary"
           />

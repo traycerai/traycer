@@ -112,10 +112,10 @@ async function storeStartPageWallpaper(args: {
     try {
       await writeAppearanceBlob(START_PAGE_WALLPAPER_KEY, args.blob);
     } catch (error) {
-      // Keep bytes and settings consistent when storage fails.
-      await removeAppearanceBlob(START_PAGE_WALLPAPER_KEY).catch(
-        () => undefined,
-      );
+      // The store write is atomic per key, so a failed replacement leaves the
+      // previous bytes intact - and leaving the row alone too keeps the pair
+      // the user already had. Deleting the bytes here is what would strand
+      // the row.
       invalidateStartPageWallpaper();
       throw error;
     }

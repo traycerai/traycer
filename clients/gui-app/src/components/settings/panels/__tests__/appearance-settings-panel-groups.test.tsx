@@ -83,6 +83,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     // reaches userspace; jsdom does not, so the change is simulated here
     // the same way the pointer-drag path is simulated (fireEvent.change),
     // leaving keyUp to answer only for the analytics side of the fix.
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
     fireEvent.change(slider, { target: { value: "90" } });
     fireEvent.keyUp(slider, { key: "ArrowLeft" });
 
@@ -92,6 +93,20 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       "appearance",
       "glassOpacity",
     );
+  });
+
+  it("reports nothing for a keyboard press the clamp leaves unmoved", () => {
+    // 30 is the slider's floor, so ArrowLeft there changes nothing and there
+    // is no setting change to report.
+    useThemeLibraryStore.setState({ glassOpacity: 30 });
+    renderPanel(queryClient);
+
+    const slider = screen.getByRole("slider", { name: "Background opacity" });
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+    fireEvent.keyUp(slider, { key: "ArrowLeft" });
+
+    expect(useThemeLibraryStore.getState().glassOpacity).toBe(30);
+    expect(analyticsMocks.trackSettingChanged).not.toHaveBeenCalled();
   });
 
   it("renders the named group headings in order", () => {
