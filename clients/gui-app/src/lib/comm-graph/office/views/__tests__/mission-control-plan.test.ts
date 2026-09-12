@@ -12,6 +12,17 @@ import {
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import type { OfficePopulation } from "@/lib/comm-graph/office/office-population";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import {
+  OFFICE_SIGN_FONT_PX,
+  OFFICE_SIGN_LETTER_SPACING_EM,
+  OFFICE_SIGN_NARROW_PLATE_MAX_CHARS,
+  OFFICE_SIGN_PADDING_X,
+  OFFICE_SIGN_PLATE_MAX_CHARS,
+  officePlateRungs,
+  officeSignCenterX,
+  officeSignsToDraw,
+  type OfficeSignToDraw,
+} from "@/lib/comm-graph/office/office-signs";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import type { OfficeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
@@ -1589,6 +1600,351 @@ describe("mission-control cold-review findings", () => {
       );
       expect(frame).toHaveLength(1);
       expect(seen).toEqual([0]);
+    }
+  });
+});
+
+/**
+ * Fixup 5 (finding M3, amphitheatre half): a lead's plate used to be
+ * `widthTiles: 1` at a single tile beside the lead's console, drawn at a
+ * fixed face and centred on that one tile - so a twelve-character
+ * `team-26-lead` reached several consoles either side and the next opaque
+ * plate painted over it (`TEAM-3-LE│TEAM-4-LE…`, the live screenshot's own
+ * `team-3-lead` vs `team-4-lead` pair). The fix (`tierRunAt` in
+ * `mission-control-plan.ts`) hands each lead plate the team's own
+ * contiguous run of consoles on its tier and declares `rungs: "name"`, so
+ * `officeSignsToDraw` walks `officePlateRungs`'s ladder - the same ladder
+ * the oblique views' pod plates already use - and drops the plate rather
+ * than drawing it over the run next door.
+ *
+ * Case 1 pins the general property - no two resolved plates on one tier's
+ * row overlap, and every plate stays inside its own run - on the
+ * 309-agent triage population the live finding came from. Case 2 walks the
+ * ladder itself on a synthetic tier of two-seat teams. The last case guards
+ * the fix against leaking into the HQ board, the Lounge area sign and the
+ * host signs, which this fixup does not touch.
+ */
+describe("mission control plates: fixup 5 - plates fit their own arc segment and never overlap", () => {
+  /**
+   * A plate's width in the face it is ACTUALLY DRAWN IN, derived the same
+   * way `oblique-plan.test.ts`'s fixup 6 rule 2 block derives it, rather
+   * than hard-coded: `ctx.letterSpacing` counts towards `measureText` as
+   * well as the painted glyphs, so leaving the tracking out under-reports
+   * every plate by the exact margin that separates a rung that fits from
+   * one that overflows the run it names.
+   */
+  const MONOSPACE_ADVANCE_EM = 0.6;
+  const CHAR_PX =
+    OFFICE_SIGN_FONT_PX *
+    (MONOSPACE_ADVANCE_EM + OFFICE_SIGN_LETTER_SPACING_EM);
+  const PLATE_PADDING_PX = OFFICE_SIGN_PADDING_X * 2;
+  function measure(text: string): number {
+    return text.length * CHAR_PX + PLATE_PADDING_PX;
+  }
+  /** Float slack for the tile-space arithmetic below, not a real tolerance. */
+  const EPS = 0.01;
+
+  it("keeps every resolved plate inside its own run and never overlapping its neighbour on the same tier, on the 309-agent triage population", () => {
+    const epic = makeTestEpic("triage", 309, 1);
+    const planned = planFresh(epic, VIEWPORT_WIDE);
+    const layout = planned.layout;
+    // EVERY plate the view draws, not only the ones a filter on `rungs`
+    // would find - "the plates this view draws all fit" is the property,
+    // and filtering on the field the fix added would pass on a plan that
+    // had stopped declaring one.
+    const plates = layout.signs.filter((sign) => sign.kind === "plate");
+    expect(plates.length).toBeGreaterThan(0);
+
+    const statusById = new Map(epic.statusById);
+    const nameById = new Map(
+      epic.agents.map((agent) => [agent.id, agent.name]),
+    );
+    const visibleAgentIds = new Set(epic.agents.map((agent) => agent.id));
+    const projector = MISSION_CONTROL_VIEW.painter.projector(layout);
+    // The three fit-estimate zooms this suite already pins for 309 agents:
+    // the lowest and highest supported zoom, and the wide-viewport fit
+    // itself (`PINNED_FIT.agents309.wide`).
+    const zooms = [0.7, PINNED_FIT.agents309.wide, 1.6];
+
+    const offenders: string[] = [];
+    for (const zoom of zooms) {
+      const drawn = officeSignsToDraw({
+        signs: plates,
+        visibleAgentIds,
+        statusById,
+        nameById,
+        hostNameById: new Map(),
+        roleClaims: {},
+        zoom,
+        measure,
+        projector,
+        lod: 1,
+      });
+      const byRow = new Map<number, OfficeSignToDraw[]>();
+      for (const entry of drawn) {
+        const maxChars =
+          entry.sign.widthTiles >= 2
+            ? OFFICE_SIGN_PLATE_MAX_CHARS
+            : OFFICE_SIGN_NARROW_PLATE_MAX_CHARS;
+        if (entry.text.length > maxChars) {
+          offenders.push(
+            `zoom=${zoom}: "${entry.text}" is ${entry.text.length} chars, over its ${maxChars}-char budget`,
+          );
+        }
+        const bucket = byRow.get(entry.sign.tile.row);
+        if (bucket === undefined) byRow.set(entry.sign.tile.row, [entry]);
+        else bucket.push(entry);
+      }
+      for (const bucket of byRow.values()) {
+        // THE BOX IN TILE SPACE: `measure(text)` px wide, centred at
+        // `officeSignCenterX(entry) * zoom`, converted back to tiles so the
+        // comparison below is against the run the plan actually handed the
+        // sign rather than against pixels a future zoom change would shift.
+        const boxes = bucket
+          .map((entry) => {
+            const width = measure(entry.text);
+            const centerPx = officeSignCenterX(entry) * zoom;
+            return {
+              left: (centerPx - width / 2) / (OFFICE_TILE * zoom),
+              right: (centerPx + width / 2) / (OFFICE_TILE * zoom),
+              text: entry.text,
+              sign: entry.sign,
+            };
+          })
+          .sort((a, b) => a.left - b.left);
+        for (const box of boxes) {
+          if (box.left < box.sign.tile.col - EPS) {
+            offenders.push(
+              `zoom=${zoom}: "${box.text}" starts at tile ${box.left.toFixed(2)}, left of its own run starting at ${box.sign.tile.col}`,
+            );
+          }
+          if (box.right > box.sign.tile.col + box.sign.widthTiles + EPS) {
+            offenders.push(
+              `zoom=${zoom}: "${box.text}" ends at tile ${box.right.toFixed(2)}, right of its own run ending at ${box.sign.tile.col + box.sign.widthTiles}`,
+            );
+          }
+        }
+        // NO TWO PLATES ON ONE TIER'S ROW OVERLAP.
+        for (let i = 1; i < boxes.length; i += 1) {
+          if (boxes[i].left < boxes[i - 1].right - EPS) {
+            offenders.push(
+              `zoom=${zoom} row=${boxes[i].sign.tile.row}: "${boxes[i - 1].text}" overlaps "${boxes[i].text}"`,
+            );
+          }
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("walks a lead's own rung ladder on a synthetic tier of two-seat teams", () => {
+    // 12 two-seat teams: a lead, one member and the team's reserve seat is
+    // three consoles - `consoleWidthTiles` tiles apiece, read off a real
+    // console seat below rather than assumed.
+    //
+    // Which of them land whole on one tier is the PACKING's answer and not
+    // this case's premise, so nothing here counts them: a run is only ever
+    // opened at one of its aisle group's own edges, so two three-console
+    // teams fit per twelve-slot group with the middle left for walking, and
+    // a team whose turn comes with both edges taken runs on past the end of
+    // its tier. Both outcomes get the SAME assertion below - a plate spans
+    // its team's consoles ON THE LEAD'S TIER - which is the whole of the
+    // run for a team that landed whole and the clipped part of it for one
+    // that straddles, and is what `tierRunAt` is for either way.
+    const epic = teamSizedEpic(Array.from({ length: 12 }, () => 2));
+    const planned = planFresh(epic, VIEWPORT_WIDE);
+    const layout = planned.layout;
+    const frozen = requireFrozen(layout);
+    const consoleWidthTiles = firstConsole(layout).hitTiles.width;
+    const teamConsoles = 3;
+
+    interface TeamRunCheck {
+      readonly sign: OfficeSignToDraw["sign"];
+      /** The team's console cols on the lead's own tier, left to right. */
+      readonly onLeadTier: ReadonlyArray<number>;
+      /** How many of its consoles the packing left on another tier. */
+      readonly offLeadTier: number;
+    }
+
+    const teamChecks: TeamRunCheck[] = [];
+    for (const host of planned.input.partition.hosts) {
+      for (const team of host.teams) {
+        const sign = layout.signs.find(
+          (candidate) =>
+            candidate.kind === "plate" &&
+            candidate.ownerAgentId === team.teamId,
+        );
+        if (sign === undefined) {
+          throw new Error(`no plate for ${team.teamId}`);
+        }
+        const leadDesk = layout.desks.get(team.teamId);
+        if (leadDesk === undefined) {
+          throw new Error(`no desk for ${team.teamId}`);
+        }
+        const memberId = `${team.teamId.slice(0, -"-lead".length)}-member-1`;
+        const memberDesk = layout.desks.get(memberId);
+        if (memberDesk === undefined) {
+          throw new Error(`no desk for ${memberId}`);
+        }
+        const reserve = frozen.teamReserveSeatIds.find(
+          (entry) => entry.teamId === team.teamId,
+        );
+        if (reserve === undefined) {
+          throw new Error(`no reserve for ${team.teamId}`);
+        }
+        const reserveSeat = layout.seats.get(reserve.seatId);
+        if (reserveSeat === undefined) {
+          throw new Error(`no seat ${reserve.seatId}`);
+        }
+        const consoles = [
+          leadDesk.deskTile,
+          memberDesk.deskTile,
+          reserveSeat.deskTile,
+        ];
+        const onLeadTier = consoles
+          .filter((tile) => tile.row === leadDesk.deskTile.row)
+          .map((tile) => tile.col)
+          .sort((left, right) => left - right);
+        teamChecks.push({
+          sign,
+          onLeadTier,
+          offLeadTier: consoles.length - onLeadTier.length,
+        });
+      }
+    }
+    expect(teamChecks.length).toBe(12);
+
+    // THE PLATE IS ITS TEAM'S CONSOLES ON THE LEAD'S TIER, exactly: it
+    // starts at the leftmost of them and ends at the right edge of the
+    // rightmost, so it covers the arc segment it names and no tile more.
+    for (const check of teamChecks) {
+      const first = check.onLeadTier[0];
+      const last = check.onLeadTier[check.onLeadTier.length - 1];
+      expect(check.sign.tile.col).toBe(first);
+      expect(check.sign.tile.col + check.sign.widthTiles).toBe(
+        last + consoleWidthTiles,
+      );
+    }
+
+    // A TEAM THAT STRADDLES TWO TIERS IS CLIPPED TO THE LEAD'S, and the
+    // consoles it has on the other one are not counted into the plate -
+    // that plate is narrower than the team's own three consoles, and its
+    // width is the lead's tier's share of them. The fixture is chosen to
+    // produce at least one, because clipping is the half of `tierRunAt`
+    // nothing else here exercises; a packing change that stopped producing
+    // one would say so rather than quietly dropping the coverage.
+    const split = teamChecks.filter((check) => check.offLeadTier > 0);
+    expect(split.length).toBeGreaterThan(0);
+    for (const check of split) {
+      expect(check.sign.widthTiles).toBe(
+        check.onLeadTier.length * consoleWidthTiles,
+      );
+      expect(check.sign.widthTiles).toBeLessThan(
+        teamConsoles * consoleWidthTiles,
+      );
+    }
+
+    // A team the packing left whole keeps its entire run: all three
+    // consoles under one plate.
+    const wholeRun = teamChecks.filter((check) => check.offLeadTier === 0);
+    // Two, so the ladder below is walked on a plate this case knows the
+    // width of and there is a second one behind it if the first is ever
+    // the odd one out.
+    expect(wholeRun.length).toBeGreaterThanOrEqual(2);
+    for (const check of wholeRun) {
+      expect(check.sign.widthTiles).toBe(teamConsoles * consoleWidthTiles);
+    }
+
+    // ANY whole-run team's lead name comes down its ladder in the same
+    // order - full, then `team-N`, then `t-N` - so the first one is as
+    // good a probe as any; only the boundary BETWEEN `t-N` and its
+    // initials can tie for a single-digit team number (`t-3` and `t3l` are
+    // both 3 characters), and this case never needs that boundary.
+    const candidate = wholeRun[0];
+    const rungs = officePlateRungs(candidate.sign.text);
+    expect(rungs).toHaveLength(4);
+    const widthPx = candidate.sign.widthTiles * OFFICE_TILE;
+    // The zoom at which a rung's measured width exactly fills the plate's
+    // own pixels: `measure(rung)` grows with the reading, `widthPx` with
+    // the camera, and this is the boundary between them.
+    const thresholds = rungs.map((rung) => measure(rung) / widthPx);
+    // The first three thresholds must strictly decrease, or the zoom bands
+    // picked below collapse into each other. The fourth (the initials) can
+    // tie with the third for a single-digit team number - `t-0` and `t0l`
+    // are both three characters - which is why the zoom bands below never
+    // need a boundary between them.
+    for (let i = 1; i < 3; i += 1) {
+      expect(thresholds[i]).toBeLessThan(thresholds[i - 1]);
+    }
+
+    const statusById = new Map(epic.statusById);
+    const nameById = new Map(
+      epic.agents.map((agent) => [agent.id, agent.name]),
+    );
+    const visibleAgentIds = new Set(epic.agents.map((agent) => agent.id));
+    const projector = MISSION_CONTROL_VIEW.painter.projector(layout);
+    function resolvedAt(zoom: number): OfficeSignToDraw | undefined {
+      return officeSignsToDraw({
+        signs: [candidate.sign],
+        visibleAgentIds,
+        statusById,
+        nameById,
+        hostNameById: new Map(),
+        roleClaims: {},
+        zoom,
+        measure,
+        projector,
+        lod: 1,
+      })[0];
+    }
+
+    // 1. Comfortably above the full name's own threshold - 10% of headroom,
+    //    since the next rung down is always narrower and cannot fit first.
+    expect(resolvedAt(thresholds[0] * 1.1)?.text).toBe(rungs[0]);
+    // 2. Midway between the full name's threshold and `team-N`'s: below the
+    //    first, at or above the second, so only `team-N` fits.
+    expect(resolvedAt((thresholds[0] + thresholds[1]) / 2)?.text).toBe(
+      rungs[1],
+    );
+    // 3. Midway between `team-N`'s threshold and `t-N`'s: below the first,
+    //    at or above the second, so only `t-N` fits.
+    expect(resolvedAt((thresholds[1] + thresholds[2]) / 2)?.text).toBe(
+      rungs[2],
+    );
+    // 4. Half of the narrowest rung's own threshold: nothing on the ladder
+    //    fits any more, so the plate is dropped rather than drawn over the
+    //    run next door - the ticket's "team keeps only its hover name".
+    expect(resolvedAt(thresholds[3] * 0.5)).toBeUndefined();
+  });
+
+  it("leaves the HQ board, the Lounge area sign and the host signs as this fixup found them", () => {
+    const epic = makeTestEpic("triage", 309, 1);
+    const layout = planFresh(epic, VIEWPORT_WIDE).layout;
+
+    const board = layout.signs.find((sign) => sign.kind === "hq-board");
+    if (board === undefined) throw new Error("no hq-board sign");
+    expect(board.widthTiles).toBe(8);
+    expect(board.tile.row).toBe(0);
+    expect(board.rungs).toBeUndefined();
+
+    const area = layout.signs.find((sign) => sign.kind === "area");
+    if (area === undefined) throw new Error("no area sign");
+    expect(area.text).toBe("Lounge");
+    expect(area.widthTiles).toBe(2);
+    expect(area.tile.row).toBe(0);
+    // The Lounge sits to the right of the board with a one-tile gap, per
+    // `finishPacking`'s `loungeOriginCol = boardOriginCol + BOARD_COLS + 1`
+    // - checked relationally since `BOARD_COLS` is not exported, rather
+    // than repeating its value here.
+    expect(area.tile.col).toBeGreaterThan(board.tile.col + board.widthTiles);
+    expect(area.rungs).toBeUndefined();
+
+    const hostSigns = layout.signs.filter((sign) => sign.kind === "host");
+    expect(hostSigns.length).toBeGreaterThan(0);
+    for (const sign of hostSigns) {
+      expect(sign.widthTiles).toBe(2);
+      expect(sign.tile.row).toBe(layout.rows - 1);
+      expect(sign.rungs).toBeUndefined();
     }
   });
 });
