@@ -1,10 +1,11 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { FolderPlus, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import { cn } from "@/lib/utils";
 import { FolderRow } from "./folder-row";
 import type { WorkspaceRunItem } from "./workspace-run-item";
@@ -41,19 +42,9 @@ export function WorkspaceFolderRows(props: {
   /** Recent tier; null for read-only and terminal-agent binding surfaces. */
   readonly recentWorkspaces: ReactNode;
   readonly moveToRecent: boolean;
-  // True only when the rows live inside a popover (in-epic): nested popovers
-  // (branch form + its source dropdown) then portal into — and are collision-
-  // bounded by — this container so they stay inside the parent popover and a
-  // click inside them isn't treated as "interact outside". Inline (landing) it
-  // must stay false, else the short inline container collision-clips the source
-  // dropdown to near-zero height (it renders but reads as "missing").
-  readonly nestedInPopover: boolean;
 }) {
   const { items } = props;
-  // Captured so the branch-form's nested source dropdown uses this container as
-  // its collision boundary (in-epic, where the rows live inside a popover).
-  const [boundaryEl, setBoundaryEl] = useState<HTMLDivElement | null>(null);
-  const nestedBoundaryEl = props.nestedInPopover ? boundaryEl : null;
+  const nestedBoundaryEl = useDialogOverlayBoundaryEl();
 
   // Per-worktree uncommitted counts for the Location submenu annotation. Shares
   // the warm host-wide `worktree.listAllForHost` query key (same source as
@@ -101,6 +92,7 @@ export function WorkspaceFolderRows(props: {
       pending={props.addFolderPending}
       disabled={props.addFolderDisabled}
       disabledReason={props.addFolderDisabledReason}
+      iconOnly={false}
     />
   );
   // Terminal-agent "Update" action: pinned to the far right of the folder block
@@ -165,7 +157,6 @@ export function WorkspaceFolderRows(props: {
 
   return (
     <div
-      ref={setBoundaryEl}
       className="flex w-full min-w-0 items-start gap-3"
       data-testid="workspace-folder-rows"
     >
@@ -225,20 +216,30 @@ function DiscardStagedButton(props: {
   );
 }
 
+export const ADD_FOLDER_LABEL = "Add folder";
+
+/**
+ * `iconOnly` drops the visible word for a row too narrow to spare it; the
+ * button keeps its name through `aria-label` and a hover tooltip. A disabled
+ * reason still owns the tooltip when there is one - a button gets one tooltip.
+ */
 export function AddFolderButton(props: {
   readonly onAddFolder: AddFolderHandler;
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly disabledReason: string | null;
+  readonly iconOnly: boolean;
 }) {
+  const buttonDisabled = props.pending || props.disabled;
   const button = (
     <Button
       type="button"
-      size="sm"
+      size={props.iconOnly ? "icon-sm" : "sm"}
       variant="ghost"
       className="rounded-lg text-muted-foreground"
       data-testid="folder-add"
-      disabled={props.pending || props.disabled}
+      aria-label={props.iconOnly ? ADD_FOLDER_LABEL : undefined}
+      disabled={buttonDisabled}
       onClick={() => {
         void props.onAddFolder();
       }}
@@ -252,22 +253,40 @@ export function AddFolderButton(props: {
       ) : (
         <FolderPlus data-icon="inline-start" />
       )}
-      <span className="truncate">Add folder</span>
+      {props.iconOnly ? null : (
+        <span className="truncate">{ADD_FOLDER_LABEL}</span>
+      )}
     </Button>
   );
-  if (props.disabled && props.disabledReason !== null) {
-    return (
-      <TooltipWrapper
-        label={props.disabledReason}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
+  const tooltipLabel = addFolderTooltipLabel(props);
+  if (tooltipLabel === null) return button;
+  return (
+    <TooltipWrapper
+      label={tooltipLabel}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* A disabled button fires no pointer events, so a wrapper takes the
+          hover in its place. */}
+      {buttonDisabled ? (
         <span className="inline-flex w-fit">{button}</span>
-      </TooltipWrapper>
-    );
+      ) : (
+        button
+      )}
+    </TooltipWrapper>
+  );
+}
+
+function addFolderTooltipLabel(input: {
+  readonly disabled: boolean;
+  readonly disabledReason: string | null;
+  readonly iconOnly: boolean;
+}): string | null {
+  if (input.disabled && input.disabledReason !== null) {
+    return input.disabledReason;
   }
-  return button;
+  return input.iconOnly ? ADD_FOLDER_LABEL : null;
 }
 
 /**

@@ -1,4 +1,6 @@
 export const browserMutationKeys = {
+  setViewport: (hostId: string, sessionId: string, tabId: string) =>
+    ["browser.setViewport", hostId, sessionId, tabId] as const,
   /**
    * Adding is keyed by host alone - the tab it opens has no id until the host
    * answers. `null` is the host-less state a disconnected panel adds from, and

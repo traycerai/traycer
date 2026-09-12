@@ -3,7 +3,9 @@ import {
   __resetAgentActivityStoreForTests,
   __setHostAgentActivityHealthForTests,
   __setHostAgentActivityStateForTests,
+  agentActivityPlaneAnswers,
   agentActivityPlaneCoversHost,
+  agentActivityPlaneSpansFleet,
   selectAgentActivityCoverage,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
@@ -128,6 +130,70 @@ describe("selectAgentActivityCoverage", () => {
     );
 
     expect(selectAgentActivityCoverage(byHost(), null)).toBe("covered");
+  });
+});
+
+describe("merged-plane servedBy interplay (lane: merged agent-activity plane)", () => {
+  // The merged plane sends `servedBy: "local"` (this host's origin store)
+  // under the REAL link stamp whenever its union does not reach the fleet -
+  // including a `connected`-adjacent value like `disconnected` while a room
+  // is held. `servedBy` is part of the claim these predicates read, not
+  // decoration on top of it.
+
+  it("a merged host's local frame under a down link covers its own host, and reads indeterminate (not unserved) for another", () => {
+    __setHostAgentActivityHealthForTests(HOST_A, {
+      connectionStatus: "open",
+      servedBy: "local",
+      cloudSyncStatus: "disconnected",
+      stateFrameSeenThisEpoch: true,
+    });
+
+    expect(selectAgentActivityCoverage(byHost(), HOST_A)).toBe("covered");
+    expect(selectAgentActivityCoverage(byHost(), HOST_B)).toBe("indeterminate");
+    expect(agentActivityPlaneSpansFleet()).toBe(false);
+    // A `disconnected` stamp is not the "nobody is working" vouch either -
+    // `hostActivityAnswers` excludes `disconnected` by name.
+    expect(agentActivityPlaneAnswers()).toBe(false);
+  });
+
+  it("a local frame stamped connected does not span the fleet - servedBy is part of the claim", () => {
+    __setHostAgentActivityHealthForTests(HOST_A, {
+      connectionStatus: "open",
+      servedBy: "local",
+      cloudSyncStatus: "connected",
+      stateFrameSeenThisEpoch: true,
+    });
+
+    expect(agentActivityPlaneSpansFleet()).toBe(false);
+    // The slice answers (a `connected` stamp is not excluded by
+    // `hostActivityAnswers`), so the OTHER host reads the narrow-union
+    // exclusion, `unserved` - not `indeterminate`.
+    expect(selectAgentActivityCoverage(byHost(), HOST_B)).toBe("unserved");
+    expect(selectAgentActivityCoverage(byHost(), HOST_A)).toBe("covered");
+  });
+
+  it("a cloud frame stamped connected still spans the fleet (unchanged)", () => {
+    __setHostAgentActivityHealthForTests(HOST_A, {
+      connectionStatus: "open",
+      servedBy: "cloud",
+      cloudSyncStatus: "connected",
+      stateFrameSeenThisEpoch: true,
+    });
+
+    expect(selectAgentActivityCoverage(byHost(), HOST_A)).toBe("covered");
+    expect(selectAgentActivityCoverage(byHost(), HOST_B)).toBe("covered");
+  });
+
+  it("an old cloud-plane host's disconnected frame still reads indeterminate for its own host (unchanged)", () => {
+    __setHostAgentActivityHealthForTests(HOST_A, {
+      connectionStatus: "open",
+      servedBy: "cloud",
+      cloudSyncStatus: "disconnected",
+      stateFrameSeenThisEpoch: true,
+    });
+
+    expect(selectAgentActivityCoverage(byHost(), HOST_A)).toBe("indeterminate");
+    expect(selectAgentActivityCoverage(byHost(), HOST_B)).toBe("indeterminate");
   });
 });
 

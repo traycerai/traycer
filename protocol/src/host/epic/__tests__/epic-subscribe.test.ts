@@ -190,10 +190,7 @@ describe("epic.subscribe@1.0 server frames", () => {
   });
 
   it("@1.6 keeps the pause reasons the frozen minors already spoke", () => {
-    for (const pauseReason of [
-      "entitlement-lapsed",
-      "access-revoked",
-    ] as const) {
+    for (const pauseReason of ["access-revoked"] as const) {
       const frame = {
         kind: "cloudSyncStatus" as const,
         epicId: "epic-1",

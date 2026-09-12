@@ -149,6 +149,7 @@
     "eslint-plugin-react-refresh": "catalog:",
     "fake-indexeddb": "catalog:",
     "jsdom": "catalog:",
+    "lightningcss": "catalog:",
     "prettier": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

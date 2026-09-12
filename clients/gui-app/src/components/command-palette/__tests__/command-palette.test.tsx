@@ -116,7 +116,7 @@ describe("<CommandPalette />", () => {
     const firstRows = getVisibleCommandRows(document.body);
     expect(firstRows.length).toBeGreaterThan(1);
     expect(firstRows[0].className).toContain(
-      "data-[selected=true]:bg-primary/12",
+      "data-[selected=true]:bg-[color-mix(in_srgb,var(--primary)_14%,var(--popover))]",
     );
     await waitFor(() => {
       expect(firstRows[0].getAttribute("data-selected")).toBe("true");

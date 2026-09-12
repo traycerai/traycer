@@ -231,7 +231,6 @@ export type AnalyticsOnboardingStep =
 export type AnalyticsSessionImportSurface = "dialog" | "onboarding";
 
 export type AnalyticsProviderOperation =
-  | "ambient_drift"
   | "api_key"
   | "custom_path"
   | "enabled"
@@ -280,13 +279,19 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
+  | "glassOpacity"
   | "linkOpen"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
   | "preventSleepWhileRunning"
   | "quoteReplyEnabled"
   | "showGlobalResourceMonitor"
+  | "showGreeting"
   | "showNavigatorResourceStats"
+  | "showRecentHistory"
+  | "startPageWallpaper"
+  | "startPageWallpaperCurated"
+  | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
   | "summonHotkeyChord"
   | "summonHotkeyEnabled"
@@ -1150,13 +1155,19 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "defaultSelection",
   "defaultServiceTier",
   "diffViewerPreferences",
+  "glassOpacity",
   "linkOpen",
   "pinContextUsageBreakdown",
   "pointerCursors",
   "preventSleepWhileRunning",
   "quoteReplyEnabled",
   "showGlobalResourceMonitor",
+  "showGreeting",
   "showNavigatorResourceStats",
+  "showRecentHistory",
+  "startPageWallpaper",
+  "startPageWallpaperCurated",
+  "startPageWallpaperTint",
   "terminalCursorBlink",
   "terminalCursorStyle",
   "terminalFontFamily",
@@ -1631,7 +1642,6 @@ const EXACT_PROPERTY_VALUES: {
   filter: ANALYTICS_NOTIFICATION_FILTERS,
   host_state: ANALYTICS_NOTIFICATION_HOST_STATES,
   operation: new Set([
-    "ambient_drift",
     "api_key",
     "custom_path",
     "enabled",

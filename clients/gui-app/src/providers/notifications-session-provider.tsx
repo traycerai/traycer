@@ -1066,12 +1066,13 @@ function NotificationsSessionBody(
    * running on the very machine it is talking to.
    *
    * The gate is the NEGOTIATED minor, not the host's own plane selection.
-   * Those are different facts: a host may well serve local by default (the
-   * host tree has since moved to exactly that), but nothing on the wire says
-   * so, and `servedBy` reports the choice only after the room it was gating
-   * has already been acquired. This comment previously asserted the host
-   * selection itself - it had gone stale, and the stale sentence was the
-   * stated reason for withholding the lane.
+   * Those are different facts: a host's default plane is its own business
+   * (the host tree moved to local-first, then to a merged view that serves
+   * its own agents at once and still acquires the room for the others), but
+   * nothing on the wire says which, and `servedBy` reports the choice only
+   * after the room it was gating has already been acquired. This comment
+   * previously asserted the host selection itself - it had gone stale, and
+   * the stale sentence was the stated reason for withholding the lane.
    */
   const openForCurrentUser = useCallback(
     (settledFeedMode: NotificationFeedMode, cloudAuthorized: boolean): void => {
@@ -1084,13 +1085,6 @@ function NotificationsSessionBody(
       // The shared recovery contract, hoisted to `onStreamAuthError` so the
       // activity lane's two openers hand their stream the same handler.
       const onAuthError = onStreamAuthError;
-      const onEntitlementDenied = (): void => {
-        // Dormant defense for a future server-side entitlement gate: preserve a
-        // defined unavailable wall and revalidate auth instead of leaving the
-        // session in an unclassified terminal state.
-        useAuthStore.getState().setSubscriptionStatus("FREE");
-        void authService.revalidateCurrentContext();
-      };
       if (servingHostId === null) return;
       const streamHostId = servingHostId;
       // ONE reconnect policy for this host, handed to every stream opened
@@ -1166,7 +1160,6 @@ function NotificationsSessionBody(
           reconnect,
           servingStreamClient,
           onAuthError,
-          onEntitlementDenied,
           ({ rows, arrivals }) => {
             recordCompletions(
               rows.map((row) => ({
@@ -1248,7 +1241,6 @@ function NotificationsSessionBody(
     },
     [
       servingStreamClient,
-      authService,
       recordCompletions,
       servingHostId,
       windowId,
@@ -1257,10 +1249,9 @@ function NotificationsSessionBody(
       onPresenceChanged,
       onHostStreamOpened,
       // Read at the activity-lane open below (hoisted to `onAuthError`), so it
-      // belongs here. It costs no extra invalidation: it is a `useCallback`
-      // memoized on `authService` alone, which is already a dependency of this
-      // array, so its identity moves exactly when `authService` does and never
-      // on its own.
+      // belongs here. It is a `useCallback` memoized on `authService` alone,
+      // so its identity moves exactly when the auth service does and never on
+      // its own; nothing else in this callback reads the service directly.
       onStreamAuthError,
       // CALLED at the activity-lane open above, so it belongs here. Omitting
       // it did not merely risk staleness in the abstract: this callback then

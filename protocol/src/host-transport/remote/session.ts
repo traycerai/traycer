@@ -39,6 +39,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "../stream-session";
+import { isRetryableSessionLifecycleFatal } from "../stream-session";
 import type { TimerHandle } from "../timers";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -80,6 +81,8 @@ import {
   RELAY_WAKE_PROBE_TIMEOUT_MS,
   RESTORE_STALL_LOG_AFTER_MS,
   REASSEMBLY_PROGRESS_TIMEOUT_MS,
+  SESSION_LIVENESS_PROBE_TIMEOUT_MS,
+  SESSION_SILENCE_TIMEOUT_MS,
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
 import { resolveUnavailableMethodDegrade } from "./unavailable-method-degrade";
@@ -173,10 +176,13 @@ function qosForStreamMethod(method: string): QosClassValue {
  * and dies repeatedly must escalate, not present itself as a first failure
  * forever.
  *
- * Host blip (`host_detached`/`host_attached`) is NOT a resume: the same Noise
- * session persists; the scheduler pauses (holding frames, not losing them to a
- * host-less relay) and resumes. Only a socket drop or `peer_gone` triggers a
- * full attach.
+ * Host blip: `host_detached` PAUSES (the scheduler holds its frames rather
+ * than losing them to a host-less relay) and `host_attached` REBUILDS. The
+ * re-attach is not a resume and never was one - the host discards every client
+ * Noise session on any uplink close, so the frame is proof this session's
+ * responder is gone, whether or not the matching detach was ever delivered
+ * here. A socket drop, a `peer_gone` and a proven session silence all reach
+ * the same full attach.
  */
 
 /**
@@ -309,6 +315,26 @@ export interface RemoteSessionEvidence {
   ): void;
 }
 
+/**
+ * The cheap unary a session sends to DISCRIMINATE silence: has this host
+ * stopped answering, or is one slow resolver making an otherwise healthy
+ * session look dead?
+ *
+ * Deliberately untyped (`method: string`, `params: unknown`) rather than keyed
+ * off the session's RPC registry. The registry's key type would have to be
+ * threaded through every composition root that builds a session - five generic
+ * seams on the desktop client alone, none of which knows a concrete registry -
+ * so a typed probe could not actually be filled anywhere it matters. The
+ * session already indexes its manifests by string and hands `method: string,
+ * params: unknown` to its own dispatch, so nothing is lost here: an unknown
+ * method simply fails the pre-send negotiation check, which the verdict rule
+ * treats as "the probe could not be sent" and never as death.
+ */
+export type SessionLivenessProbe = {
+  readonly method: string;
+  readonly params: unknown;
+};
+
 export interface RemoteSessionOptions<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
@@ -401,6 +427,24 @@ export interface RemoteSessionOptions<
    * cache on it.
    */
   readonly clientIdentity: FirstPartyClientIdentity;
+  /**
+   * The probe behind the session-silence verdict, or `null` to make no
+   * silence claims at all.
+   *
+   * REQUIRED rather than optional, and `null` rather than a default, because
+   * the verdict it enables DROPS A LIVE CONNECTION: a composition that has not
+   * decided what a cheap, always-negotiated call looks like on ITS peer must
+   * say so rather than inherit one. `null` disables the machinery end to end -
+   * no candidate is ever raised and no verdict timer is ever armed - which is
+   * what keeps a host-to-host dialer, and every construction that does not opt
+   * in, on exactly today's behaviour.
+   *
+   * The desktop client fills it with `HOST_STATUS_LIVENESS_PROBE`
+   * (`host.status` - a released floor method, so it is negotiated on every
+   * host, and an ordinary domain resolver, so answering it exercises the whole
+   * host rather than the transport layer alone).
+   */
+  readonly livenessProbe: SessionLivenessProbe | null;
 }
 
 /**
@@ -418,6 +462,22 @@ export interface IRemoteSession<
   start(): void;
   isClosed(): boolean;
   isReady(): boolean;
+  /**
+   * Whether this session is READY and has received no in-channel frame for at
+   * least `ms` - the session's own answer to "is the host still talking to
+   * me", read by the silence machinery here and by the human Retry paths
+   * above the transport.
+   *
+   * `isReady()` is part of the predicate, which is what makes it safe behind a
+   * button: while the relay reports the host DETACHED this answers false, so a
+   * Retry pressed during an ordinary host blip stays a plain re-subscribe and
+   * never forces a redial whose handshake would bank a refusal against a host
+   * that merely blipped.
+   *
+   * Only IN-CHANNEL frames count. A relay control frame proves the relay is
+   * alive, which is the thing this predicate must not be fooled by.
+   */
+  isSilentFor(ms: number): boolean;
   /**
    * `abortSignal` is the CALLER's request authority (a cancelled TanStack
    * read, a disposed host binding). It matters because `sendUnary` can now
@@ -666,6 +726,25 @@ interface ActiveConnection {
    */
   bodyCompressionSupported: boolean;
   hostAttached: boolean;
+  /**
+   * When this connection last received a frame THROUGH THE NOISE CHANNEL -
+   * the host's own voice, as opposed to the relay's.
+   *
+   * Per connection rather than per session, so it needs no clearing and can
+   * never leak a stale stamp across a redial. Seeded at creation: a connection
+   * that has not finished its handshake has not been silent, it has not
+   * started.
+   */
+  lastInChannelInboundAt: number;
+  /**
+   * How many in-channel frames this connection has received. A MONOTONIC
+   * counter, and the only thing the silence verdict compares: an answer, an
+   * error envelope and a per-stream FATAL all arrive in-channel and all
+   * advance it, so "did anything at all reach us since the probe went out" is
+   * a counter equality rather than a wall-clock comparison that a same-
+   * millisecond frame could make ambiguous.
+   */
+  inChannelFrames: number;
 }
 
 /**
@@ -981,6 +1060,43 @@ export class RemoteSession<
    */
   private readonly streamReopenTimers = new Map<number, TimerHandle>();
   private readonly streamReopenAttempts = new Map<number, number>();
+  /**
+   * The silence probe in flight, or `null`. Single-flight by construction: a
+   * candidate raised while this is non-null is dropped, so at most one verdict
+   * timer per generation is ever armed and there is no double-drop path.
+   *
+   * `sentFrames` is `connection.inChannelFrames` at SEND time and is the whole
+   * verdict input - see the counter's own doc for why it is not a timestamp.
+   * `generation` pins the connection the probe was sent on, so a settle
+   * arriving after another cause tore that generation down reads nothing.
+   */
+  private silenceProbe: {
+    readonly generation: number;
+    readonly sentFrames: number;
+    readonly verdictTimer: TimerHandle;
+  } | null = null;
+  /**
+   * First-evidence deadlines for subscriptions opened on the current
+   * connection, keyed by stream id.
+   *
+   * The gap this closes: a subscribe that is never answered AT ALL has no
+   * bound today. The reassembly watchdog is armed only after a first chunk, so
+   * a tile whose `chat.subscribe` reaches a host that acks the session and
+   * then says nothing sits on "Still opening" until some unrelated unary
+   * happens to time out. These timers VALIDATE AT FIRE TIME (still subscribed,
+   * not restored) rather than relying on an exhaustive set of eager clears, so
+   * a stream re-keyed, closed or restored under that id since arming is a
+   * no-op. They raise a candidate; they never reopen a stream, because a
+   * subscribe with no first frame is not per-stream evidence.
+   *
+   * The bound is "this subscribe is unanswered AND the whole session has been
+   * silent for `SESSION_SILENCE_TIMEOUT_MS`", so a timer that fires into a
+   * session which spoke to SOMEONE ELSE inside its window RE-ARMS for the
+   * remainder instead of retiring - see {@link armFirstFrameDeadline}. The
+   * entry is re-`set` under the same `streamId` on each re-arm, so the eager
+   * clear on this stream's own first frame still finds it.
+   */
+  private readonly firstFrameDeadlines = new Map<number, TimerHandle>();
 
   /**
    * Throttled connect-loop failure logging (see `dial-failure-log.ts`). The
@@ -1083,6 +1199,19 @@ export class RemoteSession<
     );
   }
 
+  /** See {@link IRemoteSession.isSilentFor}. */
+  isSilentFor(ms: number): boolean {
+    const connection = this.connection;
+    if (connection === null || !this.isReady()) {
+      // Not ready is not silent. A detached host, a dial in flight and a
+      // closed session are all states with their own recovery; reporting them
+      // as silence would let a Retry force a redial at exactly the moments a
+      // redial is wrong.
+      return false;
+    }
+    return Date.now() - connection.lastInChannelInboundAt >= ms;
+  }
+
   getMethodSupport<Method extends keyof StreamRegistry & string>(
     method: Method,
   ): StreamMethodSupport {
@@ -1171,7 +1300,7 @@ export class RemoteSession<
    * the host's gauge cache shortly after — can only do so if it can TELL, and
    * a plain `HostRpcError` reads as a delivered answer.
    */
-  async sendUnary<Method extends keyof RpcRegistry & string>(
+  sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
     idempotencyKey: string | null,
@@ -1181,6 +1310,37 @@ export class RemoteSession<
     replayMustBeKeyed: boolean,
     requiredHostMethodVersion: RequiredHostMethodVersion | null,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
+    // A typed shell over the untyped path below. The registry's key type never
+    // reaches the dispatch - the body indexes its manifests by string - so
+    // splitting the two is what lets a caller INSIDE this session (the silence
+    // probe) name a method the registry type does not.
+    return this.sendUnaryUntyped(
+      method,
+      params,
+      idempotencyKey,
+      abortSignal,
+      callerAgentId,
+      responseTimeoutMs,
+      replayMustBeKeyed,
+      requiredHostMethodVersion,
+    ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
+  }
+
+  /**
+   * {@link sendUnary}'s whole body, over `method: string` / `params: unknown`.
+   * Everything the doc above says applies here; the public method adds only
+   * the registry typing.
+   */
+  private async sendUnaryUntyped(
+    method: string,
+    params: unknown,
+    idempotencyKey: string | null,
+    abortSignal: AbortSignal | null,
+    callerAgentId: string | null,
+    responseTimeoutMs: number | undefined,
+    replayMustBeKeyed: boolean,
+    requiredHostMethodVersion: RequiredHostMethodVersion | null,
+  ): Promise<unknown> {
     this.start();
     const requestId = this.options.requestId();
     if (abortSignal !== null && abortSignal.aborted) {
@@ -1331,7 +1491,7 @@ export class RemoteSession<
       responseTimeoutMs,
       idempotencyKey,
       replayMustBeKeyed,
-    ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
+    );
   }
 
   /**
@@ -1525,6 +1685,15 @@ export class RemoteSession<
                 )
               : unaryTimeoutError(requestId, method),
           );
+          // The caller settles FIRST, with the timeout it earned: whatever the
+          // session decides next about its own liveness is a different
+          // question with a different consumer.
+          //
+          // `connection` is this dispatch's own, and every drop rejects its
+          // pending unaries with their timers cleared - so a timer that fires
+          // always belongs to a generation that was current when it was armed,
+          // and `raiseSilenceCandidate` re-checks that it still is.
+          this.raiseSilenceCandidate(connection.generation, `unary:${method}`);
         }, responseTimeoutMs ?? this.options.unaryResponseMs);
         this.pendingUnary.set(streamId, {
           requestId,
@@ -1627,7 +1796,7 @@ export class RemoteSession<
     if (this.phase === "ready" && this.connection !== null) {
       this.openSubscription(this.connection, stream);
     } else {
-      stream.notifyStatus("connecting", null);
+      stream.notifyStatus("connecting", null, null);
     }
     return stream;
   }
@@ -1818,7 +1987,7 @@ export class RemoteSession<
     this.clearAllTimers();
     this.teardownConnection("closed-by-caller");
     for (const stream of this.subscriptions.values()) {
-      stream.notifyStatus("closed", { kind: "caller" });
+      stream.notifyStatus("closed", { kind: "caller" }, null);
     }
     this.subscriptions.clear();
     this.rejectAllPendingUnary(
@@ -2105,6 +2274,8 @@ export class RemoteSession<
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
       hostAttached: true,
+      lastInChannelInboundAt: Date.now(),
+      inChannelFrames: 0,
     };
     this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
   }
@@ -2148,7 +2319,10 @@ export class RemoteSession<
       return;
     }
     if (this.phase === "handshaking") {
-      this.armStandingTimer();
+      // Before ready, and harmless: this IS the host's own responder message,
+      // so it counts as the host speaking even though the session cannot
+      // carry traffic yet.
+      this.noteInChannelEvidence(connection);
       void (async () => {
         await connection.noise.readResponderMessage(bytes);
         if (!this.isCurrent(generation) || this.phase !== "handshaking") {
@@ -2172,7 +2346,12 @@ export class RemoteSession<
     // resume in arrival order — and nothing below may `await` between decrypt
     // and `reassembler.accept`, or concurrent inbound delivery could splice
     // chunk sequences. Pinned by the arrival-order conformance test.
-    this.armStandingTimer();
+    //
+    // Stamped here, BEFORE the decrypt, for the same reason the standing timer
+    // always was: arrival is the evidence, and a frame that fails to decode
+    // still proves the host is sending. It is also what keeps the silence
+    // verdict honest about an error envelope or a FATAL - both are frames.
+    this.noteInChannelEvidence(connection);
     void (async () => {
       const muxBytes = await connection.noise.decrypt(bytes);
       if (!this.isCurrent(generation)) {
@@ -2525,7 +2704,18 @@ export class RemoteSession<
       // flag, believed a recovery was in flight. Re-open it on the shared
       // backoff instead and keep it in `subscriptions`, so a later session
       // reconnect replays it like any other live stream.
-      if (parsed.data.details.retryable === true && this.phase !== "closed") {
+      //
+      // A chat session's lifecycle refusal is the same answer from a host
+      // released before it flagged those codes, and the local socket reads it
+      // the same way (`isRetryableSessionLifecycleFatal`). Without this arm,
+      // remote hosts alone would still turn a Try again pressed mid-open into
+      // a terminal close.
+      const details = parsed.data.details;
+      if (
+        (details.retryable === true ||
+          isRetryableSessionLifecycleFatal(stream.method, details)) &&
+        this.phase !== "closed"
+      ) {
         this.restoredStreamIds.delete(message.streamId);
         this.outboundSeq.delete(message.streamId);
         // The verdict just tombstoned this id on BOTH peers: the host marks a
@@ -2559,10 +2749,10 @@ export class RemoteSession<
         if (reopenAttempts !== undefined) {
           this.streamReopenAttempts.set(freshStreamId, reopenAttempts);
         }
-        this.scheduleStreamReopen(stream);
+        this.scheduleStreamReopen(stream, details);
         return;
       }
-      stream.goFatal(parsed.data.details);
+      stream.goFatal(details);
       this.subscriptions.delete(message.streamId);
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
@@ -2578,7 +2768,7 @@ export class RemoteSession<
       if (stream === undefined) {
         return;
       }
-      stream.notifyStatus("closed", { kind: "caller" });
+      stream.notifyStatus("closed", { kind: "caller" }, null);
       this.subscriptions.delete(message.streamId);
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
@@ -2620,21 +2810,19 @@ export class RemoteSession<
    * `E_HOST_UNSUPPORTED` for an `unsupported` declaration, or the declared
    * floor fallback dispatched back through this same session.
    */
-  private executeUnavailableMethodDegrade<
-    Method extends keyof RpcRegistry & string,
-  >(
+  private executeUnavailableMethodDegrade(
     connection: ActiveConnection,
-    method: Method,
+    method: string,
     methodRegistry: MethodVersionRegistry,
     clientCanonical: SchemaVersion | undefined,
     hostRpcMerged: ConnectionManifest,
-    params: RequestOfMethod<RpcRegistry, Method>,
+    params: unknown,
     requestId: string,
     callerAgentId: string | null,
     responseTimeoutMs: number | undefined,
     idempotencyKey: string | null,
     replayMustBeKeyed: boolean,
-  ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
+  ): Promise<unknown> {
     return resolveUnavailableMethodDegrade({
       registry: this.options.rpcRegistry,
       method,
@@ -2670,7 +2858,7 @@ export class RemoteSession<
           // direct path just refused.
           replayMustBeKeyed,
         ),
-    }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
+    });
   }
 
   private handleOpenAck(
@@ -2780,11 +2968,19 @@ export class RemoteSession<
         this.notifyCloudVerdictChanged();
       }
     }
+    // BEFORE the re-subscribe fan-out, not after. This ack is the in-channel
+    // frame, and the loop below arms each stream's first-frame deadline off
+    // the clock it sets - stamping afterwards left every one of those
+    // deadlines a few hundred microseconds "early" and their candidates
+    // refused for insufficient silence. The re-arm in
+    // `armFirstFrameDeadline` covers that case anyway (an unrelated frame
+    // mid-window does the same thing and cannot be ordered away), but there is
+    // no reason to hand it an off-by-ε it can avoid.
+    this.noteInChannelEvidence(connection);
     for (const stream of this.subscriptions.values()) {
       this.openSubscription(connection, stream);
     }
     this.startReauthLoop();
-    this.armStandingTimer();
     this.maybeReachReadyBoundary();
     this.armRestoreStallTimer(generation);
     // The session can carry frames from here: release every `sendUnary`
@@ -2882,6 +3078,17 @@ export class RemoteSession<
         `[remote-session] remote session (host ${this.options.hostId}) stream ${stream.method}#${streamId} ` +
           `made no reassembly progress for ${REASSEMBLY_PROGRESS_TIMEOUT_MS}ms - reopening on a fresh stream id`,
       );
+      // A stalled transfer is a symptom of the SESSION too, and the two
+      // remedies do not compete: the reopen below is the right answer for a
+      // live session with one stuck stream, and the probe decides whether that
+      // premise still holds. Raised first so a reopen that throws cannot
+      // swallow the question; if the probe then condemns the session, the
+      // reopened stream is re-subscribed on the next generation like every
+      // other.
+      this.raiseSilenceCandidate(
+        generation,
+        `stall:${stream.method}#${streamId}`,
+      );
       this.reopenStalledStream(streamId, stream, connection);
     }, REASSEMBLY_PROGRESS_TIMEOUT_MS);
     this.reassemblyWatchdogs.set(streamId, { timer, token });
@@ -2934,7 +3141,8 @@ export class RemoteSession<
     // that grants (and carries) the first-evidence deadline license.
     this.stallReopenedStreamIds.delete(streamId);
     this.stallReopenedStreamIds.add(freshStreamId);
-    this.scheduleStreamReopen(stream);
+    // `null`: this client's own stall verdict, not a close the host explained.
+    this.scheduleStreamReopen(stream, null);
   }
 
   private clearReassemblyWatchdog(streamId: number): void {
@@ -2951,6 +3159,279 @@ export class RemoteSession<
       clearTimeout(armed.timer);
     }
     this.reassemblyWatchdogs.clear();
+  }
+
+  // ---- Session-silence candidate -> probe -> verdict ---------------------- //
+
+  /**
+   * A symptom has fired on a session that has been in-channel SILENT for
+   * {@link SESSION_SILENCE_TIMEOUT_MS}. Send one cheap unary and arm the
+   * verdict timer that will decide.
+   *
+   * The probe is the whole point, and it is what separates this from "drop the
+   * session on any slow RPC". A unary timing out on a QUIET session says
+   * nothing: the silence stamp there is minutes old by construction, so
+   * without a discriminator every slow resolver would cost a full session
+   * rebuild - and the unary path cannot climb the reconnect ladder, so a host
+   * with one wedged method would be redialled forever.
+   *
+   * Four gates, each load-bearing: the generation must still be current, the
+   * session must be provably silent, the composition must have given us a
+   * probe (`null` means this session makes no silence claims at all), and only
+   * one probe may be in flight - which also means at most one verdict timer
+   * per generation, so there is no double-drop path.
+   */
+  private raiseSilenceCandidate(generation: number, origin: string): void {
+    const probeSpec = this.options.livenessProbe;
+    if (probeSpec === null || this.silenceProbe !== null) {
+      return;
+    }
+    if (
+      !this.isCurrent(generation) ||
+      !this.isSilentFor(SESSION_SILENCE_TIMEOUT_MS)
+    ) {
+      return;
+    }
+    const connection = this.connection;
+    if (connection === null) {
+      return;
+    }
+    const sentFrames = connection.inChannelFrames;
+    // Declared before the timer so the callback can identify ITS OWN arm:
+    // the field alone is not enough, because a verdict of "alive" leaves the
+    // generation running and a later candidate installs a different probe.
+    const verdictTimer: TimerHandle = setTimeout(() => {
+      this.renderSilenceVerdict(verdictTimer, generation, sentFrames, origin);
+    }, SESSION_LIVENESS_PROBE_TIMEOUT_MS);
+    this.silenceProbe = { generation, sentFrames, verdictTimer };
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) probing liveness after ` +
+        `${SESSION_SILENCE_TIMEOUT_MS}ms of in-channel silence (origin ${origin})`,
+    );
+    // The probe's OWN budget is deliberately twice the verdict's, so its
+    // promise cannot reject by timeout before the verdict is in. Unkeyed and
+    // with no required version: this asks whether the host answers, nothing
+    // more, and a replay refusal or a version floor would turn "cannot
+    // discriminate" into a pre-send rejection.
+    void this.sendUnaryUntyped(
+      probeSpec.method,
+      probeSpec.params,
+      null,
+      null,
+      null,
+      2 * SESSION_LIVENESS_PROBE_TIMEOUT_MS,
+      false,
+      null,
+    ).then(
+      () => this.settleSilenceProbe(verdictTimer, origin, false),
+      () => this.settleSilenceProbe(verdictTimer, origin, true),
+    );
+  }
+
+  /**
+   * The probe's promise came back. IT NEVER DECIDES ANYTHING.
+   *
+   * Every answer the host can give - a result of any shape, an error envelope,
+   * a per-stream FATAL - has already arrived in-channel and advanced the
+   * counter, so the verdict timer would find the session alive on its own. The
+   * one thing this promise knows that the counter does not is that the probe
+   * was never ASKED: a method the host does not advertise, an enqueue that
+   * threw, a payload that would not encode. Those reject with the counter
+   * unchanged, and treating them as death would condemn a healthy host for a
+   * client-side fault - so they cancel the verdict instead.
+   *
+   * Every settle that reaches here cancels the verdict timer, and cancelling it
+   * also cancels the "answered during the liveness probe" line it would have
+   * written - so a probe that ends here must say so itself, or a support bundle
+   * shows a probe start and nothing after it.
+   */
+  private settleSilenceProbe(
+    verdictTimer: TimerHandle,
+    origin: string,
+    rejected: boolean,
+  ): void {
+    const probe = this.silenceProbe;
+    if (probe === null || probe.verdictTimer !== verdictTimer) {
+      // The verdict already ran (this is the probe's own late timeout on a
+      // session judged alive), or another cause tore this generation down and
+      // rejected the probe on the way past. Either way it is not ours to read.
+      return;
+    }
+    if (!this.isCurrent(probe.generation)) {
+      this.clearSilenceProbe();
+      return;
+    }
+    if (
+      rejected &&
+      this.connection !== null &&
+      this.connection.inChannelFrames === probe.sentFrames
+    ) {
+      console.info(
+        `[remote-session] remote session (host ${this.options.hostId}) liveness probe could not be sent ` +
+          `(origin ${origin}) - no silence verdict`,
+      );
+    } else {
+      console.info(
+        `[remote-session] remote session (host ${this.options.hostId}) liveness probe settled ` +
+          `(origin ${origin}, ${rejected ? "answered-error" : "resolved"}) - no silence verdict`,
+      );
+    }
+    this.clearSilenceProbe();
+  }
+
+  /**
+   * THE verdict, and the only one: the probe's budget has elapsed and not one
+   * in-channel frame has arrived since it went out - on ANY stream, from any
+   * resolver. A host that has been mute for the silence window plus the probe
+   * window is not slow, and the session it cannot answer is worth less than
+   * the redial that replaces it.
+   *
+   * `not-host-evidence` deliberately: this is the CLIENT's own probe and the
+   * client's own teardown. The redial's outcome is what speaks about the host -
+   * a handshake timeout there is the refusal, a ready boundary clears the
+   * streak.
+   */
+  private renderSilenceVerdict(
+    verdictTimer: TimerHandle,
+    generation: number,
+    sentFrames: number,
+    origin: string,
+  ): void {
+    const probe = this.silenceProbe;
+    if (probe === null || probe.verdictTimer !== verdictTimer) {
+      return;
+    }
+    // Fired, so there is nothing left to cancel - just drop the state before
+    // any exit below.
+    this.silenceProbe = null;
+    const connection = this.connection;
+    if (!this.isCurrent(generation) || connection === null || !this.isReady()) {
+      console.info(
+        `[remote-session] remote session (host ${this.options.hostId}) liveness verdict abandoned ` +
+          `(origin ${origin}) - the session is no longer ready`,
+      );
+      return;
+    }
+    if (connection.inChannelFrames !== sentFrames) {
+      console.info(
+        `[remote-session] remote session (host ${this.options.hostId}) answered during the liveness probe ` +
+          `(origin ${origin}, ${connection.inChannelFrames - sentFrames} frame(s) since it was sent) - no verdict`,
+      );
+      return;
+    }
+    console.warn(
+      `[remote-session] remote session (host ${this.options.hostId}) is silent: no in-channel frame for ` +
+        `${Date.now() - connection.lastInChannelInboundAt}ms including an unanswered liveness probe ` +
+        `(origin ${origin}, ${this.pendingUnary.size} pending unary, ${this.subscriptions.size} subscription(s)) - rebuilding`,
+    );
+    this.handleConnectionLost(
+      generation,
+      "session-silent",
+      "not-host-evidence",
+    );
+  }
+
+  private clearSilenceProbe(): void {
+    if (this.silenceProbe === null) {
+      return;
+    }
+    clearTimeout(this.silenceProbe.verdictTimer);
+    this.silenceProbe = null;
+  }
+
+  /**
+   * Arms the FIRST-evidence deadline for a subscription just sent on this
+   * connection. See {@link firstFrameDeadlines} for why a subscribe that is
+   * never answered has no other bound.
+   *
+   * Validated at fire time rather than cleared exhaustively: the id may have
+   * been re-keyed by a stall verdict, closed by its caller, or answered since
+   * this was armed, and enumerating every one of those paths is the kind of
+   * census that goes stale. The eager clears that do exist (a delivered frame,
+   * a connection teardown) only keep a retired arm from sitting in the map.
+   *
+   * IT RE-ARMS FOR THE SILENCE THAT IS LEFT, and that is what makes the
+   * deadline mean what its map doc says: "while this subscribe is unanswered,
+   * watch for `SESSION_SILENCE_TIMEOUT_MS` of WHOLE-SESSION silence". A frame
+   * for some other stream says nothing about whether THIS subscribe was
+   * heard, so the window it interrupts has to be re-run rather than
+   * abandoned. The attach's own open-ack used to be such a frame: it stamped
+   * the clock microseconds AFTER this loop armed, leaving every deadline here
+   * that same ε short at its first fire. `handleOpenAck` now stamps BEFORE
+   * the fan-out, so that one is ordered away - but an unrelated frame
+   * mid-window cannot be, which is why the re-arm and not the ordering is the
+   * fix. Dropping it instead was a real hole: a host that
+   * went mute right after `OPEN_ACK` had no bound left but the 15-minute
+   * standing watchdog, which is the exact symptom this deadline exists to
+   * close.
+   *
+   * `delayMs` is explicit at both call sites - the full window from
+   * `openSubscription`, the remainder from the re-arm below.
+   */
+  private armFirstFrameDeadline(
+    generation: number,
+    streamId: number,
+    method: string,
+    delayMs: number,
+  ): void {
+    if (this.options.livenessProbe === null) {
+      // A session with no discriminator makes no silence claims, so this timer
+      // could only ever fire into a `raiseSilenceCandidate` that returns
+      // immediately. Not arming it at all is what makes `livenessProbe: null`
+      // inert BY CONSTRUCTION rather than merely harmless - no stray arm on a
+      // host dialer's every subscribe, and nothing new for a suite that
+      // identifies the reassembly watchdog by its (deliberately equal) delay.
+      return;
+    }
+    this.clearFirstFrameDeadline(streamId);
+    const timer = setTimeout(() => {
+      this.firstFrameDeadlines.delete(streamId);
+      if (
+        !this.subscriptions.has(streamId) ||
+        this.restoredStreamIds.has(streamId)
+      ) {
+        return;
+      }
+      const connection = this.connection;
+      const remainingMs =
+        connection === null
+          ? 0
+          : SESSION_SILENCE_TIMEOUT_MS -
+            (Date.now() - connection.lastInChannelInboundAt);
+      if (
+        remainingMs > 0 &&
+        connection !== null &&
+        this.isCurrent(generation) &&
+        this.isReady()
+      ) {
+        // INSUFFICIENT SILENCE IS THE ONLY CONDITION WORTH WAITING OUT. Every
+        // other reason `raiseSilenceCandidate` would refuse is settled
+        // elsewhere: a stale generation is torn down (and its map cleared), a
+        // detached host has its own recovery, and a probe already in flight is
+        // asking this very question for the whole session. Re-arming for those
+        // would be a timer that never retires.
+        this.armFirstFrameDeadline(generation, streamId, method, remainingMs);
+        return;
+      }
+      this.raiseSilenceCandidate(generation, `subscribe:${method}#${streamId}`);
+    }, delayMs);
+    this.firstFrameDeadlines.set(streamId, timer);
+  }
+
+  private clearFirstFrameDeadline(streamId: number): void {
+    const timer = this.firstFrameDeadlines.get(streamId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.firstFrameDeadlines.delete(streamId);
+    }
+  }
+
+  /** Connection teardown: every subscribe these paced died with its socket. */
+  private clearAllFirstFrameDeadlines(): void {
+    for (const timer of this.firstFrameDeadlines.values()) {
+      clearTimeout(timer);
+    }
+    this.firstFrameDeadlines.clear();
   }
 
   private openSubscription(
@@ -3040,6 +3521,18 @@ export class RemoteSession<
       },
       binary: null,
     });
+    // EVERY subscribe, not only the stall-reopened ones below: this deadline's
+    // verdict is a session-level candidate, not a stream reopen, so an
+    // event-only stream with nothing to say costs at most one probe on an
+    // otherwise-quiet session and is never churned through a CLOSE/resubscribe
+    // cycle. On a large epic the first tile's deadline sends the probe and
+    // every later one finds it in flight - one probe per attach.
+    this.armFirstFrameDeadline(
+      connection.generation,
+      stream.streamId,
+      stream.method,
+      SESSION_SILENCE_TIMEOUT_MS,
+    );
     if (this.stallReopenedStreamIds.has(stream.streamId)) {
       // A stall-reopened stream's resolver provably emits (the stall verdict
       // only ever follows accepted chunks), so its replacement subscribe
@@ -3195,10 +3688,13 @@ export class RemoteSession<
    * Two different things are announced from this connection, and they part
    * ways here:
    *
-   *  - The SOCKET stays. `host_detached` is transient; `onHostAttached` gates
-   *    on `!connection.hostAttached` precisely to restore through it, and
-   *    tearing the connection down would turn a recoverable blip into a full
-   *    redial. `isReady()` includes `hostAttached`, so `hasReadyRemoteSession`
+   *  - The SOCKET stays. `host_detached` is transient - the scheduler pauses
+   *    and holds its frames rather than losing them to a host-less relay - and
+   *    tearing the connection down here would turn a recoverable blip into a
+   *    full redial whose handshake would bank a refusal against a host that
+   *    merely flapped. The REBUILD belongs to the matching `host_attached`,
+   *    which is the frame that proves the host's Noise state is gone (see
+   *    `onHostAttached`). `isReady()` includes `hostAttached`, so `hasReadyRemoteSession`
    *    stops counting this host the moment the flag clears; the
    *    `syncReadinessLatch()` at the end is what tells its subscribers.
    *  - The AUTHORITY SESSION goes. `announceSession` at the ready boundary told
@@ -3225,7 +3721,7 @@ export class RemoteSession<
     }
     connection.hostAttached = false;
     connection.scheduler.pause();
-    this.markStreamsReconnecting();
+    this.markStreamsReconnecting(null);
     this.retractSession();
     // A detach is a DOWN edge even though the socket survives, so the two
     // things every other loss edge does through `handleConnectionLost` have to
@@ -3253,32 +3749,44 @@ export class RemoteSession<
     if (!this.isCurrent(generation)) {
       return;
     }
-    const connection = this.connection;
-    if (connection === null) {
+    if (this.connection === null) {
       return;
     }
-    this.armStandingTimer();
-    if (!connection.hostAttached) {
-      // The host discards ALL Noise state on any socket close
-      // (`teardownAllSessions`, host-side), so a `host_attached` transition
-      // out of "detached" ALWAYS means the host rebuilt a fresh Noise
-      // responder for this attach - even though the CLIENT's own relay
-      // socket never dropped. There is no "redundant re-handshake" case to
-      // special-case: resuming the paused scheduler on the STALE Noise
-      // channel (the old behavior) would silently desync the client against
-      // a responder that no longer exists on the host side, recoverable
-      // only by the 15-min standing watchdog - which a flapping host uplink
-      // re-arms indefinitely (Architecture §4 fix #2 / S2). Route it through
-      // the SAME full-attach path a genuine transport drop already uses -
-      // fresh `NoiseChannel` + relay dial + `open{bearer}` - rather than a
-      // second state machine or a new wire frame (`session_reset{sid}`
-      // stays deferred/telemetry-gated; see the S2 ticket).
-      this.handleConnectionLost(
-        generation,
-        "host-attached-stale-noise",
-        "host-transport-plane",
-      );
+    if (this.phase === "connecting") {
+      // This socket's own `attach_ack` has not landed yet, so there is no
+      // Noise session to be stale - and the relay sends `attach_ack` for a
+      // client leg synchronously before any `host_attached` reaches it, so
+      // this branch is a guard rather than a case.
+      return;
     }
+    // A `host_attached` is PROOF the responder this session was built against
+    // no longer exists. The host discards ALL Noise state on any uplink close
+    // (`teardownAllSessions`, host-side) and the relay emits this frame from
+    // exactly one site, the host's re-attach, precisely so a client re-runs
+    // its E2E handshake. That is true whether or not this client ever saw the
+    // matching `host_detached`: a client that missed it is left holding a
+    // channel whose responder is gone, and its only exit today is the 15-min
+    // standing watchdog - which the relay's own control frames kept re-arming.
+    //
+    // So there is no "still attached, nothing to do" case, and no
+    // `armStandingTimer()` here: the drop below clears that timer through
+    // `teardownConnection` and the redial's open-ack arms a fresh one.
+    // `handleConnectionLost` no-ops for a closed session, and a rebuild during
+    // `handshaking`/`opening` replaces that phase's 15s timeout - which lands
+    // as a REFUSAL today - with an immediate, honest re-attach.
+    //
+    // Reported `not-host-evidence`: the frame says the host is ATTACHED. The
+    // redial's own outcome is what speaks about the host - a handshake timeout
+    // is a refusal, a ready boundary clears the streak.
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) rebuilding on relay host_attached ` +
+        `(interrupted phase ${this.phase})`,
+    );
+    this.handleConnectionLost(
+      generation,
+      "host-reattached",
+      "not-host-evidence",
+    );
   }
 
   private onPeerGone(generation: number, reason: RelayKillReason): void {
@@ -3295,7 +3803,7 @@ export class RemoteSession<
       return;
     }
     const provenance = relayKillProvenance(reason);
-    if (provenance === "not-host-evidence") {
+    if (provenance === "not-host-evidence" && reason !== "session_reset") {
       // A relay policy kill can be congestion (for example, the relay's
       // client-leg buffer limit), not an authorization verdict. Future relay
       // kill reasons are conservatively treated the same way: retry them, but
@@ -3303,6 +3811,13 @@ export class RemoteSession<
       // The two known non-congestion losses retain their regular schedule.
       // Keep this in the existing reconnect state machine; only its entry rung
       // differs.
+      //
+      // `session_reset` is the one known reason that is NEITHER: the host
+      // asked for a re-handshake because it can no longer serve this Noise
+      // session, which means it is alive and waiting. The cap exists for kills
+      // whose cause may repeat under load; here the cause is spent the moment
+      // we redial, so the ordinary rung applies. Provenance is unchanged -
+      // still `not-host-evidence`, still `indeterminate`.
       this.raiseReconnectBackoffToMax();
     }
     this.handleConnectionLost(generation, `peer-gone:${reason}`, provenance);
@@ -3323,10 +3838,31 @@ export class RemoteSession<
     cause: string,
     provenance: ConnectionLossProvenance,
   ): void {
+    this.handleConnectionLostWithRetryCause(
+      generation,
+      cause,
+      provenance,
+      null,
+    );
+  }
+
+  /**
+   * {@link handleConnectionLost} for a loss the host EXPLAINED: `retryCause` is
+   * the retryable session fatal that caused it, published to every stream on
+   * the `reconnecting` transition this loss causes (see `StatusChangeHandler`).
+   * Its one caller is `handleSessionFatal`; every other loss goes through
+   * `handleConnectionLost`, which has no cause to give.
+   */
+  private handleConnectionLostWithRetryCause(
+    generation: number,
+    cause: string,
+    provenance: ConnectionLossProvenance,
+    retryCause: FatalErrorDetails | null,
+  ): void {
     if (!this.isCurrent(generation) || this.phase === "closed") {
       return;
     }
-    this.dropConnection(cause);
+    this.dropConnection(cause, retryCause);
     this.syncReadinessLatch();
     const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
@@ -3378,7 +3914,10 @@ export class RemoteSession<
    * earned, and this is when the outage clock starts - so they belong with the
    * drop rather than with one caller's choice of what to do next.
    */
-  private dropConnection(cause: string): void {
+  private dropConnection(
+    cause: string,
+    retryCause: FatalErrorDetails | null,
+  ): void {
     // Before anything else: a connection that is being lost never earned its
     // ladder reset, however close it came.
     this.clearStableResetTimer();
@@ -3407,7 +3946,7 @@ export class RemoteSession<
     // their retry license - but they must be released rather than left to
     // ride an unbounded number of further attempts inside one call.
     this.settleReadyWaiters(false);
-    this.markStreamsReconnecting();
+    this.markStreamsReconnecting(retryCause);
     // The DOWN edge, from the funnel every drop passes through. `isReady()`
     // is false the moment `connection` is nulled above; publishing that here
     // means no caller can forget. `handleUnauthorizedSessionFatal` had - the
@@ -3465,10 +4004,14 @@ export class RemoteSession<
       // A transient host blip must not count toward the credential give-up
       // bound - clear any streak left by a prior genuine UNAUTHORIZED episode.
       this.noProgressUnauthorizedReconnects = 0;
-      this.handleConnectionLost(
+      // The details travel on as every stream's retry cause, as the local
+      // socket's retryable fatal does: there, each stream's own socket
+      // carries this same frame.
+      this.handleConnectionLostWithRetryCause(
         generation,
         "session-fatal-retryable",
         provenance,
+        details,
       );
       return;
     }
@@ -3510,7 +4053,7 @@ export class RemoteSession<
     // after revalidation we can tell whether the next attach would present a
     // DIFFERENT token (progress) or the same rejected one (no progress).
     const rejectedBearer = this.openFrameBearer;
-    this.dropConnection("session-fatal-unauthorized");
+    this.dropConnection("session-fatal-unauthorized", null);
     void this.revalidateThenReconnect(
       generation,
       auth,
@@ -4212,7 +4755,7 @@ export class RemoteSession<
       if (this.phase === "closed" || generation !== this.connectGeneration) {
         return;
       }
-      this.dropConnection("connect-path-threw");
+      this.dropConnection("connect-path-threw", null);
       const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause: `the connect path threw before dialing: ${
@@ -4282,6 +4825,26 @@ export class RemoteSession<
    * host goes silent past the 15-min bound the client fails the session itself
    * (R4-D2) — a revoked host will not enforce its own death.
    */
+  /**
+   * Records that the HOST itself just spoke on this connection: stamp the
+   * clock, advance the frame counter, re-arm the standing watchdog.
+   *
+   * The three callers are every place an in-channel frame lands - the
+   * handshake reply, an established inbound frame, and the open-ack (stamped
+   * before that attach's re-subscribe fan-out, so the deadlines it arms
+   * measure from it). A
+   * relay control frame is deliberately NOT one of them: the relay answers
+   * keepalives at its own edge and re-announces host attachment on every
+   * burst, so letting those feed this clock is exactly how a session whose
+   * host had stopped answering kept re-arming its own 15-minute watchdog and
+   * never found out.
+   */
+  private noteInChannelEvidence(connection: ActiveConnection): void {
+    connection.lastInChannelInboundAt = Date.now();
+    connection.inChannelFrames += 1;
+    this.armStandingTimer();
+  }
+
   private armStandingTimer(): void {
     if (this.standingTimer !== null) {
       clearTimeout(this.standingTimer);
@@ -4508,9 +5071,9 @@ export class RemoteSession<
 
   // ---- Small helpers ----------------------------------------------------- //
 
-  private markStreamsReconnecting(): void {
+  private markStreamsReconnecting(retryCause: FatalErrorDetails | null): void {
     for (const stream of this.subscriptions.values()) {
-      stream.notifyStatus("reconnecting", null);
+      stream.notifyStatus("reconnecting", null, retryCause);
     }
   }
 
@@ -4523,6 +5086,12 @@ export class RemoteSession<
    * subject has simply not changed.
    */
   private markStreamRestored(streamId: number): void {
+    // The first-evidence deadline's whole question is "has anything arrived on
+    // this subscribe", and this is the one function both answer sites reach -
+    // the in-flight chunk path and the completed-frame path. Cleared ahead of
+    // the guard: an id no longer subscribed has no deadline worth keeping
+    // either.
+    this.clearFirstFrameDeadline(streamId);
     if (!this.subscriptions.has(streamId)) {
       return;
     }
@@ -4811,6 +5380,13 @@ export class RemoteSession<
     this.clearPhaseTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
+    // A drop from ANY other cause - a relay close, a `host_attached` rebuild,
+    // a person's Retry - leaves no silence timer to fire against the next
+    // generation. Both also re-check `isCurrent` when they fire, so these are
+    // hygiene rather than correctness: they keep a torn-down generation from
+    // leaking a 5s timer or logging a phantom verdict line.
+    this.clearSilenceProbe();
+    this.clearAllFirstFrameDeadlines();
     // The connection did not survive its dwell, so the streak is not forgiven.
     // This is the single choke point for losing a connection - every drop,
     // fatal and caller close routes through here - which is what keeps the
@@ -4868,15 +5444,21 @@ export class RemoteSession<
    * reading true here. The stream stays in `subscriptions` throughout, so a
    * session-level reconnect landing first simply replays it and the pending
    * timer is dropped as redundant.
+   *
+   * `retryCause` is the fatal's details, or `null` for a stall re-open.
    */
-  private scheduleStreamReopen(stream: LogicalStream): void {
+  private scheduleStreamReopen(
+    stream: LogicalStream,
+    retryCause: FatalErrorDetails | null,
+  ): void {
     const streamId = stream.streamId;
     const attempt = this.streamReopenAttempts.get(streamId) ?? 0;
     this.streamReopenAttempts.set(streamId, attempt + 1);
-    // `null`, like the session-wide reconnect projection at `notifyStatus`
-    // above: `StreamCloseReason` describes a CLOSE, and this stream is not
-    // closed. The reason travels in the log line instead.
-    stream.notifyStatus("reconnecting", null);
+    // No close reason, like the session-wide reconnect projection above:
+    // `StreamCloseReason` describes a CLOSE, and this stream is not closed.
+    // The host's details ride as the transition's `retryCause` instead, so a
+    // consumer counting failed attempts can name the code.
+    stream.notifyStatus("reconnecting", null, retryCause);
     const existing = this.streamReopenTimers.get(streamId);
     if (existing !== null && existing !== undefined) {
       clearTimeout(existing);

@@ -2,7 +2,6 @@ import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
-  fireEvent,
   render,
   screen,
   type RenderResult,
@@ -74,34 +73,6 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => {
 
 vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
   useEpicExportArtifacts: () => ({ mutate: vi.fn(), isPending: false }),
-}));
-
-/**
- * A configured platform origin, distinct from `resolvePlatformBaseUrl`'s
- * production fallback (`https://platform.traycer.ai`): without this, the
- * upgrade click would exercise `resolvePlatformBaseUrl(undefined)`'s fallback
- * arm and never prove the remedy reads a REAL `signInUrl` off the runner host.
- */
-const CONFIGURED_SIGN_IN_URL = "https://auth.configured-shell.test/sign-in";
-
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({
-    authnBaseUrl: "https://authn.test",
-    signInUrl: CONFIGURED_SIGN_IN_URL,
-    openExternalLink: vi.fn(),
-  }),
-}));
-
-const openExternalLinkMutate = vi.hoisted(() => vi.fn());
-
-// The remedy opens the upgrade link through this hook rather than the bridge
-// directly (see the component's own comment), so this mock is what the click
-// assertion below spies on instead of asserting on copy alone.
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLinkWithPending: () => ({
-    openLink: openExternalLinkMutate,
-    isPending: false,
-  }),
 }));
 
 // ─── `deriveEpicDurabilityPlane` - the pure reading ────────────────────────
@@ -311,7 +282,6 @@ describe("deriveEpicDurabilityPlane", () => {
       "delete-tombstone-unscoped-cleared",
       { severity: "steady", sentence: "Delete recorded — tidying up" },
     ],
-    ["entitlement-lapsed", { severity: "warning", sentence: "Sync paused" }],
     [null, { severity: "warning", sentence: "Sync paused" }],
   ])("reads pause reason %s as %o", (pauseReason, expected) => {
     expect(
@@ -424,7 +394,6 @@ describe("deriveEpicDurabilityPlane", () => {
       "orphaned-local-edits-after-cloud-delete",
       "delete-pending-acknowledgement",
       "delete-tombstone-unscoped-cleared",
-      "entitlement-lapsed",
       null,
     ];
 
@@ -559,10 +528,7 @@ function resetDurabilityFixture(): void {
 
 describe("<EpicDurabilityRemedies />", () => {
   beforeEach(resetDurabilityFixture);
-  afterEach(() => {
-    cleanup();
-    openExternalLinkMutate.mockClear();
-  });
+  afterEach(cleanup);
 
   it("shows the export remedy, disabled with zero artifacts, for access-revoked", () => {
     durability.status = "paused";
@@ -588,30 +554,6 @@ describe("<EpicDurabilityRemedies />", () => {
     });
     expect(exportButton.disabled).toBe(true);
     expect(screen.queryByText("Upgrade")).toBeNull();
-  });
-
-  it("shows upgrade only for the entitlement-lapsed reason, with no export remedy", () => {
-    durability.status = "paused";
-    durability.pauseReason = "entitlement-lapsed";
-
-    renderRemedies();
-
-    expect(screen.getByText("Upgrade")).toBeTruthy();
-    expect(screen.queryByText("Export artifacts")).toBeNull();
-  });
-
-  it("opens the upgrade link at the runner host's configured platform origin", () => {
-    durability.status = "paused";
-    durability.pauseReason = "entitlement-lapsed";
-
-    renderRemedies();
-    fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
-
-    expect(openExternalLinkMutate).toHaveBeenCalledWith(
-      new URL(CONFIGURED_SIGN_IN_URL).origin,
-      "auth",
-      null,
-    );
   });
 
   it("renders nothing for an omitted pause reason", () => {

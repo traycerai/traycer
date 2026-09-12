@@ -37,6 +37,7 @@ import {
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { SESSION_SILENCE_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/remote/config";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -67,6 +68,7 @@ import {
   getOpenEpicRegistry,
   handleHostClients,
   handleHostIds,
+  handleStreamClients,
   isEpicSessionHandleDead,
   releaseOpenEpicSessionIfUnused,
   trackEpicSessionHandleLiveness,
@@ -112,6 +114,14 @@ const OWNER_IDENTITY_STABLE: OwnerIdentityVerdict = { kind: "stable" };
 
 /** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
 const EPIC_SESSION_WAKE_REASON = "user-retry";
+
+/**
+ * The failure card's Retry forcing a re-dial on a transport that reports
+ * itself silent. A DIFFERENT reason from the wake above on purpose: this one
+ * names an escalation the session's own verdict earned, and a support bundle
+ * has to be able to tell the two apart.
+ */
+const EPIC_RETRY_FORCE_RECONNECT_REASON = "epic-retry";
 
 /**
  * INVARIANT (R-1): a tuple's `ownerIdentityKey` is the owner identity OF its
@@ -574,6 +584,40 @@ export function EpicSessionProvider(
       seededCreateHostRef.current = false;
       setRequestedHostId(null);
     }
+    // The re-acquire pass below reuses a WARM handle on the same host, which
+    // is the right answer for every failure this card reports except one: a
+    // transport whose host has stopped answering. Re-acquiring there hands the
+    // person the same dead session they just complained about, so ask the
+    // socket first and force a re-dial when it says it is silent.
+    //
+    // The gate is the transport's own verdict (`isSilentFor` includes
+    // readiness), never a bare "retry means redial": forcing against a host
+    // that is merely detached at the relay would put a fresh handshake in
+    // front of a blip and bank its timeout as a refusal. `?.` twice over -
+    // no handle, or a local transport that does not measure silence - both
+    // read as "not silent", i.e. today's behaviour.
+    //
+    // Read off the MOUNTED HANDLE, not a provider-local ref: this provider
+    // may never have constructed the transport it is retrying. A remount onto
+    // a handle the registry kept warm runs no factory, and the loser of an
+    // adoption race hands back the winner's handle - in both cases a ref
+    // would be null and the gate would silently stop forcing.
+    //
+    // The re-presentation that follows shows `ready` while the transport
+    // redials, and the tiles show `reconnecting` through their own status.
+    // Accepted: the pane the person clicked was the failure card, which the
+    // re-presentation replaces.
+    const mountedHandle = sessionRef.current?.handle;
+    const streamClient =
+      mountedHandle === undefined
+        ? undefined
+        : handleStreamClients.get(mountedHandle);
+    if (streamClient?.isSilentFor?.(SESSION_SILENCE_TIMEOUT_MS) === true) {
+      streamClient.reconnectAll(EPIC_RETRY_FORCE_RECONNECT_REASON, {
+        probeFirst: false,
+        wakeProbe: null,
+      });
+    }
     setRetryGeneration((generation) => generation + 1);
   }, [planRestrictedSessionRebuildBackoff]);
   const openOnOriginalHost = useCallback((): void => {
@@ -786,6 +830,11 @@ export function EpicSessionProvider(
       // retro-fire, so a deadline that landed during construction would be
       // lost if this attached afterwards.
       let reprobeHandle: OpenEpicStoreHandle | null = null;
+      // The handle this run stamped into `handleStreamClients`, so the close
+      // below can un-stamp it. A slot for the same reason `reprobeHandle` is
+      // one: the close is composed before the handle exists, and a
+      // construction that throws must leave no entry behind.
+      let streamStampedHandle: OpenEpicStoreHandle | null = null;
       const detachReprobe = attachPlanRestrictedReprobe(wsStreamClient, () => {
         const deniedHandle = reprobeHandle;
         if (deniedHandle === null) return;
@@ -801,6 +850,18 @@ export function EpicSessionProvider(
       ): void => {
         if (transportClosed) return;
         transportClosed = true;
+        // Only if it is still OURS: a repoint closes the old handle's
+        // transport after the new one has already published itself, and
+        // clearing unconditionally there would blind the silence gate to a
+        // live socket. Keyed by handle, so the two sessions cannot collide in
+        // the first place - the value check is what keeps that true if a
+        // handle is ever re-stamped.
+        if (
+          streamStampedHandle !== null &&
+          handleStreamClients.get(streamStampedHandle) === wsStreamClient
+        ) {
+          handleStreamClients.delete(streamStampedHandle);
+        }
         // Before `transport.close()`, so the timer cannot outlive the socket
         // it exists to rebuild.
         detachReprobe();
@@ -1156,6 +1217,14 @@ export function EpicSessionProvider(
         // stamp is what routes RPCs and capability answers to the host that owns
         // the stream (F1).
         handleHostIds.set(handle, targetHostId);
+        // Stamped on the SAME escaping handle and for the same reason: this is
+        // the socket `retryRepoint`'s silence gate asks, and it must travel
+        // with the session rather than with the provider that happened to
+        // build it - a warm remount and an adopted sibling both reach this
+        // handle and neither re-runs this factory. Removed by
+        // `closeSessionTransport`.
+        handleStreamClients.set(handle, wsStreamClient);
+        streamStampedHandle = handle;
         // Armed now that there is something to rebuild. `retryTransport` is
         // the handle's, not `created`'s: the wrapper is what owns this
         // session's transport close, and a reprobe that rebuilt the inner

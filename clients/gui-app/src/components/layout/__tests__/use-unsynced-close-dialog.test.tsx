@@ -23,6 +23,7 @@ const EPIC_TAB: HeaderTab = {
   canClose: true,
   canDuplicate: true,
   canOpenInNewWindow: true,
+  appearance: null,
 };
 const DRAFT_TAB: HeaderTab = {
   kind: "draft",
@@ -32,6 +33,7 @@ const DRAFT_TAB: HeaderTab = {
   icon: null,
   canDuplicate: false,
   canOpenInNewWindow: false,
+  appearance: null,
 };
 
 interface HostProps {

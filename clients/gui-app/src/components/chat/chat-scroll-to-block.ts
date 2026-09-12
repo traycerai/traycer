@@ -3,9 +3,9 @@ import { createContext, use } from "react";
 /**
  * Which collapsible open-store a scroll target lives in, so landing on the card
  * also expands it. `subagent` → the promoted/subagent card; `tool` → a
- * tool_call / command / Monitor card.
+ * tool_call / command / Monitor card; `plan` → the inline plan card (no store).
  */
-export type ChatScrollCardKind = "subagent" | "tool";
+export type ChatScrollCardKind = "subagent" | "tool" | "plan";
 
 /**
  * Scrolls the chat transcript to the card that owns `blockId` and expands it.

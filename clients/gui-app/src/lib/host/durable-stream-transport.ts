@@ -1,4 +1,5 @@
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { AvailabilityRecoveryKind } from "@traycer-clients/shared/host-transport/availability-recovery-kind";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -103,15 +104,17 @@ export function openDurableStreamTransport(params: {
   /**
    * Called (cooldown-coalesced by this module) when this transport's own
    * heartbeat evidences ITS host recovering - a session re-open after a drop,
-   * or a pong after a stall-length gap. The factory routes it to
-   * `HostClient.notifyHostAvailabilityRecovered(hostId)` so that host's
-   * stranded unary queries refetch. This must live here, not on the app-wide
-   * stream: tabs bind a `hostId` for life, so a tab can heartbeat a host that
-   * is not the effective one, and only its own transport ever observes that
-   * host's recovery. No argument, because the host is fixed at open time -
-   * see {@link NamedHostRecoveryTarget}.
+   * or a pong after a stall-length gap - with the kind of that edge. The
+   * factory routes it to `HostClient.notifyHostAvailabilityRecovered(hostId,
+   * kind)` so that host's stranded unary queries refetch. This must live
+   * here, not on the app-wide stream: tabs bind a `hostId` for life, so a
+   * tab can heartbeat a host that is not the effective one, and only its own
+   * transport ever observes that host's recovery. No host argument, because
+   * the host is fixed at open time - see {@link NamedHostRecoveryTarget}.
    */
-  readonly notifyRecoveredForNamedHost: () => void;
+  readonly notifyRecoveredForNamedHost: (
+    kind: AvailabilityRecoveryKind,
+  ) => void;
 }): AttributableDurableStreamTransport {
   const wsStreamClient = buildHostStreamClient({
     target: params.target,

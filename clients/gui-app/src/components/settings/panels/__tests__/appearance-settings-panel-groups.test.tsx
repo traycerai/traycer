@@ -11,18 +11,39 @@ import {
   DEFAULT_CODE_FONT_SIZE,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
+import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 
 vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
   useDesktopZoomBridge: () => null,
 }));
 
+// The Start page group's wallpaper gallery fetches its catalog from the CDN.
+// An empty catalog keeps this suite off the network without changing which
+// rows - and so which search anchors - the panel renders.
+vi.mock("@/lib/appearance/curated-wallpapers", () => ({
+  fetchCuratedWallpaperManifest: () => Promise.resolve([]),
+}));
+
+const analyticsMocks = vi.hoisted(() => ({
+  trackSettingChanged: vi.fn(),
+}));
+
+// Only `trackSettingChanged` is stubbed: the panel also imports
+// `trackedSettingSetter` from this module, and replacing the whole module
+// leaves every other row's setter undefined.
+vi.mock("@/lib/analytics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/analytics")>()),
+  trackSettingChanged: analyticsMocks.trackSettingChanged,
+}));
+
 const GROUP_TITLES = [
-  "Color scheme",
   "Themes",
+  "Start page",
   "Interface",
-  "Typography",
+  "Fonts and text",
+  "Motion and readability",
   "Terminal",
-  "Artifact icons",
+  "Icon colors",
 ] as const;
 
 function resetAppearanceSettings(): void {
@@ -44,6 +65,8 @@ describe("<AppearanceSettingsPanel /> groups", () => {
   beforeEach(() => {
     queryClient = createQueryClient();
     resetAppearanceSettings();
+    analyticsMocks.trackSettingChanged.mockReset();
+    useThemeLibraryStore.setState({ glassOpacity: 100 });
   });
 
   afterEach(() => {
@@ -52,43 +75,83 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     resetAppearanceSettings();
   });
 
+  it("emits exactly one glassOpacity analytics event for a keyboard change", () => {
+    renderPanel(queryClient);
+
+    const slider = screen.getByRole("slider", { name: "Background opacity" });
+    // A real browser moves the value on ArrowLeft before any key event
+    // reaches userspace; jsdom does not, so the change is simulated here
+    // the same way the pointer-drag path is simulated (fireEvent.change),
+    // leaving keyUp to answer only for the analytics side of the fix.
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+    fireEvent.change(slider, { target: { value: "90" } });
+    fireEvent.keyUp(slider, { key: "ArrowLeft" });
+
+    expect(useThemeLibraryStore.getState().glassOpacity).toBe(90);
+    expect(analyticsMocks.trackSettingChanged).toHaveBeenCalledTimes(1);
+    expect(analyticsMocks.trackSettingChanged).toHaveBeenCalledWith(
+      "appearance",
+      "glassOpacity",
+    );
+  });
+
+  it("reports nothing for a keyboard press the clamp leaves unmoved", () => {
+    // 30 is the slider's floor, so ArrowLeft there changes nothing and there
+    // is no setting change to report.
+    useThemeLibraryStore.setState({ glassOpacity: 30 });
+    renderPanel(queryClient);
+
+    const slider = screen.getByRole("slider", { name: "Background opacity" });
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+    fireEvent.keyUp(slider, { key: "ArrowLeft" });
+
+    expect(useThemeLibraryStore.getState().glassOpacity).toBe(30);
+    expect(analyticsMocks.trackSettingChanged).not.toHaveBeenCalled();
+  });
+
   it("renders the named group headings in order", () => {
     renderPanel(queryClient);
 
-    const colorScheme = screen.getByRole("heading", {
-      level: 2,
-      name: "Color scheme",
-    });
     const themes = screen.getByRole("heading", { level: 2, name: "Themes" });
+    const startPage = screen.getByRole("heading", {
+      level: 2,
+      name: "Start page",
+    });
     const iface = screen.getByRole("heading", {
       level: 2,
       name: "Interface",
     });
-    const typography = screen.getByRole("heading", {
+    const fontsAndText = screen.getByRole("heading", {
       level: 2,
-      name: "Typography",
+      name: "Fonts and text",
+    });
+    const motion = screen.getByRole("heading", {
+      level: 2,
+      name: "Motion and readability",
     });
     const terminal = screen.getByRole("heading", {
       level: 2,
       name: "Terminal",
     });
-    const artifactIcons = screen.getByRole("heading", {
+    const iconColors = screen.getByRole("heading", {
       level: 2,
-      name: "Artifact icons",
+      name: "Icon colors",
     });
 
-    expect(documentPosition(colorScheme, themes)).toBe("before");
     expect(documentPosition(themes, iface)).toBe("before");
-    expect(documentPosition(iface, typography)).toBe("before");
-    expect(documentPosition(typography, terminal)).toBe("before");
-    expect(documentPosition(terminal, artifactIcons)).toBe("before");
+    expect(documentPosition(themes, startPage)).toBe("before");
+    expect(documentPosition(startPage, iface)).toBe("before");
+    expect(documentPosition(iface, fontsAndText)).toBe("before");
+    expect(documentPosition(fontsAndText, motion)).toBe("before");
+    expect(documentPosition(motion, terminal)).toBe("before");
+    expect(documentPosition(terminal, iconColors)).toBe("before");
   });
 
   it("offers a shared hide option for chat and artifact minimaps", () => {
     renderPanel(queryClient);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Minimap side" }));
-    fireEvent.click(screen.getByRole("option", { name: "Hide" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Minimap position" }));
+    fireEvent.click(screen.getByRole("option", { name: "Hidden" }));
 
     expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");
   });
@@ -111,10 +174,6 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       expect(section?.contains(heading)).toBe(true);
     }
 
-    const colorSchemeHeading = screen.getByRole("heading", {
-      level: 2,
-      name: "Color scheme",
-    });
     const themesHeading = screen.getByRole("heading", {
       level: 2,
       name: "Themes",
@@ -123,37 +182,60 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       level: 2,
       name: "Interface",
     });
-    const typographyHeading = screen.getByRole("heading", {
+    const fontsAndTextHeading = screen.getByRole("heading", {
       level: 2,
-      name: "Typography",
+      name: "Fonts and text",
+    });
+    const motionHeading = screen.getByRole("heading", {
+      level: 2,
+      name: "Motion and readability",
     });
     const terminalHeading = screen.getByRole("heading", {
       level: 2,
       name: "Terminal",
     });
-    const artifactHeading = screen.getByRole("heading", {
+    const iconColorsHeading = screen.getByRole("heading", {
       level: 2,
-      name: "Artifact icons",
+      name: "Icon colors",
     });
 
-    const schemeButton = screen.getByRole("button", { name: "System" });
+    const schemeButton = screen.getByRole("button", { name: "Follow device" });
     const preset = screen.getByRole("button", { name: "Light theme" });
-    const pointerCursors = screen.getByText("Use pointer cursors");
-    const uiFont = screen.getByText("UI font");
+    const backgroundOpacity = screen.getByText("Background opacity");
+    const pointerCursors = screen.getByText(
+      "Show a hand cursor over clickable controls",
+    );
+    const interfaceFont = screen.getByText("Interface font");
     const codeFont = screen.getByText("Code font");
+    const promptFont = screen.getByText("Prompt font");
+    const fontLigatures = screen.getByText("Use font ligatures");
+    const panelAnimations = screen.getByText("Panel animations");
     const terminalFont = screen.getByText("Terminal font");
     const terminalCursor = screen.getByText("Terminal cursor");
     const blinkCursor = screen.getByText("Blink cursor");
-    const artifactIconColors = screen.getByText("Artifact icon colors");
+    const iconColors = screen.getAllByText("Color icons by type")[0];
 
-    expect(colorSchemeHeading.closest("div.rounded-lg")).toBeNull();
     expect(themesHeading.closest("div.rounded-lg")).toBeNull();
+    // The theme-mode control is a row of the Themes group, so it shares that
+    // group's section and its bordered card with the theme slots.
     expect(schemeButton.closest("section")).toBe(
-      colorSchemeHeading.closest("section"),
+      themesHeading.closest("section"),
+    );
+    expect(schemeButton.closest("div.rounded-lg")).toBe(
+      preset.closest("div.rounded-lg"),
+    );
+    expect(backgroundOpacity.closest("div.rounded-lg")).toBe(
+      preset.closest("div.rounded-lg"),
     );
     expect(preset.closest("section")).toBe(themesHeading.closest("section"));
-    expect(uiFont.closest("div.rounded-lg")).toBe(
+    expect(interfaceFont.closest("div.rounded-lg")).toBe(
       codeFont.closest("div.rounded-lg"),
+    );
+    expect(promptFont.closest("div.rounded-lg")).toBe(
+      interfaceFont.closest("div.rounded-lg"),
+    );
+    expect(fontLigatures.closest("div.rounded-lg")).toBe(
+      interfaceFont.closest("div.rounded-lg"),
     );
     expect(terminalFont.closest("div.rounded-lg")).toBe(
       terminalCursor.closest("div.rounded-lg"),
@@ -167,33 +249,36 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       pointerCursors.closest("div.rounded-lg"),
     );
     expect(pointerCursors.closest("div.rounded-lg")).not.toBe(
-      uiFont.closest("div.rounded-lg"),
+      interfaceFont.closest("div.rounded-lg"),
     );
-    expect(uiFont.closest("div.rounded-lg")).not.toBe(
+    expect(interfaceFont.closest("div.rounded-lg")).not.toBe(
       terminalFont.closest("div.rounded-lg"),
     );
     expect(terminalFont.closest("div.rounded-lg")).not.toBe(
-      artifactIconColors.closest("div.rounded-lg"),
+      iconColors.closest("div.rounded-lg"),
     );
 
     // Each heading's section owns its representative row.
-    const colorSchemeGroup = screen.getByRole("group", {
-      name: "Color scheme",
+    const themeModeGroup = screen.getByRole("group", {
+      name: "Theme mode",
     });
     const themeList = themesHeading.nextElementSibling;
-    expect(colorSchemeGroup.contains(schemeButton)).toBe(true);
+    expect(themeModeGroup.contains(schemeButton)).toBe(true);
     expect(themeList?.contains(preset)).toBe(true);
     expect(interfaceHeading.closest("section")).toBe(
       pointerCursors.closest("section"),
     );
-    expect(typographyHeading.closest("section")).toBe(
-      uiFont.closest("section"),
+    expect(fontsAndTextHeading.closest("section")).toBe(
+      interfaceFont.closest("section"),
+    );
+    expect(motionHeading.closest("section")).toBe(
+      panelAnimations.closest("section"),
     );
     expect(terminalHeading.closest("section")).toBe(
       terminalFont.closest("section"),
     );
-    expect(artifactHeading.closest("section")).toBe(
-      artifactIconColors.closest("section"),
+    expect(iconColorsHeading.closest("section")).toBe(
+      iconColors.closest("section"),
     );
 
     // Distinct sections per group.
@@ -201,76 +286,101 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       interfaceHeading.closest("section"),
     );
     expect(interfaceHeading.closest("section")).not.toBe(
-      typographyHeading.closest("section"),
+      fontsAndTextHeading.closest("section"),
     );
-    expect(typographyHeading.closest("section")).not.toBe(
+    expect(fontsAndTextHeading.closest("section")).not.toBe(
+      motionHeading.closest("section"),
+    );
+    expect(motionHeading.closest("section")).not.toBe(
       terminalHeading.closest("section"),
     );
     expect(terminalHeading.closest("section")).not.toBe(
-      artifactHeading.closest("section"),
+      iconColorsHeading.closest("section"),
     );
   });
 
   it("places representative rows under the correct section headers", () => {
     renderPanel(queryClient);
 
-    const colorScheme = screen.getByRole("heading", {
-      level: 2,
-      name: "Color scheme",
-    });
     const themes = screen.getByRole("heading", { level: 2, name: "Themes" });
+    const startPage = screen.getByRole("heading", {
+      level: 2,
+      name: "Start page",
+    });
     const iface = screen.getByRole("heading", {
       level: 2,
       name: "Interface",
     });
-    const typography = screen.getByRole("heading", {
+    const fontsAndText = screen.getByRole("heading", {
       level: 2,
-      name: "Typography",
+      name: "Fonts and text",
+    });
+    const motion = screen.getByRole("heading", {
+      level: 2,
+      name: "Motion and readability",
     });
     const terminal = screen.getByRole("heading", {
       level: 2,
       name: "Terminal",
     });
-    const artifactIcons = screen.getByRole("heading", {
+    const iconColors = screen.getByRole("heading", {
       level: 2,
-      name: "Artifact icons",
+      name: "Icon colors",
     });
 
-    const schemeButton = screen.getByRole("button", { name: "System" });
+    const schemeButton = screen.getByRole("button", { name: "Follow device" });
     const preset = screen.getByRole("button", { name: "Light theme" });
-    const pointerCursors = screen.getByText("Use pointer cursors");
-    const uiFont = screen.getByText("UI font");
+    const backgroundOpacity = screen.getByText("Background opacity");
+    const pointerCursors = screen.getByText(
+      "Show a hand cursor over clickable controls",
+    );
+    const interfaceFont = screen.getByText("Interface font");
     const codeFont = screen.getByText("Code font");
+    const promptFont = screen.getByText("Prompt font");
+    const fontLigatures = screen.getByText("Use font ligatures");
+    const panelAnimations = screen.getByText("Panel animations");
+    const animationDuration = screen.getByText("Animation duration");
+    const textContrast = screen.getByText("Text and border contrast");
     const terminalFont = screen.getByText("Terminal font");
     const terminalCursor = screen.getByText("Terminal cursor");
     const blinkCursor = screen.getByText("Blink cursor");
-    const artifactIconColors = screen.getByText("Artifact icon colors");
+    const artifactIconColors = screen.getAllByText("Color icons by type")[0];
 
-    // Theme controls sit between the gallery headings and Interface.
-    expect(documentPosition(colorScheme, schemeButton)).toBe("before");
-    expect(documentPosition(themes, preset)).toBe("before");
+    // Theme controls sit between the Themes heading and Start page, the mode
+    // row first.
+    expect(documentPosition(themes, schemeButton)).toBe("before");
+    expect(documentPosition(schemeButton, preset)).toBe("before");
+    expect(documentPosition(preset, backgroundOpacity)).toBe("before");
+    expect(documentPosition(themes, startPage)).toBe("before");
     expect(documentPosition(preset, iface)).toBe("before");
 
-    // Interface rows sit between that header and Typography.
+    // Interface rows sit between that header and Fonts and text.
     expect(documentPosition(iface, pointerCursors)).toBe("before");
-    expect(documentPosition(pointerCursors, typography)).toBe("before");
+    expect(documentPosition(pointerCursors, fontsAndText)).toBe("before");
     // Pointer cursors is not still in Theme.
     expect(documentPosition(themes, pointerCursors)).toBe("before");
     expect(documentPosition(pointerCursors, iface)).not.toBe("before");
 
-    // Typography: UI font and Code font before Terminal.
-    expect(documentPosition(typography, uiFont)).toBe("before");
-    expect(documentPosition(uiFont, codeFont)).toBe("before");
-    expect(documentPosition(codeFont, terminal)).toBe("before");
+    // Fonts and text rows precede Motion and readability.
+    expect(documentPosition(fontsAndText, interfaceFont)).toBe("before");
+    expect(documentPosition(interfaceFont, codeFont)).toBe("before");
+    expect(documentPosition(codeFont, promptFont)).toBe("before");
+    expect(documentPosition(promptFont, fontLigatures)).toBe("before");
+    expect(documentPosition(fontLigatures, motion)).toBe("before");
 
-    // Terminal rows before Artifact icons.
+    expect(documentPosition(motion, panelAnimations)).toBe("before");
+    expect(documentPosition(panelAnimations, animationDuration)).toBe("before");
+    expect(documentPosition(animationDuration, textContrast)).toBe("before");
+    expect(documentPosition(textContrast, terminal)).toBe("before");
+
+    // Terminal rows before Icon colors.
     expect(documentPosition(terminal, terminalFont)).toBe("before");
     expect(documentPosition(terminalFont, terminalCursor)).toBe("before");
     expect(documentPosition(terminalCursor, blinkCursor)).toBe("before");
-    expect(documentPosition(blinkCursor, artifactIcons)).toBe("before");
+    expect(documentPosition(blinkCursor, iconColors)).toBe("before");
 
-    // Artifact icons content after its header.
-    expect(documentPosition(artifactIcons, artifactIconColors)).toBe("before");
+    // Icon colors content after its header.
+    expect(documentPosition(iconColors, artifactIconColors)).toBe("before");
   });
 
   it("renders the terminal preview inside the Terminal card without a row label", () => {
@@ -355,11 +465,11 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(previewRoot.style.fontFamily).toBe(DEFAULT_MONO_FONT_STACK);
   });
 
-  it("toggles artifact icon palette visibility and preserves colors across re-enable", () => {
+  it("toggles icon color palette visibility and preserves colors across re-enable", () => {
     renderPanel(queryClient);
 
     const enableSwitch = screen.getByRole("switch", {
-      name: "Use artifact type colors",
+      name: "Color icons by type",
     });
     expect(useSettingsStore.getState().artifactIconColorMode).toBe("byType");
     expect(enableSwitch.getAttribute("data-state")).toBe("checked");
@@ -394,7 +504,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       "#ff00aa",
     );
     expect(
-      screen.getByRole("button", { name: "Reset artifact icon colors" }),
+      screen.getByRole("button", { name: "Reset icon colors" }),
     ).toBeTruthy();
   });
 });

@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -190,7 +191,8 @@ export function ArtifactVersionSettingsSection(props: {
   if (snapshot === null) {
     return (
       <SettingsGroup
-        title="Version history"
+        group={HOST_OVERVIEW.definitions.versionHistory}
+        showTitle
         tone="default"
         dataTestId="artifact-version-settings"
         fill={false}
@@ -274,14 +276,14 @@ export function ArtifactVersionSettingsSection(props: {
   return (
     <>
       <SettingsGroup
-        title="Version history"
+        group={HOST_OVERVIEW.definitions.versionHistory}
+        showTitle
         tone="default"
         dataTestId="artifact-version-settings"
         fill={false}
       >
         <SettingsRow
-          label="Capture versions"
-          description="Save restorable observations of artifact edits on this host."
+          row={HOST_OVERVIEW.definitions.captureVersions}
           control={
             <Switch
               checked={settings.enabled}
@@ -295,8 +297,7 @@ export function ArtifactVersionSettingsSection(props: {
           }
         />
         <SettingsRow
-          label="Retention"
-          description="History is pruned when any per-artifact limit is reached."
+          row={HOST_OVERVIEW.definitions.retention}
           control={
             <div className="grid w-full max-w-md grid-cols-3 gap-2">
               <label
@@ -372,8 +373,7 @@ export function ArtifactVersionSettingsSection(props: {
           }
         />
         <SettingsRow
-          label="Storage"
-          description="Referenced history is retained; reclaimable bytes can be cleared now."
+          row={HOST_OVERVIEW.definitions.storage}
           control={
             <div className="text-right text-ui-sm">
               <p>{formatBytes(snapshot.storage.referencedBytes)} referenced</p>
@@ -384,8 +384,7 @@ export function ArtifactVersionSettingsSection(props: {
           }
         />
         <SettingsRow
-          label="Clear version history"
-          description="Remove all version-history records from this host; only unreferenced content bytes are reclaimed."
+          row={HOST_OVERVIEW.definitions.clearVersionHistory}
           control={
             <Button
               size="sm"

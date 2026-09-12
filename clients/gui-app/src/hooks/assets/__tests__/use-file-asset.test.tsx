@@ -25,7 +25,12 @@ import {
   PaneSurfaceActivityContext,
   PaneVisibilityContext,
 } from "@/components/epic-tabs/pane-visibility-context";
-import { useFileAsset, type FileAssetRequest } from "../use-file-asset";
+import {
+  useFileAsset,
+  useHostFileAsset,
+  type FileAssetRequest,
+} from "../use-file-asset";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { AssetStreamFailureReason } from "@traycer-clients/shared/host-transport/asset-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
@@ -141,7 +146,7 @@ class MockStreamSession implements IStreamSession {
 
   close(): void {
     this.closed = true;
-    this.statusChangeHandler?.("closed", { kind: "caller" });
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
   }
 
   emitFrame(
@@ -158,7 +163,7 @@ class MockStreamSession implements IStreamSession {
     status: "connecting" | "open" | "reconnecting" | "closed",
     reason: StreamCloseReason | null,
   ): void {
-    this.statusChangeHandler?.(status, reason);
+    this.statusChangeHandler?.(status, reason, null);
   }
 }
 
@@ -1062,7 +1067,10 @@ describe("useFileAsset", () => {
 
     expect(acquireSpy).toHaveBeenCalledWith(
       JSON.stringify([
-        "host-1",
+        // The cache key's first element is the account+host scope pair
+        // (`assetHostScope`), not a bare hostId - no account is signed in
+        // in this test, so `accountId` is `null`.
+        JSON.stringify([null, "host-1"]),
         "git-old",
         "/repo",
         "images/logo.png",
@@ -1181,7 +1189,10 @@ describe("useFileAsset", () => {
     expect(session.closed).toBe(true);
     expect(acquireSpy).toHaveBeenCalledWith(
       JSON.stringify([
-        "host-1",
+        // The cache key's first element is the account+host scope pair
+        // (`assetHostScope`), not a bare hostId - no account is signed in
+        // in this test, so `accountId` is `null`.
+        JSON.stringify([null, "host-1"]),
         "workspace",
         "/repo",
         "images/logo.png",
@@ -1463,5 +1474,128 @@ describe("useFileAsset", () => {
     expect(transport.client.closeCalls).toBe(1);
     second.unmount();
     expect(transport.client.closeCalls).toBe(1);
+  });
+});
+
+describe("useHostFileAsset (explicit host scope)", () => {
+  afterEach(() => {
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  });
+
+  it("resolves a stream for an explicitly passed hostId, without any tab context", async () => {
+    const { result, unmount } = renderHook(() =>
+      useHostFileAsset({
+        hostId: "host-1",
+        request: WORKSPACE_REQUEST,
+        focused: true,
+        refreshKey: 0,
+      }),
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitHeader(session, "explicit-host-identity", 3);
+      emitBytes(session, [1, 2, 3]);
+    });
+    await flushPromises();
+
+    expect(result.current.status).toBe("ready");
+    unmount();
+  });
+
+  it("reopens on a blurred-to-focused transition driven by the plain `focused` prop, without a Pane context", async () => {
+    const { result, rerender, unmount } = renderHook(
+      ({ focused }: { readonly focused: boolean }) =>
+        useHostFileAsset({
+          hostId: "host-1",
+          request: WORKSPACE_REQUEST,
+          focused,
+          refreshKey: 0,
+        }),
+      { initialProps: { focused: true } },
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const firstSession = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(firstSession, "explicit-focus-refresh", 3);
+      emitBytes(firstSession, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+
+    rerender({ focused: false });
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+
+    rerender({ focused: true });
+    await flushPromises();
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    unmount();
+  });
+
+  it("reopens on a refreshKey bump for the identical host+request, and a late frame from the old stream can't repaint it", async () => {
+    const { result, rerender, unmount } = renderHook(
+      ({ refreshKey }: { readonly refreshKey: number }) =>
+        useHostFileAsset({
+          hostId: "host-1",
+          request: WORKSPACE_REQUEST,
+          focused: true,
+          refreshKey,
+        }),
+      { initialProps: { refreshKey: 1 } },
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const firstSession = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(firstSession, "before-refresh", 3);
+      emitBytes(firstSession, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+    expect(result.current.url).toBe("blob:image/1");
+
+    rerender({ refreshKey: 2 });
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const secondSession = mockWsStreamClient.sessions[1];
+
+    // A late frame from the SUPERSEDED (refreshKey:1) stream must not repaint
+    // the hook now that refreshKey:2's own request is current.
+    act(() => {
+      emitHeader(firstSession, "stale-same-path", 3);
+      emitBytes(firstSession, [9, 9, 9]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("loading");
+
+    act(() => {
+      emitHeader(secondSession, "after-refresh", 3);
+      emitBytes(secondSession, [4, 5, 6]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+    expect(result.current.url).toBe("blob:image/2");
+    unmount();
+  });
+
+  it("opens a fresh stream when the signed-in account changes, for the identical host+request", () => {
+    const { unmount } = renderHook(() =>
+      useHostFileAsset({
+        hostId: "host-1",
+        request: WORKSPACE_REQUEST,
+        focused: true,
+        refreshKey: 0,
+      }),
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "acct-1", username: "acct-1" },
+      });
+    });
+
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    unmount();
   });
 });

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -57,7 +58,8 @@ export function HostImportMigrationSection(props: {
   if (streamHostId !== props.hostId) return null;
   return (
     <SettingsGroup
-      title="Data & migration"
+      group={HOST_OVERVIEW.definitions.dataAndMigration}
+      showTitle
       tone="default"
       dataTestId="host-import-migration"
       fill={false}
@@ -114,8 +116,8 @@ function SessionImportRow(props: {
   return (
     <>
       <SettingsRow
-        label="Import your work"
-        description={description}
+        row={HOST_OVERVIEW.definitions.importYourWork}
+        status={description}
         control={
           <Button
             type="button"
@@ -159,8 +161,8 @@ function DataMigrationRow(props: {
   const running = migrationState.status === "running" || remoteRunning;
   return (
     <SettingsRow
-      label="Data migration"
-      description={
+      row={HOST_OVERVIEW.definitions.dataMigration}
+      status={
         progressLabel ??
         "Retry moving this host's local tasks and epics to cloud."
       }

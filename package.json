@@ -20,6 +20,7 @@
   "dependencies": {
     "@tanstack/react-form": "^1.33.5",
     "@tiptap/extension-image": "3.30.1",
+    "image-size": "^2.0.2",
     "inversify": "^8.2.3",
     "jsdom": "^29.1.1",
     "jsonc-parser": "^3.3.1",
@@ -180,6 +181,7 @@
     "hast-util-sanitize": "^5.0.2",
     "html-to-image": "^1.11.13",
     "jsdom": "^29.1.1",
+    "lightningcss": "^1.33.0",
     "lowlight": "^3.3.0",
     "lucide-react": "^1.40.0",
     "marked": "^17.0.6",

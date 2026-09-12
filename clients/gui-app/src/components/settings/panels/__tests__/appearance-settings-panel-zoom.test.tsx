@@ -13,6 +13,13 @@ import {
 import type { DesktopZoomBridge } from "@/lib/windows/types";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
+// The Start page group's wallpaper gallery fetches its catalog from the CDN.
+// An empty catalog keeps this suite off the network without changing which
+// rows - and so which search anchors - the panel renders.
+vi.mock("@/lib/appearance/curated-wallpapers", () => ({
+  fetchCuratedWallpaperManifest: () => Promise.resolve([]),
+}));
+
 const zoomState: {
   bridge: FakeZoomBridge | null;
 } = {
@@ -70,7 +77,12 @@ describe("<AppearanceSettingsPanel /> zoom control", () => {
     const bridge = zoomState.bridge;
     renderWithQueryClient(<AppearanceSettingsPanel />);
 
-    expect(await screen.findByText("100%")).toBeTruthy();
+    const zoomSelect = await screen.findByRole("combobox", {
+      name: "Display zoom",
+    });
+    await waitFor(() => {
+      expect(zoomSelect.textContent).toContain("100%");
+    });
     await waitFor(() => {
       expect(bridge?.listenerCount()).toBe(1);
     });
@@ -80,7 +92,9 @@ describe("<AppearanceSettingsPanel /> zoom control", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("125%")).toBeTruthy();
+      expect(
+        screen.getByRole("combobox", { name: "Display zoom" }).textContent,
+      ).toContain("125%");
     });
   });
 

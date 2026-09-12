@@ -7,38 +7,156 @@
   color: var(--sidebar-foreground);
 }
 
-/* One glass layer per floating surface. Custom Floating UI/Tiptap surfaces
-   join the same contract as the Radix wrappers through their stable markers. */
-[data-slot="dialog-content"],
-[data-slot="alert-dialog-content"],
-[data-slot="popover-content"],
-[data-slot="dropdown-menu-content"],
-[data-slot="dropdown-menu-sub-content"],
-[data-slot="context-menu-content"],
-[data-slot="context-menu-sub-content"],
-[data-slot="select-content"],
-[data-slot="hover-card-content"],
-[data-slot="sheet-content"],
-[data-slot="drawer-content"],
-[data-slot="composer-menu"],
-[data-slot="mention-preview-panel"],
-[data-slot="artifact-link-popover"],
-[data-slot="floating-draft-popover"],
-[data-slot="thread-hover-popover"],
-[data-slot="mention-suggestion"],
-[data-slot="quote-selection-popover"],
-[data-profile-usage-sidecar],
-[data-minimap-list-card],
-.tc-editor-bubble-menu,
-.tc-node-block-toolbar {
-  /* An embedded command list must not paint another, opaque panel over glass. */
+/* One tint per surface; embedded command lists inherit transparency. */
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="hover-card-content"],
+  [data-slot="sheet-content"],
+  [data-slot="drawer-content"],
+  [data-slot="composer-menu"],
+  [data-slot="mention-preview-panel"],
+  [data-slot="artifact-link-popover"],
+  [data-slot="floating-draft-popover"],
+  [data-slot="thread-hover-popover"],
+  [data-slot="mention-suggestion"],
+  [data-slot="quote-selection-popover"],
+  [data-slot="office-legend-popover"],
+  [data-profile-usage-sidecar],
+  [data-minimap-list-card],
+  .tc-editor-bubble-menu,
+  .tc-node-block-toolbar
+) {
   --command-surface-background: transparent;
   background-color: color-mix(
     in srgb,
-    var(--popover) calc(var(--glass-opacity, 1) * 100%),
+    var(--popover)
+      calc(var(--surface-glass-opacity, var(--glass-opacity, 1)) * 100%),
     transparent
   );
-  backdrop-filter: blur(16px);
+  backdrop-filter: blur(28px) saturate(140%);
+}
+/*
+ * A retained opacity animation creates a backdrop root even after it ends, so
+ * every surface that gets a backdrop-filter above needs this guard. The two
+ * lists must stay identical; plain CSS cannot share one, so they are kept
+ * adjacent and glass-inset-surface.test.ts asserts they match.
+ */
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="hover-card-content"],
+  [data-slot="sheet-content"],
+  [data-slot="drawer-content"],
+  [data-slot="composer-menu"],
+  [data-slot="mention-preview-panel"],
+  [data-slot="artifact-link-popover"],
+  [data-slot="floating-draft-popover"],
+  [data-slot="thread-hover-popover"],
+  [data-slot="mention-suggestion"],
+  [data-slot="quote-selection-popover"],
+  [data-slot="office-legend-popover"],
+  [data-profile-usage-sidecar],
+  [data-minimap-list-card],
+  .tc-editor-bubble-menu,
+  .tc-node-block-toolbar
+)[data-state="open"] {
+  animation-fill-mode: backwards;
+}
+/*
+ * Dense reading surfaces keep a legibility floor. A custom property cannot be
+ * redefined in terms of itself, so the tint rules read --surface-glass-opacity
+ * and fall back to the raw --glass-opacity the applier writes on <html>.
+ * Menus and popovers never set it, so they keep the raw user value.
+ */
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="sheet-content"],
+  [data-slot="drawer-content"]
+) {
+  --surface-glass-opacity: max(var(--glass-opacity, 1), 0.8);
+}
+/* Radix's transformed wrapper anchors the glass outside the content's scroll area. */
+[data-radix-popper-content-wrapper]
+  > :is(
+    [data-slot="popover-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="context-menu-content"],
+    [data-slot="context-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="hover-card-content"]
+  ) {
+  isolation: isolate;
+  background-color: transparent;
+  backdrop-filter: none;
+
+  &::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background-color: color-mix(
+      in srgb,
+      var(--popover)
+        calc(var(--surface-glass-opacity, var(--glass-opacity, 1)) * 100%),
+      transparent
+    );
+    backdrop-filter: blur(28px) saturate(140%);
+  }
+}
+.glass-inset {
+  background-color: var(--popover);
+  backdrop-filter: none;
+}
+/* Blur scrolling content without applying a second layer of tint. */
+:root[data-glass-enabled] .glass-inset {
+  background-color: transparent;
+  backdrop-filter: blur(28px) saturate(140%);
+}
+/* Keep the dialog background separate from sticky insets and nested portals. */
+:is(
+  [data-slot="popover-content"],
+  [data-slot="dialog-content"]
+).glass-with-insets {
+  isolation: isolate;
+  background-color: transparent;
+  backdrop-filter: none;
+}
+/*
+ * Popovers use the fixed background anchored by their Radix wrapper above; the
+ * dialog paints its glass here instead. This selector cannot join the tint
+ * list above: a pseudo-element is invalid inside :is(), and lightningcss drops
+ * the offending entry silently, which left every dialog painting nothing.
+ */
+[data-slot="dialog-content"].glass-with-insets::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background-color: color-mix(
+    in srgb,
+    var(--popover)
+      calc(var(--surface-glass-opacity, var(--glass-opacity, 1)) * 100%),
+    transparent
+  );
+  backdrop-filter: blur(28px) saturate(140%);
 }
 [data-composer-shell] {
   background-color: color-mix(
@@ -46,7 +164,7 @@
     var(--canvas) calc(var(--glass-opacity, 1) * 100%),
     transparent
   );
-  backdrop-filter: blur(16px);
+  backdrop-filter: blur(28px) saturate(140%);
 }
 [data-composer-editor] {
   font-family: var(--traycer-font-prompt, var(--traycer-font-ui));
@@ -58,32 +176,67 @@ code,
 .cm-editor {
   font-variant-ligatures: var(--appearance-ligatures, normal);
 }
-:root[data-reduce-panel-motion]
-  :is(
-    [data-slot="dialog-content"],
-    [data-slot="sheet-content"],
-    [data-slot="sidebar-gap"],
-    [data-slot="sidebar-container"],
-    [data-slot="popover-content"],
-    [data-slot="dropdown-menu-content"],
-    [data-slot="select-content"]
-  ) {
-  animation-duration: 0s;
-  transition-duration: 0s;
+/* Shared wrappers own panel timing, including their portals and backdrops. */
+:root {
+  --panel-motion-duration: var(--panel-animation-duration, 100ms);
 }
-
-:root:not([data-reduce-panel-motion])
+:root[data-reduce-panel-motion] {
+  --panel-motion-duration: 0ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --panel-motion-duration: 0ms;
+  }
+}
+:root
   :is(
     [data-slot="dialog-content"],
+    [data-slot="dialog-overlay"],
+    [data-slot="alert-dialog-content"],
+    [data-slot="alert-dialog-overlay"],
     [data-slot="sheet-content"],
-    [data-slot="sidebar-gap"],
-    [data-slot="sidebar-container"],
+    [data-slot="sheet-overlay"],
+    [data-slot="drawer-content"],
+    [data-slot="drawer-overlay"],
     [data-slot="popover-content"],
     [data-slot="dropdown-menu-content"],
-    [data-slot="select-content"]
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="context-menu-content"],
+    [data-slot="context-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="hover-card-content"],
+    [data-slot="tooltip-content"],
+    [data-slot="collapsible-content"],
+    [data-slot="tabs-content"],
+    [data-slot="sidebar-gap"],
+    [data-slot="sidebar-container"],
+    [data-slot="sidebar-rail"],
+    [data-slot="sidebar-group-label"],
+    [data-slot="sidebar-group-action"],
+    [data-slot="sidebar-menu-button"],
+    [data-slot="sidebar-menu-action"],
+    [data-slot="composer-menu"],
+    [data-slot="mention-preview-panel"],
+    [data-slot="artifact-link-popover"],
+    [data-slot="floating-draft-popover"],
+    [data-slot="thread-hover-popover"],
+    [data-slot="mention-suggestion"],
+    [data-slot="quote-selection-popover"],
+    [data-slot="office-legend-popover"],
+    [data-slot="collapsible-trigger"] svg,
+    [data-profile-usage-sidecar],
+    [data-minimap-list-card],
+    [data-landing-terminal-panel],
+    .tc-editor-bubble-menu,
+    .tc-node-block-toolbar
   ) {
-  animation-duration: var(--panel-animation-duration, 100ms);
-  transition-duration: var(--panel-animation-duration, 100ms);
+  animation-duration: var(--panel-motion-duration);
+  transition-duration: var(--panel-motion-duration);
+}
+/* Vaul writes inline settle durations; preserve its transition-property: none while dragging. */
+:root :is([data-slot="drawer-content"], [data-slot="drawer-overlay"]) {
+  animation-duration: var(--panel-motion-duration) !important;
+  transition-duration: var(--panel-motion-duration) !important;
 }
 
 :root[data-theme-sidebar-artwork]
@@ -100,4 +253,33 @@ code,
     url("../assets/brand/gradient-bg.jpg");
   background-size: cover;
   background-position: center;
+}
+
+/* The column paints one continuous image behind its rail and panel body. */
+:root[data-theme-sidebar-artwork]
+  [data-epic-sidebar-panel]
+  :is(
+    [data-slot="sidebar"],
+    [data-slot="sidebar-inner"],
+    [data-epic-sidebar-rail]
+  ) {
+  background-color: transparent;
+  background-image: none;
+}
+
+:is([data-epic-sidebar-panel], [data-settings-sidebar]) {
+  position: relative;
+  isolation: isolate;
+}
+
+:root[data-theme-sidebar-artwork]
+  :is([data-epic-sidebar-panel], [data-settings-sidebar]):has(
+    > .sidebar-artwork .appearance-wallpaper
+  ) {
+  background-image: none;
+}
+
+/* Keep navigation labels legible over the shared wallpaper treatment. */
+.sidebar-artwork {
+  opacity: 0.35;
 }

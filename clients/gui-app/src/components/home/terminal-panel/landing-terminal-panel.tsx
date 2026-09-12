@@ -59,6 +59,7 @@ import {
   clearPendingTerminalFocus,
   focusTerminalInstance,
 } from "@/lib/terminals/terminal-focus-registry";
+import { usePanelAnimationDuration } from "@/hooks/use-panel-animation-duration";
 import { reconcileXtermHostAfterLayoutTransition } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { cn } from "@/lib/utils";
 import {
@@ -2832,6 +2833,7 @@ function useLandingTerminalLayoutReconcile(args: {
   readonly panelOpen: boolean;
   readonly activeInstanceId: string | null;
 }): () => void {
+  const animationDuration = usePanelAnimationDuration();
   const frameRef = useRef<number | null>(null);
   const previousPanelOpenRef = useRef(args.panelOpen);
   const cancelScheduledReconcile = useCallback((): void => {
@@ -2852,16 +2854,20 @@ function useLandingTerminalLayoutReconcile(args: {
   useEffect(() => {
     const reopened = args.panelOpen && !previousPanelOpenRef.current;
     previousPanelOpenRef.current = args.panelOpen;
-    // A normal reveal reconciles on its final width transition. If another
-    // resize has globally suppressed transitions, the panel jumps straight to
+    // A normal reveal reconciles on its final width transition. When a resize
+    // or motion preference suppresses transitions, the panel jumps straight to
     // its target width and needs the next-frame fallback instead. An active-tab
     // change while already open also lands here, including a delayed
     // reconciliation that selects a different terminal after reveal.
-    if (args.panelOpen && (!reopened || isPanelResizeInteractionActive())) {
+    if (
+      args.panelOpen &&
+      (!reopened || animationDuration === 0 || isPanelResizeInteractionActive())
+    ) {
       scheduleReconcile();
     }
     return cancelScheduledReconcile;
   }, [
+    animationDuration,
     args.activeInstanceId,
     args.panelOpen,
     cancelScheduledReconcile,
