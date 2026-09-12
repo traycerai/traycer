@@ -275,6 +275,8 @@ function seatProps(
           x: x + 16,
           y: y + 34,
           tone: "muted",
+          // Nobody's name, so no seat to be fitted to.
+          fitTiles: null,
         },
         depth: foot + 0.2,
         ownerAgentId: null,

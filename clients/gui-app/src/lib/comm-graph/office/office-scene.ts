@@ -4488,12 +4488,27 @@ export class OfficeScene {
           y: y + OFFICE_CHARACTER_HEIGHT + LABEL_GAP,
           tone: archived ? "muted" : "default",
           ownerAgentId: character.agentId,
+          fitTiles: this.tagFitTilesOf(character),
         },
         depth,
         ownerAgentId: character.agentId,
       });
     }
     return actors;
+  }
+
+  /**
+   * The tiles a seated character's name tag has to fit inside, or `null` for
+   * one that is on its feet.
+   *
+   * The EFFECTIVE seat, so an agent borrowing somebody else's desk is fitted
+   * to the desk it is actually in. A walker gets `null` because it has left
+   * its seat: there is no box around it to overprint, and the office would be
+   * abbreviating a name for no reason.
+   */
+  private tagFitTilesOf(character: OfficeCharacter): number | null {
+    if (!character.seated) return null;
+    return this.seats.effectiveSeat(character.agentId)?.hitTiles.width ?? null;
   }
 
   /**

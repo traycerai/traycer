@@ -843,6 +843,37 @@ export type OfficeDrawable =
        * that is wrong the moment two things share a centre line.
        */
       readonly ownerAgentId: string | null;
+      /**
+       * THE BOX THIS TAG HAS TO STAY INSIDE, in tiles, or `null` for lettering
+       * that owns no box.
+       *
+       * A seated agent's tag is fitted to its seat: a cubby is ONE tile wide
+       * and a truncated name is fourteen characters, so a row of cubbies used
+       * to print its occupants over each other -
+       * `team-4-member... team-6-member...` in one smear - while each name was
+       * individually correct. A seat's own width is what makes two neighbours'
+       * tags disjoint by construction, with no neighbour search and nothing
+       * measured against the row.
+       *
+       * `null` means "draw it as written": a WALKER has left its seat and has
+       * no box to be fitted to, and a painter's own lettering (`reserve`, a
+       * room name, sign text) is laid out by whoever placed it. The renderer
+       * resolves the reading, because how wide a tile is on screen is a camera
+       * fact and the scene does not know the zoom.
+       *
+       * A WIDTH, NOT A BOX, and the tag is centred on its CHARACTER rather
+       * than on the seat's centre - which are not the same point. Every
+       * oblique desk is two tiles wide with `deskTile.col === chairTile.col`,
+       * so its occupant stands on the box's LEFT column and a maximal reading
+       * reaches half a tile past that edge while leaving half a tile unused on
+       * the right. That is deliberate and it is safe: the offset is identical
+       * for every seat in a row, so a row's tags shift together instead of
+       * closing on each other, and a tag never reaches a NEIGHBOUR's tag. Held
+       * by "a character anchored off its seat's centre still never reaches a
+       * neighbour's tag" in `comm-graph-office-canvas.test.tsx` - measured on
+       * two adjacent Towers desks, not argued.
+       */
+      readonly fitTiles: number | null;
     }
   | {
       /** Hands over a `clock` face sprite. CENTER anchored on the face. */
