@@ -1,7 +1,7 @@
 import type { FallbackPolicyField } from "./fallback-policy-draft";
 
 /**
- * The Fallback page's four sections.
+ * The Fallback page's three sections.
  *
  * The page used to stack all six of its groups in one scroll, which put every
  * setting a user might ever change in front of every user. These are the same
@@ -13,11 +13,7 @@ import type { FallbackPolicyField } from "./fallback-policy-draft";
  * per-failure matrix is `Overrides` here and not the `Advanced` it was called
  * on the single page.
  */
-export type FallbackTabKey =
-  | "plan"
-  | "equivalentModels"
-  | "destinations"
-  | "overrides";
+export type FallbackTabKey = "plan" | "equivalentModels" | "overrides";
 
 export interface FallbackTab {
   readonly key: FallbackTabKey;
@@ -28,7 +24,6 @@ export interface FallbackTab {
 export const FALLBACK_TABS: readonly FallbackTab[] = [
   { key: "plan", label: "Plan" },
   { key: "equivalentModels", label: "Equivalent models" },
-  { key: "destinations", label: "Destinations" },
   { key: "overrides", label: "Overrides" },
 ];
 
@@ -39,7 +34,7 @@ export const DEFAULT_FALLBACK_TAB: FallbackTabKey = "plan";
  * behind a tab at all.
  *
  * `enabled` is the `null`: the master toggle sits ABOVE the rail, because a
- * switch that makes all four tabs inert cannot live inside one of them, so its
+ * switch that makes all three tabs inert cannot live inside one of them, so its
  * status is always on screen and needs no tab to point at.
  *
  * This exists because the panel keeps ONE status place - `activeField` decides
@@ -63,8 +58,6 @@ export function fallbackTabForField(
       return "plan";
     case "tierGroups":
       return "equivalentModels";
-    case "allowedDestinations":
-      return "destinations";
     case "overrides":
       return "overrides";
   }

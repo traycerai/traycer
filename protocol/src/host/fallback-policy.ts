@@ -173,7 +173,7 @@ export function findTierGroupForFailedTuple(
  * needs a live catalog, an availability probe, an account and a gauge per
  * candidate - every one of them a fact about the world that can be true at
  * 10:00 and false at 10:01. This asks "does this setup point anywhere else at
- * all", which the groups and the exclusion list settle between them.
+ * all", which the groups settle on their own.
  *
  * That distinction is what lets the answer be FROZEN and what lets it be
  * answered CLIENT-SIDE. The host stores it on a failed attempt's durable
@@ -183,17 +183,14 @@ export function findTierGroupForFailedTuple(
  * it about a draft policy that has not been saved, which no host call could
  * answer.
  *
- * Two candidates are not destinations. One the user has EXCLUDED as a
- * destination is their own standing statement that this policy may not send a
- * chat there (FC8). And the failed model's own entry is not somewhere else to
- * go - matched at FAMILY level here rather than on a resolved slug, because
+ * The failed model's own entry is not somewhere else to go - matched at
+ * FAMILY level here rather than on a resolved slug, because
  * resolving a slug is exactly the catalog read this function exists not to do.
  * Family-level is the coarser of the two in the safe direction: it can only
  * discard a candidate that is very likely the model itself, never invent one.
  */
 export function tierGroupsNameDestinationFor(input: {
   readonly groups: readonly TierGroup[];
-  readonly destinationExclusions: readonly TierCandidate["harnessId"][];
   readonly harnessId: HarnessId;
   readonly model: string;
 }): boolean {
@@ -205,7 +202,6 @@ export function tierGroupsNameDestinationFor(input: {
   if (group === null) return false;
   const slug = input.model.toLowerCase();
   return group.candidates.some((candidate) => {
-    if (input.destinationExclusions.includes(candidate.harnessId)) return false;
     return !(
       candidate.harnessId === input.harnessId &&
       candidateFamilyMatchesSlug(candidate.modelFamily, slug)
@@ -252,7 +248,6 @@ export const TIER_RUNG_SKIP_REASONS = [
   "harness-not-gui",
   "provider-unknown",
   "provider-unavailable",
-  "destination-excluded",
   "profile-signed-out",
   "catalog-unreadable",
   "family-unmatched",
@@ -266,9 +261,6 @@ export type TierRungSkipReason = z.infer<typeof tierRungSkipReasonSchema>;
 
 export const fallbackPolicySchema = z.object({
   enabled: z.boolean(),
-  // Excluded providers remain group members and valid sources; never switch TO them.
-  // This unreleased policy accepts stored rows from before the field existed.
-  destinationExclusions: z.array(harnessIdSchema).readonly().default([]),
   // Empty is valid: exhaustion always notifies, even without an explicit rung.
   ladder: fallbackLadderSchema,
   reasonOverrides: z
@@ -302,7 +294,6 @@ export type FallbackPolicy = z.infer<typeof fallbackPolicySchema>;
 export function createDefaultFallbackPolicy(): FallbackPolicy {
   return {
     enabled: false,
-    destinationExclusions: [],
     ladder: ["profile", "tier", "wait", "notify"],
     graceWindowSeconds: 15,
     maxWaitMinutes: 360,

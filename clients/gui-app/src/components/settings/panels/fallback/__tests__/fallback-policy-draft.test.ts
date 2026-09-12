@@ -1515,55 +1515,6 @@ describe("fallbackPolicyValuesEqual", () => {
       ),
     ).toBe(true);
   });
-
-  // P1: `destinationExclusions` joined the comparison. A round trip through
-  // `withTierGroups` cannot falsify this - that function spreads the policy
-  // and never touches the field - so these cells go straight at the
-  // predicate.
-  //
-  // Falsification takes TWO mutations in OPPOSITE directions, and no single one
-  // supplies both - which is the transferable point:
-  //
-  //  - **A MISSING check.** Delete the
-  //    `if (!sameDestinationExclusions(...)) { return false; }` block. That
-  //    reddens the MEMBERSHIP cell below (and lane G3's
-  //    `round-trips the full policy through keyed groups and the draft state`),
-  //    and it leaves both SET cells GREEN. Deleting the block makes every
-  //    exclusion comparison equal, which is exactly what those two assert -
-  //    they say `toBe(true)`, so a missing check SATISFIES them. A cell
-  //    asserting equality is structurally blind to a check that is absent.
-  //  - **A TOO-STRICT check.** Replace the set walk with an index-wise array
-  //    compare (`a.length === b.length && a.every((id, at) => id === b[at])`).
-  //    That reddens the two SET cells and leaves membership green.
-  //
-  // Both were measured, at 2 reds each. Reaching for only the deletion is the
-  // natural move and reads as "two of these three cells prove nothing".
-  it("is sensitive to destinationExclusions membership", () => {
-    expect(
-      fallbackPolicyValuesEqual(
-        policy({ destinationExclusions: ["claude"] }),
-        policy({ destinationExclusions: [] }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats destinationExclusions as a SET: order does not matter", () => {
-    expect(
-      fallbackPolicyValuesEqual(
-        policy({ destinationExclusions: ["claude", "codex"] }),
-        policy({ destinationExclusions: ["codex", "claude"] }),
-      ),
-    ).toBe(true);
-  });
-
-  it("treats destinationExclusions as a SET: a duplicate entry does not matter", () => {
-    expect(
-      fallbackPolicyValuesEqual(
-        policy({ destinationExclusions: ["claude", "claude"] }),
-        policy({ destinationExclusions: ["claude"] }),
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("fallbackPolicyDraftReducer - fifth pass: what the state lets the page CLAIM", () => {

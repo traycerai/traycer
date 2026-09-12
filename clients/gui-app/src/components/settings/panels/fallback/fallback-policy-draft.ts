@@ -28,13 +28,6 @@ export type FallbackPolicyField =
   | "ladder"
   | "behavior"
   | "tierGroups"
-  // Allowed destinations used to commit under `tierGroups`, because it sat
-  // directly above that group and the field only decides which group the
-  // status renders under. The tabbed layout put the two on DIFFERENT tabs, so
-  // that shortcut would now render a refusal for this control on a tab the
-  // user is not looking at - the failure the panel's own mount comment
-  // predicted ("if that ever stops being true this mount is wrong").
-  | "allowedDestinations"
   | "overrides"
   // The danger zone is a group like any other for status purposes: a refused
   // reset has to say so under the button that was pressed, not under whichever
@@ -622,7 +615,7 @@ export type FallbackSaveFailureOutcome = "refused" | "unknown";
  * to maintain it, which is the failure this batch has now produced four times.
  * Comparing the values cannot drift from the sentence it licenses.
  *
- * Field-by-field rather than a generic deep equal: the policy is eight fields
+ * Field-by-field rather than a generic deep equal: the policy is seven fields
  * of known shape, and a structural walk would have to decide what to do about
  * key order and `undefined` on its own. `reasonOverrides` absent and
  * `reasonOverrides` empty both mean "no per-reason overrides" and compare
@@ -633,9 +626,9 @@ export type FallbackSaveFailureOutcome = "refused" | "unknown";
  * omission until someone adds it here, and every sentence this function
  * licenses is then false about an edit to that field alone: it would compare
  * equal to `persisted`, so `draftConfirmed` would call an unsaved change
- * stored, and `displayDispatchState` would call it `loaded-unchanged`. Eight is
- * the count as of `destinationExclusions`; if that number and the comparisons
- * below disagree, the comparisons are what is wrong.
+ * stored, and `displayDispatchState` would call it `loaded-unchanged`. Seven is
+ * the count as of the removal of the destination exclusion list; if that
+ * number and the comparisons below disagree, the comparisons are what is wrong.
  */
 export function fallbackPolicyValuesEqual(
   a: FallbackPolicy,
@@ -651,39 +644,7 @@ export function fallbackPolicyValuesEqual(
   }
   if (!sameRungOrder(a.ladder, b.ladder)) return false;
   if (!sameTierGroups(a.tierGroups, b.tierGroups)) return false;
-  if (
-    !sameDestinationExclusions(a.destinationExclusions, b.destinationExclusions)
-  ) {
-    return false;
-  }
   return sameReasonOverrides(a.reasonOverrides, b.reasonOverrides);
-}
-
-/**
- * Whether two policies exclude the same destinations.
- *
- * As a SET, unlike `ladder` beside it, and the difference is what the field
- * means rather than a shortcut: the ladder's order is the order the engine
- * walks, while an exclusion list is a membership test. Two lists naming the
- * same providers in a different order render the same checkboxes and behave
- * identically, so calling them different would report an edit nobody made -
- * and the editor writes through a `Set`, which does not promise an order.
- *
- * Duplicates collapse for the same reason. They cannot be authored here, but a
- * policy written elsewhere can carry them and the second copy changes nothing
- * a user can see.
- */
-function sameDestinationExclusions(
-  a: FallbackPolicy["destinationExclusions"],
-  b: FallbackPolicy["destinationExclusions"],
-): boolean {
-  const left = new Set(a);
-  const right = new Set(b);
-  if (left.size !== right.size) return false;
-  for (const harnessId of left) {
-    if (!right.has(harnessId)) return false;
-  }
-  return true;
 }
 
 function sameRungOrder(

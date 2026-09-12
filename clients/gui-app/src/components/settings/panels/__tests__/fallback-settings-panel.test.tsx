@@ -4419,8 +4419,8 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
     });
   }
 
-  /** One stored candidate, so the allow-list has a provider to offer. */
-  function destinationsPolicy(): FallbackPolicy {
+  /** One stored group, so the Equivalent models tab has something to edit. */
+  function groupedPolicy(): FallbackPolicy {
     return policy({
       enabled: true,
       tierGroups: [
@@ -4438,28 +4438,30 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
     });
   }
 
-  const REFUSAL = "destinations are managed for this host";
+  const REFUSAL = "model groups are managed for this host";
 
-  async function refuseADestinationsSave(): Promise<void> {
-    fallbackMocks.queryData = respond(destinationsPolicy());
+  /**
+   * A refused save that belongs to a tab OTHER than Plan. "Add a group" is the
+   * driver because it commits on the click: an empty group is schema-valid
+   * (`candidates` has no `.min(1)`), so no text edit is needed to send it.
+   */
+  async function refuseAnEquivalentModelsSave(): Promise<void> {
+    fallbackMocks.queryData = respond(groupedPolicy());
     fallbackMocks.setMutateAsync.mockRejectedValueOnce(refusedByHost(REFUSAL));
     renderPanel();
 
-    openFallbackTab("destinations");
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Allow switching to Claude Code" }),
-    );
+    openFallbackTab("equivalentModels");
+    fireEvent.click(screen.getByRole("button", { name: "Add a group" }));
     await flushHostReplies();
   }
 
-  it("opens on Plan, names its four sections in order, and keeps the master switch reachable from every one", () => {
-    fallbackMocks.queryData = respond(destinationsPolicy());
+  it("opens on Plan, names its three sections in order, and keeps the master switch reachable from every one", () => {
+    fallbackMocks.queryData = respond(groupedPolicy());
     renderPanel();
 
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Plan",
       "Equivalent models",
-      "Destinations",
       "Overrides",
     ]);
     expect(
@@ -4468,14 +4470,10 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
         .getAttribute("data-state"),
     ).toBe("active");
 
-    // The master switch makes all four tabs inert, so it cannot live inside
+    // The master switch makes all three tabs inert, so it cannot live inside
     // one of them. This is the pin on it staying ABOVE the rail: a control
     // that governs every section has to be reachable from every section.
-    for (const tab of [
-      "equivalentModels",
-      "destinations",
-      "overrides",
-    ] as const) {
+    for (const tab of ["equivalentModels", "overrides"] as const) {
       openFallbackTab(tab);
       expect(
         screen.getByRole("switch", { name: "Automatic fallback" }),
@@ -4483,19 +4481,18 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
     }
   });
 
-  it("renders a refused Allowed-destinations save on Destinations, not under the equivalent models whose field it used to borrow", async () => {
-    // Falsification: give `FallbackAllowedDestinations` back `field:
-    // "tierGroups"` - which was correct while it sat directly above that group
-    // on one page, and which `fallback-settings-panel.tsx` guarded with "if
-    // that ever stops being true this mount is wrong". The refusal then
-    // renders on the Equivalent models tab, and the person who checked a box
-    // on Destinations is told nothing at all.
-    await refuseADestinationsSave();
+  it("renders a refused Equivalent-models save on Equivalent models, and on no other tab", async () => {
+    // Falsification: route `tierGroups` to "plan" in `fallbackTabForField`.
+    // The status line then renders on a tab the person who clicked "Add a
+    // group" is not looking at, and they are told nothing at all.
+    await refuseAnEquivalentModelsSave();
 
     expect(screen.getByTestId("fallback-host-error").textContent).toContain(
       REFUSAL,
     );
-    openFallbackTab("equivalentModels");
+    openFallbackTab("plan");
+    expect(screen.queryByTestId("fallback-host-error")).toBeNull();
+    openFallbackTab("overrides");
     expect(screen.queryByTestId("fallback-host-error")).toBeNull();
   });
 
@@ -4504,32 +4501,29 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
     // owns the refusal - the message is right there - and the rail simply
     // never mentions it from anywhere else, which is the failure mode tabs
     // introduce and a single scrolling page could not have.
-    await refuseADestinationsSave();
+    await refuseAnEquivalentModelsSave();
 
     // On the tab itself the line IS the signal; a dot beside it would be a
     // second glyph for one fact.
     expect(
-      screen.queryByTestId("settings-fallback-tab-status-destinations"),
+      screen.queryByTestId("settings-fallback-tab-status-equivalentModels"),
     ).toBeNull();
 
     openFallbackTab("plan");
     expect(
-      screen.getByTestId("settings-fallback-tab-status-destinations"),
+      screen.getByTestId("settings-fallback-tab-status-equivalentModels"),
     ).toBeDefined();
     // And nowhere else - a dot claims something about ONE tab.
     expect(
       screen.queryByTestId("settings-fallback-tab-status-plan"),
     ).toBeNull();
     expect(
-      screen.queryByTestId("settings-fallback-tab-status-equivalentModels"),
-    ).toBeNull();
-    expect(
       screen.queryByTestId("settings-fallback-tab-status-overrides"),
     ).toBeNull();
 
-    openFallbackTab("destinations");
+    openFallbackTab("equivalentModels");
     expect(
-      screen.queryByTestId("settings-fallback-tab-status-destinations"),
+      screen.queryByTestId("settings-fallback-tab-status-equivalentModels"),
     ).toBeNull();
     expect(screen.getByTestId("fallback-host-error").textContent).toContain(
       REFUSAL,

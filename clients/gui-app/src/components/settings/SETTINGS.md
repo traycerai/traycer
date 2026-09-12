@@ -2258,16 +2258,12 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     (through `carryViewedHostIntoSettingsScope`), which is precisely when a
     panel that said nothing would be editing the wrong machine.
   - **Groups**: Fallback (the `Automatic fallback` master switch, off by
-    default, and the `Try these in order` step editor), Behavior, Allowed
-    destinations, Equivalent models, Advanced per-failure overrides, and a
-    Danger Zone. `Allowed destinations` (FC8, lane G3) edits
-    `destinationExclusions` and nothing else - it is mounted between Behavior
-    and Equivalent models and never adds, removes or reorders a candidate row,
-    which is why the panel commits it with `null` identities. That field is also
-    the eighth thing `fallbackPolicyValuesEqual` compares, as a SET (order and
-    duplicates are not user-visible); a policy field missing from that function
-    is equal to itself by omission, so an edit to it alone would compare equal
-    to `persisted` and the notice would call an unsaved change stored.
+    default, and the `Try these in order` step editor), Behavior, Equivalent
+    models, Advanced per-failure overrides, and a Danger Zone. Every policy
+    field is compared by `fallbackPolicyValuesEqual`; a field missing from that
+    function is equal to itself by omission, so an edit to it alone would
+    compare equal to `persisted` and the notice would call an unsaved change
+    stored.
   - **The step editor is the only drag surface in Settings**, so it carries ▲▼
     buttons as well: a pointer drag is unreachable from a keyboard and awkward
     on touch, and this list is the feature's whole configuration. Only

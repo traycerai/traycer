@@ -12,9 +12,9 @@ import { harnessDisplayName } from "@/components/session-import/session-import-m
  *
  * ## Why this is its own module
  *
- * It lived in `fallback-tier-group-card.tsx` until the allowed-destinations
- * view needed the same label, and a second implementation of "name a harness"
- * is a second way to name one vendor. Exporting it from the card was the
+ * It lived in `fallback-tier-group-card.tsx` until a second surface needed the
+ * same label, and a second implementation of "name a harness" is a second way
+ * to name one vendor. Exporting it from the card was the
  * obvious move and is the wrong one: that file exports React components, and
  * `react(only-export-components)` objects to a module that exports both - the
  * same rule that keeps `resetConfirmDescription` unexported in

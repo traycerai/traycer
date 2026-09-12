@@ -133,15 +133,6 @@ export const FALLBACK = defineSettingsSection("fallback", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
-  allowedDestinations: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "Allowed destinations",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
   advanced: {
     kind: "group",
     search: { contributesTo: "page" },

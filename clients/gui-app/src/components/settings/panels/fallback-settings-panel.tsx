@@ -64,7 +64,6 @@ import { FallbackBehaviorGroup } from "@/components/settings/panels/fallback/fal
 import { FallbackOverridesMatrix } from "@/components/settings/panels/fallback/fallback-overrides-matrix";
 import { FallbackDangerZone } from "@/components/settings/panels/fallback/fallback-danger-zone";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
-import { FallbackAllowedDestinations } from "@/components/settings/panels/fallback/fallback-allowed-destinations";
 import {
   applyGroupsInverse,
   keyedGroupsMatch,
@@ -785,7 +784,7 @@ function FallbackPolicyEditor(props: {
       <SettingsGroup
         group={FALLBACK.definitions.fallback}
         // The page is already titled Fallback. This strip is the master switch
-        // for all four tabs, not a section beside them, so a heading repeating
+        // for all three tabs, not a section beside them, so a heading repeating
         // the page name is the second name `notification-chime-settings-section`
         // refuses for the same reason.
         showTitle={false}
@@ -810,7 +809,7 @@ function FallbackPolicyEditor(props: {
           }
         />
         {saveStatusFor("enabled", "px-5 pb-4")}
-        {/* Off ABOVE the rail, not inside `Plan`: it is true of all four tabs,
+        {/* Off ABOVE the rail, not inside `Plan`: it is true of all three tabs,
           and on the single page it sat over the ladder where a reader in the
           tier groups never saw it. */}
         {state.draft.enabled ? null : (
@@ -1006,26 +1005,6 @@ function FallbackPolicyEditor(props: {
             // answers about the same rows racing each other into the draft.
             restorePending={restoreMutation.isPending || saveInFlight}
             status={saveStatusFor("tierGroups", "mt-3")}
-          />
-        </TabsContent>
-        <TabsContent value="destinations" className="pt-5">
-          {/* Lane G3's FC8 surface, mounted here rather than inside the groups
-            editor: it edits `destinationExclusions`, a policy field of its own,
-            and the groups editor owns `tierGroups`. `null` identities are
-            correct BECAUSE of that - the exclusion never adds, removes or
-            reorders a candidate row, so the rows keep the identities they have.
-            If that ever stops being true this mount is wrong and has to carry a
-            keyed list instead. It used to commit under `tierGroups`, because
-            the field only decides which group the one status line renders
-            under and this sat directly above that group - the tabbed layout
-            put the two on different tabs, so it owns `allowedDestinations`
-            now and renders its own. */}
-          <FallbackAllowedDestinations
-            policy={state.draft}
-            status={saveStatusFor("allowedDestinations", "px-5 pb-4")}
-            onChange={(next) => {
-              commit(next, "allowedDestinations", null);
-            }}
           />
         </TabsContent>
         <TabsContent value="overrides" className="pt-5">
@@ -1489,7 +1468,6 @@ function TierStepHint({
   if (
     tierGroupsNameDestinationFor({
       groups: policy.tierGroups,
-      destinationExclusions: policy.destinationExclusions,
       harnessId: lastRun.harnessId,
       model: lastRun.model,
     })
