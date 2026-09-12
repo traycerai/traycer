@@ -534,7 +534,14 @@ function useEpicArchiveChatMutation(
   >({
     client,
     method: "epic.listChatRecords",
-    mapVariables: ({ epicId }) => ({ epicId, hasDocReplica: false }),
+    // `knownRevision: null` - this read holds no list stamp and wants the
+    // whole list, which is what a one-shot post-write read means. The host
+    // therefore always answers `snapshot`.
+    mapVariables: ({ epicId }) => ({
+      epicId,
+      hasDocReplica: false,
+      knownRevision: null,
+    }),
     options: null,
   });
   return useHostMutation<
@@ -575,8 +582,13 @@ function useEpicArchiveChatMutation(
         )
           return;
         try {
-          const { chats: records } =
-            await readOwnerRecords.mutateAsync(variables);
+          const answer = await readOwnerRecords.mutateAsync(variables);
+          // `unchanged` cannot arrive: the read above sends no stamp, so the
+          // host has nothing to match and every answer is a `snapshot`. The
+          // guard returns rather than assumes - there is no row to reconcile
+          // against in an answer that carries none.
+          if (answer.kind !== "snapshot") return;
+          const records = answer.chats;
           const currentHandle = getChatMutationViewer(
             variables.epicId,
             variables.chatId,

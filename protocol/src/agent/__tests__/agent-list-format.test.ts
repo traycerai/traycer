@@ -19,6 +19,10 @@ function agent(
     folderPaths: [],
     isWorktree: false,
     runConfig: null,
+    // The `@9.1` session facet. `null` is the row's own "this host cannot
+    // know", which is what a GUI chat with no PTY session always answers.
+    sessionState: null,
+    lastExit: null,
     ...over,
   };
 }

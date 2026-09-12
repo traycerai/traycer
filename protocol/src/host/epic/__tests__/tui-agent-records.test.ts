@@ -97,7 +97,7 @@ describe("epic.listTuiAgents v1.0 -> v1.1 upgrade path", () => {
     // pins `assertSchemaCompatibility` having accepted this pair rather than
     // this test having imported nothing.
     const majorLine = hostRpcRegistry["epic.listTuiAgents"][1];
-    expect(majorLine.latestMinor).toBe(2);
+    expect(majorLine.latestMinor).toBe(3);
     expect(majorLine.versions[1].contract.schemaVersion).toEqual({
       major: 1,
       minor: 1,

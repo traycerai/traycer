@@ -233,7 +233,11 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
               }),
             );
           }
-          return Promise.resolve({ chats: records.map((row) => ({ ...row })) });
+          return Promise.resolve({
+            kind: "snapshot" as const,
+            listStamp: null,
+            chats: records.map((row) => ({ ...row })),
+          });
         },
         // The host writes the registry row BEFORE it answers
         // (`chatRegistryWriter.createChat` is awaited inside the resolver), so

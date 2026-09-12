@@ -27,23 +27,38 @@ vi.mock("../../internal/host-rpc", async () => {
 
 const rpcMock = vi.mocked(callHostRpc);
 
+/**
+ * The row WITHOUT `agent.list@9.1`'s session facet, split out so the expected
+ * JSON below can be assembled in the order zod EMITS rather than the order a
+ * fixture happens to be written in - see `EXPECTED_DEFAULT_FILLED_DATA`.
+ */
+const LEGACY_ROW_BEFORE_SESSION_FACET = {
+  id: "agent-parent",
+  parentId: null,
+  hostId: "host-1",
+  isLocal: true,
+  surface: "gui" as const,
+  harnessId: "codex" as const,
+  isSelf: true,
+  title: "Parent",
+  capabilities: { readTranscript: true, sendMessage: true },
+  active: false,
+  folderPaths: ["/repo"],
+  isWorktree: false,
+};
+
 const LEGACY_LIST_RESPONSE = {
   caller: { agentId: "agent-parent", canSendMessages: true },
   scope: "user" as const,
   agents: [
     {
-      id: "agent-parent",
-      parentId: null,
-      hostId: "host-1",
-      isLocal: true,
-      surface: "gui" as const,
-      harnessId: "codex" as const,
-      isSelf: true,
-      title: "Parent",
-      capabilities: { readTranscript: true, sendMessage: true },
-      active: false,
-      folderPaths: ["/repo"],
-      isWorktree: false,
+      ...LEGACY_ROW_BEFORE_SESSION_FACET,
+      // `agent.list@9.1`'s session facet. Required on the canonical row and
+      // supplied by the upgrade path for an older host, so a mock that stands
+      // in for the TRANSPORT - which is what `callHostRpc` is here - has to
+      // carry it. A GUI chat has no PTY session, so `null` is its answer.
+      sessionState: null,
+      lastExit: null,
     },
   ],
 };
@@ -62,9 +77,20 @@ R/S: the agent has a readable transcript and can be sent messages to
 dir: <path>: the working directory the agent runs in
 worktree: <path>: the agent runs in a dedicated git worktree`;
 
+// Key ORDER is load-bearing: the assertions below compare `JSON.stringify`
+// bytes, and zod emits in schema-declaration order - `runConfig` comes from
+// the `@9.0` row and the session facet extends it at `@9.1`, so the facet
+// trails `runConfig` however the fixture above happens to be written.
 const EXPECTED_DEFAULT_FILLED_DATA = {
   ...LEGACY_LIST_RESPONSE,
-  agents: [{ ...LEGACY_LIST_RESPONSE.agents[0], runConfig: null }],
+  agents: [
+    {
+      ...LEGACY_ROW_BEFORE_SESSION_FACET,
+      runConfig: null,
+      sessionState: null,
+      lastExit: null,
+    },
+  ],
 };
 
 function makeCtx(json: boolean): CommandContext {
