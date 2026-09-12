@@ -11,7 +11,15 @@ type FamilyInputProps = ComponentProps<typeof Input> & {
   readonly harnessId: TierCandidate["harnessId"];
 };
 
-/** Catalog slugs are exact family expressions in the host resolver. */
+/**
+ * Catalog slugs are exact family expressions in the host resolver.
+ *
+ * This used to append "Choose a catalog model or type a family name." beside
+ * the field. It was `w-full` inside the row's wrapping flex, so it did not sit
+ * beside anything - it forced a line break and split every model onto four
+ * lines, then said the same sentence again for the next model. The editor
+ * states it once, above the table.
+ */
 export function FallbackModelFamilyInput(props: FamilyInputProps): ReactNode {
   const { harnessId, ...inputProps } = props;
   const parsed = guiHarnessIdSchema.safeParse(harnessId);
@@ -52,9 +60,6 @@ function CatalogFamilyInput(props: {
           ))}
         </datalist>
       )}
-      <span className="w-full text-ui-xs text-muted-foreground">
-        Choose a catalog model or type a family name.
-      </span>
     </>
   );
 }

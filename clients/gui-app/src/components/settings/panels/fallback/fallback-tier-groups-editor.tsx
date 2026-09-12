@@ -187,6 +187,7 @@ export function FallbackTierGroupsEditor(
         <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
           Models you consider interchangeable. When one fails, the
           &ldquo;equivalent model&rdquo; step tries the others in this order.
+          Pick a catalog model or type a family name.
         </p>
         {groups.length === 0 ? (
           <EmptyGroups

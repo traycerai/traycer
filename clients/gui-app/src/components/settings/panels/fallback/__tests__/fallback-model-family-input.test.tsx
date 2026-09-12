@@ -107,9 +107,13 @@ describe("FallbackModelFamilyInput", () => {
       enabled: false,
       subscribed: true,
     });
+    // The field carries NO hint of its own. It used to append "Choose a
+    // catalog model or type a family name." as a `w-full` sibling, which broke
+    // the model's row onto a second line and then repeated itself under every
+    // other model in the group. The editor says it once, above the table.
     expect(
-      screen.getByText("Choose a catalog model or type a family name."),
-    ).toBeDefined();
+      screen.queryByText(/Choose a catalog model or type a family name/),
+    ).toBeNull();
     const input = screen.getByRole("combobox", { name: "Model family" });
     const listId = input.getAttribute("list");
     expect(listId).not.toBeNull();

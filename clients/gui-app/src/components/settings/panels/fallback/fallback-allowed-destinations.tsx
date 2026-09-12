@@ -1,7 +1,7 @@
 import { type ReactNode } from "react";
 import type { FallbackPolicy } from "@traycer/protocol/host/fallback-policy";
 import { harnessLabel } from "@/components/settings/panels/fallback/fallback-harness-label";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 
@@ -42,39 +42,55 @@ export function FallbackAllowedDestinations(props: {
         </p>
         <p className="text-ui-sm text-muted-foreground">
           Destinations come from your model groups. Availability is checked when
-          switching. Excluded providers remain valid sources; their equivalent
-          models stay in place.
+          switching. Turning one off only stops Traycer switching to it - it
+          stays a valid source, and its equivalent models stay in place.
         </p>
-        {providers.map((harnessId) => (
-          <label key={harnessId} className="flex items-center gap-2 text-ui-sm">
-            <Checkbox
-              checked={exclusions.has(harnessId)}
-              onCheckedChange={(checked) => {
-                onChange({
-                  ...policy,
-                  destinationExclusions:
-                    checked === true
-                      ? [
-                          ...new Set([
-                            ...policy.destinationExclusions,
-                            harnessId,
-                          ]),
-                        ]
-                      : policy.destinationExclusions.filter(
-                          (existing) => existing !== harnessId,
-                        ),
-                });
-              }}
-            />
-            <span>Never switch to {harnessLabel(harnessId)}</span>
-          </label>
-        ))}
+        {/* One switch per provider, ON meaning "may be switched to". These
+            were checkboxes reading "Never switch to X", so the common state -
+            this provider is allowed - was an UNCHECKED box next to the word
+            "Never", and a reader had to resolve a double negative per row to
+            learn what the summary line above already says plainly. A switch
+            also matches what the control does: each one saves on the spot,
+            which is what the rest of this page uses switches for. */}
         {providers.length === 0 ? (
           <p className="text-ui-sm text-muted-foreground">
             Nothing to allow or deny yet. Add equivalent models on the
             Equivalent models tab to offer a destination.
           </p>
-        ) : null}
+        ) : (
+          <div className="overflow-hidden rounded-md border border-border/60">
+            {providers.map((harnessId) => {
+              const label = harnessLabel(harnessId);
+              return (
+                <div
+                  key={harnessId}
+                  className="flex items-center justify-between gap-3 border-b border-border/40 px-3 py-2 last:border-b-0"
+                >
+                  <span className="min-w-0 truncate text-ui-sm">{label}</span>
+                  <Switch
+                    checked={!exclusions.has(harnessId)}
+                    aria-label={`Allow switching to ${label}`}
+                    onCheckedChange={(allowedNow) => {
+                      onChange({
+                        ...policy,
+                        destinationExclusions: allowedNow
+                          ? policy.destinationExclusions.filter(
+                              (existing) => existing !== harnessId,
+                            )
+                          : [
+                              ...new Set([
+                                ...policy.destinationExclusions,
+                                harnessId,
+                              ]),
+                            ],
+                      });
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </fieldset>
       {status}
     </SettingsGroup>

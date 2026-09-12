@@ -4447,7 +4447,7 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
 
     openFallbackTab("destinations");
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Never switch to Claude Code" }),
+      screen.getByRole("switch", { name: "Allow switching to Claude Code" }),
     );
     await flushHostReplies();
   }

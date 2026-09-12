@@ -92,6 +92,25 @@ export interface FallbackTierGroupCardProps {
  * is why there is no reordering at the group level: offering a control that
  * changes nothing would be worse than offering none.
  */
+// ONE grid for a group's models, header included, every row joining it with
+// `grid-cols-subgrid`. The shape and the reason are
+// `provider-cli-candidates-section.tsx`'s: applying the same template to each
+// row separately makes the rows SIBLING grids, so every column resolves
+// against its own row's content and no two rows agree where a column starts.
+//
+// Fractional tracks rather than `auto`, for the same reason that file gives:
+// an `auto` track is sized by its content, so one long model name would move
+// the Effort column for every row in the group. No rem floor either - that is
+// a fixed layout width, and it stops the grid shrinking inside a narrow
+// settings pane instead of letting the cells truncate. The actions track is
+// the one place `auto` is safe: it always holds the same three buttons.
+const CANDIDATE_GRID =
+  "grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_auto]";
+const CANDIDATE_ROW = "col-span-4 grid grid-cols-subgrid items-center";
+// One horizontal padding for the header and every cell, so a column header
+// lands exactly over its column.
+const CANDIDATE_CELL_X = "px-2";
+
 export function FallbackTierGroupCard(
   props: FallbackTierGroupCardProps,
 ): ReactNode {
@@ -166,7 +185,31 @@ export function FallbackTierGroupCard(
           Delete group
         </Button>
       </div>
-      <ul className="mt-3 flex flex-col gap-2">
+      {/* A table, not a stack of cards. Each model is one row of three named
+          columns, so a group reads down its Provider column instead of being
+          re-read per model - which is what four stacked lines per model cost.
+          Plain `div`s rather than `ul`/`li`: subgrid needs each row to be a
+          direct child of the one grid, and every row already names itself
+          `role="group"`. */}
+      <div
+        className={cn(
+          "mt-3 overflow-hidden rounded-md border border-border/60",
+          CANDIDATE_GRID,
+        )}
+      >
+        <div
+          className={cn(
+            CANDIDATE_ROW,
+            "border-b border-border/40 bg-foreground/3 py-1.5 text-ui-xs font-medium text-muted-foreground",
+          )}
+        >
+          <span className={CANDIDATE_CELL_X}>Provider</span>
+          <span className={CANDIDATE_CELL_X}>Model</span>
+          <span className={CANDIDATE_CELL_X}>Effort</span>
+          {/* The actions column: a header over Move up / Move down / Remove
+              would name three different things at once. */}
+          <span />
+        </div>
         {group.candidates.map((candidate, index) => (
           // The row's own client-side identity, assigned once when it entered
           // the draft. Not the index (these rows reorder, and an index key
@@ -174,79 +217,78 @@ export function FallbackTierGroupCard(
           // row, so a move keeps the input the user is typing in while its data
           // changes underneath) and not the content (two rows may legitimately
           // hold the same values - two fresh rows both start empty).
-          <li key={candidate.key}>
-            <CandidateRow
-              candidate={candidate.value}
-              // The row's identity, threaded so its Remove button can be
-              // ADDRESSED by a sibling's focus handoff. Not the index: after a
-              // removal the indices shift, which is precisely the moment the
-              // handoff runs.
-              removeKey={candidate.key}
-              index={index}
-              candidateCount={group.candidates.length}
-              preview={previewFor(preview, index)}
-              labelFor={labelFor}
-              effortOptions={effortOptions}
-              onChange={(next) => {
-                onChange(withCandidateAt(group, index, next));
-              }}
-              onCommit={(next) => {
-                onCommit(withCandidateAt(group, index, next));
-              }}
-              onMove={(to) => {
-                onCommit({
-                  ...group,
-                  candidates: moveKeyedCandidate(group.candidates, index, to),
-                });
-              }}
-              onRemove={() => {
-                // The Remove button that had focus is inside the row about to
-                // be filtered out: hand the keyboard to the row that takes its
-                // place, its neighbour if this was the last, or "Add a model"
-                // once the group is empty.
-                focusAfterRemoval([
-                  ...candidateRemoveSelectors(group.candidates, index),
-                  `[${FALLBACK_ADD_MODEL_ATTRIBUTE}]`,
-                ]);
-                // Read before the commit, for the reason spelled out at the
-                // group-level removal in `fallback-tier-groups-editor.tsx`:
-                // reading it inside the Undo callback would sample the
-                // generation at Undo time and always compare equal.
-                const generation = tierGroupIdentityGeneration();
-                onCommit({
-                  ...group,
-                  candidates: group.candidates.filter((_, at) => at !== index),
-                });
-                // The INVERSE of this one removal, applied to the draft as it
-                // stands when Undo is pressed - not this group as it stands
-                // now, which is a snapshot that would also revert whatever the
-                // user changed while the toast was up. `candidate` carries its
-                // own key, so the row comes back as the same row rather than a
-                // lookalike, at the index it held: its position is load-bearing
-                // (the rung walks this order) and is the one thing a user
-                // cannot recover by retyping.
-                toast.success(
-                  `Removed ${candidate.value.modelFamily.trim() === "" ? "the empty row" : `“${candidate.value.modelFamily}”`}`,
-                  {
-                    action: {
-                      label: "Undo",
-                      onClick: () => {
-                        onUndo({
-                          kind: "candidate",
-                          groupDraftKey: group.draftKey,
-                          candidate,
-                          index,
-                          generation,
-                        });
-                      },
+          <CandidateRow
+            key={candidate.key}
+            candidate={candidate.value}
+            // The row's identity, threaded so its Remove button can be
+            // ADDRESSED by a sibling's focus handoff. Not the index: after a
+            // removal the indices shift, which is precisely the moment the
+            // handoff runs.
+            removeKey={candidate.key}
+            index={index}
+            candidateCount={group.candidates.length}
+            preview={previewFor(preview, index)}
+            labelFor={labelFor}
+            effortOptions={effortOptions}
+            onChange={(next) => {
+              onChange(withCandidateAt(group, index, next));
+            }}
+            onCommit={(next) => {
+              onCommit(withCandidateAt(group, index, next));
+            }}
+            onMove={(to) => {
+              onCommit({
+                ...group,
+                candidates: moveKeyedCandidate(group.candidates, index, to),
+              });
+            }}
+            onRemove={() => {
+              // The Remove button that had focus is inside the row about to
+              // be filtered out: hand the keyboard to the row that takes its
+              // place, its neighbour if this was the last, or "Add a model"
+              // once the group is empty.
+              focusAfterRemoval([
+                ...candidateRemoveSelectors(group.candidates, index),
+                `[${FALLBACK_ADD_MODEL_ATTRIBUTE}]`,
+              ]);
+              // Read before the commit, for the reason spelled out at the
+              // group-level removal in `fallback-tier-groups-editor.tsx`:
+              // reading it inside the Undo callback would sample the
+              // generation at Undo time and always compare equal.
+              const generation = tierGroupIdentityGeneration();
+              onCommit({
+                ...group,
+                candidates: group.candidates.filter((_, at) => at !== index),
+              });
+              // The INVERSE of this one removal, applied to the draft as it
+              // stands when Undo is pressed - not this group as it stands
+              // now, which is a snapshot that would also revert whatever the
+              // user changed while the toast was up. `candidate` carries its
+              // own key, so the row comes back as the same row rather than a
+              // lookalike, at the index it held: its position is load-bearing
+              // (the rung walks this order) and is the one thing a user
+              // cannot recover by retyping.
+              toast.success(
+                `Removed ${candidate.value.modelFamily.trim() === "" ? "the empty row" : `“${candidate.value.modelFamily}”`}`,
+                {
+                  action: {
+                    label: "Undo",
+                    onClick: () => {
+                      onUndo({
+                        kind: "candidate",
+                        groupDraftKey: group.draftKey,
+                        candidate,
+                        index,
+                        generation,
+                      });
                     },
                   },
-                );
-              }}
-            />
-          </li>
+                },
+              );
+            }}
+          />
         ))}
-      </ul>
+      </div>
       <Button
         type="button"
         variant="link"
@@ -443,9 +485,12 @@ function CandidateRow(props: {
     <div
       role="group"
       aria-label={`Model ${index + 1}`}
-      className="rounded-md bg-foreground/3 p-2"
+      className={cn(
+        CANDIDATE_ROW,
+        "border-b border-border/40 py-2 last:border-b-0",
+      )}
     >
-      <div className="flex flex-wrap items-center gap-2">
+      <div className={cn("min-w-0", CANDIDATE_CELL_X)}>
         <HarnessSelect
           harnessId={candidate.harnessId}
           // A select produces a complete value per interaction, so it commits
@@ -454,6 +499,8 @@ function CandidateRow(props: {
             onCommit({ ...candidate, harnessId: next });
           }}
         />
+      </div>
+      <div className={cn("min-w-0", CANDIDATE_CELL_X)}>
         <FallbackModelFamilyInput
           id={familyId}
           harnessId={candidate.harnessId}
@@ -473,12 +520,14 @@ function CandidateRow(props: {
           // line - which names the row but cannot mark it.
           aria-invalid={candidate.modelFamily.trim() === "" ? true : undefined}
           placeholder="opus"
-          className="h-8 w-full max-w-[18ch]"
+          className="h-8 w-full"
           onChange={(event) => {
             onChange({ ...candidate, modelFamily: event.target.value });
           }}
           {...commitCurrent}
         />
+      </div>
+      <div className={cn("min-w-0", CANDIDATE_CELL_X)}>
         <EffortControl
           reasoningEffort={candidate.reasoningEffort}
           options={effortOptions(candidate.harnessId)}
@@ -490,7 +539,8 @@ function CandidateRow(props: {
           }}
           commitCurrent={commitCurrent}
         />
-        <div className="flex-1" />
+      </div>
+      <div className={cn("flex items-center", CANDIDATE_CELL_X)}>
         <MoveButton
           direction="up"
           disabled={index === 0}
@@ -516,6 +566,9 @@ function CandidateRow(props: {
           <X className="size-3.5" aria-hidden />
         </Button>
       </div>
+      {/* The row's fifth child, so it auto-places onto a second internal line
+          starting under Model - the column it is about. It costs no wrapper:
+          the row is already `col-span-4 grid grid-cols-subgrid`. */}
       <CandidatePreviewLine
         id={previewId}
         preview={preview}
@@ -572,7 +625,7 @@ function EffortControl(props: {
         value={reasoningEffort ?? ""}
         aria-label="Effort"
         placeholder="any effort"
-        className="h-8 w-full max-w-[14ch]"
+        className="h-8 w-full"
         onChange={(event) => {
           // Empty means "no effort constraint", which the wire encodes as
           // `null` - NOT as an empty string, which the schema refuses. The
@@ -597,7 +650,7 @@ function EffortControl(props: {
         onCommit(next === ANY_EFFORT_VALUE ? null : next);
       }}
     >
-      <SelectTrigger className="h-8 w-full max-w-[16ch]" aria-label="Effort">
+      <SelectTrigger className="h-8 w-full" aria-label="Effort">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -667,7 +720,7 @@ function HarnessSelect(props: {
         onChange(parsed.data);
       }}
     >
-      <SelectTrigger className="h-8 w-full max-w-[16ch]" aria-label="Provider">
+      <SelectTrigger className="h-8 w-full" aria-label="Provider">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -751,7 +804,7 @@ function CandidatePreviewLine(props: {
     <p
       id={id}
       className={cn(
-        "mt-1.5 text-ui-xs",
+        "col-start-2 col-span-3 mt-1 px-2 text-ui-xs",
         unmatchedFamily ? "text-destructive" : "text-muted-foreground",
       )}
       data-testid="fallback-tier-candidate-preview"

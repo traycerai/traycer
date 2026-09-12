@@ -68,12 +68,16 @@ describe("FallbackAllowedDestinations", () => {
     expect(section).toBeDefined();
     expect(screen.getByText("Can switch to: Claude Code")).toBeDefined();
     expect(screen.queryByText(/Can switch to:.*Codex/)).toBeNull();
+    // A switch per provider, ON meaning "may be switched to" - so the allowed
+    // provider reads as on, rather than as an unchecked box beside "Never".
     expect(
-      screen.getByRole("checkbox", { name: "Never switch to Claude Code" }),
-    ).toBeDefined();
+      screen.getByRole("switch", { name: "Allow switching to Claude Code" })
+        .dataset.state,
+    ).toBe("checked");
     expect(
-      screen.getByRole("checkbox", { name: "Never switch to Codex" }),
-    ).toBeDefined();
+      screen.getByRole("switch", { name: "Allow switching to Codex" }).dataset
+        .state,
+    ).toBe("unchecked");
   });
 
   it("writes an exclusion while retaining every other policy field and the source group", () => {
@@ -89,8 +93,9 @@ describe("FallbackAllowedDestinations", () => {
     const onChange = vi.fn<(next: FallbackPolicy) => void>();
     renderDestinations(value, onChange);
 
+    // Turning Claude OFF is what excludes it.
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Never switch to Claude Code" }),
+      screen.getByRole("switch", { name: "Allow switching to Claude Code" }),
     );
 
     const changed = onChange.mock.calls.at(0)?.[0];
@@ -111,8 +116,9 @@ describe("FallbackAllowedDestinations", () => {
     const onChange = vi.fn<(next: FallbackPolicy) => void>();
     renderDestinations(value, onChange);
 
+    // Claude is excluded, so its switch is off; turning it ON clears that.
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Never switch to Claude Code" }),
+      screen.getByRole("switch", { name: "Allow switching to Claude Code" }),
     );
 
     const changed = onChange.mock.calls.at(0)?.[0];
@@ -134,12 +140,14 @@ describe("FallbackAllowedDestinations", () => {
     renderDestinations(value, onChange);
 
     expect(screen.getByText("Can switch to: none")).toBeDefined();
-    const checkbox = screen.getByRole("checkbox", {
-      name: "Never switch to Codex",
+    const toggle = screen.getByRole("switch", {
+      name: "Allow switching to Codex",
     });
-    expect(checkbox.getAttribute("data-state")).toBe("checked");
+    // Excluded reads as OFF now, where the old "Never switch to" box read as
+    // checked for the same state.
+    expect(toggle.getAttribute("data-state")).toBe("unchecked");
 
-    fireEvent.click(checkbox);
+    fireEvent.click(toggle);
     const changed = onChange.mock.calls.at(0)?.[0];
     expect(changed?.destinationExclusions).toEqual([]);
     expect(changed?.tierGroups).toEqual([]);
