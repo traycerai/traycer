@@ -1,5 +1,7 @@
+import { useMemo } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
+  useMutationState,
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
@@ -231,6 +233,52 @@ export function useEpicBatchDelete(): UseMutationResult<
       onError: (error) => toastFromHostError(error, "Couldn't delete epics."),
     },
   });
+}
+
+/**
+ * epicIds with an in-flight `epic.batchDelete`. Deletion runs in the
+ * background - the confirm dialog closes at kickoff - so a row whose Task is
+ * still being deleted is rendered again with its delete control, and nothing
+ * on the wire deduplicates a second `epic.batchDelete` for the same id. This
+ * is read from the mutation cache by the shared key rather than off one hook
+ * instance, for the reason `usePendingSetPinnedEpicIds` gives: two batches can
+ * be in flight at once and each row must track its own.
+ */
+export function usePendingDeleteEpicIds(): ReadonlySet<string> {
+  const pendingVariables = useMutationState({
+    filters: {
+      mutationKey: epicMutationKeys.batchDelete(),
+      status: "pending",
+    },
+    select: (mutation) => mutation.state.variables,
+  });
+  return useMemo(
+    () =>
+      new Set(
+        pendingVariables.flatMap((variables) =>
+          isBatchDeleteEpicVariables(variables) ? variables.ids : [],
+        ),
+      ),
+    [pendingVariables],
+  );
+}
+
+/**
+ * Reads the `ids` of a pending delete dispatch. It checks nothing beyond that
+ * shape on purpose: the mutation cache has already scoped these variables by
+ * `epicMutationKeys.batchDelete()`, and an entry this guard drops reads as
+ * SETTLED - the row re-enables mid-flight - which is the direction a pending
+ * guard must never fail in.
+ */
+function isBatchDeleteEpicVariables(
+  value: unknown,
+): value is { readonly ids: ReadonlyArray<string> } {
+  if (value === null || typeof value !== "object") return false;
+  return (
+    "ids" in value &&
+    Array.isArray(value.ids) &&
+    value.ids.every((id) => typeof id === "string")
+  );
 }
 
 export function pickNeighborAfterDeletingEpics(

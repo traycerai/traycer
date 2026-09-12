@@ -433,7 +433,6 @@ function pausedCopy(
       return { label: "Delete pending", severity: "steady" };
     case "delete-tombstone-unscoped-cleared":
       return { label: "Delete recorded — tidying up", severity: "steady" };
-    case "entitlement-lapsed":
     case null:
       return { label: "Sync paused", severity: "warning" };
   }

@@ -50,6 +50,7 @@ describe("listHistoryLandingDrafts", () => {
       ],
       query: "",
       currentHostId: "host-a",
+      excludeDraftId: null,
     });
 
     expect(listed.map((row) => row.id)).toEqual(["newer", "older"]);
@@ -90,6 +91,7 @@ describe("listHistoryLandingDrafts", () => {
         drafts: [replica, foreign, local, unadopted],
         query: "",
         currentHostId: "host-a",
+        excludeDraftId: null,
       }).map((row) => row.id),
     ).toEqual(["local", "unadopted"]);
   });
@@ -114,8 +116,27 @@ describe("listHistoryLandingDrafts", () => {
         drafts: [foreign, unadopted],
         query: "",
         currentHostId: null,
+        excludeDraftId: null,
       }).map((row) => row.id),
     ).toEqual(["unadopted"]);
+  });
+
+  it("leaves out the draft the composer above it is editing", () => {
+    const typing = draft({ id: "typing", content: textContent("typing now") });
+    const retained = draft({
+      id: "retained",
+      content: textContent("put away"),
+      closed: true,
+    });
+
+    expect(
+      listHistoryLandingDrafts({
+        drafts: [typing, retained],
+        query: "",
+        currentHostId: "host-a",
+        excludeDraftId: "typing",
+      }).map((row) => row.id),
+    ).toEqual(["retained"]);
   });
 
   it("filters by derived title and surfaces workspace when present", () => {
@@ -140,6 +161,7 @@ describe("listHistoryLandingDrafts", () => {
         drafts: [withWorkspace, other],
         query: "drafts facet",
         currentHostId: null,
+        excludeDraftId: null,
       }),
     ).toEqual([
       {

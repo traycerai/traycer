@@ -14,6 +14,7 @@ import type {
   ChatMessageUserActions,
 } from "@/components/chat/chat-message";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
+import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
@@ -147,6 +148,7 @@ interface RenderTimelineOptions {
   readonly "data-testid"?: string;
   readonly onItemSizeChanged?: () => void;
   readonly navigationHighlightedMessageId?: string | null;
+  readonly navigationHighlightedBlockId?: string | null;
 }
 
 function renderTimeline(options: RenderTimelineOptions) {
@@ -160,6 +162,7 @@ function renderTimeline(options: RenderTimelineOptions) {
   const jsx = (
     messages: ReadonlyArray<ChatMessageModel>,
     navigationHighlightedMessageId: string | null | undefined,
+    navigationHighlightedBlockId: string | null | undefined,
   ): ReactNode => (
     <div
       style={{
@@ -178,12 +181,17 @@ function renderTimeline(options: RenderTimelineOptions) {
         data-testid={options["data-testid"]}
         onItemSizeChanged={options.onItemSizeChanged}
         navigationHighlightedMessageId={navigationHighlightedMessageId}
+        navigationHighlightedBlockId={navigationHighlightedBlockId}
       />
     </div>
   );
 
   const result = render(
-    jsx(options.messages, options.navigationHighlightedMessageId),
+    jsx(
+      options.messages,
+      options.navigationHighlightedMessageId,
+      options.navigationHighlightedBlockId,
+    ),
   );
   return {
     ...result,
@@ -191,8 +199,15 @@ function renderTimeline(options: RenderTimelineOptions) {
     rerenderMessages: (
       messages: ReadonlyArray<ChatMessageModel>,
       navigationHighlightedMessageId: string | null | undefined,
+      navigationHighlightedBlockId: string | null | undefined,
     ) => {
-      result.rerender(jsx(messages, navigationHighlightedMessageId));
+      result.rerender(
+        jsx(
+          messages,
+          navigationHighlightedMessageId,
+          navigationHighlightedBlockId,
+        ),
+      );
     },
   };
 }
@@ -316,7 +331,7 @@ describe("ChatTimeline", () => {
       },
     ];
 
-    rerenderMessages(nextMessages, undefined);
+    rerenderMessages(nextMessages, undefined, undefined);
 
     await advanceLegendListFrames(1);
 
@@ -537,7 +552,7 @@ describe("ChatTimeline", () => {
     const baseline = snapshotRenderCounts(messages);
 
     // Move the highlight onto message-3: only that row should render.
-    rerenderMessages(messages, "message-3");
+    rerenderMessages(messages, "message-3", undefined);
     await flushFrame();
     expect(renderedSince(messages, baseline)).toEqual(["message-3"]);
 
@@ -545,7 +560,7 @@ describe("ChatTimeline", () => {
 
     // Move the highlight from message-3 to message-5: exactly the old and
     // new highlighted rows should render - not the other 6 mounted rows.
-    rerenderMessages(messages, "message-5");
+    rerenderMessages(messages, "message-5", undefined);
     await flushFrame();
     expect(new Set(renderedSince(messages, afterFirstMove))).toEqual(
       new Set(["message-3", "message-5"]),
@@ -554,13 +569,12 @@ describe("ChatTimeline", () => {
     const afterSecondMove = snapshotRenderCounts(messages);
 
     // Clear the highlight: only the previously highlighted row should render.
-    rerenderMessages(messages, null);
+    rerenderMessages(messages, null, undefined);
     await flushFrame();
     expect(renderedSince(messages, afterSecondMove)).toEqual(["message-5"]);
   });
 
-  const NAVIGATION_HIGHLIGHT_RING_CLASS =
-    "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse";
+  const NAVIGATION_HIGHLIGHT_RING_CLASS = CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME;
 
   function highlightedRowIds(container: HTMLElement): ReadonlyArray<string> {
     return Array.from(
@@ -767,7 +781,7 @@ describe("ChatTimeline", () => {
       expect(rowHasHighlightRing(row)).toBe(false);
     }
 
-    rerenderMessages(messages, "message-2");
+    rerenderMessages(messages, "message-2", undefined);
     await flushFrame();
 
     expect(highlightedRowIds(container)).toEqual(["message-2"]);
@@ -788,7 +802,7 @@ describe("ChatTimeline", () => {
     }
 
     // Move highlight: previous loses attribute + ring; new gains both.
-    rerenderMessages(messages, "message-4");
+    rerenderMessages(messages, "message-4", undefined);
     await flushFrame();
 
     expect(highlightedRowIds(container)).toEqual(["message-4"]);
@@ -814,6 +828,40 @@ describe("ChatTimeline", () => {
     ).toBe(true);
   });
 
+  it("paints a named block instead of the owning row when a block id is set", async () => {
+    const blockId = "text-block-1";
+    const assistant = {
+      ...makeMessage(1, "assistant"),
+      id: "assistant-1",
+      segments: [
+        {
+          id: blockId,
+          kind: "text" as const,
+          markdown: "Hello",
+          isStreaming: false,
+        },
+      ],
+    };
+    const { container } = renderTimeline({
+      messages: [makeMessage(0, "user"), assistant],
+      navigationHighlightedMessageId: assistant.id,
+      navigationHighlightedBlockId: blockId,
+    });
+    await settleLegendList();
+    await waitFor(() => {
+      expect(mountedMessageRows(container).length).toBe(2);
+    });
+
+    const row = container.querySelector(`[data-message-id="${assistant.id}"]`);
+    expect(row?.getAttribute("data-navigation-highlighted")).toBeNull();
+    expect(rowHasHighlightRing(row)).toBe(false);
+
+    const block = container.querySelector(`[data-block-id="${blockId}"]`);
+    expect(block).not.toBeNull();
+    expect(block?.getAttribute("data-navigation-highlighted")).toBe("true");
+    expect(rowHasHighlightRing(block)).toBe(true);
+  });
+
   it("does not throw or highlight any row when navigationHighlightedMessageId is a stale/missing id", async () => {
     const messageCount = 5;
     const messages = makeMessages(messageCount);
@@ -829,7 +877,7 @@ describe("ChatTimeline", () => {
     });
 
     expect(() => {
-      rerenderMessages(messages, "message-not-in-list");
+      rerenderMessages(messages, "message-not-in-list", undefined);
     }).not.toThrow();
     await flushFrame();
 
@@ -841,12 +889,12 @@ describe("ChatTimeline", () => {
     }
 
     // Still healthy after a real highlight: stale id must clear any prior ring.
-    rerenderMessages(messages, "message-1");
+    rerenderMessages(messages, "message-1", undefined);
     await flushFrame();
     expect(highlightedRowIds(container)).toEqual(["message-1"]);
 
     expect(() => {
-      rerenderMessages(messages, "message-removed-earlier");
+      rerenderMessages(messages, "message-removed-earlier", undefined);
     }).not.toThrow();
     await flushFrame();
     expect(highlightedRowIds(container)).toEqual([]);
@@ -880,7 +928,7 @@ describe("ChatTimeline", () => {
 
     // Highlight only A: B must stay completely unhighlighted and not throw.
     expect(() => {
-      timelineA.rerenderMessages(messagesA, "message-1");
+      timelineA.rerenderMessages(messagesA, "message-1", undefined);
     }).not.toThrow();
     await flushFrame();
 
@@ -894,7 +942,7 @@ describe("ChatTimeline", () => {
 
     // Highlight only B to a different row: A keeps its own highlight.
     expect(() => {
-      timelineB.rerenderMessages(messagesB, "b-message-2");
+      timelineB.rerenderMessages(messagesB, "b-message-2", undefined);
     }).not.toThrow();
     await flushFrame();
 
@@ -902,7 +950,7 @@ describe("ChatTimeline", () => {
     expect(highlightedRowIds(timelineB.container)).toEqual(["b-message-2"]);
 
     // Clear A: B's highlight is untouched.
-    timelineA.rerenderMessages(messagesA, null);
+    timelineA.rerenderMessages(messagesA, null, undefined);
     await flushFrame();
     expect(highlightedRowIds(timelineA.container)).toEqual([]);
     expect(highlightedRowIds(timelineB.container)).toEqual(["b-message-2"]);
@@ -932,7 +980,7 @@ describe("ChatTimeline", () => {
     let previousHighlight: string | null = null;
     for (const nextId of sequence) {
       const before = snapshotRenderCounts(messages);
-      rerenderMessages(messages, nextId);
+      rerenderMessages(messages, nextId, undefined);
       await flushFrame();
 
       const expected =
@@ -986,7 +1034,7 @@ describe("ChatTimeline", () => {
     // ChatTimelineRowCtx object must stay identity-stable (store is
     // useState-stable), so non-highlighted rows must not re-render and
     // therefore must not re-invoke getMessageActions.
-    rerenderMessages(messages, "message-3");
+    rerenderMessages(messages, "message-3", undefined);
     await flushFrame();
 
     const afterFirstMove = callCountByMessageId();
@@ -997,7 +1045,7 @@ describe("ChatTimeline", () => {
     }
 
     getMessageActions.mockClear();
-    rerenderMessages(messages, "message-0");
+    rerenderMessages(messages, "message-0", undefined);
     await flushFrame();
 
     const afterSecondMove = callCountByMessageId();
@@ -1022,7 +1070,7 @@ describe("ChatTimeline", () => {
       expect(mountedMessageRows(container).length).toBe(4);
     });
 
-    rerenderMessages(messages, "message-2");
+    rerenderMessages(messages, "message-2", undefined);
     await flushFrame();
     expect(highlightedRowIds(container)).toEqual(["message-2"]);
 
@@ -1235,7 +1283,7 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
         : { ...message },
     );
     act(() => {
-      rerenderMessages(streamed, undefined);
+      rerenderMessages(streamed, undefined, undefined);
     });
 
     expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
@@ -1253,7 +1301,7 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
     // steer nesting into its assistant turn, or a moved setup card produces.
     const withRowRemoved = messages.filter((_, index) => index !== 1);
     act(() => {
-      rerenderMessages(withRowRemoved, undefined);
+      rerenderMessages(withRowRemoved, undefined, undefined);
     });
 
     expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
@@ -1269,7 +1317,7 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
 
     const withRowRemoved = messages.filter((_, index) => index !== 1);
     act(() => {
-      rerenderMessages(withRowRemoved, undefined);
+      rerenderMessages(withRowRemoved, undefined, undefined);
     });
     expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
       data: true,
@@ -1284,7 +1332,7 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
         : { ...message },
     );
     act(() => {
-      rerenderMessages(streamed, undefined);
+      rerenderMessages(streamed, undefined, undefined);
     });
 
     expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({

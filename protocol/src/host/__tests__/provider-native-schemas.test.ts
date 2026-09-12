@@ -51,6 +51,7 @@ import {
   providersSetTerminalAgentArgsResponseSchemaV20,
   providersStartLoginRequestSchema,
   providersStartLoginResponseSchema,
+  providersStartLoginResponseSchemaV12,
   providersCancelLoginRequestSchema,
   providersCancelLoginResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
@@ -67,6 +68,7 @@ import {
   providersSetEnabledDowngradeV21ToV20,
   providersSetEnabledUpgradeV20ToV21,
   providersStartLoginUpgradeV10ToV11,
+  providersStartLoginUpgradeV11ToV12,
   providersCancelLoginUpgradeV10ToV11,
   providersAwaitLoginUpgradeV20ToV21,
 } from "@traycer/protocol/host/registry";
@@ -681,6 +683,13 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       }),
     ).not.toHaveProperty("mcpAuth");
     expect(
+      providersStartLoginUpgradeV11ToV12.upgradeResponse({
+        url: null,
+        started: true,
+        profileId: null,
+      }),
+    ).not.toHaveProperty("mcpAuth");
+    expect(
       providersCancelLoginUpgradeV10ToV11.upgradeRequest({
         providerId: "claude-code",
       }),
@@ -711,6 +720,16 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       providersStartLoginResponseSchema.parse({
         url: null,
         started: false,
+        mcpAuth: { kind: "done" },
+      }),
+    ).not.toHaveProperty("mcpAuth");
+    expect(
+      providersStartLoginResponseSchemaV12.parse({
+        url: null,
+        started: false,
+        profileId: null,
+        userCode: "ABCD-1234",
+        failure: null,
         mcpAuth: { kind: "done" },
       }),
     ).not.toHaveProperty("mcpAuth");

@@ -2,6 +2,7 @@ import {
   buildChatFindRows,
   createChatFindAdapter,
   queryMountedChatFindUnit,
+  queryMountedChatMessageRoot,
   type ChatFindAdapter,
   type ChatFindReconcileTarget,
   type ChatFindRevealTarget,
@@ -199,12 +200,7 @@ export function useChatFindController(
     (messageId: string): HTMLElement | null => {
       const scroller = getScroller();
       if (scroller === null) return null;
-      for (const row of scroller.querySelectorAll<HTMLElement>(
-        "[data-message-id]",
-      )) {
-        if (row.dataset.messageId === messageId) return row;
-      }
-      return null;
+      return queryMountedChatMessageRoot(scroller, messageId);
     },
     [getScroller],
   );
