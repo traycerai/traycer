@@ -15,6 +15,8 @@ import {
   settingsTabDescriptor,
 } from "@/stores/tabs/kinds/settings";
 import { settingsTabIntent } from "@/lib/tab-navigation/intents";
+import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
+import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 
 describe("settings tab kind - host section", () => {
   it("settingsSectionFromPath maps /settings/host to the host section", () => {
@@ -89,5 +91,27 @@ describe("settings tab kind - host section", () => {
 
   it("settings default path is unchanged", () => {
     expect(settingsDefaultPath()).toBe("/settings/general");
+  });
+});
+
+/**
+ * The gate `SETTINGS_PATHS` has never had. Three ids reached the section table
+ * without reaching that set - `devices`, then `link-phone`, then
+ * `app-notifications` - and each one was a settings tab that a restart quietly
+ * dropped, because both validators answer `SETTINGS_PATHS.has(path)` and a
+ * section missing from it is simply not a settings route.
+ *
+ * Containment, deliberately not equality: the set is a SUPERSET by
+ * construction. It also accepts `service`, the retired id that belongs to no
+ * section and that `settings.service.tsx` still redirects, and a persisted
+ * path minted by an older build is exactly the input this guards. Asserting
+ * equality would fail on that alias and teach the next person to delete it.
+ */
+describe("settings tab kind - route allowlist parity", () => {
+  it("accepts every section the settings table declares", () => {
+    const missing = SETTINGS_SECTIONS.map((section) => section.id).filter(
+      (id) => !SETTINGS_PATHS.has(id),
+    );
+    expect(missing).toEqual([]);
   });
 });

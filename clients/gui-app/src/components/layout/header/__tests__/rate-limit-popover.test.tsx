@@ -38,6 +38,8 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
@@ -445,6 +447,16 @@ function codexReady() {
   };
 }
 
+/** The ambient (profile-less) block's provider, for the header-link cases. */
+function kilocodeReady() {
+  return readyResult({
+    provider: "kilocode",
+    available: true,
+    creditBalance: 5,
+    passState: null,
+  });
+}
+
 function providerProfile(input: {
   readonly profileId: string;
   readonly kind: ProviderProfile["kind"];
@@ -623,6 +635,8 @@ function renderPopoverWithScope(scope: HostScope, hasExplicitPick: boolean) {
         <Popover open>
           <PopoverTrigger>trigger</PopoverTrigger>
           <RateLimitPopover
+            side="bottom"
+            align="end"
             onClose={onClose}
             profileSelection={mocks.profileSelection}
             scope={scope}
@@ -862,6 +876,12 @@ beforeEach(() => {
   useRateLimitPopoverStore.persist.clearStorage();
   useProvidersFocusStore.getState().clearFocusHarnessId();
   useProvidersFocusStore.getState().clearFocusTab();
+  // Both are written by the popover's Settings jumps - the reveal request the
+  // rail gear arms for Layout's Status bar group, and the viewed host the
+  // per-provider links carry across. Neither is reset by the render, so a
+  // leftover from the previous case would let an assertion pass on it.
+  useSettingsSearchStore.getState().clearReveal();
+  useSettingsHostScopeStore.getState().setScopedHostId(null);
   onClose = vi.fn();
 });
 
@@ -1830,6 +1850,8 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
           <Popover open>
             <PopoverTrigger>trigger</PopoverTrigger>
             <RateLimitPopover
+              side="bottom"
+              align="end"
               onClose={onClose}
               profileSelection={mocks.profileSelection}
               scope={SINGLE_HOST_SCOPE}
@@ -2674,18 +2696,169 @@ describe("<RateLimitPopover /> Refresh all", () => {
 });
 
 describe("<RateLimitPopover /> rail settings", () => {
-  it("opens provider settings and closes the popover from the rail settings icon", () => {
+  it("opens Layout on the status-bar group and closes the popover from the rail gear", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
     renderPopover();
-    fireEvent.click(screen.getByRole("button", { name: "Provider settings" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Status bar settings" }),
+    );
+
+    expect(mocks.openSettings).toHaveBeenCalledWith({
+      section: "layout",
+      resetToGeneral: false,
+    });
+    // The anchor cannot ride on `openSettings`, which carries a section and
+    // nothing finer - it travels in the reveal store the Layout panel's
+    // watcher polls, exactly as a settings search result's does.
+    expect(useSettingsSearchStore.getState().pendingReveal).toMatchObject({
+      section: "layout",
+      anchor: "layout-status-bar",
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the Providers deep-link intent untouched from the rail gear", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    renderPopover();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Status bar settings" }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: null,
+      focusTab: null,
+    });
+  });
+});
+
+describe("<RateLimitPopover /> manage provider links", () => {
+  it("deep-links a profile-bearing provider to Providers with the viewed host", () => {
+    const events: string[] = [];
+    onClose = vi.fn(() => {
+      events.push("close");
+    });
+    mocks.openSettings = vi.fn(() => {
+      events.push("settings");
+    });
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    renderPopover();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manage provider: Codex" }),
+    );
+
+    // Closing first matters for the same reason it does for the OpenCode
+    // link: the popover must be gone before Settings takes the surface.
+    expect(events).toEqual(["close", "settings"]);
     expect(mocks.openSettings).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
     });
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "codex",
+      // No tab named: Providers resolves this provider's own first tab.
+      focusTab: null,
+    });
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+  });
+
+  it("deep-links an ambient provider from its own header", () => {
+    mocks.configured = [
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+    ];
+    mocks.results = { kilocode: kilocodeReady() };
+    renderPopover();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manage provider: Kilo Code" }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "kilocode",
+      focusTab: null,
+    });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a previous deep link's tab so the provider opens on its own first tab", () => {
+    useProvidersFocusStore.getState().setFocusTab("modelProviders");
+    mocks.configured = [
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+    ];
+    mocks.results = { kilocode: kilocodeReady() };
+    renderPopover();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manage provider: Kilo Code" }),
+    );
+
+    expect(useProvidersFocusStore.getState().focusTab).toBeNull();
+  });
+
+  it("names one link per provider in Overview and orders it after the title", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      kilocode: kilocodeReady(),
+    };
+    renderPopover();
+
+    // The visible words repeat per block; the accessible name is what tells
+    // the two apart, which is the whole reason it is the provider's.
+    expect(screen.getAllByText("Manage provider").length).toBe(2);
+    const manageCodex = screen.getByRole("button", {
+      name: "Manage provider: Codex",
+    });
+    expect(
+      manageCodex.compareDocumentPosition(screen.getByText("Codex")) &
+        Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+  });
+
+  it("keeps the detail tab's refresh button after the manage link", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    useRateLimitPopoverStore.setState({ activeTab: "codex" });
+    renderPopover();
+
+    const manage = screen.getByRole("button", {
+      name: "Manage provider: Codex",
+    });
+    const refresh = screen.getByRole("button", { name: "Refresh Codex" });
+    expect(
+      manage.compareDocumentPosition(refresh) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
 

@@ -306,7 +306,7 @@ function renderList(tabId: string) {
 
 beforeEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useSettingsStore.setState({ showNavigatorResourceStats: false });
+  useSettingsStore.setState({ navigatorResourceMetrics: [] });
   resetEpicTerminalDurableCreatesForTests();
   durableCollection.value = undefined;
   listedSessions.value = [];
@@ -325,7 +325,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  useSettingsStore.setState({ showNavigatorResourceStats: false });
+  useSettingsStore.setState({ navigatorResourceMetrics: [] });
   resetEpicTerminalDurableCreatesForTests();
 });
 
@@ -452,8 +452,8 @@ describe("<SwitcherTerminalsList /> rows", () => {
     expect(tiles[0]?.id).toBe("second-term");
   });
 
-  it("carries the resource chip for the row's owner host when stats are on", () => {
-    useSettingsStore.setState({ showNavigatorResourceStats: true });
+  it("carries the resource chip for the row's owner host when a metric is picked", () => {
+    useSettingsStore.setState({ navigatorResourceMetrics: ["cpu"] });
     durableCollection.value = completeFleet([
       durableTerminal({
         hostId: HOST_B,

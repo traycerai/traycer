@@ -34,6 +34,7 @@ export {
   CURRENT_PERSIST_VERSION,
   basePersistOptions,
 } from "@/lib/persist/persist-options";
+export { seedPersistedStateFromLegacyKeys } from "@/lib/persist/seed-from-legacy-keys";
 export {
   clearAndResetPersistedStore,
   retargetPersistedStore,
