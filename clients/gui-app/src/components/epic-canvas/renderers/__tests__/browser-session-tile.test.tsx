@@ -116,6 +116,7 @@ const surfaceCapture = vi.hoisted(() => ({
   onConvertToPip: null as (() => void) | null,
   onNativeTileFocused: null as (() => void) | null,
   persistViewportPreset: null as ((preset: string) => void) | null,
+  persistZoomFactor: null as ((factor: number) => void) | null,
   visible: null as boolean | null,
   placement: null as BrowserTilePlacement | null,
   node: null as BrowserTileNode | null,
@@ -253,6 +254,7 @@ vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
     readonly onConvertToPip: (() => void) | null;
     readonly onNativeTileFocused: (() => void) | null;
     readonly persistViewportPreset: ((preset: string) => void) | null;
+    readonly persistZoomFactor: ((factor: number) => void) | null;
     readonly onOpenLinkInNewTile:
       | ((url: string, disposition: "foreground" | "background") => void)
       | null;
@@ -262,6 +264,7 @@ vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
     surfaceCapture.onConvertToPip = props.onConvertToPip;
     surfaceCapture.onNativeTileFocused = props.onNativeTileFocused;
     surfaceCapture.persistViewportPreset = props.persistViewportPreset;
+    surfaceCapture.persistZoomFactor = props.persistZoomFactor;
     surfaceCapture.visible = props.visible;
     surfaceCapture.placement = props.placement;
     surfaceCapture.node = props.node;
@@ -338,6 +341,7 @@ const NODE: BrowserSessionTileRef = {
   sessionId: "sess-1",
   tabId: "tab-1",
   viewportPreset: "responsive",
+  zoomFactor: 1,
 };
 
 function session(
@@ -436,6 +440,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
     surfaceCapture.onRequestClose = null;
     surfaceCapture.onConvertToPip = null;
     surfaceCapture.persistViewportPreset = null;
+    surfaceCapture.persistZoomFactor = null;
     surfaceCapture.visible = null;
     surfaceCapture.placement = null;
     surfaceCapture.node = null;
@@ -1920,12 +1925,15 @@ describe("BrowserSessionTile adapter props", () => {
       sessionId: NODE.sessionId,
       url: "https://example.com/page",
       viewportPreset: NODE.viewportPreset,
+      zoomFactor: NODE.zoomFactor,
     });
     expect(surfaceCapture.pageSessionId).toBe(NODE.id);
     // The canvas can do all three, so none of the capability callbacks is null
     // - a null here is what the Start Page placement will mean, not this one.
     expect(surfaceCapture.onConvertToPip).not.toBeNull();
     expect(surfaceCapture.persistViewportPreset).not.toBeNull();
+    // The canvas remembers zoom too, so this placement supplies a writer.
+    expect(surfaceCapture.persistZoomFactor).not.toBeNull();
     expect(surfaceCapture.onRequestClose).not.toBeNull();
     expect(surfaceCapture.visible).toBe(true);
   });

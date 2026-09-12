@@ -349,6 +349,10 @@ export const RunnerHostInvoke = {
   browserViewCancelDownload: "runnerHost:browserView:cancelDownload",
   browserViewTrustCertificate: "runnerHost:browserView:trustCertificate",
   browserViewCapturePage: "runnerHost:browserView:capturePage",
+  browserViewSaveCapture: "runnerHost:browserView:saveCapture",
+  browserViewRevealCapture: "runnerHost:browserView:revealCapture",
+  browserViewStartRecording: "runnerHost:browserView:startRecording",
+  browserViewStopRecording: "runnerHost:browserView:stopRecording",
   browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
   // Clear cookies for one site (keychain refactor ticket 07): the user's
   // tile-menu action, which reports the emptied slice to the host. There is no
@@ -479,6 +483,9 @@ export const RunnerHostEvent = {
     "runnerHost:event:browserView:nativeTab:statusChange",
   browserViewFindChange: "runnerHost:event:browserView:findChange",
   browserViewDownloadChange: "runnerHost:event:browserView:downloadChange",
+  browserViewRecordingFrame: "runnerHost:event:browserView:recordingFrame",
+  browserViewRecordingStopped:
+    "runnerHost:event:browserView:recordingStopped",
   browserViewCertificateError: "runnerHost:event:browserView:certificateError",
   browserViewOpenTileRequest: "runnerHost:event:browserView:openTileRequest",
   browserViewTileCommand: "runnerHost:event:browserView:tileCommand",

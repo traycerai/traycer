@@ -27,6 +27,8 @@ export interface OverlayChrome {
   readonly buttons: Record<string, HTMLButtonElement>;
   readonly editor: HTMLDivElement;
   readonly comment: HTMLTextAreaElement;
+  /** Declarations the user is trying on the marked elements. */
+  readonly tweaks: HTMLTextAreaElement;
   readonly refuseLine: HTMLDivElement;
   readonly refuseBanner: HTMLDivElement;
   readonly errorLine: HTMLDivElement;
@@ -78,6 +80,9 @@ export function createOverlayChrome(input: {
     ".editor textarea::placeholder{color:var(--annotation-muted-foreground);}",
     ".editor textarea:focus-visible{border-color:var(--annotation-ring);box-shadow:0 0 0 2px color-mix(in srgb,var(--annotation-ring) 30%,transparent);}",
     ".editor textarea:disabled{opacity:.5;}",
+    // Monospace and one line by default: this field takes declarations, and it
+    // must not out-weigh the comment box above it.
+    ".editor textarea.tweaks{min-height:34px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;}",
     ANNOTATION_TARGET_PICKER_CSS,
     ".refuse{color:var(--annotation-warning-foreground);font-size:11px;margin-top:5px;display:none;}",
     ".refuse-banner{position:fixed;top:58px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 24px);background:var(--annotation-popover);color:var(--annotation-warning-foreground);border:1px solid var(--annotation-border);font-size:12px;padding:6px 12px;border-radius:var(--annotation-radius);pointer-events:none;z-index:4;display:none;box-shadow:0 8px 20px rgba(0,0,0,.18);}",
@@ -131,7 +136,17 @@ export function createOverlayChrome(input: {
     "aria-describedby",
     "traycer-annotation-refuse traycer-annotation-error",
   );
-  row.append(commentLabel, comment, input.targetPickerRoot);
+  const tweakLabel = D.createElement("label");
+  tweakLabel.className = "comment-label";
+  tweakLabel.htmlFor = "traycer-annotation-tweaks";
+  tweakLabel.textContent = "Try CSS (optional)";
+  const tweaks = D.createElement("textarea");
+  tweaks.id = "traycer-annotation-tweaks";
+  tweaks.rows = 1;
+  tweaks.className = "tweaks";
+  tweaks.spellcheck = false;
+  tweaks.placeholder = "padding: 12px; color: #333";
+  row.append(commentLabel, comment, tweakLabel, tweaks, input.targetPickerRoot);
   const refuseLine = D.createElement("div");
   refuseLine.id = "traycer-annotation-refuse";
   refuseLine.className = "refuse";
@@ -168,6 +183,7 @@ export function createOverlayChrome(input: {
     buttons,
     editor,
     comment,
+    tweaks,
     refuseLine,
     refuseBanner,
     errorLine,

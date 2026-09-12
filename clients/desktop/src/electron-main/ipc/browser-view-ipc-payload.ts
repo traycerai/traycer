@@ -6,6 +6,8 @@ import {
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
 import { hostResourceScopeSchema } from "@traycer/protocol/host/resource-scope";
 import type {
+} from "@traycer-clients/shared/platform/browser-device-profiles";
+import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationSetTargetChatLabelInput,
   BrowserAnnotationStartInput,
@@ -69,6 +71,32 @@ const electronTabControlActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("zoomOut") }),
   z.object({ kind: z.literal("resetZoom") }),
   z.object({ kind: z.literal("openDevTools") }),
+  z.object({ kind: z.literal("hardReload") }),
+  z.object({ kind: z.literal("openInSystemBrowser") }),
+  // Bounded at the wire rather than only where it is applied: the factor
+  // reaches Chromium's compositor, and a non-finite or absurd multiplier there
+  // is a renderer the user cannot recover by zooming back out.
+  z.object({
+    kind: z.literal("setZoomFactor"),
+    factor: z.number().finite().min(0.25).max(5),
+  }),
+  z.object({
+    kind: z.literal("setColorSchemePreference"),
+    preference: z.enum(["system", "light", "dark"]),
+  }),
+  z.object({
+    kind: z.literal("setDeviceProfile"),
+    profile: z
+      .object({
+        devicePixelRatio: z.number().finite().min(1).max(3),
+        mobile: z.boolean(),
+        touch: z.boolean(),
+      })
+      .nullable(),
+  }),
+  z.object({ kind: z.literal("setAudioMuted"), muted: z.boolean() }),
+  z.object({ kind: z.literal("clearCache") }),
+  z.object({ kind: z.literal("togglePreviewWindow") }),
 ]);
 
 const annotationStartSchema: z.ZodType<BrowserAnnotationStartInput> =
@@ -124,7 +152,19 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
     maxWidth: z.number().int().positive(),
     maxHeight: z.number().int().positive(),
     quality: z.number().int().min(0).max(100),
+    // Bounded so a compromised renderer cannot ask main to allocate frames at
+    // an arbitrary multiple of the mirror's CSS size.
+    deviceScaleFactor: z.number().finite().min(1).max(3),
   });
+
+/**
+ * A reveal request. The path is bounded here and validated against main's own
+ * capture directory at the call site - this schema proves it is a string, not
+ * that it is a file this process wrote.
+ */
+const revealCaptureSchema = z.object({
+  path: z.string().min(1).max(4_096),
+});
 
 /** The saved-logins toggle's new value. */
 const saveLoginsSchema = z.boolean();
@@ -259,6 +299,7 @@ export const browserViewIpcPayload = {
   sessionsStreamKey: sessionsStreamKeySchema,
   sessionsStreamSend: sessionsStreamSendSchema,
   tileKey: tileKeySchema,
+  revealCapture: revealCaptureSchema,
 } as const;
 
 /**

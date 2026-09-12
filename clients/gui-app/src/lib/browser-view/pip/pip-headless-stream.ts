@@ -3,9 +3,58 @@ import { BrowserScreencastStreamClient } from "@traycer-clients/shared/host-tran
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
-export const PIP_HEADLESS_MAX_WIDTH = 480;
-export const PIP_HEADLESS_MAX_HEIGHT = 360;
-export const PIP_HEADLESS_QUALITY = 50;
+/**
+ * The mirror's CSS extent, which {@link pipHeadlessFrameBudget} multiplies by
+ * the viewer's device ratio. These are the geometry ceiling from
+ * `pip-geometry.ts`, restated here so the frame request and the surface it
+ * paints into cannot drift apart.
+ */
+export const PIP_HEADLESS_CSS_WIDTH = 480;
+export const PIP_HEADLESS_CSS_HEIGHT = 360;
+
+/**
+ * A mirror is small and glanced at, not read, so it can afford a lower
+ * quantizer than a full tile - but not the resolution loss that a ratio of 1
+ * was silently costing it. On any 2x display the frames were arriving at half
+ * the surface's real pixel count and being upscaled to fit.
+ */
+export const PIP_HEADLESS_QUALITY = 82;
+
+/**
+ * Two is the ceiling rather than three: this surface is a few hundred CSS
+ * pixels across, and the step from 2x to 3x quadruples nothing a viewer can
+ * see at that size while tripling the bytes each frame costs.
+ */
+const PIP_HEADLESS_MAX_RATIO = 2;
+
+export interface PipHeadlessFrameBudget {
+  readonly maxWidth: number;
+  readonly maxHeight: number;
+  readonly quality: number;
+  readonly deviceScaleFactor: number;
+}
+
+/** The frame budget for a mirror on a display of `devicePixelRatio`. */
+export function pipHeadlessFrameBudget(
+  devicePixelRatio: number,
+): PipHeadlessFrameBudget {
+  const ratio = Number.isFinite(devicePixelRatio)
+    ? Math.min(PIP_HEADLESS_MAX_RATIO, Math.max(1, devicePixelRatio))
+    : 1;
+  return {
+    maxWidth: Math.ceil(PIP_HEADLESS_CSS_WIDTH * ratio),
+    maxHeight: Math.ceil(PIP_HEADLESS_CSS_HEIGHT * ratio),
+    quality: PIP_HEADLESS_QUALITY,
+    deviceScaleFactor: ratio,
+  };
+}
+
+/** The budget for the display this document is on. */
+export function currentPipHeadlessFrameBudget(): PipHeadlessFrameBudget {
+  return pipHeadlessFrameBudget(
+    typeof window === "undefined" ? 1 : window.devicePixelRatio,
+  );
+}
 
 interface PipHeadlessStreamHandle {
   close(): void;

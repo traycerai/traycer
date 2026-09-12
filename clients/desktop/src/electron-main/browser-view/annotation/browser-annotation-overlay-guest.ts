@@ -8,6 +8,11 @@
  */
 import type { BrowserAnnotationTheme } from "../../../ipc-contracts/browser-annotation-types";
 import {
+  commentWithStyleTweaks,
+  parseStyleDeclarations,
+  type BrowserStyleTweak,
+} from "./browser-style-tweaks";
+import {
   createMarkStore,
   type LiveMark,
 } from "./browser-annotation-mark-store";
@@ -103,6 +108,7 @@ function boot(): boolean {
     buttons,
     editor,
     comment,
+    tweaks,
     refuseLine,
     refuseBanner,
     errorLine,
@@ -182,6 +188,11 @@ function boot(): boolean {
   }
 
   function onMarksChanged(): void {
+    // The mark set is half of what a tweak applies to, so it has to re-run here
+    // and not only on textarea input: typing CSS and THEN marking a second
+    // element used to leave that element unstyled and absent from the summary,
+    // and unmarking one used to leave this overlay's declaration behind on it.
+    syncTweaks();
     emitState();
     layoutChrome();
   }
@@ -659,6 +670,7 @@ function boot(): boolean {
       refuseBanner.textContent = "";
     }
     comment.disabled = attachPending;
+    tweaks.disabled = attachPending;
     targetPicker.setDisabled(attachPending);
     for (const name of OVERLAY_MODES) {
       const button = buttons[name];
@@ -701,8 +713,10 @@ function boot(): boolean {
     chromeHidden = false;
     attachPending = false;
     host.removeAttribute("data-traycer-capture-failed");
+    revertTweaks();
     marks.clear();
     comment.value = "";
+    tweaks.value = "";
     refusedCount = 0;
     attachError = "";
     targetPicker.close(false);
@@ -797,7 +811,9 @@ function boot(): boolean {
       targetChatId: resolvedTargetChatId,
       marks: snapshots,
       elements: budgeted.kept,
-      comment: comment.value,
+      // The tweaks ride the comment because it is the only free-form text that
+      // reaches a chat; the annotation record is a released wire contract.
+      comment: commentWithStyleTweaks(comment.value, collectTweaks()),
       unionRect: union,
     };
   }
@@ -809,6 +825,219 @@ function boot(): boolean {
       type: "attachRequested",
       payload,
     });
+  }
+
+  /**
+   * What each marked element looked like before any tweak, keyed by element.
+   *
+   * Recorded on FIRST tweak rather than per keystroke: the point of comparison is
+   * the page as the user found it, and re-reading it after a tweak has landed
+   * would report the tweak as its own previous value.
+   */
+  const tweakOriginals = new WeakMap<Element, Map<string, string>>();
+  /** Inline properties this overlay set, so it can take them back off. */
+  const tweakApplied = new WeakMap<Element, Set<string>>();
+  /**
+   * The element's OWN inline declaration before this overlay touched it, so a
+   * revert can put it back.
+   *
+   * Deliberately separate from `tweakOriginals`, which holds computed values for
+   * the report. The two answer different questions and a revert needs this one:
+   * an element carrying `style="color:red"` has a computed colour AND an inline
+   * one, and restoring the computed value as inline would invent a declaration
+   * the page never had - while dropping the property, which is what
+   * `removeProperty` does, silently deletes the author's own.
+   */
+  const tweakInline = new WeakMap<
+    Element,
+    Map<string, { value: string; priority: string }>
+  >();
+
+  /**
+   * The element's inline style, for the elements that have one.
+   *
+   * `SVGElement` as well as `HTMLElement`: a mark can land on an SVG icon, and
+   * `fill` or `stroke` typed against one is exactly the kind of tweak this is
+   * for. Both implement `ElementCSSInlineStyle`; neither shares a base class
+   * that means "has a style".
+   */
+  function inlineStyleOf(el: Element): CSSStyleDeclaration | null {
+    if (el instanceof HTMLElement) return el.style;
+    if (el instanceof SVGElement) return el.style;
+    return null;
+  }
+
+  function markedElements(): Element[] {
+    const out: Element[] = [];
+    for (const entry of marks.entries) {
+      if (entry.model.kind !== "element" || entry.element === null) continue;
+      if (!entry.element.isConnected) continue;
+      out.push(entry.element);
+    }
+    return out;
+  }
+
+  function computedValueOf(el: Element, property: string): string {
+    try {
+      return W.getComputedStyle(el).getPropertyValue(property).trim();
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Applies the current declarations to every marked element.
+   *
+   * Re-applied wholesale on each edit rather than diffed: removing what is no
+   * longer typed and setting what is keeps the page showing exactly the text in
+   * the box, which is the only behaviour a user can predict while typing.
+   */
+  /**
+   * The elements this overlay currently has a tweak on.
+   *
+   * Needed because `markedElements()` answers "what is marked NOW": an element
+   * that just left the set is no longer reachable through it, and it is exactly
+   * the element whose tweak has to come off.
+   */
+  const tweakedElements = new Set<Element>();
+
+  /**
+   * Brings the page in line with the current declarations AND the current mark
+   * set, in that order of dependence.
+   */
+  function syncTweaks(): void {
+    const marked = new Set<Element>(markedElements());
+    for (const el of [...tweakedElements]) {
+      if (marked.has(el)) continue;
+      revertElement(el);
+      tweakedElements.delete(el);
+    }
+    applyTweaks();
+  }
+
+  /** Takes this overlay's declarations off one element. */
+  function revertElement(el: Element): void {
+    const applied = tweakApplied.get(el);
+    if (applied === undefined) return;
+    const style = inlineStyleOf(el);
+    const inline = tweakInline.get(el);
+    if (style !== null) {
+      for (const property of applied)
+        restoreInline(style, inline ?? null, property);
+    }
+    applied.clear();
+    inline?.clear();
+  }
+
+  function applyTweaks(): void {
+    const declarations = parseStyleDeclarations(tweaks.value);
+    const wanted = new Set(declarations.map((entry) => entry.property));
+    for (const el of markedElements()) {
+      const style = inlineStyleOf(el);
+      if (style === null) continue;
+      let originals = tweakOriginals.get(el);
+      if (originals === undefined) {
+        originals = new Map();
+        tweakOriginals.set(el, originals);
+      }
+      let applied = tweakApplied.get(el);
+      if (applied === undefined) {
+        applied = new Set();
+        tweakApplied.set(el, applied);
+      }
+      let inline = tweakInline.get(el);
+      if (inline === undefined) {
+        inline = new Map();
+        tweakInline.set(el, inline);
+      }
+      for (const property of [...applied]) {
+        if (wanted.has(property)) continue;
+        restoreInline(style, inline, property);
+        applied.delete(property);
+      }
+      for (const declaration of declarations) {
+        if (!originals.has(declaration.property)) {
+          originals.set(
+            declaration.property,
+            computedValueOf(el, declaration.property),
+          );
+        }
+        // Read BEFORE the set, and only once: the second edit of the same
+        // property would otherwise record this overlay's own value as the
+        // page's.
+        if (!inline.has(declaration.property)) {
+          inline.set(declaration.property, {
+            value: style.getPropertyValue(declaration.property),
+            priority: style.getPropertyPriority(declaration.property),
+          });
+        }
+        style.setProperty(declaration.property, declaration.value);
+        applied.add(declaration.property);
+      }
+      tweakedElements.add(el);
+    }
+  }
+
+  /**
+   * Takes every applied tweak back off, for a cancelled or sent annotation.
+   *
+   * Walks the tweaked set rather than the marked one: an element unmarked before
+   * the overlay exits is still an element this overlay wrote to.
+   */
+  function revertTweaks(): void {
+    for (const el of tweakedElements) revertElement(el);
+    tweakedElements.clear();
+  }
+
+  /**
+   * Puts one property back the way the page had it.
+   *
+   * A property the page never declared inline is removed; one it did is written
+   * back with its own value AND priority, because dropping an `!important` and
+   * restoring it unprioritised are different pages.
+   */
+  function restoreInline(
+    style: CSSStyleDeclaration,
+    inline: Map<string, { value: string; priority: string }> | null,
+    property: string,
+  ): void {
+    const previous = inline?.get(property);
+    if (previous === undefined || previous.value.length === 0) {
+      style.removeProperty(property);
+      return;
+    }
+    style.setProperty(property, previous.value, previous.priority);
+  }
+
+  /**
+   * The tweaks as records, for the attach payload.
+   *
+   * Only declarations the browser ACCEPTED are reported: `setProperty` silently
+   * ignores a value it cannot parse, so reading the inline style back is what
+   * separates "I tried this" from "this is what the page is showing".
+   */
+  function collectTweaks(): BrowserStyleTweak[] {
+    const out: BrowserStyleTweak[] = [];
+    for (const entry of marks.entries) {
+      if (entry.model.kind !== "element" || entry.element === null) continue;
+      const el = entry.element;
+      const applied = tweakApplied.get(el);
+      const originals = tweakOriginals.get(el);
+      if (applied === undefined || originals === undefined) continue;
+      const style = inlineStyleOf(el);
+      if (style === null) continue;
+      for (const property of applied) {
+        const value = style.getPropertyValue(property).trim();
+        if (value.length === 0) continue;
+        out.push({
+          selector: entry.model.selector ?? "",
+          property,
+          previousValue: originals.get(property) ?? "",
+          value,
+        });
+      }
+    }
+    return out;
   }
 
   function onPagePointer(e: Event): void {
@@ -954,6 +1183,9 @@ function boot(): boolean {
   function teardown(): void {
     if (done) return;
     done = true;
+    // The page must not keep a tweak the user only tried: an overlay that exits
+    // leaving inline styles behind has edited the page rather than described it.
+    revertTweaks();
     listeners.abort();
     if (scrollFrame !== null) W.cancelAnimationFrame(scrollFrame);
     targetPicker.dispose();
@@ -997,6 +1229,7 @@ function boot(): boolean {
   W.addEventListener("scroll", onScroll, listen);
   W.addEventListener("keydown", onKey, listen);
   pill.addEventListener("click", onPillClick, listen);
+  tweaks.addEventListener("input", applyTweaks, { signal: listeners.signal });
   emitState();
   return true;
 }

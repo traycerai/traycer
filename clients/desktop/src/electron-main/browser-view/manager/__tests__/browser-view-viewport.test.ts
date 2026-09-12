@@ -82,6 +82,11 @@ function createEntry(webContents: BrowserViewWebContents): BrowserViewEntry {
     rendererResetPending: false,
     internalNavigation: false,
     succeededByReplacement: false,
+    currentFaviconUrl: null,
+    declaredFaviconUrl: null,
+    emulation: null,
+    previewWindow: null,
+    recording: null,
     closePromise: null,
   };
 }

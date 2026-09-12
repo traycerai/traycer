@@ -7,6 +7,9 @@ import type {
 import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
 import type { BrowserSessionProfile } from "../browser-session";
 import type { BrowserDebugSession } from "../debug/browser-debug-session";
+import type { BrowserPageEmulation } from "../emulation/browser-page-emulation";
+import type { BrowserPreviewWindowHandle } from "./browser-preview-window";
+import type { BrowserPageRecording } from "../recording/browser-page-recording";
 import type { BrowserViewEntryKey } from "./browser-view-entry-registry";
 import type {
   BrowserViewDevToolsWindow,
@@ -52,13 +55,44 @@ export interface BrowserViewEntry {
   requestedUrl: string;
   currentUrl: string;
   currentTitle: string;
+  /**
+   * The current document's declared icon, or `null` when it declares none.
+   *
+   * Cleared on navigation rather than carried: Chromium emits the event only
+   * when a page HAS an icon, so a page without one would otherwise keep showing
+   * the previous page's - which reads as the tile having navigated nowhere.
+   */
+  currentFaviconUrl: string | null;
+  /**
+   * The icon URL the page itself declared, kept only to notice when it changes.
+   *
+   * Distinct from {@link currentFaviconUrl}, which holds the `data:` URL read
+   * from it: a renderer is never given a guest-chosen remote address to fetch,
+   * so the address the page named and the value the tile displays are two
+   * different things and both have to be remembered.
+   */
+  declaredFaviconUrl: string | null;
   status: BrowserViewStatus;
   statusReason: string | null;
   findState: BrowserViewEntryFindState;
   certificateError: BrowserViewCertificateErrorChange | null;
   debugSession: BrowserDebugSession | null;
+  /**
+   * This tile's viewport/appearance emulation, minted with its first use.
+   *
+   * Lives on the entry rather than beside the debug session because it is the
+   * tile's INTENT, which outlives any one CDP attachment: a debugger that
+   * detaches and reattaches must find the same overrides waiting to be
+   * restated, and a guest replaced by a cross-window move gets a fresh one
+   * exactly as it gets a fresh registration id.
+   */
+  emulation: BrowserPageEmulation | null;
   annotationSession: BrowserAnnotationSession | null;
   devToolsWindow: BrowserViewDevToolsWindow | null;
+  /** The always-on-top window on this tile's page, while one is open. */
+  previewWindow: BrowserPreviewWindowHandle | null;
+  /** The frame pump for a recording in progress, minted on first use. */
+  recording: BrowserPageRecording | null;
   /**
    * Set when the host window's own renderer starts a fresh main-frame
    * navigation or crashes, before the new renderer has re-upserted this

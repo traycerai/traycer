@@ -176,6 +176,12 @@ export interface BrowserSessionTileRef {
   readonly sessionId: string;
   readonly tabId: string;
   readonly viewportPreset: BrowserViewViewportPresetId;
+  /**
+   * The zoom this tile was last left at. Remembered because zoom is a statement
+   * about the page rather than the session, so losing it on reopen is a small
+   * forgetting the user notices.
+   */
+  readonly zoomFactor: number;
 }
 
 /** Pre-migration ref. These semantic fields are import/old-host evidence only. */

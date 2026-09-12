@@ -63,6 +63,9 @@ export class BrowserDebugTelemetry {
 
   snapshot(): BrowserViewDebugSnapshotData {
     return {
+      // Telemetry owns the two streams it observes; the accessibility tree is
+      // read on demand by the session, which has the debugger.
+      accessibilityNodes: [],
       consoleEntries: this.consoleEntries,
       networkEntries: Array.from(this.networkEntriesById.values()).map(
         (record) => record.entry,

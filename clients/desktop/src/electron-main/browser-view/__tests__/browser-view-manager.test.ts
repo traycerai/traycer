@@ -20,6 +20,7 @@ import type {
 import type {
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
+  BrowserViewElectronTabControl,
   BrowserViewFindChange,
   BrowserViewNativeTabCapability,
   BrowserViewOpenTileRequest,
@@ -318,11 +319,39 @@ class FakeDebugger implements BrowserViewDebugger {
 class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   readonly lifecycle: string[] = [];
   readonly debugger: FakeDebugger;
+  readonly faviconFetches: string[] = [];
   readonly session = {
     cookies: {
       get: () => Promise.resolve([]),
       set: () => Promise.resolve(),
       flushStore: () => Promise.resolve(),
+    },
+    // Recorded so a test can assert the icon read happens in the GUEST's
+    // session rather than from the app renderer.
+    fetch: (url: string) => {
+      this.faviconFetches.push(url);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "content-type" ? "image/png" : null,
+        },
+        body: {
+          getReader: () => {
+            let sent = false;
+            return {
+              read: () =>
+                Promise.resolve(
+                  sent
+                    ? { done: true }
+                    : ((sent = true), { done: false, value: new Uint8Array(4) }),
+                ),
+              cancel: () => Promise.resolve(),
+            };
+          },
+        },
+      });
     },
   };
   readonly navigationHistory = {
@@ -349,6 +378,8 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   }> = [];
   closeCalls = 0;
   reloadCalls = 0;
+  hardReloadCalls = 0;
+  audioMuted = false;
   goBackCalls = 0;
   goForwardCalls = 0;
   readonly backgroundThrottlingStates: boolean[] = [];
@@ -478,6 +509,18 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
 
   reload(): void {
     this.reloadCalls += 1;
+  }
+
+  reloadIgnoringCache(): void {
+    this.hardReloadCalls += 1;
+  }
+
+  setAudioMuted(muted: boolean): void {
+    this.audioMuted = muted;
+  }
+
+  isAudioMuted(): boolean {
+    return this.audioMuted;
   }
 
   findInPage(
@@ -1759,6 +1802,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
           maxWidth: 640,
           maxHeight: 360,
           quality: 75,
+          deviceScaleFactor: 2,
         },
         () => undefined,
       ),
@@ -2015,6 +2059,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
         registrationId: provisioned.registrationId,
         url: "https://example.com/",
         title: "Example Domain",
+        faviconUrl: null,
         status: "ready",
       }),
     ]);
@@ -2415,6 +2460,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
           maxWidth: 640,
           maxHeight: 360,
           quality: 75,
+          deviceScaleFactor: 2,
         },
         () => undefined,
       ),
@@ -2442,6 +2488,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
           maxWidth: 640,
           maxHeight: 360,
           quality: 75,
+          deviceScaleFactor: 2,
         },
         () => undefined,
       ),
@@ -3692,6 +3739,7 @@ describe("BrowserViewManager renderer guest capability", () => {
       registrationId: ready.registrationId,
       url: "https://example.com/",
       title: "Example Domain",
+      faviconUrl: null,
       status: "ready",
     });
 
@@ -4544,6 +4592,7 @@ describe("BrowserViewManager cross-window tab move (re-homed by replacement)", (
           maxWidth: 640,
           maxHeight: 360,
           quality: 75,
+          deviceScaleFactor: 2,
         },
         () => undefined,
       ),
@@ -4631,6 +4680,7 @@ describe("BrowserViewManager cross-window tab move (re-homed by replacement)", (
           maxWidth: 640,
           maxHeight: 360,
           quality: 75,
+          deviceScaleFactor: 2,
         },
         () => undefined,
       ),
@@ -4752,5 +4802,121 @@ describe("reserved chords are matched against the guest's own window", () => {
     // the wrong one of them.
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("BrowserViewManager browser chrome actions", () => {
+  const nativeKey = {
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+  } as const;
+
+  async function readyTab(): Promise<{
+    readonly harness: Harness;
+    readonly view: FakeWebContents;
+    readonly registrationId: string;
+  }> {
+    const harness = createHarness();
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+    return { harness, view, registrationId: ready.registrationId };
+  }
+
+  function control(
+    harness: Harness,
+    registrationId: string,
+    action: BrowserViewElectronTabControl["action"],
+  ): Promise<boolean> {
+    return harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId,
+      action,
+    });
+  }
+
+  it("bypasses the HTTP cache for a hard reload, and only then", async () => {
+    const { harness, view, registrationId } = await readyTab();
+    await expect(control(harness, registrationId, { kind: "reload" })).resolves.toBe(
+      true,
+    );
+    expect(view.reloadCalls).toBe(1);
+    expect(view.hardReloadCalls).toBe(0);
+
+    await expect(
+      control(harness, registrationId, { kind: "hardReload" }),
+    ).resolves.toBe(true);
+    expect(view.hardReloadCalls).toBe(1);
+    // The ordinary reload count must not move: a hard reload implemented as a
+    // reload is the defect the separate port method exists to prevent.
+    expect(view.reloadCalls).toBe(1);
+  });
+
+  it("sets the zoom multiplier outright", async () => {
+    const { harness, view, registrationId } = await readyTab();
+    await expect(
+      control(harness, registrationId, { kind: "setZoomFactor", factor: 1.5 }),
+    ).resolves.toBe(true);
+    expect(view.zoomFactor).toBe(1.5);
+  });
+
+  it("mutes and unmutes the guest", async () => {
+    const { harness, view, registrationId } = await readyTab();
+    await expect(
+      control(harness, registrationId, { kind: "setAudioMuted", muted: true }),
+    ).resolves.toBe(true);
+    expect(view.isAudioMuted()).toBe(true);
+    await expect(
+      control(harness, registrationId, { kind: "setAudioMuted", muted: false }),
+    ).resolves.toBe(true);
+    expect(view.isAudioMuted()).toBe(false);
+  });
+
+  it("opens the guest's own current address externally, through the scheme gate", async () => {
+    const { harness, view, registrationId } = await readyTab();
+    safelyOpenExternalMock.mockClear();
+    safelyOpenExternalMock.mockResolvedValue(true);
+    // The guest has navigated since the renderer last heard about it; the
+    // address the user is looking at is the one that must be handed over.
+    await view.loadURL("https://example.com/deep/link");
+    await expect(
+      control(harness, registrationId, { kind: "openInSystemBrowser" }),
+    ).resolves.toBe(true);
+    expect(safelyOpenExternalMock).toHaveBeenCalledWith(
+      "https://example.com/deep/link",
+    );
+  });
+
+  it("reports a refused external open rather than claiming success", async () => {
+    const { harness, registrationId } = await readyTab();
+    safelyOpenExternalMock.mockClear();
+    safelyOpenExternalMock.mockResolvedValue(false);
+    await expect(
+      control(harness, registrationId, { kind: "openInSystemBrowser" }),
+    ).resolves.toBe(false);
+  });
+
+  it("refuses every chrome action for a stale registration id", async () => {
+    const { harness } = await readyTab();
+    for (const action of [
+      { kind: "hardReload" },
+      { kind: "openInSystemBrowser" },
+      { kind: "clearCache" },
+      { kind: "setAudioMuted", muted: true },
+      { kind: "setColorSchemePreference", preference: "dark" },
+      { kind: "setDeviceProfile", profile: null },
+    ] as const satisfies readonly BrowserViewElectronTabControl["action"][]) {
+      await expect(control(harness, "stale-registration", action)).resolves.toBe(
+        false,
+      );
+    }
   });
 });

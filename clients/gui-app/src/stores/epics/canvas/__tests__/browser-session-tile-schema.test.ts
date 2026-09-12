@@ -53,6 +53,7 @@ describe("browserSessionTileSchema / parseTileRef", () => {
       sessionId: "sess-1",
       tabId: "tab-9",
       viewportPreset: "responsive",
+      zoomFactor: 1,
     };
 
     expect(
@@ -71,6 +72,7 @@ describe("browserSessionTileSchema / parseTileRef", () => {
       sessionId: "sess-1",
       tabId: "tab-1",
       viewportPreset: "responsive",
+      zoomFactor: 1,
     };
     expect(
       browserSessionTileSchema.parse({ ...base, sessionId: undefined }),
@@ -96,6 +98,7 @@ describe("isBrowserSessionTileRef", () => {
       sessionId: "s",
       tabId: "t",
       viewportPreset: "responsive",
+      zoomFactor: 1,
     };
     const blank: EpicCanvasTileRef = {
       id: "blank",

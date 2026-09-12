@@ -12,6 +12,9 @@ import type {
 } from "@traycer/protocol/host/browser/contracts";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type {
+  BrowserViewDeviceProfile,
+} from "./browser-device-profiles";
+import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
@@ -89,7 +92,22 @@ export interface PipCaptureStartInput extends BrowserViewNativeTabCapability {
   readonly maxWidth: number;
   readonly maxHeight: number;
   readonly quality: number;
+  /**
+   * The ratio the requested edges are expressed in, so the mirror's own
+   * `started` frame can report it instead of assuming 1. Assuming 1 made every
+   * frame on a 2x display arrive at half the surface's real pixel count.
+   */
+  readonly deviceScaleFactor: number;
 }
+
+/**
+ * The `prefers-color-scheme` a tile's page is told about.
+ *
+ * `system` is the absence of an override rather than a third value pushed into
+ * the page: a tile left alone must keep following the OS, including a change
+ * made while the tile is open.
+ */
+export type BrowserViewColorSchemePreference = "system" | "light" | "dark";
 
 export type BrowserViewElectronTabControlAction =
   | { readonly kind: "navigate"; readonly url: string }
@@ -99,7 +117,52 @@ export type BrowserViewElectronTabControlAction =
   | { readonly kind: "zoomIn" }
   | { readonly kind: "zoomOut" }
   | { readonly kind: "resetZoom" }
-  | { readonly kind: "openDevTools" };
+  | { readonly kind: "openDevTools" }
+  /**
+   * Reload with the HTTP cache bypassed. Distinct from `reload` because a
+   * developer watching a rebuilt asset needs the request to leave the machine;
+   * an ordinary reload is free to answer from cache and routinely does.
+   */
+  | { readonly kind: "hardReload" }
+  /** Hand the tile's current address to the OS default browser. */
+  | { readonly kind: "openInSystemBrowser" }
+  /**
+   * Set the zoom multiplier outright, rather than stepping it. The stepped
+   * arms remain because they are what a keyboard chord and a +/- button mean;
+   * this is what a restored tile and a "reset to 125%" affordance mean.
+   */
+  | { readonly kind: "setZoomFactor"; readonly factor: number }
+  | {
+      readonly kind: "setColorSchemePreference";
+      readonly preference: BrowserViewColorSchemePreference;
+    }
+  /**
+   * The device CHARACTER a tile presents - pointer type and device ratio -
+   * while its `<webview>` element keeps owning width and height. `null` returns
+   * the page to this machine's own. See `BrowserEmulationState.deviceProfile`
+   * for why geometry deliberately does not travel with it.
+   */
+  | {
+      readonly kind: "setDeviceProfile";
+      readonly profile: BrowserViewDeviceProfile | null;
+    }
+  | { readonly kind: "setAudioMuted"; readonly muted: boolean }
+  /**
+   * Drop the cached responses this tile's page can see.
+   *
+   * Deliberately narrower than the cookie clears, which run through main's jar
+   * machinery (the whole-jar barrier, the forget ledger and its host ack)
+   * because a cookie is a login. A cache entry is a copy of a public response,
+   * so it needs none of that - and must not borrow it, or a cache clear would
+   * queue behind, and be reported as, a sign-out.
+   */
+  | { readonly kind: "clearCache" }
+  /**
+   * Toggle a small always-on-top window on this tile's page. Toggle rather than
+   * open/close so the menu row and the window's own close button cannot
+   * disagree about whether one is up.
+   */
+  | { readonly kind: "togglePreviewWindow" };
 
 export type BrowserViewElectronTabControl = BrowserViewNativeTabCapability & {
   readonly action: BrowserViewElectronTabControlAction;
@@ -120,6 +183,16 @@ export type BrowserViewStatus = "loading" | "ready" | "dead";
 export interface BrowserViewNativeTabStatusChange extends BrowserViewNativeTabCapability {
   readonly url: string;
   readonly title: string | null;
+  /**
+   * The page's own icon, as an absolute http(s) URL, or `null` when it declared
+   * none for the current document.
+   *
+   * A URL rather than bytes: the renderer is already showing this page, so it
+   * can fetch the icon through the ordinary image path with the caching that
+   * comes with it. Passing bytes would put a page-controlled payload of
+   * unbounded size through IPC for something an `<img>` can do.
+   */
+  readonly faviconUrl: string | null;
   readonly status: BrowserViewStatus;
   readonly reason: string | null;
   readonly canGoBack: boolean;
@@ -501,6 +574,22 @@ export interface BrowserViewNetworkEntry {
 export interface BrowserViewDebugSnapshotData {
   readonly consoleEntries: readonly BrowserViewConsoleEntry[];
   readonly networkEntries: readonly BrowserViewNetworkEntry[];
+  /**
+   * The page's interactive shape - roles and accessible names, no values - so a
+   * caller reading this snapshot can tell what is on the page and what it is
+   * called without a second round trip. Empty when the tree could not be read
+   * (a detached debugger, a page mid-navigation), which is a normal outcome
+   * rather than a failure of the whole snapshot.
+   */
+  readonly accessibilityNodes: readonly BrowserViewAccessibilityNode[];
+}
+
+/** One row of {@link BrowserViewDebugSnapshotData.accessibilityNodes}. */
+export interface BrowserViewAccessibilityNode {
+  readonly role: string;
+  readonly name: string;
+  readonly interactive: boolean;
+  readonly depth: number;
 }
 
 export interface BrowserViewDebugSnapshot
@@ -511,6 +600,41 @@ export interface BrowserViewCapturePageResult extends BrowserViewTileKey {
   readonly base64: string;
   readonly byteLength: number;
   readonly sha256: string;
+  readonly capturedAt: number;
+}
+
+/**
+ * Where a saved screenshot landed. Only the PATH crosses: main picked the
+ * directory and minted the filename, so a renderer can ask to reveal this
+ * result but can never name a file of its own.
+ */
+/**
+ * One recorded frame on its way to the renderer's encoder. Base64 rather than a
+ * transferable buffer because this rides the same structured-clone IPC as every
+ * other browser event, and a recording is bounded in both duration and frames.
+ */
+export interface BrowserViewRecordingFrame extends BrowserViewTileKey {
+  readonly sequence: number;
+  readonly width: number;
+  readonly height: number;
+  readonly capturedAtMs: number;
+  readonly jpegBase64: string;
+}
+
+/** Why a recording ended. `requested` is the user pressing stop. */
+export type BrowserViewRecordingStopReason =
+  | "requested"
+  | "duration-limit"
+  | "frame-limit"
+  | "page-gone";
+
+export interface BrowserViewRecordingStopped extends BrowserViewTileKey {
+  readonly reason: BrowserViewRecordingStopReason;
+}
+
+export interface BrowserViewSaveCaptureResult extends BrowserViewTileKey {
+  readonly path: string;
+  readonly byteLength: number;
   readonly capturedAt: number;
 }
 
@@ -754,6 +878,25 @@ export interface BrowserViewBridge {
   cancelDownload(input: BrowserViewDownloadCancel): Promise<void>;
   trustCertificate(input: BrowserViewCertificateTrust): Promise<void>;
   capturePage(input: BrowserViewTileKey): Promise<BrowserViewCapturePageResult>;
+  /** Captures this tile and writes the PNG where main can reveal it. */
+  saveCapture(input: BrowserViewTileKey): Promise<BrowserViewSaveCaptureResult>;
+  /**
+   * Reveals a previously saved capture. Answers `false` for a path main did not
+   * write, which is a refusal rather than an error.
+   */
+  revealCapture(path: string): Promise<boolean>;
+  /**
+   * Starts streaming recorded frames for this tile. Answers whether recording
+   * began - a second request while one runs is refused rather than interleaved.
+   */
+  startRecording(input: BrowserViewTileKey): Promise<boolean>;
+  stopRecording(input: BrowserViewTileKey): Promise<boolean>;
+  onRecordingFrame(listener: (frame: BrowserViewRecordingFrame) => void): {
+    dispose: () => void;
+  };
+  onRecordingStopped(listener: (change: BrowserViewRecordingStopped) => void): {
+    dispose: () => void;
+  };
   getDebugSnapshot(
     input: BrowserViewTileKey,
   ): Promise<BrowserViewDebugSnapshot>;

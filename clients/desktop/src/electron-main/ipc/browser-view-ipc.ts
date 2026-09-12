@@ -11,6 +11,7 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
+import { revealBrowserCapture } from "../browser-view/storage/browser-capture-store";
 import {
   browserViewIpcPayload,
   parseReservedChords,
@@ -881,6 +882,46 @@ export function registerBrowserViewIpc(
         browserViewIpcPayload.tileKey.parse(payload),
       );
     },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewSaveCapture,
+    (event, payload) => {
+      const windowId = readSenderWindowId(bridge, event);
+      return manager.saveCapture(
+        windowId,
+        browserViewIpcPayload.tileKey.parse(payload),
+      );
+    },
+  );
+
+  // The path is validated against main's own capture directory rather than
+  // trusted: "reveal this path" is otherwise an arbitrary `showItemInFolder`
+  // aimed wherever a compromised renderer likes.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewRevealCapture,
+    (_event, payload) =>
+      revealBrowserCapture(
+        browserViewIpcPayload.revealCapture.parse(payload).path,
+      ),
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewStartRecording,
+    (event, payload) =>
+      manager.startRecording(
+        readSenderWindowId(bridge, event),
+        browserViewIpcPayload.tileKey.parse(payload),
+      ),
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewStopRecording,
+    (event, payload) =>
+      manager.stopRecording(
+        readSenderWindowId(bridge, event),
+        browserViewIpcPayload.tileKey.parse(payload),
+      ),
   );
 
   bridge.handleInvoke(

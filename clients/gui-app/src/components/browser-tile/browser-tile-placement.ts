@@ -41,6 +41,8 @@ export interface BrowserTileNode {
   readonly sessionId: string;
   readonly tabId: string;
   readonly viewportPreset: BrowserViewViewportPresetId;
+  /** The zoom this tile was last left at. */
+  readonly zoomFactor: number;
 }
 
 /** The canvas coordinates a placement names, whatever it calls them. */

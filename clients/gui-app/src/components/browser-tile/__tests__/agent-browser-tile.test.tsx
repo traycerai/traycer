@@ -117,6 +117,13 @@ const CHROME_CONTROLLER: TileController = {
     find: false,
     siteInfo: false,
     annotate: false,
+    screenshot: false,
+    recording: false,
+    previewWindow: false,
+    hardReload: false,
+    appearance: false,
+    clearCache: false,
+    audio: false,
   },
   profile: "primary",
   url: "https://example.com/",
@@ -127,6 +134,10 @@ const CHROME_CONTROLLER: TileController = {
   canGoBack: false,
   canGoForward: false,
   zoomPercent: 100,
+  faviconUrl: null,
+  colorSchemePreference: "system",
+  muted: false,
+  isRecording: false,
   disabled: false,
   zoomLocked: false,
   annotation: null,
@@ -140,6 +151,14 @@ const CHROME_CONTROLLER: TileController = {
   onZoomIn: () => undefined,
   onResetZoom: () => undefined,
   onOpenDevTools: () => undefined,
+  devtoolsUnavailableReason: null,
+  onHardReload: () => undefined,
+  onColorSchemePreferenceChange: () => undefined,
+  onClearCache: () => undefined,
+  onToggleMuted: () => undefined,
+  onSaveScreenshot: null,
+  onToggleRecording: null,
+  onTogglePreviewWindow: () => undefined,
   onClearSite: () => undefined,
 };
 
@@ -153,6 +172,9 @@ interface OpenTileRequest {
 }
 
 interface NativeStatusChange {
+  readonly faviconUrl: string | null;
+  /** The guest the report belongs to; a tile ignores any other's. */
+  readonly registrationId: string;
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
@@ -284,6 +306,7 @@ const NODE = {
   sessionId: "session-1",
   url: "https://example.com/",
   viewportPreset: "responsive",
+  zoomFactor: 1,
 } satisfies ComponentProps<typeof ElectronTabSurface>["node"];
 
 function createBinding(
@@ -334,6 +357,7 @@ function surfaceElement(
       pageSessionId={PAGE_SESSION_ID}
       onRequestClose={state.closeCanvasTile}
       persistViewportPreset={state.persistViewportPreset}
+      persistZoomFactor={null}
       onOpenLinkInNewTile={state.onOpenLinkInNewTile}
       onRequestNewTab={null}
       onConvertToPip={() => undefined}
@@ -481,6 +505,7 @@ describe("ElectronTabSurface", () => {
         pageSessionId={PAGE_SESSION_ID}
         onRequestClose={state.closeCanvasTile}
         persistViewportPreset={null}
+        persistZoomFactor={null}
         onOpenLinkInNewTile={state.onOpenLinkInNewTile}
         onRequestNewTab={null}
         onConvertToPip={null}
@@ -640,6 +665,8 @@ describe("ElectronTabSurface", () => {
         hostId: "host-1",
         sessionId: "session-1",
         tabId: "foreign-tab",
+        // Same registration on purpose: this case is about the TAB differing.
+        registrationId: "registration-1",
         url: "https://foreign.example/",
         title: null,
         status: "dead",
@@ -647,6 +674,7 @@ describe("ElectronTabSurface", () => {
         canGoBack: false,
         canGoForward: false,
         zoomPercent: 100,
+        faviconUrl: null,
       });
     });
     expect(screen.queryByText("foreign failure")).toBeNull();
@@ -656,6 +684,7 @@ describe("ElectronTabSurface", () => {
         hostId: "host-1",
         sessionId: "session-1",
         tabId: "tab-1",
+        registrationId: "registration-1",
         url: "https://example.com/",
         title: null,
         status: "dead",
@@ -663,6 +692,7 @@ describe("ElectronTabSurface", () => {
         canGoBack: false,
         canGoForward: false,
         zoomPercent: 100,
+        faviconUrl: null,
       });
     });
     expect(screen.getByText("native guest crashed")).toBeTruthy();
@@ -726,6 +756,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
         pageSessionId={PAGE_SESSION_ID}
         onRequestClose={state.closeCanvasTile}
         persistViewportPreset={state.persistViewportPreset}
+        persistZoomFactor={null}
         onOpenLinkInNewTile={state.onOpenLinkInNewTile}
         onRequestNewTab={null}
         onConvertToPip={() => undefined}
@@ -794,6 +825,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
         pageSessionId={PAGE_SESSION_ID}
         onRequestClose={state.closeCanvasTile}
         persistViewportPreset={state.persistViewportPreset}
+        persistZoomFactor={null}
         onOpenLinkInNewTile={state.onOpenLinkInNewTile}
         onRequestNewTab={onRequestNewTab}
         onConvertToPip={() => undefined}
@@ -834,6 +866,7 @@ describe("ElectronTabSurface navigation stall", () => {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
+      registrationId: "registration-1",
       url: "https://example.com/",
       title: null,
       status: "loading",
@@ -841,6 +874,7 @@ describe("ElectronTabSurface navigation stall", () => {
       canGoBack: false,
       canGoForward: false,
       zoomPercent: 100,
+      faviconUrl: null,
     };
   }
 
@@ -951,6 +985,40 @@ describe("ElectronTabSurface navigation stall", () => {
 
     expect(state.navigateToUrl).toHaveBeenCalledExactlyOnceWith(NODE.url);
   });
+
+  it("ignores a status report from a guest this tile no longer has", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    await act(async () => {
+      bridge.emitStatus({ ...readyStatus(), zoomPercent: 125 });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.queryByText("This page did not load")).toBeNull();
+
+    await act(async () => {
+      // A report already in flight when the guest was replaced. It still names
+      // this tab, so only the registration reveals it as a dead guest's last
+      // word - and adopting it would count as a fresh zoom report, letting the
+      // old guest's value be persisted over the one being restored.
+      bridge.emitStatus({
+        ...readyStatus(),
+        registrationId: "registration-obsolete",
+        status: "dead",
+        reason: "old guest died",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The dead status belonged to a guest this tile no longer has, so the tile
+    // must not present itself as failed.
+    expect(screen.queryByText("This page did not load")).toBeNull();
+  });
+
 });
 
 /**
@@ -969,6 +1037,7 @@ describe("ElectronTabSurface echo-less settle", () => {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
+      registrationId: "registration-1",
       url,
       title: null,
       status,
@@ -976,6 +1045,7 @@ describe("ElectronTabSurface echo-less settle", () => {
       canGoBack: false,
       canGoForward: false,
       zoomPercent: 100,
+      faviconUrl: null,
     };
   }
 

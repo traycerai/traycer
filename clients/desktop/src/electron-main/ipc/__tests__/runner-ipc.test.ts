@@ -794,6 +794,12 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.browserViewControlElectronTab,
           RunnerHostInvoke.browserViewSetReservedChords,
           RunnerHostInvoke.browserViewCapturePage,
+          // Saving a screenshot is main's: it picks the directory, mints the
+          // filename, and refuses to reveal anything it did not write.
+          RunnerHostInvoke.browserViewSaveCapture,
+          RunnerHostInvoke.browserViewRevealCapture,
+          RunnerHostInvoke.browserViewStartRecording,
+          RunnerHostInvoke.browserViewStopRecording,
           RunnerHostInvoke.browserViewFindInPage,
           RunnerHostInvoke.browserViewStopFindInPage,
           RunnerHostInvoke.browserViewCancelDownload,
