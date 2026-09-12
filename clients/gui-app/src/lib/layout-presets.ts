@@ -157,9 +157,16 @@ const DEFAULT_PRESET: LayoutPresetBundle = {
  * a reading long (the mode word, the mini bar, the countdown), which is the
  * strip's own `percent-only` shape expressed as preferences. The composer
  * folds its three dock rows and its access picker to chips - each keeps every
- * verb it had - and hides the two elements with another route (paste and
- * drag-drop attach an image, the dictation chord starts voice input). The
- * compact button stays: compaction has a keyboard path but no other button.
+ * verb it had - and hides the two elements that have a full route elsewhere:
+ * the dictation chord starts voice input, and the command palette and
+ * `/compact` compact a conversation.
+ *
+ * **Attach image stays visible** (user ruling, 2026-09-12), alone among the
+ * composer's buttons. Paste and drag-drop look like the same escape hatch the
+ * other two have, but they are not: both need the image already in hand, and
+ * neither opens a file picker - so hiding the button removes the only way to
+ * attach a file from disk. Density is meant to shorten a reading, not to cost
+ * a gesture.
  */
 const COMPACT_PRESET: LayoutPresetBundle = {
   statusBar: {
@@ -182,10 +189,10 @@ const COMPACT_PRESET: LayoutPresetBundle = {
     filesChanged: "compact",
     activeAgents: "compact",
     background: "compact",
-    attachImage: "hidden",
+    attachImage: "visible",
     access: "compact",
     mic: "hidden",
-    compactButton: "visible",
+    compactButton: "hidden",
     reasoningIndicator: "bars",
   },
   home: { density: "compact" },

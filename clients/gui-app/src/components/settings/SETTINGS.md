@@ -1348,18 +1348,27 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       defaults" assertion with it. `DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN` was
       added to `settings-store` for the one value that had no constant.
 
-      |                     | Default              | Compact                                          | Detailed                    |
-      | ------------------- | -------------------- | ------------------------------------------------ | --------------------------- |
-      | Mode word/bar/timer | on                   | all off                                          | all on                      |
-      | Percent mode        | Used                 | Used                                             | Used                        |
-      | Providers           | tightest limit       | tightest limit, none hidden                      | tightest limit, none hidden |
-      | Resource metrics    | CPU/Memory/Processes | CPU                                              | all four (adds RAM share)   |
-      | Composer rows       | visible              | three docks + access compact, image & mic hidden | all visible                 |
-      | Reasoning           | Text                 | Bars                                             | Bars + text                 |
-      | Home density        | Comfortable          | Compact                                          | Comfortable                 |
-      | Pin breakdown       | off                  | off                                              | on, all fields              |
-      | Context indicator   | Text                 | Ring only                                        | Text                        |
-      | Sidebar chips       | none                 | none                                             | CPU/Memory/Processes        |
+      |                     | Default              | Compact                                                              | Detailed                    |
+      | ------------------- | -------------------- | -------------------------------------------------------------------- | --------------------------- |
+      | Mode word/bar/timer | on                   | all off                                                              | all on                      |
+      | Percent mode        | Used                 | Used                                                                 | Used                        |
+      | Providers           | tightest limit       | tightest limit, none hidden                                          | tightest limit, none hidden |
+      | Resource metrics    | CPU/Memory/Processes | CPU                                                                  | all four (adds RAM share)   |
+      | Composer rows       | visible              | three docks + access compact, mic & compaction hidden, image VISIBLE | all visible                 |
+      | Reasoning           | Text                 | Bars                                                                 | Bars + text                 |
+      | Home density        | Comfortable          | Compact                                                              | Comfortable                 |
+      | Pin breakdown       | off                  | off                                                                  | on, all fields              |
+      | Context indicator   | Text                 | Ring only                                                            | Text                        |
+      | Sidebar chips       | none                 | none                                                                 | CPU/Memory/Processes        |
+
+      **Compact hides a composer button only where the verb survives without
+      it**: the dictation chord starts voice input, and the command palette
+      and `/compact` compact a conversation. Attach image has no such route -
+      paste and drag-drop both need the image already in hand and neither
+      opens a file picker - so Compact keeps that button (user ruling,
+      2026-09-12). A persisted Compact page from before that change had the
+      button hidden and now reads **Custom** until Compact is re-applied,
+      which is the honest answer: it no longer matches the bundle.
 
     - **What a preset never touches**: `homeTabEnabled` (a feature flag),
       Home's `view` (the page's own navigation choice) and the status bar's

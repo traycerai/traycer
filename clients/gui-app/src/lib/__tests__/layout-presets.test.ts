@@ -82,6 +82,24 @@ describe("layout presets", () => {
     }
   });
 
+  it("keeps Compact's attach-image button, and hides the mic and the compaction one", () => {
+    // The three composer buttons Compact treats differently, asserted through
+    // the STORE after an apply rather than off the bundle literal, because
+    // that is the state the composer actually draws from. Attach image is the
+    // odd one out on purpose (user ruling, 2026-09-12): paste and drag-drop
+    // both need the image already in hand and neither opens a file picker,
+    // while dictation has its chord and compaction has the palette and
+    // `/compact`. A future tidy-up that "restores symmetry" here is the
+    // regression this guards.
+    applyLayoutPreset("compact");
+
+    const composer = useLayoutStore.getState().composer;
+    expect(composer.attachImage).toBe("visible");
+    expect(composer.mic).toBe("hidden");
+    expect(composer.compactButton).toBe("hidden");
+    expect(matchLayoutPreset(currentSnapshot())).toBe("compact");
+  });
+
   it("reports Default for the stores' own defaults, read from the DEFAULT_ constants", () => {
     // Not a copy of the values: a default that changes carries the preset with
     // it, and this fails the moment the two drift.
@@ -194,6 +212,9 @@ describe("layout presets", () => {
           useLayoutStore.getState().setComposerBackground("compact"),
       },
       {
+        // `hidden` is no longer any bundle's value for this row - Compact
+        // keeps the button - so it is a deviation from Detailed AND from the
+        // only other preset that could have absorbed it.
         name: "composer: attach image",
         deviate: () =>
           useLayoutStore.getState().setComposerAttachImage("hidden"),
@@ -411,8 +432,9 @@ describe("layout presets", () => {
       activeAgents: "compact",
       background: "compact",
       access: "compact",
-      attachImage: "hidden",
+      attachImage: "visible",
       mic: "hidden",
+      compactButton: "hidden",
       reasoningIndicator: "bars",
     });
     expect(compact.chat.pinContextUsageBreakdown).toBe(false);
