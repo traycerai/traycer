@@ -2670,6 +2670,133 @@ describe("CommGraphTile", () => {
     });
   });
 
+  describe("Auto's keep arm trusts a camera the record itself contradicts (Finding E)", () => {
+    // THE OTHER GAP the keep arm at `:661-664` leaves open, and unlike
+    // Finding D there is NO WITNESS anywhere in this one - which is exactly
+    // what makes it a different defect, not a repeat. Finding D was about a
+    // move witnessed live, with the store settlement effect (`:573-631`)
+    // failing to retire the camera before Auto could see it. Here nothing
+    // moves live at all:
+    //
+    // 1. A tile with `officeCameraView: "towers"` and a non-null Towers
+    //    camera is LRU-evicted; the Settings default moves to `auto` while it
+    //    is gone. Nothing witnesses this - there is no mount to arm on.
+    // 2. It reopens cold: `officeView: null`, `officeAutoView: null`, the
+    //    stamp still says `"towers"`, the camera is still non-null. A fresh
+    //    mount arms no witness, and the record/witness settlement effect
+    //    waits for a CONCRETE `resolvedViewId` to compare the stamp against -
+    //    which is `null`, since Auto has not measured anything yet. So the
+    //    stale camera and its contradicting stamp both ride straight through
+    //    to Auto.
+    // 3. Real Auto answers Floor. The keep arm asks only "is the outcome
+    //    Floor?" - not "does the record already say this camera is for a
+    //    DIFFERENT view?" - so it preserves the Towers camera anyway and
+    //    overwrites the one piece of evidence against it (`officeCameraView`
+    //    becomes `"floor"`), same as Finding D's ending but reached with no
+    //    live move and no witness at all.
+    //
+    // D52's actual exception is a camera with NO record (`officeCameraView:
+    // null` - "nobody framed this, trust it"). A record naming ANOTHER view
+    // is the opposite of that: it is the tile's own history vouching AGAINST
+    // the camera, and the keep arm has to read it before deciding whether to
+    // preserve.
+    it("neutralises a record-contradicted camera on Auto's first Floor outcome, cold reopen, no live move (Finding E)", async () => {
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      // The default is ALREADY "auto" before this tile ever mounts - no
+      // Settings move happens on this tile's watch. Moving the default here
+      // would rearm the witness and this would just be Finding D again.
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      // A cold reopen: `officeView`/`officeAutoView` both `null` (following
+      // Auto, unmeasured), the record still naming the view this camera was
+      // actually framed for before the default moved out from under it while
+      // it sat evicted. Graph seeded at Finding B's own non-neutral numbers,
+      // same reasoning as the fixup 12 cases above - a neutral seed could not
+      // tell a correct no-op from a wrongly-broadened reset touching the
+      // GRAPH's fields.
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: 155,
+        y: 266,
+        zoom: 2,
+        officeCameraView: "towers",
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+
+      // REAL Auto, not a stub: this fixture's handful of agents fits the
+      // Floor comfortably at 1040x700, the same fixture every other Auto
+      // case in this file relies on.
+      await waitFor(() => {
+        expect(storedView()?.officeAutoView).toBe("floor");
+      });
+
+      // The Auto answer remounts the canvas (measuring -> floor), and that
+      // remount only reports its own eligibility on the frame this next
+      // `step()` drives - same two-step pattern as every other real-Auto
+      // frame read in this file.
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      step();
+
+      // ASSERTION 1, the strong route: the first resolved Floor runtime read
+      // off the ACTUAL scene it painted. RED today - the keep arm hands the
+      // canvas the stale Towers camera unconditionally on a Floor outcome,
+      // so the runtime frames the far-off-screen Towers rect the sibling
+      // "keeps a resolved Floor camera" case pins at `{ x: 2500, y: 5000,
+      // width: 260, height: 175 }`, not the fitted one below.
+      const state = lastFrameAndBounds(frames, sync);
+      expect(state.frame).toEqual({
+        x: -498.4049079754601,
+        y: -35.92638036809816,
+        width: 1556.8098159509202,
+        height: 1047.8527607361964,
+      });
+
+      // ASSERTION 2: the STORE agrees. RED today for the same reason -
+      // `node.view.officeCamera` rides through unconditionally and the stamp
+      // that would have named the contradiction is overwritten with
+      // `"floor"` in the very same write.
+      expect(storedView()).toMatchObject({
+        officeCamera: null,
+        officeCameraView: "floor",
+      });
+
+      // ASSERTION 3: the Graph's own camera was never anyone's business here
+      // either - the actual seeded numbers, not merely "still the default".
+      expect(storedView()).toMatchObject({ x: 155, y: 266, zoom: 2 });
+    });
+
+    // GUARD 1 (pre-existing): the record with NO stamp at all - D52's actual
+    // exception, a legacy camera that has never addressed any view. Finding
+    // E's fix reads the record before trusting the camera, and this is the
+    // case that proves it does not turn into a blanket refusal: `null` must
+    // still mean "nobody framed this, trust it" and let the camera through.
+    // "keeps a resolved Floor camera when Auto answers - the witness must
+    // not overrule a preserved camera" (above, in "a Settings change under
+    // an unresolved Auto (fixup 4, R1)") already seeds exactly this
+    // (`officeCameraView: null`) and asserts the stale-but-unstamped camera
+    // survives Auto's Floor outcome - confirmed by re-reading it rather than
+    // duplicated here.
+
+    // GUARD 2: the record AGREEING with the outcome - the other shape the
+    // fix must not over-refuse. "keeps the saved camera when Auto's first
+    // outcome is Floor" (above, in the "Auto" describe block) already covers
+    // this: it stamps the camera `"floor"` through
+    // `updateCommGraphTileOfficeCameraInTab`'s own `framedView` argument
+    // before Auto ever runs, and Auto's first outcome IS Floor - record and
+    // outcome agree - so it asserts the camera survives untouched
+    // (`{ x: 111, y: 222, zoom: 2 }`). A fix that reads the record correctly
+    // keeps this GREEN; a fix that over-refuses (declining to preserve
+    // whenever ANY stamp exists, agreeing or not) would redden it instead -
+    // which is exactly the failure mode a record-agreement guard exists to
+    // catch. Confirmed by re-reading it; no new case needed for this shape.
+  });
+
   describe("restored Auto outcome (persisted, no re-measurement)", () => {
     it("reads a restored Building outcome from persistence without deciding again", async () => {
       const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
