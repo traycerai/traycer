@@ -165,6 +165,67 @@ describe("turnKeysWithUnprovableProfileWalk", () => {
     expect([...keys].sort()).toEqual(["turn-1", "turn-2"]);
   });
 
+  it("classifies a wake from the record that OPENS it, not from an empty leading record", () => {
+    // `blocks` has no minimum in the schema, so a turn's FIRST record can carry
+    // none and the block that opens the turn then arrives on a later record of
+    // the same `turnId`. The classification reads a turn's opening block off
+    // its first record, which is the turn's first block only while that record
+    // has one - so an empty leader used to shut the window against the record
+    // that actually opens the turn.
+    //
+    // Falsification: drop the `message.blocks.length === 0` skip in
+    // `turnKeysWithUnprovableProfileWalk` and this goes red, with
+    // `turn-ordinary` joining the set - the wake counted as a dispatch and took
+    // the ordinary turn's label down with it.
+    const emptyLeadingRecord = messageSchema.parse({
+      role: "assistant",
+      messageId: "a-0",
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "agent-1",
+        displayName: null,
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 2000,
+      timestamp: 2000,
+      turnId: "turn-wake",
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    });
+
+    const keys = turnKeysWithUnprovableProfileWalk([
+      userMessage({
+        messageId: "u-1",
+        timestamp: 1000,
+        sessionAnchor: claudeAnchor("work", "Claude Work"),
+      }),
+      emptyLeadingRecord,
+      assistantMessage({
+        messageId: "a-1",
+        turnId: "turn-wake",
+        timestamp: 2500,
+        turnProfile: null,
+        opensWith: autonomousResumeBlock("ar-1", 2500, "turn_start"),
+      }),
+      assistantMessage({
+        messageId: "a-2",
+        turnId: "turn-ordinary",
+        timestamp: 3000,
+        turnProfile: null,
+      }),
+    ]);
+
+    // The wake is refused on its own account - no anchor is ever minted for one.
+    // `turn-ordinary` is the assertion that matters: it is the only turn the
+    // user row DISPATCHED, so it is not a second attempt and keeps its label.
+    expect([...keys].sort()).toEqual(["turn-wake"]);
+  });
+
   it("says nothing about a user row with a single turn, which is most of every transcript", () => {
     const keys = turnKeysWithUnprovableProfileWalk([
       userMessage({

@@ -2046,8 +2046,15 @@ describe("FallbackGraceMenu", () => {
 
 describe("FallbackWaitingMenu", () => {
   beforeEach(() => {
+    // Reset every harness flag explicitly rather than relying on run order:
+    // `listHarness` is module-level state shared with `FallbackGraceMenu`
+    // above, and without resetting `isPending`/`isError` here too, this
+    // suite would silently inherit whatever the grace suite's last test left
+    // behind instead of standing on its own.
     listHarness.calls = [];
+    listHarness.isPending = false;
     listHarness.isFetching = false;
+    listHarness.isError = false;
     listHarness.data = listed({
       failedTuple: FAILED_CLAUDE_TUPLE,
       profileTargets: [],

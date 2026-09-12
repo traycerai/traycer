@@ -616,17 +616,25 @@ describe("useRenderedMessages", () => {
     };
 
     const driver = renderRenderedMessages(initial);
-    const firstSegment = driver.result.current[0]?.segments[0];
-    expect(firstSegment.kind).toBe("plan");
-    if (firstSegment.kind !== "plan") throw new Error("expected plan segment");
+    // `.at(0)` rather than `[0]` throughout this file: with
+    // `noUncheckedIndexedAccess` off, an indexed read is typed non-optional, so
+    // a `=== undefined` guard is a no-overlap condition `no-unnecessary-condition`
+    // rejects - while the value really can be absent at runtime, and `.kind` then
+    // throws a TypeError over the intended diagnostic. `.at()` returns the honest
+    // `| undefined`, which makes the guard both necessary and legal.
+    const firstSegment = driver.result.current.at(0)?.segments.at(0);
+    if (firstSegment === undefined || firstSegment.kind !== "plan") {
+      throw new Error("expected plan segment");
+    }
     expect(firstSegment.contentIdentity).toBe("hash-1");
     expect(firstSegment.markdownPreview).toContain("First plan");
 
     driver.set(updated);
 
-    const secondSegment = driver.result.current[0]?.segments[0];
-    expect(secondSegment.kind).toBe("plan");
-    if (secondSegment.kind !== "plan") throw new Error("expected plan segment");
+    const secondSegment = driver.result.current.at(0)?.segments.at(0);
+    if (secondSegment === undefined || secondSegment.kind !== "plan") {
+      throw new Error("expected plan segment");
+    }
     expect(secondSegment.planId).toBe("plan-1");
     expect(secondSegment.contentIdentity).toBe("hash-2");
     expect(secondSegment.markdownPreview).toContain("Second plan");
@@ -1451,18 +1459,19 @@ describe("useRenderedMessages", () => {
     });
 
     const driver = renderRenderedMessages(input);
-    const firstSegment = driver.result.current[0]?.segments[0];
-    expect(firstSegment.kind).toBe("provider_notice");
-    if (firstSegment.kind !== "provider_notice") {
+    const firstSegment = driver.result.current.at(0)?.segments.at(0);
+    if (firstSegment === undefined || firstSegment.kind !== "provider_notice") {
       throw new Error("expected a provider_notice segment");
     }
     expect(firstSegment.title).toBe("Model changed");
 
     driver.patch({ messages: [after] });
 
-    const secondSegment = driver.result.current[0]?.segments[0];
-    expect(secondSegment.kind).toBe("provider_notice");
-    if (secondSegment.kind !== "provider_notice") {
+    const secondSegment = driver.result.current.at(0)?.segments.at(0);
+    if (
+      secondSegment === undefined ||
+      secondSegment.kind !== "provider_notice"
+    ) {
       throw new Error("expected a provider_notice segment");
     }
     expect(secondSegment.title).toBe("Model re-verified");
@@ -1507,16 +1516,19 @@ describe("useRenderedMessages", () => {
     const input = renderedMessagesInput({ messages: [before] });
 
     const driver = renderRenderedMessages(input);
-    const firstSegment = driver.result.current[0]?.segments[0];
-    if (firstSegment.kind !== "provider_notice") {
+    const firstSegment = driver.result.current.at(0)?.segments.at(0);
+    if (firstSegment === undefined || firstSegment.kind !== "provider_notice") {
       throw new Error("expected a provider_notice segment");
     }
     expect(firstSegment.noticeKind).toBe("fallback_applied");
 
     driver.patch({ messages: [after] });
 
-    const secondSegment = driver.result.current[0]?.segments[0];
-    if (secondSegment.kind !== "provider_notice") {
+    const secondSegment = driver.result.current.at(0)?.segments.at(0);
+    if (
+      secondSegment === undefined ||
+      secondSegment.kind !== "provider_notice"
+    ) {
       throw new Error("expected a provider_notice segment");
     }
     expect(secondSegment.noticeKind).toBe("fallback_wait_resumed");

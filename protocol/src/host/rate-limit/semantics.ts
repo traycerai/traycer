@@ -262,6 +262,32 @@ const UNRESOLVED_MODEL_TOKENS: ReadonlySet<string> = new Set([
  * user is told about the same window. A divergence shows up as a chat that
  * waits on a limit the UI says does not apply.
  */
+/**
+ * The SLUG-side wrapper, which is the shape both peers can always form: a model
+ * is named by a bare slug on the host, and by a slug plus a display label in the
+ * GUI.
+ *
+ * This exists so the host does not keep a private copy of the two-line wrapper.
+ * It used to, and the GUI's agreement suite could only reproduce that copy
+ * rather than call it - so a change to the host's own token derivation would
+ * have left both suites green while the peers silently stopped meaning the same
+ * thing. One exported implementation makes that drift impossible instead of
+ * merely detectable.
+ *
+ * A `null` slug is unknown and therefore INCLUDES the window, the same
+ * err-toward-the-blocker direction as every other uncertain path here.
+ */
+export function rateLimitFamilyAffectsModelSlug(
+  family: string | null,
+  modelSlug: string | null,
+): boolean {
+  if (modelSlug === null) return true;
+  return rateLimitFamilyAffectsModel(
+    family,
+    new Set(rateLimitMatchTokens(modelSlug)),
+  );
+}
+
 export function rateLimitFamilyAffectsModel(
   family: string | null,
   modelTokens: ReadonlySet<string>,

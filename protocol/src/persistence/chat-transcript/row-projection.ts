@@ -477,11 +477,25 @@ export function turnKeysWithUnprovableProfileWalk(
     if (message.turnProfile !== undefined) {
       recorded.add(turnKey);
     }
+    // A record carrying no blocks can neither classify its turn nor BE one of
+    // its attempts, so it is skipped before both - but AFTER the snapshot read
+    // above, since an empty record can still state its own account and that
+    // exemption is about the row, not its blocks.
+    //
+    // `blocks` has no minimum in the schema, so a turn's first record can hold
+    // none and the block that OPENS the turn then arrives on a later record of
+    // the same `turnId`. Classifying off the first record regardless would shut
+    // `seenTurnKeys` against that later record, so an `autonomous_resume`
+    // arriving there is never seen: the wake reads as a dispatch, counts as an
+    // attempt, and the ordinary turn beside it is refused along with it - the
+    // exact over-refusal this function exists to prevent.
+    if (message.blocks.length === 0) continue;
     if (!seenTurnKeys.has(turnKey)) {
       seenTurnKeys.add(turnKey);
-      // Classified from the turn's FIRST record only - a turn's blocks are
-      // concatenated across records in walk order, so that record's first block
-      // is the turn's first block. A later record cannot make a turn autonomous.
+      // Classified from the turn's first BLOCK-BEARING record - a turn's blocks
+      // are concatenated across records in walk order, so that record's first
+      // block is the turn's first block. A later record cannot make a turn
+      // autonomous.
       if (turnOpensWithAutonomousResume(message.blocks)) {
         autonomous.add(turnKey);
       }

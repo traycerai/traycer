@@ -874,7 +874,7 @@ export const chatRangeResponseSchema = z.object({
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
 
 /**
- * Wire-freeze copy of the `range` response bound to `chat.subscribe@1.8` -
+ * Wire-freeze copy of the `range` response bound to `chat.subscribe@1.9` -
  * the second of the windowed line's three body channels. See
  * {@link chatTranscriptWindowSchemaPreFallback} for why all three are frozen
  * together. Hand-frozen field-for-field.

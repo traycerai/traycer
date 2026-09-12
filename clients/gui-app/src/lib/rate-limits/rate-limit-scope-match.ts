@@ -1,8 +1,5 @@
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
-import {
-  rateLimitFamilyAffectsModel,
-  rateLimitMatchTokens,
-} from "@traycer/protocol/host/rate-limit/semantics";
+import { rateLimitFamilyAffectsModelSlug } from "@traycer/protocol/host/rate-limit/semantics";
 import type { ModelOption } from "@/components/home/data/landing-options";
 
 export type ProfileRateLimitSeverity = "near_limit" | "hard_limit";
@@ -17,17 +14,29 @@ export type ProfileRateLimitSeverity = "near_limit" | "hard_limit";
  * as a chat waiting on a limit the UI says does not apply. This wrapper only
  * supplies the model side, which differs by peer (a `ModelOption` here, a bare
  * slug on the host).
+ *
+ * The label is consulted as a SECOND verdict OR-ed with the slug's, never by
+ * merging both token sets into one. Merging is not a safe way to add
+ * information here, because the shared rule errs toward including the window
+ * only while a model has no informative token left: pouring label tokens into
+ * the same set can HAND it one and flip an err-toward-include into an exclude.
+ * Family `Fable` against slug `default` labelled "Claude Opus 4.7" is the case -
+ * the host sees an unresolved alias and applies the window, while the merged
+ * form found `opus`, judged the model informative, and dropped it. That is the
+ * exact divergence the shared rule's doc names, in the dangerous direction: the
+ * chat waits on a window this panel has told the user does not apply.
+ *
+ * OR-ing is monotone by construction, so the label can only ever make this side
+ * MORE inclusive than the host. The host's verdict stays a floor: whatever it
+ * decides to wait for, this still calls gating.
  */
 export function rateLimitScopeAffectsModel(
   family: string | null,
   model: ModelOption,
 ): boolean {
-  return rateLimitFamilyAffectsModel(
-    family,
-    new Set([
-      ...rateLimitMatchTokens(model.slug),
-      ...rateLimitMatchTokens(model.label),
-    ]),
+  return (
+    rateLimitFamilyAffectsModelSlug(family, model.slug) ||
+    rateLimitFamilyAffectsModelSlug(family, model.label)
   );
 }
 

@@ -7,7 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FallbackWaitingCard } from "@/components/chat/fallback/fallback-waiting-card";
-import { formatResetDateTime } from "@/lib/relative-time";
+import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
   BANNED_VOCABULARY,
@@ -92,12 +92,11 @@ describe("FallbackWaitingCard", () => {
     // lives in a sibling span that is still in the accessibility tree (the
     // whole card's text still contains it) but is not itself the live region.
     // Falsification: put "(in about ...)" back inside the role="status" span in fallback-waiting-card.tsx and THIS assertion must go red.
-    renderCard({
-      deadline: Date.now() + 2 * 60 * 60 * 1000,
-    });
+    const deadline = Date.now() + 2 * 60 * 60 * 1000;
+    renderCard({ deadline });
     const headline = screen.getByRole("status");
-    expect(headline.textContent).toMatch(
-      /^Resuming at \d{1,2}:\d{2}\s?[AP]M$/i,
+    expect(headline.textContent).toBe(
+      `Resuming at ${formatClockTime(deadline)}`,
     );
     expect(headline.textContent).not.toMatch(/\(in about/);
     expect(screen.getByTestId("fallback-waiting-card").textContent).toMatch(
