@@ -655,6 +655,30 @@ function TuiAgentTileLive(
     armRestartSuppression();
     retryTerminal();
   }, [armRestartSuppression, isCloudReplica, retryTerminal]);
+  /**
+   * The PASSIVE reap, which is not a request.
+   *
+   * `reviveAfterReap` above is right for a tile somebody asked for: the user
+   * is looking at it, the host reaped it for idleness, and recreating under
+   * the same id resumes the conversation transparently. It is wrong for a tile
+   * nobody asked for, and a RESTORED tile can reach it - `adoptOnly` attaches
+   * to a session that is already alive rather than refusing to render, so a
+   * restored tile whose agent happens to be running renders the live shell.
+   * When the host then reaps that agent, routing the notification through the
+   * revive would flip `adoptOnly` off and recreate the PTY, giving back
+   * exactly what the idle reap freed - on a canvas the user only restored.
+   *
+   * `startRequested` is the existing name for "somebody asked for this
+   * session" (an explicit open, or an in-tile revive already granted), and it
+   * is the same predicate the sleeping gate reads. Declining here is not
+   * dropping the event: the reap stamps the record `sleeping`, `hostHasSession`
+   * settles `false`, and the tile falls to the asleep notice - whose Open
+   * button is `reviveAfterReap`, one click from the same resume.
+   */
+  const reviveAfterPassiveReap = useCallback((): void => {
+    if (!startRequested) return;
+    reviveAfterReap();
+  }, [reviveAfterReap, startRequested]);
   // The kill must target a LIVE session. If session presence is unknown
   // (`terminal.list` refetching → `hostHasSession === null`) or already gone at
   // commit time, do NOT silently drop the rebind (the bug where Update appeared
@@ -863,7 +887,7 @@ function TuiAgentTileLive(
           createError={bootstrap.createError}
           handle={bootstrap.handle}
           onRetry={bootstrap.retry}
-          onReapedExit={reviveAfterReap}
+          onReapedExit={reviveAfterPassiveReap}
           isActive={props.isActive}
           recovery={props.recovery}
           onCrashExit={props.onCrashExit}
