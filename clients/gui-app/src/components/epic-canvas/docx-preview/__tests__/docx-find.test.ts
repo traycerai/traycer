@@ -10,7 +10,7 @@
  * test.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DOCX_FIND_HIGHLIGHT_CSS, DocxFindEngine } from "../docx-find";
+import { DocxFindEngine } from "../docx-find";
 
 class FakeHighlight {
   readonly ranges: readonly Range[];
@@ -35,15 +35,6 @@ describe("docx-find", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-  });
-
-  it("exposes the ::highlight() rules for both the match and active highlight names", () => {
-    expect(DOCX_FIND_HIGHLIGHT_CSS).toContain(
-      "::highlight(traycer-docx-find-match)",
-    );
-    expect(DOCX_FIND_HIGHLIGHT_CSS).toContain(
-      "::highlight(traycer-docx-find-active)",
-    );
   });
 
   describe("search", () => {
@@ -103,6 +94,67 @@ describe("docx-find", () => {
       expect(engine.search("cat")).toBe(3);
       expect(engine.result()).toEqual({ current: 1, total: 3 });
     });
+
+    it("maps a match after an expanding lowercase character to original offsets", () => {
+      const root = document.createElement("div");
+      root.innerHTML = "<p>İstanbul report</p>";
+      const engine = new DocxFindEngine(root);
+
+      expect(engine.search("report")).toBe(1);
+
+      const active = [...registry.values()].find(
+        (highlight) => highlight.ranges.length === 1,
+      );
+      const range = active?.ranges[0];
+      expect(range).toBeDefined();
+      expect(range?.startOffset).toBe(9);
+      expect(range?.endOffset).toBe(15);
+      expect(range?.cloneContents().textContent).toBe("report");
+    });
+  });
+
+  it("keeps split-run search intact when two viewers own separate shadow roots", () => {
+    const hostA = document.createElement("div");
+    const hostB = document.createElement("div");
+    const shadowA = hostA.attachShadow({ mode: "open" });
+    const shadowB = hostB.attachShadow({ mode: "open" });
+    const rootA = document.createElement("div");
+    const rootB = document.createElement("div");
+    rootA.innerHTML = "<p><span>Hel</span><span>lo report</span></p>";
+    rootB.innerHTML = "<p><span>Go</span><span>odbye world</span></p>";
+    shadowA.append(rootA);
+    shadowB.append(rootB);
+    document.body.append(hostA, hostB);
+
+    const engineA = new DocxFindEngine(rootA);
+    const engineB = new DocxFindEngine(rootB);
+    expect(engineA.search("hello report")).toBe(1);
+    expect(engineB.search("goodbye world")).toBe(1);
+    const bHighlights = [...registry.values()].filter((highlight) =>
+      highlight.ranges.every(
+        (range) => range.startContainer.getRootNode() === shadowB,
+      ),
+    );
+    expect(bHighlights.length).toBeGreaterThan(0);
+
+    engineA.dispose();
+
+    expect(
+      [...registry.values()].some((highlight) =>
+        highlight.ranges.some(
+          (range) => range.startContainer.getRootNode() === shadowB,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      [...registry.values()].some((highlight) =>
+        highlight.ranges.some(
+          (range) => range.startContainer.getRootNode() === shadowA,
+        ),
+      ),
+    ).toBe(false);
+    engineB.dispose();
+    expect(registry.size).toBe(0);
   });
 
   describe("painting", () => {

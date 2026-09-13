@@ -48,7 +48,7 @@ export function currentPageAmong(
 
 /**
  * The scroll offset that puts a page's top edge at the top of the container,
- * leaving `gutter` (already in visual px) of the wrapper's padding above it.
+ * leaving `gutter` (already in visual px) of the scroll container's padding above it.
  */
 export function scrollTopForPage(
   page: VerticalExtent,

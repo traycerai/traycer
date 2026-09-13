@@ -74,6 +74,11 @@ type ViewerBinding = {
 };
 
 export default function PdfPreview(props: PdfPreviewProps): ReactNode {
+  return <PdfDocument key={props.url} {...props} />;
+}
+
+/** One document owns its controls, DOM and renderer resources. */
+function PdfDocument(props: PdfPreviewProps): ReactNode {
   const openLink = useOpenLink();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const bindingRef = useRef<ViewerBinding | null>(null);
@@ -128,19 +133,6 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     let binding: ViewerBinding | null = null;
     let loadingTask: PDFDocumentLoadingTask | null = null;
     let resizeObserver: ResizeObserver | null = null;
-
-    scaleModeRef.current = "page-width";
-    setDocumentReady(false);
-    setPageCount(0);
-    setPageNumber(1);
-    setScalePercent(null);
-    setOutline([]);
-    setMatchState(null);
-    // Search state is per-document too: leaving the bar open with the old
-    // query would show a counter and highlights that never ran against the
-    // new document (no find is dispatched on load).
-    setSearchOpen(false);
-    setQuery("");
 
     const open = async (): Promise<void> => {
       // `connect-src blob:` is already in the CSP (the lightbox depends on

@@ -1,8 +1,7 @@
 /**
  * In-document search for the rendered Word document, painted with the CSS
- * Custom Highlight API (the same mechanism as `lib/find-engine`, under its
- * own highlight names so a global Find pass and a document search never
- * repaint each other's ranges).
+ * Custom Highlight API (the same mechanism as `lib/find-engine`, with
+ * per-viewer highlight ownership so searches never repaint each other).
  *
  * Unlike `FindEngine`, matches may SPAN text nodes. Word splits a paragraph
  * into runs at every formatting or revision boundary - "Hel" + "lo world"
@@ -13,25 +12,11 @@
  * table cells) are separated by a newline so a phrase never matches across
  * a paragraph boundary.
  */
-import { getHighlights } from "@/lib/find-engine/find-engine";
-
-const MATCH_HIGHLIGHT_NAME = "traycer-docx-find-match";
-const ACTIVE_HIGHLIGHT_NAME = "traycer-docx-find-active";
+import { findTextMatches } from "@/lib/find-engine/find-text";
+import { RangeHighlighter } from "@/lib/find-engine/range-highlighter";
 
 /** Selector for the elements whose text is searched as one unit. */
 const BLOCK_SELECTOR = "p, td, th, li, h1, h2, h3, h4, h5, h6";
-
-/** The `::highlight()` rules a stylesheet must carry for the two names above. */
-export const DOCX_FIND_HIGHLIGHT_CSS = `
-::highlight(${MATCH_HIGHLIGHT_NAME}) {
-  background-color: color-mix(in srgb, var(--primary) 35%, transparent);
-  color: inherit;
-}
-::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
-  background-color: color-mix(in srgb, var(--primary) 75%, transparent);
-  color: var(--primary-foreground);
-}
-`;
 
 export interface DocxFindResult {
   readonly current: number;
@@ -112,29 +97,28 @@ function rangeFor(
 }
 
 export class DocxFindEngine {
-  private readonly root: Node;
+  private readonly root: HTMLElement;
   private ranges: Range[] = [];
   private activeIndex = 0;
+  private readonly highlighter = new RangeHighlighter();
 
-  constructor(root: Node) {
+  constructor(root: HTMLElement) {
     this.root = root;
   }
 
   /** Re-scans the document for `query` (case-insensitive) and paints; returns the match count. */
   search(query: string): number {
-    this.clearHighlights();
+    this.highlighter.clear();
     this.ranges = [];
     this.activeIndex = 0;
     if (query.length === 0) return 0;
 
     const { text, segments } = flattenText(this.root);
     if (segments.length === 0) return 0;
-    const haystack = text.toLowerCase();
-    const needle = query.toLowerCase();
-    let hit = haystack.indexOf(needle);
-    while (hit !== -1) {
-      this.ranges.push(rangeFor(segments, hit, hit + needle.length));
-      hit = haystack.indexOf(needle, hit + needle.length);
+    for (const match of findTextMatches(text, query, false)) {
+      this.ranges.push(
+        rangeFor(segments, match.offset, match.offset + match.length),
+      );
     }
     this.paint();
     return this.ranges.length;
@@ -168,31 +152,11 @@ export class DocxFindEngine {
   }
 
   dispose(): void {
-    this.clearHighlights();
+    this.highlighter.dispose();
     this.ranges = [];
   }
 
   private paint(): void {
-    const registry = getHighlights();
-    if (registry === null) return;
-    const others = this.ranges.filter((_, index) => index !== this.activeIndex);
-    if (others.length > 0) {
-      registry.set(MATCH_HIGHLIGHT_NAME, new Highlight(...others));
-    } else {
-      registry.delete(MATCH_HIGHLIGHT_NAME);
-    }
-    if (this.ranges.length > 0) {
-      const active = this.ranges[this.activeIndex];
-      registry.set(ACTIVE_HIGHLIGHT_NAME, new Highlight(active));
-    } else {
-      registry.delete(ACTIVE_HIGHLIGHT_NAME);
-    }
-  }
-
-  private clearHighlights(): void {
-    const registry = getHighlights();
-    if (registry === null) return;
-    registry.delete(MATCH_HIGHLIGHT_NAME);
-    registry.delete(ACTIVE_HIGHLIGHT_NAME);
+    this.highlighter.paint(this.root, this.ranges, this.activeIndex);
   }
 }

@@ -1,5 +1,6 @@
-const FIND_HIGHLIGHT_NAME = "traycer-find-match";
-const FIND_HIGHLIGHT_ACTIVE_NAME = "traycer-find-match-active";
+import { findTextMatches } from "./find-text";
+import { getHighlights, RangeHighlighter } from "./range-highlighter";
+export { getHighlights } from "./range-highlighter";
 
 const FIND_SKIP_ATTR = "data-find-skip";
 
@@ -8,22 +9,8 @@ export interface FindResult {
   readonly total: number;
 }
 
-export interface SupportedHighlightsAPI {
-  set(name: string, highlight: Highlight): void;
-  delete(name: string): void;
-}
-
-/** The CSS Custom Highlight registry, or `null` where the browser has none. */
-export function getHighlights(): SupportedHighlightsAPI | null {
-  if (typeof CSS === "undefined") return null;
-  const reg = (CSS as { highlights?: SupportedHighlightsAPI }).highlights;
-  return reg ?? null;
-}
-
 export function isFindEngineSupported(): boolean {
-  if (typeof window === "undefined") return false;
-  if (typeof Highlight === "undefined") return false;
-  return getHighlights() !== null;
+  return typeof window !== "undefined" && getHighlights() !== null;
 }
 
 /**
@@ -46,6 +33,7 @@ export class FindEngine {
   private readonly matchCase: boolean;
   private ranges: Range[] = [];
   private activeIndex = 0;
+  private readonly highlighter = new RangeHighlighter();
 
   constructor(options: FindEngineOptions) {
     this.root = options.root;
@@ -59,12 +47,11 @@ export class FindEngine {
    * view (kept separate so navigation calls can skip the scan).
    */
   search(query: string): number {
-    this.clearHighlights();
+    this.highlighter.clear();
     this.ranges = [];
     this.activeIndex = 0;
     if (query.length === 0) return 0;
 
-    const needle = this.matchCase ? query : query.toLowerCase();
     const walker = document.createTreeWalker(this.root, NodeFilter.SHOW_TEXT, {
       acceptNode: (node) => {
         const parent = node.parentElement;
@@ -82,17 +69,11 @@ export class FindEngine {
 
     let node = walker.nextNode() as Text | null;
     while (node !== null) {
-      const haystack = this.matchCase ? node.data : node.data.toLowerCase();
-      const step = Math.max(query.length, 1);
-      let idx = 0;
-      let hit = haystack.indexOf(needle, idx);
-      while (hit !== -1) {
+      for (const match of findTextMatches(node.data, query, this.matchCase)) {
         const range = new Range();
-        range.setStart(node, hit);
-        range.setEnd(node, hit + query.length);
+        range.setStart(node, match.offset);
+        range.setEnd(node, match.offset + match.length);
         this.ranges.push(range);
-        idx = hit + step;
-        hit = haystack.indexOf(needle, idx);
       }
       node = walker.nextNode() as Text | null;
     }
@@ -134,33 +115,11 @@ export class FindEngine {
   }
 
   dispose(): void {
-    this.clearHighlights();
+    this.highlighter.dispose();
     this.ranges = [];
   }
 
   private paint(): void {
-    const reg = getHighlights();
-    if (reg === null) return;
-    const others = this.ranges.filter((_, i) => i !== this.activeIndex);
-    if (others.length > 0) {
-      reg.set(FIND_HIGHLIGHT_NAME, new Highlight(...others));
-    } else {
-      reg.delete(FIND_HIGHLIGHT_NAME);
-    }
-    if (this.activeIndex < this.ranges.length) {
-      reg.set(
-        FIND_HIGHLIGHT_ACTIVE_NAME,
-        new Highlight(this.ranges[this.activeIndex]),
-      );
-    } else {
-      reg.delete(FIND_HIGHLIGHT_ACTIVE_NAME);
-    }
-  }
-
-  private clearHighlights(): void {
-    const reg = getHighlights();
-    if (reg === null) return;
-    reg.delete(FIND_HIGHLIGHT_NAME);
-    reg.delete(FIND_HIGHLIGHT_ACTIVE_NAME);
+    this.highlighter.paint(this.root, this.ranges, this.activeIndex);
   }
 }

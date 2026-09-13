@@ -26,6 +26,17 @@ type RenderAsyncMock = (
   options: unknown,
 ) => Promise<unknown>;
 
+class Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve!: (value: T | PromiseLike<T>) => void;
+
+  constructor() {
+    this.promise = new Promise<T>((resolve) => {
+      this.resolve = resolve;
+    });
+  }
+}
+
 const state = vi.hoisted(() => ({
   renderAsync: vi.fn<RenderAsyncMock>(),
   warn: vi.fn<
@@ -260,8 +271,8 @@ describe("<DocxPreview />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
 
     // scrollTopForPage: page.top(532) - container.top(0) +
-    // containerScrollTop(0) - gutter(PAGE_GUTTER_PX 16 * scale 2 = 32) = 500.
-    expect(scrollContainer.scrollTop).toBe(500);
+    // containerScrollTop(0) - fixed gutter(16px) = 516.
+    expect(scrollContainer.scrollTop).toBe(516);
     expect(pageField.value).toBe("2");
   });
 
@@ -395,7 +406,10 @@ describe("<DocxPreview />", () => {
   });
 
   it("re-renders on a url change, replacing the shadow contents and closing search", async () => {
-    mockRenderAsyncWith([{ widthPx: 400, paragraphs: [["Hel", "lo world"]] }]);
+    mockRenderAsyncWith([
+      { widthPx: 400, paragraphs: [["Hel", "lo world"]] },
+      { widthPx: 400, paragraphs: [["Second page"]] },
+    ]);
     const onRenderFailure = vi.fn();
 
     const { rerender } = render(
@@ -403,27 +417,85 @@ describe("<DocxPreview />", () => {
     );
     setScrollContainerWidth(832);
 
-    await waitForReady(1);
+    const pageField = await waitForReady(2);
     expect(state.renderAsync).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(pageField.value).toBe("2");
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByLabelText("Zoom level").textContent).toBe("220%");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Search document" }),
     );
     expect(screen.getByLabelText("Find in document")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Find in document"), {
+      target: { value: "old query" },
+    });
 
     mockRenderAsyncWith([{ widthPx: 400, paragraphs: [["Different text"]] }]);
     rerender(
       <DocxPreview {...baseProps({ onRenderFailure, url: "blob:two" })} />,
     );
+    setScrollContainerWidth(832);
 
     await waitFor(() => expect(state.renderAsync).toHaveBeenCalledTimes(2));
-    // A new document resets search state - the old query/results must not
-    // survive onto content that was never searched.
+    await waitForReady(1);
+    // A new document resets every document-owned control - page, zoom and
+    // search state must not survive onto content that was never searched.
     expect(screen.queryByLabelText("Find in document")).toBeNull();
+    expect(screen.getByLabelText<HTMLInputElement>("Page number").value).toBe(
+      "1",
+    );
+    expect(screen.getByLabelText("Zoom level").textContent).toBe("200%");
 
     const host = screen.getByTestId("docx-preview-host");
     expect(host.shadowRoot?.querySelectorAll(".docx-wrapper").length).toBe(1);
     expect(host.shadowRoot?.textContent).toContain("Different text");
+    expect(onRenderFailure).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale asynchronous render after the document URL changes", async () => {
+    const firstRender = new Deferred<void>();
+    state.renderAsync
+      .mockImplementationOnce((_data, body) =>
+        firstRender.promise.then(() => {
+          body.append(
+            buildDocxWrapper([{ widthPx: 400, paragraphs: [["Stale"]] }]),
+          );
+        }),
+      )
+      .mockImplementationOnce((_data, body) => {
+        body.append(
+          buildDocxWrapper([{ widthPx: 400, paragraphs: [["Current"]] }]),
+        );
+        return Promise.resolve();
+      });
+    const onRenderFailure = vi.fn();
+    const { rerender } = render(
+      <DocxPreview {...baseProps({ onRenderFailure, url: "blob:first" })} />,
+    );
+    await waitFor(() => expect(state.renderAsync).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <DocxPreview {...baseProps({ onRenderFailure, url: "blob:second" })} />,
+    );
+    setScrollContainerWidth(832);
+    await waitFor(() => expect(state.renderAsync).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("docx-preview-host").shadowRoot?.textContent,
+      ).toContain("Current"),
+    );
+
+    firstRender.resolve();
+    await act(async () => {
+      await firstRender.promise;
+    });
+
+    const host = screen.getByTestId("docx-preview-host");
+    expect(host.shadowRoot?.textContent).toContain("Current");
+    expect(host.shadowRoot?.textContent).not.toContain("Stale");
     expect(onRenderFailure).not.toHaveBeenCalled();
   });
 });

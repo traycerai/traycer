@@ -10,13 +10,14 @@
  * split across two runs is found would be asserting against bytes nobody can
  * read. This builder writes the package itself - `[Content_Types].xml`, the
  * package relationships, `word/document.xml`, optionally one inline PNG -
- * as a STORED (uncompressed) ZIP, so the fixture is legible in the test that
- * uses it and needs no zip dependency in either tree that imports it.
+ * as a STORED (uncompressed) ZIP through fflate. Tests describe document
+ * contents without maintaining a second ZIP encoder.
  *
  * Platform-neutral on purpose: it runs in the host-side e2e suites under
- * Node and in the browser regression fixture under Chrome, so it uses only
- * `TextEncoder` and typed arrays.
+ * Node and in the browser regression fixture under Chrome.
  */
+
+import { zipSync } from "fflate";
 
 /** One paragraph, as the runs Word would split it into. */
 export type DocxFixtureParagraph = readonly string[];
@@ -184,124 +185,12 @@ function escapeXml(text: string): string {
  * and only the renderer can reject.
  */
 export function buildStoredZip(entries: readonly ZipEntrySpec[]): Uint8Array {
-  const encoder = new TextEncoder();
-  const localParts: Uint8Array[] = [];
-  const centralParts: Uint8Array[] = [];
-  let offset = 0;
-  for (const entry of entries) {
-    const name = encoder.encode(entry.name);
-    const crc = crc32(entry.bytes);
-    const local = new ByteWriter(30 + name.byteLength);
-    local.u32(0x04034b50);
-    local.u16(20); // version needed: 2.0
-    local.u16(0); // flags
-    local.u16(0); // method: stored
-    local.u16(0); // modification time
-    local.u16(0x0021); // modification date: 1980-01-01
-    local.u32(crc);
-    local.u32(entry.bytes.byteLength);
-    local.u32(entry.bytes.byteLength);
-    local.u16(name.byteLength);
-    local.u16(0); // extra length
-    local.bytes(name);
-    localParts.push(local.done(), entry.bytes);
-
-    const central = new ByteWriter(46 + name.byteLength);
-    central.u32(0x02014b50);
-    central.u16(20); // version made by
-    central.u16(20); // version needed
-    central.u16(0);
-    central.u16(0);
-    central.u16(0);
-    central.u16(0x0021);
-    central.u32(crc);
-    central.u32(entry.bytes.byteLength);
-    central.u32(entry.bytes.byteLength);
-    central.u16(name.byteLength);
-    central.u16(0); // extra length
-    central.u16(0); // comment length
-    central.u16(0); // disk number
-    central.u16(0); // internal attributes
-    central.u32(0); // external attributes
-    central.u32(offset);
-    central.bytes(name);
-    centralParts.push(central.done());
-
-    offset += 30 + name.byteLength + entry.bytes.byteLength;
-  }
-  const centralSize = centralParts.reduce(
-    (total, part) => total + part.byteLength,
-    0,
+  return zipSync(
+    Object.fromEntries(entries.map(({ name, bytes }) => [name, bytes])),
+    {
+      level: 0,
+      // ZIP timestamps otherwise default to now; keep fixture bytes deterministic.
+      mtime: new Date(1980, 0, 1),
+    },
   );
-  const end = new ByteWriter(22);
-  end.u32(0x06054b50);
-  end.u16(0);
-  end.u16(0);
-  end.u16(entries.length);
-  end.u16(entries.length);
-  end.u32(centralSize);
-  end.u32(offset);
-  end.u16(0);
-  return concat([...localParts, ...centralParts, end.done()]);
-}
-
-class ByteWriter {
-  private readonly view: DataView;
-  private readonly buffer: Uint8Array;
-  private position = 0;
-
-  constructor(size: number) {
-    this.buffer = new Uint8Array(size);
-    this.view = new DataView(this.buffer.buffer);
-  }
-
-  u16(value: number): void {
-    this.view.setUint16(this.position, value, true);
-    this.position += 2;
-  }
-
-  u32(value: number): void {
-    this.view.setUint32(this.position, value, true);
-    this.position += 4;
-  }
-
-  bytes(value: Uint8Array): void {
-    this.buffer.set(value, this.position);
-    this.position += value.byteLength;
-  }
-
-  done(): Uint8Array {
-    return this.buffer;
-  }
-}
-
-function concat(parts: readonly Uint8Array[]): Uint8Array {
-  const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
-  const out = new Uint8Array(total);
-  let position = 0;
-  for (const part of parts) {
-    out.set(part, position);
-    position += part.byteLength;
-  }
-  return out;
-}
-
-const CRC_TABLE: Uint32Array = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-    for (let k = 0; k < 8; k += 1) {
-      c = (c & 1) === 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
 }

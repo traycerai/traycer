@@ -140,6 +140,7 @@ if (runsFirstShard) {
     // `onClick` turns this red (0 activations) while its ordinary-click
     // premise stays green.
     runBrowserRegression("scripts/boot-escape-hatch-press-browser.mjs");
+    runBrowserRegression("scripts/docx-preview-browser-regression.mjs");
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design

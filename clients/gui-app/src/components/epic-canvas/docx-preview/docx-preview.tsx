@@ -30,7 +30,8 @@ import { isFindEngineSupported } from "@/lib/find-engine/find-engine";
 import type { DocumentViewerProps } from "@/components/epic-canvas/document-preview/lazy-document-viewer";
 import { DocumentSearchBar } from "@/components/epic-canvas/document-preview/document-search-bar";
 import { DocumentPreviewToolbar } from "@/components/epic-canvas/document-preview/document-preview-toolbar";
-import { DOCX_FIND_HIGHLIGHT_CSS, DocxFindEngine } from "./docx-find";
+import { DocxFindEngine } from "./docx-find";
+import { registerTileSelectionRoot } from "@/lib/commands/tile-select-all";
 import { currentPageAmong, scrollTopForPage } from "./docx-page-position";
 
 const ZOOM_STEP = 1.1;
@@ -42,25 +43,20 @@ const PAGE_GUTTER_PX = 16;
 
 /**
  * Overrides applied INSIDE the shadow root, after docx-preview's own rules:
- * the wrapper's gray page-backdrop becomes the tile's canvas (pages keep
- * their white paper, as the PDF viewer's do), the gutter is ours, and the
- * wrapper grows with its pages so a zoomed-in page scrolls instead of being
- * clipped on the left by flexbox centering. The find highlights ride along
- * because a `::highlight()` rule only applies from a sheet in the same tree.
+ * the wrapper's gray page-backdrop becomes the tile's canvas. The scroll
+ * container owns the fixed gutter; only the pages are zoomed. The wrapper
+ * grows with its pages so zooming never clips their left edge.
  */
 const VIEWER_STYLE = `
 .docx-wrapper {
   background: transparent;
-  padding: ${PAGE_GUTTER_PX}px;
-  padding-bottom: 0;
+  padding: 0;
   width: max-content;
-  min-width: 100%;
   box-sizing: border-box;
 }
 .docx-wrapper > section.docx {
   margin-bottom: ${PAGE_GUTTER_PX}px;
 }
-${DOCX_FIND_HIGHLIGHT_CSS}
 `;
 
 /**
@@ -94,6 +90,11 @@ interface RenderedDocument {
 }
 
 export default function DocxPreview(props: DocumentViewerProps): ReactNode {
+  return <DocxDocument key={props.url} {...props} />;
+}
+
+/** One document owns its controls, DOM and renderer resources. */
+function DocxDocument(props: DocumentViewerProps): ReactNode {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const renderedRef = useRef<RenderedDocument | null>(null);
@@ -159,26 +160,13 @@ export default function DocxPreview(props: DocumentViewerProps): ReactNode {
     let resizeObserver: ResizeObserver | null = null;
     let stopTrackingPage: (() => void) | null = null;
 
-    scaleModeRef.current = "page-width";
-    scaleRef.current = 1;
-    pageNumberRef.current = 1;
-    setDocumentReady(false);
-    setPageCount(0);
-    setPageNumber(1);
-    setScalePercent(null);
-    setMatchState(null);
-    // Search state is per-document: leaving the bar open with the old query
-    // would show a counter and highlights that never ran against the new
-    // document.
-    setSearchOpen(false);
-    setQuery("");
-
-    // React can re-run this effect for the same host (Strict Mode, a URL
-    // change); a shadow root attaches once and is emptied per document.
+    // Strict Mode can re-run setup on the same host. Reuse its shadow root
+    // while giving each render its own content container.
     const shadow = host.shadowRoot ?? host.attachShadow({ mode: "open" });
     shadow.replaceChildren();
     const body = document.createElement("div");
     shadow.append(body);
+    const unregisterSelection = registerTileSelectionRoot(container, body);
 
     const open = async (): Promise<void> => {
       const response = await fetch(props.url);
@@ -258,6 +246,7 @@ export default function DocxPreview(props: DocumentViewerProps): ReactNode {
 
     return () => {
       cancelled = true;
+      unregisterSelection();
       resizeObserver?.disconnect();
       stopTrackingPage?.();
       renderedRef.current?.find.dispose();
@@ -282,7 +271,7 @@ export default function DocxPreview(props: DocumentViewerProps): ReactNode {
       page.getBoundingClientRect(),
       container.getBoundingClientRect(),
       container.scrollTop,
-      PAGE_GUTTER_PX * scaleRef.current,
+      PAGE_GUTTER_PX,
     );
   }, []);
 
@@ -404,10 +393,10 @@ export default function DocxPreview(props: DocumentViewerProps): ReactNode {
           // Ctrl/Cmd+A selects the document, not the whole window.
           data-selection-root=""
           className="absolute inset-0 overflow-auto"
+          style={{ padding: PAGE_GUTTER_PX }}
           data-testid="docx-preview-container"
         >
-          {/* The shadow host. Kept mounted across documents so the shadow
-              root attaches once; its contents are replaced per URL. */}
+          {/* Document styles stay inside this shadow host. */}
           <div ref={hostRef} data-testid="docx-preview-host" />
         </div>
         {documentReady ? null : (

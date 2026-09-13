@@ -7,16 +7,15 @@
  * from stream-open to first paint.
  *
  * Also where "this device cannot run the viewer" surfaces. The chunk load
- * failing (each viewer's `*-loader.ts` explains why that IS the support
- * check) or the viewer throwing while it mounts both report
+ * failing or the viewer throwing while it mounts both report
  * `onUnavailable`, and the host surface swaps in its placeholder. The file
  * bytes are fine in both cases - this is not the `onRenderFailure` path,
  * which discards them.
  */
 import {
   Component,
-  useEffect,
-  useState,
+  lazy,
+  Suspense,
   type ErrorInfo,
   type ReactNode,
 } from "react";
@@ -56,55 +55,39 @@ export interface LazyDocumentViewerProps extends DocumentViewerProps {
 type DocumentViewerComponent = (props: DocumentViewerProps) => ReactNode;
 
 export function createLazyDocumentViewer(options: {
-  /** Memoized chunk import - see `pdf-preview-loader.ts` for the contract. */
+  /** Chunk import, cached by React.lazy for this viewer type. */
   readonly load: () => Promise<{ readonly default: DocumentViewerComponent }>;
   /** Log prefix naming the viewer, e.g. `pdf-preview`. */
   readonly logTag: string;
 }): (props: LazyDocumentViewerProps) => ReactNode {
   const { load, logTag } = options;
 
+  // Created once per format, outside render. React owns loading and caches
+  // both success and failure across tiles. Import failure is the support
+  // check for engines that cannot parse or initialize the viewer dependency;
+  // no browser-version probes or retry layer are needed.
+  const Viewer = lazy(load);
+
   return function LazyDocumentViewer(props: LazyDocumentViewerProps) {
     const { onUnavailable, ...viewerProps } = props;
-    const [Viewer, setViewer] = useState<DocumentViewerComponent | null>(null);
-
-    useEffect(() => {
-      let cancelled = false;
-      void load().then(
-        (module) => {
-          if (!cancelled) setViewer(() => module.default);
-        },
-        (error: unknown) => {
-          if (cancelled) return;
-          appLogger.errorSummary(
-            `[${logTag}] viewer chunk failed to load`,
-            {},
-            error,
-          );
-          onUnavailable();
-        },
-      );
-      return () => {
-        cancelled = true;
-      };
-    }, [onUnavailable]);
-
-    if (Viewer === null) {
-      return (
-        <div className="flex size-full items-center justify-center">
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
-        </div>
-      );
-    }
     return (
       <DocumentViewerErrorBoundary
         logTag={logTag}
         onUnavailable={onUnavailable}
       >
-        <Viewer {...viewerProps} />
+        <Suspense
+          fallback={
+            <div className="flex size-full items-center justify-center">
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+            </div>
+          }
+        >
+          <Viewer {...viewerProps} />
+        </Suspense>
       </DocumentViewerErrorBoundary>
     );
   };
@@ -121,15 +104,15 @@ interface DocumentViewerErrorBoundaryState {
 }
 
 /**
- * Catches the viewer throwing during render or its setup effects (an API
- * missing at construction time, past the module-scope failures the loader
- * already sees). Renders nothing once failed: the parent has been told and
- * replaces this subtree with its placeholder.
+ * Catches rejected imports and viewer render/setup failures. Renders
+ * nothing once failed: the parent replaces this subtree with its placeholder.
  */
 class DocumentViewerErrorBoundary extends Component<
   DocumentViewerErrorBoundaryProps,
   DocumentViewerErrorBoundaryState
 > {
+  private reported = false;
+
   constructor(props: DocumentViewerErrorBoundaryProps) {
     super(props);
     this.state = { failed: false };
@@ -140,8 +123,10 @@ class DocumentViewerErrorBoundary extends Component<
   }
 
   override componentDidCatch(error: unknown, info: ErrorInfo): void {
+    if (this.reported) return;
+    this.reported = true;
     appLogger.errorSummary(
-      `[${this.props.logTag}] viewer threw while mounting`,
+      `[${this.props.logTag}] viewer could not load or mount`,
       { componentStack: info.componentStack ?? null },
       error,
     );

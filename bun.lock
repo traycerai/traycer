@@ -270,6 +270,7 @@
         "@typescript-eslint/eslint-plugin": "catalog:",
         "@typescript-eslint/parser": "catalog:",
         "eslint": "catalog:",
+        "fflate": "catalog:",
         "prettier": "catalog:",
         "yaml": "catalog:",
       },

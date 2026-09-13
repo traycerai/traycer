@@ -100,6 +100,39 @@ describe("chat find adapter", () => {
     );
   });
 
+  it("maps chat matches after an expanding lowercase character to original offsets", () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    unit.textContent = "İstanbul report";
+    row.append(unit);
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-unicode-offset",
+      revealMatch: (target) => target.paint(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    setRows([testRow("row-1", "unit-1", "İstanbul report")]);
+
+    void adapter.search({ requestId: 13, query: "report", matchCase: false });
+    flushFrames();
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 1,
+      activeUnitId: "unit-1",
+      exactHighlight: "painted",
+    });
+    const activeEntry = Array.from(registry.values.entries()).find(([name]) =>
+      name.includes("active"),
+    );
+    const range = activeEntry?.[1].ranges[0];
+    expect(range?.startOffset).toBe(9);
+    expect(range?.endOffset).toBe(15);
+    expect(range?.cloneContents().textContent).toBe("report");
+  });
+
   it("qualifies a ZERO-match answer that only scanned part of a windowed transcript", () => {
     const { adapter, setRows, setCoverageMessage } = createChatFindTestAdapter({
       tileInstanceId: "chat-tile-a",

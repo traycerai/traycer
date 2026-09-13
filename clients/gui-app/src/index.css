@@ -1121,21 +1121,6 @@
 }
 
 /*
- * Find-in-page highlight paints (`lib/find-engine/find-engine.ts`).
- * Uses the CSS Custom Highlight API so painting never touches
- * `window.getSelection()` - contenteditable editors don't see a
- * selection change and don't grab focus away from the find input.
- */
-::highlight(traycer-find-match) {
-  background-color: color-mix(in srgb, var(--primary) 35%, transparent);
-  color: inherit;
-}
-::highlight(traycer-find-match-active) {
-  background-color: color-mix(in srgb, var(--primary) 75%, transparent);
-  color: var(--primary-foreground);
-}
-
-/*
  * Communication-graph edge focus (`comm-graph-edge-interaction.ts`).
  * React Flow strips the edge group's outline and paints its own focus stroke
  * only for a `selectable` edge - which that canvas is not - so a focused edge
