@@ -77,6 +77,34 @@ export const transcriptRowContextSchema = z.object({
    */
   sessionAnchor: chatSessionAnchorSchema.optional(),
   /**
+   * The anchor above must NOT be relied on for this turn's account, and neither
+   * may the reader's own walk - render no profile label at all.
+   *
+   * A provider fallback hop re-dispatches one user message as a second attempt
+   * and rewrites that user row's `sessionAnchor` to the REPLACEMENT's, so the
+   * original attempt's walked anchor names an account it never ran on. A
+   * profile-only hop keeps `harnessId` identical, so the renderer's
+   * harness-agreement gate does not catch it. The walk is provably correct only
+   * where a user row has ONE attempt hanging off it; this says the projection
+   * looked at whole history and found more (or found an autonomous turn, whose
+   * account the anchor never spoke for).
+   *
+   * This is the only field here that is a REFUSAL rather than an answer, and it
+   * exists because absence could not carry it. The two would collide: the
+   * projection expresses "do not trust the walk" by withholding `sessionAnchor`,
+   * and a row whose context then holds nothing else is not serialized at all
+   * (`read-range.ts` charges and emits context only when
+   * `Object.keys(context).length > 0`). The refusal would arrive at the client
+   * as silence, and silence is the renderer falling back to exactly the walk
+   * being refused. Carrying a `true` keeps the object non-empty, which is what
+   * gets the refusal onto the wire in the first place.
+   *
+   * Whole-history by nature, so a client cannot re-derive it: a bounded window
+   * holding one of two attempts counts one and walks. Carried only when TRUE,
+   * like the other flags here - `false` is what a reader concludes anyway.
+   */
+  profileWalkUnprovable: z.boolean().optional(),
+  /**
    * Whether any LATER checkpoint rewrites a file this row's checkpoint also
    * touches, computed over whole history.
    *
@@ -119,15 +147,35 @@ export const transcriptRowContextSchema = z.object({
 export type TranscriptRowContext = z.infer<typeof transcriptRowContextSchema>;
 
 /**
+ * Frozen copy bound to the released pre-fallback lines (`chat.subscribe@1.8`
+ * and `@1.9`), which bind their `rowContext` to THIS schema.
+ *
+ * Only `profileWalkUnprovable` differs, because that flag is provider
+ * fallback's and provider fallback was minted at `@1.10`. What a released line
+ * owes a later line's field is tolerance, not stripping: the host writes the
+ * flag at every minor, and a `≤1.9` peer drops the key on decode as an unknown
+ * member - the same treatment `failure` gets on the error block. Such a peer
+ * then falls back to its own walk, which is exactly what it did before the
+ * flag existed.
+ *
+ * The byte-stability of those lines is pinned by
+ * `host/agent/gui/__tests__/chat-schema-checkpoints.test.ts`, which is what
+ * caught the field reaching them through the live schema.
+ */
+export const transcriptRowContextSchemaPreFallback =
+  transcriptRowContextSchema.omit({ profileWalkUnprovable: true });
+
+/**
  * Frozen copy bound to the released windowed line (`chat.subscribe@1.8`).
  *
- * Only `sessionAnchor` differs: it takes the anchor union as 1.3.0 shipped it,
- * without the Antigravity arm. Everything else is shared with the live schema
- * by spreading `.shape`, so a field added above reaches both copies and only
- * the discriminant this freeze exists to withhold stays behind.
+ * Only `sessionAnchor` differs from the pre-fallback copy above: it takes the
+ * anchor union as 1.3.0 shipped it, without the Antigravity arm. Everything
+ * else is shared by extension, so a field added above reaches this copy too -
+ * which is why it extends the FROZEN copy rather than the live schema. A field
+ * minted for a later line must reach neither released line.
  */
 export const transcriptRowContextSchemaPreAntigravity =
-  transcriptRowContextSchema.extend({
+  transcriptRowContextSchemaPreFallback.extend({
     sessionAnchor: chatSessionAnchorSchemaPreAntigravity.optional(),
   });
 

@@ -58,6 +58,14 @@ import { z } from "zod";
 // publisher losslessly - `CHAT_SYNC_1_1_READER_FLOOR` stays where it is.
 // 1.4 adds autonomous_resume.deliveryPlacement, defaulting to unknown for
 // old data. It is presentation metadata; the minimum reader does not change.
+//
+// 1.4 also carries `error.failure` (the typed provider failure behind an
+// error block - a `chat.subscribe@1.10` field that lands in a publication). It
+// rides this still-unreleased minor on the same rule as `agentMessageReceipt`
+// above: `host-v1.3.0` shipped chat-sync 1.3, so 1.4 is the next line a
+// released reader will meet. Defaulted `null`, so an older record parses
+// unchanged and residual capture (§3) carries it through an older publisher
+// losslessly; the minimum reader does not change.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 4 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

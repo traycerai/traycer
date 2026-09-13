@@ -69,7 +69,9 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicUpdateChatProfile: () => ({ mutate: updateProfile }),
 }));
 
-function settings(overrides: Partial<ChatRunSettings> = {}): ChatRunSettings {
+function settings(
+  overrides: Partial<ChatRunSettings> | undefined,
+): ChatRunSettings {
   return {
     harnessId: "claude",
     model: "opus[1m]",
@@ -156,13 +158,13 @@ describe("useTaskProfileRateLimitSwitch", () => {
         legacy,
       ]),
     });
-    batch.settingsByChatId.set(sameHostMatch.id, settings());
+    batch.settingsByChatId.set(sameHostMatch.id, settings(undefined));
     batch.settingsByChatId.set(
       sameHostDifferentModel.id,
       settings({ model: "sonnet" }),
     );
-    batch.settingsByChatId.set(crossHostMatch.id, settings());
-    batch.settingsByChatId.set(legacy.id, settings());
+    batch.settingsByChatId.set(crossHostMatch.id, settings(undefined));
+    batch.settingsByChatId.set(legacy.id, settings(undefined));
 
     const { result } = renderHook(() =>
       useTaskProfileRateLimitSwitch({

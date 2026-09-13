@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
+import { limitedFamilyQualifier } from "@/lib/rate-limits/rate-limit-copy";
 import { cn } from "@/lib/utils";
 import {
   initialPreviewProfileId,
@@ -62,7 +63,24 @@ interface ProfileRateLimitSwitchBannerProps {
    * automatic non-forced usage check on it per mounted warning episode. */
   readonly probeTarget: ProfileRateLimitDestination | null;
   readonly runTargetHostId: string | null;
-  /** User-confirmed only. Commits the picked profile for the next turn. */
+  /**
+   * User-confirmed only. Commits the picked profile for the next turn.
+   *
+   * "User-confirmed" is a statement about THIS banner, not a rule about the
+   * app. Provider fallback switches a chat's profile without a press, and that
+   * is legitimate: the user authorized it once, in advance, by configuring the
+   * policy — a standing authorization is consent, and the fallback surfaces
+   * spend it in the open (a named destination, a countdown, and a refusal that
+   * keeps the error).
+   *
+   * What stays true here is the DIVISION: this banner is the manual,
+   * PRE-failure path. It fires on a usage reading while the turn could still
+   * succeed, so there is nothing to rescue and no authorization to spend —
+   * only a suggestion, which a person accepts or dismisses. Fallback is the
+   * post-failure path and never routes through this callback: it would drop
+   * the failed message, which is the one thing this banner's switch does not
+   * carry.
+   */
   readonly onSwitchProfile: (profileId: string | null) => void;
   /** Includes the current chat. The current composer commit is handled by
    * `onSwitchProfile`; this callback switches only matching siblings. */
@@ -105,12 +123,6 @@ const PREVIEW_NAVIGATION_KEYS = new Set([
 
 function switchLabel(profile: ProviderProfile): string {
   return `Switch to ${profileDisplayLabel(profile)}`;
-}
-
-/** "Fable " / "Fable, Opus " qualifier for the banner line; empty when the
- * warning is profile-wide. Trailing space keeps the caller's template flat. */
-function familyQualifier(limitedFamilies: ReadonlyArray<string>): string {
-  return limitedFamilies.length === 0 ? "" : `${limitedFamilies.join(", ")} `;
 }
 
 function profileMenuRows(
@@ -280,8 +292,8 @@ export function ProfileRateLimitSwitchBanner(
             />
             <span>
               {props.severity === "hard_limit"
-                ? `has reached its ${familyQualifier(props.limitedFamilies)}rate limit.`
-                : `is running low on ${familyQualifier(props.limitedFamilies)}usage.`}
+                ? `has reached its ${limitedFamilyQualifier(props.limitedFamilies)}rate limit.`
+                : `is running low on ${limitedFamilyQualifier(props.limitedFamilies)}usage.`}
             </span>
             {readOnly ? (
               <span className="text-muted-foreground">

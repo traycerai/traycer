@@ -484,6 +484,9 @@ function rejectLastChatAction(
     reason,
     code: null,
     backgroundStopTaskIds: [],
+    // The lease token rides every ack, but it is only ever non-null on a
+    // `chat.fallback.*` hold. Nothing in this file takes one.
+    token: null,
   });
   return frame.clientActionId;
 }
@@ -502,6 +505,7 @@ function acceptLastChatAction(ack: LastChatActionAck): string {
     reason: null,
     code: null,
     backgroundStopTaskIds: [],
+    token: null,
   });
   return frame.clientActionId;
 }
@@ -1187,7 +1191,7 @@ describe("epic-parking - B1: retention-pool / warm-session key", () => {
 // same reason production reads `snapshot()` as a Promise in the first place.
 
 function fakeEpicVisibilityChannel(
-  snapshotEntries: readonly DesktopEpicVisibilityEntry[] = [],
+  snapshotEntries: readonly DesktopEpicVisibilityEntry[],
 ): {
   readonly channel: NonNullable<DesktopWindowsBridge["epicVisibility"]>;
   readonly emit: (entries: readonly DesktopEpicVisibilityEntry[]) => void;
@@ -1320,7 +1324,7 @@ describe("epic-parking - B2: cross-window visibility", () => {
   it("does not park an epic another window is showing", async () => {
     const EPIC = "epic-cross-window-visible-elsewhere";
     const TAB = "tab-cross-window-visible-elsewhere";
-    const { channel, emit } = fakeEpicVisibilityChannel();
+    const { channel, emit } = fakeEpicVisibilityChannel([]);
     const uninstall = installCrossWindowEpicVisibility(
       fakeDesktopWindowsBridge("window-a", channel),
     );
@@ -1344,7 +1348,7 @@ describe("epic-parking - B2: cross-window visibility", () => {
   it("parks an epic that is hidden everywhere the cross-window map can prove", async () => {
     const EPIC = "epic-cross-window-hidden-both";
     const TAB = "tab-cross-window-hidden-both";
-    const { channel } = fakeEpicVisibilityChannel();
+    const { channel } = fakeEpicVisibilityChannel([]);
     const uninstall = installCrossWindowEpicVisibility(
       fakeDesktopWindowsBridge("window-a", channel),
     );
@@ -1369,7 +1373,7 @@ describe("epic-parking - B2: cross-window visibility", () => {
   it("pushes this window's own roll-up at install and on every local visibility edge", async () => {
     const EPIC_A = "epic-cross-window-report-a";
     const EPIC_B = "epic-cross-window-report-b";
-    const { channel, reports } = fakeEpicVisibilityChannel();
+    const { channel, reports } = fakeEpicVisibilityChannel([]);
     const uninstall = installCrossWindowEpicVisibility(
       fakeDesktopWindowsBridge("window-a", channel),
     );
@@ -1407,7 +1411,7 @@ describe("epic-parking - B2: cross-window visibility", () => {
   it("does not count window A's own reported row as foreign visibility", async () => {
     const EPIC = "epic-cross-window-own-row";
     const TAB = "tab-cross-window-own-row";
-    const { channel, emit } = fakeEpicVisibilityChannel();
+    const { channel, emit } = fakeEpicVisibilityChannel([]);
     const uninstall = installCrossWindowEpicVisibility(
       fakeDesktopWindowsBridge("window-a", channel),
     );
@@ -1605,7 +1609,7 @@ describe("epic-parking - document hidden but the epic is visible in another wind
     const EPIC = "epic-doc-hidden-visible-elsewhere";
     const TAB = "tab-doc-hidden-visible-elsewhere";
     setDocumentVisibilityState("hidden");
-    const { channel, emit } = fakeEpicVisibilityChannel();
+    const { channel, emit } = fakeEpicVisibilityChannel([]);
     const uninstall = installCrossWindowEpicVisibility(
       fakeDesktopWindowsBridge("window-a", channel),
     );
@@ -3136,6 +3140,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
             reason: "Wait for the active chat turn to finish.",
             code: "CHECKPOINT_RESTORE_ACTIVE_TURN",
             backgroundStopTaskIds: [],
+            token: null,
           });
         }
         expect(
@@ -3312,6 +3317,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
             reason: "Wait for the active chat turn to finish.",
             code: "CHECKPOINT_RESTORE_ACTIVE_TURN",
             backgroundStopTaskIds: [],
+            token: null,
           });
           expect(chat.handle.store.getState().restore, door).toBeNull();
         }

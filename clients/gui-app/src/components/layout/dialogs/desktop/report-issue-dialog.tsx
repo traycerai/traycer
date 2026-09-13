@@ -116,6 +116,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/appearance": "Settings - Appearance",
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Host diagnostics",
+  "/settings/fallback": "Settings - Fallback",
   "/settings/general": "Settings - General",
   "/settings/host": "Settings - Host",
   "/settings/keybindings": "Settings - Keybindings",

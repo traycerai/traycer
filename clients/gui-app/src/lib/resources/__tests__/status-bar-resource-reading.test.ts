@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   statusBarResourceMetricViews,
   statusBarResourceReading,
+  type StatusBarResourceMetricView,
 } from "@/lib/resources/status-bar-resource-reading";
 import type { DesktopAppResourceUsage } from "@/lib/resources/desktop-app-resource-usage";
 import {
@@ -113,7 +114,7 @@ function liveProjection(hostId: string | null): GlobalResourceProjection {
 }
 
 function valueOf(
-  rendered: ReturnType<typeof views>,
+  rendered: ReadonlyArray<StatusBarResourceMetricView>,
   metric: ResourceMetric,
 ): string | null {
   const view = rendered.find((candidate) => candidate.metric === metric);

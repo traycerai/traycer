@@ -37,6 +37,7 @@ function errorBlock(blockId: string, code: string | null): ContentBlock {
     message: "boom",
     recoverable: true,
     code,
+    failure: null,
   };
 }
 
