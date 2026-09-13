@@ -7,7 +7,11 @@ import type {
   RecordListStamp,
 } from "@traycer/protocol/host/epic/record-list-revision";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useRecordListStamp } from "@/hooks/chats/use-record-list-stamp";
+import {
+  useProjectedRecordCounter,
+  useRecordListStamp,
+  useRecordListStreamStamp,
+} from "@/hooks/chats/use-record-list-stamp";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -212,6 +216,20 @@ export function useEpicSyncChatRecords(epicId: string): void {
     () => store?.getState().chatSnapshotIncompleteSeq ?? null,
     [store],
   );
+  // The DELTA half, read reactively rather than at dispatch: it has no
+  // dispatch to be read at, and a move in it has to drive the gap rule below.
+  const subscribeToStore = useCallback(
+    (onChange: () => void) => store?.subscribe(onChange) ?? (() => undefined),
+    [store],
+  );
+  const readChatDeltaIncompleteSeq = useCallback(
+    () => store?.getState().chatDeltaIncompleteSeq ?? null,
+    [store],
+  );
+  const chatDeltaIncompleteSeq = useProjectedRecordCounter(
+    subscribeToStore,
+    readChatDeltaIncompleteSeq,
+  );
   // The revision-gating seam. Keyed on the same four facts the cache entry is
   // (epic, viewer, host, store generation), so the stamp dies with the row set
   // it describes - see {@link useRecordListStamp}.
@@ -284,6 +302,15 @@ export function useEpicSyncChatRecords(epicId: string): void {
           context === null ? null : context.snapshotIncompleteSeq,
       };
     },
+  });
+
+  // Stage 2: the push stream's stamp keeps the revision above current between
+  // polls, so an ordinary record change costs one delta instead of one
+  // snapshot per open tab. `query.refetch` is what a GAP falls back to - see
+  // {@link useRecordListStreamStamp}.
+  useRecordListStreamStamp(epicId, stamp, query.refetch, {
+    deltaIncompleteSeq: chatDeltaIncompleteSeq,
+    listIsFetching: query.isFetching,
   });
 
   const answer = query.data ?? null;

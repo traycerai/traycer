@@ -273,6 +273,18 @@ export function publishedChatSessionState(
     // snapshot that established it, so the transcript is absorbed as
     // baseline history and nothing in it is ever announced as live.
     transcriptBaselineEpoch: 0,
+    // Equal to the baseline above, and that equality is the point: a published
+    // copy is frozen, so its transcript is by definition the one its (absent)
+    // connection seated. A consumer gating on `baseline === connectionEpoch`
+    // therefore reads READY here rather than stalling forever on a reconnect
+    // that can never arrive.
+    connectionEpoch: 0,
+    // Never acted, so nothing was ever confirmed. Distinct from "an action
+    // happened and we lost the record": there is no action path here at all.
+    confirmedManualFallbackAction: null,
+    // Same reason, one step further: no action was sent, so no answer to one
+    // can have arrived with nowhere to land.
+    unattendedFallbackOutcome: null,
     // Frozen, so nothing hydrates and this never moves.
     transcriptHydrationSequence: 0,
     transcriptRowContext: {},
@@ -342,6 +354,24 @@ export function publishedChatSessionState(
     accumulatedSummaryGenerationSeated: true,
     accumulatedSummaryAssemblyStarted: false,
     backgroundItems: undefined,
+    // A published copy is frozen and has no stream: there is no traversal to
+    // hold its dispatch and no offer to answer, so both surfaces are absent
+    // for the life of the surface rather than merely not-yet-arrived. That is
+    // the same thing `undefined` means on a live frame, so the cards read one
+    // value here and there rather than a published-only sentinel.
+    pendingFallback: undefined,
+    pendingReturn: undefined,
+    // A published copy can never act, so there is no rung to admit even if the
+    // transcript it froze ends in a failure. Absent, not empty: empty would
+    // say "the host looked and admitted nothing", and nothing looked.
+    lastFailedAttempt: undefined,
+    // Nothing ever confirmed an outcome for a frozen copy, and absence is the
+    // honest value rather than a gap: on a live frame `undefined` already means
+    // "no confirmed outcome for the current incident", and a published copy has
+    // no incident at all. A consumer that must speak an outcome exactly once
+    // therefore says nothing here, which is correct.
+    lastFallbackOutcome: undefined,
+    fallbackChoiceLease: null,
     pendingBackgroundStops: {},
     pendingBackgroundStopAll: null,
     pendingBackgroundSessionStop: null,
@@ -388,6 +418,15 @@ export function publishedChatSessionState(
     editUserMessage: () => null,
     revertFileChanges: () => null,
     stopTurn: () => null,
+    fallbackHoldForChoice: () => null,
+    fallbackReleaseChoice: () => null,
+    // A no-op for the same reason as its neighbours: a published copy cannot
+    // run a manual rung, so nothing can ever confirm one. The announcer reads
+    // `confirmedManualFallbackAction` (null below) and stays silent.
+    publishConfirmedManualFallbackAction: () => undefined,
+    // Likewise. A published copy sends no fallback verb, so there is no
+    // outcome to deliver and no surface that could have gone missing.
+    publishUnattendedFallbackOutcome: () => undefined,
     stopBackgroundItem: () => null,
     stopAllBackgroundItems: () => null,
     stopBackgroundSession: () => null,

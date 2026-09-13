@@ -469,6 +469,8 @@ function createDirtyEpicHandle(
     chatIngestSeq: 0,
     tuiAgentIngestSeq: 0,
     chatSnapshotIncompleteSeq: 0,
+    chatDeltaIncompleteSeq: 0,
+    tuiAgentDeltaIncompleteSeq: 0,
     tuiAgentSnapshotIncompleteSeq: 0,
     ...EMPTY_PROJECTED_SLICES,
     chatRecords: EMPTY_CHATS_SLICE,

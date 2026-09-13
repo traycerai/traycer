@@ -129,8 +129,15 @@ export function providerTabInputs(state: ProviderCliState): ProviderTabInputs {
  * missing it is a tab that under-promises until someone notices, not a broken
  * surface - which is why the label mirrors the rule rather than inventing a
  * second source of truth for it.
+ *
+ * Exported for the Fallback section, whose "switch to another profile" step is
+ * inert for a user with no second account anywhere - and which must decide
+ * that from the same set, not from a second id list that would answer
+ * differently the day a fourth provider gains profiles.
  */
-function providerSupportsManagedProfiles(providerId: ProviderId): boolean {
+export function providerSupportsManagedProfiles(
+  providerId: ProviderId,
+): boolean {
   return (
     providerId === "claude-code" ||
     providerId === "codex" ||

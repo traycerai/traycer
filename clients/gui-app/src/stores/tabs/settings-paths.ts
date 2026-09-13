@@ -27,6 +27,7 @@ export const SETTINGS_PATHS = new Set([
   "appearance",
   "devices",
   "diagnostics",
+  "fallback",
   "general",
   "host",
   "keybindings",

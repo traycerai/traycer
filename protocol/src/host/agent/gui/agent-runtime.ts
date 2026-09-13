@@ -22,6 +22,7 @@ import {
   interviewQuestionSchemaPreCustomAnswer,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
+  agentFailureSchema,
   agentMessageReceiptSchema,
   agentMessageSendSchema,
   artifactOperationActionSchema,
@@ -31,15 +32,19 @@ import {
   imageGenerationResultSchema,
   providerNoticeDetailSchema,
   providerNoticeKindSchema,
+  providerNoticeKindSchemaPreFallback,
   providerNoticeKindSchemaPreHarnessMessage,
   providerNoticeNormalizedMetadataSchema,
   providerNoticeToneSchema,
   toolCallManagedCommandSchema,
   workflowActivityEntrySchema,
+  type AgentFailureReason,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { HostNotificationStoppedReason } from "@traycer/protocol/host/notifications/payloads";
 import { imageResolutionEntrySchema } from "@traycer/protocol/persistence/epic/messages";
 
 export {
+  agentFailureSchema,
   agentMessageReceiptSchema,
   agentMessageSendSchema,
   backgroundTaskOutputSchema,
@@ -50,6 +55,8 @@ export {
   providerNoticeNormalizedMetadataSchema,
   providerNoticeToneSchema,
   workflowActivityEntrySchema,
+  type AgentFailure,
+  type AgentFailureReason,
   type AgentMessageSend,
   type BackgroundTaskOutput,
   type DiffSource,
@@ -939,6 +946,31 @@ const providerNoticeUpsertEventSchemaPreReasonix = z.object({
   metadata: providerNoticeNormalizedMetadataSchema.nullable(),
 });
 
+// Wire-freeze copy bound to the `chat.subscribe@1.7`-`@1.9` blockDelta frames.
+// Those minors ship the full event shape of their day and hold back exactly
+// one thing here: the notice KIND enum, which grew the provider-fallback
+// attribution arms on `1.10`. Unnumbered deliberately - it said "the two" and
+// was stale at `fallback_settled`, then staler again when the move arms split
+// into `fallback_applied` / `fallback_returned` / `fallback_return_blocked`,
+// while the freeze below never had to move because it names a frozen SCHEMA
+// rather than a list of kinds. Freezing the schema is again
+// only half of it - `chat-frame-projection.ts` is what stops the host EMITTING
+// a kind a negotiated line cannot decode, on live upserts, persisted snapshot
+// bodies, and the windowed tail/range bodies alike.
+const providerNoticeUpsertEventSchemaPreFallback = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("provider_notice.upsert"),
+  harnessId: guiHarnessIdSchema,
+  noticeKind: providerNoticeKindSchemaPreFallback,
+  tone: providerNoticeToneSchema,
+  status: z.enum(["streaming", "completed"]),
+  title: z.string(),
+  message: z.string().nullable(),
+  details: z.array(providerNoticeDetailSchema),
+  fallbackText: z.string().min(1),
+  metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+});
+
 export const fileChangeStartedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("file_change.started"),
@@ -1422,6 +1454,20 @@ export const turnInterruptedEventSchema = z.object({
   reason: z.string(),
   code: z.string().optional(),
   recoverable: z.boolean().optional(),
+  /**
+   * The typed failure this interruption RE-STATES - see
+   * {@link agentFailureSchema}.
+   *
+   * A terminal `error` event is followed by a synthesized `turn.interrupted`
+   * carrying the same failure's prose, and that synthesized copy is what the
+   * durable terminal-turn record is built from. Without this member the payload
+   * would exist on the error block and vanish from the interruption, so a
+   * reconnect that replays terminal-turn state would lose it.
+   *
+   * Present only where the host stamped one; `optional()` (not
+   * nullable-defaulted) to match the other additive members of this wire event.
+   */
+  failure: agentFailureSchema.optional(),
 });
 export type TurnInterruptedEvent = z.infer<typeof turnInterruptedEventSchema>;
 
@@ -1431,8 +1477,70 @@ export const errorEventSchema = z.object({
   message: z.string(),
   recoverable: z.boolean(),
   code: z.string().optional(),
+  /**
+   * Typed description of WHY the turn died - see {@link agentFailureSchema}.
+   *
+   * Stamped ONCE by the host at emit time (never re-derived downstream) and
+   * carried from here into the persisted `error` block and the synthesized
+   * `turn.interrupted`.
+   *
+   * `optional()` describes what a DECODER tolerates, and that is not the same
+   * question as what a released line may EMIT: every shipped `chat.subscribe`
+   * minor is host→client, so a key the released baseline never carried is a
+   * breaking addition there no matter how forgiving the parse is (the
+   * `released-baseline-compat` guard states it exactly that way). Hence the two
+   * frozen copies below, which every released runtime-event union binds in
+   * place of this one.
+   */
+  failure: agentFailureSchema.optional(),
 });
 export type ErrorEvent = z.infer<typeof errorEventSchema>;
+
+// ─── Frozen pre-`failure` copies of the two terminal events ──────────────────
+//
+// `failure` joined both events for `chat.subscribe@1.10`. Every earlier minor
+// has shipped, and each of them binds a runtime-event union that names its
+// members EXPLICITLY - which is the freeze working as designed, except that
+// naming the live `errorEventSchema` there makes the alias frozen in name only
+// (the union is pinned; the member it points at still grows). These two literal copies are
+// what the frozen unions bind instead, so growth on the live pair cannot reach
+// a shipped line.
+//
+// Hand-written rather than derived with `.omit()`: a derived copy tracks the
+// live schema, which is precisely the property a freeze must not have.
+
+export const turnInterruptedEventSchemaPreFallback = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("turn.interrupted"),
+  turnId: z.string(),
+  reason: z.string(),
+  code: z.string().optional(),
+  recoverable: z.boolean().optional(),
+});
+
+export const errorEventSchemaPreFallback = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("error"),
+  message: z.string(),
+  recoverable: z.boolean(),
+  code: z.string().optional(),
+});
+
+/**
+ * The one conversion between the host notification taxonomy and the persisted
+ * failure vocabulary, and the compile-time proof that they are one list.
+ *
+ * `AGENT_FAILURE_REASONS` is re-declared in the persistence layer because that
+ * layer cannot import this one (the dependency runs host -> persistence). This
+ * function proves host ⊆ persisted; `fallbackReasonLabel`
+ * (`host/notifications/presentation.ts`) proves persisted ⊆ host. Adding a
+ * reason on one side alone fails to compile at one of the two.
+ */
+export function runtimeFailureReason(
+  reason: HostNotificationStoppedReason,
+): AgentFailureReason {
+  return reason;
+}
 
 /**
  * Stable `ErrorEvent.code` flagging a *recoverable* provider auth failure (an
@@ -1466,6 +1574,25 @@ export const AUTH_ERROR_CODE = "auth";
  * `ErrorEvent` has no structured payload); its VALUE never leaves the host.
  */
 export const ENV_CREDENTIAL_AUTH_ERROR_CODE = "auth_env_credential";
+
+/**
+ * `code` on the error block the host appends beside a queue pause, when the
+ * pause was caused by the turn above it ending in an error.
+ *
+ * Shared rather than host-private because a renderer has to tell this block
+ * apart from the PROVIDER failure on the same assistant row, and no other field
+ * can do it: both carry `failure: null` whenever the adapter emitted no typed
+ * failure, and both are `type: "error"` under one `turnId`. A surface that
+ * cannot distinguish them attaches the failed turn's recovery actions to the
+ * "resume the queue to send them" notice, so "Retry" underneath that sentence
+ * replays the failed prompt instead of resuming the queue.
+ *
+ * Beside {@link ENV_CREDENTIAL_AUTH_ERROR_CODE} for the same reason that one is
+ * here: it is a stable code the host stamps and the renderer keys on, and a
+ * second copy of the string in the client is a contract nobody would notice
+ * drifting.
+ */
+export const QUEUE_PAUSED_AFTER_ERROR_CODE = "QUEUE_PAUSED_AFTER_ERROR";
 
 /**
  * Upserts the image resolution record for a markdown-referenced image in an
@@ -1601,10 +1728,10 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
-  turnInterruptedEventSchema,
+  turnInterruptedEventSchemaPreFallback,
   steerSubmittedEventSchemaPreReasonix,
   usageUpdatedEventSchema,
-  errorEventSchema,
+  errorEventSchemaPreFallback,
   workflowStartedEventSchema,
   workflowProgressEventSchema,
   workflowCompletedEventSchema,
@@ -1652,10 +1779,10 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
-  turnInterruptedEventSchema,
+  turnInterruptedEventSchemaPreFallback,
   steerSubmittedEventSchemaPreInReplyTo,
   usageUpdatedEventSchema,
-  errorEventSchema,
+  errorEventSchemaPreFallback,
 ]);
 
 export const runtimeEventSchemaPreInReplyTo = z.discriminatedUnion("type", [
@@ -1712,14 +1839,70 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
   userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
-  turnInterruptedEventSchema,
+  turnInterruptedEventSchemaPreFallback,
   steerSubmittedEventSchemaPreReasonix,
   usageUpdatedEventSchema,
-  errorEventSchema,
+  errorEventSchemaPreFallback,
   workflowStartedEventSchema,
   workflowProgressEventSchema,
   workflowCompletedEventSchema,
   providerNoticeUpsertEventSchemaPreReasonix,
+  imageResolutionUpdatedEventSchema,
+  userMessageAnchorTailUpdatedEventSchema,
+]);
+
+// Wire-freeze copy of the runtime-event union as `chat.subscribe@1.7`/`@1.8`
+// ship it: every live member, with `provider_notice.upsert` swapped for its
+// pre-fallback freeze so neither line can observe ANY provider-fallback
+// attribution kind - the swap is against `providerNoticeKindSchemaPreFallback`,
+// which is a frozen four-kind list, so a kind added to the live enum later
+// (`fallback_settled`, then `fallback_returned` / `fallback_return_blocked`) is
+// held off these lines with no edit here. Explicitly listed rather than derived from the live
+// union, for the same reason `runtimeEventSchemaPreImage` is: a future event
+// must not silently join a line that has shipped peers.
+export const runtimeEventSchemaPreFallback = z.discriminatedUnion("type", [
+  textDeltaEventSchema,
+  textCompletedEventSchema,
+  reasoningDeltaEventSchema,
+  reasoningCompletedEventSchema,
+  toolCallStartedEventSchema,
+  toolCallCompletedEventSchema,
+  toolCallErroredEventSchema,
+  toolCallProgressEventSchema,
+  approvalRequestedEventSchema,
+  approvalResolvedEventSchema,
+  todoUpdatedEventSchema,
+  planDeltaEventSchema,
+  planUpdatedEventSchema,
+  planCompletedEventSchema,
+  compactionStartedEventSchema,
+  compactionCompletedEventSchema,
+  compactionErroredEventSchema,
+  interviewRequestedEventSchema,
+  interviewResolvedEventSchema,
+  interviewErroredEventSchema,
+  subAgentStartedEventSchema,
+  subAgentProgressEventSchema,
+  subAgentCompletedEventSchema,
+  fileChangeStartedEventSchema,
+  fileChangeCompletedEventSchema,
+  artifactOperationEventSchema,
+  commandStartedEventSchema,
+  commandCompletedEventSchema,
+  sessionCreatedEventSchema,
+  sessionResumedEventSchema,
+  turnStartedEventSchema,
+  userMessageAnchorResolvedEventSchema,
+  turnCompletedEventSchema,
+  turnStoppedEventSchema,
+  turnInterruptedEventSchemaPreFallback,
+  steerSubmittedEventSchema,
+  usageUpdatedEventSchema,
+  errorEventSchemaPreFallback,
+  workflowStartedEventSchema,
+  workflowProgressEventSchema,
+  workflowCompletedEventSchema,
+  providerNoticeUpsertEventSchemaPreFallback,
   imageResolutionUpdatedEventSchema,
   userMessageAnchorTailUpdatedEventSchema,
 ]);

@@ -217,60 +217,36 @@
   animation: chat-dock-chip-pulse 620ms ease-out forwards;
 }
 
-/* Arriving at the model picker's LAST thinking level: a fine ring blooms out
-   of the slider's thumb once and dissolves, leaving a static halo on the thumb
-   and the accent on the end of the track. The thumb does not move and the
-   label does not change - the cue is the arrival, not the setting.
+/* The model picker's LAST thinking level. Below it the pill is a solid
+   `--primary` fill; at it the fill becomes a gradient running into the accent,
+   the pill takes a soft glow of the same colour, and a fixed constellation of
+   sparkles twinkles over it. Everything here is the STATE of being at the top,
+   not a celebration of arriving there - a picker opened at max looks exactly
+   like one dragged there.
 
-   The `--reasoning-max-*` properties are local aliases of `--primary`, not
-   theme tokens: a custom primary recolours the halo with no React involved,
-   and an achromatic default theme still reads, because the ring's EXPANSION
-   is what carries the flourish.
-
-   Unlike the dock chip above, this one does get a reduced-motion rule. The
-   chip relies on `animationend` to take `data-pulse` off, so suppressing the
-   animation would strand it; here the owning hook refuses to create a cue
-   under reduced motion and clears one in flight, so the display rule is a
-   guard for the frames before React catches up rather than the whole
-   mechanism. */
-/* The max treatment's four alphas in one place. They were first set for the
-   default themes, where `--primary` is a saturated accent; in a monochrome
-   theme the same percentages of a near-foreground grey read as "slightly
-   lighter track" and the highest level was reported as having no treatment at
-   all. So the static pair carries most of the raise (the halo and tail are
-   what a still frame has to say max with), and the flowing band sits above
-   both - it has to be legible while crossing a track the tail has already
-   lit. The dots and the thumb paint above all of this, so none of it is at
-   their expense. */
+   The two ends of the gradient are both theme tokens: `--primary` and
+   `--reasoning-max-accent` (registered in `themeTokens`, default violet), so a
+   custom theme can recolour max without touching this file and an achromatic
+   default still reads, because the accent carries the hue the monochrome
+   primary has none of. */
 .reasoning-effort-slider {
-  --reasoning-max-ring: color-mix(in srgb, var(--primary) 50%, transparent);
-  --reasoning-max-halo: color-mix(in srgb, var(--primary) 40%, transparent);
-  --reasoning-max-tail: color-mix(in srgb, var(--primary) 85%, transparent);
-  --reasoning-max-flow: color-mix(in srgb, var(--primary) 95%, transparent);
+  --reasoning-max-glow: color-mix(
+    in srgb,
+    var(--reasoning-max-accent) 32%,
+    transparent
+  );
+  --reasoning-max-edge: color-mix(
+    in srgb,
+    var(--reasoning-max-accent) 35%,
+    transparent
+  );
 }
 
-.reasoning-effort-thumb-core {
-  background: var(--foreground);
-  border: 2px solid var(--popover);
-  /* Position/size/rounding from composition classes above. */
-}
-
-.reasoning-effort-slider[data-max="true"] .reasoning-effort-thumb-core {
-  box-shadow:
-    0 0 0 2px var(--reasoning-max-ring),
-    0 0 12px 2px var(--reasoning-max-halo);
-}
-
-.reasoning-effort-max-tail {
-  opacity: 0;
-}
-
-.reasoning-effort-slider[data-max="true"] .reasoning-effort-max-tail {
-  opacity: 1;
+.reasoning-effort-max-range {
   background: linear-gradient(
     to right,
-    transparent 35%,
-    var(--reasoning-max-tail)
+    var(--primary),
+    var(--reasoning-max-accent)
   );
 }
 
@@ -278,74 +254,52 @@
    `:dir()` did not ship until Chrome 120, so the pseudo-class silently left
    111-119 on the left-to-right gradient. The attribute is what the document
    sets anyway, and matches every descendant of it. */
-[dir="rtl"]
-  .reasoning-effort-slider[data-max="true"]
-  .reasoning-effort-max-tail {
+[dir="rtl"] .reasoning-effort-max-range {
   background: linear-gradient(
     to left,
-    transparent 35%,
-    var(--reasoning-max-tail)
+    var(--primary),
+    var(--reasoning-max-accent)
   );
 }
 
-/* Feathered at both ends so the band has no edge to read as a moving object:
-   what travels is a brightening of the track, not a shape on it. The travel
-   itself is an inline `transform` written from the shared status clock - there
-   is deliberately no `animation` here. */
-.reasoning-effort-max-flow {
-  background: linear-gradient(
-    to right,
-    transparent,
-    var(--reasoning-max-flow) 50%,
-    transparent
-  );
+/* Sized to the clearance the row reserves: `0 0 12px 2px` reaches 14px, which
+   is the slider's `py-2` plus the footer's `py-1.5`, so the popover's
+   `overflow-hidden` has nothing of it to cut. The 1px spread underneath draws
+   the pill's own edge, which is what keeps the glow reading as light coming
+   OFF the control rather than a blur sitting behind it. */
+.reasoning-effort-max-glow {
+  box-shadow:
+    0 0 0 1px var(--reasoning-max-edge),
+    0 0 12px 2px var(--reasoning-max-glow);
 }
 
-.reasoning-effort-bloom {
-  inset: -4px;
-  border: 1px solid var(--primary);
-  opacity: 0;
+/* A sparkle is white at every theme, not `--foreground`: it is a specular
+   highlight on a saturated fill, and a light theme's near-black foreground
+   would read as dirt on the gradient rather than as a glint. Its opacity is
+   written per tick from the shared status clock into the custom property the
+   component names; the fallback is what a still field sits at, so reduced
+   motion and a hidden pane need no rule of their own. */
+.reasoning-effort-sparkle {
+  background: #fff;
+  filter: drop-shadow(0 0 2px rgb(255 255 255 / 0.8));
 }
 
-.reasoning-effort-slider[data-open="true"][data-max="true"]
-  .reasoning-effort-bloom[data-pulse="true"] {
-  animation: reasoning-max-bloom 640ms cubic-bezier(0.16, 1, 0.3, 1) 1 both;
+.reasoning-effort-sparkle-glint {
+  color: #fff;
+  font-size: 8px;
+  line-height: 1;
 }
 
-@keyframes reasoning-max-bloom {
-  0% {
-    opacity: 0.65;
-    transform: scale(0.75);
-  }
-  30% {
-    opacity: 0.42;
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.65);
-  }
-}
-
-/* The component already withholds both under the preference; these are the
-   floor for a frame rendered before React reads it. The halo and the tail stay
-   - they carry no motion, and they are what still says "max". */
-@media (prefers-reduced-motion: reduce) {
-  .reasoning-effort-bloom,
-  .reasoning-effort-max-flow {
-    display: none;
-  }
-}
-
+/* Decoration with no information in it, so it simply goes: the level's name is
+   above the track and `aria-valuetext` says it too. The fill and the thumb
+   carry the state in a forced palette. */
 @media (forced-colors: active) {
-  .reasoning-effort-bloom,
-  .reasoning-effort-max-flow,
-  .reasoning-effort-max-tail {
-    display: none;
-  }
-  .reasoning-effort-slider[data-max="true"] .reasoning-effort-thumb-core {
+  .reasoning-effort-max-glow {
     box-shadow: none;
-    outline: 1px solid CanvasText;
-    outline-offset: 2px;
+  }
+  .reasoning-effort-sparkle,
+  .reasoning-effort-sparkle-glint {
+    display: none;
   }
 }
 
@@ -1005,6 +959,11 @@
   --color-muted: var(--muted);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
+  /* The reasoning slider's max accent is a registered theme token
+     (`themeTokens` in `lib/themes/theme-definition.ts`): its default lives in
+     `builtin-palettes.ts`, the fallback stylesheet carries it, the applier
+     writes it, and a custom theme overrides it like any other role. */
+  --color-reasoning-max-accent: var(--reasoning-max-accent);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);

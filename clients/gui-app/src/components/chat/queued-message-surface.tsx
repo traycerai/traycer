@@ -3,7 +3,6 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  type DraggableAttributes,
   type DraggableSyntheticListeners,
 } from "@dnd-kit/core";
 import {
@@ -651,7 +650,6 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         visible={!readOnly}
         disabled={!actionState.canReorder}
         setHandleElement={rowSortable.setActivatorNodeRef}
-        attributes={rowSortable.attributes}
         listeners={rowSortable.listeners}
       />
       <QueuedMessageRowContent
@@ -1038,13 +1036,11 @@ function QueuedMessageDragHandle({
   visible,
   disabled,
   setHandleElement,
-  attributes,
   listeners,
 }: {
   readonly visible: boolean;
   readonly disabled: boolean;
   readonly setHandleElement: (element: HTMLElement | null) => void;
-  readonly attributes: DraggableAttributes;
   readonly listeners: DraggableSyntheticListeners;
 }) {
   if (!visible) return null;
@@ -1063,20 +1059,42 @@ function QueuedMessageDragHandle({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
+        {/* AX7, one surface over. dnd-kit's `attributes` were spread here, and
+            they advertise a keyboard gesture this surface does not implement:
+            `aria-roledescription="sortable"` plus an `aria-describedby`
+            pointing at "press the space bar to lift". `useSensors` registers
+            `PointerSensor` ONLY, so space and the arrow keys did nothing, on a
+            control that was in the tab order and named itself as draggable.
+
+            Registering `KeyboardSensor` was the other resolution and it is not
+            available here - not without redesigning the reorder hook. A
+            keyboard drag carries no `pointerCoordinates`, so
+            `queued-message-reorder-dnd.ts` resolves NO drop preview (its own
+            doc comment says exactly this), and `handleDragEnd` calls
+            `onReorder` only when a preview exists. Adding the sensor would turn
+            a false advertisement into a lift-move-drop that silently reorders
+            nothing, which is worse. Making that work means an index-based
+            preview path for keyboard drags, replacing the pointer-midline
+            math - a change to that hook's core, not to this handle.
+
+            So: pointer listeners only, out of the accessibility tree and out of
+            the tab order, which is what the `disabled` branch above already
+            does. Nothing is taken away - there is no keyboard reorder path on
+            this surface today either, and this stops claiming one. That gap is
+            real and is reported separately; it is a product decision, not an
+            attribute. */}
+        <span
           ref={setHandleElement}
-          type="button"
-          {...attributes}
           {...listeners}
+          aria-hidden
           className={cn(
             "inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground transition-colors",
-            "hover:bg-muted hover:text-foreground focus-visible:border focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:cursor-grabbing",
+            "hover:bg-muted hover:text-foreground active:cursor-grabbing",
           )}
-          aria-label="Drag to reorder queued message"
           data-testid="queued-message-drag-handle"
         >
-          <GripVertical className="size-3.5" aria-hidden />
-        </button>
+          <GripVertical className="size-3.5" />
+        </span>
       </TooltipTrigger>
       <TooltipContent sideOffset={6}>Drag to reorder</TooltipContent>
     </Tooltip>

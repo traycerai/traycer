@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as idbKeyval from "idb-keyval";
 import { createStore, get as idbGet, set } from "idb-keyval";
+import type { UseStore } from "idb-keyval";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import { closeTab } from "@/stores/epics/canvas/actions";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
@@ -569,7 +570,7 @@ describe("tab recovery history", () => {
     const peerA = await import("../history");
     vi.resetModules();
     const peerB = await import("../history");
-    let verificationStore: ReturnType<typeof createStore> | null = null;
+    let verificationStore: UseStore | null = null;
     try {
       const account = "recovery-peer-account";
       const windowId = "recovery-peer-window";

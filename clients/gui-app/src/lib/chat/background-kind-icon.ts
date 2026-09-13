@@ -1,6 +1,7 @@
 import {
   AlarmClock,
   Bot,
+  Hourglass,
   Monitor,
   Plug,
   TerminalSquare,
@@ -33,4 +34,7 @@ export const BACKGROUND_KIND_ICONS: Readonly<
   wakeup: AlarmClock,
   workflow: Workflow,
   mcp: Plug,
+  // A paused chat waiting out a provider limit: the one kind whose row is a
+  // countdown rather than a task, so the glyph is time rather than an actor.
+  "fallback-wait": Hourglass,
 };

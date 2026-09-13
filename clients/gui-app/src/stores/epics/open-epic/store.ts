@@ -417,6 +417,8 @@ export interface OpenEpicState {
    */
   readonly chatSnapshotIncompleteSeq: number;
   readonly tuiAgentSnapshotIncompleteSeq: number;
+  readonly chatDeltaIncompleteSeq: number;
+  readonly tuiAgentDeltaIncompleteSeq: number;
   /**
    * Chats the record plane RETRACTED while this session was open, and why.
    *

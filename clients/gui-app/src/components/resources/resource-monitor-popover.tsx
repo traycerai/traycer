@@ -45,7 +45,9 @@ import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import { displayTitle } from "@/lib/display-title";
 import {
+  useRegisteredEpicAgentSessionCounts,
   useRegisteredEpicLiveAgents,
+  type EpicAgentSessionCounts,
   type RegisteredEpicAgentRef,
   type RegisteredEpicLiveAgent,
 } from "@/lib/epic-selectors";
@@ -83,6 +85,7 @@ import {
 } from "@/lib/managed-commands/managed-command-copy";
 import { normalizeProviderId } from "@/components/home/data/landing-options";
 import { useResourcesKill } from "@/hooks/resources/use-resources-kill-mutation";
+import { useStopTerminalOwner } from "@/hooks/resources/use-stop-terminal-owner-mutation";
 import { agentProviderLabel } from "@/lib/chat/sender-display";
 import {
   DropdownMenu,
@@ -351,6 +354,13 @@ interface TaskDisplayRow {
   readonly cpuPercent: number;
   readonly memoryBytes: number | null;
   readonly owners: readonly OwnerDisplayRow[];
+  /**
+   * This epic's terminal agents by session state, or `null` when this window
+   * holds no session for the epic and therefore knows nothing about its
+   * agents. Read from the RECORD plane, never from the owner rows above - a
+   * sleeping agent owns no processes, which is the whole point of it.
+   */
+  readonly agentSessions: EpicAgentSessionCounts | null;
 }
 
 interface DesktopProcessGroupEntry {
@@ -653,8 +663,10 @@ function useResourceRowActions(
 } {
   const killMutation = useResourcesKill();
   const stopMutation = useManagedCommandStop();
+  const stopAgentMutation = useStopTerminalOwner();
   const killPids = killMutation.mutate;
   const stopShell = stopMutation.mutate;
+  const stopAgent = stopAgentMutation.mutate;
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<
     ReadonlyMap<string, RowActionTarget>
@@ -679,6 +691,14 @@ function useResourceRowActions(
         });
         continue;
       }
+      if (target.kind === "stopAgent") {
+        // One call per session, like the shells and unlike the kills: the pid
+        // merge below exists because `resources.kill` takes a LIST, and
+        // `terminal.kill` names exactly one session. It is idempotent, so an
+        // agent already on its way down costs nothing.
+        stopAgent({ hostId: target.hostId, sessionId: target.sessionId });
+        continue;
+      }
       const existing = pidsByHost.get(target.hostId) ?? [];
       existing.push(...target.pids);
       pidsByHost.set(target.hostId, existing);
@@ -687,7 +707,10 @@ function useResourceRowActions(
       if (pids.length > 0) killPids({ hostId, pids });
     }
   };
-  const isPending = killMutation.isPending || stopMutation.isPending;
+  const isPending =
+    killMutation.isPending ||
+    stopMutation.isPending ||
+    stopAgentMutation.isPending;
   const api: ResourceRowActionApi = {
     selectionMode,
     isSelected: (key) => liveSelected.has(key),
@@ -702,7 +725,7 @@ function useResourceRowActions(
     isPending,
   };
   const selectedStopCount = [...liveSelected.values()].filter(
-    (target) => target.kind === "stop",
+    isStopTarget,
   ).length;
   return {
     api,
@@ -766,7 +789,10 @@ function selectionActionCopy(
   }
   return {
     text: `Stop ${stopCount} · Kill ${killCount}`,
-    ariaLabel: `Stop ${countedNoun(stopCount, "shell", "shells")}, kill ${countedNoun(killCount, "process", "processes")}`,
+    // "item", not "shell": since terminal owners stop too, a mixed selection's
+    // stop half can be shells, agents or both, and naming one of them would
+    // describe the wrong rows to the reader who cannot see the selection.
+    ariaLabel: `Stop ${countedNoun(stopCount, "item", "items")}, kill ${countedNoun(killCount, "process", "processes")}`,
     destructive: true,
   };
 }
@@ -1270,6 +1296,22 @@ function ResourceMonitorPanel(props: {
     [canvas, liveAgentByOwner],
   );
   const epicTitleById = useMemo(() => buildEpicTitleById(tasks), [tasks]);
+  // The epics with a section, so the counts subscribe to exactly the sessions
+  // whose headers can show one. An epic this window has not mounted is absent
+  // from the answer rather than zero - see the selector.
+  const projectedEpicIds = useMemo(
+    () => projection.entries.map((entry) => entry.epicId),
+    [projection.entries],
+  );
+  // Scoped to the host this panel is READING, the same one
+  // `attributedProjection` empties the process list for when it disagrees.
+  // The session behind a count belongs to whichever host its epic is open on,
+  // so without this an epic open elsewhere printed that machine's numbers in
+  // this host's section header.
+  const agentSessionsByEpicId = useRegisteredEpicAgentSessionCounts(
+    projectedEpicIds,
+    scope.hostId,
+  );
   const taskRows = useMemo(
     () =>
       buildTaskRows({
@@ -1278,10 +1320,12 @@ function ResourceMonitorPanel(props: {
         canvasIndex,
         recordByOwner,
         epicTitleById,
+        agentSessionsByEpicId,
         sortOption,
         memoryMetric,
       }),
     [
+      agentSessionsByEpicId,
       canvas,
       canvasIndex,
       epicTitleById,
@@ -2050,6 +2094,36 @@ function buildEpicTitleById(
   );
 }
 
+/**
+ * The task header's agent tally: "3 running · 4 sleeping".
+ *
+ * It is the one place the Resource Manager says anything about an agent that
+ * owns no processes, and it says it in WORDS rather than by inventing a row.
+ * A sleeping agent has nothing to show in a process list and nothing to act
+ * on there, so a synthesized row would be a line the panel cannot honestly
+ * fill in - and the panel's contract is that every row it draws is something
+ * running.
+ *
+ * Rendered only when there is something to say: an epic whose agents are all
+ * running reads exactly as it did before, and one this window holds no session
+ * for (`null`) says nothing rather than "0 running".
+ */
+function TaskAgentSessionCounts(props: {
+  readonly counts: EpicAgentSessionCounts | null;
+}) {
+  const counts = props.counts;
+  if (counts === null || counts.sleeping === 0) return null;
+  return (
+    <span
+      className="shrink-0 whitespace-nowrap text-ui-xs text-muted-foreground"
+      data-testid="resource-task-agent-sessions"
+    >
+      {counts.running} running <span aria-hidden="true">·</span>{" "}
+      {counts.sleeping} sleeping
+    </span>
+  );
+}
+
 function TaskResourceSection(props: {
   readonly task: TaskDisplayRow;
   readonly searchQuery: string;
@@ -2087,8 +2161,11 @@ function TaskResourceSection(props: {
           STICKY_SECTION_HEADER,
         )}
       >
-        <span className="min-w-0 truncate text-ui-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {props.task.label}
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="min-w-0 truncate text-ui-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {props.task.label}
+          </span>
+          <TaskAgentSessionCounts counts={props.task.agentSessions} />
         </span>
         <div className="flex items-center">
           <MetricPair
@@ -2280,14 +2357,48 @@ interface StopTarget {
 }
 
 /**
+ * A terminal session to stop through its own host, named by session id - which
+ * for a `terminal-agent` owner is also the agent id.
+ *
+ * Not a {@link KillTarget} over the same row's `rootPids`, and the difference
+ * is what the host is able to say afterwards. A raw signal arrives as
+ * `exitCode=143 reason=process-exit` with nothing tying it to the person who
+ * asked: the agent is reported to its senders as having "exited" without
+ * replying - a verdict that sticks until it is re-armed - and its record
+ * cannot say it was stopped rather than lost. `terminal.kill` carries the
+ * intent, so the sender is told the agent "was stopped by the user", the next
+ * message resumes the same session, and the row reads asleep instead of gone.
+ *
+ * Separate from {@link StopTarget} rather than folded into it because the two
+ * act on different objects through different RPCs. What they share is the
+ * VERB, and that is expressed by both counting as stops below.
+ */
+interface StopAgentTarget {
+  readonly kind: "stopAgent";
+  readonly key: string;
+  readonly hostId: string;
+  readonly sessionId: string;
+}
+
+/**
  * What acting on one row means. The two verbs are not interchangeable: a raw
  * process tree is killed, but a SUPERVISED shell is stopped through its
- * supervisor. Signalling a shell directly would be recorded as
- * `exited (signal SIGTERM)` - a crash, as far as every reader of that status is
- * concerned - which lights the chat's attention badge and invites the agent to
- * restart the very shell a human just asked it to stop.
+ * supervisor and a terminal session through its host. Signalling a shell
+ * directly would be recorded as `exited (signal SIGTERM)` - a crash, as far as
+ * every reader of that status is concerned - which lights the chat's attention
+ * badge and invites the agent to restart the very shell a human just asked it
+ * to stop; signalling an agent's own PTY does the same to its conversation.
  */
-type RowActionTarget = KillTarget | StopTarget;
+type RowActionTarget = KillTarget | StopTarget | StopAgentTarget;
+
+/**
+ * Whether acting on this row is a STOP - the verb, across both stop kinds.
+ * Written as "not a kill" so a fourth target kind has to opt OUT of the gentle
+ * verb rather than be silently counted as a kill.
+ */
+function isStopTarget(target: RowActionTarget): boolean {
+  return target.kind !== "kill";
+}
 
 /**
  * Row action controls threaded down to actionable rows. `selectionMode` toggles
@@ -2317,7 +2428,7 @@ function ConfirmableRowAction(props: {
   const [armed, setArmed] = useState(false);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
-  const verb = props.target.kind === "kill" ? "kill" : "stop";
+  const verb = isStopTarget(props.target) ? "stop" : "kill";
   const arm = (): void => {
     returnFocusRef.current =
       document.activeElement instanceof HTMLElement
@@ -2416,38 +2527,86 @@ function ConfirmableRowAction(props: {
   }
   return (
     <span {...{ [RESOURCE_ACTION_KEY_ATTRIBUTE]: props.target.key }}>
-      {props.target.kind === "stop" ? (
-        <ManagedCommandStopButton
-          commandId={props.target.commandId}
-          ariaLabel={`Stop ${props.label}`}
-          isPending={props.isPending}
-          className={ROW_HOVER_REVEAL}
-          onStop={arm}
-        />
-      ) : (
-        <>
-          {/* Text label, not an icon: a bin reads as "delete this agent's
-              state" and a stop glyph reads as "stop the turn", but this only
-              terminates the process tree. The word carries the meaning. */}
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className={cn(
-              "h-6 shrink-0 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive",
-              ROW_HOVER_REVEAL,
-            )}
-            aria-label={`Kill ${props.label}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              arm();
-            }}
-          >
-            Kill
-          </Button>
-        </>
-      )}
+      <RowActionTrigger
+        target={props.target}
+        label={props.label}
+        isPending={props.isPending}
+        onArm={arm}
+      />
     </span>
+  );
+}
+
+/**
+ * The un-armed affordance for one row, in the verb that row's action actually
+ * performs.
+ *
+ * Three branches rather than two since terminal owners stop. The two stop
+ * kinds deliberately look ALIKE and differ from Kill: "stop" leaves something
+ * that can be started again - a shell stays listed and restartable, an agent
+ * goes to sleep and resumes on the next message - and only the kill arm ends
+ * something. Painting an agent's Stop in the destructive tone would say the
+ * opposite of what the act now does.
+ *
+ * Split out of {@link ConfirmableRowAction} so that component keeps one job
+ * (the two-step confirm) and this one keeps the other (what the row offers).
+ */
+function RowActionTrigger(props: {
+  readonly target: RowActionTarget;
+  readonly label: string;
+  readonly isPending: boolean;
+  readonly onArm: () => void;
+}) {
+  const onArm = props.onArm;
+  const arm = (event: MouseEvent<HTMLButtonElement>): void => {
+    event.stopPropagation();
+    onArm();
+  };
+  if (props.target.kind === "stop") {
+    return (
+      <ManagedCommandStopButton
+        commandId={props.target.commandId}
+        ariaLabel={`Stop ${props.label}`}
+        isPending={props.isPending}
+        className={ROW_HOVER_REVEAL}
+        onStop={onArm}
+      />
+    );
+  }
+  if (props.target.kind === "stopAgent") {
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        className={cn(
+          "h-6 shrink-0 px-1.5 text-muted-foreground hover:text-foreground",
+          ROW_HOVER_REVEAL,
+        )}
+        aria-label={`Stop ${props.label}`}
+        onClick={arm}
+      >
+        Stop
+      </Button>
+    );
+  }
+  return (
+    // Text label, not an icon: a bin reads as "delete this agent's state" and
+    // a stop glyph reads as "stop the turn", but this only terminates the
+    // process tree. The word carries the meaning.
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      className={cn(
+        "h-6 shrink-0 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive",
+        ROW_HOVER_REVEAL,
+      )}
+      aria-label={`Kill ${props.label}`}
+      onClick={arm}
+    >
+      Kill
+    </Button>
   );
 }
 
@@ -2542,6 +2701,16 @@ function OwnerRowActionCell(props: {
  *
  * A shell is stopped rather than killed regardless of how it is nested, so this
  * reads the snapshot rather than the row's position in the tree.
+ *
+ * A `terminal` / `terminal-agent` owner is stopped through its own host for the
+ * reason {@link StopAgentTarget} gives: the raw pid route is the one that
+ * leaves the host unable to say who ended the session.
+ *
+ * Ordered deliberately. The managed-command arm comes first because a shell
+ * created by an agent is a `managed-command` owner in its own right, not a
+ * terminal one; the no-processes arm next, because it is the one owner row
+ * with nothing to act on at all; the pid fallback last, for a `chat`, a
+ * harness child or a provider server, where a signal is all there is.
  */
 function ownerSnapshotActionTarget(
   snapshot: OwnerResourceSnapshotWireV15,
@@ -2557,7 +2726,26 @@ function ownerSnapshotActionTarget(
       commandId: managedCommand.commandId,
     };
   }
+  // BEFORE the terminal branch, not after: a Synthetic Agent Row is an
+  // all-zero snapshot standing in for an agent whose own program is not
+  // running, and its owner kind is `terminal-agent` like any other. Offering
+  // Stop there would be an affordance for a session that does not exist -
+  // `terminal.kill` would answer `killed: false` and the row would sit
+  // unchanged, which is worse than no button at all.
   if (snapshot.rootPids.length === 0) return null;
+  const ownerKind = snapshot.owner.kind;
+  if (ownerKind === "terminal" || ownerKind === "terminal-agent") {
+    // The session id rather than the pids it happens to own: the whole point
+    // is to let the host record WHO ended the session, and a pid list cannot
+    // say that. `ResourceOwnerRef.ownerId` IS the session id for both terminal
+    // kinds, so the row already names everything `terminal.kill` needs.
+    return {
+      kind: "stopAgent",
+      key,
+      hostId: snapshot.owner.hostId,
+      sessionId: snapshot.owner.ownerId,
+    };
+  }
   return {
     kind: "kill",
     key,
@@ -3261,6 +3449,7 @@ interface TaskRowBuildInput {
   readonly canvasIndex: CanvasResourceIndex;
   readonly recordByOwner: ReadonlyMap<string, EpicNodeRecord>;
   readonly epicTitleById: ReadonlyMap<string, string>;
+  readonly agentSessionsByEpicId: ReadonlyMap<string, EpicAgentSessionCounts>;
   readonly sortOption: ResourceSortOption;
   readonly memoryMetric: ResourceMemoryMetric;
 }
@@ -3299,6 +3488,7 @@ function buildTaskRows(input: TaskRowBuildInput): TaskDisplayRow[] {
           owners.map((owner) => owner.treeMemoryBytes),
         ),
         owners: sortOwnerRows(owners, input.sortOption),
+        agentSessions: input.agentSessionsByEpicId.get(entry.epicId) ?? null,
       },
     ];
   });

@@ -84,6 +84,8 @@ export interface ChatRecordTable {
    * {@link RecordTable.snapshotIncompleteSeq}.
    */
   snapshotIncompleteSeq(): number;
+  /** The delta twin - see {@link RecordTable.deltaIncompleteSeq}. */
+  deltaIncompleteSeq(): number;
   applyRecords(
     records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
@@ -373,6 +375,7 @@ export function createChatRecordTable(
     current: () => table.current(),
     ingestSeq: () => table.ingestSeq(),
     snapshotIncompleteSeq: () => table.snapshotIncompleteSeq(),
+    deltaIncompleteSeq: () => table.deltaIncompleteSeq(),
 
     // `@1.1` states the home for every row it carries, so the answer is
     // authoritative and the held row takes it verbatim.
@@ -455,10 +458,28 @@ export function createChatRecordTable(
       );
       const heldHome = held === null ? null : held.docResident;
       return published(
-        table.applyUpsert({
-          ...delta.record,
-          docResident: heldHome,
-        }),
+        table.applyUpsert(
+          {
+            ...delta.record,
+            docResident: heldHome,
+          },
+          // A chat this table has never held, and the stream row cannot state
+          // a home. So this apply INTRODUCES a row whose home is unknown, and
+          // `routeChatWrite` reads that as "unavailable" - rename, archive,
+          // reparent and delete closed on a chat the user can see.
+          //
+          // The repair used to be automatic: the next poll re-served the row
+          // with its home. A revision-gated poll answers `unchanged` instead,
+          // and a `@1.4` delta ADVANCES the held stamp - so without this
+          // counter a chat created in another window or by an A2A agent
+          // would never have its home stated for the life of the session.
+          //
+          // `held !== null` is complete whatever its home says: the value is
+          // carried forward, so this delta made the representation no less
+          // complete than it found it, and the row's first answer is already
+          // owed by whatever introduced it.
+          held === null ? "introduces-unstated" : "complete",
+        ),
       );
     },
 

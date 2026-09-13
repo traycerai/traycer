@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useRecordListStamp } from "@/hooks/chats/use-record-list-stamp";
+import {
+  useProjectedRecordCounter,
+  useRecordListStamp,
+  useRecordListStreamStamp,
+} from "@/hooks/chats/use-record-list-stamp";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -145,6 +149,20 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
     () => store?.getState().tuiAgentSnapshotIncompleteSeq ?? null,
     [store],
   );
+  // The DELTA half - see the chat twin. Reactive, because a move in it drives
+  // the gap rule and there is no dispatch for it to be read at.
+  const subscribeToStore = useCallback(
+    (onChange: () => void) => store?.subscribe(onChange) ?? (() => undefined),
+    [store],
+  );
+  const readTuiAgentDeltaIncompleteSeq = useCallback(
+    () => store?.getState().tuiAgentDeltaIncompleteSeq ?? null,
+    [store],
+  );
+  const tuiAgentDeltaIncompleteSeq = useProjectedRecordCounter(
+    subscribeToStore,
+    readTuiAgentDeltaIncompleteSeq,
+  );
   // Keyed on the same four facts the cache entry is, so the stamp dies with
   // the row set it describes - see {@link useRecordListStamp}.
   const stamp = useRecordListStamp({
@@ -208,6 +226,15 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
           context === null ? null : context.snapshotIncompleteSeq,
       };
     },
+  });
+
+  // Stage 2, the terminal twin - see the chat hook. This plane advances on
+  // every applied delta for the epic, INCLUDING a chat one: both lists are
+  // answered from the same per-(viewer, epic) composite, so a chat write moves
+  // this list's revision even though no terminal-agent row changed.
+  useRecordListStreamStamp(epicId, stamp, query.refetch, {
+    deltaIncompleteSeq: tuiAgentDeltaIncompleteSeq,
+    listIsFetching: query.isFetching,
   });
 
   const answer = query.data ?? null;

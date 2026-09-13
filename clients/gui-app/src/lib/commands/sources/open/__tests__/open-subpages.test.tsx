@@ -194,6 +194,8 @@ function agent(id: string, title: string): TuiAgentProjection {
     terminalAgentArgs: null,
     terminalShellCommand: null,
     terminalShellArgs: null,
+    sessionState: null,
+    lastExit: null,
   };
 }
 function artifact(args: {

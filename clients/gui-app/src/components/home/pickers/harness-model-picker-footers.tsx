@@ -12,8 +12,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import {
-  STATUS_ANIMATION_SMOOTH_CADENCE_MS,
-  useReducedMotion,
+  STATUS_ANIMATION_PULSE_CADENCE_MS,
   useStatusAnimation,
 } from "@/lib/animation/status-animation-clock";
 import {
@@ -33,11 +32,27 @@ import {
 } from "@/components/ui/slider";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useLayoutStore } from "@/stores/settings/layout-store";
-import {
-  isMaxReasoningLevel,
-  type ReasoningMaxCue,
-  type ReasoningMaxCueConfig,
-} from "@/components/home/pickers/use-reasoning-max-cue";
+
+/**
+ * Whether the selected level is the catalog's LAST one, read off the full
+ * unsorted catalog the harness reported.
+ *
+ * A zero-effort id (`off` / `none`) counts at its catalog position rather than
+ * being filtered out the way the chip's ladder filters it: the slider's stops
+ * ARE the catalog, so "the last stop" is the only thing max can mean here. An
+ * unknown id indexes at `-1` and is never max, and a one-level catalog has no
+ * max at all - its single stop is the whole range, so landing on it says
+ * nothing about effort.
+ */
+function isMaxReasoningLevel(
+  value: ReasoningLevel,
+  options: ReadonlyArray<ReasoningLevelOption>,
+): boolean {
+  if (options.length < 2) return false;
+  return (
+    options.findIndex((option) => option.id === value) === options.length - 1
+  );
+}
 
 export interface ReasoningFooterConfig {
   readonly value: ReasoningLevel;
@@ -55,21 +70,24 @@ export interface ServiceTierFooterConfig {
 interface HarnessModelPickerModelSettingsFooterProps {
   readonly reasoning: ReasoningFooterConfig | null;
   readonly serviceTier: ServiceTierFooterConfig | null;
-  /** `null` for a footer mounted without the picker's cue state: no bloom is
-   *  ever drawn, and the strip reads as presented. */
-  readonly reasoningMax: ReasoningMaxCueConfig | null;
+  /**
+   * The picker's `visibleOpen` - false while the popover plays its exit, so a
+   * writer never ticks against a surface on its way out. A footer mounted
+   * without a picker around it passes `true`.
+   */
+  readonly pickerOpen: boolean;
 }
 
 export function HarnessModelPickerModelSettingsFooter(
   props: HarnessModelPickerModelSettingsFooterProps,
 ) {
-  const { reasoning, serviceTier, reasoningMax } = props;
+  const { reasoning, serviceTier, pickerOpen } = props;
   if (reasoning === null && serviceTier === null) return null;
   return (
     <ModelSettingsFooter
       reasoning={reasoning}
       serviceTier={serviceTier}
-      reasoningMax={reasoningMax}
+      pickerOpen={pickerOpen}
     />
   );
 }
@@ -77,11 +95,11 @@ export function HarnessModelPickerModelSettingsFooter(
 interface ModelSettingsFooterProps {
   readonly reasoning: ReasoningFooterConfig | null;
   readonly serviceTier: ServiceTierFooterConfig | null;
-  readonly reasoningMax: ReasoningMaxCueConfig | null;
+  readonly pickerOpen: boolean;
 }
 
 function ModelSettingsFooter(props: ModelSettingsFooterProps) {
-  const { reasoning, serviceTier, reasoningMax } = props;
+  const { reasoning, serviceTier, pickerOpen } = props;
   const upgradeServiceTier =
     serviceTier === null
       ? null
@@ -129,7 +147,7 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
           mount without the strip. A model with no levels renders nothing here
           and the next model that has them mounts the group afresh. */}
       {reasoning === null || !hasReasoningOptions ? null : (
-        <ReasoningFooterGroup config={reasoning} maxCue={reasoningMax} />
+        <ReasoningFooterGroup config={reasoning} pickerOpen={pickerOpen} />
       )}
     </div>
   );
@@ -137,7 +155,7 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
 
 interface ReasoningFooterGroupProps {
   readonly config: ReasoningFooterConfig;
-  readonly maxCue: ReasoningMaxCueConfig | null;
+  readonly pickerOpen: boolean;
 }
 
 // Mounted only for a model that reports at least one level - see the gate in
@@ -155,7 +173,7 @@ interface ReasoningFooterGroupProps {
 // single stop is a control that cannot be moved, and the level's name alone is
 // what that model has to say.
 function ReasoningFooterGroup(props: ReasoningFooterGroupProps) {
-  const { config, maxCue } = props;
+  const { config, pickerOpen } = props;
   const control = useLayoutStore(
     (state) => state.composer.reasoningFooterControl,
   );
@@ -167,7 +185,7 @@ function ReasoningFooterGroup(props: ReasoningFooterGroupProps) {
       className="m-0 flex min-w-0 flex-1 items-center border-0 p-0"
     >
       {stepped ? (
-        <ReasoningLevelSlider config={config} maxCue={maxCue} />
+        <ReasoningLevelSlider config={config} pickerOpen={pickerOpen} />
       ) : (
         <ReasoningLevelList config={config} />
       )}
@@ -181,7 +199,7 @@ interface ReasoningLevelStripProps {
 
 interface ReasoningLevelSliderProps {
   readonly config: ReasoningFooterConfig;
-  readonly maxCue: ReasoningMaxCueConfig | null;
+  readonly pickerOpen: boolean;
 }
 
 function ReasoningLevelList(props: ReasoningLevelStripProps) {
@@ -228,85 +246,140 @@ function ReasoningLevelList(props: ReasoningLevelStripProps) {
   );
 }
 
-// The sizers, which are the ONLY things the cell's width is measured from:
-// stacked in one grid cell, so the column is as wide as the widest of them.
-const REASONING_LEVEL_LABEL_SIZER =
-  "col-start-1 row-start-1 invisible truncate";
-
-// The name the user reads, laid over that cell and out of flow, so it cannot
-// widen what the sizers reserved. A level the catalog does not list prints its
-// raw id here, and a long one would otherwise be the widest thing in the grid -
-// the cell would grow for it and SHRINK again on the next real selection, which
-// is the exact track movement the sizers exist to prevent. Out of flow it
-// truncates inside the reserved width instead.
-const REASONING_LEVEL_LABEL_NAME = "absolute inset-0 truncate";
-
-/** One pass of the flowing band, back from the max end. */
-const REASONING_MAX_FLOW_PERIOD_MS = 1600;
+/** One full twinkle, dim to bright and back: a whole number of writes at the
+ *  pulse cadence (30 of them), so the cycle closes on a written frame. */
+const REASONING_SPARKLE_PERIOD_MS = 2400;
+const REASONING_SPARKLE_MIN_OPACITY = 0.25;
+const REASONING_SPARKLE_MAX_OPACITY = 1;
 /**
- * The band's travel, as a share of its OWN width (`w-2/5` of the track, so 100%
- * here is 40% of the track). It starts fully past the right edge and ends fully
- * past the left one, which is what makes the wrap invisible: at either end of a
- * pass there is nothing of the band inside the track to jump.
+ * What a sparkle sits at with no writer driving it - reduced motion, a hidden
+ * pane, the frames before the first tick. Declared as the CSS fallback of the
+ * custom property the writer sets, so "static at a mid opacity" needs no second
+ * code path and no second class.
  */
-const REASONING_MAX_FLOW_START_PERCENT = 250;
-const REASONING_MAX_FLOW_TRAVEL_PERCENT = 350;
+const REASONING_SPARKLE_STATIC_OPACITY = 0.6;
 
-/** Right to left, linear, wrapping once per period. */
-function reasoningMaxFlowOffsetPercent(elapsedMs: number): number {
+/** One sparkle: where it sits in the fill, how big, and where in the cycle. */
+interface ReasoningSparkle {
+  /** Percent across the track, and down it. */
+  readonly left: number;
+  readonly top: number;
+  /** Pixels for a disc; `null` marks a four-point `✦` glint instead. */
+  readonly size: number | null;
+  /** 0-1 of the period, so no two sparkles peak together. */
+  readonly phase: number;
+}
+
+/**
+ * The field, authored rather than generated: a random scatter re-rolls on every
+ * mount and reads as noise, while eleven placed points read as the same
+ * constellation every time the level is chosen. Kept off the stops' own
+ * percentages (0 / 25 / 50 / 75 / 100 for a five-level ladder) so a sparkle
+ * never looks like a dot that drifted, and inside 8-85% so the pill's rounded
+ * ends and the thumb do not clip one mid-twinkle.
+ */
+const REASONING_SPARKLES: ReadonlyArray<ReasoningSparkle> = [
+  { left: 8, top: 30, size: 3, phase: 0 },
+  { left: 15, top: 64, size: 2, phase: 0.19 },
+  { left: 22, top: 22, size: null, phase: 0.42 },
+  { left: 34, top: 52, size: 4, phase: 0.12 },
+  { left: 41, top: 26, size: 2, phase: 0.62 },
+  { left: 49, top: 60, size: null, phase: 0.31 },
+  { left: 57, top: 34, size: 3, phase: 0.77 },
+  { left: 63, top: 66, size: 2, phase: 0.5 },
+  { left: 71, top: 40, size: 4, phase: 0.08 },
+  { left: 78, top: 24, size: null, phase: 0.69 },
+  { left: 85, top: 58, size: 2, phase: 0.35 },
+];
+
+/** The custom property sparkle `index` reads its opacity from. */
+function reasoningSparkleProperty(index: number): string {
+  return `--reasoning-sparkle-${index}`;
+}
+
+/** A raised cosine on the sparkle's own phase: dim, bright, dim, no corners. */
+function reasoningSparkleOpacity(elapsedMs: number, phase: number): number {
   const progress =
-    (elapsedMs % REASONING_MAX_FLOW_PERIOD_MS) / REASONING_MAX_FLOW_PERIOD_MS;
+    ((elapsedMs % REASONING_SPARKLE_PERIOD_MS) / REASONING_SPARKLE_PERIOD_MS +
+      phase) %
+    1;
+  const swell = 0.5 - 0.5 * Math.cos(progress * 2 * Math.PI);
   return (
-    REASONING_MAX_FLOW_START_PERCENT -
-    progress * REASONING_MAX_FLOW_TRAVEL_PERCENT
+    REASONING_SPARKLE_MIN_OPACITY +
+    swell * (REASONING_SPARKLE_MAX_OPACITY - REASONING_SPARKLE_MIN_OPACITY)
   );
 }
 
 /**
- * The max treatment's moving half: a soft band of the accent flowing back down
- * the track, right to left, for as long as the highest level is selected. The
- * static halo and tail say "this is the top"; the flow is what makes it read as
- * live rather than as a colour someone chose.
+ * The max treatment's moving half: a fixed constellation twinkling over the
+ * gradient fill, for as long as the highest level is selected. The gradient and
+ * the glow say "this is the top" in a still frame; the sparkles are what make
+ * it read as live rather than as a colour someone chose.
  *
- * It rides the shared 25 Hz status clock and writes one inline `transform` per
- * tick - no CSS `animation`, which for continuous motion costs a main-thread
- * style recalc every display frame for as long as it runs (see
- * `status-animation-clock.ts`). The one-shot bloom keeps its keyframes: a
- * 640 ms animation that retires itself is exactly what that budget is for.
+ * It rides the shared status clock at the slow cadence and writes ONE element
+ * per tick - eleven custom properties on the field's own container, which each
+ * sparkle reads through `opacity: var(--reasoning-sparkle-N, …)`. Eleven
+ * subscriptions would put eleven writers on the clock's map and eleven elements
+ * in the tick's style pass; one container keeps it at one of each. There is
+ * deliberately no CSS `animation`: for continuous motion that costs a
+ * main-thread style recalc every display frame for as long as it runs (see
+ * `status-animation-clock.ts`).
  *
- * Mounted only while the whole gate holds - the component's presence IS the
- * subscription, so "stop flowing" is an unmount and never a paused writer. The
- * clock's own reduced-motion and hidden-pane rules apply on top.
+ * Unlike the old flowing band, this component is mounted under reduced motion
+ * too. `useStatusAnimation` neither subscribes nor writes then, so every
+ * property stays unset and the fallback in each `var()` is what paints: the
+ * same constellation, still, at a mid opacity. "Static" is the absence of the
+ * writer rather than a branch.
  */
-function ReasoningMaxFlow() {
+function ReasoningMaxSparkles() {
   const ref = useRef<HTMLSpanElement | null>(null);
   const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
-    element.style.transform = `translateX(${reasoningMaxFlowOffsetPercent(elapsedMs).toFixed(2)}%)`;
+    for (const [index, sparkle] of REASONING_SPARKLES.entries()) {
+      element.style.setProperty(
+        reasoningSparkleProperty(index),
+        reasoningSparkleOpacity(elapsedMs, sparkle.phase).toFixed(3),
+      );
+    }
   }, []);
-  // Back to the stylesheet's own resting position, with no inline style left
-  // behind to park a visible band at the left edge.
+  // Back to the fallbacks, with no inline property left behind to freeze the
+  // field at whatever frame the writer stopped on.
   const clear = useCallback((element: HTMLSpanElement) => {
-    element.style.removeProperty("transform");
+    for (const index of REASONING_SPARKLES.keys()) {
+      element.style.removeProperty(reasoningSparkleProperty(index));
+    }
   }, []);
-  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
+  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
 
   return (
-    // The lane is mirrored in RTL rather than the band: the writer's
-    // percentages are physical, and flipping them about the TRACK's centre is
-    // the only place the reflection is the one intended - a `scale` on the band
-    // itself would mirror its travel about its own box, which sits at the left
-    // edge. The tail flips the same way one rule below it in `index.css`, so
-    // the flow still runs back from whichever end max is on.
     <span
+      ref={ref}
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0 rtl:-scale-x-100"
+      data-testid="model-reasoning-max-sparkles"
+      className="pointer-events-none absolute inset-0"
     >
-      <span
-        ref={ref}
-        aria-hidden="true"
-        data-testid="model-reasoning-max-flow"
-        className="reasoning-effort-max-flow absolute inset-y-0 left-0 w-2/5"
-      />
+      {REASONING_SPARKLES.map((sparkle, index) => (
+        <span
+          key={`${sparkle.left}-${sparkle.top}`}
+          aria-hidden="true"
+          data-testid="model-reasoning-max-sparkle"
+          className={cn(
+            "absolute -translate-x-1/2 -translate-y-1/2",
+            sparkle.size === null
+              ? "reasoning-effort-sparkle-glint"
+              : "reasoning-effort-sparkle rounded-full",
+          )}
+          style={{
+            left: `${sparkle.left}%`,
+            top: `${sparkle.top}%`,
+            opacity: `var(${reasoningSparkleProperty(index)}, ${REASONING_SPARKLE_STATIC_OPACITY})`,
+            ...(sparkle.size === null
+              ? {}
+              : { width: sparkle.size, height: sparkle.size }),
+          }}
+        >
+          {sparkle.size === null ? "✦" : null}
+        </span>
+      ))}
     </span>
   );
 }
@@ -328,34 +401,26 @@ function ReasoningMaxFlow() {
  */
 function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
   const { value, options, disabled, onChange } = props.config;
-  const maxCue = props.maxCue;
+  const open = props.pickerOpen;
   const selectedIndex = options.findIndex((option) => option.id === value);
   // A level the catalog does not list (remembered from another model, before
   // normalization catches up) parks the thumb at the first stop rather than
   // leaving the slider without a value - `findReasoningLabel` still prints the
-  // raw level beside it, so the name and the position disagree visibly instead
+  // raw level above it, so the name and the position disagree visibly instead
   // of the control vanishing.
   const thumbIndex = selectedIndex === -1 ? 0 : selectedIndex;
   const lastIndex = options.length - 1;
   const gesture = useRef<PointerGesture>({ active: false, moved: false });
   const atMax = isMaxReasoningLevel(value, options);
-  const open = maxCue === null || maxCue.open;
-  // Drawn only while the cue still belongs to what is on screen. The owning
-  // hook clears an invalidated cue; this is the second reading of the same
-  // question, taken where the DOM is written.
-  const cue = drawableMaxCue(maxCue, atMax);
-  // The flowing band's gate. Deliberately NOT the cue's: the cue is one
-  // arrival, retired the moment its animation ends, while the flow is the
-  // state of being at max - it runs for a picker OPENED at max, which
-  // celebrates nothing. What it shares with the cue is the presentation half
+  // The sparkle field's gate. Reduced motion is deliberately NOT in it: the
+  // field still renders, still, which is the max treatment's answer to the
+  // preference rather than its absence. What IS in it is the presentation half
   // (the two signals `PopoverContent` checks before rendering at all, plus the
   // picker's own `visibleOpen`), because a writer ticking against a popover
   // nobody can see is the one thing the shared clock must never accumulate.
   const paneFocused = usePaneFocused();
   const concealed = usePortalConcealed();
-  const reducedMotion = useReducedMotion();
-  const flowing =
-    atMax && open && !disabled && paneFocused && !concealed && !reducedMotion;
+  const sparkling = atMax && open && !disabled && paneFocused && !concealed;
 
   const selectLevel = (index: number) => {
     const option = options.at(index);
@@ -377,59 +442,31 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
   };
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2 px-2">
-      {/* The label is sized by the catalog, not by the level currently on:
-          "Low" and "Medium" are different widths, so a cell that fits only the
-          selected name moves the track - and every stop with it - each time the
-          level changes, which is exactly what the control is being dragged to
-          do. So every label the catalog offers is stacked in ONE grid cell
-          (`col-start-1 row-start-1`), invisible and `aria-hidden`, and THEY are
-          what the cell is measured from: it is as wide as the widest name this
-          harness can show, for the model's whole ladder, with no measurement,
-          no layout effect and no second render.
-
-          The name the user reads is laid over that cell rather than being one
-          of the stack: a level the catalog does not list prints its raw id
-          (see `thumbIndex`), which has no sizer of its own, so in flow it could
-          be wider than every one of them - the cell would grow for it and
-          shrink again on the next real selection, reintroducing the movement
-          from the other end. Out of flow it can only truncate inside what the
-          sizers reserved.
-
-          The cap is on the cell and `truncate` on every node alike, so a
-          harness with a sentence for a label shortens the cell rather than
-          starving the track - and shortens it to the same width whichever
-          level is on. */}
-      <span className="relative grid max-w-[min(30vw,7rem)] shrink-0 text-ui-xs text-muted-foreground">
-        {options.map((option) => (
-          <span
-            key={option.id}
-            aria-hidden="true"
-            data-testid="model-reasoning-level-sizer"
-            className={REASONING_LEVEL_LABEL_SIZER}
-          >
-            {option.label}
-          </span>
-        ))}
-        <span
-          data-testid="model-reasoning-level-name"
-          className={REASONING_LEVEL_LABEL_NAME}
-        >
-          {findReasoningLabel(value, options)}
-        </span>
+    <div className="flex min-w-0 flex-1 flex-col gap-1 px-2">
+      {/* The name sits ABOVE the track rather than beside it, which is what
+          finally settles the width problem the earlier sizer stack worked
+          around: a label on its own line cannot take width from the track, so
+          "Low" and "Extra high" leave every stop exactly where it was and no
+          reserved-width machinery is needed. Centred, because the row it heads
+          is the whole track rather than the thumb's end of it. It truncates
+          inside a cap of its own so a harness with a sentence for a label
+          cannot widen the popover. */}
+      <span
+        data-testid="model-reasoning-level-name"
+        className="max-w-full truncate text-center text-ui-xs text-muted-foreground"
+      >
+        {findReasoningLabel(value, options)}
       </span>
-      {/* `py-3` is the bloom's room, not spacing: the ring reaches ~20px from
-          the thumb's centre (a 16px thumb, `inset:-4px`, scaled to 1.65), and
-          the popover clips it. 12px here plus the footer's own `py-1.5` puts
-          the centre exactly 20px above the bottom edge at every width. The
-          padding lives on the slider alone, so a footer that also carries the
-          service-tier row does not add it twice, and the list keeps its own
-          height. */}
+      {/* `py-2` is the max glow's room, not spacing: the glow reaches 14px from
+          the track's edge (`0 0 12px 2px`) and the popover is
+          `overflow-hidden`. 8px here plus the footer's own `py-1.5` is exactly
+          that. The padding lives on the slider alone, so a footer that also
+          carries the service-tier row does not add it twice, and the list keeps
+          its own height. */}
       <Slider
         data-testid="model-reasoning-slider"
-        className="reasoning-effort-slider min-w-0 flex-1 py-3"
+        className="reasoning-effort-slider min-w-0 flex-1 py-2"
         data-max={atMax ? "true" : undefined}
-        data-open={open ? "true" : undefined}
         value={[thumbIndex]}
         min={0}
         max={lastIndex}
@@ -449,25 +486,31 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
           selectLevel(next.at(0) ?? thumbIndex);
         }}
       >
-        <SliderTrack>
-          <SliderRange />
-          {/* The end of the track takes the accent at max. Static, and a
-              gradient rather than a second solid fill, so the neutral base and
-              the stops stay readable under it. */}
-          <span
-            aria-hidden="true"
-            data-testid="model-reasoning-max-tail"
-            className="reasoning-effort-max-tail pointer-events-none absolute inset-0 rounded-full"
+        <SliderTrack
+          size="pill"
+          className={cn(atMax && "reasoning-effort-max-glow")}
+        >
+          {/* Solid, not the primitive's `/70`: in a pill this wide the fill IS
+              the control's read, and a translucent one over the unfilled base
+              muddies the boundary the thumb sits on. */}
+          <SliderRange
+            data-testid="model-reasoning-range"
+            className={cn(
+              "rounded-full bg-primary",
+              atMax && "reasoning-effort-max-range",
+            )}
           />
-          {/* Inside the track, so the track's own `overflow-hidden` is what
-              clips the band at both ends; over the range and the tail, under
-              the stops and the thumb, which are the slider's later siblings. */}
-          {flowing ? <ReasoningMaxFlow /> : null}
+          {/* Inside the track, so the track's own `overflow-hidden` and rounded
+              ends are what clip the field; over the range, under the stops and
+              the thumb, which are the slider's later siblings. */}
+          {sparkling ? <ReasoningMaxSparkles /> : null}
         </SliderTrack>
         {/* Inset by half the thumb, which is where Radix keeps the thumb's own
             centre at the two ends (`getThumbInBoundsOffset`) - without it the
-            first and last dot sit half a thumb outside the thumb's reach. */}
-        <div className="pointer-events-none absolute inset-0 px-2">
+            first and last dot sit half a thumb outside the thumb's reach. The
+            pill thumb is 28px, so this is `px-3.5`; `py-2` matches the slider's
+            own padding, which puts the overlay exactly on the track. */}
+        <div className="pointer-events-none absolute inset-0 px-3.5 py-2">
           <div className="relative h-full">
             {options.map((option, index) => (
               <ReasoningLevelStop
@@ -476,6 +519,10 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
                 index={index}
                 percent={lastIndex === 0 ? 0 : (index / lastIndex) * 100}
                 selected={index === selectedIndex}
+                // The fill runs from the left edge to the thumb's centre, so
+                // every stop up to the selected one is painted over it and
+                // needs the colour meant to sit ON the fill.
+                overFill={index < thumbIndex}
                 disabled={disabled}
                 onSelect={selectLevel}
                 movedByGesture={gestureMovedValue}
@@ -483,58 +530,17 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
             ))}
           </div>
         </div>
-        {/* The thumb keeps its own hit area, focus ring and Radix geometry;
-            the visible disc is the core drawn inside it, so the max halo and
-            the focus ring are separate channels that cannot displace each
-            other. */}
+        {/* The disc IS the thumb at this size - no core drawn inside it, since
+            there is no longer a halo that would have to stay off the focus
+            ring's channel. */}
         <SliderThumb
+          size="pill"
           aria-label="Thinking effort"
           aria-valuetext={findReasoningLabel(value, options)}
-          className="border-0 bg-transparent shadow-none"
-        >
-          <span
-            aria-hidden="true"
-            data-testid="model-reasoning-thumb-core"
-            className="reasoning-effort-thumb-core pointer-events-none absolute inset-0 rounded-full"
-          />
-          {cue === null ? null : (
-            <span
-              // Keyed by generation: leaving max and coming straight back is a
-              // new node, so the animation restarts instead of being skipped
-              // as an unchanged element.
-              key={cue.generation}
-              aria-hidden="true"
-              data-pulse="true"
-              data-testid="model-reasoning-max-bloom"
-              className="reasoning-effort-bloom pointer-events-none absolute rounded-full"
-              onAnimationEnd={(event) => {
-                // This element's own bloom, and no other animation that
-                // happens to end here - a popover or tooltip playing out
-                // nearby must not retire the cue.
-                if (event.target !== event.currentTarget) return;
-                if (event.animationName !== "reasoning-max-bloom") return;
-                maxCue?.onCueEnd(cue.generation);
-              }}
-            />
-          )}
-        </SliderThumb>
+        />
       </Slider>
     </div>
   );
-}
-
-/**
- * The cue to draw, or `null`. A cue survives only while the world it names is
- * still the one on screen: same host, harness, model and catalog, still at the
- * last stop, still presented.
- */
-function drawableMaxCue(
-  maxCue: ReasoningMaxCueConfig | null,
-  atMax: boolean,
-): ReasoningMaxCue | null {
-  if (maxCue === null || maxCue.cue === null) return null;
-  if (!atMax || !maxCue.open) return null;
-  return maxCue.cue.contextKey === maxCue.contextKey ? maxCue.cue : null;
 }
 
 /** One pointer gesture on the slider: whether it is in flight, and whether it
@@ -549,6 +555,8 @@ interface ReasoningLevelStopProps {
   readonly index: number;
   readonly percent: number;
   readonly selected: boolean;
+  /** Whether the fill reaches this stop, which decides the dot's colour. */
+  readonly overFill: boolean;
   readonly disabled: boolean;
   readonly onSelect: (index: number) => void;
   /** Whether the gesture that produced this click already set the level. */
@@ -558,8 +566,15 @@ interface ReasoningLevelStopProps {
 // One dot. `pointer-events-auto` restores what the overlay above it gives up,
 // so the bare track between two dots still belongs to the slider and a drag
 // that crosses a dot is not interrupted.
+//
+// The hit target is the track's full HEIGHT (36px, comfortably past the 24px
+// coarse-pointer floor on that axis) and stays narrow across: a target as wide
+// as it is tall would overlap its neighbour on the narrowest picker with the
+// longest ladder, and the thing a finger is aiming at is a column of the track,
+// not a square.
 function ReasoningLevelStop(props: ReasoningLevelStopProps) {
-  const { option, index, percent, selected, disabled, onSelect } = props;
+  const { option, index, percent, selected, overFill, disabled, onSelect } =
+    props;
   return (
     <TooltipWrapper
       label={option.label}
@@ -575,7 +590,7 @@ function ReasoningLevelStop(props: ReasoningLevelStopProps) {
         disabled={disabled}
         style={{ left: `${percent}%` }}
         className={cn(
-          "group pointer-events-auto absolute top-1/2 flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full disabled:cursor-not-allowed pointer-coarse:size-6",
+          "group pointer-events-auto absolute top-1/2 flex h-full w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full disabled:cursor-not-allowed pointer-coarse:w-6",
           // The selected stop keeps its slot - the thumb is drawn on top of it
           // and takes the pointer, so a visible dot under there would only be
           // a smudge at the edge of the thumb.
@@ -586,10 +601,19 @@ function ReasoningLevelStop(props: ReasoningLevelStopProps) {
           onSelect(index);
         }}
       >
+        {/* Two colours, because the dot sits on two different surfaces:
+            `--primary-foreground` is by definition the colour that reads on the
+            fill, and a foreground alpha is what reads on the unfilled base. A
+            single alpha would vanish on one half of every theme. */}
         <span
+          data-testid={`model-reasoning-dot-${index}`}
           className={cn(
-            "size-1.5 rounded-full bg-foreground/30 transition-colors",
-            !disabled && "group-hover:bg-foreground/60",
+            "size-1.5 rounded-full transition-colors",
+            overFill ? "bg-primary-foreground/35" : "bg-foreground/25",
+            !disabled &&
+              (overFill
+                ? "group-hover:bg-primary-foreground/70"
+                : "group-hover:bg-foreground/55"),
           )}
         />
       </button>

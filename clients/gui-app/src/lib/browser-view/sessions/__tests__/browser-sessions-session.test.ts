@@ -82,7 +82,7 @@ const SNAPSHOT_FRAME: BrowserSessionsUxServerFrame = {
 
 describe("openBrowserSessionsSession on a desktop shell (browserView present)", () => {
   it("opens through IPC and relays only UX frames the bridge forwards", () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     const { statuses, frames, callbacks } = recordingCallbacks();
     const session = openBrowserSessionsSession({
       key: KEY,
@@ -148,7 +148,7 @@ describe("openBrowserSessionsSession on a desktop shell (browserView present)", 
   });
 
   it("relays tabBound and tabReleased by identity only", () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     const { bound, released, callbacks } = recordingCallbacks();
     openBrowserSessionsSession({
       key: KEY,

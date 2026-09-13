@@ -1,3 +1,4 @@
+import type { UseMutateFunction } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, Paintbrush } from "lucide-react";
@@ -43,6 +44,7 @@ import {
   useEpicSweepWorktrees,
   useSweepingWorktreePaths,
   type SweepWorktreesResult,
+  type SweepWorktreesVariables,
 } from "@/hooks/epic/use-epic-sweep-worktrees-mutation";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -782,7 +784,11 @@ function startSweepKickoff(input: {
   readonly hostId: string | null;
   readonly epicId: string | undefined;
   readonly targets: ReadonlyArray<EpicSweepWorktreeRow>;
-  readonly mutate: ReturnType<typeof useEpicSweepWorktrees>["mutate"];
+  readonly mutate: UseMutateFunction<
+    SweepWorktreesResult,
+    Error,
+    SweepWorktreesVariables
+  >;
   readonly onClose: () => void;
   readonly onSweepOutcome: (result: SweepWorktreesResult) => void;
 }): void {

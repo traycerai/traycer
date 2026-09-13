@@ -200,3 +200,109 @@ export function classifyProviderRateLimits(
   if (severities.includes("running_low")) return "running_low";
   return "healthy";
 }
+
+/**
+ * Tokenizes a family name or a model slug/label for family matching.
+ *
+ * Both sides tokenize on non-alphanumerics because the two vocabularies are
+ * formatted differently for the same fact: a provider names a window's family
+ * with a DISPLAY name ("Claude Opus") and names the models it gates with a
+ * SLUG ("claude-opus-4-7"). Comparing them as raw strings - `slug.includes(
+ * family)` - fails on the space alone, which is how a real blocker came to be
+ * dropped and a false readiness emitted.
+ */
+export function rateLimitMatchTokens(value: string): readonly string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 0);
+}
+
+// Tokens that appear in family names AND in every model slug of the provider
+// ("Claude Opus" / `claude-fable-5`), so matching through them would gate every
+// model. Stripped from the FAMILY side; a family left with nothing errs toward
+// matching.
+const PROVIDER_GENERIC_TOKENS: ReadonlySet<string> = new Set([
+  "claude",
+  "anthropic",
+]);
+
+// Slugs that name no particular model - a harness's "whatever is configured"
+// alias. They are alphabetic and would otherwise read as informative, so a
+// window for `opus` would be judged NOT to gate them, which is backwards: an
+// alias proves nothing about which model runs.
+const UNRESOLVED_MODEL_TOKENS: ReadonlySet<string> = new Set([
+  "default",
+  "auto",
+  "inherit",
+]);
+
+/**
+ * Whether a limited window's `family` gates the model described by
+ * `modelTokens` (the union of its slug's and label's tokens).
+ *
+ * `null` is a shared window and gates everything. Otherwise the window applies
+ * when any INFORMATIVE family token appears among the model's tokens: "Fable"
+ * -> `claude-fable-5`, "opus" -> `opus[1m]`, "Claude Opus" -> `claude-opus-4-7`
+ * but NOT `claude-fable-5`. Purely numeric family tokens are version noise and
+ * provider-generic tokens match everything, so both are ignored.
+ *
+ * Every uncertain path INCLUDES the window - a family with no informative token
+ * left, and a model that is only an unresolved alias. The asymmetry is
+ * deliberate and means opposite things to the two callers, both of them the
+ * safe direction: the GUI errs toward SHOWING a limit warning rather than
+ * hiding a real one, and the host errs toward counting a blocker, which can
+ * only make readiness stricter. Dropping a window on doubt would instead offer
+ * the nearest reset of the windows that happened to match - the forty-minute
+ * answer under an exhausted weekly window that the readiness rule exists to
+ * refuse.
+ *
+ * Shared rather than copied because the two peers must agree: the host decides
+ * from this whether to WAIT for a window, and the GUI renders from it what the
+ * user is told about the same window. A divergence shows up as a chat that
+ * waits on a limit the UI says does not apply.
+ */
+/**
+ * The SLUG-side wrapper, which is the shape both peers can always form: a model
+ * is named by a bare slug on the host, and by a slug plus a display label in the
+ * GUI.
+ *
+ * This exists so the host does not keep a private copy of the two-line wrapper.
+ * It used to, and the GUI's agreement suite could only reproduce that copy
+ * rather than call it - so a change to the host's own token derivation would
+ * have left both suites green while the peers silently stopped meaning the same
+ * thing. One exported implementation makes that drift impossible instead of
+ * merely detectable.
+ *
+ * A `null` slug is unknown and therefore INCLUDES the window, the same
+ * err-toward-the-blocker direction as every other uncertain path here.
+ */
+export function rateLimitFamilyAffectsModelSlug(
+  family: string | null,
+  modelSlug: string | null,
+): boolean {
+  if (modelSlug === null) return true;
+  return rateLimitFamilyAffectsModel(
+    family,
+    new Set(rateLimitMatchTokens(modelSlug)),
+  );
+}
+
+export function rateLimitFamilyAffectsModel(
+  family: string | null,
+  modelTokens: ReadonlySet<string>,
+): boolean {
+  if (family === null) return true;
+  const familyTokens = rateLimitMatchTokens(family).filter(
+    (token) => /[a-z]/.test(token) && !PROVIDER_GENERIC_TOKENS.has(token),
+  );
+  if (familyTokens.length === 0) return true;
+  const informativeModelTokens = [...modelTokens].filter(
+    (token) =>
+      /[a-z]/.test(token) &&
+      !PROVIDER_GENERIC_TOKENS.has(token) &&
+      !UNRESOLVED_MODEL_TOKENS.has(token),
+  );
+  if (informativeModelTokens.length === 0) return true;
+  return familyTokens.some((token) => modelTokens.has(token));
+}

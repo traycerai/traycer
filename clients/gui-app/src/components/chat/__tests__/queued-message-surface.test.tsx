@@ -113,7 +113,23 @@ vi.mock("@dnd-kit/sortable", () => ({
   useSortable: () => ({
     setNodeRef: () => null,
     setActivatorNodeRef: () => null,
-    attributes: {},
+    // These are the attributes the REAL `useSortable` returns, and they must be
+    // here or the AX7 pin below is vacuous. That is not hypothetical: this mock
+    // returned `attributes: {}`, and under an ablation that re-threaded
+    // `{...attributes}` onto the handle the pin stayed GREEN - spreading an
+    // empty object changes no markup, so the cell asserting those attributes
+    // are ABSENT could not fail whatever production did.
+    //
+    // An under-provisioned mock reads as a missing feature. The pin's subject
+    // is "the handle does not carry dnd-kit's keyboard advertisement", so the
+    // fixture has to be able to supply that advertisement.
+    attributes: {
+      role: "button",
+      tabIndex: 0,
+      "aria-disabled": false,
+      "aria-roledescription": "sortable",
+      "aria-describedby": "DndDescribedBy-0",
+    },
     listeners: {},
     transform: null,
     transition: undefined,
@@ -178,6 +194,62 @@ describe("<QueuedMessagePanel />", () => {
     expect(
       screen.queryByRole("button", { name: "Drag to reorder queued message" }),
     ).toBeNull();
+  });
+
+  it("AX7: the drag handle is hidden from assistive technology and out of the tab order, for EVERY row - enabled ones included", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-1", "First queued prompt", "pending"),
+        queuedItem("queue-2", "Second queued prompt", "pending"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: vi.fn(),
+    });
+
+    // Two rows, so reordering is possible and both handles are ENABLED - the
+    // case the old `attributes` spread applied to. The disabled single-row
+    // handle was already a hidden span; this is about the other branch.
+    const handles = screen.getAllByTestId("queued-message-drag-handle");
+    expect(handles).toHaveLength(2);
+    for (const handle of handles) {
+      // Falsification, and it now takes TWO steps, which is the point:
+      // `useQueuedMessageRowSortable` no longer returns `attributes` at all, so
+      // re-adding the defect means restoring that field to
+      // `UseQueuedMessageRowSortableReturn` first, and only then threading it
+      // to this handle and spreading it. dnd-kit supplies `role="button"`,
+      // `tabIndex={0}`, `aria-roledescription="sortable"` and an
+      // `aria-describedby` naming the space-bar gesture - four of the six
+      // assertions in this loop redden, `aria-hidden` and `tagName` staying
+      // green.
+      //
+      // Measured, and the first attempt measured ZERO: the mock above returned
+      // `attributes: {}`, so the spread added no markup and this cell could not
+      // fail. It reddens now because that fixture was fixed - see the comment
+      // on the `useSortable` mock.
+      expect(handle.getAttribute("aria-hidden")).toBe("true");
+      expect(handle.getAttribute("aria-roledescription")).toBeNull();
+      expect(handle.getAttribute("aria-describedby")).toBeNull();
+      expect(handle.getAttribute("tabindex")).toBeNull();
+      expect(handle.getAttribute("role")).toBeNull();
+      expect(handle.tagName).toBe("SPAN");
+    }
+
+    // And nothing anywhere still offers it by name. `queryByRole` would not
+    // see an `aria-hidden` node, so this is the assertion that would catch a
+    // handle re-exposed WITHOUT the dnd-kit attributes - a plain
+    // `<button aria-label="Drag to reorder…">` with no working key handler,
+    // which is the same defect wearing different markup.
+    expect(
+      screen.queryByRole("button", { name: /Drag to reorder/ }),
+    ).toBeNull();
+    // The pointer affordance survives: the handle is still the tooltip's
+    // trigger, so this is a change to what AT is told, not a removal of the
+    // control. Asserted STRUCTURALLY rather than through `tooltipTextNear`,
+    // which opens the tip by focusing the trigger - and this trigger is now
+    // deliberately not focusable, so reading its text would be testing the
+    // probe's reach rather than the handle.
+    expect(handles[0].getAttribute("data-slot")).toBe("tooltip-trigger");
   });
 
   it("collapses and expands queued rows from the header", () => {
@@ -316,10 +388,14 @@ describe("<QueuedMessagePanel />", () => {
 
     const firstRow = screen.getAllByTestId("queued-message-row")[0];
     const rowButtons = within(firstRow).getAllByRole("button");
+    // The drag handle is deliberately NOT in this list. It used to lead it as
+    // "Drag to reorder queued message"; AX7 took it out of the accessibility
+    // tree and the tab order, because dnd-kit's `attributes` advertised a
+    // space-bar gesture `PointerSensor` alone never implemented. The row's
+    // three real controls are what a keyboard reaches.
     expect(
       rowButtons.map((button) => button.getAttribute("aria-label")),
     ).toEqual([
-      "Drag to reorder queued message",
       "Edit queued message",
       "Delete queued message",
       "Steer queued message now",

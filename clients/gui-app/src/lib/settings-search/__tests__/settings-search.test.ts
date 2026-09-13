@@ -24,7 +24,7 @@ const FAKE_RUNNER_HOST = createFakeRunnerHost({});
  */
 const DESKTOP: SettingsAvailabilityContext = {
   runnerHost: createFakeRunnerHost({
-    browserView: new FakeBrowserViewBridge(),
+    browserView: new FakeBrowserViewBridge(undefined),
     zoom: DESKTOP_ZOOM,
     notifications: {
       ...FAKE_RUNNER_HOST.notifications,
@@ -360,8 +360,10 @@ describe("settings search", () => {
 
     it("sends runtime-gated groups' vocabulary to their pages", () => {
       // Website sessions also waits on a bound host runtime and a first read
-      // of the browser bridge; host Notifications' groups sit behind the
-      // page's scope gate. Neither is a target — their words reach the page.
+      // of the browser bridge; host Notifications' and Fallback's groups sit
+      // behind their pages' scope gates, and Fallback's render only once the
+      // host answers the policy read. None is a target — their words reach
+      // the page.
       for (const context of [DESKTOP, MOBILE]) {
         for (const query of ["stay signed in", "cookies", "website sessions"]) {
           expect(landingsFor(query, context), query).toContain("general#<top>");
@@ -369,6 +371,11 @@ describe("settings search", () => {
         for (const query of ["notification hooks", "webhook", "toast"]) {
           expect(landingsFor(query, context), query).toContain(
             "notifications#<top>",
+          );
+        }
+        for (const query of ["rate limit", "failover", "equivalent models"]) {
+          expect(landingsFor(query, context), query).toContain(
+            "fallback#<top>",
           );
         }
       }
@@ -379,6 +386,7 @@ describe("settings search", () => {
         "Saved website sessions",
         "In-app notifications",
         "Notification hooks",
+        "Automatic fallback",
       ]) {
         expect(labelsFor(label, DESKTOP), label).not.toContain(label);
       }

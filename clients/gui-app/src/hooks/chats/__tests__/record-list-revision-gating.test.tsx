@@ -69,6 +69,7 @@ import {
   invalidateEpicTuiAgentRecords,
   useEpicSyncTuiAgentRecords,
 } from "@/hooks/chats/use-epic-tui-agent-records";
+import { publishRecordListDeltaStamp } from "@/lib/records/record-list-delta-stamps";
 
 const EPIC_ID = "epic-revision-gating";
 const VIEWER_ID = "viewer-1";
@@ -227,7 +228,10 @@ function newSession(): OpenedStoreForTest {
 }
 
 interface HandlerBox<Req, Res> {
-  impl: (params: Req) => Res;
+  // `| Promise<Res>` so a case can hold a dispatch in flight (R8's
+  // in-flight-refetch case) without every other case's synchronous handler
+  // having to wrap its answer.
+  impl: (params: Req) => Res | Promise<Res>;
 }
 
 interface Fixture {
@@ -966,9 +970,10 @@ describe("R9 - the terminal twin: a racing tuiUpsert also declines the stamp", (
     // REAPED AGENT THEN READS AS ABSENT rather than as asleep and resumable,
     // which is the original symptom this epic exists to fix.
     //
-    // The facet's own value has no seam out of the store yet
-    // (`TerminalAgentsSlice` does not carry it), so what is pinned is the step
-    // that decides it: the next dispatch asks for a snapshot.
+    // `TerminalAgentsSlice` now carries the facet, so this pins both halves:
+    // the step that decides it (the next dispatch asks for a snapshot) and the
+    // value that step delivers (the repaired snapshot's `sleeping` reaching
+    // the slice).
     const stampBefore: RecordListStamp = {
       epoch: "F",
       revision: 4,
@@ -1007,6 +1012,10 @@ describe("R9 - the terminal twin: a racing tuiUpsert also declines the stamp", (
           kind: "tuiUpsert",
           epicId: EPIC_ID,
           record: streamRow,
+          // NOT STATED, which is what a pre-`@1.4` frame carries and what
+          // makes this the racing case: a `@1.4` frame would state the facet
+          // outright and the answer would have nothing left to repair.
+          sessionFacet: null,
         });
       }
       return {
@@ -1039,6 +1048,520 @@ describe("R9 - the terminal twin: a racing tuiUpsert also declines the stamp", (
       expect(tuiCalls(fixture.messenger)).toHaveLength(3);
     });
     expect(tuiCalls(fixture.messenger)[2]?.knownRevision).toBeNull();
+
+    // And the repair lands the facet. The snapshot that the dropped stamp
+    // forces is answered with the row stated, and `sleeping` reaches the
+    // slice - the agent reads as asleep and resumable rather than absent,
+    // which is the symptom itself and not merely the step that decides it.
+    //
+    // At revision 10 here only to keep this case about the STAMP. The
+    // equal-revision answer lands too, via the facet waiver in
+    // `tuiAgentRowSupersedes` - that is the second half of the same repair
+    // and `record-table-incomplete-apply.test.ts`'s I2 pins it directly, at
+    // the revision the delta actually seeded.
+    fixture.tuiHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: { epoch: "F", revision: 6, touchRevision: 1 },
+      tuiAgents: [
+        tuiRow({ tuiAgentId: "tui-seed" }),
+        {
+          ...tuiRow({ tuiAgentId: "tui-new", revision: 10 }),
+          sessionState: "sleeping" as const,
+          lastExit: "reaped" as const,
+        },
+      ],
+    });
+    invalidateEpicTuiAgentRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(
+        fixture.handle.store.getState().tuiAgents.byId["tui-new"]?.sessionState,
+      ).toBe("sleeping");
+    });
+    expect(
+      fixture.handle.store.getState().tuiAgents.byId["tui-new"]?.lastExit,
+    ).toBe("reaped");
+
+    view.unmount();
+  });
+});
+
+/**
+ * R10 - `useRecordListStreamStamp` keeps a held stamp current from the PUSH
+ * channel (`publishRecordListDeltaStamp`), so an ordinary change stops costing
+ * a snapshot. Reuses R1-R7's harness verbatim: the same fixture, the same real
+ * hooks, the same `chatCalls`/`tuiCalls` dispatch log - the only new
+ * ingredient is publishing directly onto the per-epic channel the mount would
+ * otherwise announce on, since this file has no `ChatRecordsStreamMount`
+ * mounted.
+ *
+ * Downstream of R8/R9, and the pairing is the point: those two decide when a
+ * stamp may be HELD at all, and this one advances a held stamp without a read.
+ * A stamp this client should have dropped is a stamp the push channel would
+ * then keep alive indefinitely.
+ */
+describe("R10 - the push stream's stamp", () => {
+  it("advances the held stamp on the immediate successor, with no refetch, and the next dispatch carries it", async () => {
+    const chatStamp: RecordListStamp = {
+      epoch: "E",
+      revision: 1,
+      touchRevision: 3,
+    };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: chatStamp,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    const view = renderHook(useBothRecordSyncHooks, {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    // The immediate successor: same epoch, `held.revision + 1`.
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 2 });
+    // No refetch fires from the publish alone - `publish` is synchronous, so
+    // if a refetch had been queued it would already have been dispatched by
+    // the time this assertion runs.
+    expect(chatCalls(fixture.messenger)).toHaveLength(1);
+
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    // The advanced revision, with `touchRevision` carried through UNCHANGED -
+    // the delta reports a list change, never a quiet write.
+    expect(chatCalls(fixture.messenger)[1]?.knownRevision).toEqual({
+      epoch: "E",
+      revision: 2,
+      touchRevision: 3,
+    });
+
+    view.unmount();
+  });
+
+  it("advances the TERMINAL-AGENT plane's held stamp from a delta announced for the SAME epic - the per-epic channel, not a per-plane one", async () => {
+    // The channel is per (viewer, epic), not per list method: both planes
+    // answer with the same composite revision, so one announcement - whatever
+    // kind of row actually changed - must move BOTH held stamps.
+    const tuiStamp: RecordListStamp = {
+      epoch: "F",
+      revision: 1,
+      touchRevision: 1,
+    };
+    fixture.tuiHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: tuiStamp,
+      tuiAgents: [tuiRow({ tuiAgentId: "tui-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(tuiCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().tuiAgents.allIds).toContain(
+        "tui-a",
+      );
+    });
+
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "F", revision: 2 });
+
+    invalidateEpicTuiAgentRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(tuiCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(tuiCalls(fixture.messenger)[1]?.knownRevision).toEqual({
+      epoch: "F",
+      revision: 2,
+      touchRevision: 1,
+    });
+  });
+
+  it("triggers exactly one refetch for a delta at held + 2 - a gap, not a jump to follow", async () => {
+    const chatStamp: RecordListStamp = {
+      epoch: "E",
+      revision: 1,
+      touchRevision: 1,
+    };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: chatStamp,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    // A gap: `held.revision + 2`, not the immediate successor. The in-between
+    // change is exactly what this client has no other way to learn about, so
+    // the rule must re-read rather than silently skip it.
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 3 });
+
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    // Settle and assert no THIRD dispatch follows from the same publish.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chatCalls(fixture.messenger)).toHaveLength(2);
+  });
+
+  it("triggers exactly one refetch when the epoch differs, even though the revision happens to equal held + 1", async () => {
+    const chatStamp: RecordListStamp = {
+      epoch: "E",
+      revision: 1,
+      touchRevision: 1,
+    };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: chatStamp,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    // Revisions from two epochs do not compare - this is a host restart or a
+    // re-hydrate, not "the very next change", however the bare number reads.
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "OTHER-EPOCH", revision: 2 });
+
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(chatCalls(fixture.messenger)[1]?.knownRevision).toBeNull();
+  });
+
+  it("a plane holding null ignores a delta entirely: no refetch, nothing held", async () => {
+    // The `@1.2` upgrade path (R4): a snapshot with no revision to report
+    // leaves the plane on `knownRevision: null`, which already asks for a
+    // snapshot on every dispatch - a delta has nothing to tell it.
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: null,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 2 });
+    // Settle any microtask a (wrongly) queued refetch would need.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chatCalls(fixture.messenger)).toHaveLength(1);
+
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(chatCalls(fixture.messenger)[1]?.knownRevision).toBeNull();
+  });
+
+  it("a second delta arriving while the gap's refetch is still in flight triggers no further refetch - the stamp was dropped", async () => {
+    const chatStamp: RecordListStamp = {
+      epoch: "E",
+      revision: 1,
+      touchRevision: 1,
+    };
+    const refetchLatch: { resolve: (() => void) | null } = { resolve: null };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: chatStamp,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    // The refetch this gap triggers will hang until `refetchLatch.resolve` runs.
+    fixture.chatHandler.impl = () =>
+      new Promise((resolve) => {
+        refetchLatch.resolve = () => {
+          resolve({
+            kind: "snapshot",
+            listStamp: { epoch: "E", revision: 3, touchRevision: 1 },
+            chats: [chatRow({ chatId: "chat-a" })],
+          });
+        };
+      });
+
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 3 });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(refetchLatch.resolve).not.toBeNull();
+
+    // A second delta lands while the first refetch is still in flight. The
+    // stamp was already dropped to `null` by the first one, so this must find
+    // `currentStamp === null` and do nothing - no third dispatch.
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chatCalls(fixture.messenger)).toHaveLength(2);
+
+    refetchLatch.resolve?.();
+    await waitFor(() => {
+      expect(
+        fixture.handle.store.getState().chats.byId["chat-a"],
+      ).toBeDefined();
+    });
+    // Still exactly two dispatches once the in-flight refetch resolves.
+    expect(chatCalls(fixture.messenger)).toHaveLength(2);
+  });
+
+  it("does not advance a stamp the store's incomplete apply already invalidated - the push channel cannot launder a dropped stamp", async () => {
+    // THE SEAM BETWEEN R8 AND THIS SUITE, and the one neither covers alone.
+    // R8 proves an incomplete apply makes the next DISPATCH send `null`. This
+    // proves the push channel cannot undo that: a delta arriving in between
+    // finds `read()` already refusing the stamp and so has nothing to move,
+    // and the snapshot R8's decline buys is still asked for.
+    //
+    // Without it the two mechanisms compose into the failure neither has on
+    // its own - a stamp dropped for an incomplete apply, then re-advanced by
+    // the very next delta and sent as though it described rows this client
+    // holds. Ablating the counter check in `read` fails exactly here, with
+    // `{E, 6}` going out in place of `null`.
+    const stampBefore: RecordListStamp = {
+      epoch: "E",
+      revision: 4,
+      touchRevision: 1,
+    };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: stampBefore,
+      chats: [chatRow({ chatId: "chat-seed" })],
+    });
+
+    const view = renderHook(useBothRecordSyncHooks, {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain(
+        "chat-seed",
+      );
+    });
+
+    // Same race as R8: a delta lands from inside the handler, so the answer's
+    // copy of the row is held back by the request-time fence.
+    const deltaSent = { value: false };
+    fixture.chatHandler.impl = () => {
+      if (!deltaSent.value) {
+        deltaSent.value = true;
+        const { docResident: _home, ...streamRow } = chatRow({
+          chatId: "chat-new",
+          revision: 9,
+        });
+        fixture.handle.store.getState().applyChatRecordDelta({
+          kind: "upsert",
+          epicId: EPIC_ID,
+          record: streamRow,
+        });
+      }
+      return {
+        kind: "snapshot",
+        listStamp: { epoch: "E", revision: 5, touchRevision: 1 },
+        chats: [
+          chatRow({ chatId: "chat-seed" }),
+          chatRow({ chatId: "chat-new", revision: 9, docResident: false }),
+        ],
+      };
+    };
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chatSnapshotIncompleteSeq).toBe(1);
+    });
+
+    // The immediate successor of the stamp that answer carried. Under a
+    // re-binding `advance` this would be held as `{E, 6}` and sent.
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 6 });
+
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(3);
+    });
+    // THE CLAIM: still `null`. The delta moved nothing, because there was no
+    // valid stamp for it to move.
+    expect(chatCalls(fixture.messenger)[2]?.knownRevision).toBeNull();
+
+    view.unmount();
+  });
+});
+
+/**
+ * R11 - a REMOTE CREATE between polls, end to end.
+ *
+ * The case R8-R10 leave open, and the one that needs no race at all: no
+ * in-flight poll, no lost frame, no unusual timing. Another window or an A2A
+ * agent creates a chat; its `@1.4` `upsert` arrives stamped with the exact
+ * successor of the revision this client holds.
+ *
+ * Every mechanism then behaves correctly and the result is still wrong. The
+ * delta is applied whole (no fence skipped anything, so `snapshotIncompleteSeq`
+ * does not move), the revision IS contiguous (so R10 advances the stamp), and
+ * every later poll answers `unchanged`. The chat's home is never stated, and
+ * `routeChatWrite` reads `docResident: null` as "unavailable" - rename,
+ * archive, reparent and delete closed on it for the life of the session,
+ * behind copy that says it is not adopted.
+ *
+ * What closes it is that a delta INTRODUCING a row it cannot fully state is
+ * itself an incomplete apply, counted separately (`deltaIncompleteSeq`) and
+ * repaired by the GAP RULE rather than by the dispatch comparison - a delta
+ * has no dispatch to bind a stamp to.
+ */
+describe("R11 - a delta that introduces an unstated row declines the stamp", () => {
+  it("re-reads once, the snapshot states the home, and the stamp advances normally after", async () => {
+    const stampBefore: RecordListStamp = {
+      epoch: "E",
+      revision: 4,
+      touchRevision: 1,
+    };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: stampBefore,
+      chats: [chatRow({ chatId: "chat-seed" })],
+    });
+
+    const view = renderHook(useBothRecordSyncHooks, {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain(
+        "chat-seed",
+      );
+    });
+    expect(chatCalls(fixture.messenger)).toHaveLength(1);
+
+    // The answer the forced re-read will get: both chats, the new one with
+    // its home stated at last.
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: { epoch: "E", revision: 5, touchRevision: 1 },
+      chats: [
+        chatRow({ chatId: "chat-seed" }),
+        chatRow({ chatId: "chat-new", revision: 9, docResident: false }),
+      ],
+    });
+
+    // THE REMOTE CREATE. Applied first, then the stamp announced - exactly
+    // the order `ChatRecordsStreamMount` uses.
+    const { docResident: _home, ...streamRow } = chatRow({
+      chatId: "chat-new",
+      revision: 9,
+    });
+    fixture.handle.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: EPIC_ID,
+      record: streamRow,
+    });
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 5 });
+
+    // The row is here and its home is unknown - the state the whole case is
+    // about.
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain(
+        "chat-new",
+      );
+    });
+
+    // THE CLAIM. One re-read, asking for a full snapshot rather than
+    // reporting the revision the delta just advanced to.
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(chatCalls(fixture.messenger)[1]?.knownRevision).toBeNull();
+
+    // And it lands, which is what makes the chat writable again.
+    await waitFor(() => {
+      expect(
+        fixture.handle.store.getState().chats.byId["chat-new"]?.docResident,
+      ).toBe(false);
+    });
+
+    // Self-healing ONCE: the repaired snapshot was a complete apply, so the
+    // gating is back on and the next dispatch carries its stamp.
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(3);
+    });
+    expect(chatCalls(fixture.messenger)[2]?.knownRevision).toEqual({
+      epoch: "E",
+      revision: 5,
+      touchRevision: 1,
+    });
+
+    view.unmount();
+  });
+
+  it("a delta carrying a KNOWN home forward costs no snapshot", async () => {
+    // The steady state, and the saving this epic exists for. If this
+    // re-read, every rename on every chat would cost a full list.
+    const stampBefore: RecordListStamp = {
+      epoch: "E",
+      revision: 4,
+      touchRevision: 1,
+    };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: stampBefore,
+      chats: [chatRow({ chatId: "chat-a", docResident: false })],
+    });
+
+    const view = renderHook(useBothRecordSyncHooks, {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+    expect(chatCalls(fixture.messenger)).toHaveLength(1);
+
+    const { docResident: _home, ...streamRow } = chatRow({
+      chatId: "chat-a",
+      revision: 9,
+      title: "renamed",
+    });
+    fixture.handle.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: EPIC_ID,
+      record: streamRow,
+    });
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 5 });
+
+    // No re-read: the home rode forward, so the representation stayed whole.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chatCalls(fixture.messenger)).toHaveLength(1);
+
+    // And the advanced stamp is what the next dispatch carries.
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(chatCalls(fixture.messenger)[1]?.knownRevision).toEqual({
+      epoch: "E",
+      revision: 5,
+      touchRevision: 1,
+    });
 
     view.unmount();
   });

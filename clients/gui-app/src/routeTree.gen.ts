@@ -24,6 +24,7 @@ import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
+import { Route as SettingsFallbackRouteImport } from "./routes/settings.fallback";
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
@@ -114,6 +115,11 @@ const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
   path: "/diagnostics",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsFallbackRoute = SettingsFallbackRouteImport.update({
+  id: "/fallback",
+  path: "/fallback",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
   id: "/general",
   path: "/general",
@@ -194,6 +200,7 @@ export interface FileRoutesByFullPath {
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
+  "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
@@ -222,6 +229,7 @@ export interface FileRoutesByTo {
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
+  "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
@@ -253,6 +261,7 @@ export interface FileRoutesById {
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
+  "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
@@ -285,6 +294,7 @@ export interface FileRouteTypes {
     | "/settings/appearance"
     | "/settings/devices"
     | "/settings/diagnostics"
+    | "/settings/fallback"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
@@ -313,6 +323,7 @@ export interface FileRouteTypes {
     | "/settings/appearance"
     | "/settings/devices"
     | "/settings/diagnostics"
+    | "/settings/fallback"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
@@ -343,6 +354,7 @@ export interface FileRouteTypes {
     | "/settings/appearance"
     | "/settings/devices"
     | "/settings/diagnostics"
+    | "/settings/fallback"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
@@ -477,6 +489,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsDiagnosticsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/fallback": {
+      id: "/settings/fallback";
+      path: "/fallback";
+      fullPath: "/settings/fallback";
+      preLoaderRoute: typeof SettingsFallbackRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/general": {
       id: "/settings/general";
       path: "/general";
@@ -590,6 +609,7 @@ interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
+  SettingsFallbackRoute: typeof SettingsFallbackRoute;
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
@@ -612,6 +632,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
+  SettingsFallbackRoute: SettingsFallbackRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
