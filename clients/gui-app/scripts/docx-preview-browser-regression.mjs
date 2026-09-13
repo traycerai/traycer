@@ -59,6 +59,7 @@ try {
   const launched = await launchChromeWithDevTools(
     chromePath,
     "traycer-docx-preview-",
+    [],
   );
   chrome = launched.chrome;
   chromeProfilePath = launched.profilePath;
