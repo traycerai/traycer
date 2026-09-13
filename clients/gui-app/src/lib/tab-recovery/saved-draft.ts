@@ -16,6 +16,7 @@ import {
 import { blobHashesOfDocument } from "@/lib/drafts/draft-write-codec";
 import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
 import { putImageBytesAtHash } from "@/lib/composer/landing-image-store";
+import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
 import type { ClosedHeaderTab } from "./history";
 
 /** Keep future live-byte accounting consistent with the bytes actually read. */
@@ -45,7 +46,9 @@ export async function prepareSavedDraft(
   item: Extract<ClosedHeaderTab, { kind: "draft" }>,
   stillCurrent: () => boolean,
 ): Promise<boolean> {
-  if (!stillCurrent()) return false;
+  const canRestore = (): boolean =>
+    stillCurrent() && !landingDraftIsRetired(item.draftId);
+  if (!canRestore()) return false;
   if (
     useLandingDraftStore
       .getState()
@@ -67,7 +70,7 @@ export async function prepareSavedDraft(
     staleTime: 0,
     retry: false,
   });
-  if (!stillCurrent()) return false;
+  if (!canRestore()) return false;
   // A local edit or another reopen that raced the read wins over the host copy.
   if (
     useLandingDraftStore
@@ -84,7 +87,7 @@ export async function prepareSavedDraft(
     throw new Error("The draft is not available from its host yet.");
   }
   if (document.kind !== "landing") return false;
-  return prepareHostDraft(document, item.hostId, client, stillCurrent);
+  return prepareHostDraft(document, item.hostId, client, canRestore);
 }
 
 async function prepareHostDraft(
