@@ -55,7 +55,7 @@ describe("<OnboardingLoginImportStage />", () => {
 
   it("renders the flow's Pick step against the runner host's browser bridge", async () => {
     resetStore();
-    browserViewState.current = new OneSourceBridge();
+    browserViewState.current = new OneSourceBridge({});
     renderStage();
 
     expect(
@@ -70,7 +70,7 @@ describe("<OnboardingLoginImportStage />", () => {
 
   it("consumes the login-import announcement on mount", () => {
     resetStore();
-    browserViewState.current = new OneSourceBridge();
+    browserViewState.current = new OneSourceBridge({});
     renderStage();
 
     expect(

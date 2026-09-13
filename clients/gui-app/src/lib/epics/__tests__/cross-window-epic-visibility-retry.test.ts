@@ -62,7 +62,8 @@ function controllableEpicVisibilityChannel(): {
   readonly setSnapshotPending: () => void;
   readonly settlePendingSnapshot: (
     outcome: "resolve" | "reject",
-    entries?: readonly DesktopEpicVisibilityEntry[],
+    // `undefined` settles with whatever `setSnapshotOutcome` last recorded.
+    entries: readonly DesktopEpicVisibilityEntry[] | undefined,
   ) => void;
   readonly emitChange: (entries: readonly DesktopEpicVisibilityEntry[]) => void;
 } {
@@ -532,7 +533,7 @@ describe("installCrossWindowEpicVisibility - failed-snapshot retry (fixup 2, cla
     // warning and arms a fresh `window.setTimeout` that will later fire and
     // no-op on the lifecycle guard - a leaked timer, not an extra call. That
     // timer is the load-bearing assertion below.
-    controls.settlePendingSnapshot("reject");
+    controls.settlePendingSnapshot("reject", undefined);
     // Flush the microtask so `.catch` - and, on the reverted code, the
     // `window.setTimeout` it would arm - has run before we read the count.
     await vi.advanceTimersByTimeAsync(0);

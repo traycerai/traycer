@@ -28,10 +28,10 @@ import {
 } from "@/stores/tabs/store";
 import { isRegisteredTabKind } from "@/stores/tabs/registry";
 import { homeRoutePath, isHomePath } from "@/stores/tabs/kinds/home";
+import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import { setTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { tabSourceRefs } from "@/stores/tabs/source-refs";
-import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 
 const DEBOUNCE_MS = 100;

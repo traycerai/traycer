@@ -27,7 +27,9 @@ interface ToastAction {
 }
 
 const toastError = vi.hoisted(() =>
-  vi.fn<(message: string, options?: { action?: ToastAction }) => void>(),
+  vi.fn<
+    (message: string, options: { action?: ToastAction } | undefined) => void
+  >(),
 );
 
 const harness = vi.hoisted<{

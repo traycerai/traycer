@@ -21,6 +21,7 @@ import {
   type ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import type { ChatProviderFallbackState } from "@/components/chat/fallback/fallback-state";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
 import {
   ChatDockCompactStrip,
@@ -103,6 +104,15 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly composer: ChatLowerComposerState;
   readonly todo: PinnedTodoSnapshot | null;
   readonly restoreContext: ChatRestoreContextValue;
+  /**
+   * The chat's provider-fallback state, straight off the frame.
+   *
+   * It reaches two places from here and only two: the retry row that sits above
+   * the dock, and the composer's banner slot (the grace card and the
+   * switch-back offer). Threaded as one group rather than two props because
+   * both fields travel the same hops and appear and vanish together.
+   */
+  readonly providerFallback: ChatProviderFallbackState;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
   readonly backgroundStopAllPending: boolean;
@@ -256,6 +266,7 @@ interface ComposerSurfaceModel {
   readonly approvals: ChatLowerApprovalsState;
   readonly queue: ChatLowerQueueState;
   readonly composer: ChatLowerComposerState;
+  readonly providerFallback: ChatProviderFallbackState;
   readonly pendingApprovalCount: number;
   readonly hasPendingApprovals: boolean;
 }
@@ -475,6 +486,7 @@ export function ChatLowerInteractionSurfaces(
       },
       queue: props.queue,
       composer: props.composer,
+      providerFallback: props.providerFallback,
       pendingApprovalCount,
       hasPendingApprovals,
     }),
@@ -488,6 +500,7 @@ export function ChatLowerInteractionSurfaces(
       visiblePendingApprovals,
       props.queue,
       props.composer,
+      props.providerFallback,
       pendingApprovalCount,
       hasPendingApprovals,
     ],
@@ -1112,6 +1125,7 @@ function LiveChatComposer(props: {
       onStopTurn={model.turn.onStopTurn}
       workspaceControls={model.composer.workspaceControls}
       workspaceAvailability={model.composer.workspaceAvailability}
+      providerFallback={model.providerFallback}
       topSpacing={props.topSpacing}
       topSlot={null}
     />

@@ -65,7 +65,7 @@ export type OwnerTeardownSnapshot = {
 
 export function teardownHolderKey(
   holder: WorktreeBusyHolder,
-  uniqueId: string | undefined = undefined,
+  uniqueId: string | undefined,
 ): string {
   const base = `${holder.ownerRef.ownerKind}:${holder.ownerRef.ownerId}:${holder.holdKind}:${holder.label}`;
   return uniqueId === undefined ? base : `${base}:${uniqueId}`;
@@ -75,7 +75,7 @@ export function teardownHolderRowKey(holder: WorktreeBusyHolder): string {
   if ("holderKey" in holder) {
     return (holder as DisclosedTeardownHolder).holderKey;
   }
-  return teardownHolderKey(holder);
+  return teardownHolderKey(holder, undefined);
 }
 
 export function teardownHolderSetDrifted(
@@ -202,12 +202,15 @@ export function snapshotOwnerTeardown(
   const stopTargets: TeardownStopTarget[] = [];
   const agentStopClearsOwner = chatTurnWillCallAgentStop(input);
   if (input.hasActiveTurn) {
-    const holder = disclosedHolder({
-      ownerRef: input.ownerRef,
-      holdKind: "chat-turn",
-      activity: "working",
-      label: chatTurnHolderLabel(input, agentStopClearsOwner),
-    });
+    const holder = disclosedHolder(
+      {
+        ownerRef: input.ownerRef,
+        holdKind: "chat-turn",
+        activity: "working",
+        label: chatTurnHolderLabel(input, agentStopClearsOwner),
+      },
+      undefined,
+    );
     holders.push(holder);
     if (agentStopClearsOwner) {
       stopTargets.push({
@@ -218,12 +221,15 @@ export function snapshotOwnerTeardown(
   }
   if (input.ptyLive) {
     holders.push(
-      disclosedHolder({
-        ownerRef: input.ownerRef,
-        holdKind: "terminal-agent-pty",
-        activity: "working",
-        label: `${teardownOwnerDisplayName(input.ownerLabel)} will restart in the new folder`,
-      }),
+      disclosedHolder(
+        {
+          ownerRef: input.ownerRef,
+          holdKind: "terminal-agent-pty",
+          activity: "working",
+          label: `${teardownOwnerDisplayName(input.ownerLabel)} will restart in the new folder`,
+        },
+        undefined,
+      ),
     );
   }
   for (const shell of input.shells) {
@@ -261,7 +267,7 @@ export function snapshotOwnerTeardown(
 
 function disclosedHolder(
   holder: WorktreeBusyHolder,
-  uniqueId: string | undefined = undefined,
+  uniqueId: string | undefined,
 ): DisclosedTeardownHolder {
   return { ...holder, holderKey: teardownHolderKey(holder, uniqueId) };
 }

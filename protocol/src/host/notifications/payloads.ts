@@ -44,6 +44,7 @@ export const HOST_NOTIFICATION_STOPPED_REASONS = [
   "turn_start_timeout",
   "missing_terminal_event",
   "background_work_failed",
+  "session_budget",
 ] as const;
 export type HostNotificationStoppedReason =
   (typeof HOST_NOTIFICATION_STOPPED_REASONS)[number];
@@ -67,8 +68,33 @@ export function deriveHostNotificationStoppedReason(
       return "auth";
     case "rate_limit":
     case "usage_limit_exceeded":
-    case "session_budget_exceeded":
       return "rate_limit";
+    // Its own reason rather than joining the two above, and it is worth saying
+    // why each of the three neighbouring answers is wrong.
+    //
+    // Codex emits it with "Start a new session or compact the conversation,
+    // then try again" - a SESSION-local stop, whose remedy is a fresh session
+    // on the SAME account. Calling it `rate_limit` made it fallback-eligible
+    // (`REASON_ELIGIBLE_RUNGS.rate_limit` admits profile, tier and wait), so a
+    // budget stop could automatically relaunch the turn on a DIFFERENT account
+    // that was never the problem - and the rate-limit branch of
+    // `buildTurnFailurePayload` reads an existing gauge, so it could also hand
+    // this failure an unrelated window's `resetsAt` and offer a wait on it.
+    //
+    // It is not `context_exhausted` either: "budget" is ambiguous between spend
+    // and context, and we have not established which Codex means. The name here
+    // deliberately claims neither - it repeats the provider's own noun, scoped
+    // to the session it is about.
+    //
+    // And it is not `null`. Declining to classify does stop the switching, but
+    // a turn with no typed failure gets no failed-attempt envelope
+    // (`preserveFallbackFailedAttemptEnvelope` returns at an absent `failure`),
+    // so the error card loses its manual `retry` / `switch` / `wait_once` rungs
+    // - and a fresh session is exactly what `retry` performs, i.e. the one
+    // affordance that fixes this failure. What actually stops the automatic
+    // traversal is `EXCLUDED_FALLBACK_REASONS`, which this reason is in.
+    case "session_budget_exceeded":
+      return "session_budget";
     case "billing_error":
       return "billing";
     case "model_not_found":

@@ -119,7 +119,7 @@ function tuiRow(
     : { ...wire, origin: "registry" as const };
 }
 
-function freshTuiTable(getCurrentUserId: () => string | null = () => null) {
+function freshTuiTable(getCurrentUserId: () => string | null) {
   return createTuiAgentRecordTable({
     getCurrentUserId,
     onBeforePublish: () => undefined,
@@ -309,7 +309,7 @@ describe("applyTouches does not advance the snapshot fence (T6)", () => {
 
 describe("applyTouches - the session facet survives a recency patch (T7)", () => {
   it("keeps sessionState through a patch, and a tuiUpsert with no facet carries it forward", () => {
-    const table = freshTuiTable();
+    const table = freshTuiTable(() => null);
     table.applyRecords(
       [
         tuiRow({
@@ -386,7 +386,7 @@ describe("applyTouches - the session facet survives a recency patch (T7)", () =>
     // (`bun run compile`), not by the vitest runtime - there is no
     // `test.typecheck` project configured here, so this line is a no-op when
     // merely run, and only reddens under a type-check.
-    const table = freshTuiTable();
+    const table = freshTuiTable(() => null);
     expectTypeOf<readonly TuiAgentRecordSummaryV12[]>().not.toExtend<
       Parameters<typeof table.applyRecords>[0]
     >();

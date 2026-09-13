@@ -116,10 +116,10 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // Mainline's own `epic.subscribe` work landed as a new MAJOR (@2.0), so it
     // does not move this number.
     expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(6);
-    // Chat minors arrive entirely from mainline (now @1.9, the record-head
-    // live-sync minor); this branch added no chat minor of its own, so
-    // mainline's latest is adopted as-is on every refresh.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(9);
+    // The same re-mint rule on the chat line: mainline's @1.9 (Antigravity
+    // anchors and delivery placement) stays frozen as staging shipped it, and
+    // provider fallback took @1.10 above it.
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(10);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
       2,

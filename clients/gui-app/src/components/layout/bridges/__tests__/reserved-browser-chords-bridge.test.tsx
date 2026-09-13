@@ -49,7 +49,7 @@ function tokensOf(
 
 describe("<ReservedBrowserChordsBridge />", () => {
   it("pushes the reserved-chord table into main when a browserView exists", () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     renderBridge(bridge);
 
     expect(bridge.reservedChordsCalls).toEqual([
@@ -70,7 +70,7 @@ describe("<ReservedBrowserChordsBridge />", () => {
  */
 describe("<ReservedBrowserChordsBridge /> rebinds", () => {
   it("re-pushes the policy when a forwarded action is rebound", async () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     renderBridge(bridge);
 
     await waitFor(() => {
@@ -91,7 +91,7 @@ describe("<ReservedBrowserChordsBridge /> rebinds", () => {
   });
 
   it("drops an unbound action's chord from the pushed policy", async () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     renderBridge(bridge);
 
     await waitFor(() => {
@@ -121,7 +121,7 @@ describe("<ReservedBrowserChordsBridge /> rebinds", () => {
  */
 describe("<ReservedBrowserChordsBridge /> surfaces", () => {
   it("stops forwarding the panel's chords when an epic takes the screen, and resumes when it leaves", async () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     renderBridge(bridge);
 
     await waitFor(() => {

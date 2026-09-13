@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  errorEventSchemaPreFallback,
   runtimeAgentRunInputSchema,
   runtimeApprovalRequestSchema,
   runtimeEventSchema,
+  runtimeEventSchemaPreFallback,
   runtimeEventSchemaV12,
+  runtimeFailureReason,
   runtimePermissionModeSchema,
+  turnInterruptedEventSchemaPreFallback,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
 
 describe("agent runtime stream schema", () => {
@@ -425,5 +429,137 @@ describe("agent runtime stream schema", () => {
     // entirely, and the schema must not backfill it with `[]`.
     expect(parsed.skillInvocations).toBeUndefined();
     expect("skillInvocations" in parsed).toBe(false);
+  });
+});
+
+// ─── `failure` on the two terminal runtime events (ticket 01, chat.subscribe@1.10) ───
+describe("runtimeFailureReason", () => {
+  it("is the identity conversion - the compile-time proof that host reasons are a subset of the persisted vocabulary", () => {
+    expect(runtimeFailureReason("rate_limit")).toBe("rate_limit");
+    expect(runtimeFailureReason("auth")).toBe("auth");
+  });
+});
+
+describe("errorEventSchema / turnInterruptedEventSchema failure round-trip", () => {
+  it("round-trips a full failure payload on an error event", () => {
+    const withFailure = {
+      type: "error" as const,
+      blockId: "block-1",
+      timestamp: 1,
+      message: "rate limited",
+      recoverable: true,
+      code: "usage_limit_exceeded",
+      failure: {
+        reason: "rate_limit" as const,
+        resetsAt: 1000,
+        resetsAtSource: "provider" as const,
+        scope: "five_hour",
+        providerDetail: "usage_limit_exceeded",
+      },
+    };
+    const parsed = runtimeEventSchema.parse(withFailure);
+    expect(parsed).toMatchObject({
+      type: "error",
+      failure: withFailure.failure,
+    });
+  });
+
+  it("leaves failure undefined (not null) on an error event that omits it - the wire uses .optional()", () => {
+    const parsed = runtimeEventSchema.parse({
+      type: "error",
+      blockId: "block-1",
+      timestamp: 1,
+      message: "boom",
+      recoverable: false,
+    });
+    expect(parsed.type === "error" && parsed.failure).toBeUndefined();
+    expect(parsed.type === "error" && "failure" in parsed).toBe(false);
+  });
+
+  it("round-trips failure on turn.interrupted, and leaves it undefined when omitted", () => {
+    const withFailure = runtimeEventSchema.parse({
+      type: "turn.interrupted",
+      blockId: "turn-1",
+      timestamp: 1,
+      turnId: "turn-1",
+      reason: "provider rate limited",
+      failure: { reason: "rate_limit" as const },
+    });
+    expect(withFailure).toMatchObject({
+      type: "turn.interrupted",
+      failure: { reason: "rate_limit" },
+    });
+
+    const withoutFailure = runtimeEventSchema.parse({
+      type: "turn.interrupted",
+      blockId: "turn-2",
+      timestamp: 2,
+      turnId: "turn-2",
+      reason: "provider rate limited",
+    });
+    expect(
+      withoutFailure.type === "turn.interrupted" && withoutFailure.failure,
+    ).toBeUndefined();
+    expect(
+      withoutFailure.type === "turn.interrupted" && "failure" in withoutFailure,
+    ).toBe(false);
+  });
+});
+
+describe("pre-fallback frozen runtime-event freezes (released chat.subscribe@1.0-1.8)", () => {
+  const errorWithFailure = {
+    type: "error" as const,
+    blockId: "block-1",
+    timestamp: 1,
+    message: "rate limited",
+    recoverable: true,
+    code: "usage_limit_exceeded",
+    failure: { reason: "rate_limit" as const },
+  };
+  const interruptedWithFailure = {
+    type: "turn.interrupted" as const,
+    blockId: "turn-1",
+    timestamp: 1,
+    turnId: "turn-1",
+    reason: "provider rate limited",
+    failure: { reason: "rate_limit" as const },
+  };
+
+  it("errorEventSchemaPreFallback strips failure as an unknown key rather than rejecting the event", () => {
+    const parsed = errorEventSchemaPreFallback.parse(errorWithFailure);
+    expect("failure" in parsed).toBe(false);
+    expect(parsed).toMatchObject({ type: "error", message: "rate limited" });
+  });
+
+  it("turnInterruptedEventSchemaPreFallback strips failure as an unknown key rather than rejecting the event", () => {
+    const parsed = turnInterruptedEventSchemaPreFallback.parse(
+      interruptedWithFailure,
+    );
+    expect("failure" in parsed).toBe(false);
+    expect(parsed).toMatchObject({
+      type: "turn.interrupted",
+      turnId: "turn-1",
+    });
+  });
+
+  // The structural pin: the frozen runtime-event UNION every released
+  // chat.subscribe minor binds must itself route through the frozen error /
+  // turn.interrupted members above, not the live ones - a union that lists
+  // its members explicitly but points at a live, still-growing member is
+  // "frozen" in name only. This is exactly the gap the coordinator found and
+  // fixed in this ticket's own protocol half.
+  it("runtimeEventSchemaPreFallback (the union every released line binds) strips failure on both terminal members", () => {
+    const parsedError = runtimeEventSchemaPreFallback.parse(errorWithFailure);
+    expect(parsedError.type === "error" && "failure" in parsedError).toBe(
+      false,
+    );
+
+    const parsedInterrupted = runtimeEventSchemaPreFallback.parse(
+      interruptedWithFailure,
+    );
+    expect(
+      parsedInterrupted.type === "turn.interrupted" &&
+        "failure" in parsedInterrupted,
+    ).toBe(false);
   });
 });

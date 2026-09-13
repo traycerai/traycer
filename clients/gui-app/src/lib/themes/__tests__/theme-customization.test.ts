@@ -15,9 +15,7 @@ import {
 import { createThemeFromPreset } from "@/lib/themes/theme-library";
 import { searchOpenVsxThemes } from "@/lib/themes/open-vsx";
 
-function nativeTheme(
-  overrides: Partial<ThemeDefinition> = {},
-): ThemeDefinition {
+function nativeTheme(overrides: Partial<ThemeDefinition>): ThemeDefinition {
   return {
     version: 1,
     id: "native-theme",
@@ -65,7 +63,7 @@ describe("theme customization contract", () => {
     expect(normalizeThemeColor("var(--primary)")).toBeNull();
 
     const parsed = themeDefinitionSchema.safeParse({
-      ...nativeTheme(),
+      ...nativeTheme({}),
       colors: { unknown: "#123456" },
     });
     expect(parsed.success).toBe(false);
@@ -100,7 +98,9 @@ describe("theme customization contract", () => {
   it("honors cancellation before and after reading local theme files", async () => {
     const before = new AbortController();
     before.abort();
-    const unread = vi.fn(() => Promise.resolve(JSON.stringify(nativeTheme())));
+    const unread = vi.fn(() =>
+      Promise.resolve(JSON.stringify(nativeTheme({}))),
+    );
     const unreadFile = new File([], "theme.json");
     Object.defineProperty(unreadFile, "text", { value: unread });
 
@@ -112,7 +112,7 @@ describe("theme customization contract", () => {
     const after = new AbortController();
     const read = vi.fn(() => {
       after.abort();
-      return Promise.resolve(JSON.stringify(nativeTheme()));
+      return Promise.resolve(JSON.stringify(nativeTheme({})));
     });
     const readFile = new File([], "theme.json");
     Object.defineProperty(readFile, "text", { value: read });

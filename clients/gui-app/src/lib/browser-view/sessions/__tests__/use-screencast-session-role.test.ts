@@ -20,7 +20,7 @@ describe("screencastRoleForShell", () => {
 
   it("is a tile only where the shell owns a native browser (desktop)", () => {
     expect(
-      screencastRoleForShell({ browserView: new FakeBrowserViewBridge() }),
+      screencastRoleForShell({ browserView: new FakeBrowserViewBridge({}) }),
     ).toBe("tile");
   });
 });

@@ -18,6 +18,7 @@ import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
 } from "@/stores/tabs/registry";
+import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import {
   createEmptySplit,
   DEFAULT_LEFT_RATIO,
@@ -52,7 +53,6 @@ import {
 } from "@/stores/tabs/layout";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 import { isHomeTabEnabled } from "@/stores/settings/settings-store";
-import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
 import { isTabStructurallyLocked } from "@/stores/tabs/tab-structural-lock";
 

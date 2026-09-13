@@ -382,6 +382,140 @@ export function accumulateDurableTurns(
 }
 
 /**
+ * Does this turn OPEN with an autonomous-resume divider - i.e. is it a turn the
+ * host started with no user message of its own?
+ *
+ * Two signals, because neither alone covers the record population. A modern
+ * `in_turn` block is a notification appended into an already-RUNNING ordinary
+ * turn, so it says so on itself and is excluded here. A HISTORICAL block
+ * carries `deliveryPlacement: null`, which the schema defines as
+ * "historical/unknown" and explicitly invites readers to resolve by position -
+ * so for those, being the turn's first block is the only evidence there is, and
+ * it is read as the turn-start form.
+ *
+ * The residual: a historical `in_turn` notification that landed on a turn which
+ * had not streamed anything yet would be the first block and read as
+ * autonomous. That costs an ordinary turn its account label (a refusal, never a
+ * wrong name), and it cannot combine with the mislabel this module is about -
+ * reaching that requires a fallback hop, and every hop-era row is stamped with
+ * its own `turnProfile` and never consults the walk at all.
+ */
+function turnOpensWithAutonomousResume(
+  blocks: readonly ContentBlock[],
+): boolean {
+  const first = blocks.at(0);
+  if (first === undefined || first.type !== "autonomous_resume") return false;
+  return first.deliveryPlacement !== "in_turn";
+}
+
+/**
+ * The turns whose account the SESSION-ANCHOR WALK is not allowed to name.
+ *
+ * `TranscriptRowContext.sessionAnchor` exists for exactly one consumer: the
+ * renderer's profile label. The anchor it carries is the one in effect at the
+ * turn, taken from the running walk over user records - and that walk can be
+ * wrong in a specific, known shape.
+ *
+ * A provider fallback hop re-dispatches ONE user message as a second attempt
+ * and then REWRITES that user row's `sessionAnchor` to the replacement's. The
+ * original attempt's row never changes, so walking to the anchor hands it the
+ * account that did not produce it; a profile-only hop keeps `harnessId`
+ * identical, so the renderer's harness-agreement gate does not catch it either.
+ *
+ * ## The rule
+ *
+ * The walk is provably correct when a user row has exactly ONE dispatch attempt
+ * hanging off it: there is then a single account the anchor can mean, rewritten
+ * or not. Two or more is what a fallback re-dispatch or a manual replay
+ * produces, and that is the shape refused here.
+ *
+ * **An attempt is a turn the user row DISPATCHED.** Not every turn is one: an
+ * autonomous/wake turn is started by the host with no user message
+ * (`startProviderTurn` mints a fresh id as its anchor), so its records land in
+ * the preceding user row's span without being a second dispatch of it. Counting
+ * one would refuse the ordinary turn beside it - a label blanked on the great
+ * majority of historical agent chats, which have wakes and have never fallen
+ * back. So autonomous turns are excluded from the count. They are also never
+ * WALKED themselves: no anchor is ever minted for them (an anchor whose message
+ * id names no user row is dropped), so the anchor in effect belongs to someone
+ * else's turn and may name a different account entirely.
+ *
+ * A turn whose own record carries `turnProfile` is never refused - the row
+ * states its account directly, and the renderer prefers it over anything
+ * derived.
+ *
+ * ## How the refusal travels
+ *
+ * `projectTranscriptRows` withholds `sessionAnchor` AND sets
+ * `profileWalkUnprovable`. The flag is not redundant with the withholding: a
+ * context left with nothing in it is never serialized at all, so the refusal
+ * would reach a windowed client as silence - and silence is the renderer
+ * falling back to its own walk, which against a span holding one of two
+ * attempts reaches exactly the wrong answer being refused. See the field's own
+ * comment in `row-context.ts`.
+ *
+ * This is the ONE implementation. The renderer imports it rather than counting
+ * for itself, so the definition of an attempt cannot drift between the two.
+ */
+export function turnKeysWithUnprovableProfileWalk(
+  messages: readonly Message[],
+): ReadonlySet<string> {
+  const recorded = new Set<string>();
+  const autonomous = new Set<string>();
+  const seenTurnKeys = new Set<string>();
+  const unprovable = new Set<string>();
+  // Distinct ATTEMPT turn keys since the last user record, in first-seen order.
+  // A steered user record resets it, which is correct: the slices either side
+  // of a steer share one turn key, so a steered turn still counts once.
+  let attemptKeysSinceUserRow: string[] = [];
+  for (const message of messages) {
+    if (message.role === "user") {
+      attemptKeysSinceUserRow = [];
+      continue;
+    }
+    const turnKey = assistantTurnKey(message);
+    if (message.turnProfile !== undefined) {
+      recorded.add(turnKey);
+    }
+    // A record carrying no blocks can neither classify its turn nor BE one of
+    // its attempts, so it is skipped before both - but AFTER the snapshot read
+    // above, since an empty record can still state its own account and that
+    // exemption is about the row, not its blocks.
+    //
+    // `blocks` has no minimum in the schema, so a turn's first record can hold
+    // none and the block that OPENS the turn then arrives on a later record of
+    // the same `turnId`. Classifying off the first record regardless would shut
+    // `seenTurnKeys` against that later record, so an `autonomous_resume`
+    // arriving there is never seen: the wake reads as a dispatch, counts as an
+    // attempt, and the ordinary turn beside it is refused along with it - the
+    // exact over-refusal this function exists to prevent.
+    if (message.blocks.length === 0) continue;
+    if (!seenTurnKeys.has(turnKey)) {
+      seenTurnKeys.add(turnKey);
+      // Classified from the turn's first BLOCK-BEARING record - a turn's blocks
+      // are concatenated across records in walk order, so that record's first
+      // block is the turn's first block. A later record cannot make a turn
+      // autonomous.
+      if (turnOpensWithAutonomousResume(message.blocks)) {
+        autonomous.add(turnKey);
+      }
+    }
+    if (autonomous.has(turnKey)) continue;
+    if (attemptKeysSinceUserRow.includes(turnKey)) continue;
+    attemptKeysSinceUserRow.push(turnKey);
+    if (attemptKeysSinceUserRow.length < 2) continue;
+    // The whole span, not only the later attempts: the one that gets
+    // mislabelled is the FIRST, whose anchor was rewritten out from under it.
+    for (const key of attemptKeysSinceUserRow) unprovable.add(key);
+  }
+  for (const turnKey of autonomous) unprovable.add(turnKey);
+  // Applied after the walk rather than inside it, because a turn's snapshot can
+  // arrive on a continuation record read AFTER the sibling that marked the span.
+  for (const turnKey of recorded) unprovable.delete(turnKey);
+  return unprovable;
+}
+
+/**
  * The one field {@link nestedSteeredMessageIds} reads off a turn.
  *
  * Deliberately structural rather than {@link DurableTurnAccumulator}: the
@@ -800,6 +934,12 @@ export function projectTranscriptRows(
   // retracts the badge, so this cannot be re-derived from a row's own records.
   // See `TranscriptRowContext.completedSteer`.
   const completedSteerMessageIds = steeredMessageIdsFromEvents(input.events);
+  // Whole-history fold as well: whether a turn shares its user row with another
+  // attempt is not decidable from the turn's own records. See
+  // `turnKeysWithUnprovableProfileWalk`.
+  const unprovableProfileWalkTurnKeys = turnKeysWithUnprovableProfileWalk(
+    input.messages,
+  );
 
   const base: TranscriptRowDescriptor[] = [];
   const emittedTurns = new Set<string>();
@@ -848,7 +988,10 @@ export function projectTranscriptRows(
         activeTurnId: input.activeTurnId,
         stopped: stoppedByTurnKey.get(turnKey) ?? null,
         decoratingEventIdsByTurnKey,
-        sessionAnchor: currentSessionAnchor,
+        profileWalkUnprovable: unprovableProfileWalkTurnKeys.has(turnKey),
+        sessionAnchor: unprovableProfileWalkTurnKeys.has(turnKey)
+          ? null
+          : currentSessionAnchor,
         hasLaterOverlappingChanges: overlappingTurnKeys.has(turnKey),
       }),
     );
@@ -933,6 +1076,8 @@ function describeTurnRows(input: {
   readonly decoratingEventIdsByTurnKey: ReadonlyMap<string, readonly string[]>;
   /** The anchor in effect at this turn - see {@link TranscriptRowContext}. */
   readonly sessionAnchor: ChatSessionAnchor | null;
+  /** Whole-history refusal - see {@link turnKeysWithUnprovableProfileWalk}. */
+  readonly profileWalkUnprovable: boolean;
   /** Whole-history overlap - see {@link turnKeysWithLaterOverlappingChanges}. */
   readonly hasLaterOverlappingChanges: boolean;
 }): readonly TranscriptRowDescriptor[] {
@@ -962,11 +1107,17 @@ function describeTurnRows(input: {
   // renderer falls back to its own derivation. `false` is what that derivation
   // already produces from an isolated span, so speaking it would be bytes
   // asserting the answer the reader would have reached anyway.
+  //
+  // `profileWalkUnprovable` is the one flag here whose `true` is NOT an
+  // optimisation over what the reader would conclude anyway - it is the
+  // opposite of what an unaided reader concludes, and it is what keeps this
+  // object non-empty so the refusal is serialized at all. See the field.
   const turnContext: TranscriptRowContext = {
     ...(turn.startedAt === null ? { legacyRowAnchorAt: rowAnchorAt } : {}),
     ...(input.sessionAnchor === null
       ? {}
       : { sessionAnchor: input.sessionAnchor }),
+    ...(input.profileWalkUnprovable ? { profileWalkUnprovable: true } : {}),
     ...(input.hasLaterOverlappingChanges
       ? { hasLaterOverlappingChanges: true }
       : {}),

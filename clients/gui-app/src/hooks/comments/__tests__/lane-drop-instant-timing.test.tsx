@@ -38,15 +38,17 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render } from "@testing-library/react";
-import { create } from "zustand";
-import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   resolveArtifactCommentThreads,
   useEpicLaneCommentThreadsDroppedAt,
 } from "@/hooks/comments/use-lane-comment-threads";
-
-type LaneStatusState = { readonly recordsTransportStatus: string };
 
 let clock = 1_000;
 function tick(by: number): number {
@@ -54,23 +56,34 @@ function tick(by: number): number {
   return clock;
 }
 
-function makeHandle(initialStatus: string): {
-  readonly handle: OpenEpicStoreHandle;
+const liveHandles: OpenedStoreForTest[] = [];
+
+function makeHandle(initialStatus: StreamConnectionStatus): {
+  readonly handle: OpenedStoreForTest;
   // A property of function type, not a method shorthand: `unbound-method`
   // reads the shorthand as a method that could lose its `this`.
-  readonly setStatus: (status: string) => void;
+  readonly setStatus: (status: StreamConnectionStatus) => void;
 } {
-  const store = create<LaneStatusState>(() => ({
-    recordsTransportStatus: initialStatus,
-  }));
+  const factory: EpicStreamClientFactory = () => ({
+    applyUpdate: () => undefined,
+    awareness: () => undefined,
+    applyArtifactRoomUpdate: () => undefined,
+    artifactRoomAwareness: () => undefined,
+    retryMigration: () => undefined,
+    close: () => undefined,
+  });
+  const handle = openStoreForTest({
+    epicId: "lane-drop-instant-timing",
+    userId: null,
+    factories: { streamClientFactory: factory, laneSelection: null },
+    writeCommand: null,
+  });
+  liveHandles.push(handle);
+  handle.store.setState({ recordsTransportStatus: initialStatus });
   return {
-    // Only `store` is ever read by the hook under test - it reaches
-    // `handle.store.getState().recordsTransportStatus` and nothing else - so
-    // the rest of the handle is deliberately absent rather than stubbed with
-    // values a reader might think are load-bearing.
-    handle: { store } as unknown as OpenEpicStoreHandle,
+    handle,
     setStatus: (status) => {
-      store.setState({ recordsTransportStatus: status });
+      handle.store.setState({ recordsTransportStatus: status });
     },
   };
 }
@@ -90,6 +103,7 @@ describe("the lane-drop instant is stamped at the TRANSITION", () => {
   });
 
   afterEach(() => {
+    for (const handle of liveHandles.splice(0)) handle.dispose();
     vi.restoreAllMocks();
   });
 

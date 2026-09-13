@@ -90,6 +90,7 @@ export type AnalyticsSettingsSection =
   | "appearance"
   | "devices"
   | "diagnostics"
+  | "fallback"
   | "general"
   | "host"
   | "keybindings"
@@ -1174,6 +1175,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     appearance: true,
     devices: true,
     diagnostics: true,
+    fallback: true,
     general: true,
     host: true,
     keybindings: true,

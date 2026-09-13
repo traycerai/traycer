@@ -2,6 +2,7 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
+  contentBlockSchemaPreFallback,
   contentBlockSchemaV18,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreReasonix,
@@ -213,8 +214,8 @@ export const userMessageSchemaV18 = z
     sessionAnchor: chatSessionAnchorSchema.nullable(),
   })
   .superRefine(userMessageSenderKindRefine);
-// There is no user-message delta in 1.9. Alias the frozen schema until a
-// newer contract needs its own extension (including the sender-kind check).
+// There is no user-message delta in 1.9 or 1.10. Alias the frozen schema until
+// a newer contract needs its own extension (including the sender-kind check).
 export const userMessageSchema = userMessageSchemaV18;
 export type UserMessage = z.infer<typeof userMessageSchema>;
 
@@ -293,6 +294,43 @@ export const imageResolutionEntrySchema = z.discriminatedUnion("state", [
 ]);
 export type ImageResolutionEntry = z.infer<typeof imageResolutionEntrySchema>;
 
+/**
+ * Which account ONE assistant attempt ran on, snapshotted onto that attempt's
+ * own row.
+ *
+ * Recorded, not derived - the same argument `envCredentialVar` makes a few
+ * fields below, for the same reason it has to. "Which account produced this
+ * turn?" is knowable only while the turn is being dispatched: a provider
+ * fallback hop re-dispatches ONE user message onto a different profile and
+ * rewrites that user row's `sessionAnchor` to the replacement's, so a renderer
+ * that re-derives the answer from the rows around the one it is drawing reads
+ * today's account onto yesterday's attempt. That is the mislabel this exists to
+ * prevent, and no amount of looking at neighbours fixes it - the evidence is
+ * gone by then.
+ *
+ * It differs from `envCredentialVar` in WHEN it is stamped, and the difference
+ * is load-bearing rather than incidental. `envCredentialVar` is stamped from
+ * the adapter's `turn.started`; a provider that errors before its first event -
+ * a rate limit, a billing stop, a signed-out account - emits none. A failed
+ * attempt is exactly the row a fallback hop leaves behind and mislabels, so a
+ * `turn.started`-stamped field would be absent on precisely the row that needs
+ * it. This is stamped where the assistant row is CREATED, before any adapter
+ * event.
+ *
+ * `labelSnapshot` is the profile's display name captured at that instant, not a
+ * name to resolve later: a profile can be renamed or tombstoned, and history
+ * must keep reading as it did. `profileId: null` INSIDE a recorded snapshot is
+ * the positive claim "this attempt ran on the ambient/host login" - distinct
+ * from the whole snapshot being absent, which is the claim that nothing was
+ * recorded at all. Never the account email: this record replicates cross-host
+ * (same scope rule as the session anchor's own profile snapshot).
+ */
+export const assistantTurnProfileSchema = z.object({
+  profileId: z.string().nullable(),
+  labelSnapshot: z.string().nullable(),
+});
+export type AssistantTurnProfile = z.infer<typeof assistantTurnProfileSchema>;
+
 // Historical message fields; newer blocks are selected only by the live
 // extension below. Unchanged nested leaves follow the existing freeze pattern.
 export const assistantMessageSchemaV18 = z.object({
@@ -363,6 +401,33 @@ export const assistantMessageSchemaV18 = z.object({
 });
 export const assistantMessageSchema = assistantMessageSchemaV18.extend({
   blocks: z.array(contentBlockSchema),
+  /**
+   * This attempt's own profile snapshot - see {@link assistantTurnProfileSchema}
+   * for what it records and why it is stamped at row creation.
+   *
+   * ABSENT means NOT RECORDED: a row written by a host predating this field, or
+   * an import/migration that has no such fact to state. It never means "no
+   * profile" - a turn that ran on the ambient login records
+   * `{ profileId: null, labelSnapshot: null }` and says so positively. A reader
+   * must not read a value into the silence; see
+   * `profileLabelsByTurnKeyFromMessages` (gui-app `rendered-messages.ts`) for
+   * the one narrow shape in which falling back to the surrounding anchor walk
+   * is still provably correct, and why every other shape refuses instead.
+   *
+   * Spelled `.optional()` rather than this file's usual additive
+   * `.nullable().default(null)`. The defaulted form makes the key REQUIRED on
+   * the inferred type, and `AssistantMessage` is written as an object literal
+   * at ~150 sites across the host, the GUI and their suites - none of which has
+   * a profile fact to state. Absence already carries the exact meaning needed
+   * here, and it is how `transcriptRowContextSchema` next door spells "the
+   * producer declines to speak".
+   *
+   * LIVE LINE ONLY. Every frozen `assistantMessageSchemaPre*` copy must stay
+   * without it - and so must `assistantMessageSchemaV18`, which is not a
+   * historical base class but the frozen `chat.subscribe@1.7`/`@1.8` field set
+   * this schema happens to extend.
+   */
+  turnProfile: assistantTurnProfileSchema.optional(),
 });
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
@@ -564,6 +629,40 @@ export const assistantMessageSchemaPreSettlement = z.object({
 export const messageSchemaPreSettlement = z.discriminatedUnion("role", [
   userMessageSchemaV16,
   assistantMessageSchemaPreSettlement,
+]);
+
+// ── Wire-freeze variant (pre-fallback, `chat.subscribe@1.9`) ───────────────
+// Hand-frozen copy of `assistantMessageSchema` as the frozen `1.9` line ships
+// it: the complete live shape with `blocks` swapped for
+// `contentBlockSchemaPreFallback`, so that line can observe neither a
+// `providerNotice.noticeKind` nor an error `failure` that `1.10` added. `1.7`
+// and `1.8` bind `messageSchemaV18` below instead, which also holds back
+// delivery placement. The user branch needs no freeze - user messages carry
+// no provider notice - so the union binds the LIVE `userMessageSchema`, which
+// is what `1.9` actually ships (browser annotations included).
+//
+// Field-for-field hand copy, NOT `.extend()`: see
+// `assistantMessageSchemaPreImage` for why a released line must not follow the
+// live shape by reference.
+export const assistantMessageSchemaPreFallback = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchema,
+  blocks: z.array(contentBlockSchemaPreFallback),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  envCredentialVar: z.string().nullable().default(null),
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+});
+
+export const messageSchemaPreFallback = z.discriminatedUnion("role", [
+  userMessageSchema,
+  assistantMessageSchemaPreFallback,
 ]);
 
 export const messageSchemaV18 = z.discriminatedUnion("role", [

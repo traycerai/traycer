@@ -12,6 +12,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import pluginQuery from "@tanstack/eslint-plugin-query";
 import pluginRouter from "@tanstack/eslint-plugin-router";
 import oxlint from "eslint-plugin-oxlint";
+import { traycerTypeSafetyRestrictions } from "../../eslint/traycer-type-safety-rules.mjs";
 import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-clients-import-boundary-rules.mjs";
 import {
   nestedFocusBoundaryRestrictions,
@@ -385,8 +386,9 @@ const generalCustomSyntaxRestrictions = [
 // every override below hand-rebuilt its array. That is the RESTATEMENT idiom
 // the comment at the top of this file says had already deleted a boundary
 // twice, and it went on to do it twice more: `src/lib/tab-navigation.ts` and
-// the test-file block each dropped SIX families by rebuilding from
-// `traycerTypeSafetyRestrictions` alone, and no test could see it.
+// the test-file block used to drop SIX custom-syntax families by rebuilding
+// from the type-safety array alone. The current composition retains those
+// custom dimensions and adds all seven shared type-safety rules to each block.
 //
 // A block now names what it is EXEMPT from. So a gap is a readable word in a
 // list rather than an absence nobody can see, and closing one is deleting that
@@ -448,6 +450,7 @@ function syntaxRestrictions({ exempt, nestedFocus, tabNavigation }) {
   }
   return [
     "error",
+    ...traycerTypeSafetyRestrictions,
     noFullStoreSubscription,
     ...generalCustomSyntaxRestrictions.filter(
       (restriction) => !lifted.has(restriction),
@@ -774,8 +777,8 @@ export default tseslint.config(
     // The exemption this block exists for is tabActivate and NOTHING ELSE, so
     // the selection bans are restated. Rebuilding the value from
     // `traycerTypeSafetyRestrictions` alone had silently dropped them here:
-    // `--print-config` on this file reported 8 restrictions against 71 for an
-    // ordinary production module, with no `selectById` entry among them - so
+    // adding the shared type-safety rules raises each block's count by seven;
+    // that alone cannot repair the historical missing `selectById` entry - so
     // the one file allowed to name a tab-activation internal was also the one
     // file allowed to call `selectById`, which nothing intended and no test
     // would have noticed. That is the last-block-wins hazard this config warns

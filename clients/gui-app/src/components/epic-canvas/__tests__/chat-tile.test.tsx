@@ -1090,18 +1090,18 @@ function renderChatTile() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileTestTree(queryClient, true));
+  return render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
 }
 
 function renderSwitchableChatTile() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  const rendered = render(chatTileTestTree(queryClient, true));
+  const rendered = render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
   return {
     ...rendered,
     setChatVisible: (visible: boolean) => {
-      rendered.rerender(chatTileTestTree(queryClient, visible));
+      rendered.rerender(chatTileTestTree(queryClient, visible, CHAT_ARTIFACT));
     },
   };
 }
@@ -1109,7 +1109,7 @@ function renderSwitchableChatTile() {
 function chatTileTestTree(
   queryClient: QueryClient,
   chatVisible: boolean,
-  node: typeof CHAT_ARTIFACT = CHAT_ARTIFACT,
+  node: typeof CHAT_ARTIFACT,
 ) {
   return (
     <TestRouterProvider>
@@ -1428,7 +1428,7 @@ describe("<ChatTile />", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const rendered = render(chatTileTestTree(queryClient, true));
+    const rendered = render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
     await advanceLegendListTime(0);
     const began = Number(
       screen
@@ -1794,6 +1794,7 @@ describe("<ChatTile />", () => {
         reason: null,
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2830,6 +2831,7 @@ describe("<ChatTile />", () => {
         reason: null,
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2892,6 +2894,7 @@ describe("<ChatTile />", () => {
         reason: "Only the agent owner can perform this action.",
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2958,6 +2961,7 @@ describe("<ChatTile />", () => {
         reason: "Only the agent owner can perform this action.",
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -3011,6 +3015,7 @@ describe("<ChatTile />", () => {
         reason: "Only the agent owner can perform this action.",
         code: "NOT_OWNER",
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -4183,7 +4188,7 @@ describe("<ChatTile />", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const rendered = render(chatTileTestTree(queryClient, true));
+    const rendered = render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
     await waitForChatTileLoaded();
     act(() => {
       emitChatSnapshotWithMessages({

@@ -60,6 +60,7 @@ import {
   type ChatLowerComposerState,
 } from "@/components/epic-canvas/renderers/chat-tile-lower-surfaces";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
+import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
@@ -249,6 +250,7 @@ function props(
     composer: COMPOSER,
     todo: todoSnapshot(`token-${token}`),
     restoreContext: restoreContext(),
+    providerFallback: NO_PROVIDER_FALLBACK,
     backgroundItems: undefined,
     backgroundStopPendingTaskIds: EMPTY_BACKGROUND_STOP_TASK_IDS,
     backgroundStopAllPending: false,

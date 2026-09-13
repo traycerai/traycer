@@ -68,6 +68,7 @@ import {
   type FailedProviderProfileAttempt,
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
+import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
 import {
   defaultSelectedProfileId,
   profileCommitId,
@@ -1426,6 +1427,9 @@ function ProviderTabBody({
               />
             ) : null}
           </div>
+          {/* Outside the inert block: it is not profile-scoped, so dimming it
+              while a profile switch settles would suggest it is. */}
+          <FallbackCrossLinkRow />
         </div>
       );
     case "mcp": {

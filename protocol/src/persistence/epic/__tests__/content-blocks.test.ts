@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  agentFailureSchema,
   contentBlockSchema,
+  contentBlockSchemaPreFallback,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreSettlement,
   decodeAutonomousResumeBlock,
   encodeAutonomousResumeBlock,
+  errorBlockSchema,
+  errorBlockSchemaPreFallback,
+  providerNoticeKindSchema,
+  providerNoticeKindSchemaPreFallback,
   autonomousResumeBlockSchema,
   autonomousResumeBlockSchemaV18,
   providerNoticeMetadataSchema,
@@ -1103,6 +1109,259 @@ describe("textBlockSchema providerNotice (no new persisted block type)", () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+// ─── errorBlockSchema.failure (ticket 01, chat.subscribe@1.10) ────────────
+describe("errorBlockSchema.failure round-trip and defaulting", () => {
+  it("round-trips a full failure payload", () => {
+    const block = {
+      type: "error",
+      blockId: "err-1",
+      status: "completed",
+      timestamp: 1,
+      message: "rate limited",
+      recoverable: true,
+      code: "usage_limit_exceeded",
+      failure: {
+        reason: "rate_limit",
+        resetsAt: 1000,
+        resetsAtSource: "provider",
+        scope: "five_hour",
+        providerDetail: "usage_limit_exceeded",
+      },
+    };
+    const parsed = errorBlockSchema.parse(block);
+    expect(parsed.failure).toEqual(block.failure);
+    // Full parse -> serialize -> parse.
+    expect(errorBlockSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(
+      parsed,
+    );
+  });
+
+  it("defaults failure to null (NOT undefined) when the key is absent - the persisted block is .nullable().default(null)", () => {
+    const parsed = errorBlockSchema.parse({
+      type: "error",
+      blockId: "err-2",
+      status: "completed",
+      timestamp: 1,
+      message: "boom",
+      recoverable: false,
+      code: null,
+    });
+    expect(parsed.failure).toBeNull();
+    expect("failure" in parsed).toBe(true);
+  });
+
+  it("agentFailureSchema round-trips every optional field and requires only reason", () => {
+    expect(agentFailureSchema.parse({ reason: "rate_limit" })).toEqual({
+      reason: "rate_limit",
+    });
+    const full = {
+      reason: "rate_limit" as const,
+      resetsAt: 1000,
+      resetsAtSource: "probe" as const,
+      scope: "seven_day",
+      providerDetail: "usage_limit_exceeded",
+    };
+    expect(agentFailureSchema.parse(full)).toEqual(full);
+    expect(agentFailureSchema.safeParse({}).success).toBe(false);
+  });
+
+  // `resetsAt` + `resetsAtSource` are documented as a PAIR, and the error card
+  // spends that: it formats `failure.resetsAt` as a clock time and never reads
+  // the source. Before the refinement each field was independently optional, so
+  // a boundary with nothing certifying it parsed cleanly and rendered as a
+  // verified time - the one thing the payload's doc promises cannot happen.
+  describe("agentFailureSchema reset-metadata pairing", () => {
+    const base = { reason: "rate_limit" as const };
+
+    it("rejects a boundary with no source, naming the MISSING field", () => {
+      const result = agentFailureSchema.safeParse({ ...base, resetsAt: 1000 });
+      expect(result.success).toBe(false);
+      // The path, not just the rejection: an arm that fired on the wrong half
+      // would still refuse this input, and refusing for the wrong reason is
+      // what makes a later inversion invisible.
+      expect(
+        result.success ? [] : result.error.issues.map((issue) => issue.path),
+      ).toEqual([["resetsAtSource"]]);
+    });
+
+    it("rejects a source with no boundary, naming the MISSING field", () => {
+      const result = agentFailureSchema.safeParse({
+        ...base,
+        resetsAtSource: "probe",
+      });
+      expect(result.success).toBe(false);
+      expect(
+        result.success ? [] : result.error.issues.map((issue) => issue.path),
+      ).toEqual([["resetsAt"]]);
+    });
+
+    it("accepts neither and both - the pair is optional, not required", () => {
+      expect(agentFailureSchema.safeParse(base).success).toBe(true);
+      expect(
+        agentFailureSchema.safeParse({
+          ...base,
+          resetsAt: 1000,
+          resetsAtSource: "provider",
+        }).success,
+      ).toBe(true);
+    });
+
+    // The must-NOT-flag control. `scope` is a per-provider free-text label, not
+    // part of the boundary's proof, so it is deliberately outside the pairing;
+    // this cell reddens if someone widens the rule to cover it.
+    it("leaves `scope` and `providerDetail` uncoupled from the pair", () => {
+      expect(
+        agentFailureSchema.safeParse({
+          ...base,
+          scope: "five_hour",
+          providerDetail: "usage_limit_exceeded",
+        }).success,
+      ).toBe(true);
+    });
+
+    // The refinement has to survive the wrappers the persisted block puts on
+    // it (`.nullable().default(null)`); a future refactor that rebuilt the
+    // failure shape inline in the block would drop it silently otherwise.
+    it("propagates through errorBlockSchema's nullable+defaulted failure", () => {
+      const block = {
+        type: "error",
+        blockId: "err-pair",
+        status: "completed",
+        timestamp: 1,
+        message: "rate limited",
+        recoverable: true,
+        code: "usage_limit_exceeded",
+      };
+      expect(
+        errorBlockSchema.safeParse({
+          ...block,
+          failure: { reason: "rate_limit", resetsAt: 1000 },
+        }).success,
+      ).toBe(false);
+      // The positive control. Without it a typo anywhere else in `block` would
+      // reject the line above for a reason that has nothing to do with the
+      // pairing, and the cell would read as a pass.
+      expect(
+        errorBlockSchema.safeParse({
+          ...block,
+          failure: {
+            reason: "rate_limit",
+            resetsAt: 1000,
+            resetsAtSource: "provider",
+          },
+        }).success,
+      ).toBe(true);
+    });
+  });
+});
+
+describe("providerNoticeKindSchemaPreFallback rejects an unknown enum VALUE (not merely an unknown key)", () => {
+  it("rejects every fallback attribution kind, and still accepts every pre-fallback kind", () => {
+    // Named one at a time rather than derived as "the live enum minus this
+    // one": a derived list would pass for any pair of enums, including the two
+    // being identical, which is the property this cell exists to refuse. The
+    // three MOVE arms are listed separately for the same reason - splitting
+    // `fallback_applied` into three kinds is exactly the growth a `1.7`-`1.9`
+    // peer's frozen copy cannot absorb, so each new value has to be refused
+    // here by name.
+    for (const kind of [
+      "fallback_applied",
+      "fallback_returned",
+      "fallback_return_blocked",
+      "fallback_wait_resumed",
+      "fallback_settled",
+    ]) {
+      expect(providerNoticeKindSchemaPreFallback.safeParse(kind).success).toBe(
+        false,
+      );
+      // The live enum is the other half of the claim: these are refused
+      // because the freeze does not name them, NOT because they are unknown
+      // values everywhere. Without this line the cell would still pass if a
+      // kind were misspelled out of existence on both sides.
+      expect(providerNoticeKindSchema.safeParse(kind).success).toBe(true);
+    }
+    for (const kind of [
+      "model_rerouted",
+      "model_verification",
+      "safety_buffering",
+      "harness_message",
+    ]) {
+      expect(providerNoticeKindSchemaPreFallback.safeParse(kind).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it("contentBlockSchemaPreFallback rejects a text block carrying the new fallback_applied notice kind", () => {
+    const fallbackAppliedBlock = {
+      type: "text",
+      blockId: "notice-fallback-1",
+      status: "completed",
+      timestamp: 1,
+      text: "Switched to the backup profile after a rate limit.",
+      providerNotice: {
+        harnessId: "claude",
+        noticeKind: "fallback_applied",
+        tone: "info",
+        title: "Switched profile",
+        message: null,
+        details: [],
+        metadata: null,
+      },
+    };
+    // Live schema accepts it - this is the whole point of the freeze existing
+    // beside it.
+    expect(contentBlockSchema.safeParse(fallbackAppliedBlock).success).toBe(
+      true,
+    );
+    expect(
+      contentBlockSchemaPreFallback.safeParse(fallbackAppliedBlock).success,
+    ).toBe(false);
+    // The same block on a released kind still parses on the frozen union - the
+    // rejection is the enum value, not the block shape.
+    expect(
+      contentBlockSchemaPreFallback.safeParse({
+        ...fallbackAppliedBlock,
+        providerNotice: {
+          ...fallbackAppliedBlock.providerNotice,
+          noticeKind: "harness_message",
+        },
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("errorBlockSchemaPreFallback (frozen chat.subscribe@1.0-1.9) strips failure as an unknown key", () => {
+  const errorWithFailure = {
+    type: "error",
+    blockId: "err-1",
+    status: "completed",
+    timestamp: 1,
+    message: "rate limited",
+    recoverable: true,
+    code: "usage_limit_exceeded",
+    failure: { reason: "rate_limit" },
+  };
+
+  it("strips failure rather than rejecting the block", () => {
+    const parsed = errorBlockSchemaPreFallback.parse(errorWithFailure);
+    expect("failure" in parsed).toBe(false);
+    expect(parsed).toMatchObject({ type: "error", message: "rate limited" });
+  });
+
+  // The structural pin: contentBlockSchemaPreFallback (what every released
+  // snapshot chat-tree ultimately binds `error` blocks through) must itself
+  // route through the frozen errorBlockSchemaPreFallback member, not the
+  // live, still-growing errorBlockSchema - a discriminated union that lists
+  // its members explicitly but points one of them at a live schema is frozen
+  // in name only.
+  it("contentBlockSchemaPreFallback strips failure from an error block via its frozen member", () => {
+    const parsed = contentBlockSchemaPreFallback.parse(errorWithFailure);
+    expect(parsed.type).toBe("error");
+    expect("failure" in parsed).toBe(false);
   });
 });
 

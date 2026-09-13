@@ -266,6 +266,7 @@ import {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -306,6 +307,20 @@ import {
   hostRestartV11,
   hostRestartV12,
 } from "@traycer/protocol/host/restart/contracts";
+import {
+  providersFallbackPolicyGetV10,
+  providersFallbackPolicyPreviewTierGroupsV10,
+  providersFallbackPolicyResetV10,
+  providersFallbackPolicyRestoreTierGroupsV10,
+  providersFallbackPolicySetV10,
+} from "@traycer/protocol/host/fallback-policy";
+import {
+  chatFallbackCancelV10,
+  chatFallbackChooseTargetV10,
+  chatFallbackListTargetsV10,
+  chatFallbackReturnToPreferredV10,
+  chatFallbackRunManualRungV10,
+} from "@traycer/protocol/host/chat-fallback";
 import {
   hostIdentityGetV10,
   hostIdentitySetV10,
@@ -5624,6 +5639,82 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // The four external fallback actions. All off-floor: a client meeting a host
+  // without the fallback engine must simply not render the affordance, which is
+  // exactly what `unsupported` degradation gives it. Unary rather than stream
+  // actions because they name a traversal rather than a subscription - the two
+  // that DO need to name their subscription (`fallback.holdForChoice` /
+  // `fallback.releaseChoice`) are stream actions for that reason, and the lease
+  // token these carry is the bridge between the two transports.
+  "chat.fallback.cancel": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackCancelV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "chat.fallback.chooseTarget": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackChooseTargetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "chat.fallback.runManualRung": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackRunManualRungV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "chat.fallback.returnToPreferred": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackReturnToPreferredV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Read-only, and the only fallback method that is: it computes what a menu
+  // may offer and changes nothing. `unsupported` like its four siblings, so a
+  // client meeting an older host renders no destination menu rather than
+  // failing - the affordance is absent, not broken.
+  "chat.fallback.listTargets": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackListTargetsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "agent.gui.listHarnesses": {
     1: {
       latestMinor: 0,
@@ -9620,6 +9711,71 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "providers.fallbackPolicy.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.fallbackPolicy.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicySetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.fallbackPolicy.restoreTierGroups": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyRestoreTierGroupsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.fallbackPolicy.reset": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyResetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.fallbackPolicy.previewTierGroups": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyPreviewTierGroupsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "providers.setProfileApiKey": {
     degrade: { kind: "unsupported" },
     1: {
@@ -11168,7 +11324,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 9,
+      latestMinor: 10,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11201,8 +11357,16 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // @1.9 is the first minor whose `rowContext` may carry an Antigravity
         // anchor. The resolver withholds `sessionAnchor` from a <1.9
         // subscriber rather than sending a frame it cannot decode.
+        //
+        // @1.9 is itself frozen as the staging builds shipped it (Antigravity
+        // anchors and delivery placement, no provider fallback). Provider
+        // fallback re-minted ABOVE it at @1.10 rather than folding into it, so
+        // a staging @1.9 peer never meets a fallback frame it cannot decode.
         9: {
           contract: chatSubscribeV19,
+        },
+        10: {
+          contract: chatSubscribeV110,
         },
       },
     },

@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
 import { ImportLoginsFlow } from "@/components/settings/import-logins-flow";
 import { PLAIN_IMPORT_LOGINS_FRAME } from "@/components/settings/import-logins-frame";
@@ -117,10 +117,10 @@ function scan(overrides: Partial<LoginImportScan>): LoginImportScan {
 }
 
 function renderDialog(bridge: TestBridge): {
-  readonly onOpenChange: ReturnType<typeof vi.fn>;
+  readonly onOpenChange: Mock<(open: boolean) => void>;
   readonly client: QueryClient;
 } {
-  const onOpenChange = vi.fn();
+  const onOpenChange = vi.fn<(open: boolean) => void>();
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -157,7 +157,7 @@ afterEach(() => {
 
 describe("<ImportLoginsDialog /> pick step", () => {
   it("lists sources with last-used copy and an import-from-file entry", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [
       source({
         id: "source-1",
@@ -179,7 +179,7 @@ describe("<ImportLoginsDialog /> pick step", () => {
   });
 
   it("groups profiles under one heading per browser, most recently used browser first", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     const hour = 60 * 60 * 1000;
     bridge.sources = [
       source({
@@ -233,7 +233,7 @@ describe("<ImportLoginsDialog /> pick step", () => {
     const consoleError = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     const fileSourceAt = (lastUsedAt: number): LoginImportSource => ({
       id: "file-source-1",
       browser: "file",
@@ -267,7 +267,7 @@ describe("<ImportLoginsDialog /> pick step", () => {
 
 describe("<ImportLoginsDialog /> choose-sites step", () => {
   it("lists a checklist of registrable domains with counts, all checked by default", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -299,7 +299,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("disables and unchecks Google's excluded rows, with the opt-in switch off and no alert", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -341,7 +341,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("has no opt-in switch when the scan lists no excluded rows", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -359,7 +359,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("toggling the opt-in on shows the warning, ticks google.com in the checklist, and updates the count", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -416,7 +416,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("shows the unreadable-records notice when unreadableCookieCount > 0", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -434,7 +434,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("shows the protected-cookie banner when protectedCookieCount > 0", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -456,7 +456,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("renders the needs-full-disk-access explainer, whose button opens the pane through its own RunnerHost method", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -482,7 +482,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     "profile-too-large",
     "too-many-sites",
   ])("renders the %s explainer and a Try again affordance", async (reason) => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set("source-1", scan({ blocked: reason }));
     renderDialog(bridge);
@@ -512,7 +512,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("renders the macOS-keychain unlock hint when the selected site's unlock is macos-keychain", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({ browser: "chrome" })];
     bridge.scanBySourceId.set(
       "source-1",
@@ -533,7 +533,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("shows no keychain hint when only plaintext sites are selected", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({ browser: "chrome" })];
     bridge.scanBySourceId.set(
       "source-1",
@@ -569,7 +569,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("disables the Import button with 0 sites selected", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -587,7 +587,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
   });
 
   it("freezes Select all and Select none while the import is pending", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.deferImport = true;
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
@@ -640,7 +640,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
 
 describe("<ImportLoginsDialog /> import", () => {
   it("sends exactly the currently-checked domains", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -672,7 +672,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("sends includeDeviceBound: true and the google domain when the opt-in is on", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -712,7 +712,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("sends includeDeviceBound: false and no google domain when the opt-in is toggled on then off again before importing", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -759,7 +759,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("pushes once on a successful import and shows the sent/saved copy on Done", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -794,7 +794,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("shows the saved-on-this-machine copy when nothing was pushed", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -825,7 +825,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("a declined desktop confirmation leaves the checklist in place", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -852,7 +852,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("renders a Try again affordance for a blocked import result", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -872,7 +872,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("shows the part-way title and explainer for an incomplete import", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -893,7 +893,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("invalidates the saved sites after an incomplete import", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -916,7 +916,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("leaves the saved sites alone for a blocked import that wrote nothing", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -937,7 +937,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("keeps the previous selection after a retry from a blocked import", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -984,7 +984,7 @@ describe("<ImportLoginsDialog /> import", () => {
   });
 
   it("keeps the Google opt-in switch on after a retry from a blocked import", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -1035,7 +1035,7 @@ describe("<ImportLoginsDialog /> import", () => {
 
 describe("<ImportLoginsDialog /> Done step affordance", () => {
   it("shows a Done affordance on a successful import when onFinished is present", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -1082,7 +1082,7 @@ describe("<ImportLoginsFlow /> with nowhere to go (onFinished null)", () => {
   }
 
   it("shows no Close/Done button on the Done step", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",
@@ -1110,7 +1110,7 @@ describe("<ImportLoginsFlow /> with nowhere to go (onFinished null)", () => {
   });
 
   it("keeps Try again on a blocked Done step, with no Close button", async () => {
-    const bridge = new TestBridge();
+    const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
       "source-1",

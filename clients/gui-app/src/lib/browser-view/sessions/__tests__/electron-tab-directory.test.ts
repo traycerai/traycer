@@ -55,7 +55,7 @@ function publishedBinding(
 
 describe("publishElectronTabBinding surface serialization", () => {
   it("keeps one attach/detach chain across a republish of the same tab", async () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     const owner = Symbol("owner");
     publishElectronTabBinding(owner, bridge, CAPABILITY);
     const first = await publishedBinding(CAPABILITY).bindSurface(
@@ -93,7 +93,7 @@ describe("publishElectronTabBinding surface serialization", () => {
       tabId: "tab-retired",
       registrationId: "native:tab-retired",
     };
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     const owner = Symbol("owner");
     publishElectronTabBinding(owner, bridge, capability);
     const first = await publishedBinding(capability).bindSurface(
@@ -129,7 +129,7 @@ describe("publishElectronTabBinding surface serialization", () => {
       tabId: "tab-released",
       registrationId: "native:tab-released",
     };
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     const owner = Symbol("owner");
     publishElectronTabBinding(owner, bridge, capability);
     await publishedBinding(capability).bindSurface(surfaceInput("binding-1"));

@@ -384,7 +384,7 @@ function liveSessions(): BrowserSessionsState {
 let stopGuestHost: (() => void) | null = null;
 
 function mountGuestForTile(): void {
-  const bridge = new FakeBrowserViewBridge();
+  const bridge = new FakeBrowserViewBridge({});
   stopGuestHost = startPersistentBrowserGuestHost(bridge, {
     pointerDown: () => {},
     focus: () => {},

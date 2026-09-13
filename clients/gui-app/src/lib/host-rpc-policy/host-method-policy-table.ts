@@ -587,6 +587,63 @@ export const HOST_METHOD_POLL_TABLE = {
   // supersedes an older one - and never polled: the answer is a position in a
   // transcript the live subscription is already reporting changes to.
   "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
+  // The external fallback actions. All `fifo`, and none polled.
+  //
+  // `fifo` because each carries the traversal revision it expects, so two rapid
+  // sends are not the same request twice - the second names a revision the
+  // first is about to invalidate. Coalescing them would drop the one the user
+  // actually meant and answer with the other one's outcome; dropping the LATER
+  // one is worse still, since that is the one carrying the newer intent.
+  //
+  // Never polled, and that is not merely "these are mutations". A poll would
+  // re-send an action against a revision the host has moved past and get a
+  // `traversal_advanced` for its trouble, which the menu renders as "this chat
+  // already resumed" - a poll would manufacture that message out of nothing.
+  //
+  // What `fifo` does NOT buy, because the mode is the only thing this table
+  // gets to say: it does not order these four against ONE ANOTHER, nor two
+  // sends of one verb naming different revisions. `HostRequestCoordinator`
+  // keys its queues by `[hostId, userId, method, params]`, so each of those is
+  // a separate queue and they race. Nothing here needs them not to - every
+  // verb names the revision (or the attempt) it expects and the HOST
+  // adjudicates, answering the loser with a refusal inside a successful
+  // response, which is the concurrency control. A client-side ordering would
+  // only decide WHICH concurrent press wins, and the argument above says the
+  // later one carries the newer intent. A surface that does need arrival order
+  // has to ask for it where the ordering primitive lives - a shared
+  // `MutationScope` on the hooks in `use-fallback-actions.ts` - since a
+  // scheduling policy answers `modeFor` and never supplies the queue key.
+  "chat.fallback.cancel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.fallback.chooseTarget": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.fallback.runManualRung": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The switch-back banner's answer, on the same terms as the other three: it
+  // names the revision it expects, so two rapid answers are two different
+  // requests rather than one sent twice.
+  "chat.fallback.returnToPreferred": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The destination menu's candidate list, and the ONE fallback method that is
+  // not `fifo`. The other four mutate and name the revision they expect, so two
+  // rapid answers must stay two ordered requests. This one is read-only - no
+  // probe, no gauge write, no record write - so a later read supersedes an
+  // earlier one and `LATEST_SCHEDULING` is the honest scheduling: a user who
+  // reopens or refreshes the menu wants the newest answer, not a queue of stale
+  // ones delivered in order.
+  "chat.fallback.listTargets": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.getLocalStorageSize": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.readSnapshotDiff": { ...LATEST_SCHEDULING, poll: null },
   // Clearing snapshots destructively removes locally retained data.
@@ -1666,6 +1723,67 @@ export const HOST_METHOD_POLL_TABLE = {
   "providers.setProfileEnabled": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Reading the host-global fallback policy - a pure read, so `latest`.
+  //
+  // Opt-in polling (`poll: true`), for one caller: the settings panel's
+  // "N in progress right now" (`useFallbackInFlightCountQuery`), which reads
+  // this method under its OWN cache entry so the count stays true while the
+  // page is open. The policy read itself (`useFallbackPolicyQuery`) must not
+  // opt in: its entry is where `set` and `restoreTierGroups` write their
+  // responses, and a poll landing after one of those writes would put the
+  // pre-save policy back for the next mount to seed from.
+  "providers.fallbackPolicy.get": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
+  },
+  // Saving the fallback policy is a persisted settings write - `fifo` for the
+  // same reason as the classic provider mutations above: two rapid saves must
+  // both LAND, not be coalesced into one.
+  //
+  // Landing is all `fifo` gives them, and this comment used to add "in order",
+  // which it does not: the queue key carries the params, so two saves carrying
+  // two different policies sit in two queues and race. That matters more here
+  // than for most writes, because `useFallbackPolicySetMutation` folds each
+  // response into the `…fallbackPolicy.get` cache with `setQueriesData` - so
+  // the cached policy is whichever response lands LAST, not whichever save was
+  // pressed last. Ordering has to come from a shared `MutationScope` on that
+  // hook, or from a host-side revision check; this table cannot supply it,
+  // because a scheduling policy answers `modeFor` and never the queue key.
+  "providers.fallbackPolicy.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Restoring the seeded model groups and resetting the whole policy are both
+  // persisted settings writes, so `fifo` for the same reason as `.set`: they
+  // race with it (all three write the same row) and each must land, never be
+  // coalesced. Not "in the order the user pressed them", which this comment
+  // used to claim: three methods are three queue keys, so `fifo` sequences
+  // each against itself and nothing against the other two - see the note on
+  // `.set` above, and the same limit stated on `providers.nativeMutate` below.
+  "providers.fallbackPolicy.restoreTierGroups": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.fallbackPolicy.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A pure read re-issued on every edit, so `latest` - the same argument as
+  // `chat.fallback.listTargets`. Coalescing onto the NEWEST request is what
+  // makes the rendered verdicts match the draft on screen: under a burst of
+  // edits the superseded requests describe groups the user has already changed,
+  // and running them in order would render each stale answer on the way past
+  // while spending a catalog walk per candidate on every one of them. `fifo`
+  // belongs to the writes, which name a revision and must all land.
+  // `poll: null`: it is re-asked when the draft changes, and nothing else can
+  // change its answer.
+  "providers.fallbackPolicy.previewTierGroups": {
+    ...LATEST_SCHEDULING,
     poll: null,
   },
   // Native MCP/plugins/skills mutations write provider config files, so they

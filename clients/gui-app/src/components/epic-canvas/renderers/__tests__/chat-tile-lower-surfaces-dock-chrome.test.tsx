@@ -141,6 +141,7 @@ import {
   useLayoutStore,
 } from "@/stores/settings/layout-store";
 import { ChatDockCompactStrip } from "@/components/chat/chat-dock-compact-strip";
+import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import {
   ChatLowerInteractionSurfaces,
   type ChatLowerInteractionSurfacesProps,
@@ -404,6 +405,9 @@ function surfacesProps(patch: {
     todo: null,
     restoreContext: patch.restoreContext,
     backgroundItems: patch.backgroundItems,
+    // No fallback in flight: this suite is about the dock chrome, and the
+    // retry row is `chat-lower-background-spacing.test.tsx`'s subject.
+    providerFallback: NO_PROVIDER_FALLBACK,
     backgroundStopPendingTaskIds: new Set(),
     backgroundStopAllPending: false,
     backgroundSessionStopPending: false,

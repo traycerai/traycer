@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveHostNotificationStoppedReason,
+  HOST_NOTIFICATION_STOPPED_REASONS,
   parseKnownHostNotificationPayload,
   parseKnownHostNotificationPayloadForKind,
 } from "@traycer/protocol/host/notifications/payloads";
@@ -172,7 +173,6 @@ describe("deriveHostNotificationStoppedReason", () => {
     ["rate_limit", "rate_limit"],
     ["RATE_LIMIT", "rate_limit"],
     ["usage_limit_exceeded", "rate_limit"],
-    ["session_budget_exceeded", "rate_limit"],
     ["billing_error", "billing"],
     ["model_not_found", "model_unavailable"],
     ["overloaded", "provider_unavailable"],
@@ -204,6 +204,46 @@ describe("deriveHostNotificationStoppedReason", () => {
     "future_error",
   ])("keeps unsafe or unknown code %s generic", (code) => {
     expect(deriveHostNotificationStoppedReason(code)).toBeNull();
+  });
+
+  // Its own case rather than a row in the normalization list above, because
+  // what is being pinned is which of FOUR answers this code gets, and three of
+  // them are wrong in a way the list cannot express.
+  //
+  // Codex emits it with "Start a new session or compact the conversation": a
+  // session-local stop, on an account that is fine.
+  //
+  //   - NOT `rate_limit`, which it was: that made it fallback-eligible for
+  //     `profile`, `tier` and `wait` (`REASON_ELIGIBLE_RUNGS`), so the engine
+  //     could relaunch the turn on a different account that was never the
+  //     problem and attach that account's reset as this failure's `resetsAt`.
+  //   - NOT `context_exhausted`: "budget" is ambiguous between spend and
+  //     context and we have not established which Codex means, which is why the
+  //     reason it does get claims neither.
+  //   - NOT `null`, which was the stopgap: no derived reason means no typed
+  //     failure, no failed-attempt envelope, and therefore no manual `retry` on
+  //     the error card - and a fresh session is precisely what `retry` does.
+  //
+  // What keeps the engine out of it is `EXCLUDED_FALLBACK_REASONS`, asserted in
+  // `fallback-reason-matrix.test.ts`, not the absence of a reason here.
+  it("classifies a Codex session-budget stop as its own session_budget reason", () => {
+    expect(deriveHostNotificationStoppedReason("session_budget_exceeded")).toBe(
+      "session_budget",
+    );
+    expect(deriveHostNotificationStoppedReason("SESSION_BUDGET_EXCEEDED")).toBe(
+      "session_budget",
+    );
+  });
+
+  // The negative half of the same decision, and the one a rename would break
+  // silently: the reason must not be either neighbour it was nearly given.
+  it("keeps the session-budget reason distinct from rate_limit and context_exhausted", () => {
+    const reason = deriveHostNotificationStoppedReason(
+      "session_budget_exceeded",
+    );
+    expect(reason).not.toBe("rate_limit");
+    expect(reason).not.toBe("context_exhausted");
+    expect(HOST_NOTIFICATION_STOPPED_REASONS).toContain("session_budget");
   });
 });
 

@@ -1,0 +1,93 @@
+import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
+
+/**
+ * User-facing copy for the four ladder steps.
+ *
+ * The vocabulary is settled and narrow: "try these in order" and "step", never
+ * "ladder" or "rung", which are engine words. `Record<FallbackRungKind, …>`
+ * rather than a lookup with a fallback, so a fifth step cannot ship without
+ * copy - the same discipline the host applies to its own reason maps.
+ */
+export interface FallbackRungCopy {
+  /** The step's own line in "Try these in order". */
+  readonly label: string;
+  /** One line under it saying what the step actually does. */
+  readonly description: string;
+  /**
+   * The short form used as a column chip in the per-failure overrides matrix,
+   * where the row already names the failure and the full sentence would not
+   * fit. Deliberately the same three words the wireframe uses.
+   */
+  readonly chipLabel: string;
+}
+
+export const FALLBACK_RUNG_COPY: Record<FallbackRungKind, FallbackRungCopy> = {
+  profile: {
+    label: "Switch to another profile of the same provider",
+    description:
+      "Continues on a different account you have signed in to for that provider.",
+    chipLabel: "other profile",
+  },
+  tier: {
+    label: "Switch to an equivalent model on another provider",
+    // "the equivalent models", NOT "the model groups". A group is policy
+    // STRUCTURE, and the vocabulary table bans naming it for the same reason it
+    // bans "tier", "ladder" and "rung" - this line was the last place the word
+    // survived in shipped copy, and it named what a section headed "Equivalent
+    // models" also names, so the page named one thing two ways.
+    //
+    // "below" went when the tabs arrived: that section is no longer under this
+    // line, it is behind the Equivalent models tab. A direction the reader
+    // cannot follow is worse than none, and the step's own label already says
+    // what it uses. The `wait` step below KEEPS its "the cap below" for the
+    // mirror-image reason - its cap is `Behavior`, which is still on this tab,
+    // still under this list.
+    description:
+      "Uses your equivalent models to find one you have said is interchangeable.",
+    chipLabel: "equivalent model",
+  },
+  wait: {
+    label: "Wait for the limit to reset",
+    description:
+      "Only when the provider has told us when the limit resets, and the wait is inside the cap below.",
+    chipLabel: "wait",
+  },
+  notify: {
+    label: "Notify me",
+    // NOT "Always runs when nothing else worked". This description renders for
+    // the row whatever the stored ladder holds, including a ladder that omits
+    // `notify` entirely - the state where the editor offers "Add this step
+    // back" precisely because the step does NOT run. `FixedStepControl` is
+    // where "Always" belongs, and it already says it only in the `enabled`
+    // branch; saying it here too put the claim beside its own contradiction,
+    // which `fallback-ladder-editor.tsx` documents at its `FixedStepControl`.
+    //
+    // And NOT "Runs at the end of the plan" either - the same defect one step
+    // further out. The editor maps `displayOrder` verbatim and this step is
+    // fixed but not RELOCATED, so an externally authored early `notify` draws
+    // this line with a step visibly below it, the copy claiming an end the
+    // list on screen contradicts. What holds in every stored order is that the
+    // walk STOPS here, and that is also the one fact the early case needs
+    // stated, since the steps below it will never run. So this asserts
+    // termination, which the engine guarantees, rather than position, which
+    // only the ladders this panel itself writes happen to have.
+    description:
+      "Ends the plan: it runs once the steps above are spent, and no step below it runs.",
+    chipLabel: "notify",
+  },
+};
+
+/**
+ * The three steps the per-failure overrides matrix has columns for.
+ *
+ * `notify` is deliberately absent: it is eligible for every failure that arms
+ * at all, so a column of always-green chips would carry no information. It is
+ * still part of the stored ladder for each row, which is why every write from
+ * that matrix has to carry it through explicitly rather than rebuild the row
+ * from the chips on screen.
+ */
+export const FALLBACK_MATRIX_RUNGS: readonly FallbackRungKind[] = [
+  "profile",
+  "tier",
+  "wait",
+];

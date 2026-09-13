@@ -827,7 +827,7 @@ describe("beside placement", () => {
 
   function besideIntent(
     paneId: string,
-    overrides: Partial<TileOpenIntent> = {},
+    overrides: Partial<TileOpenIntent>,
   ): TileOpenIntent {
     return {
       ...BASE_INTENT,
@@ -840,7 +840,7 @@ describe("beside placement", () => {
   it("splits to the right of the NAMED pane on the split row", () => {
     expect(
       resolve({
-        intent: besideIntent("p2"),
+        intent: besideIntent("p2", {}),
         settings: { ...DEFAULT_SETTINGS, sideChat: "split" },
         canvas: TWO_PANE_CANVAS,
         singleTileViewport: false,
@@ -857,7 +857,7 @@ describe("beside placement", () => {
   it("opens as a tab of the NAMED pane on the tab row", () => {
     expect(
       resolve({
-        intent: besideIntent("p2"),
+        intent: besideIntent("p2", {}),
         settings: { ...DEFAULT_SETTINGS, sideChat: "tab" },
         canvas: TWO_PANE_CANVAS,
         singleTileViewport: false,
@@ -931,7 +931,7 @@ describe("beside placement", () => {
   it("clamps to the named pane on a single-tile viewport", () => {
     expect(
       resolve({
-        intent: besideIntent("p2"),
+        intent: besideIntent("p2", {}),
         settings: { ...DEFAULT_SETTINGS, sideChat: "split" },
         canvas: TWO_PANE_CANVAS,
         singleTileViewport: true,
@@ -955,7 +955,7 @@ describe("beside placement", () => {
     };
     expect(
       resolve({
-        intent: besideIntent("p2"),
+        intent: besideIntent("p2", {}),
         settings: FLAT_TAB,
         canvas: TWO_PANE_CANVAS,
         singleTileViewport: false,
@@ -973,7 +973,7 @@ describe("beside placement", () => {
     it("falls through to the configured split, right of the active pane", () => {
       expect(
         resolve({
-          intent: besideIntent("gone"),
+          intent: besideIntent("gone", {}),
           settings: { ...DEFAULT_SETTINGS, sideChat: "split" },
           canvas: SINGLE_PANE_CANVAS,
           singleTileViewport: false,
@@ -990,7 +990,7 @@ describe("beside placement", () => {
     it("falls through to the configured tab, in the active pane", () => {
       expect(
         resolve({
-          intent: besideIntent("gone"),
+          intent: besideIntent("gone", {}),
           settings: { ...DEFAULT_SETTINGS, sideChat: "tab" },
           canvas: SINGLE_PANE_CANVAS,
           singleTileViewport: false,
@@ -1016,7 +1016,7 @@ describe("beside placement", () => {
     });
     expect(
       resolve({
-        intent: besideIntent("p2"),
+        intent: besideIntent("p2", {}),
         settings: { ...DEFAULT_SETTINGS, sideChat: "split" },
         canvas,
         singleTileViewport: false,

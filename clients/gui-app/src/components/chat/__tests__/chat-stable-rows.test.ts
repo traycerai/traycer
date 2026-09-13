@@ -202,6 +202,93 @@ describe("computeStableChatTimelineRows", () => {
     const next = computeStableChatTimelineRows([], empty);
     expect(next).toBe(empty);
   });
+
+  /**
+   * F14: the `turnId` comparator (`CHAT_MESSAGE_FIELD_UNCHANGED.turnId`) was
+   * untested - zero occurrences of `turnId` anywhere in this file before this
+   * block. It is the field that decides whether a row whose ONLY change is
+   * turn identity gets a fresh reference handed to LegendList.
+   *
+   * The two cases are a pair on purpose: the positive alone would pass for a
+   * comparator that treats every field as changed, and the control alone
+   * would pass for a comparator that treats every field as unchanged. Neither
+   * proves the comparator reads `turnId` specifically.
+   */
+  it("treats a turnId change as a real change, and an unchanged turnId as no change at all", () => {
+    // Same reference for every OTHER field - if this test rebuilt them, an
+    // accidental new-array/new-object comparator (rather than the real
+    // `===`) could pass by coincidence.
+    const withTurn: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      turnId: "turn-1",
+    };
+    const state = computeStableChatTimelineRows(
+      [withTurn],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+
+    // POSITIVE: turnId is the only field that differs.
+    const turnChanged: ChatMessage = { ...withTurn, turnId: "turn-2" };
+    const afterTurnChange = computeStableChatTimelineRows([turnChanged], state);
+    // Falsification: neuter the comparator to `turnId: () => true` (deleting
+    // the key is a compile error - the field table is typed
+    // `Record<ChatMessageComparableField, ...>` - so this is the only way to
+    // ablate it without an unrelated red) and THIS assertion goes red: the
+    // neutered comparator reports every other field unchanged too, so the row
+    // keeps reusing `withTurn` instead of picking up `turnChanged`.
+    expect(afterTurnChange.result[0]).toBe(turnChanged);
+
+    // CONTROL: a fresh object, but the SAME turnId value (and every other
+    // field, by construction). Must reuse the previous reference - identity
+    // of the id, not of the object - and must NOT be perturbed by the
+    // falsifier above, since neutering `turnId` to always-unchanged still
+    // reports "unchanged" here.
+    const sameTurnNewObject: ChatMessage = { ...withTurn };
+    const afterSameTurn = computeStableChatTimelineRows(
+      [sameTurnNewObject],
+      state,
+    );
+    expect(afterSameTurn.result[0]).toBe(withTurn);
+    expect(afterSameTurn).toBe(state);
+  });
+
+  // F11's projection seam (`withManualRungAnchor`) writes this field on the
+  // ROW, so it needs the same positive/control pair `turnId` above got - the
+  // compile-exhaustive field table forced its addition, but nothing had
+  // exercised it as a comparator yet.
+  it("treats a manualRungAnchorId change as a real change, and an unchanged one as no change at all", () => {
+    const withAnchor: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      manualRungAnchorId: "seg-a",
+    };
+    const state = computeStableChatTimelineRows(
+      [withAnchor],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+
+    // POSITIVE: manualRungAnchorId is the only field that differs.
+    const anchorChanged: ChatMessage = {
+      ...withAnchor,
+      manualRungAnchorId: "seg-b",
+    };
+    const afterAnchorChange = computeStableChatTimelineRows(
+      [anchorChanged],
+      state,
+    );
+    // Falsification: neuter the comparator to
+    // `manualRungAnchorId: () => true` and THIS assertion goes red - the row
+    // keeps reusing `withAnchor` instead of picking up `anchorChanged`.
+    expect(afterAnchorChange.result[0]).toBe(anchorChanged);
+
+    // CONTROL: a fresh object, same manualRungAnchorId value.
+    const sameAnchorNewObject: ChatMessage = { ...withAnchor };
+    const afterSameAnchor = computeStableChatTimelineRows(
+      [sameAnchorNewObject],
+      state,
+    );
+    expect(afterSameAnchor.result[0]).toBe(withAnchor);
+    expect(afterSameAnchor).toBe(state);
+  });
 });
 
 describe("didChatTimelineKeySequenceChange", () => {

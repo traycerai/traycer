@@ -114,7 +114,10 @@ import {
 import { resetFakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
 import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
 import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
-import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
+import type {
+  EpicStreamClientFactory,
+  OpenEpicStreamClient,
+} from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
 import {
   __resetEpicParkingForTests,
   isEpicParked,
@@ -153,7 +156,7 @@ function installStreamFactory(factory: EpicStreamClientFactory): void {
   );
 }
 
-function noopStreamFactory(): ReturnType<EpicStreamClientFactory> {
+function noopStreamFactory(): OpenEpicStreamClient {
   return {
     applyUpdate: () => undefined,
     awareness: () => undefined,

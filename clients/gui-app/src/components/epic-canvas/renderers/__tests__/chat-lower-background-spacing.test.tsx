@@ -75,6 +75,7 @@ import {
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
+import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import {
   ChatLowerInteractionSurfaces,
@@ -204,6 +205,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
     },
     todo: null,
     restoreContext: RESTORE_CONTEXT,
+    providerFallback: NO_PROVIDER_FALLBACK,
     // The harness session reports nothing of its own - the whole point of the
     // case: everything below the transcript comes from the chat's commands.
     backgroundItems: [],

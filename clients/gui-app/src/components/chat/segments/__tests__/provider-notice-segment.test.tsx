@@ -12,6 +12,7 @@ describe("<ProviderNoticeSegment />", () => {
     render(
       <ProviderNoticeSegment
         status="completed"
+        noticeKind="model_rerouted"
         tone="info"
         title="Model verification active"
         message="Trusted access verification enabled."
@@ -31,6 +32,7 @@ describe("<ProviderNoticeSegment />", () => {
     render(
       <ProviderNoticeSegment
         status="streaming"
+        noticeKind="model_rerouted"
         tone="info"
         title="Safety check in progress"
         message={null}
@@ -46,6 +48,7 @@ describe("<ProviderNoticeSegment />", () => {
     render(
       <ProviderNoticeSegment
         status="completed"
+        noticeKind="model_rerouted"
         tone="warning"
         title="Model changed"
         message={null}
@@ -61,6 +64,7 @@ describe("<ProviderNoticeSegment />", () => {
     render(
       <ProviderNoticeSegment
         status="completed"
+        noticeKind="model_rerouted"
         tone="warning"
         title="Model changed"
         message="Codex switched from gpt-5 to gpt-5-safe."

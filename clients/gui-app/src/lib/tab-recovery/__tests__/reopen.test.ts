@@ -215,7 +215,7 @@ function canvasEntry(input: {
 }
 
 function draftRef(
-  draftId = "draft-1",
+  draftId: string,
 ): Extract<ClosedHeaderTab, { kind: "draft" }> {
   return {
     kind: "draft",
@@ -364,7 +364,7 @@ describe("reopenClosedTab", () => {
   });
 
   it("keeps the recovery entry when a draft cannot be restored", async () => {
-    const item = draftRef();
+    const item = draftRef("draft-1");
     const entry: TabRecoveryEntry = {
       id: "entry-1",
       kind: "header",
@@ -393,14 +393,14 @@ describe("reopenClosedTab", () => {
   });
 
   it("restores available bulk items and retains only the failed draft", async () => {
-    const failedDraft = draftRef();
+    const failedDraft = draftRef("draft-1");
     const entry: TabRecoveryEntry = {
       id: "entry-1",
       kind: "header",
       bulk: true,
       items: [
         ...epicEntry({ id: "entry-1", bulk: true }).items,
-        { ...draftRef(), index: 1 },
+        { ...draftRef("draft-1"), index: 1 },
       ],
     };
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
@@ -648,7 +648,7 @@ describe("reopenClosedTab", () => {
   });
 
   it("does not restore a draft removed while it is being prepared", async () => {
-    const item = draftRef();
+    const item = draftRef("draft-1");
     const entry: Extract<TabRecoveryEntry, { kind: "header" }> = {
       id: "entry-1",
       kind: "header",

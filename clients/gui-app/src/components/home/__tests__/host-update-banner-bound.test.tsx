@@ -107,7 +107,7 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   }),
 }));
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -120,6 +120,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
   HostControllerStatus,
   IHostManagement,
   IRunnerHost,
@@ -1289,11 +1291,20 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
 
   // 10. Operation-lane Retry routes on intent like every other retry here.
   describe("operation Retry routing", () => {
+    type ApplyStaged = () => Promise<{
+      readonly kind: "ok";
+      readonly value: ApplyStagedOk;
+    }>;
+    type ActivateInstalled = () => Promise<{
+      readonly kind: "ok";
+      readonly value: ActivateInstalledOk;
+    }>;
+
     function failedAttemptWithControllerStatus(status: HostControllerStatus): {
-      readonly applyStaged: ReturnType<typeof vi.fn>;
-      readonly activateInstalled: ReturnType<typeof vi.fn>;
+      readonly applyStaged: Mock<ApplyStaged>;
+      readonly activateInstalled: Mock<ActivateInstalled>;
     } {
-      const applyStaged = vi.fn(() =>
+      const applyStaged = vi.fn<ApplyStaged>(() =>
         Promise.resolve({
           kind: "ok" as const,
           value: {
@@ -1303,7 +1314,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           },
         }),
       );
-      const activateInstalled = vi.fn(() =>
+      const activateInstalled = vi.fn<ActivateInstalled>(() =>
         Promise.resolve({
           kind: "ok" as const,
           value: { activated: true },

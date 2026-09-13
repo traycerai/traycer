@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import { rateLimitFamilyAffectsModelSlug } from "@traycer/protocol/host/rate-limit/semantics";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import {
   assessProfileRateLimit,
@@ -128,6 +129,99 @@ describe("rateLimitScopeAffectsModel", () => {
     expect(
       rateLimitScopeAffectsModel("Claude", model("opus[1m]", "Opus")),
     ).toBe(true);
+  });
+});
+
+// F4 (host/GUI agreement): both peers now CALL the same exported wrapper,
+// `rateLimitFamilyAffectsModelSlug`. The host's `familyWindowApplies` delegates
+// to it and this suite invokes it directly as the host side, so the table below
+// is no longer a reproduction of host code that could drift away from it: there
+// is one implementation, and a change to its token derivation cannot leave two
+// separately-green suites that quietly stopped meaning the same thing. (It was
+// a reproduction, because the host's wrapper was private to
+// `rate-limit-gauge-cache.ts` and unreachable from a GUI test - which is the
+// reason the wrapper moved rather than the test growing a cleverer copy.)
+describe("host/GUI rate-limit family agreement (F4)", () => {
+  // The production host-side wrapper, under the name the table reads it by.
+  const hostSideAnswer = rateLimitFamilyAffectsModelSlug;
+
+  const PAIRS: ReadonlyArray<{
+    readonly family: string | null;
+    readonly modelSlug: string;
+    readonly modelLabel: string;
+  }> = [
+    // The motivating case: a display-name family with a SPACE must gate the
+    // slug it names and must not gate an unrelated one. `includes()` failed
+    // on the space alone - the bug this whole fix is for.
+    {
+      family: "Claude Opus",
+      modelSlug: "claude-opus-4-7",
+      modelLabel: "Claude Opus 4.7",
+    },
+    { family: "Claude Opus", modelSlug: "claude-fable-5", modelLabel: "Fable" },
+    { family: "opus", modelSlug: "opus[1m]", modelLabel: "Opus" },
+    { family: "opus", modelSlug: "claude-fable-5", modelLabel: "Fable" },
+    { family: "Fable", modelSlug: "claude-fable-5[1m]", modelLabel: "Fable" },
+    { family: "sonnet", modelSlug: "sonnet", modelLabel: "Sonnet" },
+    { family: null, modelSlug: "haiku", modelLabel: "Haiku" },
+    // An unresolved alias proves nothing about which model runs - gated by
+    // every family, informative or not.
+    { family: "opus", modelSlug: "default", modelLabel: "Default" },
+    { family: "Fable", modelSlug: "auto", modelLabel: "Auto" },
+    // A family left with no informative token (pure version noise, or only
+    // provider-generic tokens) errs toward matching everything.
+    { family: "5", modelSlug: "opus[1m]", modelLabel: "Opus" },
+    { family: "Claude", modelSlug: "opus[1m]", modelLabel: "Opus" },
+  ];
+
+  it.each(PAIRS)(
+    "family=$family modelSlug=$modelSlug: host and GUI agree",
+    ({ family, modelSlug, modelLabel }) => {
+      const hostAnswer = hostSideAnswer(family, modelSlug);
+      const guiAnswer = rateLimitScopeAffectsModel(
+        family,
+        model(modelSlug, modelLabel),
+      );
+      expect(guiAnswer).toBe(hostAnswer);
+    },
+  );
+
+  it("the motivating case, asserted in both directions so a positive-only pin could not have passed against the bug", () => {
+    const opus = model("claude-opus-4-7", "Claude Opus 4.7");
+    const fable = model("claude-fable-5", "Fable");
+    expect(rateLimitScopeAffectsModel("Claude Opus", opus)).toBe(true);
+    expect(hostSideAnswer("Claude Opus", "claude-opus-4-7")).toBe(true);
+    expect(rateLimitScopeAffectsModel("Claude Opus", fable)).toBe(false);
+    expect(hostSideAnswer("Claude Opus", "claude-fable-5")).toBe(false);
+  });
+
+  // Where the peers are allowed to DIVERGE, and the only direction that is
+  // safe. The GUI knows a display label the host never sees, so it takes a
+  // second verdict from the label and ORs it with the slug's: the label can
+  // only make this side MORE inclusive, never less. The host's verdict is a
+  // floor - anything it would wait for, the GUI still calls gating.
+  //
+  // Falsification: merge the slug and label tokens into one set in
+  // `rateLimitScopeAffectsModel` (the shape this replaced) and the two extra
+  // rows below go red. Merging is not a safe way to add information here,
+  // because the shared rule errs toward including a window only while the model
+  // has no informative token left - and a label can HAND it one, flipping an
+  // err-toward-include into an exclude on a window the chat is really waiting
+  // on.
+  it("never calls a window inapplicable that the host would wait for", () => {
+    const cases = [
+      ...PAIRS,
+      // The host sees the unresolved alias and applies the window; the merged
+      // form found `opus` in the LABEL and dropped it.
+      { family: "Fable", modelSlug: "default", modelLabel: "Claude Opus 4.7" },
+      { family: "opus", modelSlug: "auto", modelLabel: "Claude Fable 5" },
+    ];
+    for (const { family, modelSlug, modelLabel } of cases) {
+      if (!hostSideAnswer(family, modelSlug)) continue;
+      expect(
+        rateLimitScopeAffectsModel(family, model(modelSlug, modelLabel)),
+      ).toBe(true);
+    }
   });
 });
 

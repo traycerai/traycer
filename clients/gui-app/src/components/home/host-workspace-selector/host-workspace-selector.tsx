@@ -2169,10 +2169,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     surface.binding,
   ]);
   const applyStagedFoldersAndResume = useCallback(
-    (
-      capture: WorktreeCommitCapture,
-      isCancelled: () => boolean = () => false,
-    ): void => {
+    (capture: WorktreeCommitCapture, isCancelled: () => boolean): void => {
       const settleRun = (): void => {
         setCommitRunPending(false);
       };

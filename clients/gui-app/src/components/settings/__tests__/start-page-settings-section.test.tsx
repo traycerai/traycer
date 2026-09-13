@@ -280,9 +280,7 @@ describe("StartPageSettingsSection", () => {
   });
 });
 
-function manifestEntry(
-  overrides: Partial<CuratedWallpaper> = {},
-): CuratedWallpaper {
+function manifestEntry(overrides: Partial<CuratedWallpaper>): CuratedWallpaper {
   return {
     id: "dunes",
     title: "Dunes",
@@ -296,7 +294,7 @@ function manifestEntry(
 }
 
 describe("StartPageSettingsSection: curated wallpaper gallery", () => {
-  const dunes = manifestEntry();
+  const dunes = manifestEntry({});
   const ridge = manifestEntry({
     id: "ridge",
     title: "Ridge",

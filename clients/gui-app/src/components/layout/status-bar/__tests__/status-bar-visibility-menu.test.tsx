@@ -32,7 +32,7 @@ const PROVIDERS: ReadonlyArray<StatusBarMenuProvider> = [
   { providerId: "claude-code", label: "Claude Code" },
 ];
 
-function renderMenu(providers = PROVIDERS) {
+function renderMenu(providers: ReadonlyArray<StatusBarMenuProvider>) {
   return render(
     <StatusBarVisibilityMenu providers={providers}>
       <div data-testid="status-bar-trigger">status bar</div>
@@ -53,7 +53,7 @@ afterEach(() => {
 
 describe("<StatusBarVisibilityMenu />", () => {
   it("reflects store state: every passed provider checked, none hidden by default", () => {
-    renderMenu();
+    renderMenu(PROVIDERS);
     openMenu();
 
     for (const provider of PROVIDERS) {
@@ -80,7 +80,7 @@ describe("<StatusBarVisibilityMenu />", () => {
         },
       },
     });
-    renderMenu();
+    renderMenu(PROVIDERS);
     openMenu();
 
     expect(
@@ -102,7 +102,7 @@ describe("<StatusBarVisibilityMenu />", () => {
         resources: { ...DEFAULT_STATUS_BAR_LAYOUT.resources, enabled: false },
       },
     });
-    renderMenu();
+    renderMenu(PROVIDERS);
     openMenu();
 
     expect(
@@ -113,7 +113,7 @@ describe("<StatusBarVisibilityMenu />", () => {
   });
 
   it("toggles a provider's membership in the hidden deny-list on click", () => {
-    renderMenu();
+    renderMenu(PROVIDERS);
     openMenu();
 
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Codex" }));
@@ -124,7 +124,7 @@ describe("<StatusBarVisibilityMenu />", () => {
   });
 
   it("navigates to the layout settings section from 'Status bar settings…'", () => {
-    renderMenu();
+    renderMenu(PROVIDERS);
     openMenu();
 
     fireEvent.click(
@@ -136,7 +136,7 @@ describe("<StatusBarVisibilityMenu />", () => {
 
   it("'Move to header' sets placement to header", () => {
     useLayoutStore.getState().setStatusBarPlacement("status-bar");
-    renderMenu();
+    renderMenu(PROVIDERS);
     openMenu();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to header" }));
@@ -151,7 +151,7 @@ describe("<StatusBarVisibilityMenu />", () => {
     // the effect of, and leave it waiting for the next desktop window - so it
     // takes the same gate the Layout page puts on the placement row.
     viewport.mobile = true;
-    renderMenu();
+    renderMenu(PROVIDERS);
     openMenu();
 
     expect(
