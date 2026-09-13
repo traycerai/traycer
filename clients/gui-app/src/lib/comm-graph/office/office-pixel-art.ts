@@ -14,15 +14,26 @@
  * the agent's appearance, the tint and the theme - because a stale entry would
  * silently render one agent in another's colors.
  */
-import type {
-  OfficePoint,
-  OfficeSize,
-  OfficeSpriteName,
-  OfficeSpriteRef,
-  OfficeTheme,
+import {
+  OFFICE_TILE,
+  type OfficePoint,
+  type OfficeSize,
+  type OfficeSpriteName,
+  type OfficeSpriteRef,
+  type OfficeTheme,
 } from "@/lib/comm-graph/office/office-types";
 import {
   BOX_MAP,
+  FACE_MAP,
+  SLAB_MAP,
+  DESK_FRONT_MAP,
+  LAMP_MAP,
+  STAIRS_SIDE_MAP,
+  CUBBY_MAP,
+  SILHOUETTE_MAP,
+  SKYBRIDGE_MAP,
+  BOARD_MAP,
+  ROOF_EDGE_MAP,
   BUBBLE_ATTENTION_MAP,
   BUBBLE_AWAITING_MAP,
   BUBBLE_HELLO_MAP,
@@ -45,6 +56,7 @@ import {
   CHAIR_MAP,
   CLOCK_MAP,
   COFFEE_MACHINE_MAP,
+  CONSOLE_MAP,
   DESK_MAP,
   DOOR_MAP,
   DUST_SHEET_MAP,
@@ -67,6 +79,7 @@ import {
   NAMEPLATE_MAP,
   PARTITION_MAP,
   PLANT_MAP,
+  PODIUM_MAP,
   RECEPTION_MAP,
   RUG_MAP,
   SIGN_MAP,
@@ -85,6 +98,7 @@ import {
   SHELF_MAP,
   SLEEP_BAG_MAP,
   SOFA_MAP,
+  TIER_STEP_MAP,
   TREADMILL_MAP,
   TREE_MAP,
   TV_MAP,
@@ -92,12 +106,36 @@ import {
   WATERING_CAN_MAP,
   WHITEBOARD_MAP,
   WINDOW_MAP,
+  BLOCK_LEFT_MAP,
+  BLOCK_RIGHT_MAP,
+  BLOCK_TOP_MAP,
+  DESK_ISO_MAP,
+  DOOR_ISO_MAP,
+  FLOOR_GRASS_ISO_A_MAP,
+  FLOOR_GRASS_ISO_B_MAP,
+  FLOOR_ISO_A_MAP,
+  FLOOR_ISO_B_MAP,
+  SPIRE_MAP,
+  WALL_ISO_LEFT_MAP,
+  WALL_ISO_RIGHT_MAP,
+  WINDOW_DARK_MAP,
+  WINDOW_LIT_MAP,
+  BED_MAP,
+  BED_OCCUPIED_MAP,
+  LOUNGE_CHAIR_MAP,
+  LOW_TABLE_MAP,
+  RECORDS_DOOR_MAP,
+  CROSS_SIGN_MAP,
 } from "@/lib/comm-graph/office/office-prop-maps";
 import {
+  isOfficeSeatedPose,
+  officeAccessoryMap,
   officeHairMap,
   officeHeadMap,
+  officeHeadOffsetOf,
   officeSeatedMap,
   officeTorsoMap,
+  OFFICE_ACCESSORY_MAPS,
   OFFICE_HAIR_MAPS,
   OFFICE_HEAD_MAPS,
   OFFICE_SEATED_MAPS,
@@ -267,6 +305,17 @@ const EYE_COLOR = "#20242c";
 
 const SPRITE_SIZES: Readonly<Record<OfficeSpriteName, OfficeSize>> = {
   character: { width: 16, height: 20 },
+  face: { width: 16, height: 16 },
+  slab: { width: 16, height: 16 },
+  "desk-front": { width: 32, height: 16 },
+  lamp: { width: 8, height: 8 },
+  "stairs-side": { width: 16, height: 16 },
+  cubby: { width: 16, height: 16 },
+  silhouette: { width: 16, height: 16 },
+  skybridge: { width: 16, height: 16 },
+  board: { width: 16, height: 12 },
+  "roof-edge": { width: 16, height: 8 },
+
   desk: { width: 32, height: 16 },
   "monitor-on": { width: 16, height: 12 },
   "monitor-on-b": { width: 16, height: 12 },
@@ -337,11 +386,46 @@ const SPRITE_SIZES: Readonly<Record<OfficeSpriteName, OfficeSize>> = {
   "bubble-hello": { width: 14, height: 12 },
   "bubble-sleep": { width: 14, height: 12 },
   sparkle: { width: 8, height: 8 },
+  "tier-step": { width: 16, height: 16 },
+  podium: { width: 32, height: 16 },
+  console: { width: 32, height: 16 },
+  "floor-iso-a": { width: 32, height: 16 },
+  "floor-iso-b": { width: 32, height: 16 },
+  "floor-grass-iso-a": { width: 32, height: 16 },
+  "floor-grass-iso-b": { width: 32, height: 16 },
+  "wall-iso-left": { width: 16, height: 32 },
+  "wall-iso-right": { width: 16, height: 32 },
+  "door-iso": { width: 16, height: 32 },
+  "desk-iso": { width: 32, height: 24 },
+  "block-left": { width: 16, height: 16 },
+  "block-right": { width: 16, height: 16 },
+  "block-top": { width: 32, height: 16 },
+  "window-lit": { width: 8, height: 8 },
+  "window-dark": { width: 8, height: 8 },
+  spire: { width: 8, height: 24 },
+
+  bed: { width: 32, height: 16 },
+  "bed-occupied": { width: 32, height: 16 },
+  "lounge-chair": { width: 16, height: 16 },
+  "low-table": { width: 32, height: 16 },
+  "records-door": { width: 16, height: 16 },
+  "cross-sign": { width: 16, height: 16 },
 };
 
 const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   character: [],
   desk: DESK_MAP,
+  face: FACE_MAP,
+  slab: SLAB_MAP,
+  "desk-front": DESK_FRONT_MAP,
+  lamp: LAMP_MAP,
+  "stairs-side": STAIRS_SIDE_MAP,
+  cubby: CUBBY_MAP,
+  silhouette: SILHOUETTE_MAP,
+  skybridge: SKYBRIDGE_MAP,
+  board: BOARD_MAP,
+  "roof-edge": ROOF_EDGE_MAP,
+
   "monitor-on": MONITOR_ON_MAP,
   "monitor-on-b": MONITOR_ON_B_MAP,
   "monitor-off": MONITOR_OFF_MAP,
@@ -411,6 +495,30 @@ const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   "bubble-hello": BUBBLE_HELLO_MAP,
   "bubble-sleep": BUBBLE_SLEEP_MAP,
   sparkle: SPARKLE_MAP,
+  "tier-step": TIER_STEP_MAP,
+  podium: PODIUM_MAP,
+  console: CONSOLE_MAP,
+  "floor-iso-a": FLOOR_ISO_A_MAP,
+  "floor-iso-b": FLOOR_ISO_B_MAP,
+  "floor-grass-iso-a": FLOOR_GRASS_ISO_A_MAP,
+  "floor-grass-iso-b": FLOOR_GRASS_ISO_B_MAP,
+  "wall-iso-left": WALL_ISO_LEFT_MAP,
+  "wall-iso-right": WALL_ISO_RIGHT_MAP,
+  "door-iso": DOOR_ISO_MAP,
+  "desk-iso": DESK_ISO_MAP,
+  "block-left": BLOCK_LEFT_MAP,
+  "block-right": BLOCK_RIGHT_MAP,
+  "block-top": BLOCK_TOP_MAP,
+  "window-lit": WINDOW_LIT_MAP,
+  "window-dark": WINDOW_DARK_MAP,
+  spire: SPIRE_MAP,
+
+  bed: BED_MAP,
+  "bed-occupied": BED_OCCUPIED_MAP,
+  "lounge-chair": LOUNGE_CHAIR_MAP,
+  "low-table": LOW_TABLE_MAP,
+  "records-door": RECORDS_DOOR_MAP,
+  "cross-sign": CROSS_SIGN_MAP,
 };
 
 /**
@@ -440,6 +548,27 @@ export function officeSpriteSize(ref: OfficeSpriteRef): OfficeSize {
   return SPRITE_SIZES[ref.name];
 }
 
+/**
+ * Where a TOP-LEFT anchored sprite is drawn so that its FOOT lands on a tile.
+ *
+ * A prop taller than its tile would otherwise spill DOWN over whatever sits on
+ * the row below - a plant over its own chair, a rug over the doorway. A
+ * one-tile sprite is unaffected, and a sprite SHORTER than a tile (a name
+ * plate, a pod plate) sits down on it, which is where a small thing on the
+ * floor actually is.
+ *
+ * Lives with the sprite sizes rather than with any one caller: the painter
+ * places props by it, the scene hangs the clock hands off it, and the renderer
+ * mounts a sign with it. Three copies of this arithmetic is three chances for
+ * one of them to disagree about where a sign is.
+ */
+export function officeSpriteFootY(
+  ref: OfficeSpriteRef,
+  tileRow: number,
+): number {
+  return tileRow * OFFICE_TILE - (SPRITE_SIZES[ref.name].height - OFFICE_TILE);
+}
+
 /** One entry per authored map, for the test that guards the art's shape. */
 export interface OfficeSpriteMapEntry {
   readonly name: OfficeSpriteName;
@@ -453,6 +582,7 @@ export function officeSpriteMaps(): ReadonlyArray<OfficeSpriteMapEntry> {
     ...OFFICE_TORSO_MAPS,
     ...OFFICE_SEATED_MAPS,
     ...OFFICE_HAIR_MAPS,
+    ...OFFICE_ACCESSORY_MAPS,
   ].map((part) => ({
     name: "character" as const,
     label: part.label,
@@ -617,15 +747,34 @@ interface SelectedMap {
  * `left` is never authored: it is `right` mirrored, which is both half the art
  * to keep consistent and the only way the two stay in sync when one is edited.
  */
-function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
+/** Hair, then anything worn over it, at whatever offset this head sits at. */
+function dressHead(
+  body: SpriteMap,
+  ref: OfficeSpriteRef,
+  source: "down" | "up" | "right",
+  headDy: number,
+): SpriteMap {
   const appearance = ref.appearance;
   const hairStyle = appearance === undefined ? 0 : appearance.hairStyle;
+  const haired = overlayMap(body, officeHairMap(source, hairStyle), headDy);
+  const accessory = ref.accessory;
+  if (accessory === undefined) return haired;
+  return overlayMap(haired, officeAccessoryMap(accessory), headDy);
+}
+
+function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
   const pose = ref.pose ?? "stand";
-  if (pose === "sit" || pose === "type1" || pose === "type2") {
-    // A seated head sits one row lower than a standing one, so the `up` hair
-    // rides down with it rather than floating above the scalp.
+  if (isOfficeSeatedPose(pose)) {
+    // A seated head sits a row lower than a standing one - further on a slump,
+    // less on a lean - so the `up` hair and anything over it ride down with it
+    // rather than floating above the scalp.
     return {
-      map: overlayMap(officeSeatedMap(pose), officeHairMap("up", hairStyle), 1),
+      map: dressHead(
+        officeSeatedMap(pose, ref.facing === "down" ? "down" : "up"),
+        ref,
+        ref.facing === "down" ? "down" : "up",
+        officeHeadOffsetOf(pose),
+      ),
       mirror: false,
     };
   }
@@ -637,7 +786,7 @@ function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
     0,
   );
   return {
-    map: overlayMap(body, officeHairMap(source, hairStyle), 0),
+    map: dressHead(body, ref, source, 0),
     mirror: facing === "left",
   };
 }
@@ -665,8 +814,16 @@ const surfaceCache = new Map<string, SpriteSurface | null>();
  * A floor draws a few hundred distinct sprites at once, so this is roomy
  * enough that a live floor never evicts something it is still using, and
  * bounded enough that a long session cannot grow without limit.
+ *
+ * The densest view's working set at office zoom is about 850 surfaces in a
+ * 1280 x 700 tile - one per distinct look of every visible seated agent, plus
+ * the walkers - and the four new poses and the front-facing seated maps
+ * multiply the KEYS over that. 1,024 was within thrashing distance of it:
+ * evicting a sprite the same frame asks for again is the one failure mode a
+ * cap can have. A seated surface is under 2 KB of pixels, so 4,096 of them
+ * stay under 32 MB worst case, shared by every canvas in the tab, once.
  */
-export const OFFICE_SPRITE_CACHE_LIMIT = 1024;
+export const OFFICE_SPRITE_CACHE_LIMIT = 4096;
 
 export function clearOfficeSpriteCache(): void {
   surfaceCache.clear();
@@ -711,7 +868,7 @@ export function officeSpriteSurface(
   ref: OfficeSpriteRef,
   theme: OfficeTheme,
 ): SpriteSurface | null {
-  const key = cacheKey(ref, theme);
+  const key = officeSpriteCacheKey(ref, theme);
   const cached = readCachedSurface(key);
   if (cached !== undefined) return cached;
   const built = buildSurface(ref, theme);
@@ -719,7 +876,17 @@ export function officeSpriteSurface(
   return built;
 }
 
-function cacheKey(ref: OfficeSpriteRef, theme: OfficeTheme): string {
+/**
+ * What makes two sprite requests the SAME surface: the name, the palette, and
+ * for a character every part of the look that is drawn into its pixels.
+ *
+ * Exported because "how many distinct sprites does one frame ask for" is a
+ * budget, and the only honest answer to it is the key the cache itself uses.
+ */
+export function officeSpriteCacheKey(
+  ref: OfficeSpriteRef,
+  theme: OfficeTheme,
+): string {
   if (ref.name !== "character") {
     return `${ref.name}|${theme}|${ref.tint ?? ""}`;
   }
@@ -728,7 +895,7 @@ function cacheKey(ref: OfficeSpriteRef, theme: OfficeTheme): string {
     appearance === undefined
       ? "-"
       : `${appearance.skin}${appearance.hair}${appearance.hairStyle}${appearance.shirt}${appearance.pants}`;
-  return `character|${theme}|${ref.facing ?? "down"}|${ref.pose ?? "stand"}|${look}`;
+  return `character|${theme}|${ref.facing ?? "down"}|${ref.pose ?? "stand"}|${ref.accessory ?? ""}|${look}`;
 }
 
 /**

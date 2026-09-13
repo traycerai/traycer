@@ -224,14 +224,21 @@ describe("comm-graph view mode", () => {
     expect(screen.queryByTestId("comm-graph-office-canvas")).toBeNull();
   });
 
-  it("resets the viewport on a mode switch so the incoming mode fits itself", async () => {
-    // Sprite pixels and flow units are not the same measure, so a framing made
-    // in one mode would land the other off-screen while still counting as
-    // "the user framed this" and suppressing its fit.
+  it("leaves the graph's x/y/zoom exactly where they were on a mode switch (D68, N10 guard)", async () => {
+    // Before D68 there was one shared camera, and a mode switch reset it so
+    // the incoming mode would not inherit a framing made in the other
+    // renderer's units (sprite pixels vs. flow units). D68 gave each
+    // renderer its own camera - `x`/`y`/`zoom` for the Graph, `officeCamera`
+    // for the office - so there is nothing left for a switch to protect:
+    // resetting the Graph's own camera here would only destroy the framing
+    // the person is coming right back to (the live re-run's N10). This is
+    // the sibling of the tile suite's N10 guard, pinned at the mode-toggle
+    // seam instead of the tile's own render path.
     act(() => {
       useEpicCanvasStore
         .getState()
         .updateCommGraphTileViewInTab(TAB_ID, commGraphTileId(EPIC_ID), {
+          ...DEFAULT_COMM_GRAPH_VIEW,
           x: 400,
           y: -220,
           zoom: 3,
@@ -245,7 +252,65 @@ describe("comm-graph view mode", () => {
       await Promise.resolve();
     });
 
-    expect(storedView()).toEqual({ ...DEFAULT_COMM_GRAPH_VIEW, mode: "graph" });
+    // Only the mode moves - the seeded camera survives verbatim, not the
+    // neutral default a reset would have landed on.
+    expect(storedView()).toEqual({
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      x: 400,
+      y: -220,
+      zoom: 3,
+      mode: "graph",
+    });
+  });
+
+  it("keeps officeView, officeAutoView and the graph's camera through Office -> Graph -> Office (D68)", async () => {
+    // `handleModeChange` spreads the current value across the mode change,
+    // so a toggle must not lose `officeView` / `officeAutoView` - the
+    // original claim here, kept verbatim - AND, since D68, must not touch
+    // the Graph's own `x`/`y`/`zoom` either: a mode switch is not a camera
+    // event in either direction any more.
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .updateCommGraphTileViewInTab(TAB_ID, commGraphTileId(EPIC_ID), {
+          ...DEFAULT_COMM_GRAPH_VIEW,
+          x: 400,
+          y: -220,
+          zoom: 3,
+          mode: "office",
+          officeView: "towers",
+          officeAutoView: "building",
+        });
+    });
+    await renderTile();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("comm-graph-mode-graph"));
+      await Promise.resolve();
+    });
+
+    expect(storedView()?.mode).toBe("graph");
+    expect(storedView()?.officeView).toBe("towers");
+    expect(storedView()?.officeAutoView).toBe("building");
+    // The Graph's own camera survives the hop into Graph mode - it is the
+    // one being drawn now, and nothing resets it on the way in.
+    expect(storedView()?.x).toBe(400);
+    expect(storedView()?.y).toBe(-220);
+    expect(storedView()?.zoom).toBe(3);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+      await Promise.resolve();
+    });
+
+    expect(storedView()?.mode).toBe("office");
+    expect(storedView()?.officeView).toBe("towers");
+    expect(storedView()?.officeAutoView).toBe("building");
+    // And it survives the hop back to Office too - the Graph's camera is
+    // the Graph's alone now, untouched by either direction of the switch.
+    expect(storedView()?.x).toBe(400);
+    expect(storedView()?.y).toBe(-220);
+    expect(storedView()?.zoom).toBe(3);
   });
 
   it("switches back to the office from the graph", async () => {

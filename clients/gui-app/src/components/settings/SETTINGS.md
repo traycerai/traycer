@@ -1143,7 +1143,8 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     migrated once in the store's persist `merge` and then dropped.
 - `Appearance`: the theme library (`themes/theme-gallery.tsx`) leads,
   followed by **Start page**, **Interface**, **Fonts and text**, **Motion and
-  readability**, **Terminal**, and **Icon colors** via `settings-group.tsx`.
+  readability**, **Terminal**, **Agent office**, and **Icon colors** via
+  `settings-group.tsx`.
   Each group has an `<h2>` label outside its bordered card. Settings apply
   immediately; the theme editor previews a draft until Save theme or Cancel.
   `themes/appearance-details.tsx` supplies the prompt font and ligature rows
@@ -1296,6 +1297,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       visually distinct. `TerminalPreview` reflects the chosen shape/blink with a
       CSS-only cursor (reads the store directly, no xterm instance) so the effect
       is visible without spawning a real terminal.
+  - **Agent office** (group). One row, `Default view` (a `Select` over
+    `agentOfficeDefaultView`, `"auto"` plus every id in `OFFICE_VIEW_IDS`,
+    default `"auto"`) - which office view an epic's comm-graph tile opens on
+    when nobody has picked one for that tile. The options are read from the
+    office view REGISTRY rather than listed here, so a newly registered view
+    appears in this row and in the tile's own picker together; `merge`
+    re-derives the persisted value against that registry and falls back to
+    Auto. A tile with its own `officeView` ignores this row.
   - **Artifact icons** (group). One row, `Artifact icon colors`
     (`EpicNodeIconColorPicker`, `controls/node-icon-color-picker.tsx`) - a "Use
     type colors" `Switch` (`artifactIconColorMode`, `"byType" | "none"`,

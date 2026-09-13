@@ -119,6 +119,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
   "gui-app/src/components/epic-canvas/canvas/pane-opener.tsx": 1,
   "gui-app/src/components/epic-canvas/canvas/tab-strip.tsx": 2,
+  "gui-app/src/components/epic-canvas/comm-graph/office/comm-graph-office-canvas.tsx": 1,
   "gui-app/src/components/epic-canvas/image-preview/image-preview.tsx": 7,
   "gui-app/src/components/epic-canvas/pdf-preview/pdf-preview.tsx": 2,
   "gui-app/src/components/epic-canvas/pip/agent-browser-pip.tsx": 6,
@@ -210,6 +211,14 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
     chars: ["+", "-", "0", "=", "F", "_", "f"],
     why: "unmodified viewer keys, as above",
   },
+  "gui-app/src/components/epic-canvas/comm-graph/office/comm-graph-office-canvas.tsx":
+    {
+      chars: ["+", "-", "0", "=", "F", "f"],
+      // The two pairs are NOT accepted for one reason, so they are not stated as
+      // one: conflating them is how a later reader concludes the office tolerates
+      // any spelling of anything, and adds a case that does resolve a chord.
+      why: "unmodified keys on the focused floor - no modifier is involved, so the character typed IS the request, and none of them resolve a registered chord. The pairs differ: +/= is ONE physical key whose unshifted character most layouts make =, while f/F is one character in either case, so caps lock or a held shift still fits the floor",
+    },
 };
 
 /** Properties only a keyboard event carries. */

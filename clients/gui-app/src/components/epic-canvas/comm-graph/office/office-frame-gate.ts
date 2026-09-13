@@ -70,6 +70,18 @@ export function isElementVisible(element: Element): boolean {
 export class OfficeFrameGate {
   private sinceLastFrame = 0;
   private lastDrawnMinute = -1;
+  /**
+   * Whether the floor was moving when this gate last looked.
+   *
+   * THE SETTLING FRAME IS THE ONE THAT SHOWS THE END. The loop ticks the scene
+   * and then asks whether it is animating, so the tick that lands the last
+   * walker in its chair or takes the delivered envelope off the floor is the
+   * tick after which the answer is no - and a gate that only asked the new
+   * answer would refuse exactly the frame in which the motion finishes,
+   * leaving the canvas holding the envelope a frame short of the desk and the
+   * pip two pixels shy of its seat until something else happened to move.
+   */
+  private wasAnimating = false;
 
   /**
    * Accumulates real time and answers with the elapsed slice when the cap
@@ -96,10 +108,18 @@ export class OfficeFrameGate {
    *
    * A still floor is still redrawn when the clock's MINUTE turns over, or its
    * hands would sit wrong until something else happened to move.
+   *
+   * And once more after the motion stops, for the reason `wasAnimating` gives:
+   * the frame in which a thing finishes is a frame in which nothing is moving
+   * any more. ONE more - the latch clears with it - so a settled floor goes
+   * quiescent on the next pass rather than redrawing forever.
    */
   shouldDraw(motion: OfficeFloorMotion): boolean {
+    const settling = this.wasAnimating && !motion.animating;
+    this.wasAnimating = motion.animating;
     const idle =
       !motion.animating &&
+      !settling &&
       motion.minute === this.lastDrawnMinute &&
       !motion.panning;
     if (idle) return false;

@@ -67,7 +67,10 @@ import type {
   CommGraphPulse,
   CommGraphPulseKind,
 } from "@/lib/comm-graph/comm-graph-timeline";
-import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
+import type {
+  CommGraphTileCamera,
+  CommGraphTileViewState,
+} from "@/stores/epics/canvas/types";
 import { isDefaultCommGraphView } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
@@ -172,7 +175,15 @@ export interface CommGraphCanvasProps {
    */
   readonly modeToggle: ReactNode;
   readonly view: CommGraphTileViewState;
-  readonly onViewChange: (view: CommGraphTileViewState) => void;
+  /**
+   * Persist the camera, and only the camera.
+   *
+   * A renderer knows where it has been panned to and nothing else. The mode
+   * and the office view choice are written by the tile, so handing a whole
+   * view value up from here would let a pan that settles after a pick put the
+   * old rendering back - see `updateCommGraphTileCamera`.
+   */
+  readonly onCameraChange: (camera: CommGraphTileCamera) => void;
   /** Whether this row's owning cloud origin can currently open endpoints. */
   readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   /** Whether a detail row can be opened at its source. */
@@ -239,7 +250,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     onJumpToCreated,
     onJumpToSender,
     onOpenAgent,
-    onViewChange,
+    onCameraChange,
     playing,
     pulse,
     tileInstanceId,
@@ -533,15 +544,15 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
 
   const handleMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
-      // `mode` is carried through: the viewport moved, the rendering did not.
-      onViewChange({
+      // A PATCH: the viewport moved, the rendering did not, and this renderer
+      // is not the authority on which rendering that is.
+      onCameraChange({
         x: viewport.x,
         y: viewport.y,
         zoom: viewport.zoom,
-        mode: view.mode,
       });
     },
-    [onViewChange, view.mode],
+    [onCameraChange],
   );
 
   const openAgentById = useCommGraphOpenAgentById(agents, onOpenAgent);

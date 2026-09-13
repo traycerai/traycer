@@ -27,16 +27,33 @@ const STATUS_LABELS: Readonly<Record<OfficeAgentStatus, string>> = {
 export interface OfficeHoverSupplementProps {
   readonly status: OfficeAgentStatus;
   readonly modelTier: OfficeModelTier;
+  /**
+   * WHERE this agent is, in the words its own floor plan uses - its room, the
+   * quiet stack, or wherever it has walked to. `null` before the first layout,
+   * and for an agent the seat book does not know.
+   *
+   * Asked of the SCENE, never of the plan: a plan-time label stops being true
+   * the moment somebody gets up, and getting up is most of what the office
+   * does.
+   */
+  readonly whereabouts: string | null;
 }
 
 export function OfficeHoverSupplement(props: OfficeHoverSupplementProps) {
-  const { modelTier, status } = props;
+  const { modelTier, status, whereabouts } = props;
   return (
-    <p
-      className="text-ui-xs text-muted-foreground"
-      data-testid="comm-graph-office-hover-supplement"
-    >
-      {STATUS_LABELS[status]} · {modelTier} model
-    </p>
+    <div data-testid="comm-graph-office-hover-supplement">
+      <p className="text-ui-xs text-muted-foreground">
+        {STATUS_LABELS[status]} · {modelTier} model
+      </p>
+      {whereabouts === null ? null : (
+        <p
+          className="text-ui-xs text-muted-foreground"
+          data-testid="comm-graph-office-hover-where"
+        >
+          {whereabouts}
+        </p>
+      )}
+    </div>
   );
 }

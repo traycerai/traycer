@@ -1,5 +1,9 @@
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
+import type {
+  OfficeViewChoice,
+  OfficeViewId,
+} from "@/lib/comm-graph/office/office-view-vocabulary";
 import { makeLiteralGuard } from "@/lib/type-guard";
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
 import type { DesktopJsonValue } from "@/lib/windows/types";
@@ -495,18 +499,80 @@ export interface ManagedCommandOutputTileRef {
  * `mode` picks between the two renderings of the SAME projection: the React
  * Flow node graph and the pixel-art office floor. Both read one cursor, one
  * event array and one agent set, so switching cannot show two different
- * stories. There is ONE viewport for both, not one per mode - and because the
- * fields mean flow units in `graph` and sprite pixels in `office`, a framing
- * chosen in one mode says nothing about the other. So switching mode RESETS
- * the viewport to the neutral one, which is what each renderer reads as "fit
- * yourself"; carrying the numbers over would open the incoming mode
- * off-screen while still counting as user-framed.
+ * stories. The FRAMING is the one thing they do not share: these fields mean
+ * flow units in `graph` and sprite pixels in `office`, so a camera chosen in
+ * one says nothing about the other.
+ *
+ * D68 settles that by giving each renderer its own: this shape is the GRAPH's
+ * camera, and the office keeps {@link CommGraphTileViewState.officeCamera}
+ * beside it. Neither is reset by a mode switch - a detour through the graph
+ * and back is not a statement about how the office was framed, and the
+ * reset that used to stand in for ownership is what lost it.
  */
-export interface CommGraphTileViewState {
+export interface CommGraphTileCamera {
   readonly x: number;
   readonly y: number;
   readonly zoom: number;
+}
+
+/**
+ * Which office view this tile draws, as the USER chose it - re-exported from
+ * the vocabulary module that owns it.
+ *
+ * `"auto"` is a choice like any other, not the absence of one: it means "pick
+ * for me, by what fits", and its measured outcome is remembered separately in
+ * `officeAutoView` so a remount cannot re-decide it.
+ */
+export type { OfficeViewChoice };
+
+export interface CommGraphTileViewState extends CommGraphTileCamera {
   readonly mode: "graph" | "office";
+  /**
+   * The view this tile was told to draw, or `null` where the user has never
+   * said - in which case the Settings default applies, and a change to it
+   * moves this tile.
+   */
+  readonly officeView: OfficeViewChoice | null;
+  /**
+   * What Auto last MEASURED for this tile, or `null` before it has run.
+   *
+   * Persisted rather than recomputed, because a re-measure is free to answer
+   * differently and the saved camera addresses whichever view was on screen
+   * when it was saved. Only re-picking Auto clears it.
+   */
+  readonly officeAutoView: OfficeViewId | null;
+  /**
+   * WHICH VIEW the saved camera was framed under, or `null` for a camera
+   * nobody framed.
+   *
+   * Pan and zoom mean "this much of THAT office", and the view underneath can
+   * change without the tile being on screen to notice: the Settings default is
+   * usually changed from Settings, with the epic closed, and the tile that
+   * follows it reopens over coordinates that addressed a different floor. The
+   * two office fields above say what to DRAW; this one says what the camera is
+   * ABOUT, which is the only way a mount can tell a framing worth keeping from
+   * one pointing into empty space.
+   */
+  readonly officeCameraView: OfficeViewId | null;
+  /**
+   * THE OFFICE'S OWN CAMERA, about {@link officeCameraView}, or `null` where
+   * nobody has framed the office.
+   *
+   * `x`, `y` and `zoom` on this same object are the GRAPH's, and always were
+   * in `graph` mode - the two renderers simply used to take turns holding one
+   * set of numbers, which only worked because every mode switch wiped them.
+   * D68 ends the sharing: a detour through the Graph and back now returns the
+   * office to exactly where it was, because the graph never had anywhere to
+   * write that would disturb it.
+   *
+   * `null` is what the office canvas reads as "fit yourself", so it is also
+   * what every writer that invalidates a framing stores - a view pick that
+   * lands somewhere new, Auto's first measurement away from the Floor, a
+   * Settings default that moves under a tile. The tile PROJECTS this into
+   * `x`, `y`, `zoom` before building the office canvas, which is why that
+   * canvas still reads a plain camera and knows nothing about this field.
+   */
+  readonly officeCamera: CommGraphTileCamera | null;
 }
 
 /**

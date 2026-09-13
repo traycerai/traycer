@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { AgentActivityTier } from "@/lib/agent-activity";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import {
+  OFFICE_STATUS_IS_HOT,
+  isOfficeHotStatus,
   officeAgentStatuses,
   officeOpenRequestCounts,
 } from "@/lib/comm-graph/office/office-status";
@@ -409,5 +411,38 @@ describe("officeOpenRequestCounts", () => {
     );
 
     expect(counts.has("beta")).toBe(false);
+  });
+});
+
+describe("isOfficeHotStatus", () => {
+  it("calls failure, attention, awaiting, working and background hot, and archived, idle and undefined cold", () => {
+    // Named one by one, not read off OFFICE_STATUS_IS_HOT: a case that
+    // asserted the table against itself would prove the function forwards,
+    // not that the five the office has always treated as hot still are.
+    expect(isOfficeHotStatus("failure")).toBe(true);
+    expect(isOfficeHotStatus("attention")).toBe(true);
+    expect(isOfficeHotStatus("awaiting")).toBe(true);
+    expect(isOfficeHotStatus("working")).toBe(true);
+    expect(isOfficeHotStatus("background")).toBe(true);
+    expect(isOfficeHotStatus("archived")).toBe(false);
+    expect(isOfficeHotStatus("idle")).toBe(false);
+    expect(isOfficeHotStatus(undefined)).toBe(false);
+  });
+
+  it("lists exactly the union's seven members and no others", () => {
+    // A key renamed in the union and left behind here is an excess-property
+    // error on the object literal, so the type already catches it. This is
+    // the runtime half: the count stays honest as the union grows, so a
+    // newly classified member cannot land in the table without this list
+    // noticing.
+    expect([...Object.keys(OFFICE_STATUS_IS_HOT)].sort()).toEqual([
+      "archived",
+      "attention",
+      "awaiting",
+      "background",
+      "failure",
+      "idle",
+      "working",
+    ]);
   });
 });

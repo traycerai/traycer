@@ -23,6 +23,7 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
@@ -41,6 +42,12 @@ import {
   type TerminalCursorStyle,
 } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
+import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
+import {
+  isOfficeViewChoice,
+  OFFICE_VIEW_CHOICES,
+  type OfficeViewChoice,
+} from "@/lib/comm-graph/office/office-view-vocabulary";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
 import {
@@ -48,6 +55,10 @@ import {
   trackSettingChanged,
   type AnalyticsSetting,
 } from "@/lib/analytics";
+
+function officeViewChoiceLabel(choice: OfficeViewChoice): string {
+  return choice === "auto" ? "Auto" : OFFICE_VIEWS[choice].label;
+}
 
 function trackedAppearanceSetter<Value>(
   setting: AnalyticsSetting,
@@ -116,6 +127,12 @@ export function AppearanceSettingsPanel() {
   );
   const resetArtifactIconColors = useSettingsStore(
     (state) => state.resetArtifactIconColors,
+  );
+  const agentOfficeDefaultView = useSettingsStore(
+    (state) => state.agentOfficeDefaultView,
+  );
+  const setAgentOfficeDefaultView = useSettingsStore(
+    (state) => state.setAgentOfficeDefaultView,
   );
   const compact = useSettingsDensity() === "compact";
 
@@ -305,6 +322,43 @@ export function AppearanceSettingsPanel() {
               </div>
             </div>
           </div>
+        </SettingsGroup>
+
+        <SettingsGroup
+          group={APPEARANCE.definitions.agentOffice}
+          showTitle
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <SettingsRow
+            row={APPEARANCE.definitions.agentOfficeDefaultView}
+            control={
+              <Select
+                value={agentOfficeDefaultView}
+                onValueChange={(value) => {
+                  if (!isOfficeViewChoice(value)) return;
+                  trackAppearanceSetting("agentOfficeDefaultView");
+                  setAgentOfficeDefaultView(value);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label="Default view"
+                  className="w-[min(40vw,8rem)]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {OFFICE_VIEW_CHOICES.map((choice) => (
+                    <SelectItem key={choice} value={choice}>
+                      {officeViewChoiceLabel(choice)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            }
+          />
         </SettingsGroup>
 
         <SettingsGroup

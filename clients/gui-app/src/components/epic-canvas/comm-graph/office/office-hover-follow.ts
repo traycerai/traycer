@@ -41,9 +41,10 @@ export function hitRegionFor(
   regions: ReadonlyArray<OfficeHitRegion>,
   point: OfficePoint,
 ): OfficeHitRegion | null {
-  // Last match wins: `hitRegions` follows the frame's own draw order, so the
-  // character painted on top of another is the one the pointer is over.
-  let found: OfficeHitRegion | null = null;
+  // FIRST match wins: `hitRegions` arrives front-most first, so the character
+  // painted on top of another is the one the pointer is over. The frame is
+  // culled to the viewport, so scanning it front to back and stopping is also
+  // the cheaper half of the two orders.
   for (const region of regions) {
     if (
       point.x >= region.rect.x &&
@@ -51,10 +52,10 @@ export function hitRegionFor(
       point.y >= region.rect.y &&
       point.y <= region.rect.y + region.rect.height
     ) {
-      found = region;
+      return region;
     }
   }
-  return found;
+  return null;
 }
 
 /**
