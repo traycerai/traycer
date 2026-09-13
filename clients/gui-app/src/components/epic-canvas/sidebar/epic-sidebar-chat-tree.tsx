@@ -2480,13 +2480,38 @@ function SidebarRowCheckbox(props: {
   readonly onToggleSelection: (id: string) => void;
 }) {
   const { inputId, nodeId, nodeName, isSelected, onToggleSelection } = props;
+  // The checkbox is the only named control on a selection-mode row - its
+  // `aria-label` is what a screen reader announces, and the row `<label>`
+  // around it carries no name of its own. Without the state here the badge
+  // beside it is visible and unspoken, which is the same split the row
+  // button's own `aria-label` already has to close.
+  //
+  // Read here rather than passed in: the badge reads the same selector, so the
+  // two cannot disagree, and threading it would add a prop to a component
+  // whose call site is already at this file's complexity ceiling.
+  //
+  // `isArchived: false` deliberately, and it is not a lie by omission. That
+  // flag exists to stop the row BUTTON saying "archived, stopped" - one fact
+  // twice - and this name does not say "archived" at all, so there is nothing
+  // for `stopped` to repeat here. Suppressing it would drop the state from the
+  // one string this control announces.
+  const sessionFacet = useEpicAgentSessionFacet(nodeId);
+  const stateForAria = describeSessionStateForAria(
+    sessionFacet.sessionState,
+    false,
+    false,
+  );
   return (
     <span className="relative flex size-4 shrink-0">
       <input
         id={inputId}
         type="checkbox"
         checked={isSelected}
-        aria-label={`Select ${nodeName}`}
+        aria-label={
+          stateForAria === null
+            ? `Select ${nodeName}`
+            : `Select ${nodeName}, ${stateForAria}`
+        }
         data-testid={`epic-sidebar-select-${nodeId}`}
         className="peer absolute inset-0 m-0 size-4 cursor-pointer opacity-0"
         onChange={() => {
@@ -2942,6 +2967,7 @@ function describeOfflineLockForAria(
 function describeSessionStateForAria(
   sessionState: AgentSessionState | null,
   isArchived: boolean,
+  withResumeGuidance: boolean,
 ): string | null {
   // The RESUME GUIDANCE rides here, not only in the badge's tooltip.
   //
@@ -2957,8 +2983,17 @@ function describeSessionStateForAria(
   // one it fixes. The `lastExit` detail stays visual - it is display-only, and
   // all four exits resume identically, so it earns a tooltip and not a place
   // in every row's accessible name.
+  //
+  // `withResumeGuidance` because the two callers are asking different
+  // questions. The row BUTTON is the control that opens the agent, so "you can
+  // get it back" belongs in its name. The selection CHECKBOX is not - the
+  // reader is picking rows to bulk-act on, and repeating a resume sentence on
+  // every sleeping row they arrow past is noise in front of the one word that
+  // changes the decision.
   if (sessionState === "sleeping") {
-    return "asleep, resumes on the next message or when you open it";
+    return withResumeGuidance
+      ? "asleep, resumes on the next message or when you open it"
+      : "asleep";
   }
   if (sessionState === "stopped" && !isArchived) return "stopped";
   return null;
@@ -2973,7 +3008,7 @@ function chatRowAriaLabel(input: {
 }): string {
   const stateSuffix = [
     input.isArchived ? "archived" : null,
-    describeSessionStateForAria(input.sessionState, input.isArchived),
+    describeSessionStateForAria(input.sessionState, input.isArchived, true),
     input.sharedWithTask ? "shared with task" : null,
     describeOfflineLockForAria(input.offlineLock),
   ]
@@ -3342,6 +3377,15 @@ function ChatRowButton(props: ChatRowButtonProps) {
               ownerKind={resourceOwnerKind}
               claims={roleClaims}
             />
+            {/*
+             * The session state survives selection mode, unlike the owner
+             * metadata below. Bulk-selecting is exactly where a reader decides
+             * what to act on, and "this one is asleep, not stopped" is the
+             * distinction that changes the decision - dropping it here would
+             * hide the fact this change exists to surface, at the one moment
+             * it is being used.
+             */}
+            <AgentSessionStateBadge nodeId={nodeId} isArchived={isArchived} />
           </span>
         </span>
       </label>

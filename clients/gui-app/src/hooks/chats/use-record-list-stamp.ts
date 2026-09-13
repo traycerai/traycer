@@ -220,6 +220,21 @@ export function useRecordListStamp(
     };
   }, [identity, readSnapshotIncompleteSeq]);
 }
+/**
+ * One of the record projection's counters, read reactively off an open-epic
+ * store, or `null` with no session.
+ *
+ * Both record hooks need this and neither needs a slice: the counters are
+ * plain numbers on the projection, so `useSyncExternalStore` over the store's
+ * own subscribe is the whole mechanism and a selector library would only add
+ * an equality function for `===`.
+ */
+export function useProjectedRecordCounter(
+  subscribeToStore: (onChange: () => void) => () => void,
+  readCounter: () => number | null,
+): number | null {
+  return useSyncExternalStore(subscribeToStore, readCounter, readCounter);
+}
 
 /**
  * Stage 2: keeps one record plane's held stamp current from the PUSH stream,
@@ -264,22 +279,6 @@ export function useRecordListStamp(
  * re-shipping them. A plane holding nothing (`null`) is already asking for a
  * snapshot on every dispatch, so a delta has nothing to tell it.
  */
-/**
- * One of the record projection's counters, read reactively off an open-epic
- * store, or `null` with no session.
- *
- * Both record hooks need this and neither needs a slice: the counters are
- * plain numbers on the projection, so `useSyncExternalStore` over the store's
- * own subscribe is the whole mechanism and a selector library would only add
- * an equality function for `===`.
- */
-export function useProjectedRecordCounter(
-  subscribeToStore: (onChange: () => void) => () => void,
-  readCounter: () => number | null,
-): number | null {
-  return useSyncExternalStore(subscribeToStore, readCounter, readCounter);
-}
-
 export function useRecordListStreamStamp(
   epicId: string,
   stamp: RecordListStampHold,

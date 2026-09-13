@@ -3963,6 +3963,40 @@ describe("terminal-agent row session-state badge", () => {
     }
   });
 
+  it("keeps the session state visible AND spoken in selection mode", () => {
+    // Selection mode takes its own early return and rebuilds the row, so the
+    // badge is not inherited - it has to be rendered there too. This is also
+    // the moment the state matters most: bulk-selecting is where a reader
+    // decides what to act on, and asleep-versus-stopped changes that decision.
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "sleeping",
+        lastExit: "reaped",
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+
+    expect(
+      screen.getByTestId("chat-row-session-state-agent-root").textContent,
+    ).toBe("Asleep");
+
+    // And spoken: the checkbox is the only NAMED control on a selection row -
+    // the row is a `<label>` with no name of its own - so its label is the
+    // whole of what a screen reader gets. A visible badge beside an unchanged
+    // "Select X" would be the same visible-but-unspoken split the row button
+    // already has to close.
+    expect(
+      screen
+        .getByTestId("epic-sidebar-select-agent-root")
+        .getAttribute("aria-label"),
+    ).toBe("Select Terminal agent, asleep");
+  });
+
   it('renders "Stopped" for an agent whose record is over', () => {
     seedChatTree();
     testState.tuiAgentById = {
