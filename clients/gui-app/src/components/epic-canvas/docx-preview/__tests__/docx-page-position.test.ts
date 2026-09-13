@@ -17,67 +17,122 @@ import {
 const VIEWPORT: VerticalExtent = { top: 0, bottom: 1000 };
 
 describe("currentPageAmong", () => {
-  it("returns 1 for an empty page list", () => {
-    expect(currentPageAmong([], VIEWPORT, 1)).toBe(1);
+  it("returns 1 for an empty document", () => {
+    expect(
+      currentPageAmong(0, () => ({ top: 0, bottom: 0 }), VIEWPORT, 1),
+    ).toBe(1);
   });
 
-  it("picks the page with the largest visible share", () => {
-    const pages: readonly VerticalExtent[] = [
-      // Fully above the viewport - 0 visible.
-      { top: -500, bottom: -100 },
-      // Half visible: 500 of 1000 -> share 0.5.
-      { top: 500, bottom: 1500 },
-      // Fully visible: 200 of 200 -> share 1.
-      { top: 700, bottom: 900 },
-    ];
-
-    expect(currentPageAmong(pages, VIEWPORT, 1)).toBe(3);
-  });
-
-  it("keeps the earlier page on a tie", () => {
+  it("keeps a fully visible current page, then chooses the largest share with an earlier tie", () => {
     const pages: readonly VerticalExtent[] = [
       { top: 0, bottom: 500 },
       { top: 500, bottom: 1000 },
     ];
-    // Both are fully visible against a 0-1000 viewport - equal share 1 -
-    // the earlier page (1) must win, not the later one that merely ties.
-    expect(currentPageAmong(pages, VIEWPORT, 1)).toBe(1);
+    const readPage = (index: number): VerticalExtent => pages[index];
+
+    expect(currentPageAmong(pages.length, readPage, VIEWPORT, 2)).toBe(2);
+    expect(currentPageAmong(2, readPage, { top: 250, bottom: 750 }, 2)).toBe(1);
   });
 
-  it("keeps the current page while it stays fully visible, even though the tie-break alone would pick the earlier one", () => {
+  it("uses visible fraction, so a short fully visible last page wins", () => {
     const pages: readonly VerticalExtent[] = [
-      { top: 0, bottom: 500 },
-      { top: 500, bottom: 1000 },
+      { top: 0, bottom: 1000 },
+      { top: 1000, bottom: 1050 },
     ];
-    // Both pages are fully visible (share 1 each), so the plain tie-break
-    // would land on page 1 - but the current page is 2, and it stays
-    // current exactly because it too is still fully visible.
-    expect(currentPageAmong(pages, VIEWPORT, 2)).toBe(2);
+    const readPage = (index: number): VerticalExtent => pages[index];
+
+    expect(currentPageAmong(2, readPage, { top: 900, bottom: 1050 }, 1)).toBe(
+      2,
+    );
   });
 
-  it("lets a short, fully-visible last page win over a tall page that shows more raw pixels but a smaller share", () => {
+  it("ignores zero-height pages and retains the current page through a gap", () => {
     const pages: readonly VerticalExtent[] = [
-      // Tall page: 1000 tall, 500 visible -> share 0.5 (more pixels than
-      // the short page below, but a smaller share of itself).
-      { top: -500, bottom: 500 },
-      // Short page: 50 tall, fully visible -> share 1.
-      { top: 500, bottom: 550 },
+      { top: 0, bottom: 100 },
+      { top: 100, bottom: 100 },
+      { top: 116, bottom: 216 },
     ];
+    const readPage = (index: number): VerticalExtent => pages[index];
 
-    expect(currentPageAmong(pages, VIEWPORT, 1)).toBe(2);
+    expect(currentPageAmong(3, readPage, { top: 100, bottom: 116 }, 2)).toBe(2);
+    expect(currentPageAmong(3, readPage, { top: 100, bottom: 116 }, 3)).toBe(3);
+    expect(currentPageAmong(3, readPage, { top: 120, bottom: 180 }, 2)).toBe(3);
+    expect(currentPageAmong(3, readPage, { top: 90, bottom: 170 }, 2)).toBe(3);
   });
 
-  it("ignores a zero-height page rather than dividing by zero", () => {
+  it("clamps the retained page when no positive-height page is visible", () => {
     const pages: readonly VerticalExtent[] = [
-      // Zero height - must be skipped, not treated as a 0/0 "best" match.
-      { top: 200, bottom: 200 },
-      // Not visible at all (share 0), but still a valid page to fall back to.
-      { top: -300, bottom: -100 },
+      { top: 0, bottom: 100 },
+      { top: 120, bottom: 220 },
+      { top: 240, bottom: 340 },
     ];
-    // currentPage points past the end so the "stays current while fully
-    // visible" override can't mask the zero-height page's own handling -
-    // this test is purely about the best-share fallback.
-    expect(currentPageAmong(pages, VIEWPORT, 5)).toBe(2);
+    const readPage = (index: number): VerticalExtent => pages[index];
+    const gap = { top: 220, bottom: 240 };
+
+    expect(currentPageAmong(3, readPage, gap, 0)).toBe(1);
+    expect(currentPageAmong(3, readPage, gap, 9)).toBe(3);
+  });
+
+  it("binary-searches a long document for far jumps without reading every page", () => {
+    const pageCount = 1000;
+    const pageHeight = 100;
+    const gap = 20;
+    const pages = Array.from({ length: pageCount }, (_, index) => {
+      const top = index * (pageHeight + gap);
+      return { top, bottom: top + pageHeight };
+    });
+    let reads = 0;
+    const readPage = (index: number): VerticalExtent => {
+      reads += 1;
+      return pages[index];
+    };
+    const maxReads = Math.ceil(Math.log2(pageCount)) + 5;
+
+    reads = 0;
+    expect(
+      currentPageAmong(
+        pageCount,
+        readPage,
+        { top: 749 * 120 + 20, bottom: 749 * 120 + 100 },
+        1,
+      ),
+    ).toBe(750);
+    expect(reads).toBeLessThanOrEqual(maxReads);
+
+    reads = 0;
+    expect(
+      currentPageAmong(
+        pageCount,
+        readPage,
+        { top: 199 * 120 + 20, bottom: 199 * 120 + 100 },
+        750,
+      ),
+    ).toBe(200);
+    expect(reads).toBeLessThanOrEqual(maxReads);
+  });
+
+  it("reads live geometry on every call rather than retaining stale page boxes", () => {
+    let pages: readonly VerticalExtent[] = [
+      { top: 0, bottom: 100 },
+      { top: 100, bottom: 200 },
+      { top: 200, bottom: 300 },
+    ];
+    const reads: number[] = [];
+    const readPage = (index: number): VerticalExtent => {
+      reads.push(index);
+      return pages[index];
+    };
+    const viewport = { top: 100, bottom: 200 };
+
+    expect(currentPageAmong(3, readPage, viewport, 1)).toBe(2);
+    pages = [
+      { top: 0, bottom: 200 },
+      { top: 200, bottom: 400 },
+      { top: 400, bottom: 600 },
+    ];
+    reads.length = 0;
+    expect(currentPageAmong(3, readPage, viewport, 2)).toBe(1);
+    expect(reads.length).toBeGreaterThan(0);
   });
 });
 

@@ -314,6 +314,50 @@ describe("<DocxPreview />", () => {
     expect(pageField.value).toBe("2");
   });
 
+  it("tracks a far scroll position without measuring every page", async () => {
+    const pageCount = 300;
+    mockRenderAsyncWith(
+      Array.from({ length: pageCount }, (_, index) => ({
+        widthPx: 400,
+        paragraphs: [[`Page ${index + 1}`]],
+      })),
+    );
+
+    render(<DocxPreview {...baseProps({})} />);
+    setScrollContainerWidth(832);
+    const pageField = await waitForReady(pageCount);
+    const scrollContainer = screen.getByTestId("docx-preview-container");
+    vi.spyOn(scrollContainer, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 832, 500),
+    );
+
+    const host = screen.getByTestId("docx-preview-host");
+    const pages = [
+      ...(host.shadowRoot?.querySelectorAll<HTMLElement>("section.docx") ?? []),
+    ];
+    let pageRectCalls = 0;
+    for (const [index, page] of pages.entries()) {
+      vi.spyOn(page, "getBoundingClientRect").mockImplementation(() => {
+        pageRectCalls += 1;
+        const top = index * 120 - scrollContainer.scrollTop;
+        return new DOMRect(0, top, 400, 100);
+      });
+    }
+
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    scrollContainer.scrollTop = 249 * 120;
+    fireEvent.scroll(scrollContainer);
+    expect(frames).toHaveLength(1);
+    act(() => frames[0](0));
+
+    expect(pageField.value).toBe("250");
+    expect(pageRectCalls).toBeLessThan(20);
+  });
+
   it("zooms in by 1.1x and clears fit mode so a later resize does not re-fit; Fit to width restores it", async () => {
     mockRenderAsyncWith([
       { widthPx: 400, paragraphs: [["Page one"]] },

@@ -230,7 +230,8 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
         frame = requestAnimationFrame(() => {
           frame = null;
           const page = currentPageAmong(
-            pages.map((section) => section.getBoundingClientRect()),
+            pages.length,
+            (index) => pages[index].getBoundingClientRect(),
             container.getBoundingClientRect(),
             pageNumberRef.current,
           );

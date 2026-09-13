@@ -19,18 +19,46 @@ export interface VerticalExtent {
  * earlier page wins a tie. A scroll that reveals a short last page in full
  * therefore lands on it even though the page above still fills more of the
  * viewport, and a tall page stays current while the reader is inside it.
+ * Pages must be stacked in document order without overlap. Read their live
+ * bounds on demand: binary search skips pages above the viewport, and the
+ * scan stops below it, keeping measurements to O(log(pageCount) + visible).
  */
 export function currentPageAmong(
-  pages: readonly VerticalExtent[],
+  pageCount: number,
+  readPage: (index: number) => VerticalExtent,
   viewport: VerticalExtent,
   currentPage: number,
 ): number {
-  if (pages.length === 0) return 1;
-  let bestPage = 1;
-  let bestShare = -1;
-  pages.forEach((page, index) => {
+  if (pageCount === 0) return 1;
+  const currentNumber = Math.min(Math.max(currentPage, 1), pageCount);
+  const current = readPage(currentNumber - 1);
+  if (
+    current.bottom > current.top &&
+    current.top >= viewport.top &&
+    current.bottom <= viewport.bottom
+  ) {
+    return currentNumber;
+  }
+
+  let first = 0;
+  let end = pageCount;
+  while (first < end) {
+    const middle = Math.floor((first + end) / 2);
+    if (readPage(middle).bottom <= viewport.top) {
+      first = middle + 1;
+    } else {
+      end = middle;
+    }
+  }
+
+  // Keep the current page when only a gap between pages is visible.
+  let bestPage = currentNumber;
+  let bestShare = 0;
+  for (let index = first; index < pageCount; index++) {
+    const page = readPage(index);
+    if (page.top >= viewport.bottom) break;
     const height = page.bottom - page.top;
-    if (height <= 0) return;
+    if (height <= 0) continue;
     const visible =
       Math.min(page.bottom, viewport.bottom) - Math.max(page.top, viewport.top);
     const share = Math.max(visible, 0) / height;
@@ -38,12 +66,8 @@ export function currentPageAmong(
       bestShare = share;
       bestPage = index + 1;
     }
-  });
-  if (currentPage < 1 || currentPage > pages.length) return bestPage;
-  const current = pages[currentPage - 1];
-  const currentFullyVisible =
-    current.top >= viewport.top && current.bottom <= viewport.bottom;
-  return currentFullyVisible ? currentPage : bestPage;
+  }
+  return bestPage;
 }
 
 /**
