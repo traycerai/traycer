@@ -107,9 +107,8 @@ describe("useRenderedMessages fallback projection", () => {
         },
       ],
     });
-    const notice = result.current[0]?.segments[0];
-    expect(notice.kind).toBe("provider_notice");
-    if (notice.kind !== "provider_notice") {
+    const notice = result.current.at(0)?.segments.at(0);
+    if (notice === undefined || notice.kind !== "provider_notice") {
       throw new Error("expected provider_notice");
     }
     expect(notice.noticeKind).toBe("fallback_applied");
@@ -136,9 +135,8 @@ describe("useRenderedMessages fallback projection", () => {
         },
       ],
     });
-    const error = result.current[0]?.segments[0];
-    expect(error.kind).toBe("error");
-    if (error.kind !== "error") {
+    const error = result.current.at(0)?.segments.at(0);
+    if (error === undefined || error.kind !== "error") {
       throw new Error("expected error");
     }
     expect(error.failure).toEqual({ reason: "auth" });
@@ -164,9 +162,8 @@ describe("useRenderedMessages fallback projection", () => {
       },
     } satisfies ChatEvent;
     const { result } = renderRenderedMessages({ events: [failure] });
-    const error = result.current[0]?.segments[0];
-    expect(error.kind).toBe("error");
-    if (error.kind !== "error") {
+    const error = result.current.at(0)?.segments.at(0);
+    if (error === undefined || error.kind !== "error") {
       throw new Error("expected error");
     }
     expect(error.failure).toBeNull();
@@ -191,7 +188,7 @@ describe("useRenderedMessages fallback projection", () => {
         },
       ],
     });
-    const kinds = (result.current[0]?.segments ?? []).map(
+    const kinds = (result.current.at(0)?.segments ?? []).map(
       (segment) => segment.kind,
     );
     expect(kinds).toEqual(["text"]);

@@ -186,7 +186,7 @@ describe("FallbackWaitingCard", () => {
 
     const status = screen.getByRole("status");
     const entryStatusText = status.textContent;
-    expect(entryStatusText).toMatch(/^Resuming at \d{1,2}:\d{2}\s?[AP]M$/i);
+    expect(entryStatusText).toBe(`Resuming at ${formatClockTime(deadline)}`);
 
     const observedTexts: string[] = [];
     const observer = new MutationObserver(() => {

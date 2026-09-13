@@ -8,6 +8,7 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { LastFailedAttempt } from "@traycer/protocol/host/agent/gui/subscribe";
+import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -135,7 +136,7 @@ function queuePausedBlock(blockId: string, timestamp: number): AssistantBlock {
     timestamp,
     message: "2 queued messages were held. Resume the queue to send them.",
     recoverable: false,
-    code: "QUEUE_PAUSED_AFTER_ERROR",
+    code: QUEUE_PAUSED_AFTER_ERROR_CODE,
     failure: null,
   };
 }
@@ -236,6 +237,40 @@ describe("F11: manualRungAnchorId over a turn that splits", () => {
     // and `noUncheckedIndexedAccess` is off in this workspace, so the index
     // read is already typed non-nullish.
     expect(assistantRows[0].manualRungAnchorId).toBe("err-terminal-u");
+  });
+
+  // F11 (review): every case above also carries a terminal `err-terminal*`
+  // block, so `lastWithFailure` always wins and the QUEUE_PAUSED_AFTER_ERROR_CODE
+  // skip in `manualRungAnchorSegmentId` could be deleted without turning any
+  // of them red. This case removes the terminal failure entirely, so
+  // `lastWithFailure` stays null and `lastCandidate` is what decides - the
+  // only path where that skip actually matters.
+  it("falls back to the last non-queue-paused candidate when nothing in the turn carries a typed failure", () => {
+    const assistant = {
+      ...assistantMessage("turn-no-failure", 2000),
+      blocks: [
+        nonTerminalErrorBlock("err-pre-only", 2001),
+        queuePausedBlock("err-queue-paused-only", 2002),
+      ],
+    };
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+    const assistantRows = result.current.filter(
+      (row) => row.role === "assistant",
+    );
+    expect(assistantRows).toHaveLength(1);
+    // Same reasoning as the positive control above: guarded by the length
+    // assertion, and `noUncheckedIndexedAccess` is off in this workspace.
+    //
+    // Falsification (the review's own finding): delete the
+    // `if (segment.code === QUEUE_PAUSED_AFTER_ERROR_CODE) continue;` guard in
+    // `manualRungAnchorSegmentId` and this must go red - with the guard gone,
+    // the queue-paused block becomes eligible as `lastCandidate` too, and
+    // being LAST in iteration order it would win, landing the anchor on
+    // "err-queue-paused-only" instead.
+    expect(assistantRows[0].manualRungAnchorId).toBe("err-pre-only");
+    expect(assistantRows[0].manualRungAnchorId).not.toBe(
+      "err-queue-paused-only",
+    );
   });
 });
 

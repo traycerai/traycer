@@ -71,24 +71,36 @@ describe("FallbackBehaviorGroup - out-of-range stored values", () => {
   });
 
   it("still offers every ordinary option alongside the out-of-range one, sorted into place", () => {
+    // GRACE_WINDOW_SECONDS (10-15) is a contiguous run of integers, so no
+    // integer stored value can ever land BETWEEN two of its offered options -
+    // it can only sort before 10 or after 15. (A fractional value like 12.5
+    // cannot stand in for one either: the wire schema's `graceWindowSeconds`
+    // is `z.number().int()`, so a fraction is not a representable stored
+    // value.) MAX_WAIT_MINUTES has real gaps, so it is the field that can
+    // actually exercise a genuinely interleaved out-of-range value: 120 is
+    // not one of the offered options and sorts strictly between "1 hour" (60)
+    // and "3 hours" (180). If `withStoredNumber` only concatenated instead of
+    // sorting, "2 hours" would land LAST (after "7 days") instead of second.
     render(
       <FallbackBehaviorGroup
-        policy={policy({ graceWindowSeconds: 12 })}
+        policy={policy({ maxWaitMinutes: 120 })}
         onChange={vi.fn()}
         status={null}
       />,
     );
-    openCombobox("Time to cancel before switching");
+    openCombobox("Longest wait for a reset");
     const labels = screen
       .getAllByRole("option")
       .map((option) => option.textContent);
     expect(labels).toEqual([
-      "10 seconds",
-      "11 seconds",
-      "12 seconds",
-      "13 seconds",
-      "14 seconds",
-      "15 seconds",
+      "1 hour",
+      "2 hours",
+      "3 hours",
+      "6 hours",
+      "12 hours",
+      "1 day",
+      "3 days",
+      "7 days",
     ]);
   });
 });

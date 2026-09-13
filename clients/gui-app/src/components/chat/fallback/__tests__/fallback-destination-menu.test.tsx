@@ -2055,6 +2055,16 @@ describe("FallbackWaitingMenu", () => {
     listHarness.isPending = false;
     listHarness.isFetching = false;
     listHarness.isError = false;
+    // Same shared-state reasoning as the flags above: `leaseHarness` is
+    // module-level `vi.hoisted` state shared with the `FallbackGraceMenu`
+    // suite too, which leaves `lease` set to a `held` token on some tests.
+    // `FallbackWaitingMenu` never reads `hold`/`release` (it hardcodes
+    // `leaseToken: null` unconditionally - see fallback-card-menus.tsx), so
+    // resetting them here only clears call history for this suite's own
+    // assertions; it does not need a default implementation reinstalled.
+    leaseHarness.lease = null;
+    leaseHarness.hold.mockReset();
+    leaseHarness.release.mockReset();
     listHarness.data = listed({
       failedTuple: FAILED_CLAUDE_TUPLE,
       profileTargets: [],

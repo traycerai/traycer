@@ -430,8 +430,19 @@ function DefaultGroupSelect(props: {
     if (group.id.trim() === "" || names.includes(group.id)) continue;
     names.push(group.id);
   }
+  // A BLANK marker is not "unlisted", it is mid-rename. Clearing the default
+  // group's name emits `id: ""`, the marker follows the rename, and the loop
+  // above has already dropped that group from `names` - so without this the
+  // escape hatch below re-admits the very thing the loop excluded, as an
+  // option with no text at all (" - no such group"). Radix also reads `""` as
+  // "no value", so that option can never be chosen or shown as chosen: the
+  // trigger falls back to the placeholder while the policy still holds `""`.
+  // The next keystroke of the rename restores a real name, and the draft's own
+  // validation is what speaks for the blank group in the meantime.
   const unlisted =
-    defaultTierGroupId !== null && !names.includes(defaultTierGroupId);
+    defaultTierGroupId !== null &&
+    defaultTierGroupId.trim() !== "" &&
+    !names.includes(defaultTierGroupId);
   return (
     <div
       className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1"

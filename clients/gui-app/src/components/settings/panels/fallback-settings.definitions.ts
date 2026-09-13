@@ -62,8 +62,6 @@ export const FALLBACK = defineSettingsSection("fallback", {
       "equivalent models",
       "similar model",
       "tier",
-      "allowed destinations",
-      "exclude provider",
       "per-failure overrides",
       "reset",
     ],

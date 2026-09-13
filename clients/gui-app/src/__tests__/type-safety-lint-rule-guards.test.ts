@@ -277,6 +277,15 @@ const bareGenericProbe = [
 ].join("\n");
 
 describe("GUI type-safety selector composition", () => {
+  // `expectedSelectors` only reads indexes 0..6 by name, so a ninth
+  // restriction appended to `traycerTypeSafetyRestrictions` would be silently
+  // unchecked by every `it.each` below. This independent length assertion
+  // guards that: it fails the moment the shared module's restriction count
+  // diverges from what this file actually tracks.
+  it("tracks every restriction the shared type-safety module exports, not just the first seven", () => {
+    expect(sharedTypeSafetyRestrictions).toHaveLength(expectedSelectors.length);
+  });
+
   it.each(expectedSelectors)(
     "retains the $name selector for production and test files",
     (entry) => {
