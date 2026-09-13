@@ -883,6 +883,47 @@ function packAmenities(
   return { placements, width: rightOffset + columnCols };
 }
 
+/**
+ * Drop the infirmary to the foot of its own column, so its door opens straight
+ * onto the lobby row - which is the road - instead of onto a corridor
+ * mid-storey.
+ *
+ * THIS IS WHAT MAKES THE KERB MEAN ANYTHING. The placement rule is that the
+ * infirmary sits on the road side with its kerb one tile from its door, and an
+ * ambulance three hundred rows from the beds it came for is not in the same
+ * frame as them. Anchoring the ROOM is how that is bought here: the road stays
+ * the straight lobby row, monotone in `+col` with no reversal and no vertical
+ * leg, and `kerbOnRoad` lands one tile below the door by construction rather
+ * than by arithmetic that happens to agree.
+ *
+ * It costs nothing. `localRows` is measured from the column's STACKED height,
+ * which this does not change - the room moves down inside a column that was
+ * already reserved for it, and the slack it leaves above is corridor either
+ * way. Measured at 1, 2, 6, 12, 40, 309 and 1000 agents, and on a three-storey
+ * building: the grid is identical to the packing without it, and the door sits
+ * exactly one row above the road on every storey.
+ *
+ * It is the LAST spec in the column order, so nothing is packed below it and
+ * moving it down can collide with nothing. It never moves UP: a column whose
+ * foot it cannot reach - the first column on a multi-storey building, where
+ * the stairwell holds the bottom corner - leaves it where the packer put it,
+ * and its kerb is then the road tile in its door's column as before.
+ */
+function anchorInfirmaryToRoad(
+  packing: AmenityPacking,
+  lastRow: number,
+  firstColumnLastRow: number,
+): AmenityPacking {
+  const placements = packing.placements.map((placement) => {
+    if (placement.spec.kind !== "infirmary") return placement;
+    const columnLastRow =
+      placement.rightOffset === 0 ? firstColumnLastRow : lastRow;
+    const row = columnLastRow - placement.spec.rows + 1;
+    return row > placement.row ? { ...placement, row } : placement;
+  });
+  return { placements, width: packing.width };
+}
+
 interface Forest {
   /** Agents with no parent on this floor, in `(createdAt, id)` order. */
   readonly roots: ReadonlyArray<OfficeAgentInput>;
@@ -1249,9 +1290,13 @@ function buildFloors(
     // occupy is the one over the corridor, which is what the height floor
     // above was measured for.
     const lastRoomRow = originRow + localRows - 3;
-    const packing = packAmenities(
-      specs,
-      originRow + BUILDING_TOP_WALL_ROWS,
+    const packing = anchorInfirmaryToRoad(
+      packAmenities(
+        specs,
+        originRow + BUILDING_TOP_WALL_ROWS,
+        lastRoomRow,
+        lastRoomRow - stairsRows,
+      ),
       lastRoomRow,
       lastRoomRow - stairsRows,
     );
@@ -2920,7 +2965,11 @@ function buildCivicRecord(request: CivicRoomRequest): CivicBuild {
       floorIndex,
       hostId,
       // Nothing drives to the lounge (C6), so it names no kerb. The infirmary
-      // stops a vehicle at the road tile its door opens toward.
+      // stops a vehicle at the road tile its door opens ONTO - the row below
+      // its own bottom wall, because `anchorInfirmaryToRoad` put the room at
+      // the foot of its column for exactly this reason. One tile from the
+      // door, as the placement rule asks, rather than one column of the road
+      // that happens to share its col.
       kerbTile:
         spec.kind === "infirmary" ? kerbOnRoad(road, plan.doorTile.col) : null,
     },

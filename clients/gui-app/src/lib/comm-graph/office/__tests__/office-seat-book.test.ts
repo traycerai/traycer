@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { OfficeSeatBook } from "@/lib/comm-graph/office/office-seat-book";
+import type { OfficeSeatPreference } from "@/lib/comm-graph/office/office-seat-book";
 import type {
   OfficeAgentStatus,
   OfficeDesk,
@@ -38,6 +39,16 @@ interface SeatSpec {
 
 function tile(col: number, row: number): OfficeTilePos {
   return { col, row };
+}
+
+/**
+ * A WAKE's preference: somewhere to work, and the plan is told when there is
+ * nowhere. Every case that predates the civic layer wants exactly this, so it
+ * is written once rather than thirty-three times - and a case that wants a bed
+ * or a chair has to say so, which is the point of the two fields.
+ */
+function wake(roomId: string | null, floorIndex: number): OfficeSeatPreference {
+  return { roomId, floorIndex, wants: "desk", shortfall: "plan" };
 }
 
 function makeSeat(spec: SeatSpec): OfficeSeat {
@@ -190,7 +201,7 @@ describe("OfficeSeatBook", () => {
     expect(book.effectiveSeat("A")?.seatId).toBe("cubby-a");
 
     // Wake: A claims the room's only reserve desk.
-    const claimed = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    const claimed = book.claim("A", wake(ROOM, 0));
     expect(claimed?.seatId).toBe("desk-1");
     expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
     expect(book.occupant("desk-1")).toBe("A");
@@ -264,7 +275,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A"], "keep");
-    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    book.claim("A", wake(ROOM, 0));
     expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
 
     // The plan should have read `occupancy` and steered around desk-1, but
@@ -325,7 +336,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A"], "keep");
-    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    book.claim("A", wake(ROOM, 0));
     expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
 
     // Scrub back to a cursor where A was never hot: the claim it holds now
@@ -387,8 +398,8 @@ describe("OfficeSeatBook", () => {
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A", "B"], "keep");
 
-    const first = book.claim("A", { roomId: ROOM, floorIndex: 0 });
-    const second = book.claim("B", { roomId: ROOM, floorIndex: 0 });
+    const first = book.claim("A", wake(ROOM, 0));
+    const second = book.claim("B", wake(ROOM, 0));
     expect(first?.seatId).toBe("desk-1");
     expect(second?.seatId).toBe("desk-2");
     assertNoDoubleBooking(book);
@@ -397,8 +408,8 @@ describe("OfficeSeatBook", () => {
     // first gets seat-id order's first free seat, same as above.
     const reordered = new OfficeSeatBook();
     reordered.adopt(layout, ["A", "B"], "keep");
-    const bFirst = reordered.claim("B", { roomId: ROOM, floorIndex: 0 });
-    const aSecond = reordered.claim("A", { roomId: ROOM, floorIndex: 0 });
+    const bFirst = reordered.claim("B", wake(ROOM, 0));
+    const aSecond = reordered.claim("A", wake(ROOM, 0));
     expect(bFirst?.seatId).toBe("desk-1");
     expect(aSecond?.seatId).toBe("desk-2");
     assertNoDoubleBooking(reordered);
@@ -437,7 +448,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A", "C"], "keep");
-    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    book.claim("A", wake(ROOM, 0));
     expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
 
     book.endClaim("A");
@@ -445,14 +456,14 @@ describe("OfficeSeatBook", () => {
     // again, but the desk it is leaving is still nobody else's to take.
     expect(book.effectiveSeat("A")?.seatId).toBe("cubby-a");
     expect(book.occupancy().get("desk-1")).toBe("A");
-    const duringRelease = book.claim("C", { roomId: ROOM, floorIndex: 0 });
+    const duringRelease = book.claim("C", wake(ROOM, 0));
     expect(duringRelease).toBeNull();
     expect(book.needsCapacity()).toContain("C");
     assertNoDoubleBooking(book);
 
     book.vacated("A");
     // Now the seat is actually empty, and the agent that was shut out gets it.
-    const afterVacate = book.claim("C", { roomId: ROOM, floorIndex: 0 });
+    const afterVacate = book.claim("C", wake(ROOM, 0));
     expect(afterVacate?.seatId).toBe("desk-1");
     expect(book.needsCapacity()).not.toContain("C");
     assertNoDoubleBooking(book);
@@ -486,7 +497,7 @@ describe("OfficeSeatBook", () => {
     book.adopt(layout, ["A", "B"], "keep");
 
     // Every non-cubby seat is already B's: A's wake finds nothing free.
-    const exhausted = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    const exhausted = book.claim("A", wake(ROOM, 0));
     expect(exhausted).toBeNull();
     expect(book.needsCapacity()).toEqual(["A"]);
     assertNoDoubleBooking(book);
@@ -524,7 +535,7 @@ describe("OfficeSeatBook", () => {
       stable: true,
     });
     book.adopt(grown, ["A", "B"], "keep");
-    const seated = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    const seated = book.claim("A", wake(ROOM, 0));
     expect(seated?.seatId).toBe("desk-2");
     expect(book.needsCapacity()).toEqual([]);
     assertNoDoubleBooking(book);
@@ -556,7 +567,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A", "B"], "keep");
-    expect(book.claim("A", { roomId: ROOM, floorIndex: 0 })).toBeNull();
+    expect(book.claim("A", wake(ROOM, 0))).toBeNull();
     expect(book.needsCapacity()).toContain("A");
 
     // A goes cold before a seat ever opened up: it stops wanting one, and
@@ -594,7 +605,7 @@ describe("OfficeSeatBook", () => {
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A"], "keep");
 
-    expect(book.claim("A", { roomId: ROOM, floorIndex: 0 })).toBeNull();
+    expect(book.claim("A", wake(ROOM, 0))).toBeNull();
     expect(book.effectiveSeat("A")?.seatId).toBe("cubby-a");
     expect(book.occupant("cubby-spare")).toBeNull();
     expect(book.needsCapacity()).toEqual(["A"]);
@@ -865,7 +876,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A", "B", "C"], "keep");
-    const preference = { roomId: ROOM, floorIndex: 0 };
+    const preference = wake(ROOM, 0);
 
     expect(book.claim("B", preference)?.seatId).toBe("r1");
     expect(book.claim("A", preference)?.seatId).toBe("r2");
@@ -925,7 +936,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(before, ["A", "B"], "keep");
-    expect(book.claim("A", { roomId: ROOM, floorIndex: 0 })?.seatId).toBe("H");
+    expect(book.claim("A", wake(ROOM, 0))?.seatId).toBe("H");
     assertNoDoubleBooking(book);
 
     // An unstable re-plan moves A's home assignment onto R while A's claim on
@@ -970,7 +981,7 @@ describe("OfficeSeatBook", () => {
     });
     book.adopt(after, ["A", "B"], "keep");
     expect(book.occupancy().get("R")).toBe("A");
-    expect(book.claim("B", { roomId: ROOM, floorIndex: 0 })).toBeNull();
+    expect(book.claim("B", wake(ROOM, 0))).toBeNull();
     expect(book.needsCapacity()).toContain("B");
     assertNoDoubleBooking(book);
 
@@ -978,7 +989,7 @@ describe("OfficeSeatBook", () => {
     book.endClaim("A");
     book.vacated("A");
     expect(book.effectiveSeat("A")?.seatId).toBe("R");
-    const seated = book.claim("B", { roomId: ROOM, floorIndex: 0 });
+    const seated = book.claim("B", wake(ROOM, 0));
     expect(seated?.seatId).toBe("H");
     assertNoDoubleBooking(book);
   });
@@ -1014,7 +1025,7 @@ describe("OfficeSeatBook", () => {
       book.adopt(layout, ["A"], "keep");
       // The only candidate is on host-2; A lives on host-1, so this must not
       // walk it across buildings - it must ask the plan for local capacity.
-      expect(book.claim("A", { roomId: null, floorIndex: 0 })).toBeNull();
+      expect(book.claim("A", wake(null, 0))).toBeNull();
       expect(book.needsCapacity()).toEqual(["A"]);
       assertNoDoubleBooking(book);
     });
@@ -1052,7 +1063,7 @@ describe("OfficeSeatBook", () => {
       });
       const book = new OfficeSeatBook();
       book.adopt(layout, ["A"], "keep");
-      const seat = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+      const seat = book.claim("A", wake(ROOM, 0));
       expect(seat?.seatId).toBe("a-desk");
       expect(book.needsCapacity()).toEqual([]);
       assertNoDoubleBooking(book);
@@ -1084,7 +1095,7 @@ describe("OfficeSeatBook", () => {
       });
       const book = new OfficeSeatBook();
       book.adopt(layout, ["A"], "keep");
-      const seat = book.claim("A", { roomId: null, floorIndex: 0 });
+      const seat = book.claim("A", wake(null, 0));
       expect(seat?.seatId).toBe("desk-1");
       expect(book.needsCapacity()).toEqual([]);
       assertNoDoubleBooking(book);
@@ -1112,7 +1123,7 @@ describe("OfficeSeatBook", () => {
       });
       const book = new OfficeSeatBook();
       book.adopt(layout, ["A"], "keep");
-      const seat = book.claim("A", { roomId: null, floorIndex: 0 });
+      const seat = book.claim("A", wake(null, 0));
       expect(seat?.seatId).toBe("desk-1");
       expect(book.needsCapacity()).toEqual([]);
       assertNoDoubleBooking(book);
@@ -1140,7 +1151,7 @@ describe("OfficeSeatBook", () => {
       });
       const book = new OfficeSeatBook();
       book.adopt(layout, ["A"], "keep");
-      expect(book.claim("A", { roomId: null, floorIndex: 0 })).toBeNull();
+      expect(book.claim("A", wake(null, 0))).toBeNull();
       expect(book.needsCapacity()).toEqual(["A"]);
       assertNoDoubleBooking(book);
     });
@@ -1189,7 +1200,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A", "B", "C"], "keep");
-    const preference = { roomId: ROOM, floorIndex: 0 };
+    const preference = wake(ROOM, 0);
 
     // A's own room wins over both other tiers, despite sorting last by id.
     expect(book.claim("A", preference)?.seatId).toBe("z-same-room");
@@ -1224,7 +1235,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(small, ["A"], "keep");
-    expect(book.claim("A", { roomId: ROOM, floorIndex: 0 })).toBeNull();
+    expect(book.claim("A", wake(ROOM, 0))).toBeNull();
     expect(book.needsCapacity()).toEqual(["A"]);
 
     const grown = buildLayout({
@@ -1269,7 +1280,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A"], "keep");
-    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    book.claim("A", wake(ROOM, 0));
     expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
 
     // `vacated` before `endClaim` answers a question that has not been asked
@@ -1311,7 +1322,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A"], "keep");
-    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    book.claim("A", wake(ROOM, 0));
     expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
 
     // A is removed from the roster entirely, still holding its claim.
@@ -1344,7 +1355,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A"], "keep");
-    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    book.claim("A", wake(ROOM, 0));
     // A has stopped wanting the seat but has not vacated it yet.
     book.endClaim("A");
     expect(book.occupancy().get("desk-1")).toBe("A");
@@ -1435,7 +1446,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A"], "keep");
-    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    book.claim("A", wake(ROOM, 0));
     expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
     expect(book.assignedSeat("A")?.seatId).toBe("cubby-a");
 
@@ -1485,7 +1496,7 @@ describe("OfficeSeatBook", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layoutA, ["A", "U"], "keep");
-    const fromA = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    const fromA = book.claim("A", wake(ROOM, 0));
     expect(fromA?.seatId).toBe("a-desk");
     expect(fromA?.hostId).toBe("host-a");
     assertNoDoubleBooking(book);
@@ -1528,7 +1539,7 @@ describe("OfficeSeatBook", () => {
 
     // firstFreeSeat: A is assigned on host-b, so the ordinary claim path
     // walks the cached ids looking for a free desk there.
-    const fromB = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    const fromB = book.claim("A", wake(ROOM, 0));
     expect(fromB?.seatId).toBe("b-desk");
     expect(fromB?.hostId).toBe("host-b");
     assertNoDoubleBooking(book);
@@ -1537,7 +1548,7 @@ describe("OfficeSeatBook", () => {
     // is not a storey this layout carries, so the scan has to name host-u
     // from B's own seats. A stale cache would still be walking A's ids,
     // find none of them in B, and refuse to resolve a host at all.
-    const scanned = book.claim("U", { roomId: null, floorIndex: 1 });
+    const scanned = book.claim("U", wake(null, 1));
     expect(scanned?.seatId).toBe("b-scan-desk");
     expect(scanned?.hostId).toBe("host-u");
     assertNoDoubleBooking(book);
@@ -1669,7 +1680,7 @@ describe("OfficeSeatBook fixup 8c - a fresh adoption (D66)", () => {
     });
     const book = new OfficeSeatBook();
     book.adopt(layout, ["A"], "keep");
-    const claimed = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    const claimed = book.claim("A", wake(ROOM, 0));
     expect(claimed?.seatId).toBe(reserve);
     expect(book.effectiveSeat("A")?.seatId).toBe(reserve);
 
