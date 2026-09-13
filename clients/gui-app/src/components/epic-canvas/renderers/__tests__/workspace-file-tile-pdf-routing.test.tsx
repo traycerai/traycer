@@ -1,15 +1,12 @@
 /**
- * PDF routing in the workspace file tile (PDF preview design):
+ * Document routing in the workspace file tile (PDF and Word preview design):
  *
- * - Every `.pdf` routes to the pdf.js viewer tile, streaming over
- *   `useFileAsset`, never the text path - there is no host-version gate on
- *   this routing decision. The STREAM's own negotiation is the sole
- *   authority: an old host's refusal degrades inside `useFileAsset` to the
- *   shared fallback placeholder, rather than the router trying to guess the
- *   host's age up front.
+ * - Every supported document extension routes to its own lazy viewer tile,
+ *   streaming over `useFileAsset`, never the text path - there is no
+ *   host-version gate on this routing decision.
  * - Fallback statuses render the shared `BinaryPlaceholder` with the
- *   PDF-specific copy the hook supplies (e.g. the 20 MiB cap message).
- * - Image routing is unaffected by the PDF branch.
+ *   format-specific copy the hook supplies.
+ * - Image routing is unaffected by the document branch.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
@@ -261,6 +258,7 @@ vi.mock("@/components/epic-canvas/docx-preview/docx-preview-lazy", () => ({
     "The Word document viewer could not be loaded on this device.",
   DocxPreviewLazy: (props: {
     readonly url: string;
+    readonly toolbarActions: ReactNode;
     readonly onUnavailable: () => void;
   }) => {
     const { onUnavailable } = props;
@@ -272,7 +270,9 @@ vi.mock("@/components/epic-canvas/docx-preview/docx-preview-lazy", () => ({
         role="toolbar"
         aria-label="Word document preview controls"
         data-url={props.url}
-      />
+      >
+        {props.toolbarActions}
+      </div>
     );
   },
 }));
@@ -485,7 +485,39 @@ describe("workspace file tile PDF routing", () => {
       screen.queryByRole("toolbar", { name: "PDF preview controls" }),
     ).toBeNull();
     expect(screen.queryByTestId("workspace-file-toolbar")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Open externally" }),
+    ).toBeTruthy();
   });
+
+  it.each(["ready", "loading", "fallback"] as const)(
+    "hides Word document Open Externally controls for a remote host in the %s state",
+    (status) => {
+      state.hostEntry = hostEntry("remote");
+      state.asset = {
+        status,
+        url: status === "ready" ? "blob:docx" : null,
+        meta: null,
+        reason:
+          status === "fallback"
+            ? "This Word document is too large to preview."
+            : null,
+        totalBytes: null,
+        servedFromCache: false,
+      };
+
+      renderTile(nodeFor("docs/brief.docx"));
+
+      expect(
+        screen.queryByRole("button", { name: "Open externally" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Open Externally" }),
+      ).toBeNull();
+      expect(state.openPaths).not.toHaveBeenCalled();
+      expect(state.triggerOpenExternally).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders the shared placeholder with the hook's Word document copy on fallback", () => {
     state.asset = {
@@ -523,6 +555,23 @@ describe("workspace file tile PDF routing", () => {
     expect(
       screen.queryByRole("toolbar", { name: "Word document preview controls" }),
     ).toBeNull();
+  });
+
+  it("hides the unavailable Word viewer open control for an unresolved host", () => {
+    state.hostEntry = null;
+    state.viewerUnavailable = true;
+
+    renderTile(nodeFor("docs/brief.docx"));
+
+    expect(
+      screen.getByText(
+        "The Word document viewer could not be loaded on this device.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Open Externally" }),
+    ).toBeNull();
+    expect(state.openPaths).not.toHaveBeenCalled();
   });
 
   // Legacy `.doc` is a different (binary OLE) format with no viewer here, and

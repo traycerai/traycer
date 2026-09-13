@@ -47,7 +47,7 @@ export interface DocumentViewerProps {
 export interface LazyDocumentViewerProps extends DocumentViewerProps {
   /**
    * The viewer chunk failed to load, or the viewer threw while mounting.
-   * The surface should show its placeholder (Open Externally still works).
+   * The surface should show its placeholder; local hosts can offer Open Externally.
    */
   readonly onUnavailable: () => void;
 }
