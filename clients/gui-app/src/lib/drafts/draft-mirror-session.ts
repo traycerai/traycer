@@ -83,10 +83,11 @@ type PendingFlush = {
   retryCount: number;
 };
 
-/** One draft's outstanding `drafts.upsert`, and the generation it carries. */
+/** One active write and at most one latest, not-yet-started snapshot. */
 type PendingSend = {
   promise: Promise<void>;
-  readonly highestGeneration: number;
+  highestGeneration: number;
+  next: DraftDirtyWrite | null;
 };
 
 /**
@@ -103,19 +104,22 @@ export class DraftMirrorSession {
   private readonly now: () => number;
 
   /**
-   * Per-draft send chain. Two `upsertDirty` runs can overlap (a debounce
+   * Per-draft send worker. Two `upsertDirty` runs can overlap (a debounce
    * timer firing while a `flush` is awaiting `collectDirtyWrites`), and the
    * request coordinator keys its FIFO queue by the FULL params - so two
    * writes for the same draft carry different params and land in different
    * queues. The host applies an upsert as a whole-document LWW, so an older
    * body reaching it last wins. Ordering therefore has to be owned here.
    *
+   * Waiting snapshots are replaced, not appended: slow image uploads must
+   * not turn every keystroke into a queued whole-document write.
    * The entry lives only while a send for that draft is outstanding, so no
    * generation bookkeeping survives a drained chain - a store that later
    * restarts its own generation counter (a re-created row) is unaffected.
    */
   private readonly sendChain = new Map<string, PendingSend>();
   private readonly deleteChain = new Map<string, Promise<boolean>>();
+  private readonly retiredDraftIds = new Set<string>();
 
   private snapshotSeq = 0;
   private listedScopeId: string | null = null;
@@ -155,7 +159,7 @@ export class DraftMirrorSession {
   }
 
   noteDirty(draftId: string): void {
-    if (this.isAbandoned()) return;
+    if (this.isAbandoned() || this.writeIsRetired(draftId)) return;
     this.schedule(draftId);
   }
 
@@ -221,6 +225,10 @@ export class DraftMirrorSession {
    * can still find the row.
    */
   async deleteOnHost(draftId: string): Promise<boolean> {
+    this.retiredDraftIds.add(draftId);
+    this.clearTimer(draftId);
+    const pending = this.sendChain.get(draftId);
+    if (pending !== undefined) pending.next = null;
     const outstanding = this.deleteChain.get(draftId);
     if (outstanding !== undefined) return outstanding;
     const deleting = this.runDeleteOnHost(draftId).finally(() => {
@@ -287,11 +295,7 @@ export class DraftMirrorSession {
         });
         if (!this.sink.isDirty(document.draftId)) {
           await this.sink.applyUpsert(document);
-          this.sink.rememberSynced(
-            document.draftId,
-            document.revision,
-            Number.POSITIVE_INFINITY,
-          );
+          this.rememberIncomingSynced(document);
         }
       }
       for (const tombstone of listed.tombstones) {
@@ -396,11 +400,7 @@ export class DraftMirrorSession {
         revision: frame.revision,
       });
       await this.sink.applyUpsert(frame.draft);
-      this.sink.rememberSynced(
-        frame.draftId,
-        frame.revision,
-        Number.POSITIVE_INFINITY,
-      );
+      this.rememberIncomingSynced(frame.draft);
       return;
     }
     this.held.set(frame.draftId, {
@@ -434,6 +434,25 @@ export class DraftMirrorSession {
     this.armTimer(existing);
   }
 
+  private rememberIncomingSynced(document: DraftDocument): void {
+    const held = this.held.get(document.draftId);
+    // Awaiting images can admit a newer frame or local edit. An old apply
+    // must neither lower the frontier nor acknowledge those unsent edits.
+    if (
+      this.isAbandoned() ||
+      this.writeIsRetired(document.draftId) ||
+      held?.kind !== "row" ||
+      held.revision !== document.revision ||
+      this.sink.isDirty(document.draftId)
+    )
+      return;
+    this.sink.rememberSynced(
+      document.draftId,
+      document.revision,
+      Number.POSITIVE_INFINITY,
+    );
+  }
+
   private armTimer(entry: PendingFlush): void {
     if (entry.timer !== null) clearTimeout(entry.timer);
     const elapsed = this.now() - entry.firstScheduledAt;
@@ -443,6 +462,7 @@ export class DraftMirrorSession {
     );
     entry.timer = setTimeout(() => {
       entry.timer = null;
+      entry.firstScheduledAt = this.now();
       void this.upsertDirty([entry.draftId]);
     }, wait);
   }
@@ -463,13 +483,14 @@ export class DraftMirrorSession {
   }
 
   /**
-   * One draft's upsert, queued behind that draft's own outstanding send.
+   * One draft's latest upsert, replacing any snapshot still waiting to send.
    * Collection order and send order are not the same order, so a body an
    * equal-or-newer generation already covers is dropped rather than queued
    * behind it - re-sending it would hand the host the older document last.
    */
   private sendUpsert(entry: DraftDirtyWrite): Promise<void> {
     const draftId = entry.write.draftId;
+    if (this.writeIsRetired(draftId)) return Promise.resolve();
     const outstanding = this.sendChain.get(draftId);
     if (
       outstanding !== undefined &&
@@ -477,12 +498,30 @@ export class DraftMirrorSession {
     ) {
       return outstanding.promise;
     }
+    if (outstanding !== undefined) {
+      outstanding.highestGeneration = entry.generation;
+      outstanding.next = entry;
+      return outstanding.promise;
+    }
     const pending: PendingSend = {
       promise: Promise.resolve(),
       highestGeneration: entry.generation,
+      next: entry,
     };
-    pending.promise = (outstanding?.promise ?? Promise.resolve())
-      .then(() => this.runUpsert(entry))
+    pending.promise = Promise.resolve()
+      .then(async () => {
+        while (pending.next !== null) {
+          const next = pending.next;
+          pending.next = null;
+          await this.runUpsert(next);
+        }
+        // Retire the worker before its promise settles: a collector resumed
+        // in the following microtask must start a new worker, not append to
+        // one whose loop has already finished.
+        if (this.sendChain.get(draftId) === pending) {
+          this.sendChain.delete(draftId);
+        }
+      })
       .finally(() => {
         if (this.sendChain.get(draftId) === pending) {
           this.sendChain.delete(draftId);
@@ -495,17 +534,24 @@ export class DraftMirrorSession {
   private async runUpsert(entry: DraftDirtyWrite): Promise<void> {
     if (this.isAbandoned()) return;
     const draftId = entry.write.draftId;
-    if (this.sink.isDeletePending(draftId)) return;
+    if (this.writeIsRetired(draftId)) return;
     try {
       const prepared = await this.sink.prepareWrite(this.hostId, entry.write);
       // Blob preparation is asynchronous. Submission can fence the row while
       // this write is waiting there, so gate again at actual RPC dispatch.
-      if (this.isAbandoned() || this.sink.isDeletePending(draftId)) return;
+      if (this.isAbandoned() || this.writeIsRetired(draftId)) return;
       const response = await this.rpc.upsert(prepared);
-      this.held.set(response.draft.draftId, {
-        kind: "row",
-        revision: response.draft.revision,
-      });
+      if (this.isAbandoned()) return;
+      // A committed write still advances the host frontier after retirement.
+      // Deletion derives its tombstone from this frontier, and another stream
+      // may already have delivered a newer row or tombstone while RPC awaited.
+      if (response.draft.revision > this.revisionOfHeld(draftId)) {
+        this.held.set(draftId, {
+          kind: "row",
+          revision: response.draft.revision,
+        });
+      }
+      if (this.writeIsRetired(draftId)) return;
       this.sink.rememberSynced(
         response.draft.draftId,
         response.draft.revision,
@@ -529,10 +575,16 @@ export class DraftMirrorSession {
       });
       // Dirty gate is correct (keep suppressing host frames) but it must
       // have a live retry behind it — re-arm with bounded backoff.
-      if (this.sink.isDirty(draftId)) {
+      if (!this.writeIsRetired(draftId) && this.sink.isDirty(draftId)) {
         this.scheduleRetry(draftId);
       }
     }
+  }
+
+  private writeIsRetired(draftId: string): boolean {
+    return (
+      this.retiredDraftIds.has(draftId) || this.sink.isDeletePending(draftId)
+    );
   }
 
   private async retryPendingDeletes(): Promise<void> {

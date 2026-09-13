@@ -20,6 +20,7 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   recordNegotiatedHostManifest,
@@ -969,6 +970,13 @@ describe("<TabStrip />", () => {
   it("renders a hover chrome layer for inactive header tabs", async () => {
     openEpicFixture(EPIC_A);
     openEpicFixture(EPIC_B);
+    // Source reconciliation preserves the current selection when B is added
+    // in the background. Explicitly select B for this active/inactive chrome
+    // fixture so its intended distinction is independent of insertion order.
+    tabCommandCoordinator.activateTab({
+      kind: "ref",
+      ref: { kind: "epic", id: EPIC_B.id },
+    });
     const router = buildRouter("/epics/e-b/e-b");
     render(<RouterProvider router={router} />);
 

@@ -42,6 +42,12 @@ import type {
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
+  completeLandingDraftDelete,
+  isLandingDraftRetirementKey,
+  landingDraftIsRetired,
+  retireLandingDraft,
+} from "@/lib/drafts/landing-draft-retirement";
+import {
   resolvePrimaryPath,
   trimFoldersPreservingPrimary,
 } from "@/lib/worktree/resolve-primary-path";
@@ -118,7 +124,7 @@ export const UNADOPTED_LANDING_DRAFT: LandingDraftAdoption = {
 };
 
 export function isOpenLandingDraft(draft: LandingDraftTab): boolean {
-  return !draft.closed;
+  return !draft.closed && !landingDraftIsRetired(draft.id);
 }
 
 /** Local persist cap for adopted mirrors; unadopted drafts are never LRU'd. */
@@ -480,6 +486,15 @@ function destroyLandingDraft(
   // A local delete needs a row to route its host request. A host tombstone is
   // already authoritative even when its local mirror was evicted.
   if (closing === undefined && routeHostDelete) return;
+  if (closing !== undefined) {
+    retireLandingDraft(
+      id,
+      routeHostDelete && closing.adoption.state === "adopted"
+        ? closing.adoption.hostId
+        : null,
+    );
+  }
+  if (!routeHostDelete) completeLandingDraftDelete(id);
   pruneRecoveryDraft(id);
   if (closing === undefined) return;
   draftRuntimeRegistry.close(id);
@@ -554,6 +569,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       createDraftWithId: (id, settings) => {
+        if (landingDraftIsRetired(id)) return id;
         if (get().drafts.some((draft) => draft.id === id)) return id;
         // Workspace and default settings belong to the same placement host,
         // including drafts created through the tab strip or a split pane.
@@ -622,6 +638,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       openDraft: (id) => {
+        if (landingDraftIsRetired(id)) return;
         const draft = get().drafts.find((d) => d.id === id);
         if (draft === undefined) return;
         // A pending create keeps the runtime alive through close. Reopen
@@ -661,7 +678,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
 
       setActiveDraft: (id) => {
         const draft = get().drafts.find((d) => d.id === id);
-        if (draft === undefined || draft.closed) return;
+        if (draft === undefined || !isOpenLandingDraft(draft)) return;
         set({ activeDraftId: id });
       },
 
@@ -953,7 +970,7 @@ function uniqueLandingDrafts(
 ): ReadonlyArray<LandingDraftTab> {
   const seen = new Set<string>();
   return drafts.flatMap((draft) => {
-    if (seen.has(draft.id)) return [];
+    if (seen.has(draft.id) || landingDraftIsRetired(draft.id)) return [];
     seen.add(draft.id);
     return [draft];
   });
@@ -1614,6 +1631,7 @@ function nonNegativeNumber(value: unknown): number {
 }
 
 export function landingDraftIsDirty(draftId: string): boolean {
+  if (landingDraftIsRetired(draftId)) return false;
   const draft = useLandingDraftStore
     .getState()
     .drafts.find((entry) => entry.id === draftId);
@@ -1631,7 +1649,7 @@ export function landingDraftRememberSynced(
       if (draft.id !== draftId) return draft;
       return {
         ...draft,
-        hostRevision,
+        hostRevision: Math.max(draft.hostRevision, hostRevision),
         syncedGeneration:
           collectedGeneration >= draft.generation
             ? draft.generation
@@ -1655,10 +1673,22 @@ export function applyLandingHostDocument(
   document: DraftDocument,
   content: JsonContent,
 ): void {
-  if (document.kind !== "landing") return;
+  if (document.kind !== "landing" || landingDraftIsRetired(document.draftId))
+    return;
   const existing = useLandingDraftStore
     .getState()
     .drafts.find((draft) => draft.id === document.draftId);
+  // Image reads can finish out of order after subscribe-frame admission.
+  // Cloud heads use synthetic revision 0 (unknown), even for a newer head
+  // fetched while the owner is offline. Compare only actual host revisions;
+  // permanent retirement above independently fences consumed cloud drafts.
+  if (
+    existing !== undefined &&
+    existing.ownerHostId === document.ownerHostId &&
+    document.revision > 0 &&
+    existing.hostRevision > document.revision
+  )
+    return;
   if (
     existing !== undefined &&
     existing.generation > existing.syncedGeneration
@@ -1797,4 +1827,30 @@ function evictAdoptedLandingMirrors(
       .map((draft) => draft.id),
   );
   return drafts.filter((draft) => !evictIds.has(draft.id));
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (!isLandingDraftRetirementKey(event.key) || event.newValue === null)
+      return;
+    const retired = useLandingDraftStore
+      .getState()
+      .drafts.filter((draft) => landingDraftIsRetired(draft.id));
+    if (retired.length === 0) return;
+    for (const draft of retired) {
+      pruneRecoveryDraft(draft.id);
+      draftRuntimeRegistry.close(draft.id);
+    }
+    // Another window's receipt removes the visible row, but must not ACK its
+    // pending host delete. The owner receipt still routes reconnect retries.
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.filter((draft) => !landingDraftIsRetired(draft.id)),
+      activeDraftId:
+        state.activeDraftId !== null &&
+        landingDraftIsRetired(state.activeDraftId)
+          ? null
+          : state.activeDraftId,
+    }));
+    scheduleLandingImageReconcile();
+  });
 }
