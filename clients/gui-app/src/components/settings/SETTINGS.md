@@ -1960,32 +1960,39 @@ md:top-0`): positioned against the nearest scrollport - the settings
     order but not out of the accessibility tree, each with a tooltip. A drag
     that starts on a dot ends with a click on that dot, so a gesture that
     already moved the value swallows its own trailing click rather than
-    snapping the level back to where the drag began. The selected level's name renders beside the
-    track, so the dots never stand alone. `list` renders exactly the strip of
+    snapping the level back to where the drag began. The selected level's
+    name renders on its own line ABOVE the track, centred - beside it, its
+    width would move the track and every stop with it each time the level
+    changed. `list` renders exactly the strip of
     buttons the footer had before, and a model advertising a single level
     renders that strip whatever the setting says - a slider with one stop is a
     control that cannot be moved. The ⌥-digit chord still sets a level in
     either mode (it lives in `usePickerLeaderScope`, not in the strip); only
     its per-button badges are a thing the list has and the slider does not.
-  - **The last stop blooms once, and only when a person lands on it.**
-    Arriving at the catalog's final level draws a 640ms ring out of the thumb
-    (`reasoning-max-bloom` in `index.css`) and leaves a static halo plus an
-    accent on the end of the track. The cue is captured on the CHANGE path -
-    `useReasoningMaxCue` wraps `ReasoningFooterConfig.onChange`, which every
-    route reaches, the ⌥-digit chord included - so a level that arrives by
-    hydration, a catalog refresh or a model swap gets the static treatment and
-    no celebration, and so does one reached from a level the catalog does not
-    list (nobody climbed off a rung that was not there). It is finite CSS
-    retired by its own `animationend`, keyed by a generation so a late finish
-    cannot erase a newer bloom; leaving max, closing the picker, losing pane
-    focus or being concealed - the two signals `PopoverContent` itself
-    un-presents on, which unmount the footer while the picker's root stays
-    open - disabling the control, switching to the list, changing
-    host/model/catalog or turning reduced motion on all CLEAR the cue rather
-    than hiding it, so reopening a gate never replays it. The slider row
-    carries `py-3` for the ring's ~20px reach, since the popover clips it. No clock, no timer:
-    `useStatusAnimation` is for continuous motion and is deliberately not used
-    here. The trigger chip is untouched at max, in both display modes.
+  - **The slider is a thick pill, and the last stop is a state, not a
+    celebration.** The track is the `pill` size of `ui/slider.tsx` (36px,
+    `rounded-full`, `bg-foreground/8`), the fill a solid `--primary` from the
+    left edge to the thumb's centre, the stops small dots coloured for the
+    surface under them (`bg-primary-foreground/35` over the fill,
+    `bg-foreground/25` over the rest), and the thumb a 28px `--foreground`
+    disc in a `--popover` ring - `--foreground` rather than
+    `--primary-foreground` because at the lowest stop the disc sits entirely
+    on the UNFILLED track, where the default achromatic themes put
+    `--primary-foreground` within a few percent of the surface. At the
+    catalog's final level the fill becomes a gradient from `--primary` into
+    `--reasoning-max-accent` (a registered theme token - "Max reasoning
+    accent" under Controls in the theme editor, default violet - so a custom
+    theme recolours max like any other role), the pill takes a soft glow of
+    the accent, and a fixed constellation of eleven sparkles twinkles over the
+    fill. The sparkles ride the shared status clock at the pulse cadence -
+    one writer, one element, eleven custom properties per tick, no CSS
+    `animation` - and are mounted only while max is selected AND the picker
+    is presented (`visibleOpen`, pane focused, not concealed, control
+    enabled); under reduced motion they render still at a mid opacity, with
+    nothing subscribed. A picker OPENED at max looks exactly like one dragged
+    there: there is no arrival cue and no one-shot animation. The
+    slider row carries `py-2` for the glow's 14px reach, since the popover
+    clips it. The trigger chip is untouched at max, in both display modes.
   - **The glyph's slot per bar is fixed, and the box grows sideways**
     (`h-3.5 w-auto`, `viewBox` width = count × slot). Harnesses advertise
     anywhere from two graded levels to seven, and dividing a fixed width by

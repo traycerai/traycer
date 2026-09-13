@@ -84,7 +84,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
     render(
       <div style={{ width: "140px" }}>
         <HarnessModelPickerModelSettingsFooter
-          reasoningMax={null}
+          pickerOpen
           reasoning={reasoningConfig("minimal", SEVEN_OPTIONS, onChange)}
           serviceTier={null}
         />
@@ -104,7 +104,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("is a real horizontal scroller whose inner row keeps the even spread until it overflows", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -130,7 +130,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
     try {
       render(
         <HarnessModelPickerModelSettingsFooter
-          reasoningMax={null}
+          pickerOpen
           reasoning={reasoningConfig("ultra", SEVEN_OPTIONS, vi.fn())}
           serviceTier={null}
         />,
@@ -150,7 +150,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("shows no edge fade when the strip does not overflow its scroller", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -169,7 +169,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("fades only the right edge when an overflowing strip is scrolled to its start", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -193,7 +193,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("fades only the left edge when an overflowing strip is scrolled to its end", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -217,7 +217,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("fades both edges when an overflowing strip is scrolled to its middle", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -238,7 +238,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("keeps the Fast service-tier toggle and its divider outside the reasoning scroller", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={serviceTierConfig(FAST_MODEL, "", vi.fn())}
       />,
@@ -252,7 +252,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("wires the scroller when a model with levels replaces one that reported none", () => {
     const { rerender } = render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("", [], vi.fn())}
         serviceTier={serviceTierConfig(FAST_MODEL, "", vi.fn())}
       />,
@@ -263,7 +263,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
 
     rerender(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("minimal", SEVEN_OPTIONS, vi.fn())}
         serviceTier={serviceTierConfig(FAST_MODEL, "", vi.fn())}
       />,
@@ -285,7 +285,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("does not render the thinking-effort group when the model reports no reasoning levels", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("", [], vi.fn())}
         serviceTier={serviceTierConfig(FAST_MODEL, "", vi.fn())}
       />,

@@ -78,7 +78,6 @@ import type {
   ReasoningFooterConfig,
   ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
-import { useReasoningMaxCue } from "@/components/home/pickers/use-reasoning-max-cue";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
@@ -276,30 +275,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selectedModel,
     reasoningOptions,
   );
-  // The max-effort cue hangs off the CHANGE path rather than off the value, so
-  // a level that arrives by hydration, a catalog refresh or a model swap is not
-  // mistaken for someone moving the slider. Every route lands on
-  // `reasoningFooter.onChange` - the slider, the list, and the ⌥-digit chord
-  // through `usePickerLeaderScope` - so wrapping it here covers all of them.
-  const { config: reasoningMaxCue, onChange: handleReasoningChange } =
-    useReasoningMaxCue({
-      value: reasoning,
-      options: reasoningOptions,
-      disabled: reasoningDisabled,
-      open: visibleOpen,
-      hostId: runTargetHostId,
-      harnessId: selection.harnessId,
-      modelSlug: selection.modelSlug,
-      onSelect: setReasoning,
-    });
   const reasoningFooter = useMemo<ReasoningFooterConfig>(
     () => ({
       value: reasoning,
       options: reasoningOptions,
       disabled: reasoningDisabled,
-      onChange: handleReasoningChange,
+      onChange: setReasoning,
     }),
-    [reasoning, reasoningOptions, reasoningDisabled, handleReasoningChange],
+    [reasoning, reasoningOptions, reasoningDisabled, setReasoning],
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const coarsePointer = useCoarsePointer();
@@ -1064,7 +1047,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onActiveRow={setActiveRowId}
         onSelectRow={selectRow}
         reasoningFooter={reasoningFooter}
-        reasoningMaxCue={reasoningMaxCue}
+        reasoningPickerOpen={visibleOpen}
         serviceTierFooter={serviceTierFooter}
         createProfileHostId={createProfileHostId}
         runTargetHostId={runTargetHostId}

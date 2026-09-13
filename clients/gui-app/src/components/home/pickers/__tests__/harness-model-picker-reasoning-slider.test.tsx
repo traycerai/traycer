@@ -39,7 +39,7 @@ function reasoningConfig(
 function renderFooter(config: ReasoningFooterConfig): void {
   render(
     <HarnessModelPickerModelSettingsFooter
-      reasoningMax={null}
+      pickerOpen
       reasoning={config}
       serviceTier={null}
     />,
@@ -57,7 +57,7 @@ function renderStatefulFooter(initial: string): ReadonlyArray<string> {
     const [value, setValue] = useState(initial);
     return (
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={{
           value,
           options: FOUR_OPTIONS,
@@ -120,7 +120,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     expect(thumb().getAttribute("aria-valuemin")).toBe("0");
     expect(thumb().getAttribute("aria-valuemax")).toBe("3");
     expect(thumb().getAttribute("aria-valuetext")).toBe("High");
-    // The name is beside the track too, so the dots never stand alone.
+    // The name is above the track too, so the dots never stand alone.
     expect(screen.getByTestId("model-reasoning-level-name").textContent).toBe(
       "High",
     );
@@ -216,10 +216,10 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     expect(onChange).toHaveBeenLastCalledWith("off");
   });
 
-  it("moves the name beside the track when the level changes", () => {
+  it("moves the name above the track when the level changes", () => {
     const { rerender } = render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("low", FOUR_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -230,7 +230,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
 
     rerender(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={reasoningConfig("max", FOUR_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -242,142 +242,57 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     expect(thumb().getAttribute("aria-valuenow")).toBe("3");
   });
 
-  // The track may not move when the name beside it does: the label cell holds
-  // the width of the WIDEST name in the catalog, so every stop keeps its
-  // position for the model's whole ladder.
-  describe("fixed-width level label", () => {
-    function sizers(): ReadonlyArray<HTMLElement> {
-      return screen.getAllByTestId("model-reasoning-level-sizer");
+  // The track may not move when the name changes. It cannot any more: the name
+  // is on its own line ABOVE the track, so its width is not the track's
+  // business at all and the reserved-width sizer stack that used to hold the
+  // line steady is gone with it.
+  describe("level label", () => {
+    function label(): HTMLElement {
+      return screen.getByTestId("model-reasoning-level-name");
     }
 
-    it("reserves one sizer per catalog level, whichever level is selected", () => {
-      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
-
-      expect(sizers().map((sizer) => sizer.textContent)).toEqual([
-        "Low",
-        "Medium",
-        "High",
-        "Max",
-      ]);
-    });
-
-    it("shows only the selected name and hides the sizers from sight and from AT", () => {
+    it("sits above the track, not beside it, with nothing reserving width", () => {
       renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
-      for (const sizer of sizers()) {
-        expect(sizer.classList.contains("invisible")).toBe(true);
-        expect(sizer.getAttribute("aria-hidden")).toBe("true");
-      }
-
-      const name = screen.getByTestId("model-reasoning-level-name");
+      const name = label();
       expect(name.textContent).toBe("High");
-      expect(name.classList.contains("invisible")).toBe(false);
       expect(name.getAttribute("aria-hidden")).toBeNull();
+      // The row the slider lives in stacks; the name is the slider's previous
+      // sibling rather than a cell in the same line.
+      const row = name.parentElement;
+      expect(row?.className).toContain("flex-col");
+      expect(row?.lastElementChild).toBe(
+        screen.getByTestId("model-reasoning-slider"),
+      );
+      expect(screen.queryAllByTestId("model-reasoning-level-sizer")).toEqual(
+        [],
+      );
     });
 
-    // The width comes from the cell, not from the class list: if the selected
-    // level could change either, it could change the width.
-    it("gives the label cell the same classes at the first level as at the last", () => {
+    // The class set is what a jsdom test can read of the geometry: if the
+    // selected level could change it, it could change the layout.
+    it("draws the same label cell at the first level as at the last", () => {
       renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
-      const atFirst = screen.getByTestId(
-        "model-reasoning-level-name",
-      ).className;
-      const firstSizers = sizers().map((sizer) => sizer.className);
+      const atFirst = label().className;
       cleanup();
 
       renderFooter(reasoningConfig("max", FOUR_OPTIONS, vi.fn()));
 
-      expect(screen.getByTestId("model-reasoning-level-name").className).toBe(
-        atFirst,
-      );
-      expect(sizers().map((sizer) => sizer.className)).toEqual(firstSizers);
+      expect(label().className).toBe(atFirst);
     });
 
-    it("keeps the reserved set intact across a level change, name and value with it", () => {
-      const { rerender } = render(
-        <HarnessModelPickerModelSettingsFooter
-          reasoningMax={null}
-          reasoning={reasoningConfig("low", FOUR_OPTIONS, vi.fn())}
-          serviceTier={null}
-        />,
-      );
-      const before = sizers().map((sizer) => sizer.textContent);
-
-      rerender(
-        <HarnessModelPickerModelSettingsFooter
-          reasoningMax={null}
-          reasoning={reasoningConfig("max", FOUR_OPTIONS, vi.fn())}
-          serviceTier={null}
-        />,
-      );
-
-      expect(sizers().map((sizer) => sizer.textContent)).toEqual(before);
-      expect(screen.getByTestId("model-reasoning-level-name").textContent).toBe(
-        "Max",
-      );
-      expect(thumb().getAttribute("aria-valuetext")).toBe("Max");
-    });
-
-    // A remembered level from another model still prints its raw id, which has
-    // no sizer of its own - so the visible node cannot be one of the sizers.
-    it("still names a level the catalog does not list", () => {
-      renderFooter(reasoningConfig("ultra", FOUR_OPTIONS, vi.fn()));
-
-      expect(screen.getByTestId("model-reasoning-level-name").textContent).toBe(
-        "ultra",
-      );
-      expect(sizers()).toHaveLength(FOUR_OPTIONS.length);
-      expect(thumb().getAttribute("aria-valuenow")).toBe("0");
-      expect(thumb().getAttribute("aria-valuetext")).toBe("ultra");
-    });
-
-    // The other end of the same problem: a raw id LONGER than every catalog
-    // label would widen an in-flow name node, and selecting a real level again
-    // would shrink it - the movement the sizers exist to prevent, arriving by
-    // the one name they do not reserve for. So the name is out of flow and the
-    // cell is measured from the sizers alone.
-    it("is not widened by an unknown level whose raw id is longer than every label", () => {
+    it("names a level the catalog does not list, and truncates a long one", () => {
       const remembered = "a-remembered-level-nobody-advertises-any-more";
-      const { rerender } = render(
-        <HarnessModelPickerModelSettingsFooter
-          reasoningMax={null}
-          reasoning={reasoningConfig(remembered, FOUR_OPTIONS, vi.fn())}
-          serviceTier={null}
-        />,
-      );
-      const name = screen.getByTestId("model-reasoning-level-name");
-      // Out of flow, so it contributes nothing to the grid's intrinsic width
-      // and can only truncate inside it.
-      expect(name.className).toContain("absolute");
-      expect(name.className).toContain("truncate");
-      expect(name.textContent).toBe(remembered);
-      const cell = name.parentElement;
-      const structure = {
-        cell: cell?.className,
-        name: name.className,
-        sizers: sizers().map((sizer) => sizer.className),
-        texts: sizers().map((sizer) => sizer.textContent),
-      };
+      renderFooter(reasoningConfig(remembered, FOUR_OPTIONS, vi.fn()));
 
-      rerender(
-        <HarnessModelPickerModelSettingsFooter
-          reasoningMax={null}
-          reasoning={reasoningConfig("low", FOUR_OPTIONS, vi.fn())}
-          serviceTier={null}
-        />,
-      );
-
-      const after = screen.getByTestId("model-reasoning-level-name");
-      expect({
-        cell: after.parentElement?.className,
-        name: after.className,
-        sizers: sizers().map((sizer) => sizer.className),
-        texts: sizers().map((sizer) => sizer.textContent),
-      }).toEqual(structure);
-      expect(after.textContent).toBe("Low");
+      expect(label().textContent).toBe(remembered);
+      expect(label().className).toContain("truncate");
+      expect(label().className).toContain("max-w-full");
+      expect(thumb().getAttribute("aria-valuenow")).toBe("0");
+      expect(thumb().getAttribute("aria-valuetext")).toBe(remembered);
     });
 
-    it("leaves the list control without a label cell at all", () => {
+    it("leaves the list control without a label at all", () => {
       useLayoutStore.setState({
         composer: {
           ...DEFAULT_COMPOSER_LAYOUT,
@@ -388,9 +303,79 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       expect(screen.queryByTestId("model-reasoning-level-name")).toBeNull();
-      expect(screen.queryAllByTestId("model-reasoning-level-sizer")).toEqual(
-        [],
+    });
+  });
+
+  // The thick pill, and the geometry that has to move with it.
+  describe("pill geometry", () => {
+    function track(): HTMLElement {
+      const element = screen
+        .getByTestId("model-reasoning-slider")
+        .querySelector('[data-slot="slider-track"]');
+      if (!(element instanceof HTMLElement)) {
+        throw new Error("No track");
+      }
+      return element;
+    }
+
+    it("asks the primitive for the pill size on the track and the thumb alike", () => {
+      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+
+      expect(track().getAttribute("data-size")).toBe("pill");
+      expect(thumb().getAttribute("data-size")).toBe("pill");
+      // The pill's own height, and the default's, both from the primitive.
+      expect(track().className).toContain("data-[size=pill]:h-9");
+      expect(track().className).toContain("h-1");
+      expect(thumb().className).toContain("data-[size=pill]:size-7");
+      expect(thumb().className).toContain("size-4");
+    });
+
+    // Radix parks the thumb's CENTRE half a thumb inside each end
+    // (`getThumbInBoundsOffset`), so the overlay the stops are laid out in has
+    // to be inset by exactly that - 14px for the 28px pill thumb.
+    it("insets the stop overlay by half the pill thumb", () => {
+      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+
+      const overlay = stops().at(0)?.parentElement?.parentElement;
+      expect(overlay?.className).toContain("px-3.5");
+      // And matches the slider's own padding vertically, so the overlay is the
+      // track's box rather than the padded row's.
+      expect(overlay?.className).toContain("py-2");
+      expect(screen.getByTestId("model-reasoning-slider").className).toContain(
+        "py-2",
       );
+    });
+
+    it("gives each stop the track's full height and a coarse-pointer width", () => {
+      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+
+      for (const stop of stops()) {
+        expect(stop.className).toContain("h-full");
+        expect(stop.className).toContain("w-5");
+        expect(stop.className).toContain("pointer-coarse:w-6");
+      }
+    });
+
+    it("colours a dot for the surface under it: fill to the left, base to the right", () => {
+      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+
+      const dots = FOUR_OPTIONS.map((_, index) =>
+        screen.getByTestId(`model-reasoning-dot-${index}`),
+      );
+      // `high` is index 2, so 0 and 1 are under the fill and 3 is not. The
+      // selected stop is hidden under the thumb, whichever way it is painted.
+      expect(dots[0]?.className).toContain("bg-primary-foreground/35");
+      expect(dots[1]?.className).toContain("bg-primary-foreground/35");
+      expect(dots[3]?.className).toContain("bg-foreground/25");
+      expect(stops().at(2)?.className).toContain("opacity-0");
+    });
+
+    it("fills solid up to the thumb", () => {
+      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+
+      const range = screen.getByTestId("model-reasoning-range");
+      expect(range.className).toContain("bg-primary");
+      expect(range.className).not.toContain("bg-primary/70");
     });
   });
 
@@ -436,7 +421,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     const onChange = vi.fn<(next: string) => void>();
     render(
       <HarnessModelPickerModelSettingsFooter
-        reasoningMax={null}
+        pickerOpen
         reasoning={{
           value: "low",
           options: FOUR_OPTIONS,

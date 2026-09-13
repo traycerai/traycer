@@ -4150,11 +4150,13 @@ describe("<HarnessModelPicker />", () => {
     expect(reasoningChanges).toEqual(["high"]);
   });
 
-  it("blooms the slider's last stop when the sub-leader digit lands on it", async () => {
+  it("lights the slider's max treatment when the sub-leader digit lands on the last stop", async () => {
     // The ⌥-digit chord reaches the level through `usePickerLeaderScope`,
-    // never touching the slider - so this is the route that proves the cue
-    // hangs off the picker's one acknowledgement path rather than off a
-    // handler inside the strip.
+    // never touching the slider - so this is the route that proves the max
+    // treatment is a reading of the VALUE inside a presented picker, not of
+    // a gesture some handler in the strip happened to see. The sparkle field
+    // is gated on the picker's own `visibleOpen`, which only the real picker
+    // threads through.
     renderPicker({
       reasoning: "low",
       storeModels: [
@@ -4170,7 +4172,7 @@ describe("<HarnessModelPicker />", () => {
     });
 
     await openPicker();
-    expect(screen.queryByTestId("model-reasoning-max-bloom")).toBeNull();
+    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
 
     act(() => {
       fireLeaderDigit(2, "alt");
@@ -4178,8 +4180,10 @@ describe("<HarnessModelPicker />", () => {
 
     const slider = screen.getByTestId("model-reasoning-slider");
     expect(slider.getAttribute("data-max")).toBe("true");
-    expect(slider.getAttribute("data-open")).toBe("true");
-    expect(screen.getByTestId("model-reasoning-max-bloom")).not.toBeNull();
+    expect(screen.getByTestId("model-reasoning-max-sparkles")).not.toBeNull();
+    expect(screen.getByTestId("model-reasoning-range").className).toContain(
+      "reasoning-effort-max-range",
+    );
   });
 
   it("leaves the slider static when the sub-leader digit lands short of the last stop", async () => {
@@ -4205,7 +4209,7 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByTestId("model-reasoning-slider").getAttribute("data-max"),
     ).toBeNull();
-    expect(screen.queryByTestId("model-reasoning-max-bloom")).toBeNull();
+    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
   });
 
   it("sets the thinking level on the now-committed model after a rail switch", async () => {
