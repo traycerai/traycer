@@ -2943,7 +2943,23 @@ function describeSessionStateForAria(
   sessionState: AgentSessionState | null,
   isArchived: boolean,
 ): string | null {
-  if (sessionState === "sleeping") return "asleep";
+  // The RESUME GUIDANCE rides here, not only in the badge's tooltip.
+  //
+  // That tooltip hangs off a decorative `span`, so it is unreachable by
+  // keyboard - and this row button's explicit `aria-label` replaces its
+  // subtree anyway, so a description on the badge would never be announced
+  // either. This string is the one channel a screen-reader user actually
+  // gets, and "asleep" alone tells them a state without telling them it is
+  // recoverable, which is the misreading this whole change exists to stop.
+  //
+  // Deliberately NOT solved by making the badge focusable: that adds a tab
+  // stop per sleeping row inside a tree, which is a worse experience than the
+  // one it fixes. The `lastExit` detail stays visual - it is display-only, and
+  // all four exits resume identically, so it earns a tooltip and not a place
+  // in every row's accessible name.
+  if (sessionState === "sleeping") {
+    return "asleep, resumes on the next message or when you open it";
+  }
   if (sessionState === "stopped" && !isArchived) return "stopped";
   return null;
 }

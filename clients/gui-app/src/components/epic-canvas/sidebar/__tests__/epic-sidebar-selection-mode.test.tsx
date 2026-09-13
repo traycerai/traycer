@@ -3921,6 +3921,25 @@ describe("terminal-agent row session-state badge", () => {
       "Sleeping. Resumes on the next message or when you open it. Last run exited on its own.",
     );
 
+    // And the channel a keyboard user actually has. The assertion above proves
+    // the tooltip's CONTENT, not its reachability: the trigger is a decorative
+    // `span`, so `fireEvent.focus` works here and a real Tab key would never
+    // land on it - and the row button's explicit `aria-label` replaces its
+    // subtree anyway, so nothing on the badge is announced either.
+    //
+    // The row's own name is therefore the only place the guidance can reach
+    // assistive tech, and "asleep" alone would state a condition without
+    // saying it is recoverable - the exact misreading this change exists to
+    // stop. Asserted as a SUBSTRING of the row name rather than by re-stating
+    // the whole label, so an unrelated suffix (archived, shared, an offline
+    // lock) does not make this case red for the wrong reason.
+    // Reached from the badge rather than by name, so it is provably the SAME
+    // row this case seeded rather than whichever row happens to match.
+    const sleepingRow = badge.closest("button[aria-label]");
+    expect(sleepingRow?.getAttribute("aria-label")).toContain(
+      "asleep, resumes on the next message or when you open it",
+    );
+
     // The other three reasons resume identically and are deliberately not
     // spelled out - only `process-exit` contradicts what a reader would
     // otherwise assume.
