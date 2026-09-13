@@ -974,7 +974,11 @@ describe("tab command coordinator transactions", () => {
       ref.kind === "epic" ? [ref.id] : [],
     );
     expect(canvas.openTabOrder).toEqual(layoutEpicIds);
-    expect(canvas.activeTabId).toBe(xId);
+    // X was opened in the background while the command left the split's
+    // right side focused but empty. The split remains the active layout item;
+    // compatibility has no selected epic to project back to the canvas.
+    expect(layout.activeItemId).toBe("split-proj-nested-x");
+    expect(canvas.activeTabId).toBeNull();
   });
 
   it("one-shot projection listener error still releases the ledger and permits another command", () => {

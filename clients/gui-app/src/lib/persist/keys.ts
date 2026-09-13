@@ -235,10 +235,15 @@ export const PERSIST_STORES = [
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
 
-  // ── Scoped non-zustand key families (1) ──────────────────────────────────
+  // ── Scoped non-zustand key families (2) ──────────────────────────────────
   {
     camelName: "appLocalNotificationCompletionReceipt",
     leaf: "app-local-notification-completion-receipt",
+    kind: "scoped",
+  },
+  {
+    camelName: "landingDraftRetirement",
+    leaf: "landing-draft-retirement",
     kind: "scoped",
   },
 

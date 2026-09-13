@@ -14,6 +14,7 @@ import {
 import {
   batchHeaderTabRecovery,
   useTabRecoveryHistory,
+  type ClosedHeaderTab,
 } from "@/lib/tab-recovery/history";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { closeTab } from "@/stores/epics/canvas/actions";
@@ -24,7 +25,13 @@ import {
   pane,
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import { registerChatTabViewportCapture } from "@/stores/chats/chat-tab-viewport-handoff";
+import {
+  landingDraftIsRetired,
+  resetLandingDraftRetirementsForTests,
+  retireLandingDraft,
+} from "@/lib/drafts/landing-draft-retirement";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   flattenLayoutRefs,
   tabItemId,
@@ -32,6 +39,7 @@ import {
   type SplitStripItem,
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
+import { tabSourceRefs } from "@/stores/tabs/source-refs";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { readTabStripLayout, useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
@@ -49,6 +57,8 @@ function resetStores(): void {
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useSettingsStore.setState({ homeTabEnabled: false });
+  resetLandingDraftRetirementsForTests();
   useTabRecoveryHistory.setState({ entries: [], ready: true });
   __resetTabSyncCoordinatorForTesting();
   tabCommandCoordinator.resetReconciliationForTesting();
@@ -123,6 +133,164 @@ afterEach(() => {
 });
 
 describe("tab recovery through the command coordinator", () => {
+  it("preserves Home selection and history when a background draft source appears", () => {
+    useSettingsStore.setState({ homeTabEnabled: true });
+    const taskId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-home-background", "Home background");
+    const taskRef: TabRef = { kind: "epic", id: taskId };
+    seedStrip([taskRef], taskRef);
+    useTabsStore.setState({ activeItemId: null, activationHistory: [taskRef] });
+
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftRef: TabRef = { kind: "draft", id: draftId };
+    tabCommandCoordinator.reconcileFromSourceStores();
+
+    expect(stripRefs().map(tabRefKey)).toEqual([
+      tabRefKey(taskRef),
+      tabRefKey(draftRef),
+    ]);
+    expect(useTabsStore.getState().activeItemId).toBeNull();
+    expect(useTabsStore.getState().activationHistory).toEqual([taskRef]);
+  });
+
+  it("does not restore a retired closed draft while Home is selected", () => {
+    useSettingsStore.setState({ homeTabEnabled: true });
+    const taskId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-retired-closed", "Retained task");
+    const taskRef: TabRef = { kind: "epic", id: taskId };
+    seedStrip([taskRef], taskRef);
+    useTabsStore.setState({ activeItemId: null, activationHistory: [taskRef] });
+
+    const draftId = "retired-closed-recovery";
+    useLandingDraftStore.getState().createDraftWithId(draftId, null);
+    useLandingDraftStore.getState().setDraftContent(
+      draftId,
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "retained work" }],
+          },
+        ],
+      },
+      null,
+    );
+    useLandingDraftStore.getState().closeDraft(draftId);
+    const recoveryItem: Extract<ClosedHeaderTab, { kind: "draft" }> = {
+      kind: "draft",
+      draftId,
+      hostId: null,
+      index: 1,
+    };
+    const layoutBefore = readTabStripLayout();
+    const historyBefore = useTabsStore.getState().activationHistory;
+    const rowBefore = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === draftId);
+    expect(rowBefore?.closed).toBe(true);
+
+    // Retire before the other window's storage event removes this retained row.
+    retireLandingDraft(draftId, null);
+    tabCommandCoordinator.restoreClosedHeaderTabs([recoveryItem], null);
+
+    expect(readTabStripLayout()).toEqual(layoutBefore);
+    expect(useTabsStore.getState().activationHistory).toEqual(historyBefore);
+    expect(useLandingDraftStore.getState().drafts).toEqual([rowBefore]);
+    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+  });
+
+  it("rejects activation of a retired direct draft id without changing selection", () => {
+    const taskId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-retired-direct", "Retired direct");
+    const taskRef: TabRef = { kind: "epic", id: taskId };
+    seedStrip([taskRef], taskRef);
+    const before = readTabStripLayout();
+    const retiredId = "retired-direct-id";
+    retireLandingDraft(retiredId, null);
+
+    expect(
+      tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: retiredId,
+        settings: null,
+        create: true,
+      }),
+    ).toBeNull();
+    expect(readTabStripLayout()).toEqual(before);
+    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+  });
+
+  it("rejects a retired ref target while its stale row remains before storage cleanup", () => {
+    const id = "retired-ref-target";
+    useLandingDraftStore.getState().createDraftWithId(id, null);
+    const ref: TabRef = { kind: "draft", id };
+    seedStrip([ref], ref);
+    useLandingDraftStore.getState().clearActiveDraft();
+    const before = readTabStripLayout();
+    retireLandingDraft(id, null);
+
+    expect(landingDraftIsRetired(id)).toBe(true);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(tabSourceRefs()).not.toContainEqual(ref);
+    expect(tabCommandCoordinator.activateTab({ kind: "ref", ref })).toBeNull();
+    expect(readTabStripLayout()).toEqual(before);
+    useLandingDraftStore.getState().openDraft(id);
+    useLandingDraftStore.getState().setActiveDraft(id);
+    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+  });
+
+  it("keeps the focused task active when a background landing draft source appears", () => {
+    const taskId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-background-draft", "Background draft");
+    const taskRef: TabRef = { kind: "epic", id: taskId };
+    seedStrip([taskRef], taskRef);
+    useTabsStore.setState({ activationHistory: [taskRef] });
+
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftRef: TabRef = { kind: "draft", id: draftId };
+    tabCommandCoordinator.reconcileFromSourceStores();
+
+    expect(stripRefs().map(tabRefKey)).toEqual([
+      tabRefKey(taskRef),
+      tabRefKey(draftRef),
+    ]);
+    expect(useTabsStore.getState().activeItemId).toBe(tabItemId(taskRef));
+    expect(useTabsStore.getState().activationHistory).toEqual([taskRef]);
+  });
+
+  it("explicitly activates a newly created landing draft", () => {
+    const taskId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-explicit-draft", "Explicit draft");
+    const taskRef: TabRef = { kind: "epic", id: taskId };
+    seedStrip([taskRef], taskRef);
+
+    const activation = tabCommandCoordinator.activateTab({
+      kind: "draft",
+      draftId: null,
+      settings: null,
+      create: true,
+    });
+    expect(activation).not.toBeNull();
+    if (activation === null || activation.ref.kind !== "draft") {
+      throw new Error("expected explicit draft activation");
+    }
+
+    expect(useTabsStore.getState().activeItemId).toBe(
+      tabItemId(activation.ref),
+    );
+    expect(useLandingDraftStore.getState().activeDraftId).toBe(
+      activation.ref.id,
+    );
+    expect(stripRefs()).toContainEqual(activation.ref);
+  });
+
   it("journals a confirmed task close and restores strip visibility without stealing focus", () => {
     const taskA = useEpicCanvasStore.getState().openEpicTab("epic-a", "Task A");
     const taskB = useEpicCanvasStore.getState().openEpicTab("epic-b", "Task B");
