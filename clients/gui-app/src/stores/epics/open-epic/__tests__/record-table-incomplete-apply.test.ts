@@ -198,6 +198,9 @@ describe("the terminal twin: a racing tuiUpsert marks the apply incomplete (I2)"
       kind: "tuiUpsert",
       epicId: EPIC_ID,
       record: tuiStreamRow({ tuiAgentId: "a1", revision: 5 }),
+      // NOT STATED - a pre-`@1.4` frame, which is what makes this the racing
+      // case. A `@1.4` frame states the facet and there is nothing to repair.
+      sessionFacet: null,
     });
 
     // The answer that would have stated the facet, at the same revision.
@@ -206,13 +209,37 @@ describe("the terminal twin: a racing tuiUpsert marks the apply incomplete (I2)"
       issuedAtSeq,
     );
 
-    // The facet's own VALUE has no seam out of this table (`TerminalAgentsSlice`
-    // does not carry it yet - see `record-table-recency-patches.test.ts`'s T7),
-    // so what is pinned here is the causal step: the apply was incomplete, the
-    // stamp is declined, and the next poll is a snapshot that states it. The
-    // alternative is the original customer symptom, for the life of the session.
+    // `TerminalAgentsSlice` now carries the facet, so the symptom itself is
+    // assertable and not merely the causal step: the fence skipped the answer,
+    // so the agent still reads `null` - "this host cannot know", i.e. ABSENT
+    // rather than asleep-and-resumable.
     expect(table.snapshotIncompleteSeq()).toBe(1);
     expect(table.current().allIds).toContain("a1");
+    expect(table.current().byId.a1.sessionState).toBeNull();
+
+    // AND THE REPAIR LANDS, at the SAME revision the delta seeded.
+    //
+    // Which takes both halves. This clause forces the snapshot; the facet
+    // waiver in `tuiAgentRowSupersedes` is what stops rule 2 rejecting it
+    // when it arrives. The two reads are of one registry row, so the answer
+    // carries revision 5 exactly as the delta did, and `5 > 5` is false -
+    // without the waiver this snapshot is requested and then thrown away,
+    // and since the agent is ASLEEP nothing will ever write it to a higher
+    // revision to carry the repair later. See
+    // `record-table-incomplete-delta.test.ts`'s D3.
+    table.applyRecords(
+      [
+        tuiRow({
+          tuiAgentId: "a1",
+          revision: 5,
+          sessionState: "sleeping",
+          lastExit: "reaped",
+        }),
+      ],
+      table.ingestSeq(),
+    );
+    expect(table.current().byId.a1.sessionState).toBe("sleeping");
+    expect(table.current().byId.a1.lastExit).toBe("reaped");
   });
 });
 

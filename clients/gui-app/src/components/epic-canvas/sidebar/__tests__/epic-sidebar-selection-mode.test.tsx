@@ -13,6 +13,10 @@ import { forwardRef, type ReactNode } from "react";
 import type { Mock } from "vitest";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -143,6 +147,14 @@ interface TestState {
         {
           readonly hostId: string;
           readonly profileId: string | null;
+          /**
+           * The session facet (`@1.3`'s `sessionState`/`lastExit`), for the
+           * "Asleep"/"Stopped" sidebar badge. Optional and defaulted to `null`
+           * in the store mock below - every fixture that predates the badge
+           * never sets these, and `null` is the honest "not stated" answer.
+           */
+          readonly sessionState?: AgentSessionState | null;
+          readonly lastExit?: AgentSessionLastExit | null;
         }
       >
     >
@@ -890,6 +902,18 @@ vi.mock("@/lib/epic-selectors", () => ({
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => testState.activeAgentIds,
   useEpicAgentRoleClaims: () => [],
+  // The row's session facet, sourced from the same `tuiAgentById` fixture the
+  // `useEpicStore` mock builds `tuiAgents.byId` from - one source, so the
+  // badge (this selector) and the row's aria-label (which reads the same
+  // facet through `useEpicStore`, per the production comment on that read)
+  // cannot disagree in a fixture.
+  useEpicAgentSessionFacet: (nodeId: string) => {
+    const agent = testState.tuiAgentById[nodeId];
+    return {
+      sessionState: agent?.sessionState ?? null,
+      lastExit: agent?.lastExit ?? null,
+    };
+  },
   // Awareness reports a tier per working agent. An agent whose host did not
   // classify it reads as "turn", so tests that only set `activeAgentIds` keep
   // their pre-tier behaviour.
@@ -1010,6 +1034,8 @@ vi.mock("@/hooks/use-epic-store", () => ({
                   id,
                   hostId: agent.hostId,
                   profileId: agent.profileId,
+                  sessionState: agent.sessionState ?? null,
+                  lastExit: agent.lastExit ?? null,
                 },
               ],
             ];
@@ -3848,6 +3874,173 @@ describe("sidebar leading identity icon", () => {
     // Identity-only icons carry no status role to announce in the first place.
     const harnessSlot = screen.getByTestId("sidebar-agent-harness-agent-root");
     expect(harnessSlot.getAttribute("role")).toBeNull();
+  });
+});
+
+describe("terminal-agent row session-state badge", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.tuiHarnessIds = {};
+    testState.tuiAgentById = {};
+    // The archive knobs too, because this block is OUTSIDE the top describe
+    // whose `beforeEach` resets them - the archived-row case below sets both,
+    // and a leaked "all" visibility makes the `chat row archive` block's
+    // hidden-subtree assertions find rows that should not be on screen.
+    testState.archivedIds = [];
+    testState.archiveVisibility = "unarchived";
+  });
+
+  it('renders "Asleep" for a sleeping agent, with the process-exit sentence only for that reason', () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "sleeping",
+        lastExit: "process-exit",
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const badge = screen.getByTestId("chat-row-session-state-agent-root");
+    expect(badge.textContent).toBe("Asleep");
+    expect(badge.getAttribute("data-session-state")).toBe("sleeping");
+    // Focus, not hover: Radix honours it immediately, where pointer-enter
+    // sits behind the provider's open delay. `getAllByRole` and a filter,
+    // rather than `getByRole`, because the focus event bubbles to the row's
+    // own ancestor tooltip triggers (e.g. the offline lock) as well.
+    fireEvent.focus(badge);
+    const tooltips = screen.getAllByRole("tooltip").map((el) => el.textContent);
+    expect(tooltips).toContain(
+      "Sleeping. Resumes on the next message or when you open it. Last run exited on its own.",
+    );
+
+    // And the channel a keyboard user actually has. The assertion above proves
+    // the tooltip's CONTENT, not its reachability: the trigger is a decorative
+    // `span`, so `fireEvent.focus` works here and a real Tab key would never
+    // land on it - and the row button's explicit `aria-label` replaces its
+    // subtree anyway, so nothing on the badge is announced either.
+    //
+    // The row's own name is therefore the only place the guidance can reach
+    // assistive tech, and "asleep" alone would state a condition without
+    // saying it is recoverable - the exact misreading this change exists to
+    // stop. Asserted as a SUBSTRING of the row name rather than by re-stating
+    // the whole label, so an unrelated suffix (archived, shared, an offline
+    // lock) does not make this case red for the wrong reason.
+    // Reached from the badge rather than by name, so it is provably the SAME
+    // row this case seeded rather than whichever row happens to match.
+    const sleepingRow = badge.closest("button[aria-label]");
+    expect(sleepingRow?.getAttribute("aria-label")).toContain(
+      "asleep, resumes on the next message or when you open it",
+    );
+
+    // The other three reasons resume identically and are deliberately not
+    // spelled out - only `process-exit` contradicts what a reader would
+    // otherwise assume.
+    for (const lastExit of ["reaped", "user-stop", "restart"] as const) {
+      cleanup();
+      testState.tuiAgentById = {
+        "agent-root": {
+          hostId: "host-1",
+          profileId: null,
+          sessionState: "sleeping",
+          lastExit,
+        },
+      };
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+      const rowBadge = screen.getByTestId("chat-row-session-state-agent-root");
+      expect(rowBadge.textContent).toBe("Asleep");
+      fireEvent.focus(rowBadge);
+      expect(
+        screen.getAllByRole("tooltip").map((el) => el.textContent),
+      ).toContain("Sleeping. Resumes on the next message or when you open it.");
+    }
+  });
+
+  it('renders "Stopped" for an agent whose record is over', () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "stopped",
+        lastExit: null,
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const badge = screen.getByTestId("chat-row-session-state-agent-root");
+    expect(badge.textContent).toBe("Stopped");
+    expect(badge.getAttribute("data-session-state")).toBe("stopped");
+  });
+
+  it('says "Stopped" once, not twice, on a row that already reads Archived', () => {
+    seedChatTree();
+    // The only way a row normally reaches `stopped`: the archive mutation
+    // writes it, and a delete tombstones the row before anything could. So
+    // this pairing is the COMMON case for the badge, not an edge one - and
+    // "Archived · Stopped" would be the same fact said twice.
+    testState.archivedIds = ["agent-root"];
+    testState.archiveVisibility = "all";
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "stopped",
+        lastExit: null,
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    // The prefix still renders - suppressing the badge must not cost the row
+    // the state it does still need to show.
+    expect(
+      screen.getAllByTestId("chat-row-archived-label").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
+    // And the same suppression in the ACCESSIBLE NAME, which replaces the
+    // row's subtree: a badge hidden visually while the name still said both
+    // would leave the repeat only for the reader who cannot see the row.
+    const rowName =
+      screen
+        .getByTestId("epic-sidebar-item-agent-root")
+        .getAttribute("aria-label") ?? "";
+    expect(rowName).toContain("archived");
+    expect(rowName).not.toContain("stopped");
+  });
+
+  it("renders NO badge for `null` (unknown) or `running` - the same row as before the facet shipped", () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": { hostId: "host-1", profileId: null, sessionState: null },
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
+
+    cleanup();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "running",
+      },
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
   });
 });
 

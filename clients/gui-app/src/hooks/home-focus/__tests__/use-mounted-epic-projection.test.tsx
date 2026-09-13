@@ -78,6 +78,12 @@ function tuiAgentProjection(
     terminalAgentArgs: null,
     terminalShellCommand: null,
     terminalShellArgs: null,
+    // Required-and-NULLABLE, so the fixture has to state them: `null` is the
+    // row's own answer ("the serving host cannot know"), and leaving them out
+    // would make `Partial` widen both to `| undefined`, which the projection
+    // deliberately does not accept.
+    sessionState: null,
+    lastExit: null,
     ...overrides,
   };
 }

@@ -17,6 +17,7 @@ import type { PipOrigin } from "@/lib/browser-view/pip/pip-store";
 import { executeTileOpen } from "./execute-tile-open";
 import type { TileOpenIntent } from "./intent";
 import { resolveTileOpen } from "./resolve-tile-open";
+import { markTileOpenRequested } from "./tile-open-provenance";
 
 /**
  * Runs the prepared focus target without a route write. For the two callers
@@ -60,6 +61,13 @@ export function openTileWithNavigation(
   // one, and the resolver needs THAT tab's canvas.
   const tabId = resolveHeaderTabId(intent, options.createTab);
   if (tabId === null) return null;
+  // Recorded here rather than inside the executor because THIS is the seam a
+  // request comes through - the executor also runs for placements that reuse
+  // a tile, and the fact being recorded is that something asked for this tile
+  // in this session, not what the placement decided. A tile the persisted
+  // layout restored never reaches this line, which is the whole distinction.
+  // See `tile-open-provenance.ts`.
+  markTileOpenRequested(intent.node.instanceId);
   const store = useEpicCanvasStore.getState();
   const plan = resolveTileOpen({
     intent,
@@ -70,6 +78,22 @@ export function openTileWithNavigation(
     // pin this call to a viewport snapshot (C10).
     singleTileViewport: isMobileViewport(),
   });
+  // And the tile the open actually LANDS ON, which for a dedupe hit is not the
+  // one the intent named. Every caller mints a fresh instance id per intent,
+  // so `focus-existing` discards it and focuses a tile already on the canvas
+  // under an id this function has never seen. Marking only the intent's id
+  // records the request against a tile that will never mount, and the tile
+  // that does mount reads `false` - an explicit Open of a sleeping agent that
+  // leaves it asleep.
+  //
+  // Marked IN ADDITION to the line above rather than instead of it: for every
+  // other plan kind the intent's instance is the one that mounts. `noop` (a
+  // BACKGROUND open of an already-open tile) deliberately gets neither - it
+  // changes nothing on the canvas by contract, and waking an agent is a
+  // change.
+  if (plan.kind === "focus-existing") {
+    markTileOpenRequested(plan.instanceId);
+  }
   return executeTileOpen({
     plan,
     node: intent.node,

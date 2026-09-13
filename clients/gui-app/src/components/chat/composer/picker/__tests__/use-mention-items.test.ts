@@ -91,6 +91,8 @@ function terminalAgent(fields: {
     terminalAgentArgs: null,
     terminalShellCommand: null,
     terminalShellArgs: null,
+    sessionState: null,
+    lastExit: null,
   };
 }
 

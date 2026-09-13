@@ -1084,6 +1084,8 @@ function sourceAgentWithTerminalArgs(
     terminalAgentArgs,
     terminalShellCommand: "claude",
     terminalShellArgs: ["--resume", "source-session"],
+    sessionState: null,
+    lastExit: null,
   };
 }
 

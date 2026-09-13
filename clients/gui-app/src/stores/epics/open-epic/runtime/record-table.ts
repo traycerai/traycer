@@ -139,6 +139,40 @@
  * and would cost the whole feature - one doc-resident row in a session would
  * decline every stamp forever, i.e. permanent unconditional snapshots.
  *
+ * ## The other half: {@link RecordTable.deltaIncompleteSeq}
+ *
+ * A fence skip is one way to end up holding less than the host has. The other
+ * is a DELTA that introduces a row it cannot fully state - a chat the stream
+ * seeds with no home, a terminal agent seeded with no session facet, because
+ * the frame's minor has no field for it and this table held nothing to carry
+ * forward from.
+ *
+ * Both are "the representation is incomplete", and the rule is one rule. They
+ * are counted separately because the REPAIR differs, and the difference is
+ * structural rather than a preference:
+ *
+ *  - A snapshot's skip is found by an answer that has a dispatch behind it,
+ *    so the repair is to refuse the stamp bound to that dispatch. The next
+ *    poll then asks for a full snapshot on its own schedule.
+ *  - A delta has no dispatch. It advances a held stamp directly, through the
+ *    push channel, and nothing about it is bound to a request. Left to the
+ *    dispatch comparison, a remote create would sit un-repaired until the
+ *    next scheduled poll - and before this counter existed, it never
+ *    repaired at all: the stamp advanced, every later poll answered
+ *    `unchanged`, and the chat's home was never stated for the life of the
+ *    session. So a move here is treated as a REVISION GAP: drop the stamp,
+ *    re-read once.
+ *
+ * Folding the two together would give each the other's cost - every fence
+ * skip would fire a refetch, and every delta would drop a stamp the dispatch
+ * comparison was already going to refuse.
+ *
+ * Only the INTRODUCTION of an unstated row counts. A delta for a row already
+ * held carries the known value forward and states nothing less than before,
+ * so it is complete - and counting it would re-read on every subsequent
+ * delta for a row still awaiting its first answer, which is a refetch per
+ * keystroke rather than one repair.
+ *
  * ## What is shared and what is declared
  *
  * The mechanism above is shared. Everything a plane can legitimately differ on
@@ -158,6 +192,22 @@
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
 import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import { sessionKeyOf } from "@traycer-clients/shared/replica-runtime";
+
+/**
+ * Whether an upsert leaves this table able to describe the row it wrote.
+ *
+ * `"introduces-unstated"` is the narrow case that moves
+ * {@link RecordTable.deltaIncompleteSeq}: a row the table did NOT already
+ * hold, written with a field the frame had no way to state and no held row to
+ * carry forward from. The plane decides, because the field differs (the
+ * chat's home, the terminal agent's session facet) and so does what counts as
+ * "the frame could not say it" - a `@1.4` `tuiUpsert` states the facet even
+ * when its value is `null`, and that is an ANSWER rather than a gap.
+ *
+ * A named union rather than a boolean: `applyUpsert(row, true)` at a call
+ * site reads as neither of the two things it could mean.
+ */
+export type UpsertCompleteness = "complete" | "introduces-unstated";
 
 /**
  * A retained-row key that scopes a host-minted id to the account it was minted
@@ -393,6 +443,25 @@ export interface RecordTable<TRow, TSlice> {
    * cleared by somebody (and the clear would race the read) or latch forever.
    */
   snapshotIncompleteSeq(): number;
+  /**
+   * How many DELTA applies have introduced a row this table cannot fully
+   * state - monotonic, per session, and the other half of "the
+   * representation is incomplete".
+   *
+   * Separate from {@link snapshotIncompleteSeq} because the two are repaired
+   * differently, not because they mean different things. A snapshot's fence
+   * skip is discovered by an answer that already has a dispatch behind it, so
+   * the stamp bound to that dispatch is what has to be refused. A delta has
+   * no dispatch at all - it advances a held stamp directly - so the only
+   * repair that reaches it is the GAP RULE: drop the stamp and re-read once,
+   * exactly as a non-contiguous revision does.
+   *
+   * Keeping them apart is what lets each consumer do its own thing without
+   * the other's cost: folding a delta into `snapshotIncompleteSeq` would make
+   * every fence skip fire a refetch too, and folding a fence skip into this
+   * one would drop a stamp the dispatch comparison is already handling.
+   */
+  deltaIncompleteSeq(): number;
   /** Whether a removal for `retractionId` has been absorbed this session. */
   isRetracted(retractionId: string): boolean;
   applySnapshot(
@@ -413,7 +482,10 @@ export interface RecordTable<TRow, TSlice> {
   applyTouches(
     patches: readonly RecordListRecencyPatch[],
   ): RecordTablePublication<TSlice> | null;
-  applyUpsert(row: TRow): RecordTablePublication<TSlice> | null;
+  applyUpsert(
+    row: TRow,
+    completeness: UpsertCompleteness,
+  ): RecordTablePublication<TSlice> | null;
   /** A single authoritative list row, retaining snapshot supersession rules. */
   applyPointRead(row: TRow): RecordTablePublication<TSlice> | null;
   /** Remove a retained identity without announcing an id-wide retraction. */
@@ -497,6 +569,7 @@ export function createRecordTable<TRow, TSlice>(
   let ingestSeq = 0;
   let snapshotFence = 0;
   let snapshotIncompleteSeq = 0;
+  let deltaIncompleteSeq = 0;
 
   /**
    * The revision of the last RECENCY PATCH applied to a row, for rows whose
@@ -566,6 +639,7 @@ export function createRecordTable<TRow, TSlice>(
     retainedRow: (rowKey: string) => rows.get(rowKey) ?? null,
     ingestSeq: () => ingestSeq,
     snapshotIncompleteSeq: () => snapshotIncompleteSeq,
+    deltaIncompleteSeq: () => deltaIncompleteSeq,
     isRetracted: (retractionId) => retractions.has(retractionId),
 
     forgetRetractions(): void {
@@ -667,7 +741,7 @@ export function createRecordTable<TRow, TSlice>(
       return recompute(false);
     },
 
-    applyUpsert(row) {
+    applyUpsert(row, completeness) {
       // Removal is TERMINAL AND ABSORBING - the one lifecycle rule in this
       // design - so no later upsert resurrects the row here.
       if (retractions.has(plane.retractionIdOf(row))) return null;
@@ -680,6 +754,10 @@ export function createRecordTable<TRow, TSlice>(
       // cannot carry this row's new version, so its omission - or its stale
       // copy, via the revision test above - must not defeat it.
       setRow(key, row);
+      // AFTER admission, not before: a delta the supersession rules rejected
+      // introduced nothing, so it left the representation exactly as complete
+      // as it found it.
+      if (completeness === "introduces-unstated") deltaIncompleteSeq += 1;
       hooks.onUpsertAdmitted(row);
       return recompute(false);
     },
