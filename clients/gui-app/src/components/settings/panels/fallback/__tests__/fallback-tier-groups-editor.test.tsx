@@ -1064,3 +1064,104 @@ describe("FallbackTierGroupsEditor - default tier group", () => {
     expect(screen.getByTestId("fallback-tier-groups-empty")).not.toBeNull();
   });
 });
+
+/**
+ * A local wrapper for the P2 pin below, cast from the same mold as `Harness`
+ * and `CommitCarryHarness` above: `onChange` feeds the draft straight back
+ * into state, so a rename's SECOND keystroke is genuinely evaluated against
+ * the group list the FIRST one produced - which is exactly what
+ * `replaceGroupAt` reads `previous` off of. It differs from `Harness` in
+ * exposing what it emits, via `onEmit`, rather than only through the DOM:
+ * this pin's own assertion is on the policy object the editor hands up, not
+ * on a rendered proxy for it.
+ */
+function RenameCarryHarness(props: {
+  readonly initialPolicy: FallbackPolicy;
+  readonly initialGroups: readonly KeyedGroup[];
+  readonly onEmit: (
+    policy: FallbackPolicy,
+    groups: readonly KeyedGroup[],
+  ) => void;
+}): ReactNode {
+  const [policy, setPolicy] = useState(props.initialPolicy);
+  const [groups, setGroups] = useState(props.initialGroups);
+  const adopt = (
+    nextPolicy: FallbackPolicy,
+    nextGroups: readonly KeyedGroup[],
+  ): void => {
+    setPolicy(nextPolicy);
+    setGroups(nextGroups);
+    props.onEmit(nextPolicy, nextGroups);
+  };
+  return (
+    <FallbackTierGroupsEditor
+      policy={policy}
+      groups={groups}
+      preview={null}
+      labelFor={(profileId) => profileId}
+      catalog={NO_CATALOG}
+      previewPending={false}
+      previewUnavailable={false}
+      onRetryPreview={() => {}}
+      onChange={adopt}
+      onCommit={adopt}
+      onUndo={() => {}}
+      onRestoreDefaults={() => {}}
+      restorePending={false}
+      status={null}
+    />
+  );
+}
+
+describe("FallbackTierGroupsEditor - P2 a rename must not steal the default marker from another group", () => {
+  it("the marker stays with the group the user made the default, not with a sibling whose rename passes through its name", () => {
+    const groups: TierGroup[] = [tierGroup("fast", []), tierGroup("cheap", [])];
+    let lastPolicy: FallbackPolicy = {
+      ...createDefaultFallbackPolicy(),
+      tierGroups: groups,
+      defaultTierGroupId: "fast",
+    };
+    render(
+      <RenameCarryHarness
+        initialPolicy={lastPolicy}
+        initialGroups={toKeyedGroups(groups)}
+        onEmit={(policy) => {
+          lastPolicy = policy;
+        }}
+      />,
+    );
+    const nameInputs = () =>
+      screen.getAllByLabelText<HTMLInputElement>("Group name");
+
+    // Rename "cheap" (index 1, never the default) so its value passes
+    // THROUGH "fast" - the default's own name - on the way to "faster". The
+    // bug needs at least two successive changes: one that lands EXACTLY on
+    // the default's name, and a following one that moves past it.
+    fireEvent.change(nameInputs()[1], { target: { value: "fast" } });
+    // Admission evidence: the first keystroke alone does not move the
+    // marker - it is the SECOND one, landing while group 1's name reads
+    // "fast", that a name-based comparison would misjudge.
+    expect(lastPolicy.defaultTierGroupId).toBe("fast");
+    expect(lastPolicy.tierGroups.map((group) => group.id)).toEqual([
+      "fast",
+      "fast",
+    ]);
+
+    fireEvent.change(nameInputs()[1], { target: { value: "faster" } });
+
+    // Falsification: revert `replaceGroupAt` in
+    // `fallback-tier-groups-editor.tsx` to compare by NAME
+    // (`policy.defaultTierGroupId === previous.id`) instead of by the
+    // POSITION `defaultTierGroupIndex` supplies. At the second change above,
+    // `previous.id` (group 1's name going INTO that keystroke) reads "fast" -
+    // the true default's own name - so a name-based `replaceGroupAt` reads
+    // this as "the default is being renamed" and carries the marker onto
+    // "faster", even though index 1 was never the default index (0).
+    expect(lastPolicy.defaultTierGroupId).toBe("fast");
+    expect(lastPolicy.defaultTierGroupId).not.toBe("faster");
+    expect(lastPolicy.tierGroups.map((group) => group.id)).toEqual([
+      "fast",
+      "faster",
+    ]);
+  });
+});

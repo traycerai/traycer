@@ -67,6 +67,7 @@ import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/
 import {
   applyGroupsInverse,
   keyedGroupsMatch,
+  tierGroupDefaultChoiceGeneration,
   withTierGroups,
   type FallbackGroupsInverse,
   type KeyedGroup,
@@ -523,11 +524,21 @@ function FallbackPolicyEditor(props: {
       // it.
       if (groups === current.keyedTierGroups) return;
       // A restored group that was the default becomes the default again -
-      // unless another group has been made the default while the toast was
-      // up, in which case that later choice is the newer fact and stands.
+      // unless the user has CHOSEN a default while the toast was up, in which
+      // case that later choice is the newer fact and stands.
+      //
+      // The generation is what asks that, and the policy field cannot. The
+      // deletion cleared the marker to null, so "is it still null" reads TRUE
+      // both when nothing has happened and when the user went on to pick
+      // another group and then "None - skip this step" - and restoring over
+      // that second null silently reinstates a step the user had just turned
+      // off. The null check stays beside it for the narrower question it does
+      // answer: whether anything at all currently holds the marker.
       const base =
         inverse.kind === "group" &&
         inverse.wasDefault &&
+        inverse.defaultChoiceGeneration ===
+          tierGroupDefaultChoiceGeneration() &&
         current.draft.defaultTierGroupId === null
           ? { ...current.draft, defaultTierGroupId: inverse.group.id }
           : current.draft;

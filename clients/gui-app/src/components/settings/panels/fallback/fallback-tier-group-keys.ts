@@ -104,6 +104,62 @@ export function tierGroupIdentityGeneration(): number {
   return identityGeneration;
 }
 
+/**
+ * WHICH group the default marker names, as an index - `-1` for none of them.
+ *
+ * The marker is a group's `id` and the id is the EDITABLE NAME, so mid-rename
+ * two groups can carry one name and the name stops answering "which group is
+ * the default". Every caller wants the group rather than the name, so they ask
+ * by position: comparing names instead let the group being RENAMED inherit the
+ * marker on the keystroke after it passed through the default's name.
+ *
+ * The FIRST match is the answer because it is the one the engine reaches -
+ * `routeTierGroupForFailedTuple` resolves the default with `find`, and
+ * `findTierGroupForFailedTuple` breaks its own ties toward the earlier group.
+ * A list carrying a duplicate name cannot be SAVED (the schema refines ids to
+ * be unique), so this only ever decides intermediate states; deciding them the
+ * way a saved policy would is what keeps a rename from moving the marker.
+ */
+export function defaultTierGroupIndex(
+  groups: readonly KeyedGroup[],
+  defaultTierGroupId: string | null,
+): number {
+  if (defaultTierGroupId === null) return -1;
+  return groups.findIndex((group) => group.id === defaultTierGroupId);
+}
+
+/**
+ * How many times the user has CHOSEN a default group, in the select.
+ *
+ * A second generation, and deliberately not the identity one: a choice
+ * invalidates a pending marker restoration without invalidating the row
+ * addresses, and a re-seed invalidates both. What it answers is the one
+ * question a null cannot - a `defaultTierGroupId` of null means "no default",
+ * and deleting the default group produces exactly the same null as choosing
+ * "None - skip this step" afterwards. Without this stamp, Undo on the
+ * deletion's toast reads the second null as its own and puts the deleted
+ * group's marker back OVER the user's newer choice to skip the step.
+ *
+ * Only the select bumps it. A rename that carries the marker is the same
+ * group, a deletion that clears it is not a choice, and a reset re-seeds - so
+ * {@link applyGroupsInverse}'s identity guard already refuses there.
+ */
+let defaultChoiceGeneration = 0;
+
+/**
+ * The default-choice generation an inverse must be minted against for its
+ * `wasDefault` marker to still be restorable. Read by the panel that owns the
+ * policy; stamped by the deletion's toast.
+ */
+export function tierGroupDefaultChoiceGeneration(): number {
+  return defaultChoiceGeneration;
+}
+
+/** One deliberate choice of a default group, made in the select. */
+export function noteTierGroupDefaultChoice(): void {
+  defaultChoiceGeneration += 1;
+}
+
 /** Hydration for one group: it and every row get an identity. */
 export function keyedGroup(group: TierGroup): KeyedGroup {
   return {
@@ -330,10 +386,18 @@ export type FallbackGroupsInverse =
        * unsavable), so putting the group back without this would put back a
        * group that has silently stopped being the default. Applied by the
        * panel, which owns the policy the inverse is applied to - and only if
-       * no other group has been made the default since, because that later
-       * choice is the newer fact.
+       * the user has not chosen a default since, because that later choice is
+       * the newer fact.
        */
       readonly wasDefault: boolean;
+      /**
+       * {@link tierGroupDefaultChoiceGeneration} as of the removal, which is
+       * what decides "has the user chosen a default since". The policy field
+       * cannot: the deletion set it to null, and choosing "None - skip this
+       * step" afterwards sets it to the same null, so comparing values reads
+       * a deliberate choice as the deletion's own clearing and overwrites it.
+       */
+      readonly defaultChoiceGeneration: number;
     }
   | {
       readonly kind: "candidate";

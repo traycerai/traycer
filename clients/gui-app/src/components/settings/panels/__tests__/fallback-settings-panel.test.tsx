@@ -1416,6 +1416,119 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
   });
 });
 
+describe("FallbackSettingsPanel - P2 Undo must not overwrite a later explicit 'None' choice", () => {
+  it("choosing 'None - skip this step' after deleting the default group is not overwritten by that deletion's Undo", async () => {
+    fallbackMocks.queryData = respond(
+      policy({
+        tierGroups: [
+          { id: "fast", candidates: [] },
+          { id: "cheap", candidates: [] },
+        ],
+        defaultTierGroupId: "fast",
+      }),
+    );
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    // Delete "fast" (index 0), the policy's default. This clears the marker
+    // and raises the Undo toast, which closes over `wasDefault: true` and the
+    // default-choice generation AS OF THIS MOMENT.
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      fallbackMocks.setMutateAsync.mock.calls[0][0].policy.defaultTierGroupId,
+    ).toBeNull();
+    expect(screen.queryByTestId("fallback-tier-group-fast")).toBeNull();
+
+    // The user picks "cheap" as the default for a model in no group...
+    openCombobox("For a model not in any group");
+    chooseOption("cheap");
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    expect(
+      fallbackMocks.setMutateAsync.mock.calls[1][0].policy.defaultTierGroupId,
+    ).toBe("cheap");
+
+    // ...and then explicitly changes their mind back to "None - skip this
+    // step". This is the LATER, deliberate fact - and it lands on the SAME
+    // `null` the deletion itself produced, which a value comparison alone
+    // cannot tell apart from "nothing has happened since".
+    openCombobox("For a model not in any group");
+    chooseOption("None - skip this step");
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(3);
+    });
+    expect(
+      fallbackMocks.setMutateAsync.mock.calls[2][0].policy.defaultTierGroupId,
+    ).toBeNull();
+
+    // Undo the ORIGINAL deletion of "fast".
+    toastSuccess.mock.calls[0][1].action.onClick();
+
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(4);
+    });
+    const finalPolicy = fallbackMocks.setMutateAsync.mock.calls[3][0].policy;
+    // The ROW comes back...
+    expect(finalPolicy.tierGroups.map((group) => group.id)).toContain("fast");
+    // ...but its OLD default status must not come back over the user's
+    // newer, explicit "None".
+    //
+    // Falsification: in `undoGroupsChange` (`fallback-settings-panel.tsx`),
+    // drop the `inverse.defaultChoiceGeneration ===
+    // tierGroupDefaultChoiceGeneration()` conjunct, so the restoration is
+    // gated on `current.draft.defaultTierGroupId === null` alone. Both a
+    // fresh deletion and a deliberate "None" afterwards leave that field
+    // null, so the stale inverse would put "fast" back as the default here -
+    // silently reinstating a step the user had just turned off.
+    expect(finalPolicy.defaultTierGroupId).toBeNull();
+  });
+
+  it("control: deleting the default group and pressing Undo with NO default choice in between DOES restore the marker", async () => {
+    fallbackMocks.queryData = respond(
+      policy({
+        tierGroups: [
+          { id: "fast", candidates: [] },
+          { id: "cheap", candidates: [] },
+        ],
+        defaultTierGroupId: "fast",
+      }),
+    );
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      fallbackMocks.setMutateAsync.mock.calls[0][0].policy.defaultTierGroupId,
+    ).toBeNull();
+
+    // The control for the cell above: with NOTHING chosen in between, Undo
+    // really does put the marker back - so the refusal above is evidence of
+    // the generation guard working, not of `undoGroupsChange` having
+    // stopped restoring the marker altogether.
+    toastSuccess.mock.calls[0][1].action.onClick();
+
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    const finalPolicy = fallbackMocks.setMutateAsync.mock.calls[1][0].policy;
+    expect(finalPolicy.tierGroups.map((group) => group.id)).toContain("fast");
+    expect(finalPolicy.defaultTierGroupId).toBe("fast");
+  });
+});
+
 describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not claim the host's value", () => {
   function lostTheReply(): HostTransportFailureError {
     return new HostTransportFailureError({

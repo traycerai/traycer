@@ -6,7 +6,10 @@ import type {
   TierCandidatePreview,
 } from "@traycer/protocol/host/fallback-policy";
 import {
+  defaultTierGroupIndex,
   keyedGroup,
+  noteTierGroupDefaultChoice,
+  tierGroupDefaultChoiceGeneration,
   tierGroupIdentityGeneration,
   withTierGroups,
   type FallbackGroupsInverse,
@@ -191,6 +194,11 @@ export function FallbackTierGroupsEditor(
   const emit = (base: FallbackPolicy, next: readonly KeyedGroup[]): void => {
     onCommit(withTierGroups(base, next), next);
   };
+  // WHICH group is the default, by position. Asked once for the whole list and
+  // never by name: the id IS the editable name, so a rename passing through
+  // another group's name makes a name comparison answer for two groups at once.
+  // See `defaultTierGroupIndex`.
+  const defaultIndex = defaultTierGroupIndex(groups, policy.defaultTierGroupId);
   /**
    * One group replaced, and the default marker CARRIED through a rename.
    *
@@ -202,6 +210,12 @@ export function FallbackTierGroupsEditor(
    * it. Both the keystroke path and the commit path go through here, because
    * the draft has to validate on every keystroke of the rename, not only at
    * the end.
+   *
+   * "IS the default" is a question about the ROW, not about its current name.
+   * Renaming `cheap` to `faster` beside a default named `fast` types through
+   * `fast` on the way, and a name comparison then hands the marker to the
+   * group being renamed on the very next keystroke - leaving a policy that
+   * saves cleanly with the wrong group as the default.
    */
   const replaceGroupAt = (
     index: number,
@@ -212,9 +226,7 @@ export function FallbackTierGroupsEditor(
   } => {
     const previous = groups[index];
     const carried =
-      policy.defaultTierGroupId !== null &&
-      policy.defaultTierGroupId === previous.id &&
-      next.id !== previous.id
+      defaultIndex === index && next.id !== previous.id
         ? { ...policy, defaultTierGroupId: next.id }
         : policy;
     return {
@@ -273,10 +285,7 @@ export function FallbackTierGroupsEditor(
                   // pill; the draft is unsavable in that state anyway (ids
                   // must be unique), so the pill is at worst briefly ambiguous
                   // on a page that is already saying so.
-                  isDefault={
-                    policy.defaultTierGroupId !== null &&
-                    policy.defaultTierGroupId === group.id
-                  }
+                  isDefault={defaultIndex === index}
                   preview={previewForGroup(preview, group.id, ambiguousNames)}
                   labelFor={labelFor}
                   catalog={catalog}
@@ -307,14 +316,22 @@ export function FallbackTierGroupsEditor(
                     // would always compare equal - the guard would be there and
                     // decide nothing.
                     const generation = tierGroupIdentityGeneration();
+                    // Read before the commit for the same reason, and stamped
+                    // for a different question: not "do these rows still
+                    // exist" but "has the user chosen a default since". The
+                    // deletion below sets `defaultTierGroupId` to null and a
+                    // later "None - skip this step" sets it to null too, so
+                    // only a generation tells the two apart.
+                    const defaultChoiceGeneration =
+                      tierGroupDefaultChoiceGeneration();
                     // Deleting the default group clears the marker: a policy
                     // whose default names no group is one the schema refuses,
                     // and the user asked to delete a group, not to be told
                     // their policy is invalid. The inverse remembers, so Undo
-                    // puts the marker back with the group.
-                    const wasDefault =
-                      policy.defaultTierGroupId !== null &&
-                      policy.defaultTierGroupId === group.id;
+                    // puts the marker back with the group. By position, not by
+                    // name - deleting the second of two rows a rename has left
+                    // sharing the default's name is not deleting the default.
+                    const wasDefault = defaultIndex === index;
                     emit(
                       wasDefault
                         ? { ...policy, defaultTierGroupId: null }
@@ -339,6 +356,7 @@ export function FallbackTierGroupsEditor(
                             index,
                             generation,
                             wasDefault,
+                            defaultChoiceGeneration,
                           });
                         },
                       },
@@ -425,6 +443,11 @@ function DefaultGroupSelect(props: {
       <Select
         value={defaultTierGroupId ?? NO_DEFAULT_GROUP_VALUE}
         onValueChange={(next) => {
+          // The one site that records a deliberate choice of default. A
+          // pending deletion toast's Undo compares its stamp against this, so
+          // that choosing "None - skip this step" after deleting the default
+          // group is not overwritten by the Undo putting the old marker back.
+          noteTierGroupDefaultChoice();
           onCommit(next === NO_DEFAULT_GROUP_VALUE ? null : next);
         }}
       >

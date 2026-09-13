@@ -6,10 +6,12 @@ import type {
 } from "@traycer/protocol/host/fallback-policy";
 import {
   applyGroupsInverse,
+  defaultTierGroupIndex,
   keyedCandidate,
   keyedGroup,
   moveKeyedCandidate,
   revertKeyedGroups,
+  tierGroupDefaultChoiceGeneration,
   tierGroupIdentityGeneration,
   toKeyedGroups,
   toWireGroups,
@@ -139,6 +141,49 @@ describe("keyedCandidate", () => {
   });
 });
 
+describe("defaultTierGroupIndex - P2 the default marker resolved by POSITION, not by name", () => {
+  it("a null marker resolves to -1", () => {
+    const groups = toKeyedGroups([tierGroup("fast", [])]);
+    expect(defaultTierGroupIndex(groups, null)).toBe(-1);
+  });
+
+  it("a marker that matches no group's id resolves to -1", () => {
+    const groups = toKeyedGroups([
+      tierGroup("fast", []),
+      tierGroup("cheap", []),
+    ]);
+    expect(defaultTierGroupIndex(groups, "nonexistent")).toBe(-1);
+  });
+
+  it("an ordinary match resolves to that group's own index", () => {
+    const groups = toKeyedGroups([
+      tierGroup("fast", []),
+      tierGroup("cheap", []),
+      tierGroup("slow", []),
+    ]);
+    expect(defaultTierGroupIndex(groups, "cheap")).toBe(1);
+  });
+
+  it("two groups sharing the marker's name resolve to the FIRST - the index the engine's own `find` reaches", () => {
+    // The state a rename passes through: renaming a sibling THROUGH the
+    // default's name leaves two groups momentarily answering to one id, which
+    // `fallback-tier-group-keys.ts`'s own doc comment says is allowed rather
+    // than rejected mid-edit.
+    const groups = toKeyedGroups([
+      tierGroup("fast", []),
+      tierGroup("fast", []),
+    ]);
+    // Falsification: implement this with `lastIndexOf`/`findLast` semantics
+    // instead of `Array.prototype.findIndex` in `defaultTierGroupIndex`
+    // (`fallback-tier-group-keys.ts`) - the marker would then resolve to
+    // index 1, disagreeing with the engine's own resolution
+    // (`routeTierGroupForFailedTuple`'s `find`, which breaks ties toward the
+    // earlier group) and with what a saved policy - where the schema refines
+    // ids to be unique - could ever mean by this pair.
+    expect(defaultTierGroupIndex(groups, "fast")).toBe(0);
+  });
+});
+
 describe("revertKeyedGroups (F24) - the function's own table", () => {
   it("shape-equal: keeps every key, restores the incoming VALUE", () => {
     const existing: readonly KeyedGroup[] = [
@@ -230,6 +275,7 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       // Compile-fix site only - this cell is about the generation guard, not
       // about the default marker, so a semantically neutral value is fine.
       wasDefault: false,
+      defaultChoiceGeneration: tierGroupDefaultChoiceGeneration(),
     };
     // Falsification: delete the `if (inverse.generation !== identityGeneration)
     // return groups;` guard at the top of `applyGroupsInverse`. Neither the
@@ -270,6 +316,7 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       // Compile-fix site only - this cell is about re-insertion into a
       // changed list, not about the default marker.
       wasDefault: false,
+      defaultChoiceGeneration: tierGroupDefaultChoiceGeneration(),
     };
     const next = applyGroupsInverse(current, inverse);
     expect(next.map((group) => group.draftKey)).toEqual(["g1", "g2", "g3"]);
@@ -295,6 +342,7 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       // Compile-fix site only - this cell is about index clamping, not about
       // the default marker.
       wasDefault: false,
+      defaultChoiceGeneration: tierGroupDefaultChoiceGeneration(),
     };
     const next = applyGroupsInverse(current, inverse);
     expect(next.map((group) => group.draftKey)).toEqual(["g1", "g2"]);
@@ -313,6 +361,7 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       // Compile-fix site only - this cell is about the already-present no-op,
       // not about the default marker.
       wasDefault: false,
+      defaultChoiceGeneration: tierGroupDefaultChoiceGeneration(),
     };
     expect(applyGroupsInverse(already, inverse)).toBe(already);
   });
