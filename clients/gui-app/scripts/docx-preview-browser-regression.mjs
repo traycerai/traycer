@@ -210,7 +210,7 @@ try {
   );
 
   await clickDocument(client, "alpha");
-  await dispatchCtrlA(client);
+  await dispatchSelectAll(client);
   const selection = await evaluate(
     client,
     `(() => {
@@ -334,12 +334,13 @@ async function clickDocument(client, id) {
   await click(client, point.x, point.y);
 }
 
-async function dispatchCtrlA(client) {
+async function dispatchSelectAll(client) {
+  const modifiers = process.platform === "darwin" ? 4 : 2;
   await client.send("Input.dispatchKeyEvent", {
     type: "keyDown",
     key: "a",
     code: "KeyA",
-    modifiers: 2,
+    modifiers,
     windowsVirtualKeyCode: 65,
     nativeVirtualKeyCode: 65,
   });
@@ -347,7 +348,7 @@ async function dispatchCtrlA(client) {
     type: "keyUp",
     key: "a",
     code: "KeyA",
-    modifiers: 2,
+    modifiers,
     windowsVirtualKeyCode: 65,
     nativeVirtualKeyCode: 65,
   });

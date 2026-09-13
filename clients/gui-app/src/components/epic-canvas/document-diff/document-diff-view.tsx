@@ -30,6 +30,7 @@ import {
   type EpicCanvasWorkspaceFileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 export interface DocumentDiffViewProps {
   readonly hostId: string;
@@ -178,6 +179,7 @@ export function DocumentDiffView(props: DocumentDiffViewProps): ReactNode {
             variant="outline"
             size="sm"
             onClick={handleOpen}
+            onAuxClick={onMiddleClick(handleOpen)}
             aria-label={`Open ${getBasename(props.filePath)}`}
           >
             <ExternalLink className="size-4" />

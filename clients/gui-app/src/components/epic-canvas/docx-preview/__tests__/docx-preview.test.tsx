@@ -18,6 +18,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { DocumentViewerProps } from "@/components/epic-canvas/document-preview/lazy-document-viewer";
+import type { OpenLink } from "@/lib/links/open-link";
 
 type RenderAsyncMock = (
   data: Blob,
@@ -39,6 +40,7 @@ class Deferred<T> {
 
 const state = vi.hoisted(() => ({
   renderAsync: vi.fn<RenderAsyncMock>(),
+  openLink: vi.fn<OpenLink>(),
   warn: vi.fn<
     (message: string, fields: Readonly<Record<string, unknown>>) => void
   >(),
@@ -56,6 +58,10 @@ vi.mock("@/lib/logger", () => ({
     error: vi.fn(),
     errorSummary: vi.fn(),
   },
+}));
+
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => state.openLink,
 }));
 
 import DocxPreview from "../docx-preview";
@@ -99,6 +105,36 @@ function buildDocxWrapper(pages: readonly FixturePage[]): HTMLDivElement {
 function mockRenderAsyncWith(pages: readonly FixturePage[]): void {
   state.renderAsync.mockImplementation((_data, body) => {
     body.append(buildDocxWrapper(pages));
+    return Promise.resolve();
+  });
+}
+
+function mockRenderAsyncWithLinks(): void {
+  state.renderAsync.mockImplementation((_data, body) => {
+    const wrapper = buildDocxWrapper([
+      { widthPx: 400, paragraphs: [["Document links"]] },
+    ]);
+    const section = wrapper.querySelector("section.docx");
+    if (section === null) throw new Error("missing docx fixture section");
+    const paragraph = document.createElement("p");
+    for (const [href, text] of [
+      ["https://example.test/report", "External report"],
+      ["#bookmark", "Local bookmark"],
+    ] as const) {
+      const anchor = document.createElement("a");
+      anchor.setAttribute("href", href);
+      anchor.textContent = text;
+      paragraph.append(anchor);
+    }
+    const rightClick = document.createElement("a");
+    rightClick.setAttribute("href", "https://example.test/right-click");
+    rightClick.textContent = "Right click target";
+    paragraph.append(rightClick);
+    const bookmark = document.createElement("div");
+    bookmark.id = "bookmark";
+    bookmark.textContent = "Bookmark target";
+    section.append(paragraph, bookmark);
+    body.append(wrapper);
     return Promise.resolve();
   });
 }
@@ -203,6 +239,8 @@ beforeEach(() => {
   );
   installFetchStub();
   state.renderAsync.mockReset();
+  state.openLink.mockReset();
+  state.openLink.mockResolvedValue(undefined);
   state.warn.mockReset();
 });
 
@@ -377,6 +415,13 @@ describe("<DocxPreview />", () => {
       });
 
       expect(screen.getByText("0 results")).toBeTruthy();
+
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+      expect(screen.getByText("0 results")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+      expect(screen.getByText("0 results")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+      expect(screen.getByText("0 results")).toBeTruthy();
     });
 
     it("clears the query when the search bar is closed", async () => {
@@ -403,6 +448,111 @@ describe("<DocxPreview />", () => {
         screen.getByLabelText<HTMLInputElement>("Find in document").value,
       ).toBe("");
     });
+  });
+
+  it("routes external primary and middle clicks through markdown link policy", async () => {
+    mockRenderAsyncWithLinks();
+
+    render(<DocxPreview {...baseProps({})} />);
+    setScrollContainerWidth(832);
+    await waitForReady(1);
+
+    const host = screen.getByTestId("docx-preview-host");
+    const root = host.shadowRoot;
+    if (root === null) throw new Error("missing docx shadow root");
+    const external = root.querySelector<HTMLAnchorElement>(
+      'a[href="https://example.test/report"]',
+    );
+    if (external === null) throw new Error("missing external link");
+
+    const primaryEvent = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      altKey: true,
+      ctrlKey: true,
+      metaKey: true,
+      shiftKey: true,
+      button: 0,
+    });
+    fireEvent(external, primaryEvent);
+    expect(primaryEvent.defaultPrevented).toBe(true);
+    expect(state.openLink).toHaveBeenLastCalledWith(
+      "https://example.test/report",
+      "markdown",
+      expect.objectContaining({
+        altKey: true,
+        ctrlKey: true,
+        metaKey: true,
+        shiftKey: true,
+        button: 0,
+      }),
+    );
+
+    const middleEvent = new MouseEvent("auxclick", {
+      bubbles: true,
+      cancelable: true,
+      altKey: true,
+      metaKey: true,
+      shiftKey: true,
+      button: 1,
+    });
+    fireEvent(external, middleEvent);
+    expect(middleEvent.defaultPrevented).toBe(true);
+    expect(state.openLink).toHaveBeenLastCalledWith(
+      "https://example.test/report",
+      "markdown",
+      expect.objectContaining({
+        altKey: true,
+        ctrlKey: false,
+        metaKey: true,
+        shiftKey: true,
+        button: 1,
+      }),
+    );
+  });
+
+  it("ignores right clicks and keeps local bookmark navigation in the shadow document", async () => {
+    mockRenderAsyncWithLinks();
+
+    render(<DocxPreview {...baseProps({})} />);
+    setScrollContainerWidth(832);
+    await waitForReady(1);
+
+    const host = screen.getByTestId("docx-preview-host");
+    const root = host.shadowRoot;
+    if (root === null) throw new Error("missing docx shadow root");
+    const rightClick = root.querySelector<HTMLAnchorElement>(
+      'a[href="https://example.test/right-click"]',
+    );
+    const local = root.querySelector<HTMLAnchorElement>('a[href="#bookmark"]');
+    if (rightClick === null || local === null)
+      throw new Error("missing link fixture");
+
+    const rightClickEvent = new MouseEvent("auxclick", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+    });
+    fireEvent(rightClick, rightClickEvent);
+    expect(state.openLink).not.toHaveBeenCalled();
+
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const localEvent = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+    fireEvent(local, localEvent);
+    expect(localEvent.defaultPrevented).toBe(true);
+    expect(state.openLink).not.toHaveBeenCalled();
+    expect(local.getRootNode()).toBe(root);
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      inline: "nearest",
+    });
+    scrollIntoView.mockRestore();
   });
 
   it("re-renders on a url change, replacing the shadow contents and closing search", async () => {

@@ -153,6 +153,36 @@ describe("DocumentDiffView", () => {
     });
   });
 
+  it("carries a middle-click through and ignores a right-click", () => {
+    renderView({});
+    const button = screen.getByRole("button", { name: "Open report.pdf" });
+
+    fireEvent(
+      button,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+    expect(lastIntent().modifiers).toEqual({
+      shift: false,
+      alt: false,
+      middle: true,
+    });
+
+    state.openTile.mockClear();
+    fireEvent(
+      button,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+      }),
+    );
+    expect(state.openTile).not.toHaveBeenCalled();
+  });
+
   it("labels an added PDF and still offers Open", () => {
     renderView({ oldStage: null });
 

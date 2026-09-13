@@ -1,9 +1,11 @@
 import { useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { buildDocxFixture } from "@traycer-clients/shared/test-fixtures/docx-document";
 import DocxPreview from "@/components/epic-canvas/docx-preview/docx-preview";
 import { TileSelectAllBridge } from "@/components/epic-canvas/tile-select-all-bridge";
 import { useTileFindStore } from "@/stores/tile-find";
+import { createAppQueryClient } from "@/lib/query-client";
 import type {
   TileFindAdapter,
   TileFindCapability,
@@ -85,6 +87,7 @@ const urls = {
   alpha: makeDocxUrl("ALPHA"),
   beta: makeDocxUrl("BETA"),
 };
+const queryClient = createAppQueryClient();
 
 interface WordTileProps {
   readonly id: "alpha" | "beta";
@@ -151,4 +154,8 @@ export function Fixture(): ReactNode {
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("Missing fixture root");
-createRoot(root).render(<Fixture />);
+createRoot(root).render(
+  <QueryClientProvider client={queryClient}>
+    <Fixture />
+  </QueryClientProvider>,
+);

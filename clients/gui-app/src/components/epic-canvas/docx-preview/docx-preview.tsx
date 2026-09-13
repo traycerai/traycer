@@ -19,6 +19,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
   type ReactNode,
@@ -33,6 +34,7 @@ import { DocumentPreviewToolbar } from "@/components/epic-canvas/document-previe
 import { DocxFindEngine } from "./docx-find";
 import { registerTileSelectionRoot } from "@/lib/commands/tile-select-all";
 import { currentPageAmong, scrollTopForPage } from "./docx-page-position";
+import { useOpenLink } from "@/lib/links/open-link";
 
 const ZOOM_STEP = 1.1;
 const MIN_SCALE = 0.25;
@@ -95,6 +97,7 @@ export default function DocxPreview(props: DocumentViewerProps): ReactNode {
 
 /** One document owns its controls, DOM and renderer resources. */
 function DocxDocument(props: DocumentViewerProps): ReactNode {
+  const openLink = useOpenLink();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const renderedRef = useRef<RenderedDocument | null>(null);
@@ -151,6 +154,23 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
     applyScale(available / rendered.naturalPageWidth);
   }, [applyScale]);
 
+  const handleLinkClick = useEffectEvent((event: MouseEvent): void => {
+    if (event.defaultPrevented || event.button > 1) return;
+    if (!(event.target instanceof Element)) return;
+    const anchor = event.target.closest("a[href]");
+    if (anchor === null) return;
+    event.preventDefault();
+    const href = anchor.getAttribute("href")?.trim() ?? "";
+    if (href.startsWith("#")) {
+      // Browser fragment navigation cannot find bookmarks in a shadow tree.
+      hostRef.current?.shadowRoot
+        ?.getElementById(href.slice(1))
+        ?.scrollIntoView({ block: "start", inline: "nearest" });
+    } else if (href !== "") {
+      void openLink(href, "markdown", event);
+    }
+  });
+
   useEffect(() => {
     const host = hostRef.current;
     const container = scrollContainerRef.current;
@@ -166,6 +186,8 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
     shadow.replaceChildren();
     const body = document.createElement("div");
     shadow.append(body);
+    body.addEventListener("click", handleLinkClick);
+    body.addEventListener("auxclick", handleLinkClick);
     const unregisterSelection = registerTileSelectionRoot(container, body);
 
     const open = async (): Promise<void> => {
@@ -246,6 +268,8 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
 
     return () => {
       cancelled = true;
+      body.removeEventListener("click", handleLinkClick);
+      body.removeEventListener("auxclick", handleLinkClick);
       unregisterSelection();
       resizeObserver?.disconnect();
       stopTrackingPage?.();
@@ -310,7 +334,7 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
     } else {
       rendered.find.next();
     }
-    setMatchState(rendered.find.result());
+    setMatchState(rendered.find.result() ?? { current: 0, total: 0 });
     rendered.find.scrollActiveIntoView();
   }, []);
 

@@ -2,7 +2,10 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect, useRef, type ReactNode } from "react";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
-import type { AssetStreamServerFrame } from "@traycer/protocol/host/asset-stream-schemas";
+import {
+  DOCX_MEDIA_TYPE,
+  type AssetStreamServerFrame,
+} from "@traycer/protocol/host/asset-stream-schemas";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -1219,7 +1222,18 @@ describe("useFileAsset", () => {
     const { result, unmount } = renderHook(() => useFileAsset(docxRequest));
     const session = mockWsStreamClient.sessions[0];
     act(() => {
-      emitHeader(session, "docx-render-failure", 3);
+      session.emitFrame(
+        {
+          kind: "assetHeader",
+          hasBinaryPayload: false,
+          mediaType: DOCX_MEDIA_TYPE,
+          sizeBytes: 3,
+          width: null,
+          height: null,
+          contentIdentity: "docx-render-failure",
+        },
+        null,
+      );
       emitBytes(session, [1, 2, 3]);
     });
     await flushPromises();
