@@ -10,9 +10,9 @@ import { deriveToolInputSummary } from "@/lib/segment-summary";
 import { humanActionableApprovals } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 import {
   APPROVAL_PAUSED_LINE,
-  JUDGE_UNAVAILABLE_HUMAN_LINE,
   approvalWaitLine,
   isJudgeUnavailableReason,
+  judgeUnavailableHumanLine,
   judgeWaitDisclosure,
 } from "@/components/chat/segments/approval-card-disclosure";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
@@ -363,7 +363,10 @@ function JudgeReviewingLine(props: {
  * When the reason is an UNAVAILABILITY string rather than the judge's prose,
  * the machine string is kept verbatim and in mono - it is a greppable constant,
  * and a screenshot of one is a diagnosis - and the human sentence is added
- * beneath it, never in its place.
+ * beneath it, never in its place. Which sentence is the string's own failure
+ * family (`judgeUnavailableHumanLine`): a judge that ran and could not decide
+ * leaves its reasoning right above this line, so the "couldn't run" sentence
+ * would contradict the paragraph the user is reading.
  */
 function JudgeReason(props: { readonly rule: string; readonly text: string }) {
   const unavailable = isJudgeUnavailableReason(props.text);
@@ -386,7 +389,7 @@ function JudgeReason(props: { readonly rule: string; readonly text: string }) {
           className="m-0 text-ui-xs text-muted-foreground"
           data-testid="approval-judge-unavailable-line"
         >
-          {JUDGE_UNAVAILABLE_HUMAN_LINE}
+          {judgeUnavailableHumanLine(props.text)}
         </p>
       ) : null}
     </div>

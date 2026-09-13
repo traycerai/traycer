@@ -15,7 +15,8 @@ const AUTO_JUDGE_GET_PARAMS = {};
  * whichever host answers, so the query rebinds when the surface's host changes.
  * `selection: null` means unset - the host falls back to the `traycer` harness
  * and the model the server catalog flags as the auto-judge default, which is
- * what makes auto mode work before anyone opens Settings.
+ * what makes auto mode work before anyone opens Settings. New hosts report
+ * that resolution in `effective` and known configuration blockers in `blocked`.
  *
  * An OPTIONAL capability. Callers must gate mounting on
  * `useHostSupportsMethod(hostId, "autoJudge.get")`; a host that predates auto
@@ -31,6 +32,8 @@ export function useAutoJudgeQuery(): UseQueryResult<
     client,
     method: "autoJudge.get",
     params: AUTO_JUDGE_GET_PARAMS,
-    options: { refetchOnWindowFocus: false },
+    // Recheck on returning from Providers even when the selection cache is
+    // fresh: enablement and the catalog default can change independently.
+    options: { refetchOnWindowFocus: false, refetchOnMount: "always" },
   });
 }

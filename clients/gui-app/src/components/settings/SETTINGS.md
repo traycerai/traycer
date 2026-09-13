@@ -2319,11 +2319,19 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     credential the user pointed at.) Backed by `autoJudge.get` / `autoJudge.set`
     over `~/.traycer/host/config/auto-judge.json`; the read is updated in place
     from the write's response, since the picker commits on every click.
-    `selection: null` means unset, and the row says "Using Traycer's default
-    judge" under the trigger rather than naming a model: the default model is
-    the one the SERVER catalog flags (`autoJudgeDefault`), a flag that
-    deliberately never reaches a client so the server can move the default
-    judge without a host or app release. A stored `harnessId` this build has no
+    `selection: null` means unset. Both responses optionally report `effective`
+    (`harnessId`, `model`, `source`) and `blocked` from the host's shared judge
+    selection rule and provider enablement read, without probing availability.
+    The row says "Using Traycer's default judge · <model>" from that effective
+    slug, using its catalog label when available and the slug otherwise. The
+    picker also seeds its selected mark from `effective` when nothing is stored;
+    it never substitutes the catalog's ordinary chat default for the host's
+    reported judge. A disabled provider gets an amber explanation and a
+    Providers action; no default model or unsupported harness asks the user to
+    pick another judge. Returning from Providers refreshes this read even when
+    cached. Hosts that omit both fields retain the existing default-judge copy.
+    These are optional additions to unreleased 1.0, matching `autoPolicy.get`'s
+    `readState` precedent. A stored `harnessId` this build has no
     adapter for (a newer host, an older app - the protocol keeps that field a
     checked string precisely so it decodes) is named in an amber line instead of
     being presented as some other provider.
@@ -2391,6 +2399,27 @@ deny`, `Hard deny`) and nothing else - the guidance about what belongs under
     judge and "non-overridable" over-promises to a person, who can always
     approve the action on the card. The out-of-scope note is the one piece of
     prose written here rather than taken from the document.
+  - **What the card says when the judge does not decide** is the other end of
+    this page, and lives in the chat rather than in Settings
+    (`chat/segments/approval-card-disclosure.ts`, rendered by
+    `composer-slot-approval-queue.tsx`). The host's `auto: …` reason is printed
+    verbatim and in mono - a screenshot of one is a diagnosis - with a human
+    sentence BESIDE it, never in its place. There are three sentences, because
+    the constants describe three situations and one sentence is false for two
+    of them: **did not run** (`auto: no judge configured`, `auto: judge
+unavailable (…)`, `auto: judge failed`) says "Traycer couldn't run the
+    judge, so it's asking you instead."; **ran without deciding** (`auto: judge
+returned no verdict`, `auto: unparseable verdict`) says "The judge reviewed
+    this but didn't reach a verdict, so it's asking you instead."; **ran out of
+    time** (`auto: judge timed out`, `auto: judge exceeded <n> min`) says "The
+    judge didn't finish in time, so it's asking you instead." The second family
+    is the one the single sentence got wrong: the judge's own reasoning about
+    the action sits directly above that line. The wire carries `{ rule, text }`
+    and no outcome, so the family is read off the STRING; an `auto: ` constant
+    this build does not know - including the four the host emits outside the
+    three families (`turn stopped`, `judge preflight timed out`, `judge tools
+unavailable`, `account policy could not be read`, all of which the first
+    sentence describes truthfully) - falls back to the "couldn't run" line.
 
 - `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers) Editor for the **global** agent selection guide

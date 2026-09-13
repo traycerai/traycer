@@ -74,9 +74,70 @@ export function judgeWaitDisclosure(
  *
  * Support keeps a greppable constant in a screenshot; the user learns that the
  * mode is not broken and that the command itself is not suspect.
+ *
+ * There are three of these because the machine strings describe three
+ * different things, and one sentence for all of them is FALSE for two: a card
+ * carrying `auto: judge returned no verdict` sits directly under 37 s of the
+ * judge's own reasoning about the action, so "Traycer couldn't run the judge"
+ * contradicts the paragraph above it. What the user is deciding is how much to
+ * trust that paragraph, and that turns on whether the judge never ran, ran and
+ * could not decide, or ran out of time.
  */
-export const JUDGE_UNAVAILABLE_HUMAN_LINE =
+export const JUDGE_DID_NOT_RUN_HUMAN_LINE =
   "Traycer couldn't run the judge, so it's asking you instead.";
+
+/** The judge answered, but not with a verdict this build could read. */
+export const JUDGE_NO_VERDICT_HUMAN_LINE =
+  "The judge reviewed this but didn't reach a verdict, so it's asking you instead.";
+
+/** The judge was still working when its budget ran out. */
+export const JUDGE_OUT_OF_TIME_HUMAN_LINE =
+  "The judge didn't finish in time, so it's asking you instead.";
+
+/**
+ * Which of the three situations a recognised machine string describes.
+ *
+ * Not on the wire: the approval reason is `{ rule, text }` and carries no
+ * outcome, so the only thing the client can read is the string itself. Putting
+ * an outcome on the wire is a protocol change (and seam territory); reading
+ * the constants the host already spells is not.
+ */
+export type JudgeFailureFamily = "did-not-run" | "no-verdict" | "out-of-time";
+
+/**
+ * The constants that name a family outright, restated from the host's
+ * `auto-judge-service.ts`.
+ *
+ * Restated rather than shared: the host is a different repo, these strings
+ * reach the client only as free text on the wire, and the whole point of
+ * matching on them is to notice when one stops arriving in the shape this
+ * build expects. A host that renames one lands on the `null` fallback below,
+ * which is the old single sentence - degraded copy, never a wrong line.
+ */
+const JUDGE_FAILURE_FAMILY_BY_REASON: ReadonlyMap<string, JudgeFailureFamily> =
+  new Map([
+    ["auto: no judge configured", "did-not-run"],
+    ["auto: judge failed", "did-not-run"],
+    ["auto: judge returned no verdict", "no-verdict"],
+    ["auto: unparseable verdict", "no-verdict"],
+    ["auto: judge timed out", "out-of-time"],
+  ]);
+
+/**
+ * The two constants the host builds with a variable tail.
+ *
+ * `auto: judge unavailable (…)` interpolates the probe's detail or the
+ * adapter's error; `auto: judge exceeded <n> min` interpolates
+ * `AUTO_JUDGE_STAGE2_CAP_MS` in minutes, which is 2 today and is a host
+ * constant the client cannot read - so the prefix, not the rendered number, is
+ * what this can match without going stale the day the cap moves.
+ */
+const JUDGE_FAILURE_FAMILY_BY_PREFIX: ReadonlyArray<
+  readonly [string, JudgeFailureFamily]
+> = [
+  ["auto: judge unavailable (", "did-not-run"],
+  ["auto: judge exceeded ", "out-of-time"],
+];
 
 /**
  * Whether a card's reason text is one of the judge's unavailability strings
@@ -89,9 +150,50 @@ export const JUDGE_UNAVAILABLE_HUMAN_LINE =
  * kept verbatim (a screenshot of one is a diagnosis), and that prefix is the
  * property this reads. A verdict's own reasoning is a sentence about the
  * action and never starts this way.
+ *
+ * This is the broad test - "is this a machine string at all" - and it is what
+ * decides the mono type and whether a helper line is added. WHICH helper line
+ * is `judgeFailureFamily`'s narrower question, which every string this accepts
+ * has an answer for, known or fallback.
  */
 export function isJudgeUnavailableReason(text: string): boolean {
   return text.startsWith("auto: ");
+}
+
+/**
+ * The family a machine string belongs to, or `null` for an `auto: ` string
+ * this build does not recognise.
+ *
+ * Deliberately `null` rather than `"did-not-run"` for the unrecognised case,
+ * even though both render the same sentence: the host emits four more
+ * constants than the three families cover (`auto: turn stopped`, `auto: judge
+ * preflight timed out`, `auto: judge tools unavailable`, `auto: account policy
+ * could not be read`), and for every one of them "couldn't run the judge" is
+ * already true. Keeping them out of the map says so, and keeps the map a list
+ * of strings whose copy would be WRONG under the fallback.
+ */
+export function judgeFailureFamily(text: string): JudgeFailureFamily | null {
+  if (!isJudgeUnavailableReason(text)) return null;
+  const exact = JUDGE_FAILURE_FAMILY_BY_REASON.get(text);
+  if (exact !== undefined) return exact;
+  for (const [prefix, family] of JUDGE_FAILURE_FAMILY_BY_PREFIX) {
+    if (text.startsWith(prefix)) return family;
+  }
+  return null;
+}
+
+/**
+ * The sentence that goes beneath a machine string, for every machine string.
+ *
+ * Total on purpose: an unknown `auto: ` constant still gets the sentence the
+ * card printed before this function existed, so a host that grows a new
+ * failure mode degrades to today's copy rather than to a blank line.
+ */
+export function judgeUnavailableHumanLine(text: string): string {
+  const family = judgeFailureFamily(text);
+  if (family === "no-verdict") return JUDGE_NO_VERDICT_HUMAN_LINE;
+  if (family === "out-of-time") return JUDGE_OUT_OF_TIME_HUMAN_LINE;
+  return JUDGE_DID_NOT_RUN_HUMAN_LINE;
 }
 
 /** The wait line's companion, true for as long as the card is unanswered. */

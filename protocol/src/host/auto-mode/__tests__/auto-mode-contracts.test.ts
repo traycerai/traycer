@@ -159,6 +159,69 @@ describe("auto-mode protocol change", () => {
     ).toBe(false);
   });
 
+  it("widens autoJudge get/set responses in place while preserving legacy output", () => {
+    const selection = {
+      harnessId: "claude",
+      model: "claude-sonnet",
+      profileId: null,
+    };
+    const legacy = autoJudgeGetV10.responseSchema.parse({ selection });
+    expect(legacy.selection).toEqual(selection);
+    expect(Object.hasOwn(legacy, "effective")).toBe(false);
+    expect(Object.hasOwn(legacy, "blocked")).toBe(false);
+
+    const widened = autoJudgeGetV10.responseSchema.parse({
+      selection,
+      effective: {
+        harnessId: "claude",
+        model: "claude-sonnet",
+        source: "selection",
+      },
+      blocked: null,
+    });
+    expect(widened.effective).toEqual({
+      harnessId: "claude",
+      model: "claude-sonnet",
+      source: "selection",
+    });
+    expect(widened.blocked).toBeNull();
+
+    const blocked = autoJudgeSetV10.responseSchema.parse({
+      selection: null,
+      effective: null,
+      blocked: { reason: "provider-disabled" },
+    });
+    expect(blocked.selection).toBeNull();
+    expect(blocked.effective).toBeNull();
+    expect(blocked.blocked).toEqual({ reason: "provider-disabled" });
+
+    // Both new objects are open only over their documented enum members.
+    expect(
+      autoJudgeGetV10.responseSchema.safeParse({
+        selection: null,
+        effective: { harnessId: "traycer", model: "m", source: "guess" },
+      }).success,
+    ).toBe(false);
+    expect(
+      autoJudgeGetV10.responseSchema.safeParse({
+        selection: null,
+        blocked: { reason: "availability-probe" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps the widened autoJudge methods on unreleased 1.0 lines", () => {
+    for (const method of ["autoJudge.get", "autoJudge.set"] as const) {
+      const entry = hostRpcRegistry[method];
+      expect(entry[1].latestMinor).toBe(0);
+      expect(entry[1].versions[0].contract.schemaVersion).toEqual({
+        major: 1,
+        minor: 0,
+      });
+      expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
+    }
+  });
+
   it("publishes the stored judge on the head providers.list line only", () => {
     // `providers.setAutoJudge` writes; without this read half the Providers >
     // General switch could not show its own value after a reload.

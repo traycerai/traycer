@@ -10,7 +10,10 @@
  */
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
-import type { AutoJudgeSelection } from "@traycer/protocol/host/auto-mode/contracts";
+import type {
+  AutoJudgeEffective,
+  AutoJudgeSelection,
+} from "@traycer/protocol/host/auto-mode/contracts";
 import {
   DEFAULT_PERMISSION,
   type HarnessModelSelection,
@@ -19,9 +22,8 @@ import type { ComposerToolbarValues } from "@/stores/composer/composer-toolbar-s
 
 /**
  * The harness the judge runs on when nothing is stored. Traycer's own, whose
- * catalog model the SERVER flags (`autoJudgeDefault`) - which is why the unset
- * state names no model here: the flag never reaches the client, deliberately,
- * so the server can move the default judge without a host or app release.
+ * catalog model the SERVER flags (`autoJudgeDefault`). New hosts report its
+ * resolved slug through `effective`; older hosts leave this seed unpinned.
  */
 const DEFAULT_JUDGE_HARNESS_ID = "traycer";
 
@@ -72,13 +74,25 @@ export interface AutoJudgeSeed {
 export function autoJudgeSeed(
   selection: AutoJudgeSelection | null,
   harnesses: ReadonlyArray<GuiHarnessOption> | undefined,
+  effective: AutoJudgeEffective | null | undefined,
 ): AutoJudgeSeed {
+  // New hosts identify the default themselves. The empty-model seed is only
+  // the compatibility fallback for a host that cannot report that fact.
+  const resolved =
+    selection ??
+    (effective === null || effective === undefined
+      ? null
+      : {
+          harnessId: effective.harnessId,
+          model: effective.model,
+          profileId: null,
+        });
   const neutral = {
     permission: DEFAULT_PERMISSION,
     reasoning: "",
     serviceTier: "",
   } as const;
-  if (selection === null) {
+  if (resolved === null) {
     return {
       values: { ...neutral, selection: UNSET_JUDGE_SELECTION },
       seedKey: "unset",
@@ -94,12 +108,12 @@ export function autoJudgeSeed(
       storedHarnessLabel: null,
     };
   }
-  const row = harnesses.find((harness) => harness.id === selection.harnessId);
+  const row = harnesses.find((harness) => harness.id === resolved.harnessId);
   if (row === undefined) {
     return {
       values: { ...neutral, selection: UNSET_JUDGE_SELECTION },
-      seedKey: `unrecognized:${selection.harnessId}`,
-      unrecognizedHarnessId: selection.harnessId,
+      seedKey: `unrecognized:${resolved.harnessId}`,
+      unrecognizedHarnessId: resolved.harnessId,
       storedHarnessLabel: null,
     };
   }
@@ -108,13 +122,11 @@ export function autoJudgeSeed(
       ...neutral,
       selection: {
         harnessId: row.id,
-        modelSlug: selection.model,
-        profileId: selection.profileId,
+        modelSlug: resolved.model,
+        profileId: resolved.profileId,
       },
     },
-    seedKey: [row.id, selection.model, selection.profileId ?? ""].join(
-      "\u0000",
-    ),
+    seedKey: [row.id, resolved.model, resolved.profileId ?? ""].join("\u0000"),
     unrecognizedHarnessId: null,
     storedHarnessLabel: row.label,
   };

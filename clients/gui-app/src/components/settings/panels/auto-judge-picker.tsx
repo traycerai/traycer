@@ -4,10 +4,18 @@ import {
   useLayoutEffect,
   useMemo,
   useState,
+  type ReactNode,
 } from "react";
 import { useStore } from "zustand";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { AutoJudgeSelection } from "@traycer/protocol/host/auto-mode/contracts";
+import type {
+  AutoJudgeBlocked,
+  AutoJudgeEffective,
+  AutoJudgeSelection,
+} from "@traycer/protocol/host/auto-mode/contracts";
+import { resolveModelBySlug } from "@traycer/protocol/host/agent/gui/model-slug-resolution";
+import { Button } from "@/components/ui/button";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import {
   autoJudgeSeed,
@@ -50,9 +58,10 @@ const EMPTY_JUDGE_MODELS: ReadonlyArray<ModelOption> = [];
 function useAutoJudgeToolbarStore(input: {
   readonly hostId: string | null;
   readonly selection: AutoJudgeSelection | null;
+  readonly effective: AutoJudgeEffective | null | undefined;
   readonly onCommit: (selection: AutoJudgeSelection) => void;
 }): { readonly store: ComposerToolbarStore; readonly seed: AutoJudgeSeed } {
-  const { hostId, selection, onCommit } = input;
+  const { hostId, selection, effective, onCommit } = input;
   const hostClient = useHostClientForHostId(hostId);
   const harnessesQuery = useGuiHarnessesQueryForClient(hostClient, {
     enabled: true,
@@ -64,8 +73,8 @@ function useAutoJudgeToolbarStore(input: {
   // matching key anyway; this keeps the dependency honest rather than relying
   // on that.
   const seed = useMemo(
-    () => autoJudgeSeed(selection, harnesses),
-    [selection, harnesses],
+    () => autoJudgeSeed(selection, harnesses, effective),
+    [selection, harnesses, effective],
   );
   const [store] = useState(() =>
     createComposerToolbarStore({
@@ -130,14 +139,18 @@ function useAutoJudgeToolbarStore(input: {
 export function AutoJudgePicker(props: {
   readonly hostId: string | null;
   readonly selection: AutoJudgeSelection | null;
+  readonly effective: AutoJudgeEffective | null | undefined;
+  readonly blocked: AutoJudgeBlocked | null | undefined;
   readonly disabled: boolean;
   readonly onCommit: (selection: AutoJudgeSelection) => void;
 }) {
   const { store, seed } = useAutoJudgeToolbarStore({
     hostId: props.hostId,
     selection: props.selection,
+    effective: props.effective,
     onCommit: props.onCommit,
   });
+  const blocked = props.blocked ?? null;
   // The toolbar store PRESENTS the first eligible harness when the selected one
   // is unavailable, and never emits that clamp (it is a display fallback, not a
   // choice). Right for a composer, where the reroute is what the next turn will
@@ -184,11 +197,12 @@ export function AutoJudgePicker(props: {
         labelDisplay="responsive"
         profileAdmission={null}
       />
-      {props.selection === null ? (
-        <span className="text-ui-xs text-muted-foreground">
-          Using Traycer&apos;s default judge
-        </span>
-      ) : null}
+      <AutoJudgeStatus
+        store={store}
+        selection={props.selection}
+        effective={props.effective}
+        blocked={blocked}
+      />
       {selfBilling !== null ? (
         <span
           data-testid="auto-judge-self-billing"
@@ -197,7 +211,7 @@ export function AutoJudgePicker(props: {
           {selfBilling}
         </span>
       ) : null}
-      {seed.unrecognizedHarnessId !== null ? (
+      {blocked === null && seed.unrecognizedHarnessId !== null ? (
         <span
           data-testid="auto-judge-unrecognized"
           className="max-w-full text-pretty text-right text-ui-xs text-amber-700 dark:text-amber-300"
@@ -206,7 +220,7 @@ export function AutoJudgePicker(props: {
           version of the app doesn&apos;t know. Pick one to replace it.
         </span>
       ) : null}
-      {storedHarnessUnavailable ? (
+      {blocked === null && storedHarnessUnavailable ? (
         <span
           data-testid="auto-judge-unavailable"
           className="max-w-full text-pretty text-right text-ui-xs text-amber-700 dark:text-amber-300"
@@ -217,5 +231,98 @@ export function AutoJudgePicker(props: {
         </span>
       ) : null}
     </div>
+  );
+}
+
+function AutoJudgeStatus(props: {
+  readonly store: ComposerToolbarStore;
+  readonly selection: AutoJudgeSelection | null;
+  readonly effective: AutoJudgeEffective | null | undefined;
+  readonly blocked: AutoJudgeBlocked | null;
+}) {
+  const catalog = useStore(props.store, (s) => s.catalog);
+  const { effective, blocked, selection } = props;
+  if (blocked !== null) {
+    return (
+      <AutoJudgeBlockedStatus
+        blocked={blocked}
+        harnessId={effective?.harnessId ?? selection?.harnessId ?? "traycer"}
+      />
+    );
+  }
+  if (effective === undefined) {
+    if (selection !== null) return null;
+    return (
+      <span className="text-ui-xs text-muted-foreground">
+        Using Traycer&apos;s default judge
+      </span>
+    );
+  }
+  if (effective === null) return null;
+  const modelMatch =
+    catalog.modelsHarnessId === effective.harnessId
+      ? resolveModelBySlug(catalog.models, effective.model)
+      : null;
+  const modelLabel =
+    modelMatch !== null && modelMatch.kind !== "none"
+      ? modelMatch.model.label
+      : effective.model;
+  return (
+    <span
+      className="text-ui-xs text-muted-foreground"
+      data-testid="auto-judge-effective"
+    >
+      {effective.source === "default"
+        ? "Using Traycer's default judge"
+        : "Using selected judge"}{" "}
+      · {modelLabel}
+    </span>
+  );
+}
+
+function AutoJudgeBlockedStatus(props: {
+  readonly blocked: AutoJudgeBlocked;
+  readonly harnessId: string;
+}) {
+  const { openSettings } = useSystemTabModalActions();
+  const billing = autoJudgeBillingFor(props.harnessId);
+  const providerLabel =
+    billing.kind === "traycer" ? "Traycer inference" : billing.harnessLabel;
+  let message: ReactNode;
+  switch (props.blocked.reason) {
+    case "provider-disabled":
+      message = (
+        <>
+          {providerLabel} is disabled on this machine, so no judge will run.
+          Enable it under{" "}
+          <Button
+            type="button"
+            variant="link"
+            className="h-auto p-0 text-inherit text-ui-xs underline"
+            onClick={() =>
+              openSettings({ section: "providers", resetToGeneral: false })
+            }
+          >
+            Providers
+          </Button>
+          , or pick another judge.
+        </>
+      );
+      break;
+    case "no-default":
+      message =
+        "This machine has no default judge model, so no judge will run. Pick a judge above.";
+      break;
+    case "unsupported-harness":
+      message = `This machine does not support the ${providerLabel} judge. Pick another judge above.`;
+      break;
+  }
+  return (
+    <span
+      data-testid="auto-judge-blocked"
+      className="max-w-full text-pretty text-right text-ui-xs text-amber-700 dark:text-amber-300"
+    >
+      {message}
+    </span>
   );
 }

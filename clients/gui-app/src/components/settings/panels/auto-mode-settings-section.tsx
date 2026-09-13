@@ -144,6 +144,8 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
         <AutoJudgePicker
           hostId={props.hostId}
           selection={selection}
+          effective={query.data?.effective}
+          blocked={query.data?.blocked}
           // Disabled while the record is still loading so a click cannot
           // commit against - and overwrite - a selection this window has not
           // seen yet.

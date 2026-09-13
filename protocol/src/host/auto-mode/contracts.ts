@@ -95,11 +95,28 @@ export const autoJudgeSelectionSchema = z.object({
 });
 export type AutoJudgeSelection = z.infer<typeof autoJudgeSelectionSchema>;
 
+export const autoJudgeEffectiveSchema = z.object({
+  harnessId: z.string().min(1),
+  model: z.string().min(1),
+  source: z.enum(["selection", "default"]),
+});
+export type AutoJudgeEffective = z.infer<typeof autoJudgeEffectiveSchema>;
+
+/** Known configuration blockers only; this does not probe availability. */
+export const autoJudgeBlockedSchema = z.object({
+  reason: z.enum(["provider-disabled", "no-default", "unsupported-harness"]),
+});
+export type AutoJudgeBlocked = z.infer<typeof autoJudgeBlockedSchema>;
+
 export const autoJudgeGetRequestSchema = z.object({});
 export type AutoJudgeGetRequest = z.infer<typeof autoJudgeGetRequestSchema>;
 
 export const autoJudgeGetResponseSchema = z.object({
   selection: autoJudgeSelectionSchema.nullable(),
+  // Unreleased 1.0 widened in place, like autoPolicy.get.readState. Older
+  // hosts omit these fields; readers preserve their existing copy then.
+  effective: autoJudgeEffectiveSchema.nullable().optional(),
+  blocked: autoJudgeBlockedSchema.nullable().optional(),
 });
 export type AutoJudgeGetResponse = z.infer<typeof autoJudgeGetResponseSchema>;
 
@@ -118,6 +135,8 @@ export type AutoJudgeSetRequest = z.infer<typeof autoJudgeSetRequestSchema>;
 
 export const autoJudgeSetResponseSchema = z.object({
   selection: autoJudgeSelectionSchema.nullable(),
+  effective: autoJudgeEffectiveSchema.nullable().optional(),
+  blocked: autoJudgeBlockedSchema.nullable().optional(),
 });
 export type AutoJudgeSetResponse = z.infer<typeof autoJudgeSetResponseSchema>;
 
