@@ -105,7 +105,11 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
   };
 
   return (
-    <div className="mb-3 flex min-h-0 flex-col gap-2">
+    // `shrink-0`, never `min-h-0`: the rail is a scrolling flex column, and once
+    // its sections outgrow the window every child is asked to shrink. Removing
+    // the min-height floor here made this the ONLY child that could, so it
+    // collapsed and the input painted over the first group heading.
+    <div className="mb-3 flex shrink-0 flex-col gap-2">
       <InputGroup className="h-8 w-full">
         <InputGroupAddon align="inline-start">
           <Search className="size-3.5" aria-hidden />
