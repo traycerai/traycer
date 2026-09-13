@@ -416,8 +416,9 @@ const FIT_PADDING = 24;
  *
  * The world box comes from the scene (`OfficeScene.worldSize()`, the same
  * value `applyAutoFit` consumes) so the INPUT is live while the MODEL is the
- * claim. Note it is neither the projector's `bounds` nor the plan's box: the
- * two-agent Floor measures 576x1264 here, where the plan box is 704 wide.
+ * claim. Note it is the projector's `bounds` (its width and height, read at
+ * `office-scene.ts` `worldSize`), not the plan's box: the two-agent Floor
+ * measures 576x1264 here, where the plan box is 704 wide.
  *
  * `fitCamera` also clamps - `MAX_FIT_ZOOM` 6, and zoom into [0.05, 8]. Nothing
  * is within reach at this fixture's 0.753, so the clamps are deliberately left
