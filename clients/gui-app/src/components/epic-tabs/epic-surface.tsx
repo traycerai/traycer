@@ -24,7 +24,11 @@ interface EpicSurfaceProps {
 export function EpicSurface(props: EpicSurfaceProps) {
   const activity = useTabSurfaceActivity();
   // Report visibility for the agent-tab-surfacing pipeline: PiP auto-surfacing
-  // only arms while this epic is the visible surface.
+  // only arms while this epic is the visible surface. Renderer parking rolls
+  // the same per-epic set up with a debounce - see `lib/epics/epic-parking.ts`,
+  // which keys its ENTRIES on the open tab rather than on this surface, so a
+  // tab past the retention pool (unmounted, therefore never reporting here)
+  // still parks. All this owes it is the visibility edge.
   useEffect(() => {
     setEpicSurfaceVisibility(props.epicId, props.tabId, activity.visible);
     return () => {

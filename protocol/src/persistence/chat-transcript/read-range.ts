@@ -6,7 +6,10 @@ import type {
   TranscriptRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
-import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import {
+  recordByteLength,
+  type RecordFingerprintMemo,
+} from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 
 /**
@@ -298,6 +301,32 @@ function clamp(value: number, low: number, high: number): number {
 }
 
 /**
+ * What a record costs the budget, through the memo when there is one.
+ *
+ * The number is `recordByteLength`'s either way - the memo's entry is that
+ * length, taken from the same `encodeRecord` as its digest. What the memo
+ * changes is who pays for the encoding, and both readers were paying it twice.
+ * A client paging a long transcript asks for overlapping spans of the same
+ * records over and over, and each request re-stringified every record it
+ * touched to recover a number the skeleton had already computed for the same
+ * objects; a sampling profile attributed 2.6 GB in 45 seconds to exactly that
+ * measurement while a client was paging. The tail re-encodes its own newest
+ * rows on every rebuild of the host's transcript view, which is every commit
+ * of a live chat - see {@link sliceTranscriptTail}.
+ *
+ * `null` is a caller with nothing to remember across requests, and gets today's
+ * behaviour unchanged.
+ */
+function recordBytes(
+  memo: RecordFingerprintMemo | null,
+  record: Message | ChatEvent,
+): number {
+  return memo === null
+    ? recordByteLength(record)
+    : memo.lookup(record).byteLength;
+}
+
+/**
  * Slices `[fromOrdinal, toOrdinal]` out of projection order, under a byte
  * budget.
  *
@@ -315,6 +344,7 @@ export function sliceTranscriptRange(
   rows: readonly TranscriptRowDescriptor[],
   lookup: TranscriptRecordLookup,
   request: TranscriptRangeRequest,
+  memo: RecordFingerprintMemo | null,
 ): TranscriptRangeSlice {
   const empty: TranscriptRangeSlice = {
     fromOrdinal: 0,
@@ -387,14 +417,14 @@ export function sliceTranscriptRange(
       // hole in the ids would shift everything after it.
       if (message === undefined) continue;
       freshMessages.push(message);
-      cost += recordByteLength(message) + ELEMENT_SEPARATOR_BYTES;
+      cost += recordBytes(memo, message) + ELEMENT_SEPARATOR_BYTES;
     }
     for (const eventId of needed.eventIds) {
       if (seenEventIds.has(eventId)) continue;
       const event = lookup.eventsById.get(eventId);
       if (event === undefined) continue;
       freshEvents.push(event);
-      cost += recordByteLength(event) + ELEMENT_SEPARATOR_BYTES;
+      cost += recordBytes(memo, event) + ELEMENT_SEPARATOR_BYTES;
     }
     const recordsComplete =
       needed.messageIds.every((messageId) =>
@@ -466,6 +496,29 @@ export interface TranscriptTailSlice {
  * the two differ in both direction and policy, and a boolean parameter would
  * hide the second difference behind the first.
  *
+ * ## The fingerprint memo, for the same reason a range takes one
+ *
+ * An earlier version of this doc argued the tail did not need a memo because
+ * "a tail is measured once per snapshot". That premise is false in the live
+ * host, and the correction is worth keeping visible because the reasoning was
+ * not obviously wrong: the host's transcript view is memoized on the IDENTITY
+ * of its records, so it misses on every commit of a live chat, and the tail is
+ * built eagerly inside that view on every miss - immediately after
+ * `buildRowSkeleton` has fingerprinted every record in the transcript through
+ * the same session memo.
+ *
+ * So the tail is measured once per CACHE MISS, which is once per commit, and
+ * without a memo it re-encodes up to {@link TRANSCRIPT_TAIL_MAX_BYTES} of
+ * records whose `byteLength` the skeleton wrote into the memo microseconds
+ * earlier - for the whole life of a streaming turn. "Once per snapshot" was a
+ * statement about the WIRE frame, and the wire frame is not what decides how
+ * often this function runs.
+ *
+ * The numbers are the same either way: the memo stores `recordByteLength`'s own
+ * answer, so a range and a tail charge one record identically whether or not
+ * either holds a memo. `null` remains the honest answer for a caller with
+ * nothing to remember across calls, and stays explicit rather than defaulted.
+ *
  * ## No always-serve-one exception, unlike a range
  *
  * `sliceTranscriptRange` serves an over-budget row ALONE rather than leave a row
@@ -488,6 +541,7 @@ export function sliceTranscriptTail(
   rows: readonly TranscriptRowDescriptor[],
   lookup: TranscriptRecordLookup,
   maxBytes: number,
+  memo: RecordFingerprintMemo | null,
 ): TranscriptTailSlice {
   const budget = Math.max(
     0,
@@ -524,14 +578,14 @@ export function sliceTranscriptTail(
       const message = lookup.messagesById.get(messageId);
       if (message === undefined) continue;
       freshMessages.push(message);
-      cost += recordByteLength(message) + ELEMENT_SEPARATOR_BYTES;
+      cost += recordBytes(memo, message) + ELEMENT_SEPARATOR_BYTES;
     }
     for (const eventId of needed.eventIds) {
       if (seenEventIds.has(eventId)) continue;
       const event = lookup.eventsById.get(eventId);
       if (event === undefined) continue;
       freshEvents.push(event);
-      cost += recordByteLength(event) + ELEMENT_SEPARATOR_BYTES;
+      cost += recordBytes(memo, event) + ELEMENT_SEPARATOR_BYTES;
     }
     const recordsComplete =
       needed.messageIds.every((messageId) =>

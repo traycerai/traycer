@@ -7,6 +7,7 @@ import type {
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
+  InterviewChoiceGlyph,
   InterviewOptionDetailsButton,
   InterviewOptionDetailsRegion,
 } from "@/components/chat/segments/interview-visuals";
@@ -142,9 +143,8 @@ export function QuestionPage(props: QuestionPageProps) {
                 selected={selected}
                 pending={pendingOptionIndex === index}
                 disabled={disabled}
-                badge={
-                  <OptionNumberBadge index={index + 1} selected={selected} />
-                }
+                choiceKind={question.multiSelect ? "multi" : "single"}
+                badge={<OptionNumberBadge index={index + 1} />}
                 onToggle={() => onToggleOption(index)}
               />
             </li>
@@ -206,6 +206,7 @@ function OtherRow(props: OtherRowProps) {
       selected={false}
       pending={false}
       disabled={disabled}
+      choiceKind={null}
       badge={<OtherIconBadge selected={false} />}
       onToggle={onSelect}
     />
@@ -237,6 +238,7 @@ interface OptionRowProps {
   selected: boolean;
   pending: boolean;
   disabled: boolean;
+  choiceKind: "single" | "multi" | null;
   badge: ReactNode;
   onToggle: () => void;
 }
@@ -249,6 +251,7 @@ function OptionRow(props: OptionRowProps) {
     selected,
     pending,
     disabled,
+    choiceKind,
     badge,
     onToggle,
   } = props;
@@ -292,6 +295,12 @@ function OptionRow(props: OptionRowProps) {
           disabled={disabled}
           className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
         />
+        {choiceKind === null ? null : (
+          <InterviewChoiceGlyph
+            multiSelect={choiceKind === "multi"}
+            selected={selected}
+          />
+        )}
         <span className="pointer-events-none relative z-10 min-w-0 truncate font-medium text-foreground/90">
           {label}
         </span>
@@ -314,18 +323,13 @@ function OptionRow(props: OptionRowProps) {
   );
 }
 
-// The right-side circular badge doubles as the keyboard hint (its number) and
-// the selection indicator (filled when selected).
-function OptionNumberBadge(props: { index: number; selected: boolean }) {
+// The right-side circular badge is the keyboard hint. Selection lives on the
+// left radio/checkbox glyph, so this stays a number even when the row is on.
+function OptionNumberBadge(props: { index: number }) {
   return (
     <span
       aria-hidden
-      className={cn(
-        "pointer-events-none relative z-10 inline-flex size-5 shrink-0 items-center justify-center rounded-full border text-[0.625rem] font-semibold tabular-nums transition-colors",
-        props.selected
-          ? "border-primary/70 bg-primary/90 text-primary-foreground"
-          : "border-border/70 bg-background/60 text-muted-foreground/70",
-      )}
+      className="pointer-events-none relative z-10 inline-flex size-5 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/60 text-[0.625rem] font-semibold tabular-nums text-muted-foreground/70"
     >
       {props.index}
     </span>

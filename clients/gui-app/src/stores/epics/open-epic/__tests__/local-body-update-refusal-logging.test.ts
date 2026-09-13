@@ -197,6 +197,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
       // Unreached: this suite never calls `retryTransport`. Answered anyway
       // rather than defaulted, so it stays a decision the option forces.
       onRetryTransport: () => {},
+      onWakeTransport: () => undefined,
       runtime: binding,
       accounting: createProcessBackedAccountingPort({
         hostId: "test-host",
@@ -316,6 +317,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
         userId: null,
         hostId: "test-host",
         onRetryTransport: () => {},
+        onWakeTransport: () => undefined,
         runtime: binding,
         accounting: createProcessBackedAccountingPort({
           hostId: "test-host",
@@ -435,6 +437,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
       userId: null,
       hostId: "test-host",
       onRetryTransport: () => {},
+      onWakeTransport: () => undefined,
       runtime: binding,
       accounting: createProcessBackedAccountingPort({
         hostId: "test-host",

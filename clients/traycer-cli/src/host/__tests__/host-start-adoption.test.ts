@@ -252,31 +252,40 @@ describe("host-start parent adoption", () => {
     );
   });
 
-  it("fails closed for a dangling canonical adoption symlink", async () => {
-    const hostHomeDir = await freshHome();
-    homeRef.current = hostHomeDir;
-    const adoptionPath = join(hostHomeDir, ".host-start-adoption.json");
-    await mkdir(hostHomeDir, { recursive: true });
-    await symlink(join(hostHomeDir, "missing-proof.json"), adoptionPath);
-    await expectPresentEntryNotAbsent();
-  });
+  // `symlink()` is EPERM for a Windows developer without the create-
+  // symbolic-link privilege, so the two symlink-creating cases skip there
+  // rather than fail - the same guard the FIFO case below already carries.
+  it.skipIf(process.platform === "win32")(
+    "fails closed for a dangling canonical adoption symlink",
+    async () => {
+      const hostHomeDir = await freshHome();
+      homeRef.current = hostHomeDir;
+      const adoptionPath = join(hostHomeDir, ".host-start-adoption.json");
+      await mkdir(hostHomeDir, { recursive: true });
+      await symlink(join(hostHomeDir, "missing-proof.json"), adoptionPath);
+      await expectPresentEntryNotAbsent();
+    },
+  );
 
-  it("fails closed after a deterministic canonical symlink replacement", async () => {
-    const hostHomeDir = await freshHome();
-    homeRef.current = hostHomeDir;
-    const adoptionPath = join(hostHomeDir, ".host-start-adoption.json");
-    const secondTarget = join(hostHomeDir, "second-proof.json");
-    const replacement = join(hostHomeDir, ".replacement-proof");
-    await mkdir(hostHomeDir, { recursive: true });
-    await writeFile(adoptionPath, "not-json", "utf8");
-    await writeFile(secondTarget, "still-not-json", "utf8");
-    await symlink(secondTarget, replacement);
-    __setBeforeHostStartAdoptionReadHookForTest(async () => {
-      await rm(adoptionPath, { force: true });
-      await rename(replacement, adoptionPath);
-    });
-    await expectPresentEntryNotAbsent();
-  });
+  it.skipIf(process.platform === "win32")(
+    "fails closed after a deterministic canonical symlink replacement",
+    async () => {
+      const hostHomeDir = await freshHome();
+      homeRef.current = hostHomeDir;
+      const adoptionPath = join(hostHomeDir, ".host-start-adoption.json");
+      const secondTarget = join(hostHomeDir, "second-proof.json");
+      const replacement = join(hostHomeDir, ".replacement-proof");
+      await mkdir(hostHomeDir, { recursive: true });
+      await writeFile(adoptionPath, "not-json", "utf8");
+      await writeFile(secondTarget, "still-not-json", "utf8");
+      await symlink(secondTarget, replacement);
+      __setBeforeHostStartAdoptionReadHookForTest(async () => {
+        await rm(adoptionPath, { force: true });
+        await rename(replacement, adoptionPath);
+      });
+      await expectPresentEntryNotAbsent();
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "fails closed for a FIFO at the canonical adoption path",

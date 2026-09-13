@@ -230,6 +230,95 @@ function approvalRequiredMessage(): string {
   );
 }
 
+/**
+ * Single user-visible message for the one park `traycer host doctor` cannot
+ * clear: a Background Task Management record still registered under the legacy
+ * CLI label (`legacy-registered`). Sibling of {@link approvalRequiredMessage},
+ * here for the same reason - the actionable copy stays canonical.
+ *
+ * Routing a person to `doctor` here is worse than saying nothing, because
+ * doctor re-runs the very register cycle that parks: the entry guard refuses to
+ * boot out a legacy registration it cannot restore exactly, so every retry
+ * parks again on the same evidence and the machine stays hostless while the
+ * message implies progress is one command away.
+ *
+ * Only removing the stale row hands the label back, and only a person can do
+ * it - macOS exposes no API to delete another build's BTM record, and
+ * `sfltool resetbtm` resets EVERY app's login items on the machine, so it is
+ * never the instruction.
+ */
+function staleLoginItemMessage(): string {
+  return (
+    "Traycer's background host cannot be registered: an older Traycer login " +
+    "item is still registered with macOS under the same name, and it has to " +
+    "be removed by hand. Open System Settings → General → Login Items & " +
+    'Extensions, remove every Traycer entry under "Allow in the Background", ' +
+    "then click Retry."
+  );
+}
+
+/**
+ * Why `readParkedRegistrationTakeover` refused the CLI takeover. Derived from
+ * the exported union rather than re-declared, so a new refusal cannot appear
+ * there without every reader here having to account for it.
+ */
+type ParkedNoTakeoverReason = Extract<
+  ParkedRegistrationTakeover,
+  { kind: "no-takeover" }
+>["reason"];
+
+/**
+ * `parkedTakeoverVerdict`'s answer. `host-running` is the "not this method's
+ * case" arm that used to be `null`; naming it is what lets the refusal REASON
+ * travel to the message sites, which previously logged it and threw it away -
+ * so a machine wedged on a legacy BTM record was told to run `doctor`, the one
+ * command that cannot clear it.
+ */
+type ParkedTakeoverDecision =
+  | ParkedRegistrationTakeover
+  | { readonly kind: "host-running" };
+
+/**
+ * `takeOverParkedRegistrationIfDown`'s answer. `attempted` carries the
+ * takeover's outcome; `not-attempted` carries why, so the caller can name a
+ * remedy instead of a generic recovery command. `refusal: null` means a host
+ * was running.
+ */
+type ParkedTakeoverAttempt =
+  | {
+      readonly kind: "attempted";
+      readonly outcome: MutationOutcome<{ readonly activated: boolean }>;
+    }
+  | {
+      readonly kind: "not-attempted";
+      readonly refusal: ParkedNoTakeoverReason | null;
+    };
+
+/**
+ * The message for a park that left the machine with no host and no takeover,
+ * given the login-item status read at the decision and the takeover's own
+ * refusal.
+ *
+ * `legacy-registered` is the one refusal a person can act on, and the only one
+ * `doctor` cannot clear (see {@link staleLoginItemMessage}). The rest -
+ * `manifest-unreadable`, `job-running`, `job-indeterminate`,
+ * `primary-manageable` - are transient or genuinely doctor's, so they keep the
+ * doctor routing. A `null` reason means a host WAS running, which is not this
+ * message's case at all; it keeps the doctor text rather than inventing one.
+ */
+function parkedWithNoHostMessage(args: {
+  readonly loginItemStatus: HostLoginItemStatus;
+  readonly refusal: ParkedNoTakeoverReason | null;
+  readonly doctorMessage: string;
+}): string {
+  if (args.loginItemStatus === "requires-approval") {
+    return approvalRequiredMessage();
+  }
+  return args.refusal === "legacy-registered"
+    ? staleLoginItemMessage()
+    : args.doctorMessage;
+}
+
 function progressFromNdjson(
   event: Extract<NdjsonEvent, { type: "progress" }>,
 ): MutationProgress {
@@ -2142,13 +2231,18 @@ export class HostController {
           step.prePid,
           step.expectedRuntimeVersion,
         );
-        if (takeover !== null) return takeover;
+        if (takeover.kind === "attempted") return takeover.outcome;
         log.warn(
           "[host-controller] login-item registration parked with no running host to restart",
-          { loginItemStatus },
+          { loginItemStatus, refusal: takeover.refusal },
         );
         return this.failedAfterServiceCycle(
-          "Traycer Host's login item could not be re-registered and no host is running to restart - run `traycer host doctor` to recover.",
+          parkedWithNoHostMessage({
+            loginItemStatus,
+            refusal: takeover.refusal,
+            doctorMessage:
+              "Traycer Host's login item could not be re-registered and no host is running to restart - run `traycer host doctor` to recover.",
+          }),
         );
       }
       // ENABLED and down - the ordinary startup / crash window, or a park on
@@ -2203,15 +2297,15 @@ export class HostController {
    */
   private async parkedTakeoverVerdict(
     prePid: number | null,
-  ): Promise<Extract<ParkedRegistrationTakeover, { kind: "takeover" }> | null> {
-    if (prePid !== null) return null;
+  ): Promise<ParkedTakeoverDecision> {
+    if (prePid !== null) return { kind: "host-running" };
     const verdict = await readParkedRegistrationTakeover();
     if (verdict.kind !== "takeover") {
       log.info(
         "[host-controller] parked login-item registration is not one the CLI-owned LaunchAgent may finish",
         { reason: verdict.reason },
       );
-      return null;
+      return verdict;
     }
     return verdict;
   }
@@ -2255,9 +2349,14 @@ export class HostController {
   private async takeOverParkedRegistrationIfDown(
     prePid: number | null,
     expectedRuntimeVersion: string | null,
-  ): Promise<MutationOutcome<{ readonly activated: boolean }> | null> {
+  ): Promise<ParkedTakeoverAttempt> {
     const takeover = await this.parkedTakeoverVerdict(prePid);
-    if (takeover === null) return null;
+    if (takeover.kind !== "takeover") {
+      return {
+        kind: "not-attempted",
+        refusal: takeover.kind === "host-running" ? null : takeover.reason,
+      };
+    }
     log.warn(
       "[host-controller] login-item registration parked with no running host and no registration SMAppService can manage - finishing it through the CLI-owned LaunchAgent",
       { loginItemStatus: takeover.status },
@@ -2269,11 +2368,18 @@ export class HostController {
       expectedRuntimeVersion,
     });
     if (recovery.recovered) {
-      return { kind: "ok", value: { activated: true } };
+      return {
+        kind: "attempted",
+        outcome: { kind: "ok", value: { activated: true } },
+      };
     }
-    return recovery.outcome.kind === "busy"
-      ? { kind: "deferred", message: recovery.outcome.message }
-      : recovery.outcome;
+    return {
+      kind: "attempted",
+      outcome:
+        recovery.outcome.kind === "busy"
+          ? { kind: "deferred", message: recovery.outcome.message }
+          : recovery.outcome,
+    };
   }
 
   /**
@@ -4099,17 +4205,18 @@ export class HostController {
                 registration.prePid,
                 registration.expectedRuntimeVersion,
               );
-              if (takeover !== null) {
-                return takeover.kind === "ok"
+              if (takeover.kind === "attempted") {
+                return takeover.outcome.kind === "ok"
                   ? { kind: "ok", value: { registered: true } }
-                  : takeover;
+                  : takeover.outcome;
               }
               return {
                 kind: "failed",
-                message:
-                  loginItemStatus === "requires-approval"
-                    ? approvalRequiredMessage()
-                    : `Traycer Host's login item could not be re-registered (status=${loginItemStatus}) - run \`traycer host doctor\` to recover.`,
+                message: parkedWithNoHostMessage({
+                  loginItemStatus,
+                  refusal: takeover.refusal,
+                  doctorMessage: `Traycer Host's login item could not be re-registered (status=${loginItemStatus}) - run \`traycer host doctor\` to recover.`,
+                }),
               };
             }
             // Enabled already, so the registration stands; what the parked
@@ -4493,7 +4600,7 @@ export class HostController {
             // it is and the next continuation (or an explicit Restart)
             // performs the activation.
             const takeover = await this.parkedTakeoverVerdict(step.prePid);
-            if (takeover !== null) {
+            if (takeover.kind === "takeover") {
               log.warn(
                 "[host-controller] login-item registration parked with no running host and no registration SMAppService can manage - finishing the continuation through the CLI-owned LaunchAgent",
                 { loginItemStatus: takeover.status },

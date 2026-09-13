@@ -266,10 +266,10 @@ export function createLegacyEpicStreamAdapter(
           event: { kind: "dirty-snapshot", rootDirty, rooms },
         });
       },
-      onCloudSyncStatus: (status) => {
+      onCloudSyncStatus: (status, durability) => {
         emit({
           plane: "control",
-          event: { kind: "cloud-sync-status", status },
+          event: { kind: "cloud-sync-status", status, durability },
         });
       },
       onMigrationStarted: () => {
@@ -310,7 +310,7 @@ export function createLegacyEpicStreamAdapter(
           },
         });
       },
-      onConnectionStatus: (status, reason) => {
+      onConnectionStatus: (status, reason, durabilityStatusNegotiated) => {
         if (!accepts(generation)) return;
         // Reported through BOTH seams, and deliberately. `reportStatus` is what
         // an observer of the adapter reads; the control event is what the
@@ -328,6 +328,7 @@ export function createLegacyEpicStreamAdapter(
             kind: "transport-status",
             status,
             reason,
+            durabilityStatusNegotiated,
             // One socket carries every plane on this arm, the root snapshot
             // included, so its transitions ARE the control cycle's.
             ownsControlCycle: true,

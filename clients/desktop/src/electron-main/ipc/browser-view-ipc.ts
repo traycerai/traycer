@@ -461,6 +461,12 @@ export function registerBrowserViewIpc(
       if (profile !== "primary") return;
       primaryProfileSnapshots.observe(url, webContents);
     },
+    // Fire-and-forget on purpose, and safe to be: the clear's completion is
+    // owed to whoever next materializes that partition, not to this caller,
+    // and `releaseBrowserViewSession` publishes it as a per-partition barrier
+    // that the guest birth awaits. Threading a promise back through here
+    // instead would give the manager an await it has nothing to do with, and
+    // would still not cover the release the ROUND-9 owed-debt path starts.
     releaseSessionStorage: (request) => {
       void releaseBrowserViewSession(
         partitionForProfile(request.profile, request.sessionId),
@@ -616,6 +622,7 @@ export function registerBrowserViewIpc(
             identity: { userId: principal.userId },
           };
         },
+        cloudAuthorized: () => jarPlanePrincipal() !== null,
         appVersion: app.getVersion(),
       }),
     jar: {
@@ -773,13 +780,26 @@ export function registerBrowserViewIpc(
     },
   );
 
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewGuestViewportResult,
+    (event, payload) => {
+      manager.viewport.reportPresentation(
+        readSenderWindowId(bridge, event),
+        browserViewIpcPayload.guestViewportResult.parse(payload),
+      );
+    },
+  );
+
   // BT-302/BT-303: the renderer is the source of truth for the guest-focused
   // input policy - which chords outrank guest keystrokes and what each one
   // means. It pushes the whole table at startup.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSetReservedChords,
-    (_event, payload) => {
-      manager.chords.setReservedChords(parseReservedChords(payload));
+    (event, payload) => {
+      manager.chords.setReservedChords(
+        readSenderWindowId(bridge, event),
+        parseReservedChords(payload),
+      );
     },
   );
 

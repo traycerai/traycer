@@ -123,8 +123,10 @@ function environmentSubdir(base: string, environment: Environment): string {
   return environment === "production" ? base : join(base, environment);
 }
 
+const DEV_RUNS_SUBDIR = "dev-runs";
+
 function devRunSubdir(base: string, slot: string): string {
-  return join(base, "dev-runs", slot);
+  return join(base, DEV_RUNS_SUBDIR, slot);
 }
 
 export const traycerHomeDir = (): string => TRAYCER_HOME;
@@ -213,7 +215,16 @@ export function hostHomeDir(environment: Environment | undefined): string {
 export function hostPidMetadataPath(
   environment: Environment | undefined,
 ): string {
-  return join(hostHomeDir(environment), HOST_PID_FILENAME);
+  return hostPidMetadataPathIn(hostHomeDir(environment));
+}
+/**
+ * The pid record inside an EXPLICIT host home - for a reader that has to
+ * account for a run slot other than its own (`host/swap-quiescence.ts`, which
+ * walks every dev slot's record before a swap). Everything else resolves its
+ * own home through {@link hostPidMetadataPath}.
+ */
+export function hostPidMetadataPathIn(hostHome: string): string {
+  return join(hostHome, HOST_PID_FILENAME);
 }
 export function hostLogPath(environment: Environment | undefined): string {
   return join(hostHomeDir(environment), HOST_LOG_FILENAME);
@@ -404,6 +415,18 @@ export function hostDevIdentityPoolRoot(): string {
  */
 export function hostDevHomeDir(): string {
   return join(HOST_HOME, HOST_DEV_SUBDIR);
+}
+/**
+ * Root of the dev run slots (`~/.traycer/host/dev-runs`), one `<slot>`
+ * subdirectory per concurrently running dev desktop, each a full host home
+ * (`pid.json`, logs, `install/`). Read for ENUMERATION only, by the swap
+ * quiescence check: a dev host publishes its pid into the slot it was started
+ * in, so the records under here plus the unslotted {@link hostDevHomeDir} are
+ * every dev writer this machine can have. Which slot holds which pooled
+ * identity is never derived from here - see {@link hostDevIdentityPoolRoot}.
+ */
+export function hostDevRunsRoot(): string {
+  return join(HOST_HOME, DEV_RUNS_SUBDIR);
 }
 /** Durable lifecycle-layer substrate selection (v1, temp+rename writes). */
 export function hostSubstratePath(

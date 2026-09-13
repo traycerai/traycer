@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type {
   IStreamSession,
+  StatusChangeHandler,
   StreamCloseReason,
   StreamConnectionStatus,
   StreamFrameEnvelope,
@@ -16,9 +17,10 @@ import type { BrowserSessionsUxServerFrame } from "@traycer/protocol/host/browse
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openBrowserSessionsSession } from "@/lib/browser-view/sessions/browser-sessions-session";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 const KEY: BrowserSessionsStreamKey = {
-  epicId: "epic-1",
+  scope: epicScope("epic-1"),
   hostId: "host-1",
   identityKey: "local\u0000host-1\u0000user-1",
 };
@@ -98,7 +100,7 @@ describe("openBrowserSessionsSession on a desktop shell (browserView present)", 
 
     // A frame on some OTHER stream's key must not reach this session.
     bridge.emitSessionsStreamEvent({
-      key: { ...KEY, epicId: "other-epic" },
+      key: { ...KEY, scope: epicScope("other-epic") },
       event: { kind: "status", lifecycle: "live", errorMessage: null },
     });
     expect(statuses).toEqual([]);
@@ -196,12 +198,7 @@ function fakeHostStreamClient(): {
         binaryPayload: Uint8Array | null,
       ) => void)
     | null = null;
-  let onStatusChange:
-    | ((
-        status: StreamConnectionStatus,
-        reason: StreamCloseReason | null,
-      ) => void)
-    | null = null;
+  let onStatusChange: StatusChangeHandler | null = null;
   const state = { closed: false };
   const session: IStreamSession = {
     sendClientFrame: () => undefined,
@@ -225,6 +222,7 @@ function fakeHostStreamClient(): {
     isReady: () => true,
     getClosedReason: () => null,
     notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     getMethodSupport: () => "unsupported",
     subscribeMethodSupport: () => () => undefined,
@@ -239,7 +237,7 @@ function fakeHostStreamClient(): {
       onServerFrame?.(envelope, binaryPayload);
     },
     emitStatus: (status, reason) => {
-      onStatusChange?.(status, reason);
+      onStatusChange?.(status, reason, null);
     },
     get closed() {
       return state.closed;

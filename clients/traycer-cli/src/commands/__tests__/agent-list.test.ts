@@ -27,23 +27,38 @@ vi.mock("../../internal/host-rpc", async () => {
 
 const rpcMock = vi.mocked(callHostRpc);
 
+/**
+ * The row WITHOUT `agent.list@9.1`'s session facet, split out so the expected
+ * JSON below can be assembled in the order zod EMITS rather than the order a
+ * fixture happens to be written in - see `EXPECTED_DEFAULT_FILLED_DATA`.
+ */
+const LEGACY_ROW_BEFORE_SESSION_FACET = {
+  id: "agent-parent",
+  parentId: null,
+  hostId: "host-1",
+  isLocal: true,
+  surface: "gui" as const,
+  harnessId: "codex" as const,
+  isSelf: true,
+  title: "Parent",
+  capabilities: { readTranscript: true, sendMessage: true },
+  active: false,
+  folderPaths: ["/repo"],
+  isWorktree: false,
+};
+
 const LEGACY_LIST_RESPONSE = {
   caller: { agentId: "agent-parent", canSendMessages: true },
   scope: "user" as const,
   agents: [
     {
-      id: "agent-parent",
-      parentId: null,
-      hostId: "host-1",
-      isLocal: true,
-      surface: "gui" as const,
-      harnessId: "codex" as const,
-      isSelf: true,
-      title: "Parent",
-      capabilities: { readTranscript: true, sendMessage: true },
-      active: false,
-      folderPaths: ["/repo"],
-      isWorktree: false,
+      ...LEGACY_ROW_BEFORE_SESSION_FACET,
+      // `agent.list@9.1`'s session facet. Required on the canonical row and
+      // supplied by the upgrade path for an older host, so a mock that stands
+      // in for the TRANSPORT - which is what `callHostRpc` is here - has to
+      // carry it. A GUI chat has no PTY session, so `null` is its answer.
+      sessionState: null,
+      lastExit: null,
     },
   ],
 };
@@ -62,9 +77,20 @@ R/S: the agent has a readable transcript and can be sent messages to
 dir: <path>: the working directory the agent runs in
 worktree: <path>: the agent runs in a dedicated git worktree`;
 
+// Key ORDER is load-bearing: the assertions below compare `JSON.stringify`
+// bytes, and zod emits in schema-declaration order - `runConfig` comes from
+// the `@9.0` row and the session facet extends it at `@9.1`, so the facet
+// trails `runConfig` however the fixture above happens to be written.
 const EXPECTED_DEFAULT_FILLED_DATA = {
   ...LEGACY_LIST_RESPONSE,
-  agents: [{ ...LEGACY_LIST_RESPONSE.agents[0], runConfig: null }],
+  agents: [
+    {
+      ...LEGACY_ROW_BEFORE_SESSION_FACET,
+      runConfig: null,
+      sessionState: null,
+      lastExit: null,
+    },
+  ],
 };
 
 function makeCtx(json: boolean): CommandContext {
@@ -170,5 +196,44 @@ describe("agent list run config", () => {
     expect(JSON.stringify(jsonResult.data)).toBe(
       JSON.stringify(EXPECTED_DEFAULT_FILLED_DATA),
     );
+  });
+});
+
+describe("agent list session facet", () => {
+  it("describes an archived row with no [archived] marker to lean on", async () => {
+    // This command is the WORST surface for the `stopped` wording, and the
+    // reason is structural: it renders the response it just parsed through
+    // `listAgentsResponseSchema`, which has no `archived` key, so zod strips
+    // it. `sessionState` is a real `@9.1` field and survives. An archived
+    // agent therefore reaches a CLI reader as a bare `session: stopped` with
+    // no `[archived]` marker and no `[archived]` legend line anywhere - the
+    // legend clause is the ONLY thing said about that row, and the reader
+    // cannot tell archived from deleted from the row itself.
+    //
+    // That is why the clause may not assert finality: it shipped as "the agent
+    // is over as a record", which on this surface is an unqualified death
+    // claim about an agent a message would wake.
+    rpcMock.mockResolvedValue({
+      ...LEGACY_LIST_RESPONSE,
+      agents: [
+        {
+          ...LEGACY_LIST_RESPONSE.agents[0],
+          // Present on the host-enriched listing, absent from the wire schema.
+          archived: true,
+          sessionState: "stopped",
+          lastExit: null,
+        },
+      ],
+    });
+
+    const result = await buildCommand()(makeCtx(false));
+
+    expect(result.data).not.toHaveProperty("agents.0.archived");
+    expect(result.human).not.toContain("[archived]");
+    expect(result.human).toContain("session: stopped");
+    expect(result.human).toContain(
+      "An ARCHIVED agent is not over - it stays addressable, and your next message unarchives and wakes it; a deleted one is gone",
+    );
+    expect(result.human).not.toContain("the agent is over as a record");
   });
 });

@@ -183,7 +183,7 @@ function MentionSuggestionListContent({
                 // selection this list drives with ArrowUp/Down has to be
                 // unmistakable next to the plain hover tint below - which a
                 // foreground alpha one step up from it would not be.
-                "data-[selected=true]:border-primary/35 data-[selected=true]:bg-primary/12 data-[selected=true]:text-foreground data-[selected=true]:shadow-sm",
+                "data-[selected=true]:border-primary/35 data-[selected=true]:bg-[color-mix(in_srgb,var(--primary)_14%,var(--popover))] data-[selected=true]:text-foreground data-[selected=true]:shadow-sm",
                 "hover:bg-foreground/6",
               )}
               onMouseEnter={() => setSelectedIndex(index)}

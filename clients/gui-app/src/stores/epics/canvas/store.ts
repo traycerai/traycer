@@ -1,3 +1,15 @@
+import { readTabStripLayout } from "@/stores/tabs/store";
+import { captureHeaderLocation } from "@/lib/tab-recovery/header-layout";
+import {
+  recordClosedHeaderTab,
+  recordClosedCanvas,
+  recordClosedCanvasPane,
+  pruneRecoveryEpics,
+  pruneRecoveryTiles,
+  discardRecoveryTab,
+  withoutTabRecovery,
+} from "@/lib/tab-recovery/history";
+import { restoreClosedCanvas } from "@/lib/tab-recovery/restore-canvas";
 // This file owns the store interface, the zustand store creation (header-tab
 // + canvas actions), and the persistence/desktop-bridge wiring. The
 // supporting layers live in sibling modules:
@@ -69,6 +81,7 @@ import {
   createSingleTileCanvas,
   dropOnTabStrip,
   openBlankTabInPane as openBlankTabInPaneCanvas,
+  ensureEmptyCanvasPane,
   openTile,
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
@@ -376,6 +389,18 @@ export interface EpicCanvasStore {
    * current surface (e.g. without dismissing the History overlay).
    */
   openEpicTabInBackground: (epicId: string, name: string | undefined) => string;
+  /** Coordinator-only restoration of an exact saved task view. */
+  restoreTabForRecovery: (tab: EpicViewTab, canvas: EpicCanvasState) => void;
+  restoreCanvasForRecovery: (
+    tabId: string,
+    recovery: {
+      readonly before: EpicCanvasState;
+      readonly after: EpicCanvasState;
+      readonly instanceIds: readonly string[];
+      readonly paneIds?: readonly string[];
+      readonly focus: boolean;
+    },
+  ) => void;
   /**
    * Close the tab as a user-visible header action: remove it from
    * `openTabOrder`, update active/recent pointers, and keep `tabsById[tabId]`
@@ -517,11 +542,9 @@ export interface EpicCanvasStore {
     ref: EpicCanvasTileRef,
     options: PaneTileOpenOptionsFromSource,
   ) => NestedFocusTarget | null;
-  /**
-   * Open a blank "New tab" in `paneId`, made active. Reuse-if-active-is-blank:
-   * a no-op-ish focus when the pane's active tab is already blank.
-   * See {@link openBlankTabInPaneCanvas}.
-   */
+  /** Create an empty root pane when no saved layout exists. */
+  ensureEmptyPaneInTab: (tabId: string) => void;
+  /** Open the pane picker, reusing any blank tab in a populated pane. */
   openBlankTabInPane: (tabId: string, paneId: string) => void;
   prepareOpenBlankTabInPaneFocusTarget: (
     tabId: string,
@@ -1493,8 +1516,53 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           return tab.tabId;
         },
 
+        restoreTabForRecovery: (tab, canvas) => {
+          set((state) => ({
+            tabsById:
+              state.tabsById[tab.tabId] === undefined
+                ? { ...state.tabsById, [tab.tabId]: tab }
+                : state.tabsById,
+            canvasByTabId: { ...state.canvasByTabId, [tab.tabId]: canvas },
+            openTabOrder: state.openTabOrder.includes(tab.tabId)
+              ? state.openTabOrder
+              : [...state.openTabOrder, tab.tabId],
+          }));
+        },
+        restoreCanvasForRecovery: (tabId, recovery) => {
+          // Rebuilding a collapsed group can remount surviving views. Capture
+          // their live reading positions before the structural change.
+          const current = canvasForExistingTab(get(), tabId);
+          if (current !== null)
+            flushChatTabViewportHandoff(
+              collectPanes(current.root).flatMap((pane) => pane.tabInstanceIds),
+            );
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              restoreClosedCanvas(canvas, recovery.before, recovery.after, {
+                instanceIds: recovery.instanceIds,
+                paneIds: recovery.paneIds,
+                focus: recovery.focus,
+              }),
+            ),
+          );
+        },
         closeTab: (tabId) => {
           if (isTabCloseLocked({ kind: "epic", id: tabId })) return;
+          const prior = get();
+          const closing = prior.tabsById[tabId];
+          const epicIndex = prior.openTabOrder.indexOf(tabId);
+          const location = captureHeaderLocation(
+            readTabStripLayout(),
+            { kind: "epic", id: tabId },
+            epicIndex,
+          );
+          if (closing !== undefined && epicIndex >= 0)
+            recordClosedHeaderTab({
+              kind: "epic",
+              tab: closing,
+              canvas: prior.canvasByTabId[tabId] ?? EMPTY_CANVAS,
+              ...location,
+            });
           set((state) => {
             const tab = state.tabsById[tabId];
             if (tab === undefined) return state;
@@ -1519,6 +1587,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         closeTabsForEpics: (epicIds) => {
+          pruneRecoveryEpics(epicIds);
           const targetEpicIds = new Set(epicIds);
           if (targetEpicIds.size === 0) return;
           // Cancel any in-flight epic-title backstop timers so a deletion
@@ -1841,6 +1910,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           }
           const tab = get().tabsById[tabId];
           if (tab === undefined) return null;
+          discardRecoveryTab(tabId);
           set((state) => {
             const removed = new Set([tabId]);
             return {
@@ -2045,6 +2115,10 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           const after = currentNestedFocusTargetForTab(get(), tabId);
           const target = targetPane === null ? null : after;
           return target;
+        },
+
+        ensureEmptyPaneInTab: (tabId) => {
+          set((state) => updateTabCanvas(state, tabId, ensureEmptyCanvasPane));
         },
 
         openBlankTabInPane: (tabId, paneId) => {
@@ -2541,6 +2615,12 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             });
           });
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+          recordClosedCanvas(
+            get().tabsById[tabId],
+            beforeCanvas,
+            get().canvasByTabId[tabId],
+            false,
+          );
         },
 
         closeConfirmedDeletedChatTiles: (epicId, chatId, hostId) => {
@@ -2572,9 +2652,18 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             });
           });
 
-          targets.forEach(({ tabId, paneId, instanceId }) => {
-            get().closeCanvasTab(tabId, paneId, instanceId);
-          });
+          pruneRecoveryTiles(
+            (tile, ownerEpicId) =>
+              ownerEpicId === epicId &&
+              tile.type === "chat" &&
+              tile.id === chatId &&
+              tile.hostId === hostId,
+          );
+          withoutTabRecovery(() =>
+            targets.forEach(({ tabId, paneId, instanceId }) => {
+              get().closeCanvasTab(tabId, paneId, instanceId);
+            }),
+          );
         },
 
         prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {
@@ -2611,6 +2700,12 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           );
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+          recordClosedCanvas(
+            get().tabsById[tabId],
+            beforeCanvas,
+            get().canvasByTabId[tabId],
+            true,
+          );
         },
 
         closeRightCanvasTabs: (tabId, paneId, tileTabId) => {
@@ -2631,6 +2726,12 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           );
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+          recordClosedCanvas(
+            get().tabsById[tabId],
+            beforeCanvas,
+            get().canvasByTabId[tabId],
+            true,
+          );
         },
 
         prepareCloseRightCanvasTabsFocusTarget: (tabId, paneId, tileTabId) => {
@@ -2666,6 +2767,12 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           );
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+          recordClosedCanvas(
+            get().tabsById[tabId],
+            beforeCanvas,
+            get().canvasByTabId[tabId],
+            true,
+          );
         },
 
         prepareCloseAllCanvasTabsFocusTarget: (tabId, paneId) => {
@@ -2698,6 +2805,12 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           );
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+          recordClosedCanvasPane(
+            get().tabsById[tabId],
+            beforeCanvas,
+            get().canvasByTabId[tabId],
+            paneId,
+          );
         },
 
         prepareCloseCanvasPaneFocusTarget: (tabId, paneId) => {
@@ -2794,6 +2907,13 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         removeHostTerminalRefs: (hostId, terminalId) => {
+          pruneRecoveryTiles(
+            (tile) =>
+              tile.type === "terminal" &&
+              !isUnsupportedEpicTerminalRef(tile) &&
+              tile.hostId === hostId &&
+              tile.id === terminalId,
+          );
           set((state) => {
             const entries = Object.entries(state.canvasByTabId).map(
               ([tabId, canvas]) =>

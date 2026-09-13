@@ -15,6 +15,7 @@ import {
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import {
   emptyLandingDraftWorkspaceSnapshot,
+  freshLandingMirrorState,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 
@@ -72,6 +73,7 @@ function makeDraft(input: {
     settings: null,
     composerMode: "chat",
     workspace: emptyLandingDraftWorkspaceSnapshot(),
+    ...freshLandingMirrorState(),
   };
 }
 

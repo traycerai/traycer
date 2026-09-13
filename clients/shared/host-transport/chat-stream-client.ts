@@ -17,6 +17,7 @@ import {
   type ProjectedChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   IStreamSession,
   StreamCloseReason,
@@ -141,9 +142,15 @@ export interface ChatStreamCallbacks {
       { readonly kind: "heldUpdatesChanged" }
     >,
   ) => void;
+  /**
+   * `retryCause` is the host's reason for a retryable close, on the
+   * `reconnecting` transition it causes, and `null` otherwise (see
+   * `StatusChangeHandler`).
+   */
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    retryCause: FatalErrorDetails | null,
   ) => void;
 
   // ─── The windowed line (`chat.subscribe@1.8`) ─────────────────────────────
@@ -233,8 +240,8 @@ export class ChatStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
+    this.session.onStatusChange((status, reason, retryCause) => {
+      this.callbacks.onConnectionStatus(status, reason, retryCause);
     });
   }
 
@@ -588,7 +595,7 @@ export class ChatStreamClient {
       // FULL-SNAPSHOT-LINE ONLY: the deep schemas' compatibility defaults
       // (`imageResolutions: []`, `serviceTier: null`, ...) are what
       // up-convert a down-negotiated host's pre-image messages; the
-      // structural check skips them, so a 1.5 snapshot taken shallow would
+      // structural check skips them, so a 1.6 snapshot taken shallow would
       // hand the GUI assistant messages missing fields it types as present
       // (`imageResolutions.map` throws). Down-negotiated hosts predate
       // full-chat-on-subscribe, so their snapshots are the small ones the

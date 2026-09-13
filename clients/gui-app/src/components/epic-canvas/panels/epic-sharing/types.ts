@@ -32,7 +32,21 @@ export type TeamRow =
       readonly avatarUrl: string | null;
     };
 
-export type SharingAccessLoadState = "loading" | "error" | "ready";
+/**
+ * `unauthorized` is NOT a flavour of `ready`, and that is the whole reason it
+ * exists as a fourth member rather than being folded into the empty case.
+ *
+ * `epic.listCollaborators` is a cloud read, so an unverified session never
+ * dispatches it - the query is disabled, `data` stays `undefined`, and every
+ * derived count is zero. Collapsed into `ready`, that renders "No direct
+ * collaborators yet." over an epic that may be shared with a dozen people:
+ * a definite claim about access, manufactured from a question nobody asked.
+ */
+export type SharingAccessLoadState =
+  | "loading"
+  | "error"
+  | "ready"
+  | "unauthorized";
 export type SharingAccessPermission = "owner" | "read_only";
 
 export interface TeamPendingState {

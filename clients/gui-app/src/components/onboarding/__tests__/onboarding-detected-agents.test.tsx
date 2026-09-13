@@ -180,6 +180,28 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-submit-login-code-mutation", () => ({
+  useProvidersSubmitLoginCode: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+    reset: vi.fn(),
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => ({
+  useProvidersTouchLogin: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+    reset: vi.fn(),
+  }),
+}));
+
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => vi.fn(() => Promise.resolve()),
+}));
+
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
   useHostOptions: () => ({
     hosts: [{ isActive: true, isLocalMachine: true }],

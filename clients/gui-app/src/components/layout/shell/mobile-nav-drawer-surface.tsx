@@ -12,19 +12,18 @@ import {
   m,
   useDragControls,
   useMotionValue,
-  useReducedMotion,
   useTransform,
   type AnimationPlaybackControls,
   type PanInfo,
 } from "motion/react";
 import {
-  NAV_DRAWER_SETTLE,
+  navDrawerSettleTransition,
   NAV_DRAWER_TAP_SLOP_PX,
-  NAV_DRAWER_SETTLE_REDUCED,
   resolvesToOpen,
 } from "@/components/layout/shell/nav-drawer-motion";
 import { useNavDrawerClosePull } from "@/components/layout/shell/use-nav-drawer-close-pull";
 import { useModalSurfaceContainment } from "@/components/layout/shell/use-modal-surface-containment";
+import { usePanelAnimationDuration } from "@/hooks/use-panel-animation-duration";
 import { cn } from "@/lib/utils";
 
 interface MobileNavDrawerSurfaceProps {
@@ -91,7 +90,7 @@ export function MobileNavDrawerSurface(
   // True from the moment a gesture or a programmatic settle takes the panel off
   // a resting position until it reaches the next one.
   const [inFlight, setInFlight] = useState(false);
-  const reducedMotion = useReducedMotion();
+  const animationDuration = usePanelAnimationDuration();
 
   // `open` is the REQUEST - what a tap on the hamburger, a menu row or Escape
   // asked for. `settledOpen` is what is actually true of the surface right now.
@@ -105,11 +104,11 @@ export function MobileNavDrawerSurface(
   const settledOpenRef = useRef(settledOpen);
   const openRef = useRef(open);
   const onOpenChangeRef = useRef(onOpenChange);
-  const reducedMotionRef = useRef(reducedMotion);
+  const animationDurationRef = useRef(animationDuration);
   useEffect(() => {
     openRef.current = open;
     onOpenChangeRef.current = onOpenChange;
-    reducedMotionRef.current = reducedMotion;
+    animationDurationRef.current = animationDuration;
   });
 
   // Written through eagerly rather than left to the next render pass, so a
@@ -141,9 +140,7 @@ export function MobileNavDrawerSurface(
       settleTargetRef.current = toOpen;
       setInFlight(true);
       settleRef.current = animate(x, target, {
-        ...(reducedMotionRef.current === true
-          ? NAV_DRAWER_SETTLE_REDUCED
-          : NAV_DRAWER_SETTLE),
+        ...navDrawerSettleTransition(animationDurationRef.current),
         // Only a settle that ARRIVES flips the semantics. An interrupted one
         // was overtaken - by a new gesture, a new request, or a resize - and
         // whatever overtook it owns the decision now.

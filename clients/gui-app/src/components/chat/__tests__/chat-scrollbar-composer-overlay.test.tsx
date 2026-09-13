@@ -193,6 +193,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
+              folded={new Set()}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -262,6 +263,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
+              folded={new Set()}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -316,9 +318,11 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       // ComposerSlotShell is module-private. Viewer mode mounts it with
       // bottomSpacing="normal" without the real ChatComposer / host stack.
       render(
-        <TooltipProvider delayDuration={0}>
-          <ChatLowerInteractionSurfaces {...viewerSurfacesProps()} />
-        </TooltipProvider>,
+        <TabHostProvider hostId="host-1">
+          <TooltipProvider delayDuration={0}>
+            <ChatLowerInteractionSurfaces {...viewerSurfacesProps()} />
+          </TooltipProvider>
+        </TabHostProvider>,
       );
 
       const notice = screen.getByText(
@@ -519,12 +523,14 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onAnswer: () => null,
     onSkip: () => null,
     onFork: null,
+    highlightedBlockId: null,
   };
   const approvals: ChatLowerApprovalsState = {
     pendingFileEditApprovals: [],
     pendingApprovals: [],
     onFileEditDecision: () => undefined,
     onApprovalDecision: () => undefined,
+    highlightedApprovalId: null,
   };
   const queue: ChatLowerQueueState = {
     editingItem: null,

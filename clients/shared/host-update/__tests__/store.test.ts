@@ -1343,6 +1343,7 @@ describe("commitAttemptMutation - claim baseline (D19) reconstruction and round 
     installGeneration: "gen-a",
     stageFingerprint: "fp-a",
     allowDowngrade: false,
+    acceptStoreFormatLoss: false,
   };
 
   it("preserves the claim baseline across create -> park -> resume", async () => {
@@ -1492,6 +1493,10 @@ describe("commitAttemptMutation - claim baseline (D19) reconstruction and round 
       installGeneration: "gen-a",
       stageFingerprint: null,
       allowDowngrade: false,
+      // `true`, so the park below proves the store reconstructs the consent
+      // and the refresh copies it - a normalizer that did not name the key
+      // would silently write it back as `false`.
+      acceptStoreFormatLoss: true,
     };
     const created = await commitAttemptMutation({
       handle,
@@ -1530,6 +1535,7 @@ describe("commitAttemptMutation - claim baseline (D19) reconstruction and round 
       installGeneration: "gen-b",
       stageFingerprint: "fp-b",
       allowDowngrade: false,
+      acceptStoreFormatLoss: true,
     };
     expect(parked.record.claim).toEqual(refreshedClaim);
 

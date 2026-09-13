@@ -1,3 +1,7 @@
+import {
+  withoutTabRecovery,
+  pruneRecoveryTiles,
+} from "@/lib/tab-recovery/history";
 /**
  * This is the main orchestrator that composes extracted sub-components:
  * - epic-sidebar-header.tsx: header with collapse/drag
@@ -36,6 +40,7 @@ import {
   ChatFilterMenu,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
 import { CommGraphOpenMenuItem } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
+import { DeletedArtifactsOpenMenuItem } from "@/components/epic-canvas/deleted-artifacts/deleted-artifacts-open-menu-item";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -1533,6 +1538,12 @@ function SidebarBulkDeleteController(props: {
         const successfulIds = targets.flatMap((target, index) =>
           results[index].status === "fulfilled" ? [target.id] : [],
         );
+        pruneRecoveryTiles(
+          (tile, epicId) =>
+            epicId === props.epicId &&
+            tile.type !== "chat" &&
+            successfulIds.includes(tile.id),
+        );
         const failedIds = targets.flatMap((target, index) =>
           results[index].status === "rejected" ? [target.id] : [],
         );
@@ -1552,7 +1563,9 @@ function SidebarBulkDeleteController(props: {
         if (openTargets.length > 0) {
           navigateNested(props.epicId, props.tabId, () => {
             openTargets.forEach((found) => {
-              closeCanvasTab(props.tabId, found.paneId, found.instanceId);
+              withoutTabRecovery(() =>
+                closeCanvasTab(props.tabId, found.paneId, found.instanceId),
+              );
             });
             const canvas =
               useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??
@@ -2253,6 +2266,7 @@ function ChatHeaderMoreMenu(props: {
 }
 
 function ArtifactHeaderMoreMenu(props: {
+  readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
   readonly searching: boolean;
@@ -2303,6 +2317,7 @@ function ArtifactHeaderMoreMenu(props: {
             Search artifacts
           </DropdownMenuItem>
         ) : null}
+        <DeletedArtifactsOpenMenuItem epicId={props.epicId} />
         <DropdownMenuItem onSelect={props.onCollapseAll}>
           <CopyMinus className="size-4" />
           Collapse all
@@ -2346,6 +2361,7 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
         />
       )}
       <ArtifactHeaderMoreMenu
+        epicId={props.epicId}
         tabId={props.tabId}
         collapsed={props.collapsed}
         searching={props.mode === "search"}

@@ -1,3 +1,4 @@
+import { movedTabLayout } from "../windows/moved-tab-layout";
 import { dialog } from "electron";
 import { config } from "../../config";
 import { log } from "../app/logger";
@@ -247,6 +248,11 @@ async function openEpicInNewWindow(
             bridge.perWindowState.update(windowId, {
               epicTabs: [destinationTab],
               activeTabId: movedTabId,
+              tabStripLayout: movedTabLayout(
+                sourceSnapshot.tabStripLayout,
+                "epic",
+                movedTabId,
+              ),
               canvasByTabId:
                 destinationCanvas === undefined
                   ? {}
@@ -342,6 +348,11 @@ async function openDraftInNewWindow(
               canvasByTabId: {},
               landingDrafts: [movedDraft],
               activeLandingDraftId: draftId,
+              tabStripLayout: movedTabLayout(
+                sourceSnapshot.tabStripLayout,
+                "draft",
+                draftId,
+              ),
             }),
           )
           .catch((error: unknown) => {

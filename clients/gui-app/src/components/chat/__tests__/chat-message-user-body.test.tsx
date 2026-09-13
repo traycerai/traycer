@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import { useState, type ReactNode } from "react";
@@ -21,7 +22,10 @@ import {
   parseComposerClipboardHtml,
 } from "@/lib/composer/composer-clipboard";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type { ChatMessageUserActions } from "@/components/chat/chat-message";
+import {
+  ChatMessage,
+  type ChatMessageUserActions,
+} from "@/components/chat/chat-message";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
 import {
   chatTranscriptJumpKey,
@@ -33,6 +37,7 @@ import {
 } from "@/stores/chats/chat-find-force-store-context";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 const attachmentMocks = vi.hoisted(() => {
@@ -899,6 +904,10 @@ describe("<UserMessageBody /> agent messages", () => {
     expect(screen.getByText("Review Agent")).toBeTruthy();
     expect(screen.getByText(/Investigate this failure/)).toBeTruthy();
     expect(screen.queryByText("Message")).toBeNull();
+    // The arrival stamp trails the header - the one place a timeline is
+    // hardest to reconstruct otherwise, since these rows have no human send
+    // above them.
+    expect(screen.getAllByTestId("chat-message-timestamp")).toHaveLength(1);
     // Reply-expected is a compact icon in the always-visible header; the
     // spelled-out line only appears once the card is expanded.
     expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
@@ -919,6 +928,36 @@ describe("<UserMessageBody /> agent messages", () => {
         .closest(".md-prose")
         ?.hasAttribute("data-quotable"),
     ).toBe(false);
+  });
+
+  // `AgentMessageDisplayView` is wired to `message.sentAt ?? message.createdAt`
+  // rather than `createdAt` alone: a nested steer row's `createdAt` gets
+  // re-anchored to its turn's start so it sorts contiguously with the turn
+  // (a SORT position, not a send time), and `sentAt` is where the real
+  // instant survives that re-anchor. `createdAt` and `sentAt` are set far
+  // enough apart here that using the wrong one is not just wrong but
+  // detectably wrong under `formatMessageTime`'s minute precision.
+  it("stamps the received card with sentAt, not createdAt, when the two diverge", () => {
+    const sentAt = Date.now() - 5 * 60_000;
+    const createdAt = Date.now() - 20 * 60_000;
+    render(
+      <UserMessageBody
+        actions={null}
+        message={{
+          ...agentMessage("Investigate this failure."),
+          createdAt,
+          sentAt,
+        }}
+      />,
+    );
+
+    const now = Date.now();
+    const expected = formatMessageTime(sentAt, now);
+    const wrongIfUsingCreatedAt = formatMessageTime(createdAt, now);
+    expect(expected).not.toBe(wrongIfUsingCreatedAt);
+    expect(screen.getByTestId("chat-message-timestamp").textContent).toBe(
+      expected,
+    );
   });
 
   it("parks a receipt jump for the sender's chat tile when the sender name is clicked", () => {
@@ -1551,3 +1590,126 @@ function restoreProperty(
   }
   Object.defineProperty(target, key, descriptor);
 }
+
+describe("<ChatMessage /> sender overline timestamp", () => {
+  const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders exactly one timestamp on a sent YOU row", () => {
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    screen.getByText("You");
+    expect(screen.getAllByTestId("chat-message-timestamp")).toHaveLength(1);
+  });
+
+  // Paired with the test above: same fixture, only `statusLabel` flipped to
+  // "Pending" - the one status label a user row ever carries
+  // (`statusLabel === null` is the exact queued gate in chat-message.tsx). A
+  // queued row has not been sent yet, so it leads with the status instead of
+  // a send time it does not have.
+  it("renders no timestamp on a queued (Pending) YOU row", () => {
+    render(
+      <ChatMessage
+        message={{ ...plainUserMessage("Status?"), statusLabel: "Pending" }}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    screen.getByText("You - Pending");
+    expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
+  });
+
+  // Same `sentAt`-over-`createdAt` contract as the agent-sender received
+  // card, on the plain "YOU" overline: `chat-message.tsx` reads
+  // `message.sentAt ?? message.createdAt`, so a nested steer row (whose
+  // `createdAt` is re-anchored to its turn's start) still stamps the moment
+  // it was actually sent.
+  it("stamps the overline with sentAt, not createdAt, when the two diverge", () => {
+    const sentAt = Date.now() - 5 * 60_000;
+    const createdAt = Date.now() - 20 * 60_000;
+    render(
+      <ChatMessage
+        message={{ ...plainUserMessage("Status?"), createdAt, sentAt }}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    const now = Date.now();
+    const expected = formatMessageTime(sentAt, now);
+    const wrongIfUsingCreatedAt = formatMessageTime(createdAt, now);
+    expect(expected).not.toBe(wrongIfUsingCreatedAt);
+    expect(screen.getByTestId("chat-message-timestamp").textContent).toBe(
+      expected,
+    );
+  });
+
+  it("shows the unabridged timestamp on hover, restoring the weekday/year/seconds the row label drops", async () => {
+    const user = userEvent.setup();
+    const sentAt = new Date(2026, 3, 23, 15, 45, 12).getTime();
+    render(
+      <ChatMessage
+        message={{ ...plainUserMessage("Status?"), createdAt: sentAt }}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    const stamp = screen.getByTestId("chat-message-timestamp");
+    await user.hover(stamp);
+
+    const expected = formatFullTimestamp(sentAt);
+    await waitFor(() => {
+      expect(screen.getAllByText(expected).length).toBeGreaterThan(0);
+    });
+  });
+
+  // Paired with "renders exactly one timestamp on a sent YOU row" above: same
+  // fixture, `createdAt` flipped to an instant `Date` itself rejects.
+  // `ChatMessageTimestamp` renders nothing rather than crash the row on
+  // `toISOString()`, which throws instead of producing "Invalid Date".
+  //
+  // Both input classes are covered because they fail differently on the way
+  // in: `NaN` is never a time, while 8.64e15 + 1 is a perfectly finite number
+  // that a `Date` still cannot represent - so a guard written as
+  // `Number.isFinite` would let the second one through to the throw.
+  it.each([
+    ["NaN", Number.NaN],
+    ["one millisecond past the maximum representable instant", 8.64e15 + 1],
+  ])(
+    "renders no timestamp element, and no orphaned separator, for %s",
+    (_label, createdAt) => {
+      render(
+        <ChatMessage
+          message={{ ...plainUserMessage("Status?"), createdAt }}
+          actions={null}
+          backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+          nextStepActions={null}
+        />,
+      );
+
+      expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
+      // The separator is drawn by `chat-message.tsx`, NOT by the stamp, so a
+      // component that renders `null` leaves the dot stranded unless the call
+      // site drops it too. Asserting only the label's own text would miss
+      // that - it lives in a sibling span - so read the whole overline: it
+      // must be "You", never "You · ".
+      const overline = screen.getByText("You").parentElement;
+      expect(overline?.textContent).toBe("You");
+    },
+  );
+});

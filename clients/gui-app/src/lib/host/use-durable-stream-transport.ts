@@ -59,6 +59,8 @@ export function useDurableStreamTransportFactory(): (
       runnerHost: liveRef.current.runnerHost,
       subscribeBearerRotation: (onRotation) =>
         liveRef.current.globalClient.onBearerRotated(onRotation),
+      subscribeCloudVerdictChange: (onChange) =>
+        liveRef.current.globalClient.onCloudVerdictChanged(onChange),
       // Fires on any directory change; `openDurableStreamTransport` filters it
       // down to a genuine endpoint MOVE for THIS `hostId` before re-dialing,
       // so a host restart / re-provision reconnects the session at once
@@ -69,10 +71,14 @@ export function useDurableStreamTransportFactory(): (
       },
       // Recovery evidence targets THIS tab's host, not the effective one: a
       // tab's queries are keyed by its own `hostId`, and only this transport
-      // heartbeats that host when it is not the current selection. The
-      // no-argument member is exact here - `hostId` is captured at open time.
-      notifyRecoveredForNamedHost: () =>
-        liveRef.current.globalClient.notifyHostAvailabilityRecovered(hostId),
+      // heartbeats that host when it is not the current selection. The member
+      // names no host because `hostId` is captured at open time; the kind is
+      // the transport's, passed through untouched.
+      notifyRecoveredForNamedHost: (kind) =>
+        liveRef.current.globalClient.notifyHostAvailabilityRecovered(
+          hostId,
+          kind,
+        ),
     });
   }, []);
 }

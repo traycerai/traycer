@@ -7,16 +7,26 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { HostKind } from "@traycer-clients/shared/host-client/host-directory";
 import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostLease } from "@/hooks/host/use-host-lease";
 import {
   authenticatedHostStreamKey,
   authenticatedOwnerIdentityKey,
 } from "@/hooks/host/use-host-stream-client-for";
+import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
+import {
+  isEpicParked,
+  retryDeferredEpicParks,
+  subscribeEpicParking,
+} from "@/lib/epics/epic-parking";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -33,6 +43,7 @@ import {
   createStreamFlushCoordinator,
 } from "@/stores/chats/stream-flush-coordinator";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { setEpicChatWorkProbe } from "@/stores/epics/open-epic/session-registry";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 const registry = new ChatSessionRegistry({
@@ -57,6 +68,9 @@ const STREAM_FLUSH_COORDINATOR = createStreamFlushCoordinator(
 );
 const CHAT_SESSION_SCOPE_SEPARATOR = "\u0000";
 
+/** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
+const CHAT_SESSION_WAKE_REASON = "user-retry";
+
 const handleHostIds = new WeakMap<ChatSessionStoreHandle, string | null>();
 
 let streamClientFactoryOverride: ChatStreamClientFactory | null = null;
@@ -80,6 +94,67 @@ export function getChatSessionRegistry(): ChatSessionRegistry {
   return registry;
 }
 
+// The cross-plane wiring for a park verdict, both halves anchored HERE because
+// this module is downstream of both: it already imports `epic-parking`, which
+// imports the open-epic registry, so it can reach either without closing a
+// cycle - and neither of them can reach the chat registry without one.
+//
+// Registering the probe is what lets `canPark` see a chat holding work before
+// the epic-level decision force-disposes it; the subscription is the other half
+// and is not optional. A park refused for chat work waits on the OPEN-EPIC
+// registry's signal, which an epic with no session entry never emits, so
+// without this the refusal is permanent for exactly the epics whose chats
+// caused it.
+setEpicChatWorkProbe((epicId) => registry.unsettledWorkForEpic(epicId));
+
+/**
+ * The registry's own signal is NOT enough, and assuming it was left this retry
+ * mostly inert.
+ *
+ * `unsettledWorkForEpic` reads `activeTurn`, `runStatus`, the approval lists,
+ * `pendingActions`, `acceptedActions`, `failedSendRestoration` and `restore`
+ * out of each chat's STORE, but `registry.subscribe` relays only the shared
+ * session registry's membership and demand events - acquire, release, dispose.
+ * An inner store write is none of those. So the exact moments this retry exists
+ * for - a chat's last action settling, a restoration slot being taken into the
+ * composer, a restore completing - emitted nothing, and a park deferred for
+ * chat work sat waiting for some unrelated acquire elsewhere to shake it loose.
+ *
+ * Every one of those settlements is a store write and nothing else, which is
+ * why the watch is on the store rather than on any narrower signal.
+ *
+ * So watch the stores themselves, rebinding on every membership change because
+ * membership is precisely what changes the set of live handles. Firing on
+ * every store write is deliberate and cheap: `retryDeferredEpicParks` walks
+ * this window's open-tab entries and returns immediately for every epic not
+ * sitting on a refused park, which is all of them almost all of the time.
+ */
+const chatStoreWatches = new Map<ChatSessionStoreHandle, () => void>();
+
+function rebindChatStoreWatches(): void {
+  const live = new Set(registry.listHandles());
+  for (const [handle, unsubscribe] of Array.from(chatStoreWatches)) {
+    if (live.has(handle)) continue;
+    unsubscribe();
+    chatStoreWatches.delete(handle);
+  }
+  for (const handle of live) {
+    if (chatStoreWatches.has(handle)) continue;
+    chatStoreWatches.set(
+      handle,
+      handle.store.subscribe(() => {
+        retryDeferredEpicParks();
+      }),
+    );
+  }
+}
+
+registry.subscribe(() => {
+  rebindChatStoreWatches();
+  retryDeferredEpicParks();
+});
+rebindChatStoreWatches();
+
 export function getChatSessionHandleHostId(
   handle: ChatSessionStoreHandle,
 ): string | null {
@@ -90,6 +165,28 @@ export function disposeAllChatSessions(): void {
   registry.disposeAll();
 }
 
+/**
+ * Renderer parking (plan C, decision C1): a parked epic holds no
+ * `chat.subscribe`.
+ *
+ * Wired here, on the plane that OWNS chat sessions, rather than called from
+ * the parking module - so that module stays a near-leaf that knows about
+ * visibility, a clock and the epic session registry, and each plane answers
+ * for its own subscriptions. It is also what makes the release complete
+ * without the tiles' cooperation: a chat tile releasing its lease leaves the
+ * session WARM with its websocket open for `DEFAULT_CHAT_IDLE_TTL_MS`, and one
+ * surviving subscription keeps the epic visible-leased on the host, which is
+ * the whole thing parking exists to end.
+ *
+ * Module-scoped and never torn down, matching the registry singleton it acts
+ * on. `isEpicParked` is re-read rather than trusted from the notification: the
+ * signal fires on both edges and only the parked one releases anything.
+ */
+subscribeEpicParking((epicId) => {
+  if (!isEpicParked(epicId)) return;
+  registry.disposeForEpic(epicId);
+});
+
 export function useChatSessionHandle(
   chatId: string,
   hostId: string,
@@ -97,6 +194,7 @@ export function useChatSessionHandle(
 ): ChatSessionStoreHandle | null {
   const epicId = useOpenEpicId();
   const hostEntry = useHostDirectoryEntry(hostId);
+  const lease = useHostLease(hostId);
   // Chat is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
   // session store for the session's warm lifetime, NOT by this tile, so closing
   // the tab (tile unmount) no longer `.close()`s the socket and strands the warm
@@ -110,26 +208,38 @@ export function useChatSessionHandle(
   const openTransport = useDurableStreamTransportFactory();
   const queryClient = useQueryClient();
 
-  // Transport identity for the scope key + readiness gate. The test seam is a
-  // clearly separate top-level branch; the production identity is derived by the
-  // shared `authenticatedHostStreamKey` ONLY when the factory is not
+  // Dialability, for the gate below and never for the scope: null with no
+  // request context, no websocket URL, or a CONFIRMED refusal. The test seam
+  // is a clearly separate top-level branch; the production value is derived by
+  // the shared `authenticatedHostStreamKey` ONLY when the factory is not
   // overridden, so tests drive the stream through the override and never touch
   // the real request context.
   const transportKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
       : authenticatedHostStreamKey(globalClient, hostEntry);
-  // Owner-identity discriminator (R-1): `transportKey` deliberately omits a
-  // remote host's public key (dialability, not identity), so a same-host
-  // remote public-key rotation would otherwise leave this session pinned to
-  // a `ChatStreamClient` built against the stale key. Folded into the scope
-  // key alongside `transportKey`, not in place of it, so every existing
-  // rebuild trigger (host swap, user switch, endpoint dialability) is
-  // preserved unchanged.
+  // Owner identity (R-1), which with the host's kind is the whole of the
+  // session's scope: `hostId + userId` for a local host, plus the public key
+  // and relay attach URL for a remote one, so a remote public-key rotation
+  // still rebuilds. Null with no request context or no directory entry.
   const ownerIdentityKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
       : authenticatedOwnerIdentityKey(globalClient, hostEntry);
+  const hostKind = hostEntry?.kind ?? null;
+  // Whether this chat may hold its session. A dialable host may. So may a host
+  // that is coming back, which is what keeps the store and its transcript
+  // through a restart while the owned transport re-dials underneath (it reads
+  // the endpoint live on every dial): this machine's host in its booting
+  // shape, and any host whose lease says `restarting-expected`, a hold the
+  // lease's own bounds end. Everything else that nulls `transportKey` still
+  // releases: identity loss, a missing entry, and a confirmed refusal with no
+  // restart episode vouching for the host.
+  const sessionAllowed =
+    ownerIdentityKey !== null &&
+    (transportKey !== null ||
+      isLocalHostBootingEntry(hostEntry) ||
+      lease?.status === "restarting-expected");
 
   const [handle, setHandle] = useReducer(
     (
@@ -152,21 +262,24 @@ export function useChatSessionHandle(
       setHandle(null);
       return;
     }
-    // `transportKey` is null until there is an authenticated request context and
-    // a dialable host endpoint (or "test-..." when the factory is overridden).
-    // `ownerIdentityKey` is null under that same gate (both derive from the
-    // same `globalClient` + `hostEntry`), so this never masks a ready session
-    // behind a not-yet-known identity.
-    if (transportKey === null || ownerIdentityKey === null) {
+    // See `sessionAllowed`, which also narrows `ownerIdentityKey` to non-null
+    // for the scope below.
+    if (!sessionAllowed) {
       setHandle(null);
       return;
     }
+    // Identity only. The websocket URL and the host version stay out: both
+    // change when a host restarts, and a scope that moved with them disposed
+    // the store and its transcript on every restart (the "Still opening this
+    // agent" incident). A version change is safe to keep a store across: the
+    // transport renegotiates on every subscribe, and a legacy snapshot resets
+    // windowed state atomically.
     const scopeKey = chatSessionScopeKey({
       epicId,
       chatId,
       userId,
       hostId,
-      transportKey,
+      hostKind,
       ownerIdentityKey,
     });
 
@@ -177,6 +290,14 @@ export function useChatSessionHandle(
     // revived session is never handed a dead transport. `retry()` re-invokes
     // this factory, rebuilding the transport with live deps.
     let acquiredHandle: ChatSessionStoreHandle | null = null;
+    // The socket THIS chat's stream rides, captured as the transport is built.
+    // A mutable slot rather than a value because `retry()` re-invokes the
+    // factory and builds a new one: a wake must reach whichever socket is
+    // current, not the one that existed when the session was first opened.
+    // `null` until the first build, and on the override path, where no
+    // transport of ours exists to wake.
+    let boundStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null =
+      null;
     const factory: ChatStreamClientFactory = (
       factoryEpicId,
       factoryChatId,
@@ -196,13 +317,15 @@ export function useChatSessionHandle(
       const result = openOwnedDurableStreamClient(
         openTransport,
         hostId,
-        (ws) =>
-          new ChatStreamClient({
+        (ws) => {
+          boundStreamClient = ws;
+          return new ChatStreamClient({
             wsStreamClient: ws,
             epicId: factoryEpicId,
             chatId: factoryChatId,
             callbacks,
-          }),
+          });
+        },
         () => acquiredHandle?.store.getState().retry(),
       );
       return {
@@ -246,6 +369,27 @@ export function useChatSessionHandle(
           streamFlushCoordinator: STREAM_FLUSH_COORDINATOR,
           onAuthError,
           onProviderAuthError,
+          // THIS chat's socket, never the app-wide one. Each chat session owns
+          // its own transport, so a wake resolved from `useWsStreamClient()`
+          // would collapse the backoff on a different connection and leave
+          // this one sitting out its delay - a button that appears to work and
+          // does nothing. `probeFirst: false` because a person pressing it is
+          // demanding a re-dial, and the probe-first flavour answers a
+          // live-but-stuck socket with nothing.
+          wakeTransport: () => {
+            boundStreamClient?.reconnectAll(CHAT_SESSION_WAKE_REASON, {
+              probeFirst: false,
+              wakeProbe: null,
+            });
+          },
+          // The same socket the wake above reaches, asked instead whether it
+          // is worth waking. `?? false` covers both "no transport of ours"
+          // (the `streamClientFactoryOverride` path never assigns
+          // `boundStreamClient`) and "this transport does not measure
+          // silence" (the local `WsStreamClient` leaves the member absent):
+          // neither is evidence of a dead session, so neither escalates.
+          transportSilentFor: (ms) =>
+            boundStreamClient?.isSilentFor?.(ms) ?? false,
         }),
     );
     acquiredHandle = next;
@@ -257,16 +401,17 @@ export function useChatSessionHandle(
     };
     // `openTransport` is referentially stable and reads its deps (auth, runner
     // host, credential source, directory) live, so the recovery wiring is never
-    // a stale-capture risk and does not belong in this array. `transportKey`
-    // already encodes user + host + endpoint identity; `ownerIdentityKey`
-    // additionally discriminates a remote host's public-key rotation (R-1).
-    // `queryClient` is the stable TanStack client used by the
-    // provider-reauth invalidation.
+    // a stale-capture risk and does not belong in this array. `transportKey` is
+    // deliberately absent: it moves with the endpoint, and only its share of
+    // `sessionAllowed` may end the session. `ownerIdentityKey` discriminates a
+    // remote host's public-key rotation (R-1). `queryClient` is the stable
+    // TanStack client used by the provider-reauth invalidation.
   }, [
     chatId,
     hostId,
+    hostKind,
     epicId,
-    transportKey,
+    sessionAllowed,
     ownerIdentityKey,
     userId,
     enabled,
@@ -340,7 +485,7 @@ function chatSessionScopeKey(input: {
   readonly chatId: string;
   readonly userId: string | null;
   readonly hostId: string;
-  readonly transportKey: string;
+  readonly hostKind: HostKind | null;
   readonly ownerIdentityKey: string;
 }): string {
   return [
@@ -348,7 +493,8 @@ function chatSessionScopeKey(input: {
     input.chatId,
     input.userId ?? "anonymous",
     input.hostId,
-    input.transportKey,
+    // `null` only on the test-factory seam, which binds no directory entry.
+    input.hostKind ?? "none",
     input.ownerIdentityKey,
   ].join(CHAT_SESSION_SCOPE_SEPARATOR);
 }

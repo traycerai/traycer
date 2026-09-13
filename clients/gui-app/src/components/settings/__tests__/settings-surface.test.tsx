@@ -47,4 +47,17 @@ describe("<SettingsSurface />", () => {
       "appearance",
     );
   });
+
+  // A page result scrolls the pane the SURFACE owns, so every section has one
+  // whatever its panel renders.
+  it("wraps the panel in the pane a page result scrolls to the top", () => {
+    testState.pathname = "/settings/appearance";
+    render(<SettingsSurface lastPath={null} />);
+
+    expect(
+      screen
+        .getByTestId("settings-panel-probe")
+        .closest("[data-settings-panel-pane]"),
+    ).not.toBeNull();
+  });
 });

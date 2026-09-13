@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HarnessModelPickerModelSettingsFooter,
   type ReasoningFooterConfig,
@@ -9,6 +9,10 @@ import type {
   ModelOption,
   ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
+import {
+  DEFAULT_COMPOSER_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 
 // Harness-reported reasoning levels are unbounded (some harnesses advertise
 // many more than a footer row can lay out side by side), so the fixture
@@ -60,14 +64,27 @@ function serviceTierConfig(
   return { selectedModel, value, onChange };
 }
 
+// The overflowing STRIP is the `list` control's problem - the slider has one
+// track whatever the level count - so this suite pins the setting rather than
+// riding the default, which is `slider`.
 describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
-  afterEach(() => cleanup());
+  beforeEach(() => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, reasoningFooterControl: "list" },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+  });
 
   it("renders and lets you select every harness-reported level even when more levels exist than fit in a narrow row", () => {
     const onChange = vi.fn<(next: string) => void>();
     render(
       <div style={{ width: "140px" }}>
         <HarnessModelPickerModelSettingsFooter
+          reasoningMax={null}
           reasoning={reasoningConfig("minimal", SEVEN_OPTIONS, onChange)}
           serviceTier={null}
         />
@@ -87,6 +104,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("is a real horizontal scroller whose inner row keeps the even spread until it overflows", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -112,6 +130,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
     try {
       render(
         <HarnessModelPickerModelSettingsFooter
+          reasoningMax={null}
           reasoning={reasoningConfig("ultra", SEVEN_OPTIONS, vi.fn())}
           serviceTier={null}
         />,
@@ -131,6 +150,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("shows no edge fade when the strip does not overflow its scroller", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -149,6 +169,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("fades only the right edge when an overflowing strip is scrolled to its start", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -172,6 +193,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("fades only the left edge when an overflowing strip is scrolled to its end", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -195,6 +217,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("fades both edges when an overflowing strip is scrolled to its middle", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={null}
       />,
@@ -215,6 +238,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("keeps the Fast service-tier toggle and its divider outside the reasoning scroller", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("low", SEVEN_OPTIONS, vi.fn())}
         serviceTier={serviceTierConfig(FAST_MODEL, "", vi.fn())}
       />,
@@ -228,6 +252,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("wires the scroller when a model with levels replaces one that reported none", () => {
     const { rerender } = render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("", [], vi.fn())}
         serviceTier={serviceTierConfig(FAST_MODEL, "", vi.fn())}
       />,
@@ -238,6 +263,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
 
     rerender(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("minimal", SEVEN_OPTIONS, vi.fn())}
         serviceTier={serviceTierConfig(FAST_MODEL, "", vi.fn())}
       />,
@@ -259,6 +285,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   it("does not render the thinking-effort group when the model reports no reasoning levels", () => {
     render(
       <HarnessModelPickerModelSettingsFooter
+        reasoningMax={null}
         reasoning={reasoningConfig("", [], vi.fn())}
         serviceTier={serviceTierConfig(FAST_MODEL, "", vi.fn())}
       />,

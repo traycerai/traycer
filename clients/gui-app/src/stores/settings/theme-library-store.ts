@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { z } from "zod";
 import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
 import {
+  ensureVisibleThemeBorders,
   themeDefinitionSchema,
   type ThemeDefinition,
 } from "@/lib/themes/theme-definition";
@@ -9,7 +10,7 @@ import { THEME_PRESETS } from "@/lib/theme-presets";
 import { getThemeImportConflicts } from "@/lib/themes/theme-library";
 
 const librarySchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   themes: z.array(themeDefinitionSchema).max(500),
   selected: z.object({
     light: z.string().nullable(),
@@ -24,7 +25,7 @@ const librarySchema = z.object({
   contrast: z.number().min(70).max(130).default(100),
 });
 interface Library {
-  version: 1;
+  version: 2;
   themes: ThemeDefinition[];
   selected: { light: string | null; dark: string | null };
   glassOpacity: number;
@@ -68,7 +69,7 @@ interface ThemeLibraryState extends Library {
 }
 const key = persistKey(STORE_KEYS.themeLibrary);
 const emptyLibrary: Library = {
-  version: 1,
+  version: 2,
   themes: [],
   selected: { light: null, dark: null },
   glassOpacity: 100,
@@ -80,15 +81,59 @@ const emptyLibrary: Library = {
   contrast: 100,
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * v1 -> v2: a VS Code theme imported before `theme-import.ts` started
+ * repairing collapsed borders at import time (`ensureVisibleThemeBorders`)
+ * is already sitting in `themes` with invisible canvas-border/border/input
+ * tokens, and nothing else will ever repair it now that the applier no
+ * longer does a second, apply-time pass. Runs once per rehydrate, gated on
+ * the stored `version` below - a theme whose borders are already visible
+ * comes back byte-identical (`ensureVisibleThemeBorders` returns no
+ * overrides for it), so this is safe to run every time a v1 blob is read,
+ * not just the first.
+ */
+function migrateLibraryBorders(themes: unknown): unknown {
+  if (!Array.isArray(themes)) return themes;
+  return themes.map((entry: unknown) => {
+    const parsed = themeDefinitionSchema.safeParse(entry);
+    if (!parsed.success) return entry;
+    // Only a theme with a non-null `syntax` was ever imported from VS Code -
+    // that is the provenance marker `createThemeFromPreset` hardcodes to
+    // `null`. The repair targets imported themes whose borders collapsed
+    // against Traycer's surfaces; Traycer's own presets sit intentionally
+    // below the 1.3 floor for those tokens, so they must never be "repaired".
+    if (parsed.data.syntax === null) return entry;
+    const overrides = ensureVisibleThemeBorders(parsed.data.colors);
+    if (Object.keys(overrides).length === 0) return entry;
+    return {
+      ...parsed.data,
+      colors: { ...parsed.data.colors, ...overrides },
+    } satisfies ThemeDefinition;
+  });
+}
+
+function migrateLibraryToV2(value: unknown): unknown {
+  if (!isRecord(value) || value.version !== 1) return value;
+  return {
+    ...value,
+    version: 2,
+    themes: migrateLibraryBorders(value.themes),
+  };
+}
+
 function readLibrary(): Library {
   if (typeof localStorage === "undefined") return emptyLibrary;
   const raw = localStorage.getItem(key);
   if (raw === null) return emptyLibrary;
   try {
-    return librarySchema.parse(JSON.parse(raw));
+    return librarySchema.parse(migrateLibraryToV2(JSON.parse(raw)));
   } catch {
     throw new Error(
-      "Your saved theme library could not be read. Reset the library to start again, or recover the stored data before resetting.",
+      "Your saved theme library could not be read. You can reset the library to start again. Resetting permanently deletes saved themes and restores the theme-related preferences listed in the confirmation.",
     );
   }
 }

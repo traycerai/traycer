@@ -80,12 +80,6 @@ const RECENT_FOLDER: PreparedWorkspaceFolder = {
   repoUrl: null,
 };
 
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
-  useHostClient: () => FAKE_CLIENT,
-  // Spine and app-wide client are separate exports since redesign P2.1.
-  useHostRuntimeClient: () => FAKE_CLIENT,
-}));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));

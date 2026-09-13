@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   act,
   cleanup,
@@ -565,7 +563,10 @@ function callbacksFor(path: string): WorktreeDeleteStreamCallbacks {
 }
 
 type ToolbarTestProps = {
-  scope: HostScope;
+  // The automatic-cleanup chip's slot. `null` here: the chip mounts a host
+  // read of its own, and these tests are about the list, not the policy
+  // (`worktree-auto-cleanup-chip.test.tsx` owns that).
+  cleanup: ReactNode;
   onRefresh: () => Promise<unknown>;
   refreshing: boolean;
   canRefresh: boolean;
@@ -574,7 +575,7 @@ type ToolbarTestProps = {
 
 function testToolbarProps(): ToolbarTestProps {
   return {
-    scope: hostScopeFixture({}),
+    cleanup: null,
     onRefresh: vi.fn(),
     refreshing: false,
     canRefresh: true,

@@ -23,6 +23,7 @@ import {
 } from "@/stores/tabs/layout";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { getTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
@@ -89,7 +90,55 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
+  useSettingsStore.setState({ homeTabEnabled: false });
   tabCommandCoordinator.resetReconciliationForTesting();
+}
+
+/**
+ * A snapshot with two epic tabs whose layout selection is Home's - a null
+ * `activeItemId` over a populated strip, which only means Home while the flag
+ * is on and means "unset" while it is off.
+ */
+function homeSelectedSnapshot(
+  tabA: string,
+  tabB: string,
+  activeRoute: string,
+): DesktopPerWindowSnapshot {
+  return {
+    ...emptySnapshot(),
+    revision: 11,
+    epicTabs: [
+      { id: tabA, epicId: "epic-a", name: "Alpha" },
+      { id: tabB, epicId: "epic-b", name: "Beta" },
+    ],
+    activeTabId: null,
+    tabStripLayout: {
+      version: 2,
+      items: [
+        {
+          kind: "tab",
+          id: tabItemId({ kind: "epic", id: tabA }),
+          ref: { kind: "epic", id: tabA },
+        },
+        {
+          kind: "tab",
+          id: tabItemId({ kind: "epic", id: tabB }),
+          ref: { kind: "epic", id: tabB },
+        },
+      ],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+    },
+    activeRoute,
+  };
+}
+
+function openTwoEpicTabs(): { readonly tabA: string; readonly tabB: string } {
+  const canvas = useEpicCanvasStore.getState();
+  return {
+    tabA: canvas.openEpicTabWithId("tab-a", "epic-a", "Alpha"),
+    tabB: canvas.openEpicTabWithId("tab-b", "epic-b", "Beta"),
+  };
 }
 
 beforeEach(() => {
@@ -413,6 +462,85 @@ describe("desktop tabs persistence", () => {
       id: "split-a",
       focusedSide: "right",
       routeBackingSide: "left",
+    });
+  });
+
+  /**
+   * The desktop snapshot is the only path where a Home selection has to survive
+   * a round trip through code that knows nothing about it: `repairLayout`
+   * resolves a null active id to the first item, and every ref-keyed lookup in
+   * this module answers `null` for a surface with no ref. Four private helpers
+   * carry Home across that boundary, so the only way any of them can regress is
+   * silently - hence both halves of the flag for each.
+   */
+  describe("Home selection across the desktop snapshot", () => {
+    it("restores a Home-selected snapshot with the null selection, both tabs, and the /home route", () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      const { tabA, tabB } = openTwoEpicTabs();
+
+      const hydration = hydrateDesktopTabs(
+        homeSelectedSnapshot(tabA, tabB, "/home"),
+        true,
+        null,
+      );
+
+      expect(useTabsStore.getState().activeItemId).toBeNull();
+      expect(flattenLayoutRefs(useTabsStore.getState())).toEqual([
+        { kind: "epic", id: tabA },
+        { kind: "epic", id: tabB },
+      ]);
+      expect(hydration.route).toBe("/home");
+    });
+
+    it("restores the same snapshot onto the first tab with the flag off", () => {
+      const { tabA, tabB } = openTwoEpicTabs();
+
+      const hydration = hydrateDesktopTabs(
+        homeSelectedSnapshot(tabA, tabB, "/home"),
+        true,
+        null,
+      );
+
+      // The byte-identical-when-off half: `repairLayout`'s own fallback stands,
+      // and `routeRef("/home")` names nothing, so the route follows the layout.
+      expect(useTabsStore.getState().activeItemId).toBe(
+        tabItemId({ kind: "epic", id: tabA }),
+      );
+      expect(flattenLayoutRefs(useTabsStore.getState())).toEqual([
+        { kind: "epic", id: tabA },
+        { kind: "epic", id: tabB },
+      ]);
+      expect(hydration.route).toBe("/epics/epic-a/tab-a");
+    });
+
+    it("schedules a layout write while Home is active only once the route agrees", async () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      const { tabA, tabB } = openTwoEpicTabs();
+      useTabsStore.getState().setStripOrder([
+        { kind: "epic", id: tabA },
+        { kind: "epic", id: tabB },
+      ]);
+      const updates: DesktopPerWindowStatePatch[] = [];
+      installDesktopTabsPersistence(acknowledgedBridge(updates), 0);
+
+      // Home selected, but the URL still says `/` - the state a back-step onto
+      // the landing route used to leave behind. Incoherent, so nothing is
+      // written, and a layout change made here would be lost on quit.
+      updateDesktopTabsActiveRoute("/");
+      expect(
+        tabCommandCoordinator.activateTab({ kind: "home" }),
+      ).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(updates).toHaveLength(0);
+
+      updateDesktopTabsActiveRoute("/home");
+      await flushDesktopTabsPersistence();
+
+      expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({
+        activeRoute: "/home",
+        tabStripLayout: { activeItemId: null },
+      });
     });
   });
 });

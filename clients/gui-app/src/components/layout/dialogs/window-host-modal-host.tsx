@@ -20,7 +20,7 @@ import {
 import { BootOpenSettingsButton } from "@/components/host/host-boot-surface";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { getClientAppVersion } from "@/lib/app-version";
 import { isMobileApp } from "@/lib/mobile-app";
 import { appLogger } from "@/lib/logger";
@@ -148,7 +148,7 @@ function NarratingWindowHostModal(props: {
   const { narration } = props;
   const progress = useHostProvisioningProgress();
   const controller = useHostReadinessController();
-  const authStatus = useAuthStore((state) => state.status);
+  const shellAdmission = useShellLocalPlaneAdmission();
   const presentation = controller.defaultHostPresentation;
   const localLifecycle = presentsLocalHostLifecycle(presentation);
   const settled = hasSettledFailure(narration.cause, presentation);
@@ -189,7 +189,13 @@ function NarratingWindowHostModal(props: {
   const predicateInput = {
     readiness: controller.readinessFor("default-host", null),
     hasBeenReady: controller.hasBeenDefaultHostReady,
-    signedIn: authStatus === "signed-in",
+    // Must track `HostReadyGate`'s own input exactly (SHELL admission, not
+    // `signed-in` and not the status-only `admitsLocalPlane`): these two read
+    // ONE shared predicate precisely so they can never disagree about whether
+    // an app exists behind this surface, and feeding them different `signedIn`
+    // values would recreate that disagreement in the inputs instead of the
+    // predicate.
+    signedIn: shellAdmission.admitted,
     // The `/settings` bypass is already handled: `WindowHostModalHost` returns
     // null on it before this component mounts, so the gate is not drawing
     // there either and there is nothing to stand down from.
@@ -427,8 +433,9 @@ function resolveUpdateHost(
  *  - A start that has NOT settled gets the loading body WHATEVER the target's
  *    kind. It is the shared boot headline (the lane's F19 heading when this
  *    machine's controller is doing something, the idle "Starting Traycer…"
- *    when it is not), the current stage's bar, and the Show details / Open
- *    settings footer - the same card the two boot surfaces before it drew.
+ *    when it is not), the current stage's bar when it reports a percentage,
+ *    and the Show details / Open settings footer - the same card the two boot
+ *    surfaces before it drew.
  *    This arm used to be withheld unless the target was this machine, on the
  *    argument that the bootstrap log describes this computer. It does - and
  *    that is TRUE information under a remote-target start too: on a desktop
@@ -463,7 +470,7 @@ function resolveUpdateHost(
  * `stage` and grow a second one on `"slow"`: its own Retry, and the
  * failed-attempt diagnostics. The Retry was a second place for this modal to
  * state an action it already states in one row, and the diagnostics belong on
- * the settled arm where they are TRUE, not under a healthy spinner. That the
+ * the settled arm where they are TRUE, not under a healthy heading. That the
  * bootstrap.log path survives all of this is the whole point - it is the one
  * thing that lets a user take a stuck startup somewhere else, and it has been
  * orphaned by a surface move once already.
@@ -484,13 +491,13 @@ function buildBootBody(args: {
   readonly settingsOnly: boolean;
 }): ReactNode | null {
   if (args.variant.kind !== "offline") return null;
-  // NOTHING IS STARTING, so nothing may claim to be. The spinner and the stage
-  // line are gated on the settled FAILURE rather than placed beside it:
+  // NOTHING IS STARTING, so nothing may claim to be. The stage line is gated
+  // on the settled FAILURE rather than placed beside it:
   // `LocalHostLoadingContent`'s stage line falls back to
   // `HOST_PROGRESS_IDLE_HEADING` exactly when no lane is running, which is
-  // precisely this state. A live spinner over a crash report tells a user to
-  // wait for a start that is not happening, and they report a hang instead of
-  // a crash.
+  // precisely this state. "Starting Traycer…" over a crash report tells a user
+  // to wait for a start that is not happening, and they report a hang instead
+  // of a crash.
   //
   // GATED ON THE FAILURE, NOT THE CAUSE - and it was the cause until a review
   // caught it. `cause === "no-usable-host"` covers only the arm where nothing can

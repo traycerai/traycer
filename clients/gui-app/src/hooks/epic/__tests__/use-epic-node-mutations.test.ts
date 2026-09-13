@@ -10,7 +10,17 @@ vi.mock("sonner", () => ({
 // assertion.
 const clients = vi.hoisted(() => ({
   ambient: { label: "ambient-client" },
-  session: { label: "session-client" },
+  // `getActiveHostId` is what scopes the deleted-artifact invalidation below to
+  // the SESSION's host, so the sentinel has to answer it.
+  session: { label: "session-client", getActiveHostId: () => "session-host" },
+}));
+
+const queryClientFixture = vi.hoisted(() => ({
+  invalidateQueries: vi.fn(),
+}));
+
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => queryClientFixture,
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
@@ -74,6 +84,7 @@ import {
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { hostQueryKeys } from "@/lib/query-keys";
 
 function makeError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -182,6 +193,39 @@ describe("useEpicDeleteArtifact", () => {
     expect(toast.error).toHaveBeenCalledWith("Couldn't delete artifact.", {
       description: "A newer authoritative change superseded this write",
     });
+  });
+
+  // The tombstone inventory is a host QUERY, not a projected slice, so a
+  // committed command leaves it stale unless the hook invalidates it. This
+  // survived the move onto the write-command queue as an explicit call.
+  it("refreshes the deleted-artifact inventory after deletion", async () => {
+    commitCommand();
+    const { result } = renderHook(() => useEpicDeleteArtifact("artifact-1"));
+
+    await result.current.mutateAsync({
+      epicId: "epic-1",
+      artifactId: "artifact-1",
+    });
+
+    expect(queryClientFixture.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope(
+        "session-host",
+        "epic.deletedArtifacts.list",
+      ),
+    });
+  });
+
+  it("does not invalidate when the delete is refused", async () => {
+    rejectCommand("write denied");
+    const { result } = renderHook(() => useEpicDeleteArtifact("artifact-1"));
+
+    await expect(
+      result.current.mutateAsync({
+        epicId: "epic-1",
+        artifactId: "artifact-1",
+      }),
+    ).rejects.toThrow("write denied");
+    expect(queryClientFixture.invalidateQueries).not.toHaveBeenCalled();
   });
 });
 

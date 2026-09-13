@@ -4,12 +4,16 @@ import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
 import {
+  DEFAULT_CONTEXT_INDICATOR_STYLE,
   DEFAULT_LINK_OPEN_SETTINGS,
+  DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
   DEFAULT_TILE_PLACEMENT_SETTINGS,
+  DEFAULT_NAVIGATOR_RESOURCE_METRICS,
   DEFAULT_WORKTREE_BRANCH_PREFIX,
   linkOpenModeForKind,
   tilePlacementForCategory,
   useSettingsStore,
+  type StartPageWallpaper,
 } from "@/stores/settings/settings-store";
 
 /** Seeds localStorage with one persisted payload and rehydrates from it. */
@@ -29,8 +33,10 @@ function resetSettingsStore(): void {
     defaultPermission: DEFAULT_PERMISSION,
     defaultEditor: "vscode",
     showGlobalResourceMonitor: true,
-    showNavigatorResourceStats: false,
+    navigatorResourceMetrics: DEFAULT_NAVIGATOR_RESOURCE_METRICS,
     pinContextUsageBreakdown: false,
+    pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+    contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
     chatTurnMinimapSide: "right",
     quoteReplyEnabled: true,
     linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
@@ -40,6 +46,9 @@ function resetSettingsStore(): void {
     worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+    startPageWallpaper: null,
+    showGreeting: true,
+    showRecentHistory: true,
   });
 }
 
@@ -332,30 +341,100 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
   });
 
-  it("defaults navigator resource stats to off", () => {
-    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(false);
+  it("defaults the navigator resource chip to no metrics, as the switch defaulted to off", () => {
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
   });
 
-  it("toggles and persists navigator resource stats", () => {
-    useSettingsStore.getState().setShowNavigatorResourceStats(true);
+  it("toggles one navigator metric at a time, keeps chip order and persists the list", () => {
+    const { toggleNavigatorResourceMetric } = useSettingsStore.getState();
+
+    // Picked processes first, memory second, cpu last: the list still comes
+    // out in chip order, never insertion order.
+    toggleNavigatorResourceMetric("processes");
+    toggleNavigatorResourceMetric("memory");
+    toggleNavigatorResourceMetric("cpu");
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
+      "cpu",
+      "memory",
+      "processes",
+    ]);
+
+    toggleNavigatorResourceMetric("memory");
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
+      "cpu",
+      "processes",
+    ]);
+
+    toggleNavigatorResourceMetric("processes");
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"navigatorResourceMetrics":["cpu"]');
+    expect(persisted ?? "").not.toContain("showNavigatorResourceStats");
 
-    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(true);
-    expect(persisted ?? "").toContain('"showNavigatorResourceStats":true');
+    toggleNavigatorResourceMetric("cpu");
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
   });
 
-  it("rehydrates navigator resource stats from persisted settings", async () => {
-    window.localStorage.setItem(
-      "traycer-gui-app:settings",
-      JSON.stringify({
-        state: { showNavigatorResourceStats: true },
-        version: 1,
-      }),
-    );
+  it("rehydrates the navigator metric list, dropping unknown ids and restoring chip order", async () => {
+    await rehydrateFrom({
+      navigatorResourceMetrics: ["processes", "ramShare", "cpu"],
+    });
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
+      "cpu",
+      "processes",
+    ]);
 
-    await useSettingsStore.persist.rehydrate();
+    await rehydrateFrom({ navigatorResourceMetrics: [] });
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
+  });
 
-    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(true);
+  it("migrates the retired navigator resource switch: on becomes every metric, off becomes none", async () => {
+    await rehydrateFrom({ showNavigatorResourceStats: true });
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
+      "cpu",
+      "memory",
+      "processes",
+    ]);
+
+    await rehydrateFrom({ showNavigatorResourceStats: false });
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
+  });
+
+  it("collapses duplicates when rehydrating the navigator metric list", async () => {
+    await rehydrateFrom({
+      navigatorResourceMetrics: ["cpu", "cpu", "memory"],
+    });
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
+      "cpu",
+      "memory",
+    ]);
+  });
+
+  it("prefers the persisted metric list over the retired switch when both are present", async () => {
+    await rehydrateFrom({
+      showNavigatorResourceStats: true,
+      navigatorResourceMetrics: ["memory"],
+    });
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
+      "memory",
+    ]);
+  });
+
+  it("keeps an EMPTY persisted list over the retired switch, rather than resurrecting the chips", async () => {
+    // A user who turned every chip off wrote `[]`; falling back to the legacy
+    // `true` on that would hand all three straight back.
+    await rehydrateFrom({
+      showNavigatorResourceStats: true,
+      navigatorResourceMetrics: [],
+    });
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
+  });
+
+  it("falls back to no navigator metrics when neither key is persisted or the list is malformed", async () => {
+    await rehydrateFrom({});
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
+
+    await rehydrateFrom({ navigatorResourceMetrics: "cpu" });
+    expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
   });
 
   it("defaults the pinned context usage breakdown to off", () => {
@@ -401,6 +480,103 @@ describe("useSettingsStore", () => {
     await useSettingsStore.persist.rehydrate();
 
     expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
+  });
+
+  it("defaults the pinned context breakdown to every field in strip order", () => {
+    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
+      "used",
+      "fresh",
+      "cacheRead",
+      "cacheWrite",
+      "output",
+    ]);
+  });
+
+  it("toggles pinned context breakdown fields off and back on in canonical order", () => {
+    const { togglePinnedContextBreakdownField } = useSettingsStore.getState();
+
+    togglePinnedContextBreakdownField("used");
+    togglePinnedContextBreakdownField("cacheRead");
+    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
+      "fresh",
+      "cacheWrite",
+      "output",
+    ]);
+
+    // Re-inserted where the strip draws it, not appended.
+    togglePinnedContextBreakdownField("used");
+    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
+      "used",
+      "fresh",
+      "cacheWrite",
+      "output",
+    ]);
+  });
+
+  it("refuses to toggle off the last pinned context breakdown field", () => {
+    useSettingsStore.setState({ pinnedContextBreakdownFields: ["output"] });
+    const before = useSettingsStore.getState().pinnedContextBreakdownFields;
+
+    useSettingsStore.getState().togglePinnedContextBreakdownField("output");
+
+    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toBe(
+      before,
+    );
+  });
+
+  it("persists the pinned context breakdown fields", () => {
+    useSettingsStore.getState().togglePinnedContextBreakdownField("fresh");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(persisted ?? "").toContain(
+      '"pinnedContextBreakdownFields":["used","cacheRead","cacheWrite","output"]',
+    );
+  });
+
+  it("drops unknown pinned context breakdown fields and restores canonical order on rehydrate", async () => {
+    await rehydrateFrom({
+      pinnedContextBreakdownFields: ["output", "baseline", "used", "used", 42],
+    });
+
+    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
+      "used",
+      "output",
+    ]);
+  });
+
+  it("falls back to every pinned context breakdown field when the persisted list is empty or not a list", async () => {
+    await rehydrateFrom({ pinnedContextBreakdownFields: ["baseline"] });
+    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual(
+      DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+    );
+
+    await rehydrateFrom({ pinnedContextBreakdownFields: "used" });
+    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual(
+      DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+    );
+  });
+
+  it("defaults the context indicator style to text", () => {
+    expect(useSettingsStore.getState().contextIndicatorStyle).toBe("text");
+  });
+
+  it("persists and rehydrates the context indicator style", async () => {
+    useSettingsStore.getState().setContextIndicatorStyle("ring-only");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"contextIndicatorStyle":"ring-only"');
+    if (persisted === null) throw new Error("expected persisted settings");
+
+    resetSettingsStore();
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().contextIndicatorStyle).toBe("ring-only");
+  });
+
+  it("repairs an invalid persisted context indicator style to text", async () => {
+    await rehydrateFrom({ contextIndicatorStyle: "donut" });
+
+    expect(useSettingsStore.getState().contextIndicatorStyle).toBe("text");
   });
 
   it("defaults quote reply on text selection to on", () => {
@@ -464,10 +640,12 @@ describe("useSettingsStore", () => {
       content: "tab",
       conversation: "tab",
       browser: "split",
+      sideChat: "split",
     });
     const placement = useSettingsStore.getState().tilePlacement;
     expect(tilePlacementForCategory(placement, "content")).toBe("tab");
     expect(tilePlacementForCategory(placement, "browser")).toBe("split");
+    expect(tilePlacementForCategory(placement, "side-chat")).toBe("split");
   });
 
   it("lets an explicit default override the per-kind and per-category rows", () => {
@@ -488,8 +666,23 @@ describe("useSettingsStore", () => {
           content: "tab",
           conversation: "tab",
           browser: "pip",
+          sideChat: "tab",
         },
         "browser",
+      ),
+    ).toBe("split");
+    // A flat default answers for the side-chat row too - it is not exempt
+    // from "default" the way `pip` is exempt from `alt`.
+    expect(
+      tilePlacementForCategory(
+        {
+          default: "split",
+          content: "tab",
+          conversation: "tab",
+          browser: "pip",
+          sideChat: "tab",
+        },
+        "side-chat",
       ),
     ).toBe("split");
   });
@@ -515,6 +708,39 @@ describe("useSettingsStore", () => {
       ...DEFAULT_TILE_PLACEMENT_SETTINGS,
       browser: "pip",
     });
+  });
+
+  it("fills a missing sideChat row on a pre-row persisted blob with the default", async () => {
+    await rehydrateFrom({
+      tilePlacement: {
+        default: "per-category",
+        content: "tab",
+        conversation: "tab",
+        browser: "split",
+      },
+    });
+
+    expect(useSettingsStore.getState().tilePlacement).toEqual({
+      default: "per-category",
+      content: "tab",
+      conversation: "tab",
+      browser: "split",
+      sideChat: "split",
+    });
+  });
+
+  it("repairs an invalid persisted sideChat value to the default", async () => {
+    await rehydrateFrom({
+      tilePlacement: {
+        default: "per-category",
+        content: "tab",
+        conversation: "tab",
+        browser: "split",
+        sideChat: "pip",
+      },
+    });
+
+    expect(useSettingsStore.getState().tilePlacement.sideChat).toBe("split");
   });
 
   it("defaults agent tab surfacing to off", () => {
@@ -875,5 +1101,188 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
       DEFAULT_WORKTREE_BRANCH_PREFIX,
     );
+  });
+
+  it("defaults the start-page wallpaper to null and greeting/history to shown", () => {
+    expect(useSettingsStore.getState().startPageWallpaper).toBeNull();
+    expect(useSettingsStore.getState().showGreeting).toBe(true);
+    expect(useSettingsStore.getState().showRecentHistory).toBe(true);
+  });
+
+  it("persists and rehydrates a start-page wallpaper set via the setter", async () => {
+    const wallpaper = {
+      style: "dither",
+      intensity: 0.8,
+      tintWithAccent: false,
+      name: "wallpaper.png",
+      curatedId: null,
+    } satisfies StartPageWallpaper;
+    useSettingsStore.getState().setStartPageWallpaper(wallpaper);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    if (persisted === null) throw new Error("expected persisted settings");
+    const parsedPersisted: unknown = JSON.parse(persisted);
+    expect(
+      (parsedPersisted as { state: { startPageWallpaper: unknown } }).state
+        .startPageWallpaper,
+    ).toEqual(wallpaper);
+
+    useSettingsStore.setState({ startPageWallpaper: null });
+    // `setState` writes through the persist middleware too, so it just
+    // clobbered `persisted` in storage with the reset value - restore the
+    // captured JSON before rehydrating, or rehydrate only re-reads the
+    // clobbered `null`.
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().startPageWallpaper).toEqual(wallpaper);
+  });
+
+  it("persists and rehydrates showGreeting/showRecentHistory independently via their setters", async () => {
+    useSettingsStore.getState().setShowGreeting(false);
+    useSettingsStore.getState().setShowRecentHistory(false);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    if (persisted === null) throw new Error("expected persisted settings");
+    const parsedPersisted: unknown = JSON.parse(persisted);
+    expect(
+      (
+        parsedPersisted as {
+          state: { showGreeting: unknown; showRecentHistory: unknown };
+        }
+      ).state,
+    ).toEqual(
+      expect.objectContaining({
+        showGreeting: false,
+        showRecentHistory: false,
+      }),
+    );
+
+    useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
+    // `setState` writes through the persist middleware too, clobbering the
+    // just-captured storage with the reset values - restore it before
+    // rehydrating.
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().showGreeting).toBe(false);
+    expect(useSettingsStore.getState().showRecentHistory).toBe(false);
+  });
+
+  it("rehydrates a persisted wallpaper with an unknown style to null", async () => {
+    await rehydrateFrom({ startPageWallpaper: { style: "mosaic" } });
+
+    expect(useSettingsStore.getState().startPageWallpaper).toBeNull();
+  });
+
+  it("repairs an out-of-range persisted intensity to the default, keeping the style", async () => {
+    await rehydrateFrom({
+      startPageWallpaper: { style: "grain", intensity: 42 },
+    });
+
+    expect(useSettingsStore.getState().startPageWallpaper).toEqual({
+      style: "grain",
+      intensity: 0.6,
+      tintWithAccent: true,
+      name: null,
+      curatedId: null,
+    });
+  });
+
+  it("defaults a persisted wallpaper with no tint flag to tinting with the accent", async () => {
+    await rehydrateFrom({
+      startPageWallpaper: { style: "dither", intensity: 0.5 },
+    });
+
+    expect(useSettingsStore.getState().startPageWallpaper).toEqual({
+      style: "dither",
+      intensity: 0.5,
+      tintWithAccent: true,
+      name: null,
+      curatedId: null,
+    });
+  });
+
+  it("rehydrates old settings without the appearance fields to their defaults", async () => {
+    await rehydrateFrom({ artifactIconColorMode: "none" });
+
+    expect(useSettingsStore.getState().startPageWallpaper).toBeNull();
+    expect(useSettingsStore.getState().showGreeting).toBe(true);
+    expect(useSettingsStore.getState().showRecentHistory).toBe(true);
+  });
+
+  it("rehydrates a persisted wallpaper with no curatedId to null", async () => {
+    await rehydrateFrom({
+      startPageWallpaper: { style: "photo", name: "custom.png" },
+    });
+
+    expect(
+      useSettingsStore.getState().startPageWallpaper?.curatedId,
+    ).toBeNull();
+  });
+
+  it("caps a persisted curatedId over 64 characters", async () => {
+    const longId = "a".repeat(100);
+    await rehydrateFrom({
+      startPageWallpaper: { style: "photo", curatedId: longId },
+    });
+
+    expect(useSettingsStore.getState().startPageWallpaper?.curatedId).toBe(
+      "a".repeat(64),
+    );
+  });
+
+  it("rehydrates a non-string persisted curatedId to null", async () => {
+    await rehydrateFrom({
+      startPageWallpaper: { style: "photo", curatedId: 42 },
+    });
+
+    expect(
+      useSettingsStore.getState().startPageWallpaper?.curatedId,
+    ).toBeNull();
+  });
+
+  it("picks up another window's settings write via the cross-window storage listener", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({ state: { showGreeting: false }, version: 1 }),
+    );
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "traycer-gui-app:settings" }),
+    );
+    // The listener's rehydrate is fire-and-forget (`void ... rehydrate()`).
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useSettingsStore.getState().showGreeting).toBe(false);
+  });
+
+  it("treats a storage event with a null key (localStorage.clear()) as a rehydrate signal too", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({ state: { showRecentHistory: false }, version: 1 }),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: null }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useSettingsStore.getState().showRecentHistory).toBe(false);
+  });
+
+  it("ignores a storage event for an unrelated key", async () => {
+    useSettingsStore.getState().setShowGreeting(false);
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({ state: { showGreeting: true }, version: 1 }),
+    );
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "some-other-app:settings" }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Still false: the mismatched-key event must not have triggered a rehydrate.
+    expect(useSettingsStore.getState().showGreeting).toBe(false);
   });
 });

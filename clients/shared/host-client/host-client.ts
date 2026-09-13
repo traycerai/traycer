@@ -5,9 +5,14 @@ import type {
   HostRequestAuthority,
   IHostMessenger,
   RequestOfMethod,
+  RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
+import {
+  mergeAvailabilityRecoveryKinds,
+  type AvailabilityRecoveryKind,
+} from "../host-transport/availability-recovery-kind";
 import type { HostDirectoryEntry } from "./host-directory";
 import { StaleHostBindingAuthorityError } from "./host-binding-authority-error";
 import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
@@ -33,12 +38,43 @@ export interface IHostQueryInvalidator {
   readonly cancelHostScope?: (hostId: string | null) => Promise<void>;
 }
 
-export interface HostQueryInvalidationOptions {
-  readonly refetchActive: boolean;
-}
+/**
+ * `refetchActive: false` marks the scope stale without refetching - an
+ * identity transition, whose request context may already be gone.
+ * `refetchActive: true` is a recovery sweep, and `recovery` names the edge
+ * that fired it, which decides how much of the scope the sweep re-asks
+ * (`AvailabilityRecoveryKind`).
+ */
+export type HostQueryInvalidationOptions =
+  | { readonly refetchActive: false }
+  | {
+      readonly refetchActive: true;
+      readonly recovery: AvailabilityRecoveryKind;
+    };
 
 /** One host-wide recovery sweep per window, with one trailing delivery. */
 export const HOST_AVAILABILITY_SWEEP_WINDOW_MS = 10_000;
+
+/**
+ * A host-scope sweep queued as a microtask. Every report for the same host
+ * that arrives before it runs merges into it: it announces if any of them
+ * asked to, and it runs as a reconnect if any of them was one.
+ */
+interface PendingHostScopeSweep {
+  emitChangeEvent: boolean;
+  kind: AvailabilityRecoveryKind;
+}
+
+/**
+ * One host's recovery window. `sweep` is the sweep the window last delivered;
+ * while that sweep is still pending, a report folds into it. `deferred` is the
+ * widest kind among the reports the window has held back for its trailing
+ * sweep, or `null` when it holds none.
+ */
+interface HostAvailabilitySweepGate {
+  sweep: PendingHostScopeSweep;
+  deferred: AvailabilityRecoveryKind | null;
+}
 
 /** Unsubscribe handle returned by `HostClient` event subscriptions. */
 export type HostClientUnsubscribe = () => void;
@@ -105,6 +141,22 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     signal: AbortSignal | undefined,
   ): Promise<ResponseOfMethod<Registry, Method>>;
+  /**
+   * `requestWithSignal` under a version floor the dispatch's own handshake
+   * must clear, refused pre-send otherwise. On the narrow surface rather than
+   * only on the class because the callers that need it reach their host
+   * through a requester, and a floor a routed facade cannot express is a floor
+   * that silently is not applied. See the implementation for why it is a
+   * separate entry point.
+   */
+  requestWithSignalRequiringHostMethodVersion<
+    Method extends keyof Registry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
   requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
@@ -151,6 +203,15 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     (event: HostClientChangeEvent) => void
   >();
   private readonly bearerRotationHandlers = new Set<() => void>();
+  /**
+   * Separate from `bearerRotationHandlers` because the two events are separate:
+   * a verdict can change with no rotation (a demotion whose bearer is
+   * untouched, a regain after a successful validation) and every ordinary
+   * refresh rotates without touching the verdict. One handler set would make
+   * each refresh re-assert a verdict and each verdict change look like a
+   * refresh.
+   */
+  private readonly cloudVerdictHandlers = new Set<() => void>();
 
   constructor(options: HostClientOptions<Registry>) {
     this.registry = options.registry;
@@ -202,9 +263,25 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
 
   /**
    * Returns the active `RequestContext`, or `null` when signed out / not
-   * yet authenticated. Final transport clients call this to extract a
-   * bearer (`ctx.credentials.getBearerToken()`) when opening a WS frame;
-   * shared-core consumers thread the context itself past the boundary.
+   * yet authenticated. Shared-core consumers thread the context itself past
+   * the boundary.
+   *
+   * Composition roots also read `.credentials` off this to hand the LEASE
+   * OBJECT to a transport as its `BearerSourceProvider` — that is the
+   * injection pattern, and it is what the five `bearer: () =>
+   * …getRequestContext()?.credentials ?? null` sites in gui-app are doing.
+   * Handing over the lease is fine; EXTRACTING the token from it here is not.
+   * `ctx.credentials.getBearerToken()` is lint-fenced
+   * (`eslint/traycer-cloud-bearer-fence-rules.mjs`), because reaching a raw
+   * bearer out of a context is how a call helps itself to a credential the
+   * composition never authorized for cloud use.
+   *
+   * An earlier version of this comment said final transport clients call this
+   * to extract a bearer when opening a WS frame. That was wrong in both halves:
+   * they receive an `OpenFrameBearerSource` INJECTED and call
+   * `source.getBearerToken()` on it (`ws-rpc-client.ts`,
+   * `auth-aware-messenger.ts` — the fence's allowlist), and they never call
+   * this method at all.
    */
   getRequestContext(): RequestContext | null {
     return this.requestContext;
@@ -326,7 +403,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           return readActiveHostId;
         }
         if (property === "request") {
-          // The entry is captured HERE, at property access, so all four
+          // The entry is captured HERE, at property access, so all five
           // request members resolve at the same instant.
           const entry = resolveEntry();
           return <Method extends keyof Registry & string>(
@@ -351,6 +428,12 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         if (property === "requestWithSignal") {
           return target.requestForWithSignal.bind(target, resolveEntry());
         }
+        if (property === "requestWithSignalRequiringHostMethodVersion") {
+          return target.requestForWithSignalRequiringHostMethodVersion.bind(
+            target,
+            resolveEntry(),
+          );
+        }
         if (property === "requestWithResponseTimeout") {
           return target.requestForWithResponseTimeout.bind(
             target,
@@ -370,7 +453,10 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * Reports that an endpoint recovered availability, for a NAMED host.
    *
    * The announcing form: it invalidates that host's scope so active observers
-   * refetch, and emits the `"availability-recovered"` change event.
+   * refetch, and emits the `"availability-recovered"` change event. `kind`
+   * names the edge that fired: after a `"stall"` the sweep re-asks only the
+   * reads that failed, after a `"reconnect"` every settled read too
+   * (`AvailabilityRecoveryKind`). The change event is the same for both.
    *
    * There used to be a no-argument sibling that read the active slot to
    * decide whose queries to un-strand, and this method delegated to it when
@@ -385,22 +471,29 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * Delivery is coalesced per host both in the current microtask and across a
    * short time window. Independent consumer wirings have independent recovery
    * cooldowns, so their reports can otherwise arrive as a staggered burst.
+   * Coalesced reports sweep as the widest kind among them: a reconnect wins.
    */
-  notifyHostAvailabilityRecovered(hostId: string): void {
+  notifyHostAvailabilityRecovered(
+    hostId: string,
+    kind: AvailabilityRecoveryKind,
+  ): void {
     const gate = this.hostAvailabilitySweepGates.get(hostId);
-    if (gate !== undefined) {
-      if (!gate.leadingPending) gate.trailing = true;
+    if (gate === undefined) {
+      const opened: HostAvailabilitySweepGate = {
+        sweep: this.deliverHostScopeSweep(hostId, true, kind),
+        deferred: null,
+      };
+      this.hostAvailabilitySweepGates.set(hostId, opened);
+      this.armHostAvailabilitySweepGate(hostId, opened);
       return;
     }
-    const opened = { leadingPending: true, trailing: false };
-    this.hostAvailabilitySweepGates.set(hostId, opened);
-    this.deliverHostScopeSweep(hostId, true);
-    queueMicrotask(() => {
-      if (this.hostAvailabilitySweepGates.get(hostId) === opened) {
-        opened.leadingPending = false;
-      }
-    });
-    this.armHostAvailabilitySweepGate(hostId, opened);
+    if (this.pendingHostScopeSweeps.get(hostId) === gate.sweep) {
+      // The window's last sweep has not run yet, so this report is in its
+      // tick: fold into it rather than owing a trailing sweep.
+      this.deliverHostScopeSweep(hostId, true, kind);
+      return;
+    }
+    gate.deferred = mergeAvailabilityRecoveryKinds(gate.deferred, kind);
   }
 
   /**
@@ -430,34 +523,34 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * This used to be `invalidateHostScopeForAvailability`, documented as
    * existing for one caller. It has two, and a name naming one of their
    * reasons would have to be replaced by the next one.
+   *
+   * It sweeps as a `"reconnect"` for both. A remote binding's owed ready
+   * boundary is a new session to that host, and a rotated host is a machine
+   * rebuilt under its own id, so neither can vouch for a read that settled
+   * before it.
    */
   invalidateHostScopeUnannounced(hostId: string): void {
-    this.deliverHostScopeSweep(hostId, false);
+    this.deliverHostScopeSweep(hostId, false, "reconnect");
   }
 
   private readonly hostAvailabilitySweepGates = new Map<
     string,
-    { leadingPending: boolean; trailing: boolean }
+    HostAvailabilitySweepGate
   >();
 
   private armHostAvailabilitySweepGate(
     hostId: string,
-    gate: { leadingPending: boolean; trailing: boolean },
+    gate: HostAvailabilitySweepGate,
   ): void {
     setTimeout(() => {
       if (this.hostAvailabilitySweepGates.get(hostId) !== gate) return;
-      if (!gate.trailing) {
+      const deferred = gate.deferred;
+      if (deferred === null) {
         this.hostAvailabilitySweepGates.delete(hostId);
         return;
       }
-      gate.trailing = false;
-      gate.leadingPending = true;
-      this.deliverHostScopeSweep(hostId, true);
-      queueMicrotask(() => {
-        if (this.hostAvailabilitySweepGates.get(hostId) === gate) {
-          gate.leadingPending = false;
-        }
-      });
+      gate.deferred = null;
+      gate.sweep = this.deliverHostScopeSweep(hostId, true, deferred);
       this.armHostAvailabilitySweepGate(hostId, gate);
     }, HOST_AVAILABILITY_SWEEP_WINDOW_MS);
   }
@@ -470,30 +563,38 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * for one (the availability report does, the unannounced sweep deliberately
    * does not). A rotation sweep landing in the same tick as a genuine
    * availability recovery therefore still announces, and that is correct: the
-   * availability caller asked, and its announcement is true.
+   * availability caller asked, and its announcement is true. Kinds merge the
+   * same way: the sweep runs as a reconnect if any report in its tick was one,
+   * so a rotation sweep merged with a stall still re-asks every settled read.
+   *
+   * Returns the pending sweep the report landed in. The recovery window keeps
+   * it, so a later report in the same tick can fold into it.
    */
   private readonly pendingHostScopeSweeps = new Map<
     string,
-    { emitChangeEvent: boolean }
+    PendingHostScopeSweep
   >();
 
   private deliverHostScopeSweep(
     hostId: string,
     emitChangeEvent: boolean,
-  ): void {
+    kind: AvailabilityRecoveryKind,
+  ): PendingHostScopeSweep {
     const pending = this.pendingHostScopeSweeps.get(hostId);
     if (pending !== undefined) {
       if (emitChangeEvent) {
         pending.emitChangeEvent = true;
       }
-      return;
+      pending.kind = mergeAvailabilityRecoveryKinds(pending.kind, kind);
+      return pending;
     }
-    const entry = { emitChangeEvent };
+    const entry: PendingHostScopeSweep = { emitChangeEvent, kind };
     this.pendingHostScopeSweeps.set(hostId, entry);
     queueMicrotask(() => {
       this.pendingHostScopeSweeps.delete(hostId);
       this.invalidator.invalidateHostScope(hostId, {
         refetchActive: true,
+        recovery: entry.kind,
       });
       // No active-host gate: there is no active host. The event carries the
       // host it is about, and consumers that care which one filter on
@@ -507,6 +608,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         });
       }
     });
+    return entry;
   }
 
   /**
@@ -571,6 +673,25 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    */
   notifyBearerRotated(): void {
     for (const handler of [...this.bearerRotationHandlers]) {
+      handler();
+    }
+  }
+
+  onCloudVerdictChanged(handler: () => void): HostClientUnsubscribe {
+    this.cloudVerdictHandlers.add(handler);
+    return () => {
+      this.cloudVerdictHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * Fires every `onCloudVerdictChanged` subscriber. Called by `HostRuntime`
+   * when the auth boundary changes what the active context may SPEND, which is
+   * a different event from rotating what it holds - see
+   * `notifyBearerRotated` above, and the two wire frames they drive.
+   */
+  notifyCloudVerdictChanged(): void {
+    for (const handler of [...this.cloudVerdictHandlers]) {
       handler();
     }
   }
@@ -698,6 +819,59 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         // `createRetryingMessenger`, and only for the attempts that follow a
         // failure whose retryability a negotiated key earned.
         replayMustBeKeyed: false,
+        // No floor: an ordinary caller dispatches whatever the handshake
+        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+        // opt-in.
+        requiredHostMethodVersion: null,
+      }),
+    );
+  }
+
+  /**
+   * `requestWithSignal`, with a version floor the DISPATCH's own handshake
+   * must clear or the request is refused pre-send
+   * (`HostRequestOptions.requiredHostMethodVersion`, which documents the
+   * window this closes).
+   *
+   * A separate entry point rather than a parameter on the existing ones
+   * because the requirement is not a default any caller should acquire by
+   * accident: it makes a call REFUSABLE on a host that would otherwise serve
+   * it, and only a caller that knows why - one relying on an additive request
+   * field an older peer would silently strip - should opt in.
+   */
+  requestWithSignalRequiringHostMethodVersion<
+    Method extends keyof Registry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.requestForWithSignalRequiringHostMethodVersion(
+      // ∅ — see `request`.
+      null,
+      method,
+      params,
+      signal,
+      requiredHostMethodVersion,
+    );
+  }
+
+  requestForWithSignalRequiringHostMethodVersion<
+    Method extends keyof Registry & string,
+  >(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.scheduleRequest(entry, method, params, signal, (authority) =>
+      this.messenger.request(method, params, {
+        idempotencyKey: null,
+        authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion,
       }),
     );
   }
@@ -715,6 +889,10 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         // A key the CALLER supplied, which is not the same as a replay that
         // requires one - see the sibling above.
         replayMustBeKeyed: false,
+        // No floor: an ordinary caller dispatches whatever the handshake
+        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+        // opt-in.
+        requiredHostMethodVersion: null,
       }),
     );
   }
@@ -742,6 +920,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           idempotencyKey: null,
           authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     );
@@ -805,6 +984,15 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           binding.abortSignal,
           context.abortSignal,
         ]),
+        // A READER over this exact context, not its value at capture. The
+        // earlier version snapshotted here and argued that pairing it with the
+        // bearer made them "one snapshot"; that was wrong in the one direction
+        // that matters. `bearer` above is a LIVE source read when the open
+        // frame is built, while this was frozen at capture - so a request
+        // queued by the coordinator and then parked on `session.dial()` sent a
+        // stale verdict alongside a fresh bearer. Bound to the same context so
+        // both answer for the same session.
+        cloudAuthorized: () => context.cloudAuthorized,
       },
       authorityDomain: {
         bindingToken: binding.token,

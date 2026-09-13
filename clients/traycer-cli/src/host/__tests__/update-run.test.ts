@@ -1249,6 +1249,7 @@ describe("runHostUpdate - the install intent's arms", () => {
       installedVersion: "1.0.0",
       installGeneration: installGenerationNow(),
       allowDowngrade: false,
+      acceptStoreFormatLoss: false,
       // Refreshed AT THE PARK: the transfer ran under this claim, so the
       // stage the resume will find is this run's own - the id THIS transfer
       // minted, which (stage ids being independent per staging) is not the id
@@ -1907,6 +1908,100 @@ describe("runHostUpdate - bound intents", () => {
       "verifying",
     ]);
     expect(outcome.legacy.version).toBe("1.0.0");
+  });
+
+  it("a downgrade park resumed by continue carries the claim's acceptStoreFormatLoss into the installer, not the argument's", async () => {
+    await seedInstalled("2.0.0");
+    world.runningVersion = "2.0.0";
+    mocks.installHostDowngradeInSegment.mockRejectedValueOnce(busyError());
+    await expect(
+      runUpdate({
+        versionRequest: "1.0.0",
+        allowDowngrade: true,
+        acceptStoreFormatLoss: true,
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+    const parked = await requireRecord();
+    expect(parked.phase).toBe("waiting-for-work");
+    expect(parked.claim).toMatchObject({
+      allowDowngrade: true,
+      acceptStoreFormatLoss: true,
+    });
+    mocks.writes.length = 0;
+    mocks.installHostDowngradeInSegment.mockClear();
+
+    // The bound `continue` arrives with NO `--accept-store-format-loss`, as
+    // it arrives with no `--allow-downgrade`: the host's dispatcher carries
+    // neither, and both consents are the PARK's own claim. Without the claim
+    // the floor this consent was given for would refuse the very resume.
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: parked.attemptId,
+      versionRequest: "1.0.0",
+    });
+
+    expect(outcome.legacy.version).toBe("1.0.0");
+    expect(mocks.installHostDowngradeInSegment).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.installHostDowngradeInSegment.mock.calls[0]?.[0],
+    ).toMatchObject({ acceptStoreFormatLoss: true });
+  });
+
+  it("a downgrade park whose claim never recorded store-format consent resumes WITHOUT it - the flag is not implied by the downgrade", async () => {
+    await seedInstalled("2.0.0");
+    world.runningVersion = "2.0.0";
+    mocks.installHostDowngradeInSegment.mockRejectedValueOnce(busyError());
+    await expect(
+      runUpdate({ versionRequest: "1.0.0", allowDowngrade: true }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+    const parked = await requireRecord();
+    expect(parked.claim).toMatchObject({
+      allowDowngrade: true,
+      acceptStoreFormatLoss: false,
+    });
+    mocks.writes.length = 0;
+    mocks.installHostDowngradeInSegment.mockClear();
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: parked.attemptId,
+      versionRequest: "1.0.0",
+    });
+
+    expect(outcome.legacy.version).toBe("1.0.0");
+    expect(
+      mocks.installHostDowngradeInSegment.mock.calls[0]?.[0],
+    ).toMatchObject({ acceptStoreFormatLoss: false });
+  });
+
+  it("an upgrade park resumed by continue carries the claim's acceptStoreFormatLoss into the apply arm", async () => {
+    // The apply arm can land older bytes too (a stage this executor did not
+    // promote), so the consent has to reach `applyHostWithAttempt` by the
+    // same rule as the downgrade installer.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    world.latest = "2.0.0";
+    mocks.applyHostWithAttempt.mockRejectedValueOnce(busyError());
+    await expect(
+      runUpdate({ acceptStoreFormatLoss: true }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+    const parked = await requireRecord();
+    expect(parked.claim).toMatchObject({ acceptStoreFormatLoss: true });
+    mocks.writes.length = 0;
+    mocks.applyHostWithAttempt.mockClear();
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: parked.attemptId,
+      versionRequest: "2.0.0",
+    });
+
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ acceptStoreFormatLoss: true }),
+    );
   });
 
   it("a downgrade park whose claim WITHHELD consent is refused, and nothing is downloaded or applied", async () => {

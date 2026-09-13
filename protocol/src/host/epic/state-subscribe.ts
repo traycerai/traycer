@@ -158,6 +158,8 @@ import {
   ticketArtifactSchema,
 } from "@traycer/protocol/persistence/epic/artifacts";
 import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
+import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
+import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 
 /**
  * One artifact record on the records lane.
@@ -238,6 +240,62 @@ export const epicDeletedArtifactRecordSchema = z.discriminatedUnion("kind", [
 ]);
 export type EpicDeletedArtifactRecord = z.infer<
   typeof epicDeletedArtifactRecordSchema
+>;
+
+/**
+ * {@link epicDeletedArtifactRecordSchema} as `cli-v1.3.0` / `host-v1.3.0`
+ * shipped it on `epic.state.subscribe@1.0`, hand-frozen.
+ *
+ * The live tombstone grew the artifact's metadata (`folderName`, `parentId`,
+ * `createdAt`, `createdManually`, `assignee`, and a nullish `status` on every
+ * kind) so a deleted artifact can be revived with what it had. A released
+ * `@1.0` peer's schema neither carries those keys nor tolerates `status`
+ * missing on a ticket or story, so the `@1.0` line stays bound to THIS copy
+ * and `@1.1` below takes the live union. Written out in full rather than
+ * derived from the live persistence schemas on purpose: a frozen copy that
+ * reads a live sub-schema freezes nothing (`.omit()`/`.extend()` off
+ * `deletedTicketArtifactSchema` would have grown right along with it).
+ *
+ * The host gates on the negotiated minor: a `@1.0` subscriber is served frames
+ * reparsed through this schema, which strips the newer keys, so the runtime
+ * payload matches what the released peer strict-decodes. See
+ * `EpicStateStreamResolver` in the internal repo.
+ */
+// The same registry record the persistence tombstones embed; resolved here
+// rather than imported from `common/_internal`, which is registry-only.
+const ticketStatusSchemaForFrozenTombstone = getRecordSchema(
+  commonRecordRegistry,
+  "ticket-status",
+  "latest",
+);
+const frozenDeletedArtifactRecordFieldsV10 = {
+  id: z.string(),
+  title: z.string(),
+  deletedAt: z.string(),
+  ...epicLaneRowRevisionFields,
+} as const;
+export const epicDeletedArtifactRecordSchemaV10 = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("spec"),
+    ...frozenDeletedArtifactRecordFieldsV10,
+  }),
+  z.object({
+    kind: z.literal("ticket"),
+    ...frozenDeletedArtifactRecordFieldsV10,
+    status: ticketStatusSchemaForFrozenTombstone,
+  }),
+  z.object({
+    kind: z.literal("story"),
+    ...frozenDeletedArtifactRecordFieldsV10,
+    status: ticketStatusSchemaForFrozenTombstone,
+  }),
+  z.object({
+    kind: z.literal("review"),
+    ...frozenDeletedArtifactRecordFieldsV10,
+  }),
+]);
+export type EpicDeletedArtifactRecordV10 = z.infer<
+  typeof epicDeletedArtifactRecordSchemaV10
 >;
 
 /**
@@ -529,7 +587,7 @@ const epicStateSubscribeSnapshotFrameSchemaV10 = z.object({
    * it has already said everything there is to say. Carrying thread tombstones
    * here would grow the snapshot without end for a fact no consumer reads.
    */
-  deletedArtifacts: z.array(epicDeletedArtifactRecordSchema),
+  deletedArtifacts: z.array(epicDeletedArtifactRecordSchemaV10),
   roleClaims: epicStateRoleClaimsProjectionSchema,
   /** Every LIVE thread on this epic. Removed threads are simply absent. */
   commentThreads: z.array(epicCommentThreadRecordSchema),
@@ -649,7 +707,7 @@ const epicStateSubscribeDeltaFrameSchemaV10 = z.object({
    * these must not resurrect the artifact from a later upsert in the same
    * envelope or from a stale row it holds elsewhere.
    */
-  artifactTombstones: z.array(epicDeletedArtifactRecordSchema),
+  artifactTombstones: z.array(epicDeletedArtifactRecordSchemaV10),
   commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
   commentThreadRemovals: z.array(epicCommentThreadRemovalSchema),
   /**
@@ -768,5 +826,47 @@ export const epicStateSubscribeV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStateSubscribeServerFrameSchemaV10,
+  clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
+});
+
+/**
+ * `@1.1`: the `@1.0` frames with the LIVE tombstone union in both slots.
+ *
+ * Tombstones carry the deleted artifact's metadata so a revive can restore
+ * it (see {@link epicDeletedArtifactRecordSchema}); every other frame, the
+ * open request and the client frames are `@1.0`'s by reference. Stream minors
+ * negotiate to the highest both peers share, so a `1.1`-capable GUI on a
+ * `1.1`-capable host lands here and an older peer settles on `@1.0`, whose
+ * frozen copy above the host reparses outgoing frames through.
+ */
+const epicStateSubscribeSnapshotFrameSchemaV11 =
+  epicStateSubscribeSnapshotFrameSchemaV10.extend({
+    deletedArtifacts: z.array(epicDeletedArtifactRecordSchema),
+  });
+const epicStateSubscribeDeltaFrameSchemaV11 =
+  epicStateSubscribeDeltaFrameSchemaV10.extend({
+    artifactTombstones: z.array(epicDeletedArtifactRecordSchema),
+  });
+export const epicStateSubscribeServerFrameSchemaV11 = z
+  .discriminatedUnion("kind", [
+    epicStateSubscribeSnapshotFrameSchemaV11,
+    epicStateSubscribeResumedFrameSchemaV10,
+    epicStateSubscribeDeltaFrameSchemaV11,
+    epicStateSubscribeTrustChangedFrameSchemaV10,
+    z.object({
+      kind: z.literal("pong"),
+      ...epicLaneTextFrameFields,
+    }),
+  ])
+  .superRefine(refineDeltaCarriesChange);
+export type EpicStateSubscribeServerFrameV11 = z.infer<
+  typeof epicStateSubscribeServerFrameSchemaV11
+>;
+
+export const epicStateSubscribeV11 = defineStreamRpcContract({
+  method: "epic.state.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStateSubscribeServerFrameSchemaV11,
   clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
 });

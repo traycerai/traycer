@@ -23,9 +23,351 @@ function offer(overrides: Partial<HostStoreFormatOffer>): HostStoreFormatOffer {
         survey: "complete",
       },
     },
+    install: null,
     ...overrides,
   };
 }
+
+describe("hostStoreFormatRestriction over a local-file install (the CLI's local-archive identity)", () => {
+  // A desktop provisions from its bundled archive: the record is
+  // `local-file` under the CLI's own version, so the CLI withholds the
+  // installed version from applicability and EVERY move evaluates - an
+  // upgrade included. It clears from formats when the installed side can be
+  // placed (the sidecar beside the executable, or the table on the recorded
+  // version) and walks the survey when it cannot. Each row here is a case
+  // the registry-side estimate used to call unrestricted.
+  const UPGRADE = "1.4.0";
+  const pendingSurvey = {
+    chatDb: { current: 9, onDiskMax: null, epicCount: 0, survey: "pending" },
+  } as const;
+
+  it("clears an upgrade from the sidecar's declaration alone, without waiting on the survey", () => {
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          publishedFormats: { chatDb: 9 },
+          storeFormats: pendingSurvey,
+          install: {
+            source: "local-file",
+            version: "1.3.0.1757000000000.abc1234",
+            declaredFormats: { chatDb: 9 },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("places an undeclared install by the fixed table when its recorded version is on it", () => {
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          publishedFormats: { chatDb: 9 },
+          storeFormats: pendingSurvey,
+          install: {
+            source: "local-file",
+            version: "1.3.0-rc.4",
+            declaredFormats: null,
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  describe("an install the CLI cannot place - undeclared, recorded under a stamp the release ladder has no line for - walks the survey, upgrade or not", () => {
+    const unplaceable = {
+      source: "local-file",
+      version: "1.3.0.1757000000000.abc1234",
+      declaredFormats: null,
+    } as const;
+
+    it("holds the upgrade on a pending survey instead of clearing it on this build's own stamp", () => {
+      // `current` is 9 and the target reads 9, which the registry-side
+      // estimate cleared. The CLI never sees `current`; it sees an installed
+      // side nobody can place, and walks.
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: { chatDb: 9 },
+            storeFormats: pendingSurvey,
+            install: unplaceable,
+          }),
+        ),
+      ).toMatchObject({ kind: "pending", confirmation: null });
+    });
+
+    it("clears the upgrade on a completed empty survey", () => {
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: { chatDb: 9 },
+            storeFormats: {
+              chatDb: {
+                current: 9,
+                onDiskMax: null,
+                epicCount: 0,
+                survey: "complete",
+              },
+            },
+            install: unplaceable,
+          }),
+        ),
+      ).toBeNull();
+    });
+
+    it("clears the upgrade when every surveyed store is within the target's format", () => {
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: { chatDb: 9 },
+            install: unplaceable,
+          }),
+        ),
+      ).toBeNull();
+    });
+
+    it("offers Install anyway on a failed survey - the refusal the CLI would otherwise send", () => {
+      const restriction = hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          publishedFormats: { chatDb: 9 },
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: null,
+              epicCount: 2,
+              survey: "failed",
+            },
+          },
+          install: unplaceable,
+        }),
+      );
+      expect(restriction?.kind).toBe("failed");
+      expect(restriction?.confirmation).toContain(`v${UPGRADE}`);
+    });
+
+    it("blocks the upgrade when a store is stamped above what the target reads", () => {
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: { chatDb: 9 },
+            storeFormats: {
+              chatDb: {
+                current: 9,
+                onDiskMax: 10,
+                epicCount: 1,
+                survey: "complete",
+              },
+            },
+            install: unplaceable,
+          }),
+        ),
+      ).toMatchObject({ kind: "blocked" });
+    });
+
+    it("refuses an upgrade whose own format is unknown, since nothing can clear it", () => {
+      expect(
+        hostStoreFormatRestriction(
+          offer({
+            version: UPGRADE,
+            publishedFormats: null,
+            install: unplaceable,
+          }),
+        ),
+      ).toMatchObject({ kind: "unknown" });
+    });
+  });
+
+  it("does NOT withhold an upgrade over a local-file install from a store-floor-incapable method - provenance widens what is evaluated, never what is withheld", () => {
+    // The withholding sentence is about being unable to DOWNGRADE, so it is
+    // gated on the version relation even though the floor now evaluates this
+    // row. Reachable only transiently (a host reporting `install` speaks
+    // @1.5, hence install @1.3), and there it would otherwise disable every
+    // row on a desktop under downgrade-only copy.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          publishedFormats: { chatDb: 9 },
+          installSupportsStoreFloor: false,
+          install: {
+            source: "local-file",
+            version: "1.3.0-rc.4",
+            declaredFormats: { chatDb: 9 },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("still withholds a DOWNGRADE over a local-file install from a store-floor-incapable method", () => {
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.2.0",
+          installSupportsStoreFloor: false,
+          install: {
+            source: "local-file",
+            version: "1.3.0-rc.4",
+            declaredFormats: { chatDb: 9 },
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: "floor-unsupported", confirmation: null });
+  });
+
+  it("leaves a local-file install alone when the peer reported no store formats at all", () => {
+    // The early return still comes first: nothing reported means the host's
+    // own pre-dispatch survey is the only authority, whatever the provenance.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          storeFormats: null,
+          install: {
+            source: "local-file",
+            version: "1.3.0.1757000000000.abc1234",
+            declaredFormats: null,
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("compares against the RECORD's version, not the running process's, so a row between them is still evaluated under activation debt", () => {
+    // 1.4.0 is installed over a running 1.2.0 - the bytes are ahead of the
+    // host still serving. A 1.3.0 row is an upgrade from the PROCESS and a
+    // downgrade from the RECORD, and the CLI lands over the record: it
+    // surveys, and a failed survey there is an indeterminate refusal. Judging
+    // this from `runningVersion` called the row unrestricted and left the
+    // refusal to arrive from the host.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0",
+          publishedFormats: { chatDb: 9 },
+          runningVersion: "1.2.0",
+          storeFormats: {
+            chatDb: {
+              current: 8,
+              onDiskMax: null,
+              epicCount: 2,
+              survey: "failed",
+            },
+          },
+          install: {
+            source: "registry",
+            version: "1.4.0",
+            declaredFormats: null,
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: "failed" });
+  });
+
+  it("judges the installed side from the RECORD, not this build's stamp, under activation debt", () => {
+    // The install is ahead of the running process: the record says rc.4
+    // (format 9) while the running build still stamps 8. The CLI compares
+    // against the record, so a target reading 8 does NOT clear here either -
+    // clearing on `current` would be the permissive disagreement this field
+    // exists to end.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.2.0",
+          publishedFormats: { chatDb: 8 },
+          storeFormats: {
+            chatDb: {
+              current: 8,
+              onDiskMax: 9,
+              epicCount: 1,
+              survey: "complete",
+            },
+          },
+          install: {
+            source: "registry",
+            version: "1.3.0-rc.4",
+            declaredFormats: { chatDb: 9 },
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: "blocked" });
+  });
+
+  it("leaves a move the floor does not evaluate unrestricted, even with NEWER stores on disk", () => {
+    // The CLI exits on `target-not-older` before it reads anything, so it
+    // never sees the disk for this move. The GUI used to fall through to the
+    // survey branches anyway and demand loss consent for an upgrade that
+    // loses nothing - a live source build can still be serving after older
+    // bytes were installed, which is exactly how `onDiskMax` outruns both
+    // versions.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0-rc.4",
+          publishedFormats: { chatDb: 9 },
+          runningVersion: "1.3.0-rc.1",
+          storeFormats: {
+            chatDb: {
+              current: 9,
+              onDiskMax: 10,
+              epicCount: 1,
+              survey: "complete",
+            },
+          },
+          install: {
+            source: "registry",
+            version: "1.3.0-rc.1",
+            declaredFormats: { chatDb: 9 },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("judges a registry install exactly as before: an upgrade is not evaluated at all", () => {
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: UPGRADE,
+          publishedFormats: null,
+          storeFormats: pendingSurvey,
+          install: {
+            source: "registry",
+            version: RUNNING_VERSION,
+            declaredFormats: { chatDb: 9 },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("judges a same-format downgrade over a local-file install from the installed side's placement, not this build's stamp", () => {
+    // Recorded rc.4 (table: 9), declaring nothing; the target 1.3.0-rc.1
+    // reads 9 too, so the move clears before any survey - the same rc→rc
+    // rollback the registry-side rule clears, reached through the CLI's
+    // operands.
+    expect(
+      hostStoreFormatRestriction(
+        offer({
+          version: "1.3.0-rc.1",
+          publishedFormats: null,
+          storeFormats: pendingSurvey,
+          install: {
+            source: "local-file",
+            version: "1.3.0-rc.4",
+            declaredFormats: null,
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+});
 
 describe("hostStoreFormatRestriction", () => {
   it("never restricts the running version's own row - a catalog row is judged by its version, not by its published formats", () => {
@@ -163,9 +505,9 @@ describe("hostStoreFormatRestriction", () => {
       kind: "blocked",
       reason: "Reads chat store format 8; this device has 9",
       detail:
-        "Can't open chat stores written by this host; installing anyway loses access to those chats until you update forward.",
+        "Can't open chat stores written by a newer host; installing anyway loses access to those chats until a host that reads format 9 is installed.",
       confirmation:
-        "This device has chat stores written in format 9. v1.2.0 reads format 8, so it can't open those chats, and it may fail to start until you update the host again. Nothing is deleted; updating forward restores access.",
+        "This device has chat stores written in format 9. v1.2.0 reads format 8, so it can't open those chats, and it may fail to start until a host that reads format 9 is installed. Nothing is deleted; a host that reads format 9 opens them again.",
     });
   });
 
@@ -456,7 +798,7 @@ describe("describeHostStoreFloorRpcRefusal", () => {
     );
     expect(description).not.toContain("could not be read");
     expect(description).toBe(
-      "Can't install 1.2.0: 2 epics (epic-a, epic-b) use a newer chat store (format 9; 1.2.0 reads 8). Update forward instead, or choose Install anyway for v1.2.0 to proceed and lose access to affected chats until the host is updated again.",
+      "Can't install 1.2.0: 2 epics (epic-a, epic-b) use a newer chat store (format 9; 1.2.0 reads 8). Install a version that can open them instead, or choose Install anyway for v1.2.0 to proceed and lose access to affected chats until one is installed.",
     );
   });
 
@@ -475,9 +817,9 @@ describe("describeHostStoreFloorRpcRefusal", () => {
     expect(description).toContain(
       "2 epics (epic-c, epic-d) could not be read.",
     );
-    expect(description.indexOf("Update forward instead")).toBeGreaterThan(
-      description.indexOf("could not be read."),
-    );
+    expect(
+      description.indexOf("Install a version that can open them instead"),
+    ).toBeGreaterThan(description.indexOf("could not be read."));
   });
 
   it("truncates the unreadable group with an ellipsis when the count exceeds the id list", () => {
@@ -537,7 +879,7 @@ describe("hostStoreFormatRestrictionFromRpc", () => {
       "2 epics (epic-c, epic-d) couldn't be read, so Traycer can't verify v1.2.0 can open them.",
     );
     expect(restriction.confirmation).toMatch(
-      /Nothing is deleted; updating forward restores access\.$/,
+      /Nothing is deleted; a host that reads format 9 opens them again\.$/,
     );
   });
 
@@ -547,7 +889,7 @@ describe("hostStoreFormatRestrictionFromRpc", () => {
     );
     expect(restriction.confirmation).not.toContain("couldn't be read");
     expect(restriction.confirmation).toBe(
-      "This device has chat stores written in format 9. v1.2.0 reads format 8, so it can't open those chats, and it may fail to start until you update the host again. Nothing is deleted; updating forward restores access.",
+      "This device has chat stores written in format 9. v1.2.0 reads format 8, so it can't open those chats, and it may fail to start until a host that reads format 9 is installed. Nothing is deleted; a host that reads format 9 opens them again.",
     );
   });
 });

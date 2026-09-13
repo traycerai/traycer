@@ -34,6 +34,10 @@ import type {
 import type { PromptStashSourceAdapter } from "@/lib/composer/prompt-stash-source";
 import { registerActivePromptStash } from "@/lib/commands/active-prompt-stash-registry";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
+import {
+  consumeStashOnHost,
+  publishStashEntry,
+} from "@/lib/drafts/draft-mirror-coordinator";
 
 interface UsePromptStashArgs {
   readonly active: boolean;
@@ -53,6 +57,11 @@ interface UsePromptStashArgs {
    * only insert/consume when that same destination still accepts the write.
    */
   readonly destination: PromptStashDestinationAdapter;
+  /**
+   * Host this surface is bound to. `null` leaves the capture device-local
+   * (offline / old host). Restore-consume still deletes locally.
+   */
+  readonly hostId: string | null;
 }
 
 export interface PromptStashController {
@@ -72,8 +81,15 @@ export interface PromptStashController {
 export function usePromptStash(
   args: UsePromptStashArgs,
 ): PromptStashController {
-  const { active, disabled, editorRef, readHashImage, source, destination } =
-    args;
+  const {
+    active,
+    disabled,
+    editorRef,
+    readHashImage,
+    source,
+    destination,
+    hostId,
+  } = args;
   const rows = usePromptStashStore((state) => state.rows);
   const markUnavailable = usePromptStashStore((state) => state.markUnavailable);
   const save = usePromptStashStore((state) => state.save);
@@ -175,6 +191,9 @@ export function usePromptStash(
       // this await was in flight, so the source only clears if it still
       // matches the token captured before the save.
       await save(entrySnapshot);
+      if (hostId !== null) {
+        void publishStashEntry(hostId, entrySnapshot.entry);
+      }
       if (retiredRef.current) {
         // This hook instance unmounted while the save was in flight. The
         // durable stash is already committed; whatever now occupies this
@@ -203,7 +222,7 @@ export function usePromptStash(
       stashInFlightRef.current = false;
       if (!retiredRef.current) setSaving(false);
     }
-  }, [disabled, editorRef, rows.length, readHashImage, save]);
+  }, [disabled, editorRef, hostId, rows.length, readHashImage, save]);
 
   const stashCurrent = useCallback(() => {
     void stashCurrentAsync();
@@ -261,6 +280,7 @@ export function usePromptStash(
         // Consume failure leaves the inserted content plus a duplicate stash.
         try {
           await removeFromStore(entry.id);
+          await consumeStashOnHost(hostId, entry.id);
         } catch {
           toast.warning("Prompt restored, but the stash copy remains", {
             description: "You can delete the duplicate after storage recovers.",
@@ -288,7 +308,7 @@ export function usePromptStash(
         setBusyEntryId(null);
       }
     },
-    [disabled, focusEditor, markUnavailable, removeFromStore],
+    [disabled, focusEditor, hostId, markUnavailable, removeFromStore],
   );
 
   const remove = useCallback(
@@ -298,6 +318,7 @@ export function usePromptStash(
       setBusyEntryId(id);
       try {
         await removeFromStore(id);
+        await consumeStashOnHost(hostId, id);
       } catch {
         toast.error("Could not delete this stashed prompt", {
           description: "The prompt is still safely stored. Try again.",
@@ -307,7 +328,7 @@ export function usePromptStash(
         setBusyEntryId(null);
       }
     },
-    [removeFromStore],
+    [hostId, removeFromStore],
   );
 
   const stashCurrentRef = useRef(stashCurrent);

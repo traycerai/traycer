@@ -113,7 +113,7 @@ function resetStores(): void {
   });
   useSettingsStore.setState({ theme: "light", themePreset: "neutral" });
   useThemeLibraryStore.setState({
-    version: 1,
+    version: 2,
     themes: [],
     selected: { light: null, dark: null },
     glassOpacity: 100,

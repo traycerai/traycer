@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { ProgressToastIcon } from "@/components/ui/progress-toast-icon";
 import { cn } from "@/lib/utils";
+import { isMobileApp } from "@/lib/mobile-app";
+import { APP_HEADER_HEIGHT } from "@/components/layout/header/app-header-height";
 import {
   listTileRects,
   subscribeTileRects,
@@ -22,15 +24,40 @@ import {
 } from "@/components/ui/toaster-anchor";
 
 const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
+// Sonner itself always shows the close button. Hiding it until hover only
+// makes sense for a fine pointer, so the hide is scoped to
+// `not-pointer-coarse` - the app's touch convention, the same `pointer-coarse`
+// the mobile header keys its touch chrome on. A coarse pointer keeps sonner's
+// own visibility, and the button is tappable, even on a device that can also
+// hover. (Sonner's stylesheet uses the stricter `(hover: none) and (pointer:
+// coarse)`, but only to reset its own lift transform.)
+// There the 20px glyph also gets a 44px hit area: a pseudo-element square
+// centred on it, so the visual size and sonner's corner transform are
+// untouched (the pseudo-element moves with the button). Sized outright rather
+// than inset, because an inset measures from inside the button's border.
+//
+// A collapsed stack's back toasts are hidden by sonner with `opacity: 0` on
+// their children and nothing else, so without the hide above their close
+// buttons stay tappable while invisible - and they peek out past the front
+// toast. The last rule takes them out of hit testing; it outranks every
+// reveal on specificity, and on desktop hovering the toaster expands the
+// stack first, so it never fights a hover reveal.
 const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
-  "pointer-events-none",
-  "opacity-0",
+  "not-pointer-coarse:pointer-events-none",
+  "not-pointer-coarse:opacity-0",
+  "pointer-coarse:after:absolute",
+  "pointer-coarse:after:top-1/2",
+  "pointer-coarse:after:left-1/2",
+  "pointer-coarse:after:size-11",
+  "pointer-coarse:after:-translate-x-1/2",
+  "pointer-coarse:after:-translate-y-1/2",
   "group-hover/toast:pointer-events-auto",
   "group-hover/toast:opacity-100",
   "group-focus-within/toast:pointer-events-auto",
   "group-focus-within/toast:opacity-100",
   "focus-visible:pointer-events-auto",
   "focus-visible:opacity-100",
+  "group-data-[expanded=false]/toast:group-data-[front=false]/toast:pointer-events-none",
 );
 const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
   "border border-border bg-background text-foreground",
@@ -48,6 +75,20 @@ const NOTIFICATION_TOAST_ACTION_SELECTOR = "[data-notification-toast-action]";
 // that position. Size is measured from those lists so toast placement can
 // prefer anchors that miss live browser tiles.
 const SONNER_TOASTER_LIST_SELECTOR = "[data-sonner-toaster]";
+// The installed phone app shows toasts at the top, where a notification is
+// expected on a phone; sonner derives swipe-up-to-dismiss from the position.
+// The toaster is `fixed` and paints above everything, so it is offset past
+// the app header rather than over it - the header row sits directly under
+// `#root`'s top inset and never scrolls. The extra 1.5rem keeps the close
+// button's touch hit area clear of the header's: sonner pulls the 20px button
+// 6px above the toast's outer edge, so its 44px hit area reaches 18px above
+// the toast, and the header's own 44px hit areas overhang its 40px row by
+// 2px. 1.25rem would make the two touch exactly; 1.5rem leaves 4px.
+const MOBILE_APP_TOASTER_ANCHOR: ToasterAnchor = "top-center";
+const MOBILE_APP_TOASTER_TOP = `calc(var(--safe-area-inset-top) + ${APP_HEADER_HEIGHT} + 1.5rem)`;
+// Both offsets: sonner reads `mobileOffset` at <=600px and `offset` above
+// it, and a phone in landscape is wider than that.
+const MOBILE_APP_TOASTER_OFFSET = { top: MOBILE_APP_TOASTER_TOP };
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
@@ -63,6 +104,9 @@ const Toaster = ({ ...props }: ToasterProps) => {
   // size - see `toaster-anchor.ts`.
   const toasterSizeRef = useRef<ToasterSize | null>(null);
   const [anchor, setAnchor] = useState<ToasterAnchor>(DEFAULT_TOASTER_ANCHOR);
+  // Read at render, not at module load: the phone entry sets it before the
+  // first render, which is after this module has been imported.
+  const mobileApp = isMobileApp();
 
   const recomputeAnchor = useCallback(() => {
     if (toastVisibleRef.current) return;
@@ -131,7 +175,16 @@ const Toaster = ({ ...props }: ToasterProps) => {
         }}
         {...props}
         closeButton={props.closeButton ?? true}
-        position={props.position ?? anchor}
+        position={
+          props.position ?? (mobileApp ? MOBILE_APP_TOASTER_ANCHOR : anchor)
+        }
+        offset={
+          props.offset ?? (mobileApp ? MOBILE_APP_TOASTER_OFFSET : undefined)
+        }
+        mobileOffset={
+          props.mobileOffset ??
+          (mobileApp ? MOBILE_APP_TOASTER_OFFSET : undefined)
+        }
       />
     </DismissableLayer.Branch>
   );

@@ -1,3 +1,16 @@
+import {
+  captureHeaderLocation,
+  restoreHeaderLayout,
+} from "@/lib/tab-recovery/header-layout";
+import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
+import {
+  recordClosedHeaderTab,
+  pruneRecoveryEpics,
+  withoutTabRecovery,
+  type ClosedHeaderTab,
+} from "@/lib/tab-recovery/history";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { releaseOpenEpicSessionIfUnused } from "@/lib/registries/epic-session-registry";
@@ -9,23 +22,29 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import {
+  isOpenLandingDraft,
   newestLandingDraftId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { isMobileApp } from "@/lib/mobile-app";
+import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
 import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
 } from "@/stores/tabs/registry";
 import {
   consumeLegacyTabsSourceActiveSelection,
+  layoutHomeIsActive,
   useTabsStore,
 } from "@/stores/tabs/store";
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { HOME_TAB_REF } from "@/stores/tabs/kinds/home";
 import {
   createEmptySplit,
   createLayoutItem,
   findStripItemForRef,
   flattenLayoutRefs,
+  flattenStripItemRefs,
   focusLayoutRef,
   focusSplitSide,
   pairLayoutRefs,
@@ -155,7 +174,13 @@ export type CoordinatedTabActivationTarget =
       readonly systemKind: "history" | "settings";
       readonly name: string;
       readonly lastPath: string;
-    };
+    }
+  /**
+   * The fixed Home tab. It owns no strip item, so activating it is purely a
+   * selection move: `activeItemId` goes to null and every source-backed active
+   * id is cleared by the transaction's own compatibility projection.
+   */
+  | { readonly kind: "home" };
 
 export interface CoordinatedTabSelection {
   readonly items: ReadonlyArray<StripItem>;
@@ -202,6 +227,8 @@ function authoritativeLayout(): PersistedTabStripLayout {
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
     activationHistory: state.activationHistory,
+    customizations: state.customizations,
+    groups: state.groups,
   };
 }
 
@@ -312,8 +339,11 @@ function sourceHasRef(ref: TabRef): boolean {
   if (ref.kind === "draft") {
     return useLandingDraftStore
       .getState()
-      .drafts.some((draft) => draft.id === ref.id);
+      .drafts.some((draft) => draft.id === ref.id && isOpenLandingDraft(draft));
   }
+  // Home owns no source record and no strip item, so it is never a placement
+  // this reconciles - `resolveHomeActivation` is its only entry point.
+  if (ref.kind === "home") return false;
   return currentLayout().systemTabs[ref.kind] !== null;
 }
 
@@ -330,6 +360,24 @@ function canFillSplitRef(ref: TabRef): boolean {
     !isTabStructurallyLocked(ref) &&
     tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible"
   );
+}
+
+/**
+ * `repairLayout`, with a deliberate Home selection carried through it.
+ *
+ * The reducer is pure and reads a null active id as "unset", falling back to
+ * the first item; only the layout being repaired can say whether that null was
+ * an absent selection or Home holding one. Same distinction `committedLayout`
+ * draws at the store's commit boundary, applied to the two places this module
+ * repairs a layout without going through it.
+ */
+function repairedLayoutPreservingHome(
+  layout: PersistedTabStripLayout,
+): PersistedTabStripLayout {
+  const repaired = repairLayout(layout, isRegisteredTabKind);
+  return layoutHomeIsActive(layout)
+    ? { ...repaired, activeItemId: null }
+    : repaired;
 }
 
 function focusedRef(layout: PersistedTabStripLayout): TabRef | null {
@@ -373,6 +421,12 @@ function restoreCoordinatedSelection(
   layout: PersistedTabStripLayout,
   selection: CoordinatedTabSelection,
 ): PersistedTabStripLayout | null {
+  // A rejected navigation that STARTED on Home has to land back on Home. Its
+  // prior selection names no item, so the item lookup below can never recover
+  // it; the selection itself is the whole state to restore.
+  if (selection.activeItemId === null) {
+    return isHomeTabEnabled() ? { ...layout, activeItemId: null } : null;
+  }
   const priorItem = layout.items.find(
     (item) => item.id === selection.activeItemId,
   );
@@ -980,7 +1034,27 @@ export class TabCommandCoordinator {
         return this.resolveMigratedEpicActivation(target, layout);
       case "ref":
         return this.resolveRefActivation(target.ref, layout);
+      case "home":
+        return this.resolveHomeActivation(layout);
     }
+  }
+
+  /**
+   * Home is a selection, not a placement: nothing is created, nothing is
+   * reserved, and the layout keeps every item it had. Refused outright while
+   * the Home tab is off, so a stale intent cannot strand the window on a
+   * selection with no surface behind it.
+   */
+  private resolveHomeActivation(
+    layout: PersistedTabStripLayout,
+  ): ResolvedCoordinatedActivation | null {
+    if (!isHomeTabEnabled()) return null;
+    return {
+      ref: HOME_TAB_REF,
+      layout: { ...layout, activeItemId: null },
+      reservedAdditions: [],
+      applySources: () => undefined,
+    };
   }
 
   private resolveSystemActivation(
@@ -1028,17 +1102,27 @@ export class TabCommandCoordinator {
       target.draftId ??
       mobileStableDraftId ??
       (target.create ? uuidv4() : null);
-    if (draftId === null) return null;
-    const exists = useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === draftId);
-    if (!target.create && !exists) return null;
+    if (draftId === null || landingDraftIsRetired(draftId)) return null;
+    const drafts = useLandingDraftStore.getState().drafts;
+    const present = drafts.some((draft) => draft.id === draftId);
+    const open = drafts.some(
+      (draft) => draft.id === draftId && isOpenLandingDraft(draft),
+    );
+    if (!target.create && !open) return null;
     const ref: TabRef = { kind: "draft", id: draftId };
     return this.activationForRef(layout, ref, () => {
-      if (!exists) {
+      if (!present) {
         useLandingDraftStore
           .getState()
           .createDraftWithId(draftId, target.settings);
+        return;
+      }
+      if (!open) {
+        // Retained-but-closed. `createDraftWithId` would no-op on the
+        // existing row and leave `closed` set, so the ref we are installing
+        // would name a draft `tabSourceRefs()` excludes - a tab pointing at
+        // nothing reachable. Reopening is the create this target asked for.
+        useLandingDraftStore.getState().openDraft(draftId);
         return;
       }
       useLandingDraftStore.getState().setActiveDraft(draftId);
@@ -1163,12 +1247,15 @@ export class TabCommandCoordinator {
     if (ref.kind === "draft") {
       const exists = useLandingDraftStore
         .getState()
-        .drafts.some((draft) => draft.id === ref.id);
+        .drafts.some(
+          (draft) => draft.id === ref.id && isOpenLandingDraft(draft),
+        );
       if (!exists) return null;
       return this.activationForRef(layout, ref, () => {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
       });
     }
+    if (ref.kind === "home") return this.resolveHomeActivation(layout);
     if (layout.systemTabs[ref.kind] === null) return null;
     return this.activationForRef(layout, ref, () => undefined);
   }
@@ -1215,7 +1302,7 @@ export class TabCommandCoordinator {
       },
       applyRemovals: () => {
         this.applyExpectedSourceMutation(() => {
-          useLandingDraftStore.getState().closeDraft(command.draftId);
+          useLandingDraftStore.getState().deleteDraft(command.draftId);
         });
       },
     });
@@ -1294,6 +1381,113 @@ export class TabCommandCoordinator {
     );
   }
 
+  restoreClosedHeaderTabs(
+    requestedItems: readonly ClosedHeaderTab[],
+    replaceEmptyDraftId: string | null,
+  ): void {
+    // Another window can retire a retained row before its storage event
+    // removes the local recovery entry. Do not reserve or place that ID.
+    const items = requestedItems.filter(
+      (item) => item.kind !== "draft" || !landingDraftIsRetired(item.draftId),
+    );
+    if (items.length === 0) return;
+    const previousLayout = currentLayout();
+    const previousActiveDraftId = useLandingDraftStore.getState().activeDraftId;
+    let replacement: TabRef | null = null;
+    if (replaceEmptyDraftId !== null) {
+      const ref: TabRef = { kind: "draft", id: replaceEmptyDraftId };
+      const item = findStripItemForRef(previousLayout, ref);
+      const isSplitPartner = items.some(
+        (closed) =>
+          closed.placement?.split !== undefined &&
+          flattenStripItemRefs(closed.placement.split).some(
+            (partner) => tabRefKey(partner) === tabRefKey(ref),
+          ),
+      );
+      draftRuntimeRegistry.flush(replaceEmptyDraftId);
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((candidate) => candidate.id === replaceEmptyDraftId);
+      // A standalone blank landing page is the fallback after the last tab
+      // closes. Keep deliberate split slots and drafts containing user work.
+      if (
+        item?.kind === "tab" &&
+        !isSplitPartner &&
+        previousLayout.activeItemId === item.id &&
+        !isTabCloseLocked(ref) &&
+        draft !== undefined &&
+        isEmptyLandingDraftContent(draft.content)
+      )
+        replacement = ref;
+    }
+    const replacedItem =
+      replacement === null
+        ? null
+        : findStripItemForRef(previousLayout, replacement);
+    const survivingActiveItemId =
+      previousLayout.activeItemId === replacedItem?.id
+        ? null
+        : previousLayout.activeItemId;
+    const refs: TabRef[] = items.map((item) =>
+      item.kind === "epic"
+        ? { kind: "epic", id: item.tab.tabId }
+        : { kind: "draft", id: item.draftId },
+    );
+    this.execute({
+      layout: () => {
+        const base =
+          replacement === null
+            ? currentLayout()
+            : layoutWithRemovedRef(currentLayout(), replacement);
+        const layout = restoreHeaderLayout(
+          base,
+          items.map((item) => ({
+            ...item,
+            ref:
+              item.kind === "epic"
+                ? { kind: "epic" as const, id: item.tab.tabId }
+                : { kind: "draft" as const, id: item.draftId },
+          })),
+          canSplitRef,
+        );
+        if (survivingActiveItemId === null) return layout;
+        if (layout.items.some((item) => item.id === survivingActiveItemId))
+          return { ...layout, activeItemId: survivingActiveItemId };
+        // Reconstructing a split changes its item's id. Keep the same surviving
+        // view selected; single recovery's navigation selects the reopened side.
+        const survivor = focusedRef(previousLayout);
+        if (survivor === null) return layout;
+        return {
+          ...focusLayoutRef(layout, survivor),
+          activationHistory: layout.activationHistory,
+          groups: layout.groups,
+        };
+      },
+      reservedAdditions: refs,
+      pendingRemovals: replacement === null ? [] : [replacement],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        for (const item of items) {
+          if (item.kind === "epic")
+            useEpicCanvasStore
+              .getState()
+              .restoreTabForRecovery(item.tab, item.canvas);
+          else useLandingDraftStore.getState().openDraft(item.draftId);
+        }
+        if (
+          previousActiveDraftId !== null &&
+          previousActiveDraftId !== replaceEmptyDraftId
+        )
+          useLandingDraftStore.getState().setActiveDraft(previousActiveDraftId);
+        else useLandingDraftStore.getState().clearActiveDraft();
+      },
+      applyRemovals: () => {
+        if (replacement !== null)
+          withoutTabRecovery(() => this.removeSourceRef(replacement));
+      },
+    });
+  }
+
   closeRef(ref: TabRef): boolean {
     return this.closeRefAfterConfirmed(ref);
   }
@@ -1303,6 +1497,28 @@ export class TabCommandCoordinator {
     const layout = currentLayout();
     if (findStripItemForRef(layout, ref) === null) return false;
     const next = layoutWithRemovedRef(layout, ref);
+    const location = captureHeaderLocation(layout, ref, 0);
+    let recovery: ClosedHeaderTab | null = null;
+    if (ref.kind === "draft") {
+      draftRuntimeRegistry.flush(ref.id);
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((candidate) => candidate.id === ref.id);
+      if (draft !== undefined && !isEmptyLandingDraftContent(draft.content))
+        recovery = {
+          kind: "draft",
+          draftId: draft.id,
+          hostId:
+            draft.adoption.state === "adopted" ? draft.adoption.hostId : null,
+          ...location,
+        };
+    } else if (ref.kind === "epic") {
+      const state = useEpicCanvasStore.getState();
+      const tab = state.tabsById[ref.id];
+      const canvas = state.canvasByTabId[ref.id] ?? EMPTY_CANVAS;
+      if (tab !== undefined)
+        recovery = { kind: "epic", tab, canvas, ...location };
+    }
     this.execute({
       layout: next,
       reservedAdditions: [],
@@ -1310,12 +1526,14 @@ export class TabCommandCoordinator {
         ref.kind === "history" || ref.kind === "settings" ? [] : [ref],
       projectSourceCompatibility: true,
       applySources: () => undefined,
-      applyRemovals: () => this.removeSourceRef(ref),
+      applyRemovals: () => withoutTabRecovery(() => this.removeSourceRef(ref)),
     });
+    if (recovery !== null) recordClosedHeaderTab(recovery);
     return true;
   }
 
   handleEpicAccessLoss(epicIds: ReadonlyArray<string>): void {
+    pruneRecoveryEpics(epicIds);
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
     // Ticket 15 (decision #29): drop every durable chat-key entry under
@@ -1440,9 +1658,8 @@ export class TabCommandCoordinator {
         ref.kind !== "settings" &&
         !sourceKeys.has(tabRefKey(ref)),
     );
-    const repaired = repairLayout(
+    const repaired = repairedLayoutPreservingHome(
       missing.reduce(removeLayoutRef, layout),
-      isRegisteredTabKind,
     );
     const currentKeys = new Set(flattenLayoutRefs(current).map(tabRefKey));
     const reservedAdditions = flattenLayoutRefs(repaired).filter(
@@ -1699,7 +1916,7 @@ export class TabCommandCoordinator {
       return null;
     } catch (error) {
       const primary = transactionError(error);
-      const repaired = repairLayout(currentLayout(), isRegisteredTabKind);
+      const repaired = repairedLayoutPreservingHome(currentLayout());
       const fallbackFailure = this.replaceLayoutWithoutPersistence(repaired);
       this.diagnostics = {
         ...this.diagnostics,
@@ -1719,6 +1936,8 @@ export class TabCommandCoordinator {
         activeItemId: layout.activeItemId,
         systemTabs: layout.systemTabs,
         activationHistory: layout.activationHistory,
+        customizations: layout.customizations,
+        groups: layout.groups,
         stripOrder: flattenLayoutRefs(layout),
       });
       return null;
@@ -1743,8 +1962,21 @@ export class TabCommandCoordinator {
     const additions = knownSources.filter(
       (ref) => findStripItemForRef(withoutMissing, ref) === null,
     );
+    const withAdditions = additions.reduce(createLayoutItem, withoutMissing);
+    const keepSelection =
+      withoutMissing.activeItemId !== null ||
+      layoutHomeIsActive(withoutMissing);
     return {
-      next: additions.reduce(createLayoutItem, withoutMissing),
+      // Background source updates must not select a newly mirrored draft.
+      // Explicit tab commands focus their target separately.
+      next:
+        additions.length === 0 || !keepSelection
+          ? withAdditions
+          : {
+              ...withAdditions,
+              activeItemId: withoutMissing.activeItemId,
+              activationHistory: withoutMissing.activationHistory,
+            },
       additions,
       removals,
     };
@@ -1796,12 +2028,18 @@ export class TabCommandCoordinator {
     const currentDrafts = useLandingDraftStore.getState().drafts;
     const activeDraftId =
       selected?.kind === "draft" &&
-      currentDrafts.some((draft) => draft.id === selected.id)
+      currentDrafts.some(
+        (draft) => draft.id === selected.id && isOpenLandingDraft(draft),
+      )
         ? selected.id
         : null;
     if (activeDraftId !== useLandingDraftStore.getState().activeDraftId) {
       this.applyExpectedSourceMutation(() => {
-        useLandingDraftStore.setState({ activeDraftId });
+        if (activeDraftId === null) {
+          useLandingDraftStore.getState().clearActiveDraft();
+        } else {
+          useLandingDraftStore.getState().setActiveDraft(activeDraftId);
+        }
       });
     }
   }

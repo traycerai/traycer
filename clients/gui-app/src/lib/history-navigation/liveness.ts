@@ -1,5 +1,8 @@
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  isOpenLandingDraft,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import { parseNestedFocusTargetFromHref } from "@/lib/epic-nested-focus-route";
 import { hrefPathname } from "@/lib/routes";
 
@@ -24,9 +27,10 @@ import { hrefPathname } from "@/lib/routes";
  *   preview-reopen case, not dead. Once the tab is gone entirely, dead ONLY
  *   when `resolveTabIdForEpic(epicId)` finds no sibling tab (top-level
  *   entries) - a nested target never salvages onto a sibling.
- * - `/draft/$draftId` — dead when `draftId` is absent from the landing-draft
- *   store (`src/routes/draft-route-components.tsx` redirects to `/` on the same
- *   condition). `/draft/new` is a distinct route and is always kept.
+ * - `/draft/$draftId` — dead when `draftId` is absent OR closed. A closed
+ *   start-task draft is retained in the store (T10) but is not a strip
+ *   source; Back onto `/draft/:id` would landing-correct. `/draft/new` is a
+ *   distinct route and is always kept.
  *
  * Reads `getState()` at call time so the prune scheduler re-evaluates liveness
  * against the live stores at execution, not at install time.
@@ -52,7 +56,7 @@ export function isHistoryEntryDead(href: string): boolean {
     return sibling === null;
   }
 
-  // /draft/$draftId — dead when the draft id is gone. `/draft/new` is kept.
+  // /draft/$draftId — dead when the draft is gone or closed. `/draft/new` is kept.
   const segments = parsePathSegments(href);
   if (
     segments.length === 2 &&
@@ -60,10 +64,12 @@ export function isHistoryEntryDead(href: string): boolean {
     segments[1] !== "new"
   ) {
     const draftId = segments[1];
-    const exists = useLandingDraftStore
+    const isOpen = useLandingDraftStore
       .getState()
-      .drafts.some((draft) => draft.id === draftId);
-    return !exists;
+      .drafts.some(
+        (draft) => draft.id === draftId && isOpenLandingDraft(draft),
+      );
+    return !isOpen;
   }
 
   // Unknown / unparseable / every other route shape: keep.

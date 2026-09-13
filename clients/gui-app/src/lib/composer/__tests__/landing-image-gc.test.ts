@@ -38,6 +38,8 @@ vi.mock("sonner", () => ({
 }));
 
 let urlCounter = 0;
+let originalCreateObjectURLDescriptor: PropertyDescriptor | undefined;
+let originalRevokeObjectURLDescriptor: PropertyDescriptor | undefined;
 
 function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
   return new Uint8Array(values);
@@ -142,14 +144,39 @@ function makeDraft(
     settings: null,
     composerMode: "chat",
     workspace: m.draft.emptyLandingDraftWorkspaceSnapshot(),
+    ...m.draft.freshLandingMirrorState(),
   };
 }
 
 describe("landing-image-gc", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
-    URL.revokeObjectURL = vi.fn();
+    originalCreateObjectURLDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "createObjectURL",
+    );
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => `blob:mock/${++urlCounter}`,
+      });
+    }
+    vi.spyOn(URL, "createObjectURL").mockImplementation(
+      () => `blob:mock/${++urlCounter}`,
+    );
+    originalRevokeObjectURLDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "revokeObjectURL",
+    );
+    if (typeof URL.revokeObjectURL !== "function") {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => undefined,
+      });
+    }
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     toastInfo.mockClear();
     toastError.mockClear();
     window.localStorage.clear();
@@ -158,6 +185,25 @@ describe("landing-image-gc", () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    if (originalCreateObjectURLDescriptor === undefined)
+      Reflect.deleteProperty(URL, "createObjectURL");
+    else
+      Object.defineProperty(
+        URL,
+        "createObjectURL",
+        originalCreateObjectURLDescriptor,
+      );
+    if (originalRevokeObjectURLDescriptor === undefined)
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    else
+      Object.defineProperty(
+        URL,
+        "revokeObjectURL",
+        originalRevokeObjectURLDescriptor,
+      );
+    originalCreateObjectURLDescriptor = undefined;
+    originalRevokeObjectURLDescriptor = undefined;
     Reflect.deleteProperty(globalThis, "runnerHost");
   });
 
@@ -361,15 +407,46 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).not.toContain("orphan");
   });
 
-  it("close reclaims the session entry, then the bytes on the settling sweep", async () => {
+  it("empty close deletes the draft and reclaims unreferenced session bytes", async () => {
     const m = await loadModules({ desktop: true });
-    // [B2] Roots are trustworthy (landing editor mounted) so post-close sweeps
-    // may reclaim the session entry and then the bytes.
     m.gc.markLandingEditorMounted();
     m.gc.markLandingDraftsReady();
     await flush();
 
     const hash = await m.store.putImage(bytesOf([30, 31, 32]));
+    m.draft.useLandingDraftStore.setState({
+      drafts: [
+        makeDraft(m, {
+          id: "d1",
+          content: EMPTY_DOC,
+          lastTouchedAt: 1,
+        }),
+      ],
+      activeDraftId: "d1",
+    });
+    expect(m.store.sessionObjectUrl(hash)).not.toBeNull();
+
+    m.draft.useLandingDraftStore.getState().closeDraft("d1");
+    expect(m.draft.useLandingDraftStore.getState().drafts).toEqual([]);
+
+    await m.gc.reconcile();
+    await flush();
+    expect(m.store.sessionObjectUrl(hash)).toBeNull();
+    expect(await m.store.imageHashKeys()).toContain(hash);
+
+    await m.gc.reconcile();
+    await flush();
+    expect(await m.store.imageHashKeys()).not.toContain(hash);
+  });
+
+  it("retained close keeps image bytes by hash through reconcile", async () => {
+    const m = await loadModules({ desktop: true });
+    m.gc.markLandingEditorMounted();
+    m.gc.markLandingDraftsReady();
+    await flush();
+
+    const bytes = bytesOf([30, 31, 32]);
+    const hash = await m.store.putImage(bytes);
     m.draft.useLandingDraftStore.setState({
       drafts: [
         makeDraft(m, {
@@ -381,25 +458,23 @@ describe("landing-image-gc", () => {
       activeDraftId: "d1",
     });
 
-    // While referenced, nothing is reclaimed.
-    await m.gc.reconcile();
-    await flush();
-    expect(await m.store.imageHashKeys()).toContain(hash);
-    expect(m.store.sessionObjectUrl(hash)).not.toBeNull();
-
-    // Close the draft (composer is not editing it → live mirror empty).
     m.draft.useLandingDraftStore.getState().closeDraft("d1");
+    expect(m.draft.useLandingDraftStore.getState().drafts[0]?.closed).toBe(
+      true,
+    );
 
-    // First post-close sweep: session entry released, bytes still session-protected.
     await m.gc.reconcile();
     await flush();
-    expect(m.store.sessionObjectUrl(hash)).toBeNull();
+    await m.gc.reconcile();
+    await flush();
+
     expect(await m.store.imageHashKeys()).toContain(hash);
-
-    // Settling sweep (session now empty): the bytes are reclaimed.
-    await m.gc.reconcile();
-    await flush();
-    expect(await m.store.imageHashKeys()).not.toContain(hash);
+    const stored = await m.store.getImageBytes(hash);
+    expect(stored).toBeDefined();
+    if (stored === undefined) return;
+    expect(Array.from(stored)).toEqual(Array.from(bytes));
+    const recomputed = await sha256Hex(stored);
+    expect(recomputed).toBe(hash);
   });
 
   // Budget admission tests live in landing-image-budget.test.ts (canonical

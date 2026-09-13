@@ -4,6 +4,7 @@ import {
   NO_CHAT_STORE,
   SOURCE_TREE_HOST_VERSION,
   decideStoreFormatFloor,
+  declaredStoreFormatsFromSidecar,
   isReleasedHostVersion,
   isValidStoreFormatVersion,
   resolveHostStoreFormats,
@@ -479,4 +480,41 @@ describe("isValidStoreFormatVersion", () => {
   ])("rejects %s", (_label, value) => {
     expect(isValidStoreFormatVersion(value)).toBe(false);
   });
+});
+
+describe("declaredStoreFormatsFromSidecar", () => {
+  it("reads a declared format off the exact shape the host build writes", () => {
+    expect(
+      declaredStoreFormatsFromSidecar({
+        version: "1.5.0",
+        storeFormats: { chatDb: 9 },
+      }),
+    ).toEqual({ kind: "declared", formats: { chatDb: 9 } });
+  });
+
+  it.each([
+    ["a sidecar with no storeFormats member", { version: "1.5.0" }],
+    ["an explicit null member", { version: "1.5.0", storeFormats: null }],
+    ["a document that is not an object", "1.5.0"],
+    ["a null document", null],
+  ])("treats %s as undeclared, never as malformed", (_label, sidecar) => {
+    expect(declaredStoreFormatsFromSidecar(sidecar)).toEqual({
+      kind: "undeclared",
+    });
+  });
+
+  it.each([
+    ["a string chatDb", { chatDb: "9" }],
+    ["a zero chatDb", { chatDb: 0 }],
+    ["a fractional chatDb", { chatDb: 9.5 }],
+    ["an array member", [9]],
+    ["a member with no chatDb", {}],
+  ])(
+    "reports %s as malformed - the archive tried to declare and could not be read",
+    (_label, storeFormats) => {
+      expect(
+        declaredStoreFormatsFromSidecar({ version: "1.5.0", storeFormats }),
+      ).toEqual({ kind: "malformed" });
+    },
+  );
 });

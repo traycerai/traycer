@@ -10,16 +10,43 @@
 //     inherits that value via `process.env` and `withHostNodeOptions` collapses
 //     the duplicate to the single canonical cap.
 //
-// `--max-semi-space-size=16` caps V8's young generation. On hosts with a large
-// heap limit V8 otherwise sizes the scavenge space for throughput and lets
-// `new_space` reach ~64 MB idle / ~128 MB under churn - reserved, mostly-empty
-// space that still counts as RSS. This MUST be a creation-time flag: a runtime
-// `v8.setFlagsFromString` does NOT cap `new_space`.
+// `--max-semi-space-size=64` caps V8's young generation. Left uncapped, V8
+// sizes the scavenge space for throughput on a host with a large heap limit and
+// lets `new_space` reach ~64 MB idle / ~128 MB under churn - reserved,
+// mostly-empty space that still counts as RSS. This MUST be a creation-time
+// flag: a runtime `v8.setFlagsFromString` does NOT cap `new_space`.
+//
+// ## Why 64 and not the 16 this shipped with
+//
+// A trade, deliberately taken in both directions. 16 MB is what kept idle RSS
+// small, and that was the whole point of capping at all. The other side of it
+// showed up in a memory profile of a long-lived host: the parse and fold bursts
+// this process is built out of allocate TENS OF MEGABYTES AT ONCE, and a burst
+// larger than the semi-space cannot be scavenged - V8 promotes essentially all
+// of it to old space, where it dies under mark-compact instead. Mark-compact of
+// short-lived garbage is the expensive way to collect it, and GC was the
+// dominant CPU consumer during churn (3.5% of CPU even in a quiet window).
+//
+// So the cap was not sized wrong for RSS; it was sized below the allocation
+// bursts it had to survive, which converted a cheap collection into an
+// expensive one. 64 MB is chosen to sit above those bursts. The cost is
+// reserved young-generation RSS, which is why the number is not a guess:
+//
+// ## Measured on staging before it is trusted
+//
+// `ai.traycer.host.staging`, same long chat open at least an hour on each side:
+// GC share of CPU (`PerformanceObserver` on `gc` entries, 120 s), footprint
+// idle and under churn (`footprint -p`), and `new_space` size
+// (`v8.getHeapSpaceStatistics()`).
+//
+// KILL CRITERION - revert to 16 if idle footprint rises by more than 150 MB
+// with no GC-share gain, or if any host smoke that reads NODE_OPTIONS reddens.
+// 128 is the next value to consider, and only if 64 measures well.
 //
 // Provider CLIs (codex/opencode/claude) are spawned from the user's SHELL env -
 // NOT the host's process.env (see `getProviderSpawnEnv`) - so this never leaks
 // into third-party binaries.
-export const HOST_V8_FLAGS = "--max-semi-space-size=16";
+export const HOST_V8_FLAGS = "--max-semi-space-size=64";
 
 // Diagnostic-report flags for the host process. `--report-on-fatalerror`
 // makes Node write a JSON report on a V8 fatal (OOM and friends) - the class

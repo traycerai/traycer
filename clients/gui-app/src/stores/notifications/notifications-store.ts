@@ -15,7 +15,7 @@ import {
   parseNotificationRoomEntry,
 } from "@traycer/protocol/notifications/notification-room";
 import {
-  isReopenableNotificationsStreamClose,
+  isReopenableHostStreamClose,
   type HostReconnectEngine,
 } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 
@@ -284,7 +284,7 @@ export function openNotificationsStream(
     currentClient?.close();
     currentClient = null;
     openClient();
-  }, isReopenableNotificationsStreamClose);
+  }, isReopenableHostStreamClose);
 
   function openClient(): void {
     if (disposed) return;

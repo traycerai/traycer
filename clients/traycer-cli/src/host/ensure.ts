@@ -3,6 +3,7 @@ import { config } from "../config";
 import { currentInstallPlatform, type InstallSourceArg } from "../installer";
 import { resolveBundledHostArchive } from "../installer/bundled-host";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import type { RegistryYankLookup } from "../registry/client";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
 import {
@@ -79,6 +80,8 @@ export interface EnsureHostOptions {
   readonly force: boolean;
   /** See `ProvisionHostOptions.acceptStoreFormatLoss`. Forwarded verbatim. */
   readonly acceptStoreFormatLoss: boolean;
+  /** See `ProvisionHostOptions.yankLookup`. Forwarded verbatim. */
+  readonly yankLookup: RegistryYankLookup | null;
   // Liveness-only convergence: keep ANY installed, non-yanked host whatever
   // its version, instead of converging to this build's preferred pin. The
   // desktop passes it for its BACKGROUND intent (the selection authority's
@@ -197,6 +200,7 @@ export async function ensureHost(
     lockReason: "host-ensure",
     force: opts.force,
     acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
+    yankLookup: opts.yankLookup,
     holdExplicitDowngrade,
     onProgress: opts.onProgress,
     beforeMutate: opts.beforeMutate,

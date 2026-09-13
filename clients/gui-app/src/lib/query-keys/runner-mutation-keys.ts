@@ -119,7 +119,7 @@ export const runnerMutationKeys = {
     ["runner.appUpdates.setAllowPrerelease"] as const,
   globalShortcutsSet: (id: GlobalShortcutId) =>
     ["runner.globalShortcuts.set", id] as const,
-  // Settings → Notifications → "This phone". Both act on the ONE device this
+  // Settings → Sounds → "This phone". Both act on the ONE device this
   // renderer runs on, so a static key is the whole scope - there is no second
   // OS permission to hold a separate entry for.
   pushPermissionRequest: () => ["runner.pushPermission.request"] as const,
@@ -347,7 +347,7 @@ export const runnerQueryKeys = {
     target: string,
   ) =>
     ["runner.support.frozenLogTail", supportScopeId, draftId, target] as const,
-  // This phone's OS push permission (Settings → Notifications → "This
+  // This phone's OS push permission (Settings → Sounds → "This
   // phone"). Machine-local and singular - one renderer, one OS switch - so a
   // static key suffices, like `logLevels` and `installedFonts` above.
   pushPermission: () => ["runner.pushPermission"] as const,

@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { wcagContrast } from "culori";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
-import type { ThemeDefinition } from "@/lib/themes/theme-definition";
+import { createThemeFromPreset } from "@/lib/themes/theme-library";
+import type {
+  ThemeDefinition,
+  ThemeToken,
+} from "@/lib/themes/theme-definition";
 
 const PERSIST_KEY = persistKey(STORE_KEYS.themeLibrary);
 
@@ -20,7 +25,7 @@ function theme(id: string, appearance: "light" | "dark"): ThemeDefinition {
 function resetStore(): void {
   window.localStorage.clear();
   useThemeLibraryStore.setState({
-    version: 1,
+    version: 2,
     themes: [],
     selected: { light: null, dark: null },
     glassOpacity: 100,
@@ -298,5 +303,87 @@ describe("useThemeLibraryStore", () => {
     expect(useThemeLibraryStore.getState().error).toContain(
       "changed while you were reviewing",
     );
+  });
+
+  it("repairs an imported v1 theme's collapsed borders on migration to v2, and leaves a preset-derived one untouched", () => {
+    const base = createThemeFromPreset("neutral", "light");
+    // A realistic non-null `syntax` - the provenance marker the VS Code
+    // import path populates - so this fixture genuinely exercises the
+    // imported-theme repair path, not just a preset with a made-up id.
+    const importedSyntax = {
+      colors: { "editor.background": "#1e1e1eff" },
+      tokenColors: [],
+    };
+    const collapsedColors = {
+      ...base.colors,
+      "canvas-border": base.colors.canvas,
+      input: base.colors.popover,
+      border: base.colors.popover,
+    };
+    const collapsed = {
+      ...base,
+      id: "legacy-imported-theme",
+      name: "Legacy imported theme",
+      colors: collapsedColors,
+      syntax: importedSyntax,
+    };
+    // Traycer's own presets sit at ~1.2:1 for these tokens - below the 1.3
+    // bar `ensureVisibleThemeBorders` enforces - by design. A preset-derived
+    // theme (`syntax: null`) must be skipped by the migration outright, not
+    // "repaired" into colors the user never asked for, so it comes back
+    // byte-identical to the preset.
+    const presetDerived = {
+      ...base,
+      id: "preset-derived-theme",
+      name: "Preset derived theme",
+    };
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        version: 1,
+        themes: [collapsed, presetDerived],
+        selected: { light: null, dark: null },
+        glassOpacity: 100,
+      }),
+    );
+
+    // No store action reads storage until one runs, so this - like the other
+    // "durable state written directly to localStorage" tests above - both
+    // triggers the v1 -> v2 migration and asserts its result through
+    // `readLibrary()`'s one seam.
+    expect(useThemeLibraryStore.getState().setGlassOpacity(100)).toBe(true);
+
+    const themes = useThemeLibraryStore.getState().themes;
+    const repaired = themes.find(
+      (theme) => theme.id === "legacy-imported-theme",
+    );
+    const stillPresetDerived = themes.find(
+      (theme) => theme.id === "preset-derived-theme",
+    );
+    const rendered = (
+      theme: ThemeDefinition | undefined,
+      token: ThemeToken,
+    ): string => theme?.colors[token] ?? "#000000";
+
+    expect(
+      wcagContrast(
+        rendered(repaired, "canvas-border"),
+        rendered(repaired, "canvas"),
+      ),
+    ).toBeGreaterThanOrEqual(1.3);
+    for (const token of ["input", "border"] as const) {
+      expect(
+        wcagContrast(rendered(repaired, token), rendered(repaired, "popover")),
+      ).toBeGreaterThanOrEqual(1.3);
+    }
+    expect(rendered(repaired, "canvas-border")).not.toBe(
+      collapsedColors["canvas-border"],
+    );
+    expect(rendered(repaired, "input")).not.toBe(collapsedColors.input);
+    expect(rendered(repaired, "border")).not.toBe(collapsedColors.border);
+
+    // A `syntax: null` (preset-derived) theme is skipped outright and comes
+    // back byte-identical.
+    expect(stillPresetDerived).toEqual(presetDerived);
   });
 });

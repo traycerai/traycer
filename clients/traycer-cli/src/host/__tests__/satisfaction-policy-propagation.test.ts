@@ -45,6 +45,14 @@ function makeEnsureOptions(
     noServiceRegister: false,
     force: false,
     acceptStoreFormatLoss: false,
+    // `../provision` is mocked wholesale here, so nothing in this suite ever
+    // consults a yank lookup. A rejecting stub rather than `null` keeps that
+    // executable: un-mock `provisionHost` and this fails loudly instead of
+    // reaching the real manifest fetch.
+    yankLookup: {
+      isVersionYanked: () =>
+        Promise.reject(new Error("yank lookup must not run in this suite")),
+    },
     keepInstalled: false,
     onProgress: null,
     adoption: undefined,

@@ -212,7 +212,9 @@ describe("<RepoBranchPrefixSection />", () => {
       const shell = screen.getByTestId("repo-branch-prefix-section");
       expect(within(shell).getByText("Branch prefix")).toBeTruthy();
       expect(
-        within(shell).getByText("Repository · anur4ag/tailmark"),
+        within(shell).getByText(
+          "Choose how new branches are named for anur4ag/tailmark.",
+        ),
       ).toBeTruthy();
     });
 
@@ -221,7 +223,9 @@ describe("<RepoBranchPrefixSection />", () => {
         repoIdentifier: null,
         workspacePath: "/Users/me/my-project",
       });
-      expect(screen.getByText("Repository · my-project")).toBeTruthy();
+      expect(
+        screen.getByText("Choose how new branches are named for my-project."),
+      ).toBeTruthy();
     });
   });
 

@@ -33,8 +33,8 @@
  * closed the hole for the arm it opened with, and the other arm reopened it.
  */
 import { describe, expect, it } from "vitest";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { EpicStatusSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { EpicStateSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type {
@@ -105,7 +105,7 @@ interface LaneRig {
 function statusSnapshot(
   migration: EpicMigrationStatus | null,
 ): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
@@ -127,7 +127,7 @@ function statusSnapshot(
 }
 
 function stateSnapshot(): EpicStateSnapshotFrame {
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
@@ -210,7 +210,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     // snapshot established and this suite would fail for the wrong reason.
     statusCallbacks.onConnectionStatus("open", null);
     stateCallbacks.onConnectionStatus("open", null);
-    statusCallbacks.onSnapshot(statusSnapshot(options.migration));
+    statusCallbacks.onSnapshot(statusSnapshot(options.migration), true);
     stateCallbacks.onSnapshot(stateSnapshot());
   }
 
@@ -238,7 +238,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (statusCallbacks === null) {
       throw new Error("the status lane factory was not invoked");
     }
-    const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+    const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
       kind: "migrationProgress",
       hasBinaryPayload: false,
       authorityEpoch: EPOCH,
@@ -250,7 +250,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (parsed.kind !== "migrationProgress") {
       throw new Error(`expected a migrationProgress frame, got ${parsed.kind}`);
     }
-    statusCallbacks.onTransition(parsed);
+    statusCallbacks.onTransition(parsed, true);
   }
 
   return {

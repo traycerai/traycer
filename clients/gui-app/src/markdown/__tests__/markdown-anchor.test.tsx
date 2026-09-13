@@ -54,7 +54,11 @@ const neutralToast = vi.hoisted(() =>
   ),
 );
 const openTab = vi.fn<BrowserSessionsState["openTab"]>(() =>
-  Promise.resolve({ sessionId: "session-markdown", tabId: "tab-markdown" }),
+  Promise.resolve({
+    sessionId: "session-markdown",
+    tabId: "tab-markdown",
+    handoffToken: null,
+  }),
 );
 
 vi.mock("sonner", () => ({ toast: neutralToast }));
@@ -133,11 +137,17 @@ function renderMarkdownWithBrowserRouting(
     lifecycle: "live",
     inventoryReady: true,
     canMaterializeElectron: false,
+    connectionGeneration: 0,
     items: [],
+    viewports: {},
+    setViewport: () => Promise.reject(new Error("not used")),
+    reportViewport: () => undefined,
     errorMessage: null,
     retry: () => undefined,
     openTab,
     closeTab: () => Promise.resolve(),
+    attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   };
   return render(
     <RunnerHostContext.Provider value={host}>

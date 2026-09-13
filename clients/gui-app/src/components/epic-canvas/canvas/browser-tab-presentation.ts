@@ -34,7 +34,7 @@ export function useBrowserTabPresentation(
 ): BrowserTabPresentation | null {
   const sessions = useBrowserSessionsForHost({
     hostId: tab.type === "browser-session" ? tab.hostId : null,
-    epicId,
+    scope: { kind: "epic", epicId },
   });
   const session =
     tab.type === "browser-session"

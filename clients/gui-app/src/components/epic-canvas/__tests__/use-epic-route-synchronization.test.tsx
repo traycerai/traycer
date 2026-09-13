@@ -17,6 +17,7 @@ import {
 import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import type {
   EpicCanvasTileRef,
+  EpicCanvasState,
   TileLayoutNode,
 } from "@/stores/epics/canvas/types";
 import type { EpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -30,6 +31,10 @@ import {
   requestNestedRoutePrimaryEditorFocus,
   resetNestedRouteDomFocusForTests,
 } from "@/lib/nested-route-dom-focus";
+import {
+  recordClosedCanvas,
+  useTabRecoveryHistory,
+} from "@/lib/tab-recovery/history";
 import {
   beginNestedFocusNavigation,
   resetNestedFocusNavigationIntentsForTests,
@@ -49,6 +54,7 @@ type CanvasStoreSlice = Pick<
   | "renameTab"
   | "applyNestedRouteFocus"
   | "closeCanvasTab"
+  | "closedTilePayloadsByTabId"
   | "pendingCreateArtifactIds"
 >;
 
@@ -77,6 +83,15 @@ interface TestState {
    * because the substitution resolver refuses to serve them. */
   cloudCollaboratorChatIds: ReadonlySet<string>;
   chatRecordListAuthoritative: boolean;
+  /**
+   * The verdict `useCloudChatHasCloudAuthorization()` answers - whether this session
+   * may SPEND the account's cloud capability. `false` models `unverified`: the
+   * cloud-chat list is disabled for want of authorization, not because there is
+   * nothing left to ask, and the sweep guard must fail closed on that
+   * ignorance rather than reading the disabled query as "nothing will ever
+   * answer".
+   */
+  cloudAuthorized: boolean;
   canvasStore: CanvasStoreSlice;
   openEpicState: {
     readonly setLastFocusedArtifactId: Mock;
@@ -102,10 +117,12 @@ const testState = vi.hoisted<TestState>(() => ({
   cloudChatIds: new Set<string>(),
   cloudCollaboratorChatIds: new Set<string>(),
   chatRecordListAuthoritative: true,
+  cloudAuthorized: true,
   canvasStore: {
     renameTab: vi.fn(),
     applyNestedRouteFocus: vi.fn(),
     closeCanvasTab: vi.fn(),
+    closedTilePayloadsByTabId: {},
     pendingCreateArtifactIds: new Set<string>(),
   },
   openEpicState: {
@@ -169,6 +186,18 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/stores/epics/canvas/store")>();
+  const useEpicCanvasStore = Object.assign(
+    <T,>(selector: (store: CanvasStoreSlice) => T): T =>
+      testState.useRealCanvasStore
+        ? selector(actual.useEpicCanvasStore.getState())
+        : selector(testState.canvasStore),
+    {
+      getState: () =>
+        testState.useRealCanvasStore
+          ? actual.useEpicCanvasStore.getState()
+          : testState.canvasStore,
+    },
+  );
   return {
     ...actual,
     useActiveEpicArtifactId: (tabId: string) =>
@@ -184,10 +213,7 @@ vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
             tilesByInstanceId: testState.canvasTiles,
             sizesByGroupId: {},
           },
-    useEpicCanvasStore: <T,>(selector: (store: CanvasStoreSlice) => T): T =>
-      testState.useRealCanvasStore
-        ? actual.useEpicCanvasStore(selector)
-        : selector(testState.canvasStore),
+    useEpicCanvasStore,
     useEpicTab: (tabId: string) =>
       testState.useRealCanvasStore ? actual.useEpicTab(tabId) : null,
   };
@@ -285,20 +311,39 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
       isFetching: false,
       error: null,
     }),
-    isCloudChatListSettled: (query: {
-      readonly isEnabled: boolean;
-      readonly isSuccess: boolean;
-      readonly isError: boolean;
-    }) => !query.isEnabled || query.isSuccess || query.isError,
-    cloudChatListAuthorizesRecordSweep: (query: {
-      readonly isEnabled: boolean;
-      readonly isSuccess: boolean;
-      readonly isError: boolean;
-      readonly error: { readonly code: string } | null;
-    }) =>
-      !query.isEnabled ||
-      query.isSuccess ||
-      (query.isError && query.error?.code === "E_HOST_UNSUPPORTED"),
+    // The verdict the list above would have been gated on in production. Read
+    // straight from `testState` so a test can model `unverified` (`false`)
+    // without the query mock above having to fake a disabled state - the two
+    // are DIFFERENT reasons a real query disables and the sweep guard must
+    // tell them apart (see `cloudChatListAuthorizesRecordSweep` below).
+    useCloudChatHasCloudAuthorization: () => testState.cloudAuthorized,
+    isCloudChatListSettled: (
+      query: {
+        readonly isEnabled: boolean;
+        readonly isSuccess: boolean;
+        readonly isError: boolean;
+      },
+      cloudAuthorized: boolean,
+    ) => {
+      if (!cloudAuthorized) return false;
+      return !query.isEnabled || query.isSuccess || query.isError;
+    },
+    cloudChatListAuthorizesRecordSweep: (
+      query: {
+        readonly isEnabled: boolean;
+        readonly isSuccess: boolean;
+        readonly isError: boolean;
+        readonly error: { readonly code: string } | null;
+      },
+      cloudAuthorized: boolean,
+    ) => {
+      if (!cloudAuthorized) return false;
+      return (
+        !query.isEnabled ||
+        query.isSuccess ||
+        (query.isError && query.error?.code === "E_HOST_UNSUPPORTED")
+      );
+    },
   };
 });
 
@@ -352,14 +397,20 @@ function resetStores(): void {
   testState.cloudChatIds = new Set();
   testState.cloudCollaboratorChatIds = new Set();
   testState.chatRecordListAuthoritative = true;
+  testState.cloudAuthorized = true;
   vi.mocked(testState.canvasStore.renameTab).mockClear();
   tileNavigationMocks.openTile.mockClear();
   tileNavigationMocks.navigationSeams.length = 0;
   testState.routerPathname = `/epics/${EPIC_ID}/${TAB_ID}`;
   vi.mocked(testState.canvasStore.applyNestedRouteFocus).mockClear();
   vi.mocked(testState.canvasStore.closeCanvasTab).mockClear();
+  Object.assign(testState.canvasStore, {
+    closedTilePayloadsByTabId: {},
+    pendingCreateArtifactIds: new Set<string>(),
+  });
   testState.openEpicState.setLastFocusedArtifactId.mockClear();
   testState.openEpicState.setLastFocusedThreadId.mockClear();
+  useTabRecoveryHistory.setState({ entries: [], ready: true });
 }
 
 function PaneActivationOriginBoundary(props: { readonly children: ReactNode }) {
@@ -409,6 +460,22 @@ function setSinglePaneCanvas(
   testState.canvasTiles = Object.fromEntries(
     tabs.map((tab) => [tab.instanceId, tab]),
   );
+}
+
+function canvasWithSingleTile(tile: EpicCanvasTileRef): EpicCanvasState {
+  return {
+    root: {
+      kind: "pane",
+      id: "recovery-pane",
+      tabInstanceIds: [tile.instanceId],
+      activeTabId: tile.instanceId,
+      previewTabId: null,
+      activationHistory: [tile.instanceId],
+    },
+    activePaneId: "recovery-pane",
+    tilesByInstanceId: { [tile.instanceId]: tile },
+    sizesByGroupId: {},
+  };
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -1181,6 +1248,183 @@ describe("useEpicRouteSynchronization", () => {
     );
   });
 
+  it("prunes an older closed instance after its record is authoritatively removed", async () => {
+    testState.autoOpenTarget = null;
+    const oldInstance = specTile(
+      "deleted-artifact",
+      "inst-deleted-artifact-old",
+      "Deleted artifact",
+    );
+    const reopenedInstance = specTile(
+      "deleted-artifact",
+      "inst-deleted-artifact-reopened",
+      "Deleted artifact",
+    );
+    const before = canvasWithSingleTile(oldInstance);
+    const after: EpicCanvasState = {
+      ...before,
+      root: null,
+      activePaneId: null,
+      tilesByInstanceId: {},
+    };
+
+    // Simulate the first close having left an older instance in recovery,
+    // followed by a manual reopen that created a distinct live instance.
+    recordClosedCanvas(
+      { epicId: EPIC_ID, tabId: TAB_ID, name: EPIC_ID },
+      before,
+      after,
+      false,
+    );
+    testState.records = [{ id: oldInstance.id }];
+    setSinglePaneCanvas(
+      "reopened-pane",
+      [reopenedInstance],
+      reopenedInstance.instanceId,
+    );
+
+    const hook = renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+    });
+
+    // The authoritative record disappears remotely. The current reopened
+    // instance closes, and the older recovery instance is removed as well.
+    testState.records = [];
+    hook.rerender({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    });
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "reopened-pane",
+        reopenedInstance.instanceId,
+      );
+      expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+    });
+  });
+
+  it("prunes historical tiles with no open canvas while preserving other Epic and host scope", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [];
+    const deletedArtifact = specTile(
+      "deleted-artifact-rootless",
+      "inst-deleted-artifact-rootless",
+      "Deleted artifact",
+    );
+    const sameIdOtherEpic = specTile(
+      deletedArtifact.id,
+      "inst-deleted-artifact-other-epic",
+      "Same artifact in another Epic",
+    );
+    const pendingClosedArtifact = specTile(
+      "pending-closed-artifact",
+      "inst-pending-closed-artifact",
+      "Pending closed artifact",
+    );
+    const otherHostChat: EpicCanvasTileRef = {
+      id: "other-host-chat",
+      instanceId: "inst-other-host-chat",
+      type: "chat",
+      name: "Chat on another host",
+      hostId: "host-2",
+    };
+    const emptyCanvas: EpicCanvasState = {
+      root: null,
+      activePaneId: null,
+      tilesByInstanceId: {},
+      sizesByGroupId: {},
+    };
+
+    recordClosedCanvas(
+      { epicId: EPIC_ID, tabId: TAB_ID, name: EPIC_ID },
+      canvasWithSingleTile(deletedArtifact),
+      emptyCanvas,
+      false,
+    );
+    recordClosedCanvas(
+      { epicId: EPIC_ID, tabId: TAB_ID, name: EPIC_ID },
+      canvasWithSingleTile(pendingClosedArtifact),
+      emptyCanvas,
+      false,
+    );
+    recordClosedCanvas(
+      { epicId: "other-epic", tabId: "other-tab", name: "Other Epic" },
+      canvasWithSingleTile(sameIdOtherEpic),
+      emptyCanvas,
+      false,
+    );
+    Object.assign(testState.canvasStore, {
+      closedTilePayloadsByTabId: {
+        [TAB_ID]: {
+          [pendingClosedArtifact.instanceId]: {
+            node: pendingClosedArtifact,
+            pendingCreate: true,
+          },
+        },
+      },
+    });
+    recordClosedCanvas(
+      { epicId: EPIC_ID, tabId: "other-host-tab", name: EPIC_ID },
+      canvasWithSingleTile(otherHostChat),
+      emptyCanvas,
+      false,
+    );
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      const entries = useTabRecoveryHistory.getState().entries;
+      expect(entries).toHaveLength(3);
+      expect(
+        entries.flatMap((entry) =>
+          entry.kind === "canvas"
+            ? entry.before.tilesByInstanceId[entry.instanceIds[0] ?? ""]
+                ?.instanceId
+            : [],
+        ),
+      ).toEqual([
+        pendingClosedArtifact.instanceId,
+        sameIdOtherEpic.instanceId,
+        otherHostChat.instanceId,
+      ]);
+    });
+  });
+
   it("does not close a same-host chat until the local record list is authoritative", async () => {
     testState.autoOpenTarget = null;
     testState.chatRecordListAuthoritative = false;
@@ -1314,6 +1558,165 @@ describe("useEpicRouteSynchronization", () => {
       TAB_ID,
       "group-1",
       cloudKnownChat.instanceId,
+    );
+  });
+
+  // T17: an `unverified` session's cloud-chat list is disabled for want of
+  // AUTHORIZATION, not because there is nothing left to ask - the cloud rows
+  // exist and this session simply may not look. `cloudChatListAuthorizesRecordSweep`
+  // must fail closed on that ignorance, so a restored record-less chat tab
+  // must survive under `unverified` even though the identical fixture is
+  // reaped under `signed-in`. Both arms are asserted in one test: a
+  // "does not close" assertion alone is satisfied by an effect that never ran
+  // at all, so the SAME fixture reaped under `signed-in` is what proves the
+  // unverified arm's silence means something.
+  it("does not sweep a restored record-less chat tab for an unverified session, but does for signed-in", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    const restoredChat: EpicCanvasTileRef = {
+      id: "restored-record-less-chat",
+      instanceId: "inst-restored-record-less-chat",
+      type: "chat",
+      name: "Restored, record-less chat",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [restoredChat.instanceId],
+      activeTabId: restoredChat.instanceId,
+      previewTabId: null,
+      activationHistory: [restoredChat.instanceId],
+    };
+    testState.canvasTiles = {
+      [restoredChat.instanceId]: restoredChat,
+    };
+
+    // The unverified arm: the cloud list holds a real answer in this fixture
+    // (isSuccess/isEnabled from the module mock), but `cloudAuthorized` is
+    // `false` - modelling a session that may not spend the account's cloud
+    // capability at all, not one whose list genuinely came back empty.
+    testState.cloudAuthorized = false;
+    const unverified = renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    // There is nothing to `waitFor` on the negative arm itself (see the
+    // comment above this test) - give the effect the same tick budget the
+    // positive control below needs to actually run, then assert it did not
+    // touch this tab.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalled();
+    unverified.unmount();
+
+    // The positive control: the identical fixture, `signed-in`
+    // (`cloudAuthorized: true`), with no cloud row for this chat - a
+    // genuinely dead record the sweep must reap. Proves the negative arm
+    // above is silence because authorization was withheld, not because the
+    // effect never ran.
+    testState.cloudAuthorized = true;
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        restoredChat.instanceId,
+      );
+    });
+  });
+
+  // The withheld verdict withholds only the CHAT answer, not the sweep. An
+  // artifact is doc-shared, so its absence from the projection is evidence of
+  // deletion whatever the cloud list can say - an unverified user deleting a
+  // record in a local-homed epic must still see its tile close, while the
+  // record-less same-host chat beside it stays open on the non-authoritative
+  // chat-absence flag alone.
+  it("still closes a removed artifact tile for an unverified session while keeping its record-less chat", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    testState.cloudAuthorized = false;
+    const removedArtifact: EpicCanvasTileRef = {
+      id: "removed-artifact",
+      instanceId: "inst-removed-artifact",
+      type: "spec",
+      name: "Removed artifact",
+      hostId: "host-1",
+    };
+    const restoredChat: EpicCanvasTileRef = {
+      id: "restored-record-less-chat",
+      instanceId: "inst-restored-record-less-chat",
+      type: "chat",
+      name: "Restored, record-less chat",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [removedArtifact.instanceId, restoredChat.instanceId],
+      activeTabId: removedArtifact.instanceId,
+      previewTabId: null,
+      activationHistory: [removedArtifact.instanceId],
+    };
+    testState.canvasTiles = {
+      [removedArtifact.instanceId]: removedArtifact,
+      [restoredChat.instanceId]: restoredChat,
+    };
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        removedArtifact.instanceId,
+      );
+    });
+    expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledTimes(1);
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      restoredChat.instanceId,
     );
   });
 

@@ -229,6 +229,7 @@ import {
   fakeDurableStreamTransports,
   resetFakeDurableStreamTransports,
 } from "@/lib/host/test-support/fake-durable-stream-transport";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import {
   createInProcessEpicRuntimeWorker,
   createProxiedInProcessEpicRuntimeWorker,
@@ -241,6 +242,20 @@ import {
 import type { BridgeMessageEventLike } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
 import { createEpicSessionFixture } from "./epic-session-fixture";
+import {
+  __resetEpicParkingForTests,
+  isEpicParked,
+} from "@/lib/epics/epic-parking";
+import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
+import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
+import { EpicSessionGate } from "@/providers/epic-session-gate";
+import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityPlaneAnsweringForTests,
+} from "@/stores/agent-activity-store";
 import {
   ArtifactAttachmentScopeContext,
   type ArtifactAttachmentScopeValue,
@@ -418,6 +433,7 @@ import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import type {
   DesktopOwnershipClaimResult,
   DesktopPerWindowStatePatch,
@@ -489,6 +505,27 @@ function HandleProbe(props: {
     if (handle === null) return;
     onHandle(handle);
   }, [handle, onHandle]);
+  return (
+    <div
+      data-testid="handle-probe"
+      data-ready={handle === null ? "false" : "true"}
+    />
+  );
+}
+
+/**
+ * Records the handle at every render commit, in the render body itself
+ * rather than an effect. Fixup 2, item 4's pin needs this: an effect only
+ * runs AFTER a commit, and a spy checked once after an `await` would miss a
+ * handle that was published for exactly one render and then corrected -
+ * which is precisely the shape of the bug it pins.
+ */
+function RenderCapturingHandleProbe(props: {
+  onRender: (handle: OpenEpicStoreHandle | null) => void;
+}) {
+  const { onRender } = props;
+  const handle = useMaybeOpenEpicHandle();
+  onRender(handle);
   return (
     <div
       data-testid="handle-probe"
@@ -1699,6 +1736,132 @@ describe("<EpicSessionProvider />", () => {
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
   });
 
+  it("retryRepoint on the LOSER of a sibling re-point adoption reaches the WINNER's client", async () => {
+    // Base (before the fix): `adoptWinner` disposes the loser's own
+    // candidate (clearing its provider-local `epicStreamClientRef`) and then
+    // adopts the sibling's handle without ever writing this provider's ref -
+    // so the loser's silence gate reads "not silent" regardless of what the
+    // WINNER's actual client reports, and Retry on the loser never forces a
+    // reconnect.
+    // ONE FAKE PER OPEN, not one shared across the epic: the claim is that
+    // the loser reaches the WINNER's client, and a single client makes
+    // "reached the winner" and "reached its own disposed candidate"
+    // indistinguishable - which is exactly the wrong implementation this pin
+    // has to exclude.
+    const fakes: FakeStreamClient[] = [];
+    fakeDurableStreamTransports().opener = (_hostId) => {
+      const client = new FakeStreamClient(true);
+      fakes.push(client);
+      return {
+        wsStreamClient: client,
+        close: () => {
+          client.close();
+        },
+        closeWithReason: () => {
+          client.close();
+        },
+      };
+    };
+    const streams: ControlledEpicStream[] = [];
+    const handlesA: OpenEpicStoreHandle[] = [];
+    const handlesB: OpenEpicStoreHandle[] = [];
+    const presentationsA: Array<EpicSessionPresentation | null> = [];
+    const presentationsB: Array<EpicSessionPresentation | null> = [];
+    installStreamFactory((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+    const body = (): React.JSX.Element => (
+      <>
+        <EpicSessionProvider epicId="epic-retry-sibling-adopt" tabId="tab-a">
+          <HandleProbe onHandle={(handle) => handlesA.push(handle)} />
+          <PresentationProbe onPresentation={(p) => presentationsA.push(p)} />
+        </EpicSessionProvider>
+        <EpicSessionProvider epicId="epic-retry-sibling-adopt" tabId="tab-b">
+          <HandleProbe onHandle={(handle) => handlesB.push(handle)} />
+          <PresentationProbe onPresentation={(p) => presentationsB.push(p)} />
+        </EpicSessionProvider>
+      </>
+    );
+    const view = render(body());
+    await waitFor(() => {
+      expect(handlesA).toHaveLength(1);
+      expect(handlesB).toHaveLength(1);
+    });
+    expect(handlesB[0]).toBe(handlesA[0]);
+    expect(streams).toHaveLength(1);
+    act(() => {
+      deliverSnapshot(streams[0], "room-a");
+    });
+
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(body());
+    });
+    await waitFor(() => expect(streams).toHaveLength(3));
+
+    // The first candidate (tab-a's, streams[1]) wins; tab-b's (streams[2])
+    // is disposed and ADOPTS tab-a's handle - tab-b is the loser here.
+    act(() => {
+      deliverSnapshot(streams[1], "room-a");
+    });
+    await waitFor(() => {
+      expect(handlesA.at(-1)).not.toBe(handlesA[0]);
+      expect(handlesB.at(-1)).not.toBe(handlesB[0]);
+    });
+    expect(handlesB.at(-1)).toBe(handlesA.at(-1));
+    expect(streams[2].closeCount).toBe(1);
+    await waitFor(() => {
+      expect(presentationsA.at(-1)?.kind).toBe("ready");
+      expect(presentationsB.at(-1)?.kind).toBe("ready");
+    });
+
+    // Opens happen inside `createHandle`, in the same order as the stream
+    // factory calls above: [0] the original shared handle, [1] tab-a's
+    // candidate (the winner), [2] tab-b's (the loser, whose transport the
+    // adoption closed). The closed flags are asserted rather than assumed.
+    expect(fakes).toHaveLength(3);
+    const winnerClient = fakes[1];
+    const loserClient = fakes[2];
+    expect(loserClient.isClosed()).toBe(true);
+    expect(winnerClient.isClosed()).toBe(false);
+    const winnerReconnect = vi.spyOn(winnerClient, "reconnectAll");
+    const loserReconnect = vi.spyOn(loserClient, "reconnectAll");
+
+    // BOTH report silent, so a gate that read the loser's own disposed client
+    // would force on it and this pin would catch that too.
+    winnerClient.silentFor = true;
+    loserClient.silentFor = true;
+    act(() => {
+      presentationsB.at(-1)?.retry();
+    });
+    expect(winnerReconnect).toHaveBeenCalledTimes(1);
+    expect(winnerReconnect).toHaveBeenCalledWith("epic-retry", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+    expect(loserReconnect).not.toHaveBeenCalled();
+
+    winnerReconnect.mockClear();
+    winnerClient.silentFor = false;
+    loserClient.silentFor = false;
+    act(() => {
+      presentationsB.at(-1)?.retry();
+    });
+    expect(winnerReconnect).not.toHaveBeenCalled();
+    expect(loserReconnect).not.toHaveBeenCalled();
+  });
+
   /**
    * A worker that cannot be CONSTRUCTED must present `failed`, not crash the
    * Epic.
@@ -2167,6 +2330,116 @@ describe("<EpicSessionProvider />", () => {
     });
     expect(streams).toHaveLength(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  it("clears a cached local home when a pre-1.6 peer omits the durability key, and keeps it when a 1.6 peer does", async () => {
+    // Through `epic.subscribe@1.5` the durability enum has no `cloud`
+    // member: a host that just finished promoting an epic reports the new
+    // home by OMITTING the key. Reading that omission as silence left the
+    // History row `home: "local"` (Pin withheld) until a manual refresh. A
+    // `@1.6` peer says `cloud` positively, so ITS omission is unknown and
+    // must not touch the cache - the two arms below pin both halves.
+    const queryClient = new QueryClient();
+    const cloudTasksUserId = "cloud-user-1";
+    useAuthStore.setState({
+      contextMetadata: { userId: cloudTasksUserId, username: "alice" },
+    });
+    const queryKey = cloudEpicTasksQueryKey(
+      "host-a",
+      cloudTasksUserId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    // A second host's History cache and pin batch: the session below lives
+    // on the tab's host, but History and the tab strip's `getTaskContexts`
+    // batch key under the app-wide EFFECTIVE host, which can be another one.
+    // The fact is the epic's, so the patch and the invalidation must reach
+    // every host's caches for the user.
+    const otherHostQueryKey = cloudEpicTasksQueryKey(
+      "host-b",
+      cloudTasksUserId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const otherHostContextsKey = [
+      ...hostQueryKeys.methodScope("host-b", "epic.getTaskContexts"),
+      { taskIds: ["epic-session-test"] },
+      cloudTasksUserId,
+    ];
+    for (const key of [queryKey, otherHostQueryKey]) {
+      queryClient.setQueryData<ListTasksResponse>(key, {
+        tasks: [
+          {
+            ...makeHistoryTask(
+              "epic-session-test",
+              "Local epic",
+              cloudTasksUserId,
+            ),
+            home: "local",
+          },
+        ],
+        hasMore: false,
+      });
+    }
+    queryClient.setQueryData(otherHostContextsKey, { tasks: {} });
+    const cachedHome = (): "local" | "cloud" | undefined =>
+      queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.home;
+    const otherHostCachedHome = (): "local" | "cloud" | undefined =>
+      queryClient.getQueryData<ListTasksResponse>(otherHostQueryKey)?.tasks[0]
+        ?.home;
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    installStreamFactory(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </EpicSessionProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    const store = seenHandles[0].store;
+
+    // A `@1.6` peer's omission is unknown: the cached local home survives.
+    act(() => {
+      store.setState({
+        hasFreshCloudSyncStatus: true,
+        durabilityStatusNegotiated: true,
+        durabilityLegsNegotiated: true,
+        durabilityStatus: null,
+      });
+    });
+    expect(cachedHome()).toBe("local");
+    expect(otherHostCachedHome()).toBe("local");
+    expect(queryClient.getQueryState(otherHostContextsKey)?.isInvalidated).toBe(
+      false,
+    );
+
+    // A `@1.4`/`@1.5` peer's omission is the cloud answer: the key is
+    // dropped, which is the shape a normal cloud-backed row carries - on
+    // EVERY host's cache, and the other host's pin batch is invalidated.
+    act(() => {
+      store.setState({ durabilityLegsNegotiated: false });
+    });
+    expect(cachedHome()).toBeUndefined();
+    expect(otherHostCachedHome()).toBeUndefined();
+    expect(queryClient.getQueryState(otherHostContextsKey)?.isInvalidated).toBe(
+      true,
+    );
   });
 
   it("patches cached history titles when a generated epic title lands", async () => {
@@ -3194,6 +3467,155 @@ describe("<EpicSessionProvider />", () => {
     }
   });
 
+  it("retryRepoint forces reconnectAll epic-retry when the injected client reports silent, and does not when it does not", async () => {
+    const fake = new FakeStreamClient(true);
+    const reconnectAll = vi.spyOn(fake, "reconnectAll");
+    fakeDurableStreamTransports().opener = (_hostId) => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+      closeWithReason: () => {
+        fake.close();
+      },
+    });
+    installStreamFactory(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    const presentations: Array<EpicSessionPresentation | null> = [];
+    render(
+      <EpicSessionProvider
+        epicId="epic-retry-silence"
+        tabId="epic-retry-silence"
+      >
+        <PresentationProbe
+          onPresentation={(presentation) => presentations.push(presentation)}
+        />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+    await waitFor(() => {
+      expect(presentations.at(-1)?.kind).toBe("ready");
+    });
+
+    fake.silentFor = true;
+    act(() => {
+      presentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).toHaveBeenCalledWith("epic-retry", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    reconnectAll.mockClear();
+    fake.silentFor = false;
+    act(() => {
+      presentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).not.toHaveBeenCalled();
+  });
+
+  it("retryRepoint forces reconnectAll on a WARM handle re-acquired after a provider remount, not the cold-constructed one", async () => {
+    // Base (before the fix): `epicStreamClientRef` is a provider-local ref,
+    // written only inside THIS provider's own `createHandle`. A warm
+    // re-acquire (`registry.acquireMounted`) hands back the existing handle
+    // WITHOUT running the factory, so the remounted provider's ref stays
+    // null and the silence gate reads "not silent" no matter what the warm
+    // handle's actual client reports - Retry never forces a reconnect.
+    const fake = new FakeStreamClient(true);
+    const reconnectAll = vi.spyOn(fake, "reconnectAll");
+    fakeDurableStreamTransports().opener = (_hostId) => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+      closeWithReason: () => {
+        fake.close();
+      },
+    });
+    installStreamFactory(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    function providerBody(
+      onHandle: (handle: OpenEpicStoreHandle) => void,
+      onPresentation: (presentation: EpicSessionPresentation | null) => void,
+    ): React.JSX.Element {
+      return (
+        <EpicSessionProvider
+          epicId="epic-retry-warm-remount"
+          tabId="epic-retry-warm-remount"
+        >
+          <HandleProbe onHandle={onHandle} />
+          <PresentationProbe onPresentation={onPresentation} />
+        </EpicSessionProvider>
+      );
+    }
+
+    const firstMountHandles: OpenEpicStoreHandle[] = [];
+    const firstMountPresentations: Array<EpicSessionPresentation | null> = [];
+    const view = render(
+      providerBody(
+        (handle) => firstMountHandles.push(handle),
+        (presentation) => firstMountPresentations.push(presentation),
+      ),
+    );
+    await waitFor(() => expect(firstMountHandles).toHaveLength(1));
+    await waitFor(() =>
+      expect(firstMountPresentations.at(-1)?.kind).toBe("ready"),
+    );
+    const warmHandle = firstMountHandles[0];
+
+    // Unmount: the MRU registry keeps the handle warm - the durable
+    // transport (and its stream client) stays alive underneath it.
+    view.unmount();
+    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+
+    // Remount on the SAME host: the registry hands back the warm handle and
+    // does NOT run the factory again.
+    const remountHandles: OpenEpicStoreHandle[] = [];
+    const remountPresentations: Array<EpicSessionPresentation | null> = [];
+    render(
+      providerBody(
+        (handle) => remountHandles.push(handle),
+        (presentation) => remountPresentations.push(presentation),
+      ),
+    );
+    await waitFor(() => expect(remountHandles).toHaveLength(1));
+    expect(remountHandles[0]).toBe(warmHandle);
+    await waitFor(() =>
+      expect(remountPresentations.at(-1)?.kind).toBe("ready"),
+    );
+
+    fake.silentFor = true;
+    act(() => {
+      remountPresentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).toHaveBeenCalledTimes(1);
+    expect(reconnectAll).toHaveBeenCalledWith("epic-retry", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    reconnectAll.mockClear();
+    fake.silentFor = false;
+    act(() => {
+      remountPresentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).not.toHaveBeenCalled();
+  });
+
   it("retires the handle a worker fatal killed, so Retry rebuilds instead of re-presenting the corpse", async () => {
     // A fatal only moved the PRESENTATION to `failed`. The handle stayed
     // registered and undisposed, so Retry - which bumps `retryGeneration` and
@@ -3397,5 +3819,327 @@ describe("<EpicSessionProvider />", () => {
     // The candidate's own transport. Under the unfixed tree this stays 0 for
     // the life of the tab.
     expect(streams[1].closeCount).toBe(1);
+  });
+
+  // ── Renderer parking (plan C, decision C1) ─────────────────────────────
+  //
+  // Pin: "showing a parked tab re-acquires the session ... with a NEW fence
+  // identity" (`epics/.../tickets/renderer-parking`). The session-identity
+  // half lives here, against the real provider and the real
+  // `OpenEpicSessionRegistry` singleton this file already exercises for every
+  // other re-acquire pin (identity switch, host re-point, ...) - parking is
+  // one more trigger for the same "old handle disposed, new handle built"
+  // shape, driven through the real `lib/epics/epic-parking.ts` clock instead
+  // of a stand-in. The record-query consequence (a fresh
+  // `useEpicSyncChatRecords` call, which is what actually reads the new
+  // store's `ingestFenceIdentity`) is pinned beside `<EpicRouteSessionBody />`
+  // in `epic-route-session-body.test.tsx`, where that hook's call count is
+  // already observable.
+  const PARKING_TAB_CLEANUP_IDS = [
+    "epic-parking-reacquire",
+    "epic-parking-comments",
+    "epic-parking-sync-clear",
+  ];
+
+  beforeEach(() => {
+    // `canPark` reads `epicIsBusy`, which fails CLOSED until the agent
+    // activity plane has answered at least once (see the same note in
+    // `stores/epics/open-epic/__tests__/session-registry.test.ts`) - without
+    // this every park attempt below refuses forever, not because of the
+    // 5-minute window but because the plane never vouched for "idle".
+    __setAgentActivityPlaneAnsweringForTests();
+  });
+
+  afterEach(() => {
+    for (const tabId of PARKING_TAB_CLEANUP_IDS) {
+      useEpicCanvasStore.getState().closeTab(tabId);
+    }
+    __syncEpicParkingOpenTabsForTests();
+    __resetEpicParkingForTests();
+    __resetAgentActivityStoreForTests();
+    // Both parking tests install fake timers and nothing else in this file or
+    // its setup restores them - every other fake-timer test here does it
+    // inline. Without this the two leak `shouldAdvanceTime` fakes into every
+    // test that runs after them.
+    vi.useRealTimers();
+  });
+
+  it("parks a mounted session (dropping the handle, closing the stream) and re-acquires a genuinely NEW one on show", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-parking-reacquire";
+    const streams: ControlledStream[] = [];
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    installStreamFactory((_epicId, _callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    const firstHandle = seenHandles.at(-1);
+    if (firstHandle === undefined) throw new Error("expected initial handle");
+    expect(streams).toHaveLength(1);
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(EPIC_ID, EPIC_ID, EPIC_ID);
+      __syncEpicParkingOpenTabsForTests();
+    });
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
+    });
+    // Both arms in one flow, matching the ticket's "delete the threshold and
+    // this cannot fail" bar: nothing released one second short of the window.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS - 1_000);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(false);
+    expect(streams[0].closeCount).toBe(0);
+    expect(screen.getByTestId("handle-probe").dataset.ready).toBe("true");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    expect(streams[0].closeCount).toBe(1);
+    expect(screen.getByTestId("handle-probe").dataset.ready).toBe("false");
+    expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).toBeNull();
+
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, true);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(false);
+
+    // Re-acquisition is the provider's own acquire effect reacting to
+    // `parked` flipping back - a cold open, exactly as decision C5 asks a
+    // shown parked tab to look like.
+    await waitFor(() => {
+      expect(streams).toHaveLength(2);
+    });
+    await waitFor(() => {
+      expect(seenHandles.at(-1)).not.toBe(firstHandle);
+    });
+    const secondHandle = seenHandles.at(-1);
+    if (secondHandle === undefined) {
+      throw new Error("expected the re-acquired handle");
+    }
+    // A NEW store, never the disposed one. `OpenEpicState.ingestFenceIdentity`
+    // is a per-store counter (`store.ts`) that `use-epic-chat-records.ts`
+    // reads and compares against on apply, degrading a stale answer to `null`
+    // on mismatch - so a consumer built against THIS store can only ever read
+    // a fence this store minted, never the disposed one's.
+    expect(secondHandle.store).not.toBe(firstHandle.store);
+    expect(streams[1].closeCount).toBe(0);
+  });
+
+  // Fixup 2, item 4: the park effect's `setSession(null)` is now SYNCHRONOUS
+  // (`epic-session-provider.tsx`, ~1707), not deferred to a `queueMicrotask`
+  // with a cancel-on-cleanup guard. The old deferred shape had a race: an
+  // unpark landing before that microtask fired ran the effect's cleanup
+  // first, so the guarded `setSession(null)` never arrived, and the render
+  // that observed `parked === false` again republished the DISPOSED handle
+  // through `publishedSessionHandle` - the render guard cannot close that
+  // one, because in that render `parked` is already false. The fix makes the
+  // clear land in the SAME synchronous turn as the park, so there is nothing
+  // left standing for a synchronous unpark to race against.
+  it("an unpark landing before microtasks drain never publishes the disposed handle (fixup 2, item 4)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-parking-sync-clear";
+    installStreamFactory((_epicId, _callbacks) => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    const renderedHandles: Array<OpenEpicStoreHandle | null> = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <RenderCapturingHandleProbe
+          onRender={(handle) => renderedHandles.push(handle)}
+        />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(renderedHandles.some((handle) => handle !== null)).toBe(true);
+    });
+    const firstHandle = renderedHandles.find((handle) => handle !== null);
+    if (firstHandle === undefined) throw new Error("expected initial handle");
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(EPIC_ID, EPIC_ID, EPIC_ID);
+      __syncEpicParkingOpenTabsForTests();
+    });
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
+    });
+
+    // Only renders from here on matter for the race.
+    renderedHandles.length = 0;
+
+    // The race, staged with NO `await` anywhere in this block: advancing the
+    // timer SYNCHRONOUSLY (`vi.advanceTimersByTime`, not the async variant)
+    // fires the park window's `setTimeout` callback in-line, which flips
+    // `parked` and runs the provider's park effect synchronously inside this
+    // `act`. The very next statement - still perfectly synchronous, nothing
+    // has returned to the microtask queue in between - flips visibility back
+    // on and unparks. A `queueMicrotask` scheduled by the park effect (the
+    // pre-fix shape) would still be sitting unflushed at this exact point,
+    // which is what makes this the race the ticket describes; the fix's
+    // synchronous `setSession(null)` has nothing left for the unpark to beat.
+    act(() => {
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).toBeNull();
+
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, true);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(false);
+
+    // The arm that matters: no render published the disposed handle. A
+    // one-shot check after an `await` would miss a handle shown for exactly
+    // one render and then corrected, so every recorded render is checked.
+    expect(renderedHandles).not.toContain(firstHandle);
+    for (const handle of renderedHandles) {
+      if (handle === null) continue;
+      expect(handle).not.toBe(firstHandle);
+    }
+
+    // The positive arm: re-acquisition genuinely happens - a NEW handle,
+    // never null forever.
+    await waitFor(() => {
+      const latest = renderedHandles.at(-1);
+      expect(latest).not.toBeNull();
+      expect(latest).not.toBe(firstHandle);
+    });
+  });
+
+  // Pin: "comment-thread polling is not running for a parked epic." All three
+  // production callers of `useEpicCommentThreadsForClient` sit inside the
+  // canvas subtree behind `EpicSessionGate`, so this drives the same gate
+  // directly with a probe standing in for one of them - the pin is that the
+  // unmount this gate performs on park actually stops the poll, not that any
+  // one caller remembered to read `useEpicParked` itself (none of them do).
+  it("stops comment-thread polling once the epic is parked", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-parking-comments";
+    installStreamFactory((_epicId, _callbacks) => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    const requestCount = { value: 0 };
+    const commentSpine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `req-comment-park-${requestCount.value}`,
+        handlers: {
+          "epic.listCommentThreads": () => {
+            requestCount.value += 1;
+            return { threads: [] };
+          },
+        },
+      }),
+    });
+    commentSpine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const commentClient = commentSpine.createRequester(mockLocalHostEntry);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+
+    function CommentPollProbe(): null {
+      useEpicCommentThreadsForClient({
+        client: commentClient,
+        epicId: EPIC_ID,
+        artifactType: "spec",
+        artifactId: "artifact-parking-comments",
+        options: { enabled: true, laneDroppedAt: 1_000 },
+      });
+      return null;
+    }
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+          <EpicSessionGate fallback={null}>
+            <CommentPollProbe />
+          </EpicSessionGate>
+        </EpicSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(requestCount.value).toBeGreaterThan(0);
+    });
+
+    // THE POSITIVE CONTROL, and the reason it is here rather than left to the
+    // first request alone: the assertion at the end of this test is that a
+    // count stops moving, and a count that was never going to move again
+    // satisfies that vacuously. Advancing the SAME span before the park, and
+    // requiring the poll to have issued more requests over it, is what makes
+    // the flat count afterwards evidence of the park rather than of a query
+    // that had already gone quiet.
+    const beforeParkCount = requestCount.value;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(requestCount.value).toBeGreaterThan(beforeParkCount);
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(EPIC_ID, EPIC_ID, EPIC_ID);
+      __syncEpicParkingOpenTabsForTests();
+    });
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    const afterParkCount = requestCount.value;
+
+    // Several 15s cadences' worth of time - a poll still running would have
+    // issued more requests by now.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(requestCount.value).toBe(afterParkCount);
   });
 });

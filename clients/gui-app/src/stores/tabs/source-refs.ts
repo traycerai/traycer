@@ -1,10 +1,15 @@
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  isOpenLandingDraft,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import type { TabRef } from "@/stores/tabs/types";
 
 /**
  * The canonical set of refs a strip layout may reference: every open Epic tab
- * in canvas order, then every landing draft.
+ * in canvas order, then every open, non-retired landing draft. Closed drafts
+ * stay in the store for history (T11) but are not strip sources. Retirement
+ * can precede another window's storage-event cleanup of its local row.
  *
  * Defined once on purpose. Reconciliation (the command coordinator) and
  * hydration/sanitize (desktop persistence) have to agree on exactly what counts
@@ -19,6 +24,7 @@ export function tabSourceRefs(): ReadonlyArray<TabRef> {
   );
   const drafts = useLandingDraftStore
     .getState()
-    .drafts.map<TabRef>((draft) => ({ kind: "draft", id: draft.id }));
+    .drafts.filter(isOpenLandingDraft)
+    .map<TabRef>((draft) => ({ kind: "draft", id: draft.id }));
   return [...epics, ...drafts];
 }

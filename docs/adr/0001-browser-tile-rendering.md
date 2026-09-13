@@ -28,6 +28,13 @@ Each tile surface publishes `anchor-name: --traycer-bv-<registrationId>`.
 The persistent guest wrapper uses `position: fixed`, `position-anchor`, `anchor()`, and `anchor-size()`.
 The guest is never reparented; pane and tile movement change only the assigned anchor.
 
+Responsive testing keeps this topology. Fixed viewport intent supplies the
+guest's intrinsic size; a CSS transform fits that page into the anchored
+presentation rectangle. Fit clears the metrics override and resumes pane
+sizing. The native bridge acknowledges logical viewport application, not
+screen position or pane motion. Page state and guest identity survive both
+operations; preview scale remains separate from browser page zoom.
+
 Presentation states:
 
 - selected and visible: anchored, opaque, interactive;

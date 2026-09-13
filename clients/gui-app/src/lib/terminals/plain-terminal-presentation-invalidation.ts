@@ -1,3 +1,4 @@
+import { recoveryTiles } from "@/lib/tab-recovery/history";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-schemas";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -16,7 +17,10 @@ import {
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import {
+  landingTerminalTabs,
+  useLandingPanelStore,
+} from "@/stores/home/landing-panel-store";
 
 export type PlainTerminalDeletionEvidence =
   | {
@@ -74,7 +78,9 @@ export function acknowledgedPlainTerminalPresentationIdsForScope(
 ): ReadonlySet<string> {
   const terminalIds = new Set<string>();
   if (scope.kind === "independent") {
-    for (const tab of useLandingTerminalStore.getState().tabs) {
+    for (const tab of landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )) {
       const acknowledged =
         tab.hostId === hostId &&
         tab.hostAuthorityAcknowledged === true &&
@@ -111,6 +117,16 @@ export function acknowledgedPlainTerminalPresentationIdsForScope(
       );
     }
   }
+  for (const { tile } of recoveryTiles().filter(
+    (entry) => entry.epicId === scope.epicId,
+  )) {
+    addAcknowledgedTerminalId(
+      terminalIds,
+      tile,
+      hostId,
+      pendingCreateTerminalIdentities,
+    );
+  }
   return terminalIds;
 }
 
@@ -141,9 +157,27 @@ function hasPlainTerminalPresentationRefs(
     }),
   );
   if (closed) return true;
-  return useLandingTerminalStore
-    .getState()
-    .tabs.some((tab) => tab.hostId === hostId && tab.sessionId === terminalId);
+  if (
+    recoveryTiles().some(
+      ({ tile }) =>
+        tile.type === "terminal" &&
+        !isUnsupportedEpicTerminalRef(tile) &&
+        tile.hostId === hostId &&
+        tile.id === terminalId,
+    )
+  )
+    return true;
+
+  // Narrowed like its two siblings in this file. The landing list is mixed, and
+  // a browser tab's `sessionId` names the device's shared browser session -
+  // a host-minted id from a namespace nothing proves disjoint from terminal
+  // ids, which is exactly why `landingTabRefKey` carries a `kind` segment. On
+  // a collision this answered `true` for a ref that is not there, so the sweep
+  // below removed nothing and `fanOutPlainTerminalDeletionOnce` still reported
+  // the deletion as discharged.
+  return landingTerminalTabs(useLandingPanelStore.getState().tabs).some(
+    (tab) => tab.hostId === hostId && tab.sessionId === terminalId,
+  );
 }
 
 /**
@@ -159,7 +193,7 @@ function removePlainTerminalPresentationRefs(
   terminalId: string,
 ): void {
   useEpicCanvasStore.getState().removeHostTerminalRefs(hostId, terminalId);
-  useLandingTerminalStore.getState().removeHostTerminal(hostId, terminalId);
+  useLandingPanelStore.getState().removeHostTerminal(hostId, terminalId);
 }
 
 function fanOutPlainTerminalDeletionOnce(args: {

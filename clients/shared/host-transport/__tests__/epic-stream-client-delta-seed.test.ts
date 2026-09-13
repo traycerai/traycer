@@ -96,6 +96,7 @@ function makeRequestContext(bearer: string): RequestContext {
     connectionId: undefined,
     operationId: undefined,
     externalAbortSignal: undefined,
+    cloudAuthorized: true,
   });
 }
 
@@ -191,7 +192,9 @@ describe("EpicStreamClient delta-seeded reattach (epic.subscribe@1.3)", () => {
     expect(subscribeEnvelope).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
+      // The LATEST installed minor, not @1.3: `seedOffer` rides the live open
+      // request, which every minor above @1.3 keeps.
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
     expect(
@@ -218,7 +221,9 @@ describe("EpicStreamClient delta-seeded reattach (epic.subscribe@1.3)", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
+      // The LATEST installed minor, not @1.3: `seedOffer` rides the live open
+      // request, which every minor above @1.3 keeps.
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: {
         epicId: "epic-1",
         seedOffer: { stateVectorBase64: "AQ==", roomId: "room-1" },

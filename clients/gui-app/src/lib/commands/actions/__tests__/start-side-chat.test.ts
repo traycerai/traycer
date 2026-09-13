@@ -169,7 +169,11 @@ describe("startSideChat", () => {
         baseArgs({
           createChat: recorder.createChat,
           worktreeIntent: WORKTREE_INTENT,
-          placement: { kind: "split", paneId: "pane-1", edge: "right" },
+          placement: {
+            kind: "beside",
+            paneId: "pane-1",
+            category: "side-chat",
+          },
         }),
       );
 
@@ -197,9 +201,9 @@ describe("startSideChat", () => {
       expect(handoff).not.toBeNull();
       expect(handoff?.status).toBe("pending");
       expect(handoff?.placement).toEqual({
-        kind: "split",
+        kind: "beside",
         paneId: "pane-1",
-        edge: "right",
+        category: "side-chat",
       });
       expect(handoff?.messageId).toBe(request.initialMessage?.messageId);
       expect(handoff?.clientActionId).toBe(
@@ -375,7 +379,7 @@ describe("sideChatPlacementForTile", () => {
     setMobileApp(false);
   });
 
-  it("splits to the right of the pane holding the source chat's tile", () => {
+  it("names the pane holding the source chat's tile as a beside placement", () => {
     useEpicCanvasStore
       .getState()
       .seedEpic(EPIC_ID, { tabId: TAB_ID, name: "Epic" }, []);
@@ -392,9 +396,9 @@ describe("sideChatPlacementForTile", () => {
 
     const placement = sideChatPlacementForTile(TAB_ID, SOURCE_CHAT_ID);
     expect(placement).toEqual({
-      kind: "split",
+      kind: "beside",
       paneId,
-      edge: "right",
+      category: "side-chat",
     });
   });
 

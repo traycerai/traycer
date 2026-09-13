@@ -42,7 +42,6 @@ export const providersMutationKeys = {
   cancelModelProviderAuth: () => ["providers.cancelModelProviderAuth"] as const,
   pluginsMutate: () => ["providers.pluginsMutate"] as const,
   skillsMutate: () => ["providers.skillsMutate"] as const,
-  acknowledgeAmbientDrift: () => ["providers.acknowledgeAmbientDrift"] as const,
   consumeRateLimitResetCredit: () =>
     ["providers.consumeRateLimitResetCredit"] as const,
   refreshProfileStatus: (hostId: string | null) =>

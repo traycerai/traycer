@@ -648,7 +648,22 @@ export async function serviceManagerMayRespawn(
   environment: Environment,
   timeoutMs: number,
 ): Promise<boolean> {
-  const label = serviceLabelFor(environment);
+  return await serviceLabelMayRespawn(serviceLabelFor(environment), timeoutMs);
+}
+
+/**
+ * The same probe against an EXPLICIT label.
+ *
+ * Split out because {@link serviceLabelFor} can only describe this process -
+ * it reads `DEV_DESKTOP_SLOT` from the environment - while the store-format
+ * floor has to ask about every dev run slot it enumerated. A job that can
+ * START a writer of the surveyed stores disqualifies the swap exactly as a
+ * running writer does, whichever slot owns it.
+ */
+export async function serviceLabelMayRespawn(
+  label: ServiceLabel,
+  timeoutMs: number,
+): Promise<boolean> {
   if (process.platform === "darwin")
     return await macosServiceMayRespawn(label, null, timeoutMs);
   if (process.platform === "linux")

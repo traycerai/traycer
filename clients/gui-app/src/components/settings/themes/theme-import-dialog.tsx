@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { z } from "zod";
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Check,
@@ -134,6 +135,13 @@ async function stageThemeImport(
         ),
       ),
     };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new Error(
+        "The theme contains unsupported values. Check its colors and syntax rules.",
+      );
+    }
+    throw error;
   } finally {
     controllers.delete(controller);
   }
@@ -252,7 +260,7 @@ function ThemeImportDialogBody({
         )
     ) {
       setSuccess(
-        `${imported.length} ${imported.length === 1 ? "theme" : "themes"} added to your library. Choose a light or dark variant in Appearance to use it.`,
+        `${imported.length} ${imported.length === 1 ? "theme" : "themes"} added to your library. Close this dialog and choose it under Light theme or Dark theme.`,
       );
       loadThemes.reset();
     }
@@ -265,12 +273,29 @@ function ThemeImportDialogBody({
     <Dialog open onOpenChange={close}>
       <DialogContent className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:max-w-3xl">
         <DialogHeader className="shrink-0 border-b border-border/60 p-4 pr-10">
-          <DialogTitle className="text-ui-sm">
-            Find your next palette
-          </DialogTitle>
+          <DialogTitle className="text-ui-sm">Import themes</DialogTitle>
           <DialogDescription className="max-w-prose pr-4">
-            Browse Open VSX or import theme files.
+            Browse community themes from the Open VSX extension registry, or
+            import theme files.
           </DialogDescription>
+          {loadThemes.isPending ? (
+            <div
+              role="status"
+              className="flex items-center gap-2 text-muted-foreground"
+            >
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+              Reading theme data
+            </div>
+          ) : null}
+          {loadThemes.isError ? (
+            <p role="alert" className="text-destructive">
+              {loadThemes.error.message}
+            </p>
+          ) : null}
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto px-4 pb-4">
           <Tabs defaultValue="browse" className="gap-3 pt-3">
@@ -303,7 +328,7 @@ function ThemeImportDialogBody({
                       id="theme-search"
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
-                      placeholder="Theme name or publisher.extension"
+                      placeholder="Search by theme name or publisher"
                       className="h-9 border-border/70 pl-9"
                     />
                   </div>
@@ -513,24 +538,6 @@ function ThemeImportDialogBody({
             </TabsContent>
           </Tabs>
           <div className="space-y-3 pt-3">
-            {loadThemes.isPending ? (
-              <div
-                role="status"
-                className="flex items-center gap-2 text-muted-foreground"
-              >
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-                Reading theme data
-              </div>
-            ) : null}
-            {loadThemes.isError ? (
-              <p role="alert" className="text-destructive">
-                {loadThemes.error.message}
-              </p>
-            ) : null}
             {conflictError ? (
               <p role="alert" className="text-destructive">
                 {conflictError}
@@ -639,7 +646,7 @@ function CommunityThemeRow({
           ) : (
             <Download aria-hidden className="size-3.5" />
           )}
-          {installed ? "Review update" : "Install"}
+          {installed ? "Review update" : "Preview themes"}
         </Button>
       </div>
     </article>
@@ -708,7 +715,7 @@ function ThemeImportPreview({
         <p className="text-xs text-muted-foreground">
           Updating replaces {replacing} installed{" "}
           {replacing === 1 ? "theme" : "themes"}, including your color edits.
-          Save copies to keep those edits.
+          Import as copies to keep your existing themes and their edits.
         </p>
       ) : null}
       <div className="flex flex-wrap justify-end gap-2">
@@ -718,7 +725,7 @@ function ThemeImportPreview({
         {replacing > 0 || staged.baseline !== "[]" || saveFailed ? (
           <Button variant="outline" onClick={() => onSave(true)}>
             <Copy aria-hidden className="size-4" />
-            Save copies
+            Import as copies
           </Button>
         ) : null}
         <Button onClick={() => onSave(false)}>

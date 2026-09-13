@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLightPre13,
+  ListTaskLightPre15,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import {
   buildHistoryItemsFromTasks,
+  canDeleteHistoryItem,
+  canEditHistoryItemTitle,
+  EMPTY_LOCAL_HOMED_TASK_IDS,
   collectHistoryRepos,
   filterHistoryItems,
   groupHistoryItems,
@@ -36,6 +42,8 @@ function makeItem(
     ownership: overrides.ownership ?? "mine",
     permissionRole: overrides.permissionRole ?? "owner",
     isPinned: overrides.isPinned ?? false,
+    isLocalHome: overrides.isLocalHome,
+    isPreservedOrphan: overrides.isPreservedOrphan,
   };
 }
 
@@ -255,7 +263,7 @@ describe("home-page history helpers", () => {
   });
 
   it("builds history items from cloud task lights and extracts real repo identifiers", () => {
-    const tasks: ReadonlyArray<ListTaskLight> = [
+    const tasks: ReadonlyArray<ListTaskLightPre13> = [
       {
         epic: {
           light: {
@@ -330,6 +338,7 @@ describe("home-page history helpers", () => {
       tasks,
       Date.parse("2026-04-22T12:00:00.000Z"),
       "user-1",
+      EMPTY_LOCAL_HOMED_TASK_IDS,
     );
 
     expect(items).toHaveLength(2);
@@ -345,6 +354,9 @@ describe("home-page history helpers", () => {
       ownership: "mine",
       permissionRole: "owner",
       isPinned: true,
+      // Cloud-backed rows stay without a local-home mark (legacy fixtures
+      // and callers treat missing as cloud).
+      isLocalHome: false,
     });
     expect(items[1]).toMatchObject({
       id: "phase-phase-real",
@@ -355,6 +367,60 @@ describe("home-page history helpers", () => {
       initialUserPrompt: "",
       updatedBucket: "today",
       linkedRepos: ["traycerai/gui-app"],
+      isPinned: false,
+      isLocalHome: false,
+    });
+  });
+
+  it("marks host-synthesized local-home task rows for cloud-only pin gating", () => {
+    // `home` is carried on listTasks@1.4 rows; the history builder reads it
+    // off the task light the host actually returns. Annotated rather than
+    // asserted so the literal is checked structurally against the wire type.
+    const tasks: ReadonlyArray<ListTaskLightPre15> = [
+      {
+        home: "local" as const,
+        epic: {
+          light: {
+            id: "epic-local",
+            title: "Local home",
+            initialUserPrompt: "local only",
+            ticketCount: 1,
+            specCount: 0,
+            storyCount: 0,
+            reviewCount: 0,
+            status: "active",
+            createdAt: Date.parse("2026-04-21T09:00:00.000Z"),
+            updatedAt: Date.parse("2026-04-22T09:00:00.000Z"),
+            createdBy: "user-1",
+            version: "1",
+          },
+          permission: {
+            role: "owner" as const,
+            accessType: "direct" as const,
+            userId: "user-1",
+            grantedBy: "user-1",
+            grantedAt: 1,
+          },
+          repos: [],
+          workspaces: [],
+          roomInfo: null,
+        },
+        phase: null,
+        pinned: false,
+      },
+    ];
+
+    const items = buildHistoryItemsFromTasks(
+      tasks,
+      Date.parse("2026-04-22T12:00:00.000Z"),
+      "user-1",
+      EMPTY_LOCAL_HOMED_TASK_IDS,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      epicId: "epic-local",
+      isLocalHome: true,
       isPinned: false,
     });
   });
@@ -406,6 +472,118 @@ describe("home-page history helpers", () => {
 
     it("is inert when no host is selected", () => {
       expect(filterByHosts([], "any")).toEqual(["a", "b", "c", "d"]);
+    });
+  });
+
+  // T13: `canDeleteHistoryItem` now ANDs the cloud-authorization verdict into
+  // every non-local-home row, with the preserved-orphan refusal outranking it
+  // (a row that can never be deleted stays refused regardless of the
+  // verdict).
+  describe("canDeleteHistoryItem", () => {
+    it("refuses a cloud row under an unverified session", () => {
+      const item = makeItem({
+        id: "cloud-row",
+        title: "Cloud row",
+        permissionRole: "owner",
+        isLocalHome: false,
+      });
+      expect(canDeleteHistoryItem(item, false)).toBe(false);
+    });
+
+    it("keeps a local-home row deletable under an unverified session - it reclaims this machine's own disk and spends nothing", () => {
+      const item = makeItem({
+        id: "local-home-row",
+        title: "Local home row",
+        permissionRole: "owner",
+        isLocalHome: true,
+      });
+      expect(canDeleteHistoryItem(item, false)).toBe(true);
+    });
+
+    it("refuses a preserved orphan under either verdict", () => {
+      const orphan = makeItem({
+        id: "orphan-row",
+        title: "Orphan row",
+        permissionRole: "owner",
+        isPreservedOrphan: true,
+      });
+      expect(canDeleteHistoryItem(orphan, true)).toBe(false);
+      expect(canDeleteHistoryItem(orphan, false)).toBe(false);
+      // Not exempted by local-home either - a row can be both, and the
+      // undeletable-regardless-of-verdict fact outranks the spends-nothing one.
+      const localHomeOrphan = makeItem({
+        id: "local-home-orphan-row",
+        title: "Local home orphan row",
+        permissionRole: "owner",
+        isPreservedOrphan: true,
+        isLocalHome: true,
+      });
+      expect(canDeleteHistoryItem(localHomeOrphan, true)).toBe(false);
+    });
+
+    it("keeps signed-in behaviour unchanged for every role", () => {
+      const owner = makeItem({
+        id: "owner-row",
+        title: "Owner row",
+        permissionRole: "owner",
+      });
+      const editor = makeItem({
+        id: "editor-row",
+        title: "Editor row",
+        permissionRole: "editor",
+      });
+      const viewer = makeItem({
+        id: "viewer-row",
+        title: "Viewer row",
+        permissionRole: "viewer",
+      });
+      expect(canDeleteHistoryItem(owner, true)).toBe(true);
+      expect(canDeleteHistoryItem(editor, true)).toBe(true);
+      expect(canDeleteHistoryItem(viewer, true)).toBe(false);
+    });
+  });
+
+  // Renaming is the same cloud write class as deletion (`epic.updateTitle`
+  // carries the CloudData `epic.update` contract), so it admits on the same
+  // rule - with the same local-home exemption.
+  describe("canEditHistoryItemTitle", () => {
+    it("refuses a cloud row under an unverified session", () => {
+      const item = makeItem({
+        id: "cloud-row",
+        title: "Cloud row",
+        permissionRole: "owner",
+        isLocalHome: false,
+      });
+      // RED before the fix: role-only, so a demoted History page kept
+      // offering a rename that mutated cloud data on a withdrawn verdict.
+      expect(canEditHistoryItemTitle(item, false)).toBe(false);
+      expect(canEditHistoryItemTitle(item, true)).toBe(true);
+    });
+
+    it("keeps a local-home row renamable under an unverified session", () => {
+      const item = makeItem({
+        id: "local-home-row",
+        title: "Local home row",
+        permissionRole: "owner",
+        isLocalHome: true,
+      });
+      expect(canEditHistoryItemTitle(item, false)).toBe(true);
+    });
+
+    it("still refuses by role and by task type whatever the verdict", () => {
+      const viewer = makeItem({
+        id: "viewer-row",
+        title: "Viewer row",
+        permissionRole: "viewer",
+      });
+      const phase = makeItem({
+        id: "phase-row",
+        title: "Phase row",
+        taskType: "phase",
+        permissionRole: "owner",
+      });
+      expect(canEditHistoryItemTitle(viewer, true)).toBe(false);
+      expect(canEditHistoryItemTitle(phase, true)).toBe(false);
     });
   });
 });

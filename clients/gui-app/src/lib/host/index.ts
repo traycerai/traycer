@@ -15,6 +15,7 @@ export {
   useAuthService,
   useHostBinding,
   useHostClient,
+  useOptionalHostClient,
   useHostDirectory,
   useHostRuntimeClient,
 } from "@/lib/host/runtime";

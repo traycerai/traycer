@@ -7,8 +7,14 @@ import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { UsageSummaryPanel } from "@/components/usage-analytics/usage-summary-panel";
+import { negotiatedUsageServesLocalOnly } from "@/lib/usage-plane-admission";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 /**
  * The route / modal entry point. `host.usage.summary` is an OPTIONAL RPC
@@ -66,6 +72,16 @@ export function UsageSettingsPanel(): ReactNode {
   // handshake has completed yet", so a cold start shows a spinner instead of
   // claiming the active host is too old to report usage.
   const support = useHostMethodSupport(activeHostId, "host.usage.summary");
+  // The VERSION on the same manifest `support` reads. `@2.0` carries the
+  // `plane: "local-only"` selector, which is the only route a session without
+  // a cloud verdict has into this section.
+  const usageVersion = useHostNegotiatedMethodVersion(
+    client,
+    "host.usage.summary",
+  );
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   return (
     <SettingsPanelShell
       title="Usage"
@@ -87,6 +103,8 @@ export function UsageSettingsPanel(): ReactNode {
     >
       <UsageSettingsPanelBody
         support={support}
+        cloudAuthorized={cloudAuthorized}
+        servesLocalOnly={negotiatedUsageServesLocalOnly(usageVersion)}
         client={client}
         hostNames={hostNames}
         activeHostId={activeHostId}
@@ -100,6 +118,14 @@ export function UsageSettingsPanel(): ReactNode {
 function UsageSettingsPanelBody(props: {
   /** `null` = no handshake yet, so neither "supported" nor "too old" is known. */
   readonly support: boolean | null;
+  /** `authorizesCloudCapability(status)` - see the notice below for why. */
+  readonly cloudAuthorized: boolean;
+  /**
+   * `host.usage.summary@2.0` negotiated, i.e. this host takes the
+   * `plane: "local-only"` selector. Fails closed - see
+   * `negotiatedUsageServesLocalOnly`.
+   */
+  readonly servesLocalOnly: boolean;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostNames: ReadonlyMap<string, string>;
   readonly activeHostId: string | null;
@@ -146,11 +172,26 @@ function UsageSettingsPanelBody(props: {
       />
     );
   }
+  // The cloud-verdict gate, and the one capability that lifts it. Ordered
+  // BELOW the two `support` branches on purpose: a host that does not have the
+  // method at all cannot serve this cohort either, and "update this host" is
+  // then the true blocker - telling that user to sign in would send them to
+  // fix the one thing that would not help. The pending branch above covers the
+  // same manifest read this gate depends on, so a cold start never asserts
+  // "needs a verified sign-in" before the host has had a chance to say `@2.0`.
+  if (!props.cloudAuthorized && !props.servesLocalOnly) {
+    return <UsageUnverifiedNotice />;
+  }
   return (
     <UsageSummaryPanel
       client={props.client}
       hostNames={props.hostNames}
       currentHostId={props.activeHostId}
+      // Derived from the SAME `cloudAuthorized` the gate above just used, so
+      // there is no path that admits a verdict-less session and then asks the
+      // host for the cloud reader. A verdict-holding session sends nothing and
+      // keeps the released host-picks-the-plane behavior.
+      plane={props.cloudAuthorized ? null : "local-only"}
     />
   );
 }
@@ -167,6 +208,17 @@ export function UsageSettingsPanelForClient(props: {
 }): ReactNode {
   const hostId = props.client?.getActiveHostId() ?? null;
   const supported = useUsageSummarySupported(hostId);
+  const usageVersion = useHostNegotiatedMethodVersion(
+    props.client,
+    "host.usage.summary",
+  );
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  // Same two gates in the same order as `UsageSettingsPanelBody`, minus its
+  // pending branch: `useUsageSummarySupported` is the boolean form, which
+  // collapses "not yet known" into "unsupported", so there is no third state
+  // to wait on here.
   if (!supported) {
     return (
       <UsageNotice
@@ -176,17 +228,50 @@ export function UsageSettingsPanelForClient(props: {
       />
     );
   }
+  if (!cloudAuthorized && !negotiatedUsageServesLocalOnly(usageVersion)) {
+    return <UsageUnverifiedNotice />;
+  }
   return (
     <UsageSummaryPanel
       client={props.client}
       hostNames={EMPTY_HOST_NAMES}
       currentHostId={hostId}
+      plane={cloudAuthorized ? null : "local-only"}
     />
   );
 }
 
 /** Stable identity so the panel's `hostOptions` memo is not invalidated every render. */
 const EMPTY_HOST_NAMES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * What an `unverified` session sees instead of the dashboard, on a host that
+ * cannot serve it locally.
+ *
+ * Originally this cohort saw it unconditionally: `host.usage.summary` was
+ * served by whichever reader the HOST picked (the protocol says so, via
+ * `servedBy`) and the client had no selector to ask for the local one, so a
+ * session whose cloud verdict authn could not confirm would otherwise read
+ * account-wide usage through the retained local-host credential. Withholding
+ * the whole panel, rather than just its initial fetch, also covers the manual
+ * Retry and the window/metric changes that refetch. That comment then closed
+ * with "a negotiated local-only selector could give this cohort the genuinely
+ * local reads back" - `@2.0` is that selector, so the notice is now the
+ * NEGATIVE branch of an admission rather than the whole cohort's answer.
+ *
+ * It still says "reads account-wide data", and that is still true of what is
+ * being withheld here: this branch is reached only when the host cannot be
+ * asked for anything narrower.
+ */
+function UsageUnverifiedNotice(): ReactNode {
+  return (
+    <UsageNotice
+      title="Usage needs a verified sign-in"
+      detail="Traycer couldn't confirm your session with the account service. Usage reads account-wide data, so it stays hidden until you're signed in again."
+      testId="usage-unverified-notice"
+    />
+  );
+}
 
 /**
  * Same anatomy as `HostScopeGate`'s internal `HostScopeNotice` (icon chip +

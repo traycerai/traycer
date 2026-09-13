@@ -1,21 +1,32 @@
+import {
+  mergeAvailabilityRecoveryKinds,
+  type AvailabilityRecoveryKind,
+} from "@traycer-clients/shared/host-transport/availability-recovery-kind";
 import { appLogger } from "@/lib/logger";
 
 /**
  * Bridges stream-transport recovery evidence onto the query layer.
  *
- * `HostClient.notifyHostAvailabilityRecovered(hostId)` is the designed escape
- * hatch for host-scoped queries stranded in a permanent error state (every
- * automatic TanStack recovery route is deliberately disabled for host RPCs -
- * transport retries already ran, no polling, no focus/reconnect refetch). This
- * module gives it its production callers: the app-wide stream heartbeats the
- * effective host and every durable per-tab transport heartbeats the host its
- * tab is pinned to, so their availability evidence (a session re-opening after
- * a drop, or a pong landing after a stall-length gap) is exactly the "endpoint
- * recovered" signal the method's contract asks for. Every report NAMES its
- * host: P4.2 deleted the no-argument sibling that read the active slot, so
- * there is no privileged host to recover on any more. Without this, a host
- * event-loop stall that outlives the unary dial+retry budget leaves panels
- * (terminals, git-diff, file-tree) errored forever with no path back.
+ * `HostClient.notifyHostAvailabilityRecovered(hostId, kind)` is the designed
+ * escape hatch for host-scoped queries stranded in a permanent error state
+ * (every automatic TanStack recovery route is deliberately disabled for host
+ * RPCs - transport retries already ran, no polling, no focus/reconnect
+ * refetch). This module gives it its production callers: the app-wide stream
+ * heartbeats the effective host and every durable per-tab transport heartbeats
+ * the host its tab is pinned to, so their availability evidence (a session
+ * re-opening after a drop, or a pong landing after a stall-length gap) is
+ * exactly the "endpoint recovered" signal the method's contract asks for.
+ * Every report NAMES its host: P4.2 deleted the no-argument sibling that read
+ * the active slot, so there is no privileged host to recover on any more.
+ * Without this, a host event-loop stall that outlives the unary dial+retry
+ * budget leaves panels (terminals, git-diff, file-tree) errored forever with
+ * no path back.
+ *
+ * Every report also carries its kind (`AvailabilityRecoveryKind`): whether a
+ * session reconnected, or the socket survived a stall or a wake probe. The
+ * host-scope sweep re-asks less after a stall, so the kind has to survive the
+ * cooldown below. A report the cooldown defers must never lose a reconnect to
+ * a stall that later takes the leading edge.
  */
 
 /**
@@ -27,7 +38,9 @@ import { appLogger } from "@/lib/logger";
 export const AVAILABILITY_RECOVERY_COOLDOWN_MS = 10_000;
 
 export interface AvailabilityEvidenceSource {
-  subscribeAvailabilityRecovered(listener: () => void): () => void;
+  subscribeAvailabilityRecovered(
+    listener: (kind: AvailabilityRecoveryKind) => void,
+  ): () => void;
 }
 
 /**
@@ -38,7 +51,8 @@ export interface AvailabilityEvidenceSource {
  * host and closes over it, so the host is already named by the time anything
  * calls in. The two implementations say so plainly - the app-wide stream binds
  * the host it heartbeats, a durable transport binds the host its tab is
- * pinned to.
+ * pinned to. It does take the recovery's kind, which only the transport knows
+ * and the host-scope sweep reads.
  *
  * It used to be `AvailabilityRecoveryTarget.notifyAvailabilityRecovered()`,
  * which spelled the no-arg method the active slot exposed on `HostClient` -
@@ -49,7 +63,7 @@ export interface AvailabilityEvidenceSource {
  * are related.
  */
 export interface NamedHostRecoveryTarget {
-  notifyRecoveredForNamedHost(): void;
+  notifyRecoveredForNamedHost(kind: AvailabilityRecoveryKind): void;
 }
 
 /**
@@ -67,6 +81,10 @@ export interface NamedHostRecoveryTarget {
  * gate rather than suppressing under a future-dated watermark. Whenever the
  * leading edge is taken, any armed catch-up is cancelled, so the two halves
  * can never both deliver the same episode.
+ *
+ * Kinds merge wherever reports do. The catch-up delivers the widest kind it
+ * deferred, and a leading edge that supersedes an armed catch-up delivers the
+ * catch-up's kind along with its own. Either way a reconnect wins.
  */
 export function wireAvailabilityRecovery(args: {
   readonly wsStreamClient: AvailabilityEvidenceSource;
@@ -76,7 +94,9 @@ export function wireAvailabilityRecovery(args: {
 }): () => void {
   let lastNotifiedAt: number | null = null;
   let trailingTimer: number | null = null;
-  const notify = (): void => {
+  // The widest kind among the reports the cooldown deferred; null for none.
+  let deferred: AvailabilityRecoveryKind | null = null;
+  const notify = (kind: AvailabilityRecoveryKind): void => {
     // Any notify supersedes an armed catch-up: the trailing timer exists only
     // to deliver an episode that was suppressed, and this call just delivered
     // one. Two paths reach the leading edge with a timer still armed - a clock
@@ -84,6 +104,13 @@ export function wireAvailabilityRecovery(args: {
     // stalled event loop dispatching an evidence message before the timer it
     // already owes. Leaving the timer armed fires a duplicate invalidation
     // moments later, which is exactly the churn the cooldown exists to stop.
+    //
+    // It inherits what the catch-up owed along with its timer. Delivering a
+    // deferred reconnect as the stall that superseded it would sweep only the
+    // failed reads, and leave in place the settled reads of a host that may
+    // have restarted.
+    const delivered = mergeAvailabilityRecoveryKinds(deferred, kind);
+    deferred = null;
     if (trailingTimer !== null) {
       window.clearTimeout(trailingTimer);
       trailingTimer = null;
@@ -94,26 +121,31 @@ export function wireAvailabilityRecovery(args: {
     // this wiring. The sweep logs itself, with counts, in
     // `createHostQueryInvalidator`; counting THESE lines as sweeps over-reported
     // a 2026-09-03 field investigation by the client count.
-    appLogger.debug("[stream] host availability recovered", {});
-    args.target.notifyRecoveredForNamedHost();
+    appLogger.debug("[stream] host availability recovered", {
+      kind: delivered,
+    });
+    args.target.notifyRecoveredForNamedHost(delivered);
   };
   const disposeEvidence = args.wsStreamClient.subscribeAvailabilityRecovered(
-    () => {
+    (kind) => {
       const at = args.now();
       if (lastNotifiedAt !== null && at < lastNotifiedAt) {
         lastNotifiedAt = null;
       }
       if (lastNotifiedAt === null || at - lastNotifiedAt >= args.cooldownMs) {
-        notify();
+        notify(kind);
         return;
       }
+      deferred = mergeAvailabilityRecoveryKinds(deferred, kind);
       if (trailingTimer !== null) {
         return;
       }
       trailingTimer = window.setTimeout(
         () => {
           trailingTimer = null;
-          notify();
+          if (deferred !== null) {
+            notify(deferred);
+          }
         },
         args.cooldownMs - (at - lastNotifiedAt),
       );
@@ -121,6 +153,7 @@ export function wireAvailabilityRecovery(args: {
   );
   return () => {
     disposeEvidence();
+    deferred = null;
     if (trailingTimer !== null) {
       window.clearTimeout(trailingTimer);
       trailingTimer = null;

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { ActiveTabBody } from "@/components/epic-canvas/canvas/tab-group-view";
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
@@ -7,6 +7,14 @@ import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-ter
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import {
+  useEpicHostTransportStatus,
+  useEpicSnapshotLoaded,
+} from "@/lib/epic-selectors";
+import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
+import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
+import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -50,6 +58,39 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // measured inset above is 0 even while the keyboard is up - the plugin-fed
   // native state is the only live "keyboard open" signal there.
   const nativeKeyboardOpen = useNativeKeyboardOpen();
+  // The Epic's own leg, RAW. `useEpicConnectionStatus` is a lossy blend of this
+  // and the host's cloud link (see `epic-sync-pill-state.ts`), and a cloud-only
+  // drop is not this strip's subject: the canvas, the tab list and the sidebar
+  // panels are all served by the GUI↔host stream, so that is the one whose
+  // absence makes what they are showing stale.
+  const epicTransportStatus = useEpicHostTransportStatus();
+  const epicSnapshotLoaded = useEpicSnapshotLoaded();
+  // Before the empty-pane early return, like the insets above: hooks are
+  // unconditional, and this one owns a clock that must not be re-timed by a
+  // render path changing under it.
+  const epicSpell = useStreamSyncingSpell({
+    status: epicTransportStatus,
+    hasContent: epicSnapshotLoaded,
+    identity: epicId,
+  });
+  // The session's own wake, not the app-wide one - this view always sits under
+  // a live session, and the handle is what names this Epic's socket.
+  const epicHandle = useMaybeOpenEpicHandle();
+  const wakeEpicTransport = useCallback(() => {
+    epicHandle?.wakeTransport();
+  }, [epicHandle]);
+  // REPORTED, not rendered. The one indicator lives in the app shell so it
+  // neither moves nor restarts its animation when the surface speaking for it
+  // changes; ordering against the session and chat legs is the store's rank.
+  usePublishSurfaceSync({
+    // Host-scoped: an epic id is host-minted, so the bare id names a different
+    // Epic on another machine.
+    key: `epic:${epicHandle?.hostId ?? "unresolved"}:${epicId}`,
+    rank: SURFACE_SYNC_RANK.epic,
+    label: "Task",
+    spell: epicSpell,
+    wake: epicHandle === null ? null : wakeEpicTransport,
+  });
 
   // Non-null root with no resolvable tile = an empty pane (e.g. the user closed
   // the last tab). Desktop renders the inline `PaneOpener` for this; do the
@@ -87,6 +128,15 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           : undefined
       }
     >
+      {/* No bar here. The Epic's stream reports upward and the app shell renders
+          the only one, so a hand-off between surfaces changes what it says
+          rather than which element is saying it.
+
+          This view is mounted from `TileCanvasLive`'s `useIsMobileViewport()`
+          branch, which a narrow DESKTOP window also satisfies - so publishing
+          is not by itself a decision to show anything. Whether a report is
+          ever presented is the strip's call, and it gates on `isMobileApp()`
+          so the row stays absent on desktop exactly as it always has been. */}
       <MobileCurrentTileBar epicId={epicId} tile={selection.ref} />
       <div className="relative min-h-0 flex-1">
         <TabBodySelectedContext.Provider value>

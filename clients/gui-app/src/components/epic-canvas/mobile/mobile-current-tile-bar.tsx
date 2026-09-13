@@ -6,6 +6,11 @@ import {
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
+import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
+import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
+import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
+import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
+import { NO_STREAM_SYNCING_SPELL } from "@/lib/sync/stream-syncing-state";
 import {
   tileRenameKind,
   useSwitcherRename,
@@ -114,6 +119,47 @@ function MobileCurrentTileBarBody(
     },
     [rename, renameKind, tile.id],
   );
+  // A chat is the one tile kind whose own stream can be away while its content
+  // stays on screen with nothing said about it. Terminals already overlay
+  // theirs, a shell window already banners its own, and every artifact kind is
+  // served by the Epic stream the outer strip covers. `null` for the rest, so
+  // the hook is unconditional and simply resolves no session.
+  const isChat = tile.type === "chat";
+  const chatSync = useChatStreamSyncState(
+    epicId,
+    tile.id,
+    isChat && "hostId" in tile ? tile.hostId : null,
+  );
+  // Run the clock on THIS chat's outage whether or not the strip is drawn. The
+  // suppression below hides the strip while the Epic's is speaking, and the
+  // Epic's stream typically returns first: a clock that lived inside the hidden
+  // strip would start over at that hand-off, so one continuous chat outage
+  // would read as a fresh "Syncing…" a minute in, and would set its animation
+  // running again past the bound the escalation exists to impose. Keyed on the
+  // tile's id, so swiping to a different chat starts a new spell instead of
+  // inheriting this one's verdict.
+  const chatSpell = useStreamSyncingSpell({
+    status: chatSync.status,
+    hasContent: chatSync.hasContent,
+    identity: tile.id,
+  });
+  // REPORTED, not rendered. The one indicator lives in the app shell, which
+  // orders this against the session and Epic legs by rank - so there is no
+  // suppression to coordinate here, and a hand-off changes what the indicator
+  // says rather than which element says it.
+  //
+  // A non-chat tile publishes a spell that never runs. Its stream is either
+  // covered by the Epic's report (every artifact kind), or already narrated by
+  // the tile itself (a terminal's overlay, a shell window's banner).
+  usePublishSurfaceSync({
+    // Host-scoped: a chat id is host-minted, so the same id names a different
+    // conversation on another machine.
+    key: `chat:${"hostId" in tile ? tile.hostId : "unresolved"}:${tile.id}`,
+    rank: SURFACE_SYNC_RANK.chat,
+    label: "Chat",
+    spell: isChat ? chatSpell : NO_STREAM_SYNCING_SPELL,
+    wake: isChat ? chatSync.wake : null,
+  });
 
   return (
     <div

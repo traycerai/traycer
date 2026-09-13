@@ -64,6 +64,7 @@ import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-con
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
@@ -96,17 +97,21 @@ const useUsageProbeStore = create<UsageProbeState>()((set) => ({
 
 function render(ui: ReactElement) {
   const result = testingRender(
-    <TooltipProvider delayDuration={0}>
-      <LazyMotion features={domAnimation}>{ui}</LazyMotion>
-    </TooltipProvider>,
+    <TabHostProvider hostId="host-1">
+      <TooltipProvider delayDuration={0}>
+        <LazyMotion features={domAnimation}>{ui}</LazyMotion>
+      </TooltipProvider>
+    </TabHostProvider>,
   );
   return {
     ...result,
     rerender: (nextUi: ReactElement) =>
       result.rerender(
-        <TooltipProvider delayDuration={0}>
-          <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>
-        </TooltipProvider>,
+        <TabHostProvider hostId="host-1">
+          <TooltipProvider delayDuration={0}>
+            <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>
+          </TooltipProvider>
+        </TabHostProvider>,
       ),
   };
 }
@@ -155,12 +160,14 @@ const INTERVIEW: ChatLowerInterviewState = {
   onAnswer: () => null,
   onSkip: () => null,
   onFork: null,
+  highlightedBlockId: null,
 };
 const APPROVALS: ChatLowerApprovalsState = {
   pendingFileEditApprovals: [],
   pendingApprovals: [],
   onFileEditDecision: () => undefined,
   onApprovalDecision: () => undefined,
+  highlightedApprovalId: null,
 };
 const QUEUE: ChatLowerQueueState = {
   editingItem: null,
@@ -284,6 +291,21 @@ describe("composer isolation from per-token dock churn", () => {
 
     // Run status flips idle -> running: a genuine composer input change.
     rerender(<ChatLowerInteractionSurfaces {...props(TURN_RUNNING, 1)} />);
+    expect(composerRenderCount).toBe(2);
+  });
+
+  it("re-renders the composer when only the navigation highlight id changes", () => {
+    const { rerender } = render(
+      <ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />,
+    );
+    expect(composerRenderCount).toBe(1);
+
+    rerender(
+      <ChatLowerInteractionSurfaces
+        {...props(TURN_IDLE, 0)}
+        interview={{ ...INTERVIEW, highlightedBlockId: "q1:interview" }}
+      />,
+    );
     expect(composerRenderCount).toBe(2);
   });
 

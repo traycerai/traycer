@@ -23,7 +23,10 @@ import {
   type PointLike,
   type RectLike,
 } from "@/components/epic-canvas/dnd/dnd";
-import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  readHeaderTabDragGhost,
+  useEpicDndStore,
+} from "@/components/epic-canvas/dnd/dnd-store";
 import { EpicRootDragOverlayContent } from "@/components/epic-canvas/dnd/drag-overlay-chip";
 import {
   EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE,
@@ -629,6 +632,7 @@ function updateHeaderTabSourcePreview(input: {
       : resolveLiveTopLevelDrop(headerTab, topLevelTarget);
   if (validDrop !== null) {
     headerTearOffActive = false;
+    dndStore.headerTearOffPreviewChanged(false);
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
@@ -647,12 +651,16 @@ function updateHeaderTabSourcePreview(input: {
       activeHeaderStripGeometry?.stripBottom ?? null,
     )
   ) {
+    dndStore.headerTearOffPreviewChanged(
+      readTabDetachHandler()?.isAvailable === true,
+    );
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
+  dndStore.headerTearOffPreviewChanged(false);
   if (point === null) {
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
@@ -871,6 +879,7 @@ function commitHeaderStripPair(
       left: side === "left" ? sourceRef : target.targetRef,
       right: side === "left" ? target.targetRef : sourceRef,
       focusedRef: sourceRef,
+      targetRef: target.targetRef,
       splitId: `split:${uuidv4()}`,
       leftRatio: 0.5,
     },
@@ -1266,9 +1275,15 @@ export function RootDndProvider(props: RootDndProviderProps) {
           pointerX: grabPointerX(event.activatorEvent),
         });
         activeHeaderStripGeometry = geometry;
+        // The ghost enrichment (repo logo, notification badge) rides the
+        // SAME dnd-kit payload the identity fields above were just read
+        // from - the strip item that is the drag source attaches it (see
+        // `tab-strip-item.tsx`'s `useHeaderTabDnd`), so reading it here
+        // costs nothing further: no RPC, no query.
         dndStore.headerTabDragStarted(
           headerTab,
           geometry?.slots[geometry.sourceIndex]?.width ?? null,
+          readHeaderTabDragGhost(event.active.data.current),
         );
         // The move that crosses the activation distance can itself span one or
         // more tabs. dnd-kit starts the drag from that event but does not emit

@@ -11,8 +11,11 @@
  * the whole viewport and once against the area under a 40px header moved 20px
  * at each hand-off.
  *
- * The two literals MUST agree; they are separate because Tailwind resolves
- * class names statically and `top-` and `h-` cannot share one token.
+ * The literals MUST agree; they are separate because Tailwind resolves
+ * class names statically and `top-` and `h-` cannot share one token, and a
+ * library that takes its geometry as a CSS value (the toaster's `offset`)
+ * cannot take a class at all.
  */
 export const APP_HEADER_HEIGHT_CLASS = "h-10";
 export const BELOW_APP_HEADER_TOP_CLASS = "top-10";
+export const APP_HEADER_HEIGHT = "2.5rem";

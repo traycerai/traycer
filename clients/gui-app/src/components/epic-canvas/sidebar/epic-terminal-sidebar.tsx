@@ -307,8 +307,8 @@ function TerminalRow(props: TerminalRowProps) {
     durable,
     authority,
   });
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
+  const navigatorResourceMetrics = useSettingsStore(
+    (state) => state.navigatorResourceMetrics,
   );
   const label = actions.label;
   const [isRenaming, setIsRenaming] = useState(false);
@@ -474,12 +474,13 @@ function TerminalRow(props: TerminalRowProps) {
                       </span>
                     ) : null}
                   </div>
-                  {showNavigatorResourceStats ? (
+                  {navigatorResourceMetrics.length > 0 ? (
                     <OwnerResourceChip
                       epicId={epicId}
                       kind="terminal"
                       ownerId={session.sessionId}
                       hostId={hostId}
+                      metrics={navigatorResourceMetrics}
                       className={undefined}
                     />
                   ) : null}

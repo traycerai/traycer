@@ -85,17 +85,16 @@ export function ChatTileErrorNoticeToasts(
 }
 
 /**
- * Tell the store this notice reached the screen, so its eviction protection
- * can lapse. Only `SEND_RESTORED` is held for delivery, but recording every id
- * keeps the rule in one place rather than teaching this layer which codes are
- * special.
+ * Tell the store THIS notice reached the screen, so its eviction protection
+ * (`SEND_RESTORED`) or its parking hold (a last-copy notice) can lapse. The
+ * store decides the axis from the notice; this layer records every notice it
+ * shows rather than learning which codes are special.
  */
 function markDelivered(
   handle: ChatSessionStoreHandle,
   notice: ChatErrorNotice,
 ): void {
-  if (notice.clientActionId === null) return;
-  handle.store.getState().markNoticeDelivered(notice.clientActionId);
+  handle.store.getState().markNoticeDelivered(notice);
 }
 
 function rememberErrorNotice(

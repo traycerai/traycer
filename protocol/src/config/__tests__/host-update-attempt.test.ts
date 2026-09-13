@@ -75,6 +75,7 @@ const VALID_CLAIM = {
   installGeneration: "gen-a",
   stageFingerprint: "fp-a",
   allowDowngrade: true,
+  acceptStoreFormatLoss: false,
 };
 
 const VALID_COMPLETE_RECOVERY = {
@@ -161,6 +162,35 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
       expect(decodeHostUpdateAttempt(bytes(json({ claim: null })))).toEqual({
         kind: "corrupt",
       });
+    });
+
+    it("decodes a claim written before acceptStoreFormatLoss existed as consent NOT given, never as corrupt", () => {
+      // Every claim on disk before the key existed looks like this. Reading
+      // it as corrupt would refuse to resume a perfectly good park; reading
+      // it as consent given would authorize a data loss nobody consented to.
+      const { acceptStoreFormatLoss: _dropped, ...legacyClaim } = VALID_CLAIM;
+      const result = decodeHostUpdateAttempt(
+        bytes(json({ claim: legacyClaim })),
+      );
+      expect(result.kind).toBe("valid");
+      if (result.kind === "valid") {
+        expect(result.value.claim?.acceptStoreFormatLoss).toBe(false);
+      }
+    });
+
+    it("preserves acceptStoreFormatLoss verbatim, beside allowDowngrade, as the consent the claim was made under", () => {
+      const claim = { ...VALID_CLAIM, acceptStoreFormatLoss: true };
+      const result = decodeHostUpdateAttempt(bytes(json({ claim })));
+      expect(result.kind).toBe("valid");
+      if (result.kind === "valid") expect(result.value.claim).toEqual(claim);
+    });
+
+    it("reports corrupt when acceptStoreFormatLoss is present but not a boolean", () => {
+      expect(
+        decodeHostUpdateAttempt(
+          bytes(json({ claim: { ...VALID_CLAIM, acceptStoreFormatLoss: 1 } })),
+        ),
+      ).toEqual({ kind: "corrupt" });
     });
   });
 

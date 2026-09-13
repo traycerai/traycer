@@ -36,7 +36,7 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { epicSubscribeV13 } from "@traycer/protocol/host/epic/contracts";
-import { epicStateSubscribeV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeV10 } from "@traycer/protocol/host/epic/status-subscribe";
 import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type {
@@ -44,6 +44,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
 
 /**
@@ -113,7 +114,7 @@ export const OPEN_PARAMS_PARSERS: {
 } = {
   "epic.subscribe": (value) => epicSubscribeV13.openRequestSchema.parse(value),
   "epic.state.subscribe": (value) =>
-    epicStateSubscribeV10.openRequestSchema.parse(value),
+    epicStateSubscribeV11.openRequestSchema.parse(value),
   "epic.status.subscribe": (value) =>
     epicStatusSubscribeV10.openRequestSchema.parse(value),
   "artifact.subscribe": (value) =>
@@ -127,7 +128,7 @@ export const OPEN_PARAMS_SCHEMA_SOURCES: {
   };
 } = {
   "epic.subscribe": epicSubscribeV13,
-  "epic.state.subscribe": epicStateSubscribeV10,
+  "epic.state.subscribe": epicStateSubscribeV11,
   "epic.status.subscribe": epicStatusSubscribeV10,
   "artifact.subscribe": artifactSubscribeV10,
 };
@@ -230,6 +231,8 @@ export interface StreamProxyStatus {
   readonly streamId: number;
   readonly status: StreamConnectionStatus;
   readonly reason: StreamCloseReason | null;
+  /** The transition's retry cause (see `StatusChangeHandler`). */
+  readonly retryCause: FatalErrorDetails | null;
 }
 
 /** The per-SESSION negotiated version, replicated for a synchronous read. */

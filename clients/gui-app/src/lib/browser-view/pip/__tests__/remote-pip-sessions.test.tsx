@@ -31,24 +31,38 @@ const transportFactory = vi.hoisted(() => {
       sessions: [],
     };
     transports.push(record);
+    const openSession = (method: string, params: unknown): unknown => {
+      const session: RecordedSession = {
+        hostId,
+        method,
+        params,
+        closed: false,
+      };
+      record.sessions.push(session);
+      return {
+        onServerFrame: (_handler: unknown) => undefined,
+        onStatusChange: (_handler: unknown) => undefined,
+        close: () => {
+          session.closed = true;
+        },
+      };
+    };
     return {
       wsStreamClient: {
-        subscribe: (method: string, params: unknown) => {
-          const session: RecordedSession = {
-            hostId,
-            method,
-            params,
-            closed: false,
-          };
-          record.sessions.push(session);
-          return {
-            onServerFrame: (_handler: unknown) => undefined,
-            onStatusChange: (_handler: unknown) => undefined,
-            close: () => {
-              session.closed = true;
-            },
-          };
-        },
+        subscribe: openSession,
+        // `BrowserSessionsStreamClient` opens through the params-provider seam
+        // (the open request is shaped for the negotiated major) and pins `@2`
+        // for the `independent` scope. A double answering only `subscribe`
+        // records nothing and the fleet reads as having subscribed to no host.
+        subscribeWithParamsProvider: (
+          method: string,
+          paramsProvider: (onWireVersion: unknown) => unknown,
+        ) => openSession(method, paramsProvider(null)),
+        subscribeAtVersion: (
+          method: string,
+          _schemaVersion: unknown,
+          params: unknown,
+        ) => openSession(method, params),
       },
       close: () => {
         record.closed = true;
@@ -133,7 +147,7 @@ describe("useRemotePipSessions", () => {
     expect(sessions[0]).toMatchObject({
       hostId: "host-b",
       method: "browser.sessions",
-      params: { epicId: EPIC },
+      params: { scope: { kind: "epic", epicId: EPIC } },
     });
     expect(transportFactory.transports.every((item) => !item.closed)).toBe(
       true,

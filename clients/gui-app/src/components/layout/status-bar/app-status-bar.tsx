@@ -1,0 +1,390 @@
+import { use, useEffect, useRef, useState, type ReactNode } from "react";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { Popover, PopoverAnchor } from "@/components/ui/popover";
+import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
+import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
+import {
+  useStatusBarDensity,
+  type StatusBarDensity,
+} from "@/components/layout/status-bar/status-bar-density";
+import { StatusBarRateLimitCluster } from "@/components/layout/status-bar/status-bar-rate-limit-cluster";
+import { StatusBarResourceSegment } from "@/components/layout/status-bar/status-bar-resource-segment";
+import {
+  STATUS_BAR_MENU_EXEMPT_ATTRIBUTE,
+  StatusBarVisibilityMenu,
+  type StatusBarMenuProvider,
+} from "@/components/layout/status-bar/status-bar-visibility-menu";
+import { useWatchHostScope } from "@/hooks/host-scope/use-watch-host-scope";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import {
+  useRateLimitProfileSelection,
+  type RateLimitProfileSelection,
+} from "@/hooks/rate-limits/use-rate-limit-profile-selection";
+import { useStatusBarWindowedProviders } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import { HostRuntimeContext, useHostBinding } from "@/lib/host";
+import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { providerDisplayName } from "@/lib/provider-ordering";
+import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
+import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+
+/** Stable identity, so a strip with no list to offer never re-renders on one. */
+const NO_MENU_PROVIDERS: ReadonlyArray<StatusBarMenuProvider> = [];
+
+/**
+ * The app's bottom strip: provider usage on the left, the watched host's
+ * resource readout on the right.
+ *
+ * It carries no host control of its own. Both panels it opens already end their
+ * list in a `HostSwitcher` over this same watch pick, so a third one in the
+ * strip would be a third way to write one value — and the strip is the one
+ * surface with no room to say what picking does.
+ *
+ * The watch host is resolved ONCE, here, above every segment — and re-provided
+ * as this subtree's `HostRuntimeContext` and `StreamRuntimeContext`. That pair
+ * of swaps is what re-targets the whole strip: the unary context moves the RPC
+ * reads and their query keys, the streaming one moves `resources.subscribe`.
+ * Swapping only the first is how a surface ends up reading host B's RPCs beside
+ * host A's live stream, which is why both are here rather than one being left
+ * to whichever segment happens to need it.
+ *
+ * Both providers are rendered unconditionally, and that is load-bearing rather
+ * than tidiness — the same reason `RateLimitIconButton` states. Mounting one
+ * only when a scoped binding exists changes the element type at this position
+ * the moment a pick resolves, so React unmounts the whole subtree and mounts a
+ * fresh one, taking the open state of anything inside it (the usage panel, the
+ * resource panel) with it. The fallback re-provides the ambient binding
+ * VERBATIM, never a copy, so an unscoped strip still sees ambient updates.
+ */
+export function AppStatusBar(): ReactNode {
+  const { scope, hasExplicitPick } = useWatchHostScope();
+  const scopedBinding = useScopedHostBinding(scope);
+  const ambientBinding = useHostBinding();
+  const scopedStreamBinding = useScopedStreamBinding(scope);
+  const ambientStreamBinding = use(StreamRuntimeContext);
+  return (
+    <HostRuntimeContext.Provider value={scopedBinding ?? ambientBinding}>
+      <StreamRuntimeContext.Provider
+        value={scopedStreamBinding ?? ambientStreamBinding}
+      >
+        <ScopedAppStatusBar scope={scope} hasExplicitPick={hasExplicitPick} />
+      </StreamRuntimeContext.Provider>
+    </HostRuntimeContext.Provider>
+  );
+}
+
+function ScopedAppStatusBar(props: {
+  readonly scope: HostScope;
+  readonly hasExplicitPick: boolean;
+}): ReactNode {
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const measuredDensity = useStatusBarDensity(barRef);
+  // A mobile viewport takes the `compact` rung whatever it measures, which is
+  // the one place the strip overrides its own measurement.
+  //
+  // Measured, a phone is `icon-only` (its bar is the viewport, and every phone
+  // is under 500px), and an icon-only strip says nothing the mobile header's
+  // rate-limit button is not already saying one row up - so the opt-in footer
+  // would draw a second copy of the header's icons and no readings. `compact`
+  // caps the ladder at `no-timers`: percentages and their labels, no mode
+  // word, no mini bars, no countdowns. The ladder is untouched below that and
+  // still folds whole providers into the `+N` chip when they do not fit, so a
+  // narrow phone converges on its own rather than on a second width table.
+  const narrowViewport = useIsMobileViewport();
+  const density: StatusBarDensity = narrowViewport
+    ? "compact"
+    : measuredDensity;
+  const rateLimitsEnabled = useLayoutStore(
+    (state) => state.statusBar.rateLimits.enabled,
+  );
+  const resourcesEnabled = useLayoutStore(
+    (state) => state.statusBar.resources.enabled,
+  );
+  // Resolved here rather than in the cluster because it has two readers on
+  // opposite sides of the gate below: the segments, and the right-click menu
+  // that wraps the whole strip. One resolution is what keeps the menu's list
+  // and the segments beside it from ever naming different providers.
+  //
+  // It is also the one rate-limit hook mounted outside that gate, which is safe
+  // for exactly one reason: it cannot fetch a reading. Its usage observers are
+  // `enabled: false` and the `providers.list` read under them is the same one
+  // the app-shell queue already keeps subscribed. Everything that CAN pull -
+  // the usage batches, the queued mount refresh - lives inside the gate, where
+  // the binding is provably the watched host's.
+  const windowedProviders = useStatusBarWindowedProviders();
+  const [usageOpen, setUsageOpen] = useState(false);
+  // One subscription bridge for the segments and the panel alike, resolved
+  // where both can reach it - the same shape the header trigger uses.
+  const profileSelection = useRateLimitProfileSelection();
+  // `app.rate-limits.open` has one handler slot and two possible owners, and
+  // on desktop they are mutually exclusive by placement: `RateLimitIconButton`
+  // owns it in the header and is not mounted while the usage controls live
+  // down here.
+  //
+  // A mobile viewport is the one shell where BOTH are on screen - the mobile
+  // header keeps its gauge whatever the footer does - so the strip stands
+  // down and leaves the slot to the header. It is not a coin toss: the slot
+  // holds ONE handler and an unregister only clears its own, so the later
+  // registrant would silently displace the header's and then, on unmounting
+  // for the keyboard or the drawer, take the chord away entirely - the header
+  // button still on screen would have no handler and no way to get one back,
+  // since its effect does not re-run. Nothing is lost by standing down: the
+  // cluster's own `PopoverTrigger` is a tap away, and the two panels are the
+  // same panel.
+  useEffect(() => {
+    if (narrowViewport) return;
+    return registerDynamicActionHandler("app.rate-limits.open", () => {
+      setUsageOpen(true);
+    });
+  }, [narrowViewport]);
+  // The resource panel's half of the same question, and it needs one more fact
+  // because the popover is mounted by the HEADER too rather than only beside
+  // the button it replaces. On desktop `placement` keeps the two mounts
+  // mutually exclusive, so the strip always owns the action. On a mobile
+  // viewport both can be on screen, and the header's monitor is the survivor -
+  // it is still there with the keyboard up - so the strip owns the action only
+  // when the header is drawing no monitor to own it. With both off nobody
+  // registers, which is correct: there is no panel to open.
+  const headerResourceMonitor = useSettingsStore(
+    (state) => state.showGlobalResourceMonitor,
+  );
+  const claimsResourcesAction = !narrowViewport || !headerResourceMonitor;
+  // While the panel is open, let the header drop its title-bar drag regions so
+  // a click on the (otherwise event-swallowing) drag area dismisses it. The id
+  // is the header trigger's own: the two are mutually exclusive by placement
+  // wherever a title bar exists at all, so they can never both be claiming it.
+  useTitleBarDragSuppression("rate-limits", usageOpen);
+  const scope = props.scope;
+  // A PICK that has not resolved to its own client leaves this subtree on the
+  // AMBIENT binding, so mounting the live segments would draw one host's
+  // numbers under the name of the host the user picked - and keeping the hooks
+  // out of the tree, rather than discarding their output, also stops them
+  // opening a stream against the host the user did not choose.
+  //
+  // Without a pick there is no second host to confuse this one with: the
+  // ambient binding is the only thing the strip has ever meant, and an
+  // `unreachable` active host is the routine blip the resource stream rides
+  // out. Blanking it there would be a regression paid by every single-host
+  // user for a picker they never opened.
+  const scopedToOwnHost =
+    !props.hasExplicitPick || isHostScopeUsable(scope.status);
+
+  return (
+    // The menu wraps the strip's ROOT, so a right-click anywhere on it lands -
+    // including the padding under the row. The controls that own their own
+    // pointer behaviour opt out of it individually rather than the menu
+    // guessing at their bounds.
+    <StatusBarVisibilityMenu
+      providers={
+        // Only what this strip can actually show, on both counts. An unresolved
+        // pick leaves the subtree on the ambient binding, whose providers belong
+        // to a host the strip is not watching - so the menu offers nothing
+        // rather than a list borrowed from the wrong machine. And with usage
+        // switched off entirely there is no segment for a per-provider checkbox
+        // to govern: it would toggle a preference with no visible effect and no
+        // item beside it explaining why. Settings, one item down, is where that
+        // switch lives.
+        scopedToOwnHost && rateLimitsEnabled
+          ? menuProviders(windowedProviders)
+          : NO_MENU_PROVIDERS
+      }
+    >
+      {/*
+        Two boxes, not one. The row is exactly `h-6`; the bottom inset is
+        ADDITIONAL space under it. Putting `pb-safe-bottom` on an `h-6` box
+        would make the padding eat the row instead of extending past it, since
+        `h-6` fixes the total height. `#root` reserves the top and both sides
+        app-wide and deliberately not the bottom, so this strip owns that edge.
+      */}
+      <div
+        ref={barRef}
+        data-testid="app-status-bar"
+        // The rung the strip settled on, published for the same reason the
+        // preview publishes its own: which rung is live is otherwise only
+        // visible as the absence of things.
+        data-density={density}
+        className="shrink-0 border-t border-border/90 bg-canvas pb-safe-bottom text-canvas-foreground"
+      >
+        <div className="flex h-6 items-center gap-2 px-2 text-ui-xs tabular-nums">
+          {/*
+            The panel and its chord live HERE, above everything that can hide
+            the segments, because the panel stays meaningful in every state the
+            segments do not survive: it carries its own host notice and its own
+            way back. A handler owned by the cluster would go missing exactly
+            when a user reaches for it - with usage switched off in Settings, or
+            with a pick that cannot be reached - which is the argument the
+            placement toggle's own bridge already makes for itself.
+
+            The anchor is the slot rather than the trigger for the same reason:
+            there is not always a trigger, and the panel still has to open at
+            the left end of the strip.
+          */}
+          <Popover open={usageOpen} onOpenChange={setUsageOpen}>
+            <PopoverAnchor asChild>
+              {/*
+                Reserved even when it holds nothing, so the right-hand cluster
+                does not shift into place when the segments land - or when the
+                preference that hides them is flipped. The notice for an
+                unresolved pick takes the same slot.
+
+                The slot is also the row's GROWER, which is what lets the usage
+                cluster inside it know how much room it has: a `flex: 0 1 auto`
+                slot is sized by its own content, so a cluster measuring
+                anything inside it would be measuring itself. It replaces the
+                spacer that used to sit between the two clusters - the spare
+                room has to be absorbed by exactly one box, and it may as well
+                be the one that needs to know how much there is. The right-hand
+                cluster is pushed to the far edge either way.
+              */}
+              <span
+                data-testid="status-bar-rate-limit-slot"
+                className="flex min-w-0 flex-1 items-center gap-1"
+              >
+                <StatusBarUsageSlot
+                  scopedToOwnHost={scopedToOwnHost}
+                  rateLimitsEnabled={rateLimitsEnabled}
+                  providers={windowedProviders}
+                  density={density}
+                  profileSelection={profileSelection}
+                  scope={scope}
+                />
+              </span>
+            </PopoverAnchor>
+            <RateLimitPopover
+              side="top"
+              align="start"
+              onClose={() => setUsageOpen(false)}
+              profileSelection={profileSelection}
+              scope={scope}
+              hasExplicitPick={props.hasExplicitPick}
+            />
+          </Popover>
+          {/*
+            Gated on the PREFERENCE only, never on the pick - the mirror of the
+            usage panel above, and for the same reason. Wherever this is the
+            registrant of `app.resources.open` it is also the only thing that
+            renders the resource panel's own "can't reach this host" notice, so
+            unmounting it under an unresolved pick would take the chord and the
+            explanation away exactly when they are wanted, and would lose a
+            behaviour the header placement keeps.
+            Nothing leaks by staying mounted: the panel opens its stream only
+            when the binding is genuinely the picked host's, and the segment
+            runs the window's projection through the same attribution check
+            before printing a number, so an unresolved pick reads as dashes
+            rather than as the ambient host's figures.
+          */}
+          {resourcesEnabled ? (
+            <ResourceMonitorPopover
+              trigger="custom"
+              contentSide="top"
+              claimsOpenAction={claimsResourcesAction}
+              triggerNode={
+                <StatusBarResourceSegment
+                  {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
+                  density={density}
+                  hostId={scope.hostId}
+                  hostLabel={scope.hostLabel}
+                  hasExplicitPick={props.hasExplicitPick}
+                />
+              }
+            />
+          ) : null}
+        </div>
+      </div>
+    </StatusBarVisibilityMenu>
+  );
+}
+
+/**
+ * What the reserved slot is holding, in the order the three answers rule each
+ * other out: a strip that may not read its host says so and shows nothing else;
+ * a strip whose usage is switched off shows nothing at all (the slot keeps its
+ * place, and the panel it anchors is still one chord away); otherwise, the
+ * segments.
+ */
+function StatusBarUsageSlot(props: {
+  readonly scopedToOwnHost: boolean;
+  readonly rateLimitsEnabled: boolean;
+  readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+  readonly density: StatusBarDensity;
+  readonly profileSelection: RateLimitProfileSelection;
+  readonly scope: HostScope;
+}): ReactNode {
+  if (!props.scopedToOwnHost)
+    return <StatusBarHostNotice scope={props.scope} />;
+  if (!props.rateLimitsEnabled) return null;
+  return (
+    <StatusBarRateLimitCluster
+      providers={props.providers}
+      density={props.density}
+      profileSelection={props.profileSelection}
+    />
+  );
+}
+
+/**
+ * The menu names providers; the segments read them. Same list, one order, so a
+ * provider can never be togglable in one and absent from the other.
+ */
+function menuProviders(
+  providers: ReadonlyArray<ConfiguredRateLimitProvider>,
+): ReadonlyArray<StatusBarMenuProvider> {
+  return providers.map((provider) => ({
+    providerId: provider.providerId,
+    label: providerDisplayName(provider.providerId),
+  }));
+}
+
+/**
+ * Why the strip is showing no numbers rather than showing the ACTIVE host's
+ * numbers under the picked host's name.
+ *
+ * Same three states and same remedies as the popovers' notice, at one line:
+ * `vanished` needs the pick dropped, `unreachable` needs the machine back, and
+ * `connecting` needs a moment — which is why it alone offers no button. A
+ * strip is not the place to explain a plan restriction or a host version, so
+ * those keep landing in the popover, where there is room for the sentence.
+ */
+function StatusBarHostNotice(props: { readonly scope: HostScope }): ReactNode {
+  const scope = props.scope;
+  if (scope.status === "connecting") {
+    return (
+      <span
+        className="truncate text-muted-foreground"
+        data-testid="status-bar-host-connecting"
+      >
+        Finding {scope.hostLabel}…
+      </span>
+    );
+  }
+  return (
+    <span
+      role="status"
+      className="flex min-w-0 items-center gap-2"
+      data-testid="status-bar-host-unavailable"
+    >
+      <span className="truncate text-muted-foreground">
+        {scope.status === "vanished"
+          ? `${scope.hostLabel} is no longer connected`
+          : `Can't reach ${scope.hostLabel}`}
+      </span>
+      <button
+        type="button"
+        onClick={scope.returnToActive}
+        // The one way out of this state, so the strip's own menu stands down
+        // over it and leaves the platform's alone - the same exemption the two
+        // panel triggers carry.
+        {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
+        className="shrink-0 rounded-md px-1 text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        data-testid="status-bar-host-return-to-active"
+      >
+        Show the active host
+      </button>
+    </span>
+  );
+}

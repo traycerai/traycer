@@ -220,7 +220,7 @@ describe("createRemoteHostFetcher", () => {
   it("returns signed-out when there is no bearer", async () => {
     const fetcher = createRemoteHostFetcher({
       listHosts: async () => ({ kind: "ok", response: envelope() }),
-      getBearerToken: () => null,
+      bearer: { kind: "cloud", getBearerToken: () => null },
       getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
@@ -230,7 +230,7 @@ describe("createRemoteHostFetcher", () => {
   it("maps the envelope to directory entries when ok", async () => {
     const fetcher = createRemoteHostFetcher({
       listHosts: async () => ({ kind: "ok", response: envelope() }),
-      getBearerToken: () => "jwt",
+      bearer: { kind: "cloud", getBearerToken: () => "jwt" },
       getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
@@ -246,7 +246,7 @@ describe("createRemoteHostFetcher", () => {
   it("maps a rejected bearer (unauthorized) to signed-out (never a forced sign-out from a poll)", async () => {
     const fetcher = createRemoteHostFetcher({
       listHosts: async () => ({ kind: "unauthorized" }),
-      getBearerToken: () => "jwt",
+      bearer: { kind: "cloud", getBearerToken: () => "jwt" },
       getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
@@ -257,7 +257,7 @@ describe("createRemoteHostFetcher", () => {
     const result: HostListFetchResult = { kind: "network-error" };
     const fetcher = createRemoteHostFetcher({
       listHosts: async () => result,
-      getBearerToken: () => "jwt",
+      bearer: { kind: "cloud", getBearerToken: () => "jwt" },
       getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
@@ -267,7 +267,7 @@ describe("createRemoteHostFetcher", () => {
   it("maps a REJECTED listHosts call to failed - the injected IPC seam is not throw-free, and a throw must not escape the fetcher contract", async () => {
     const fetcher = createRemoteHostFetcher({
       listHosts: () => Promise.reject(new Error("ipc bridge torn down")),
-      getBearerToken: () => "jwt",
+      bearer: { kind: "cloud", getBearerToken: () => "jwt" },
       getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
@@ -758,7 +758,7 @@ describe("createRemoteHostFetcher - the plan axis", () => {
     let planAllowsRemote = true;
     const fetcher = createRemoteHostFetcher({
       listHosts: async () => ({ kind: "ok", response: envelope() }),
-      getBearerToken: () => "jwt",
+      bearer: { kind: "cloud", getBearerToken: () => "jwt" },
       getPlanAllowsRemote: () => planAllowsRemote,
       relayBaseUrl: RELAY_BASE_URL,
     });

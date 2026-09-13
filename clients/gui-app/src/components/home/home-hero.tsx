@@ -62,7 +62,10 @@ export function HomeHero({ workspaceFolders }: HomeHeroProps) {
   const firstName = profile === null ? null : readFirstName(profile.userName);
 
   return (
-    <div className="flex flex-col items-center gap-3 text-center">
+    <div
+      data-landing-hero
+      className="relative isolate flex flex-col items-center gap-3 text-center"
+    >
       <h1 className="text-display font-medium text-foreground sm:text-display">
         {greeting}
         {firstName === null ? null : `, ${firstName}`}

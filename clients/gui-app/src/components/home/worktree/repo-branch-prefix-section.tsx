@@ -458,11 +458,11 @@ function BranchNamingShell(props: {
       data-testid="repo-branch-prefix-section"
     >
       <div>
-        <p className="text-ui-xs font-medium text-muted-foreground/70 uppercase tracking-wide">
+        <h3 className="text-ui-sm font-semibold text-foreground">
           Branch prefix
-        </p>
-        <p className="mt-0.5 truncate text-ui-sm font-medium text-foreground">
-          Repository · {props.repoLabel}
+        </h3>
+        <p className="mt-1 text-ui-xs text-muted-foreground wrap-anywhere">
+          Choose how new branches are named for {props.repoLabel}.
         </p>
       </div>
       <div className="flex flex-col gap-2.5" aria-live="polite">
@@ -560,7 +560,7 @@ function InheritedBranchNaming(props: {
       <RadioGroup
         value="global"
         aria-label="Branch prefix source"
-        className="grid grid-cols-2 gap-2"
+        className="grid grid-cols-1 gap-2 sm:grid-cols-2"
         onValueChange={(next) => {
           if (next === "override") props.onChooseOverride();
         }}
@@ -568,13 +568,13 @@ function InheritedBranchNaming(props: {
         <label
           htmlFor={`${props.uid}-global`}
           data-testid="repo-branch-prefix-choice-global"
-          className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md border border-primary/50 bg-primary/5 px-2.5 py-2 transition-colors"
+          className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md border border-primary/60 bg-primary/10 px-3 py-3 transition-colors"
         >
           <RadioGroupItem
             ref={globalItemRef}
             id={`${props.uid}-global`}
             value="global"
-            className="mt-0.5"
+            className="mt-0.5 border-foreground/35"
           />
           <div className="min-w-0">
             <span className="block text-ui-sm font-medium text-foreground">
@@ -636,7 +636,7 @@ function EditingBranchNaming(props: {
         <RadioGroup
           value="override"
           aria-label="Branch prefix source"
-          className="grid grid-cols-2 gap-2"
+          className="grid grid-cols-1 gap-2 sm:grid-cols-2"
           onValueChange={(next) => {
             if (next === "global") props.onCancel();
           }}
@@ -852,13 +852,17 @@ function ChoiceRow(props: {
       htmlFor={props.id}
       data-testid={`repo-branch-prefix-choice-${props.value}`}
       className={cn(
-        "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors",
+        "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border px-3 py-3 transition-colors",
         props.active
-          ? "border-primary/50 bg-primary/5"
-          : "border-border/50 hover:bg-foreground/5",
+          ? "border-primary/60 bg-primary/10"
+          : "border-foreground/15 bg-foreground/3 hover:bg-foreground/8",
       )}
     >
-      <RadioGroupItem id={props.id} value={props.value} className="mt-0.5" />
+      <RadioGroupItem
+        id={props.id}
+        value={props.value}
+        className="mt-0.5 border-foreground/35"
+      />
       <div className="min-w-0">
         <span className="block text-ui-sm font-medium text-foreground">
           {props.title}
@@ -883,7 +887,7 @@ function BranchPreviewRow(props: {
 }): ReactNode {
   const split = splitBranchPreview(props.branch, props.prefix);
   return (
-    <div className="flex items-baseline justify-between gap-3">
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-md bg-foreground/5 px-3 py-2.5">
       <span className="shrink-0 text-ui-xs text-muted-foreground">
         {props.label}
       </span>

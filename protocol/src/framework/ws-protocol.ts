@@ -168,6 +168,12 @@ export type FatalErrorDetails = {
    */
   readonly retryable?: boolean;
   /**
+   * A separately-transported recovery action for a refused local WAL store.
+   * Optional and additive: old GUI clients ignore it, while the GUI route that
+   * can actually invoke a rebind never has to parse a human error string.
+   */
+  readonly localStoreRemedy?: string;
+  /**
    * Present exactly when this connection is being closed by a host that is
    * deliberately restarting - see {@link HostRestartIntent} and
    * {@link HOST_RESTARTING_FATAL_CODE}. Additive and optional in both
@@ -210,6 +216,19 @@ export type ClientOpenFrame = {
    * legacy-epoch verdict instead of a generic parse failure.
    */
   readonly clientIdentity?: ClientHandshakeIdentity;
+  /**
+   * Whether this connection may spend a CLOUD CAPABILITY on the account behind
+   * `token`. Same contract as the stream `open` frame's field of the same name -
+   * presence is the declaration, absence is a peer that predates the capability
+   * and is therefore authorized in fact.
+   *
+   * There is deliberately NO control frame on this carrier and no capability tag
+   * for one. A `/rpc` socket carries a single request and closes, so its verdict
+   * cannot go stale mid-connection: the next call opens a new socket and asserts
+   * the verdict again. Only the long-lived carriers (`/stream`, the mux session)
+   * need `cloudVerdictUpdate`.
+   */
+  readonly cloudAuthorized?: boolean;
 };
 
 /**
@@ -381,6 +400,7 @@ export const fatalErrorDetailsSchema = z.object({
   // timeout) that the client recovers from with plain reconnect backoff, not
   // credential revalidation.
   retryable: z.boolean().optional(),
+  localStoreRemedy: z.string().min(1).optional(),
   // Additive/optional, same rule as `retryable`: absent from every host that
   // predates the restart tombstone, and stripped by every client that does.
   restartIntent: hostRestartIntentSchema.optional(),
@@ -404,6 +424,11 @@ export const clientOpenFrameSchema = z.object({
   // client omits it (so a new host sees "no identity" and applies its legacy
   // epoch rule rather than rejecting the frame as malformed).
   clientIdentity: clientHandshakeIdentitySchema.optional(),
+  // `.optional()` and not `.default(true)`, for the reason spelled out on the
+  // stream open frame's copy: absence and an asserted `true` are different
+  // facts about the peer, and the parse boundary is where the difference is
+  // still there to keep.
+  cloudAuthorized: z.boolean().optional(),
 });
 
 /** Canonical schema for the client `request` frame. */

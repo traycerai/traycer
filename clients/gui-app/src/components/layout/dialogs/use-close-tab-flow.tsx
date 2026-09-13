@@ -1,3 +1,4 @@
+import { batchHeaderTabRecovery } from "@/lib/tab-recovery/history";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -6,6 +7,7 @@ import { readTabStripLayout } from "@/stores/tabs/store";
 import {
   findStripItemForRef,
   flattenStripItemRefs,
+  tabRefKey,
 } from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import {
@@ -26,6 +28,7 @@ export interface CloseTabFlow {
   readonly requestCloseTab: (tab: HeaderTab) => void;
   readonly closeOtherTabs: (tab: HeaderTab) => void;
   readonly closeActiveTab: () => void;
+  readonly closeGroup: (groupId: string) => void;
   readonly unsyncedDialog: ReactNode;
 }
 
@@ -39,26 +42,31 @@ export function useCloseTabFlow(): CloseTabFlow {
     select: (s) => s.location.pathname,
   });
 
-  const requestCloseTab = useCallback(
+  const finalizeCloseTab = useCallback(
     (tab: HeaderTab) => {
       if (windowsBridge !== null && isOnlyBlankStartPage(tab)) {
         void windowsBridge.requestClose(windowsBridge.windowId);
         return;
       }
       const captured = picker.capture(tab);
-      const finalize = () => {
-        closeTab(tab);
-        if (tab.kind === "epic") {
-          Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
-            target: "task",
-          });
-        }
-        picker.navigateToCaptured(captured);
-      };
+      closeTab(tab);
+      if (tab.kind === "epic") {
+        Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+          target: "task",
+        });
+      }
+      picker.navigateToCaptured(captured);
+    },
+    [closeTab, picker, windowsBridge],
+  );
+
+  const requestCloseTab = useCallback(
+    (tab: HeaderTab) => {
+      const finalize = () => finalizeCloseTab(tab);
       if (dialog.promptOrConfirm(tab, finalize)) return;
       finalize();
     },
-    [closeTab, dialog, picker, windowsBridge],
+    [dialog, finalizeCloseTab],
   );
 
   const closeOtherTabs = useCallback(
@@ -73,19 +81,21 @@ export function useCloseTabFlow(): CloseTabFlow {
       const preserved = new Set(
         flattenStripItemRefs(targetItem).map((ref) => `${ref.kind}:${ref.id}`),
       );
-      for (const other of getHeaderTabs()) {
-        if (preserved.has(`${other.kind}:${other.id}`)) continue;
-        if (tabRequiresCloseConfirm(other)) {
-          skipped.push(other.name);
-          continue;
+      batchHeaderTabRecovery(() => {
+        for (const other of getHeaderTabs()) {
+          if (preserved.has(`${other.kind}:${other.id}`)) continue;
+          if (tabRequiresCloseConfirm(other)) {
+            skipped.push(other.name);
+            continue;
+          }
+          closeTab(other);
+          if (other.kind === "epic") {
+            Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+              target: "task",
+            });
+          }
         }
-        closeTab(other);
-        if (other.kind === "epic") {
-          Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
-            target: "task",
-          });
-        }
-      }
+      }, layout);
       if (skipped.length > 0) {
         const detail =
           skipped.length === 1 ? `"${skipped[0]}"` : `${skipped.length} tabs`;
@@ -96,6 +106,47 @@ export function useCloseTabFlow(): CloseTabFlow {
       navigateToTabIntent(navigate, tabResolveIntent(target), undefined);
     },
     [closeTab, navigate],
+  );
+
+  const closeGroup = useCallback(
+    (groupId: string) => {
+      const layout = readTabStripLayout();
+      const members = getHeaderTabs().filter(
+        (tab) => layout.customizations?.[tabRefKey(tab)]?.groupId === groupId,
+      );
+      const active = members.find((tab) => tabMatchesPath(tab, activePathname));
+      const finalize = () => {
+        let skipped = 0;
+        // Do not keep a global batch open while the dialog waits: unrelated
+        // closes must stay separate. Only confirmed group closes run here.
+        batchHeaderTabRecovery(() => {
+          for (const tab of members) {
+            if (tab === active) continue;
+            if (tabRequiresCloseConfirm(tab)) {
+              skipped += 1;
+              continue;
+            }
+            closeTab(tab);
+          }
+          if (
+            active !== undefined &&
+            getHeaderTabs().some((tab) => tabRefKey(tab) === tabRefKey(active))
+          ) {
+            // Capture the neighbor after the other group members are gone.
+            finalizeCloseTab(active);
+          }
+        }, readTabStripLayout());
+        if (skipped > 0)
+          toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
+            description:
+              "Close those tabs individually to discard their edits.",
+          });
+      };
+      if (active !== undefined && dialog.promptOrConfirm(active, finalize))
+        return;
+      finalize();
+    },
+    [activePathname, closeTab, dialog, finalizeCloseTab],
   );
 
   const closeActiveTab = useCallback(() => {
@@ -122,9 +173,16 @@ export function useCloseTabFlow(): CloseTabFlow {
       requestCloseTab,
       closeOtherTabs,
       closeActiveTab,
+      closeGroup,
       unsyncedDialog: dialog.dialog,
     }),
-    [closeActiveTab, closeOtherTabs, dialog.dialog, requestCloseTab],
+    [
+      closeActiveTab,
+      closeGroup,
+      closeOtherTabs,
+      dialog.dialog,
+      requestCloseTab,
+    ],
   );
 }
 

@@ -124,6 +124,28 @@ export function dialableHostEndpointFor(
 }
 
 /**
+ * Whether a directory entry is this machine's host while it restarts: the
+ * entry is LOCAL and its `websocketUrl` is null.
+ *
+ * `HostDirectoryService.snapshot()` substitutes the registry's twin of this
+ * machine in exactly that shape while the local snapshot is absent (boot,
+ * ensure/respawn, post-wake re-probe), and nothing else in the directory
+ * produces it. Its `not-dialable` is about DIALABILITY, not about the host
+ * being gone, so the shape means "coming back", never a per-tab death.
+ *
+ * Two readers, which must agree: `useHostReachability` answers it
+ * `host-starting`, and the chat session registry holds a chat's store through
+ * it instead of releasing the store with the endpoint.
+ */
+export function isLocalHostBootingEntry(
+  entry: HostDirectoryEntry | null,
+): boolean {
+  return (
+    entry !== null && entry.kind === "local" && entry.websocketUrl === null
+  );
+}
+
+/**
  * Canonical identity a long-lived REMOTE-AWARE stream OWNER - the app-wide
  * `HostStreamProvider`, the durable chat/terminal registries, and the epic
  * session mount - rebuilds on (R-1: closing the S1 rotation gap). Mode-aware:

@@ -6,86 +6,94 @@ import { THEME_PRESETS, type ThemePreset } from "../theme-presets";
 export const themeTokens = [
   { key: "background", label: "Background", group: "Surfaces" },
   { key: "foreground", label: "Text", group: "Surfaces" },
-  { key: "canvas", label: "Canvas", group: "Surfaces" },
-  { key: "canvas-foreground", label: "Canvas foreground", group: "Surfaces" },
+  { key: "canvas", label: "Canvas background", group: "Surfaces" },
+  { key: "canvas-foreground", label: "Canvas text", group: "Surfaces" },
   { key: "canvas-border", label: "Canvas border", group: "Surfaces" },
-  { key: "card", label: "Surface", group: "Surfaces" },
-  { key: "card-foreground", label: "Surface text", group: "Surfaces" },
+  { key: "card", label: "Panel background", group: "Surfaces" },
+  { key: "card-foreground", label: "Panel text", group: "Surfaces" },
   { key: "popover", label: "Menus and dialogs", group: "Surfaces" },
   { key: "popover-foreground", label: "Menu text", group: "Surfaces" },
-  { key: "sidebar", label: "Sidebar", group: "Surfaces" },
-  { key: "sidebar-foreground", label: "Sidebar foreground", group: "Surfaces" },
-  { key: "primary", label: "Primary", group: "Controls" },
-  { key: "primary-foreground", label: "Primary text", group: "Controls" },
-  { key: "secondary", label: "Secondary", group: "Controls" },
+  { key: "sidebar", label: "Sidebar background", group: "Surfaces" },
+  { key: "sidebar-foreground", label: "Sidebar text", group: "Surfaces" },
+  { key: "primary", label: "Accent color", group: "Controls" },
+  {
+    key: "primary-foreground",
+    label: "Text on accent color",
+    group: "Controls",
+  },
+  { key: "secondary", label: "Secondary button background", group: "Controls" },
   {
     key: "secondary-foreground",
-    label: "Secondary foreground",
+    label: "Secondary button text",
     group: "Controls",
   },
   { key: "muted", label: "Muted surface", group: "Controls" },
   { key: "muted-foreground", label: "Secondary text", group: "Controls" },
-  { key: "accent", label: "Accent", group: "Controls" },
-  { key: "accent-foreground", label: "Accent foreground", group: "Controls" },
+  { key: "accent", label: "Hover highlight", group: "Controls" },
+  {
+    key: "accent-foreground",
+    label: "Hover highlight text",
+    group: "Controls",
+  },
   { key: "border", label: "Border", group: "Controls" },
-  { key: "input", label: "Input", group: "Controls" },
+  { key: "input", label: "Input border", group: "Controls" },
   { key: "ring", label: "Focus ring", group: "Controls" },
-  { key: "destructive", label: "Destructive", group: "Status" },
+  { key: "destructive", label: "Destructive actions", group: "Status" },
   { key: "success", label: "Success", group: "Status" },
-  { key: "success-foreground", label: "Success foreground", group: "Status" },
+  { key: "success-foreground", label: "Success text", group: "Status" },
   { key: "warning", label: "Warning", group: "Status" },
-  { key: "warning-foreground", label: "Warning foreground", group: "Status" },
+  { key: "warning-foreground", label: "Warning text", group: "Status" },
   { key: "chart-1", label: "Chart 1", group: "Charts" },
   { key: "chart-2", label: "Chart 2", group: "Charts" },
   { key: "chart-3", label: "Chart 3", group: "Charts" },
   { key: "chart-4", label: "Chart 4", group: "Charts" },
   { key: "chart-5", label: "Chart 5", group: "Charts" },
   { key: "term-background", label: "Terminal background", group: "Terminal" },
-  { key: "term-foreground", label: "Terminal foreground", group: "Terminal" },
+  { key: "term-foreground", label: "Terminal text", group: "Terminal" },
   { key: "term-cursor", label: "Terminal cursor", group: "Terminal" },
   { key: "term-selection", label: "Terminal selection", group: "Terminal" },
-  { key: "term-ansi-black", label: "Ansi black", group: "Terminal" },
-  { key: "term-ansi-red", label: "Ansi red", group: "Terminal" },
-  { key: "term-ansi-green", label: "Ansi green", group: "Terminal" },
-  { key: "term-ansi-yellow", label: "Ansi yellow", group: "Terminal" },
-  { key: "term-ansi-blue", label: "Ansi blue", group: "Terminal" },
-  { key: "term-ansi-magenta", label: "Ansi magenta", group: "Terminal" },
-  { key: "term-ansi-cyan", label: "Ansi cyan", group: "Terminal" },
-  { key: "term-ansi-white", label: "Ansi white", group: "Terminal" },
+  { key: "term-ansi-black", label: "ANSI black", group: "Terminal" },
+  { key: "term-ansi-red", label: "ANSI red", group: "Terminal" },
+  { key: "term-ansi-green", label: "ANSI green", group: "Terminal" },
+  { key: "term-ansi-yellow", label: "ANSI yellow", group: "Terminal" },
+  { key: "term-ansi-blue", label: "ANSI blue", group: "Terminal" },
+  { key: "term-ansi-magenta", label: "ANSI magenta", group: "Terminal" },
+  { key: "term-ansi-cyan", label: "ANSI cyan", group: "Terminal" },
+  { key: "term-ansi-white", label: "ANSI white", group: "Terminal" },
   {
     key: "term-ansi-bright-black",
-    label: "Ansi bright black",
+    label: "ANSI bright black",
     group: "Terminal",
   },
-  { key: "term-ansi-bright-red", label: "Ansi bright red", group: "Terminal" },
+  { key: "term-ansi-bright-red", label: "ANSI bright red", group: "Terminal" },
   {
     key: "term-ansi-bright-green",
-    label: "Ansi bright green",
+    label: "ANSI bright green",
     group: "Terminal",
   },
   {
     key: "term-ansi-bright-yellow",
-    label: "Ansi bright yellow",
+    label: "ANSI bright yellow",
     group: "Terminal",
   },
   {
     key: "term-ansi-bright-blue",
-    label: "Ansi bright blue",
+    label: "ANSI bright blue",
     group: "Terminal",
   },
   {
     key: "term-ansi-bright-magenta",
-    label: "Ansi bright magenta",
+    label: "ANSI bright magenta",
     group: "Terminal",
   },
   {
     key: "term-ansi-bright-cyan",
-    label: "Ansi bright cyan",
+    label: "ANSI bright cyan",
     group: "Terminal",
   },
   {
     key: "term-ansi-bright-white",
-    label: "Ansi bright white",
+    label: "ANSI bright white",
     group: "Terminal",
   },
 ] as const;
@@ -217,4 +225,88 @@ export function deriveThemeColors(
     "term-cursor": ink,
     "term-selection": primary.slice(0, 7) + "55",
   };
+}
+
+/**
+ * VS Code borders can be transparent or match surfaces that differ in
+ * Traycer. Returns only the tokens it had to fix up, rather than mutating
+ * `colors` in place, so a caller decides when and how to merge them.
+ */
+// culori's `wcagContrast` computes relative luminance from RGB channels only
+// and ignores alpha (verified against culori 4.0.2 - `wcagContrast` on a 5%-
+// opaque white over black returns 21, identical to fully opaque white). A VS
+// Code border token can be genuinely translucent (`normalizeThemeColor`
+// preserves alpha), so judging it unmodified reports full contrast for a
+// border that is nearly invisible once actually composited onto its surface.
+// Composite first so the check measures the same pixel the page renders.
+function compositeOverSurface(color: string, surface: string): string {
+  const fg = rgb(parse(color));
+  const bg = rgb(parse(surface));
+  if (!fg || !bg) return color;
+  const alpha = fg.alpha ?? 1;
+  return formatHex8({
+    mode: "rgb",
+    r: fg.r * alpha + bg.r * (1 - alpha),
+    g: fg.g * alpha + bg.g * (1 - alpha),
+    b: fg.b * alpha + bg.b * (1 - alpha),
+  });
+}
+
+export function ensureVisibleThemeBorders(
+  colors: ThemeDefinition["colors"],
+): Partial<Record<ThemeToken, string>> {
+  const overrides: Partial<Record<ThemeToken, string>> = {};
+  for (const token of ["canvas-border", "border", "input"] as const) {
+    const surfaces = (
+      token === "canvas-border"
+        ? [colors.canvas]
+        : [colors.background, colors.card, colors.popover, colors.sidebar]
+    ).filter((color): color is string => color !== undefined);
+    const original = colors[token];
+    if (!original || surfaces.length === 0) continue;
+    // Loop-invariant across every step below: the surfaces a candidate is
+    // judged against, and the minimum contrast a color reaches over them.
+    // A candidate this loop generates is already opaque (the interpolation
+    // below omits alpha, and `formatHex8` defaults a missing alpha to fully
+    // opaque), so compositing it over a surface is a no-op; only `original`
+    // can carry the translucency this guards against.
+    const minSurfaceContrast = (color: string) =>
+      Math.min(
+        ...surfaces.map((surface) =>
+          wcagContrast(compositeOverSurface(color, surface), surface),
+        ),
+      );
+    const visible = (color: string) => minSurfaceContrast(color) >= 1.3;
+    if (visible(original)) continue;
+    const source = rgb(parse(original));
+    if (!source) continue;
+    const channel =
+      minSurfaceContrast("#ffffff") > minSurfaceContrast("#000000") ? 1 : 0;
+    // Track the best candidate seen in case no step reaches full visibility.
+    let bestCandidate = original;
+    let bestContrast = minSurfaceContrast(original);
+    for (let step = 1; step <= 20; step += 1) {
+      const amount = step / 20;
+      const candidate = formatHex8({
+        mode: "rgb",
+        r: source.r + (channel - source.r) * amount,
+        g: source.g + (channel - source.g) * amount,
+        b: source.b + (channel - source.b) * amount,
+      });
+      if (visible(candidate)) {
+        bestCandidate = candidate;
+        break;
+      }
+      const candidateContrast = minSurfaceContrast(candidate);
+      if (candidateContrast > bestContrast) {
+        bestCandidate = candidate;
+        bestContrast = candidateContrast;
+      }
+    }
+    // Either the step that reached visibility, or - if the loop exhausted
+    // without one - the highest-contrast candidate found, as an explicit
+    // fallback rather than silently keeping the invisible original.
+    overrides[token] = bestCandidate;
+  }
+  return overrides;
 }

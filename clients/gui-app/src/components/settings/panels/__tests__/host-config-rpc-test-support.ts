@@ -133,6 +133,7 @@ export function buildConfigHostFixture(options: {
         updateOperation: null,
         updateTransaction: null,
         storeFormats: null,
+        install: null,
       };
     },
     "config.shell.get": async () => {

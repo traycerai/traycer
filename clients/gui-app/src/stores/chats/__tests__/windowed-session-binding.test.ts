@@ -315,6 +315,7 @@ function createHarnessWith(
     onProviderAuthError: () => {
       providerAuthNudges += 1;
     },
+    wakeTransport: null,
     streamFlushCoordinator,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;

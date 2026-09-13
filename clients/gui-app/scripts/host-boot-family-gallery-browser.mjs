@@ -49,19 +49,14 @@ const FACES = [
 ];
 /**
  * The faces that must not MOVE relative to one another (same top + height):
- * every healthy wait, INCLUDING the narrator with a lane reporting at 42% -
- * a launch crosses all five and the bar is on every one of them, so a lane
- * starting to report changes the sentence and the fill, not the box.
- * `narrator-slow` is deliberately not here: it grows a Retry action row,
- * which is a real state change on its own clock, not a hand-off.
+ * every healthy wait before a stage reports a percentage. `narrator-lane` is
+ * deliberately not here: its lane reports 42%, so it draws the progress bar
+ * the others have no position for, and is taller by that bar and its row
+ * gap.
+ * `narrator-slow` is not here either: it grows a Retry action row, which is a
+ * real state change on its own clock, not a hand-off.
  */
-const WAIT_FACES = new Set([
-  "runtime",
-  "attach",
-  "restoring",
-  "narrator-idle",
-  "narrator-lane",
-]);
+const WAIT_FACES = new Set(["runtime", "attach", "restoring", "narrator-idle"]);
 
 const args = process.argv.slice(2);
 const dark = args.includes("--dark");

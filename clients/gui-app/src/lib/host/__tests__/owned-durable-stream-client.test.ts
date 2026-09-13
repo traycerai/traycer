@@ -36,6 +36,7 @@ function controllableTransport(): {
     },
     instanceId: "controlled-durable-client",
     notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     isReady: () => !closed,
     getMethodSupport: () => "unknown",

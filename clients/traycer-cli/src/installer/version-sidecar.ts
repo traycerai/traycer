@@ -20,7 +20,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  isValidStoreFormatVersion,
+  declaredStoreFormatsFromSidecar,
   type HostStoreFormats,
 } from "@traycer/protocol/host/store-formats";
 import type { ILogger } from "../logger";
@@ -86,20 +86,17 @@ export async function readExtractedStoreFormats(
     // before this field existed.
     return null;
   }
-  let declared: unknown;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object") return null;
-    declared = (parsed as Record<string, unknown>).storeFormats;
+    parsed = JSON.parse(raw);
   } catch {
     return null;
   }
-  if (declared === undefined || declared === null) return null;
-  const chatDb =
-    typeof declared === "object" && !Array.isArray(declared)
-      ? (declared as Record<string, unknown>).chatDb
-      : undefined;
-  if (!isValidStoreFormatVersion(chatDb)) {
+  // The interpretation is the protocol's, shared with the host's own read of
+  // the sidecar it runs from (`host.status`'s install report), so the two
+  // processes cannot accept different shapes.
+  const reading = declaredStoreFormatsFromSidecar(parsed);
+  if (reading.kind === "malformed") {
     // Present and unusable IS worth saying out loud: the archive tried to
     // declare something and this build could not read it, which is a packaging
     // bug rather than an old archive.
@@ -109,5 +106,5 @@ export async function readExtractedStoreFormats(
     );
     return null;
   }
-  return { chatDb };
+  return reading.kind === "declared" ? reading.formats : null;
 }

@@ -33,6 +33,10 @@ import {
   selectionKernelImportRestrictions,
   selectionKernelOwner,
 } from "../../eslint/traycer-host-selection-layer-rules.mjs";
+import {
+  cloudBearerFenceGuiAllowlist,
+  cloudBearerFenceRestrictions,
+} from "../../eslint/traycer-cloud-bearer-fence-rules.mjs";
 
 // ── IMPORT RESTRICTIONS ARE COMPOSED FROM DIMENSIONS. READ THIS BEFORE ADDING ONE. ──
 //
@@ -230,6 +234,10 @@ const followingSurfaceAppWideReadExemptions = [
 // single subscription it owns outlives every wizard that watches it.
 const appChromeAppWideReadExemptions = [
   "src/components/session-import/session-import-run-controller.tsx",
+  // Mounted once at the app root, outside any `<TabHostProvider>`. `hostId`
+  // null means follow the app-wide default (which may be remote) so auto-open
+  // can match the picker's create-profile gate.
+  "src/components/providers/provider-profile-add-flow-host.tsx",
 ];
 
 // Hook directories whose every RPC now takes the caller's client, because
@@ -364,6 +372,7 @@ const generalCustomSyntaxRestrictions = [
   epicTabRouteConstructionBan,
   ...selectByIdRestrictions,
   ...selectionAuthorityRestrictions,
+  ...cloudBearerFenceRestrictions,
   ...LINK_EGRESS_RESTRICTIONS,
   ...TILE_OPEN_RESTRICTIONS,
 ];
@@ -403,6 +412,7 @@ const syntaxExemptions = {
   epicTabRoute: [epicTabRouteConstructionBan],
   selectById: selectByIdRestrictions,
   selectionAuthority: selectionAuthorityRestrictions,
+  cloudBearerFence: cloudBearerFenceRestrictions,
   // Two groups, not one: tests lift the bridge half (they stub
   // `{ openExternalLink: vi.fn() }` and assert on it) and keep the DOM half.
   linkEgressBridge: LINK_EGRESS_BRIDGE_RESTRICTIONS,
@@ -922,6 +932,53 @@ export default tseslint.config(
     },
   },
   {
+    // The cloud-bearer fence's one gui-app allowance. `auth-service.test.ts`
+    // asserts what the service INSTALLS on the request context - that a sign-in
+    // publishes the bearer, that a same-user rotation replaces it in place, that
+    // a sign-out releases the lease - and reading it back through the context is
+    // how those are observable at all. Same exemption class as the shared
+    // lease-contract suites; see `traycer-cloud-bearer-fence-rules.mjs`.
+    //
+    // Scoped to this ONE file rather than added to the `__tests__` block's
+    // `exempt` list: a test elsewhere reaching a raw bearer out of a context is
+    // a real violation of the rule's intent, and a blanket test exemption would
+    // erase exactly what the fence protects.
+    //
+    // MUST STAY BELOW THE `__tests__` BLOCK ABOVE. That block matches every test
+    // file and supplies a from-scratch `no-restricted-syntax` value, so this
+    // allowance placed anywhere earlier is silently overwritten and reads as
+    // configured while doing nothing. That is not hypothetical - this block WAS
+    // written higher up, lint stayed red on the five sites it names, and only
+    // running it found out. It restates the same `nestedFocus` / `tabNavigation`
+    // shape the test block sets so moving it down costs those files nothing -
+    // and the three test-scaffolding exemptions too (`tileOpen` /
+    // `linkEgressBridge` / `linkEgressHook`): `auth-service.test.ts` stubs
+    // `runnerHost.openExternalLink` to observe the sign-in ordering, and a
+    // from-scratch value here that dropped them re-banned exactly the
+    // test-double reading the block above lifts. Same overwrite, other
+    // direction.
+    files: cloudBearerFenceGuiAllowlist,
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: [
+          "cloudBearerFence",
+          "nativeTitleTooltip",
+          "forwardRef",
+          "selectById",
+          "selectionAuthority",
+          "tileOpen",
+          "linkEgressBridge",
+          "linkEgressHook",
+        ],
+        nestedFocus: null,
+        tabNavigation: [
+          "useEpicCanvasStore.setActiveTab",
+          "useLandingDraftStore.setActiveDraft",
+        ],
+      }),
+    },
+  },
+  {
     // These hooks build a remote host transport (Architecture §4 / S1's
     // shared `(hostId, userId)` session cache) inside a `useEffect`,
     // deliberately NOT a `useMemo`: only an effect's cleanup is guaranteed to
@@ -942,6 +999,27 @@ export default tseslint.config(
     },
   },
   {
+    // The park effect RETRACTS a session this window has already destroyed,
+    // which is the one shape this rule's "cascading renders" reasoning does
+    // not cover. The rule is about deriving state in an effect, where the
+    // cure is to compute during render instead; here the effect is reacting
+    // to an external system (the parking decider released the session and
+    // disposed the handle) and the write is a retraction of a value that is
+    // now a destroyed object.
+    //
+    // It was deferred to a microtask precisely to satisfy this rule, and that
+    // deferral was the defect: an unpark landing inside the microtask window
+    // runs the effect's cleanup, which cancelled the pending write, so the
+    // render that observed `parked === false` republished the disposed handle
+    // through `publishedSessionHandle` and consumers read a destroyed store.
+    // The cascade the rule warns about is one extra render; the cost of
+    // avoiding it here was handing consumers a destroyed Y.Doc.
+    files: ["src/providers/epic-session-provider.tsx"],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
     // Router -> store synchronization direction for an already-committed epic
     // route. This is the inverse of navigateToTabIntent's entry-point seam,
     // so it may read the store action directly while the rest of the app may
@@ -956,6 +1034,18 @@ export default tseslint.config(
     },
   },
 
+  {
+    // Closed-tab recovery owns placement reconstruction and either commits one
+    // nested navigation or deliberately preserves the current bulk-close focus.
+    files: ["src/lib/tab-recovery/reopen.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: [],
+        nestedFocus: ["restoreCanvasForRecovery"],
+        tabNavigation: null,
+      }),
+    },
+  },
   // ── Nested-focus-opener boundary allowlist ──────────────────────────────────
   // See eslint/traycer-nested-focus-boundary-rules.mjs for the contract this
   // enforces. Every entry below is a verified, empirical exception (grep the

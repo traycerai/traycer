@@ -343,6 +343,7 @@ function fakeWsStreamClient(
     isClosed: () => false,
     isReady: () => true,
     notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     getMethodSupport: () => "unknown",
     subscribeMethodSupport: () => () => undefined,

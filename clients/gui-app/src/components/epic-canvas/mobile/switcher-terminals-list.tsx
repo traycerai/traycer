@@ -153,8 +153,8 @@ function SwitcherTerminalRow(props: {
   // Host-scoped, like desktop: two fleet terminals sharing a terminalId must
   // not both read as the current tile.
   const isActive = useIsActiveTile(tabId, session.sessionId, hostId);
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
+  const navigatorResourceMetrics = useSettingsStore(
+    (state) => state.navigatorResourceMetrics,
   );
   const label = terminalSessionLabel(session);
 
@@ -166,12 +166,13 @@ function SwitcherTerminalRow(props: {
         row.runtimeStatus === "unknown" ? "Runtime status unavailable" : null
       }
       badge={
-        showNavigatorResourceStats ? (
+        navigatorResourceMetrics.length > 0 ? (
           <OwnerResourceChip
             epicId={epicId}
             kind="terminal"
             ownerId={session.sessionId}
             hostId={hostId}
+            metrics={navigatorResourceMetrics}
             className={undefined}
           />
         ) : null

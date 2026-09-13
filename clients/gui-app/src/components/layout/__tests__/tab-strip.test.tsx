@@ -1,5 +1,11 @@
+import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
+import {
+  SplitMemberChrome,
+  SplitTabLayout,
+} from "@/components/layout/tabs/split-tab-chrome";
+import { TabChrome } from "@/components/layout/tabs/header-tab-visual";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
@@ -14,6 +20,12 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { tabItemId } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
@@ -109,7 +121,7 @@ interface TestToastOptions {
 
 const pinTestState = vi.hoisted(
   (): {
-    pinnedByEpicId: Map<string, boolean>;
+    pinnedByEpicId: Map<string, TaskPinnedState>;
     pendingEpicIds: Set<string>;
     mutate: Mock<
       (
@@ -140,10 +152,81 @@ vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => pinTestState.pinnedByEpicId,
 }));
 
-vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
-  useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
-  usePendingSetPinnedEpicIds: () => pinTestState.pendingEpicIds,
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", async (importOriginal) => {
+  // `epicPinDispatchAdmitted` is a real pure predicate `tab-strip.tsx` calls
+  // directly (not through a hook) at both the initial and Undo dispatch
+  // sites - kept REAL here via importOriginal, rather than mocked away,
+  // because a mock that always admits would make the Undo/no-op assertions
+  // below vacuous.
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/epic/use-epic-set-pinned-mutation")
+    >();
+  return {
+    epicPinDispatchAdmitted: actual.epicPinDispatchAdmitted,
+    useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
+    usePendingSetPinnedEpicIds: () => pinTestState.pendingEpicIds,
+  };
+});
+
+/**
+ * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
+ * outside a `<HostRuntimeProvider>` - absent everywhere in this file.
+ * Defaults to `false` (reset every test): every legacy pin case in this file
+ * predates lane 9 item 5 and pins the pre-`@1.1` reading (`local-home`
+ * permanently unavailable). The §3.2 cases (lane 9 evidence artifact) flip
+ * this to `true` for the duration of one test to exercise the negotiated
+ * `@1.1` local-home pin path through the tab strip's two dispatch edges.
+ */
+const pinLocalHomeSupportedTestState = vi.hoisted(
+  (): { supported: boolean } => ({ supported: false }),
+);
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => pinLocalHomeSupportedTestState.supported,
 }));
+
+// No host transport in this strip fixture; appearance queries remain disabled.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+/**
+ * `useEpicRecordViewed` also reads `useHostClient()` directly, and mounts on
+ * every epic-tab route rendered through `buildRouter` in this file - unmocked
+ * it throws the same `HostRuntimeProvider` error on nearly every test here,
+ * unrelated to what any of them is actually about.
+ */
+const recordViewedTestState = vi.hoisted(
+  (): { mutate: Mock<(variables: unknown) => void> } => ({
+    mutate: vi.fn(),
+  }),
+);
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewedTestState.mutate }),
+}));
+
+/**
+ * `TabStripBody` itself now reads `useHostClient()` unconditionally, to pass
+ * `hostClient.getActiveHostId()` into `epicPinDispatchAdmitted` at the Undo
+ * dispatch site. Every test in this file renders `TabStripBody`, and none of
+ * them wraps in a `<HostRuntimeProvider>`, so this one call throws on nearly
+ * every case regardless of what it is testing. Partial mock: only
+ * `useHostClient` is replaced, everything else in the module comes from the
+ * real implementation (`useHostBinding`, `useHostDirectory`, etc., which
+ * other parts of the render tree may still call for real).
+ */
+const hostClientTestState = vi.hoisted((): { activeHostId: string | null } => ({
+  activeHostId: "host-a",
+}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => ({
+      getActiveHostId: () => hostClientTestState.activeHostId,
+    }),
+  };
+});
 
 vi.mock("sonner", () => ({
   toast: {
@@ -369,6 +452,7 @@ function buildHeaderEpicHandle(
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
+    wakeTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
     ...INERT_ROOT_STATE_PORT,
@@ -396,6 +480,7 @@ function registerChatSession(epicId: string, chatId: string): void {
         userId: null,
         onAuthError: null,
         onProviderAuthError: null,
+        wakeTransport: null,
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         streamClientFactory: () => ({
           sendAction: () => undefined,
@@ -575,15 +660,23 @@ describe("<TabStrip />", () => {
     notificationIndicatorTestState.request = null;
     __resetAppLocalNotificationsStoreForTests();
     resetStores();
+    pinLocalHomeSupportedTestState.supported = false;
+    // The tab History pin is a cloud CAPABILITY, and the store defaults to
+    // `signed-out` - under which the menu item is disabled and every pin
+    // assertion below would pass without exercising anything.
+    useAuthStore.setState({ status: "signed-in" });
   });
 
   afterEach(() => {
     cleanup();
+    // Module-scope store: a staged status outlives this file in the worker.
+    useAuthStore.setState({ status: "signed-out" });
     queryClient.clear();
     headerActivityByEpic.clear();
     resetAgentActivity();
     __resetAppLocalNotificationsStoreForTests();
     resetStores();
+    resetNegotiatedManifests();
   });
 
   it("renders one tab per open epic", async () => {
@@ -596,6 +689,92 @@ describe("<TabStrip />", () => {
     expect(screen.getByTestId("tab-epic-e-b")).toBeDefined();
     expect(screen.getByTestId("tab-new")).toBeDefined();
   });
+
+  it("uses the project color for the active outline while keeping the neutral fill", () => {
+    render(<TabChrome isActive color="#12ab34" />);
+
+    const center = screen.getByTestId("tab-chrome-center");
+    expect(center.style.backgroundColor).toBe("var(--color-background)");
+    expect(center.style.borderTopColor).toBe("rgb(18, 171, 52)");
+  });
+
+  it("keeps the project color on an inactive tab", () => {
+    const { container } = render(
+      <TabChrome isActive={false} color="#12ab34" />,
+    );
+
+    expect(
+      container.querySelector("span[style]")?.getAttribute("style"),
+    ).toContain("background-color: rgb(18, 171, 52);");
+  });
+
+  it("uses the manual color for a focused split member and retains the primary fallback", () => {
+    const { rerender, container } = render(
+      <SplitMemberChrome focused color="#12ab34" />,
+    );
+    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
+      "rgb(18, 171, 52)",
+    );
+
+    rerender(<SplitMemberChrome focused color={null} />);
+    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
+      "var(--color-primary)",
+    );
+
+    rerender(<SplitMemberChrome focused={false} color="#12ab34" />);
+    expect(screen.queryByTestId("tab-chrome-center")).toBeNull();
+    expect(screen.queryByTestId("tab-baseline-cover")).toBeNull();
+    expect(screen.queryByTestId("tab-cap-left")).toBeNull();
+    expect(screen.queryByTestId("tab-cap-right")).toBeNull();
+    expect(container.querySelector("span")?.className).toContain(
+      "group-hover/tab:bg-accent/20",
+    );
+  });
+
+  it.each([
+    {
+      side: "left",
+      leftColor: "#f97316",
+      rightColor: null,
+      expectedLeft: "rgb(249, 115, 22)",
+      expectedRight: "var(--color-primary)",
+    },
+    {
+      side: "right",
+      leftColor: null,
+      rightColor: "#f97316",
+      expectedLeft: "var(--color-primary)",
+      expectedRight: "rgb(249, 115, 22)",
+    },
+  ])(
+    "keeps the $side split member underline color independent",
+    ({ leftColor, rightColor, expectedLeft, expectedRight }) => {
+      render(
+        <SplitTabLayout
+          leftColor={leftColor}
+          rightColor={rightColor}
+          splitId="split-colors"
+          selectedSide={null}
+          control={<span data-testid="split-control" />}
+          left={<span data-testid="split-left" />}
+          right={<span data-testid="split-right" />}
+        />,
+      );
+
+      expect(
+        screen.getByTestId("split-tab-group-underline-split-colors").style
+          .color,
+      ).toBe("var(--color-primary)");
+      expect(
+        screen.getByTestId("split-tab-group-underline-left-split-colors").style
+          .color,
+      ).toBe(expectedLeft);
+      expect(
+        screen.getByTestId("split-tab-group-underline-right-split-colors").style
+          .color,
+      ).toBe(expectedRight);
+    },
+  );
 
   it("shows the pair highlight on the approach half during a merge", async () => {
     openEpicFixture(EPIC_A);
@@ -615,6 +794,7 @@ describe("<TabStrip />", () => {
           index: 0,
         },
         120,
+        null,
       );
       // Dragging rightward onto B: the dragged tab's centre is on B's
       // approach (left) half, so the merge is live immediately with the
@@ -658,6 +838,7 @@ describe("<TabStrip />", () => {
           index: 0,
         },
         120,
+        null,
       );
       dndStore.headerStripDragStateChanged({
         kind: "reorder",
@@ -691,6 +872,7 @@ describe("<TabStrip />", () => {
           index: 0,
         },
         120,
+        null,
       );
       // Dragging leftward back onto B: the dragged tab's centre is on B's
       // approach (right) half, so the dragged tab would take the pair's
@@ -774,7 +956,7 @@ describe("<TabStrip />", () => {
     const frame = tab.parentElement;
     if (frame === null) throw new Error("Expected tab frame");
 
-    expect(frame.className).toContain("min-w-[120px]");
+    expect(frame.className).toContain("min-w-[min(40vw,12rem)]");
     expect(frame.className).toContain("w-56");
     expect(frame.className).toContain("max-w-56");
     expect(frame.className).toContain("flex-[1_1_14rem]");
@@ -788,6 +970,13 @@ describe("<TabStrip />", () => {
   it("renders a hover chrome layer for inactive header tabs", async () => {
     openEpicFixture(EPIC_A);
     openEpicFixture(EPIC_B);
+    // Source reconciliation preserves the current selection when B is added
+    // in the background. Explicitly select B for this active/inactive chrome
+    // fixture so its intended distinction is independent of insertion order.
+    tabCommandCoordinator.activateTab({
+      kind: "ref",
+      ref: { kind: "epic", id: EPIC_B.id },
+    });
     const router = buildRouter("/epics/e-b/e-b");
     render(<RouterProvider router={router} />);
 
@@ -870,10 +1059,10 @@ describe("<TabStrip />", () => {
     expect(screen.getByTestId("split-tab-divider-split-a")).toBeDefined();
     expect(
       screen.getByTestId("split-tab-group-underline-left-split-a").className,
-    ).toContain("bg-primary");
+    ).toContain("bg-current");
     expect(
       screen.getByTestId("split-tab-group-underline-right-split-a").className,
-    ).toContain("bg-primary");
+    ).toContain("bg-current");
 
     const plainC = screen.getByTestId(`tab-epic-${EPIC_C.id}`);
     const plainD = screen.getByTestId(`tab-epic-${tabD.id}`);
@@ -974,10 +1163,10 @@ describe("<TabStrip />", () => {
     const rightTab = screen.getByTestId("tab-epic-e-b");
     const leftPane = indicator.querySelector('[data-split-pane="left"]');
     const rightPane = indicator.querySelector('[data-split-pane="right"]');
-    expect(controlUnderline.className).toContain("bg-primary");
+    expect(controlUnderline.className).toContain("bg-current");
     expect(screen.queryByTestId("split-tab-divider-split-a")).toBeNull();
-    expect(leftUnderline.className).not.toContain("bg-primary");
-    expect(rightUnderline.className).toContain("bg-primary");
+    expect(leftUnderline.className).not.toContain("bg-current");
+    expect(rightUnderline.className).toContain("bg-current");
     expect(
       within(leftTab).getByTestId("tab-chrome-center").style.borderTopColor,
     ).toBe("var(--color-primary)");
@@ -1010,9 +1199,9 @@ describe("<TabStrip />", () => {
     expect(rightPane?.getAttribute("width")).toBe("8");
     expect(leftPane?.getAttribute("fill")).toBe("none");
     expect(rightPane?.getAttribute("fill")).toBe("currentColor");
-    expect(leftUnderline.className).toContain("bg-primary");
-    expect(rightUnderline.className).not.toContain("bg-primary");
-    expect(leftTab.className).toContain("px-1.5");
+    expect(leftUnderline.className).toContain("bg-current");
+    expect(rightUnderline.className).not.toContain("bg-current");
+    expect(leftTab.className).toContain("px-5");
     expect(rightTab.className).toContain("px-5");
     expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();
     expect(
@@ -1127,9 +1316,15 @@ describe("<TabStrip />", () => {
 
     const tab = await screen.findByTestId("tab-epic-e-a");
     const title = screen.getByTestId("tab-title-epic-e-a");
+    const closeButton = screen.getByTestId("tab-close-epic-e-a");
+
+    const trigger = tab.querySelector('[data-slot="tooltip-trigger"]');
+    if (trigger === null) throw new Error("Expected a tooltip trigger");
 
     expect(tab.getAttribute("data-slot")).not.toBe("tooltip-trigger");
-    expect(title.getAttribute("data-slot")).toBe("tooltip-trigger");
+    expect(trigger).not.toBe(tab);
+    expect(trigger.contains(title)).toBe(true);
+    expect(trigger.contains(closeButton)).toBe(false);
   });
 
   it("shows a spinner while epic title generation is pending", async () => {
@@ -1359,7 +1554,12 @@ describe("<TabStrip />", () => {
   });
 
   it("pins a task from its tab context menu and offers Undo", async () => {
-    pinTestState.pinnedByEpicId.set(EPIC_A.id, false);
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: false,
+      home: undefined,
+      hostId: null,
+      pinnedKnown: true,
+    });
     openEpicFixture(EPIC_A);
     registerEpicHeader(EPIC_A, "owner");
     const router = buildRouter("/epics/e-a/e-a");
@@ -1370,7 +1570,14 @@ describe("<TabStrip />", () => {
 
     expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
     const firstCall = pinTestState.mutate.mock.calls[0];
-    expect(firstCall[0]).toEqual({ epicId: EPIC_A.id, pinned: true });
+    expect(firstCall[0]).toEqual({
+      epicId: EPIC_A.id,
+      pinned: true,
+      isLocalHome: false,
+      // A cloud-homed reading carries no host, so the mutation dispatches on
+      // the following client exactly as it did before the host rode along.
+      hostId: null,
+    });
     expect(typeof firstCall[1]?.onSuccess).toBe("function");
     expect(toastTestState.messages).toEqual([
       "Pinned “Alpha” to the top of History",
@@ -1383,11 +1590,18 @@ describe("<TabStrip />", () => {
     expect(pinTestState.mutate).toHaveBeenNthCalledWith(2, {
       epicId: EPIC_A.id,
       pinned: false,
+      isLocalHome: false,
+      hostId: null,
     });
   });
 
   it("shows the inverse task-history action for a pinned task", async () => {
-    pinTestState.pinnedByEpicId.set(EPIC_A.id, true);
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: true,
+      home: undefined,
+      hostId: null,
+      pinnedKnown: true,
+    });
     openEpicFixture(EPIC_A);
     registerEpicHeader(EPIC_A, "owner");
     const router = buildRouter("/epics/e-a/e-a");
@@ -1396,6 +1610,238 @@ describe("<TabStrip />", () => {
     fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
 
     expect(await screen.findByText("Unpin Task in History")).toBeDefined();
+  });
+
+  it("refuses the cloud-only pin action on a local-home epic tab", async () => {
+    // `home: "local"` reaches the tab strip through
+    // `epic.getTaskContexts@1.2`'s `localHomedTaskIds`. Before that key
+    // existed the strip saw only `pinned: false`, which is indistinguishable
+    // from "in the cloud and not pinned" - so the item rendered enabled, fired
+    // the cloud mutation, and the toast claimed the epic had been pinned.
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: false,
+      home: "local",
+      hostId: null,
+      pinnedKnown: true,
+    });
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    const item = await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+    expect(item.getAttribute("data-local-home-pin-unavailable")).toBe("true");
+    // Permanently unavailable, so `aria-disabled` rather than `disabled`:
+    // the explanatory label stays keyboard-reachable.
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.getAttribute("data-disabled")).toBeNull();
+    // States the condition; does not promise a cloud sync that may never come.
+    expect(item.textContent).toContain(
+      "Pin Task in History — needs a newer host",
+    );
+    expect(item.textContent).not.toMatch(/cloud|device/i);
+
+    fireEvent.click(item);
+
+    // The load-bearing assertion: no cloud mutation, and no toast claiming a
+    // pin that never happened.
+    expect(pinTestState.mutate).not.toHaveBeenCalled();
+    expect(toastTestState.messages).toEqual([]);
+  });
+
+  /**
+   * `06641bf75` - the `unverified` local-home carve-out's tab-strip half
+   * (lane 9 evidence artifact, §3.2). The desktop-History/mobile-tray half
+   * is `use-epic-set-pinned-mutation.test.tsx`'s "refuses at dispatch"
+   * case; this pins the tab strip's own two entry points into the SAME
+   * `epicPinDispatchAdmitted` gate - the menu select and the toast's Undo
+   * action - under an `unverified` session on a host that has negotiated
+   * `epic.setPinned@1.1`.
+   */
+  describe("unverified local-home pin carve-out (06641bf75)", () => {
+    beforeEach(() => {
+      recordNegotiatedHostManifest(hostClientTestState.activeHostId ?? "", {
+        "epic.setPinned": { major: 1, minor: 1 },
+      });
+      useAuthStore.setState({ status: "unverified" });
+      pinLocalHomeSupportedTestState.supported = true;
+    });
+
+    it("dispatches the menu pin for a local-homed tab", async () => {
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: "local",
+        hostId: null,
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      const item = await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+      expect(item.getAttribute("aria-disabled")).toBeNull();
+      fireEvent.click(item);
+
+      expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
+      expect(pinTestState.mutate.mock.calls[0]?.[0]).toEqual({
+        epicId: EPIC_A.id,
+        pinned: true,
+        isLocalHome: true,
+        hostId: null,
+      });
+
+      toastTestState.undo?.();
+
+      expect(pinTestState.mutate).toHaveBeenNthCalledWith(2, {
+        epicId: EPIC_A.id,
+        pinned: false,
+        isLocalHome: true,
+        hostId: null,
+      });
+    });
+
+    /**
+     * The host half of the same dispatch: a local-homed reading names the host
+     * whose `epic.listTasks` page produced it, and THAT host - not the
+     * window's effective host - is where the pin write is sent. The Undo
+     * action is the case that forces the host into the VARIABLES rather than
+     * being read at dispatch time: the toast outlives the row, so by the time
+     * Undo fires there may be no reading left to re-read a host from.
+     */
+    it("sends the reading's own host into the dispatch and the Undo closure", async () => {
+      // The gate asks the DISPATCH host's negotiation, so the owning host is
+      // the one that has to have negotiated `@1.1` - see the refusal case
+      // below, where only the window's host has.
+      recordNegotiatedHostManifest("host-owning-epic-a", {
+        "epic.setPinned": { major: 1, minor: 1 },
+      });
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: "local",
+        hostId: "host-owning-epic-a",
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      fireEvent.click(
+        await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`),
+      );
+
+      expect(pinTestState.mutate.mock.calls[0]?.[0]).toEqual({
+        epicId: EPIC_A.id,
+        pinned: true,
+        isLocalHome: true,
+        hostId: "host-owning-epic-a",
+      });
+
+      // Drop the reading, then Undo: the host must come from the closure.
+      pinTestState.pinnedByEpicId.delete(EPIC_A.id);
+      toastTestState.undo?.();
+
+      expect(pinTestState.mutate).toHaveBeenNthCalledWith(2, {
+        epicId: EPIC_A.id,
+        pinned: false,
+        isLocalHome: true,
+        hostId: "host-owning-epic-a",
+      });
+    });
+
+    /**
+     * The falsifier for the host moving: the WINDOW's host has negotiated
+     * `@1.1` (the `beforeEach` records it) and the epic's own host has not, so
+     * a gate reading the window's host admits the write and a gate reading the
+     * dispatch host refuses it. Refusing is correct - the write is going to a
+     * host that never promised to serve it off local disk.
+     */
+    it("refuses when the epic's host has not negotiated, though the window's has", async () => {
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: "local",
+        hostId: "host-without-the-minor",
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      fireEvent.click(
+        await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`),
+      );
+
+      expect(pinTestState.mutate).not.toHaveBeenCalled();
+      expect(toastTestState.messages).toEqual([]);
+    });
+
+    it("does neither for a cloud-homed tab - no mutate, no toast", async () => {
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: undefined,
+        hostId: null,
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      const item = await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+      // The menu's own gate (`tabPinUnavailableReason`) refuses first, before
+      // `onSetTaskPinned` - and therefore `epicPinDispatchAdmitted` - is ever
+      // reached: the item states WHY rather than firing and doing nothing.
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      expect(item.textContent).toContain(
+        "Pin Task in History — sign-in not confirmed",
+      );
+
+      fireEvent.click(item);
+
+      expect(pinTestState.mutate).not.toHaveBeenCalled();
+      expect(toastTestState.messages).toEqual([]);
+    });
+
+    it("makes Undo a no-op once the host rolls back to @1.0 between the click and the Undo", async () => {
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: "local",
+        hostId: null,
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      fireEvent.click(
+        await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`),
+      );
+
+      expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
+      expect(toastTestState.undo).not.toBeNull();
+
+      // The toast outlives the click: the host the client is bound to rolls
+      // back to the pre-local-home line before Undo is pressed.
+      recordNegotiatedHostManifest(hostClientTestState.activeHostId ?? "", {
+        "epic.setPinned": { major: 1, minor: 0 },
+      });
+
+      toastTestState.undo?.();
+
+      // Still one call - the Undo dispatch re-read the live negotiation, saw
+      // it no longer serves a local-home write with no cloud verdict, and
+      // silently declined rather than sending an unverified bearer's write.
+      expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("does not expose the task-history pin action on system tabs", async () => {

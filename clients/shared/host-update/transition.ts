@@ -1038,8 +1038,9 @@ export interface AttemptAdvance {
    * All three arms, in one sentence each:
    *
    *  - a refresh on a record WITH a claim replaces those three fields and
-   *    COPIES `allowDowngrade` from the prior record - consent travels with the
-   *    attempt and is never recomputed from arguments or version order;
+   *    COPIES both consents (`allowDowngrade`, `acceptStoreFormatLoss`) from
+   *    the prior record - consent travels with the attempt and is never
+   *    recomputed from arguments or version order;
    *  - a refresh on a record WITHOUT a claim is IGNORED - a legacy
    *    continuation cannot gain an authorization nobody ever granted it;
    *  - `null` carries the prior claim unchanged.
@@ -1064,9 +1065,10 @@ export interface AttemptAdvance {
 /**
  * The install identity a park write re-read under the lock.
  *
- * Deliberately NOT `HostUpdateAttemptClaimBaseline`: `allowDowngrade` is
- * absent because a refresh may not restate consent, and a shape that cannot
- * carry it cannot accidentally recompute it.
+ * Deliberately NOT `HostUpdateAttemptClaimBaseline`: the two consents
+ * (`allowDowngrade`, `acceptStoreFormatLoss`) are absent because a refresh may
+ * not restate consent, and a shape that cannot carry them cannot accidentally
+ * recompute them.
  */
 export interface AttemptClaimRefresh {
   readonly installedVersion: string;
@@ -1220,8 +1222,9 @@ function refreshedClaimBaseline(
     installedVersion: refresh.installedVersion,
     installGeneration: refresh.installGeneration,
     stageFingerprint: refresh.stageFingerprint,
-    // COPIED, never recomputed. The refresh shape cannot even express it.
+    // COPIED, never recomputed. The refresh shape cannot even express them.
     allowDowngrade: prior.allowDowngrade,
+    acceptStoreFormatLoss: prior.acceptStoreFormatLoss,
   };
 }
 

@@ -11,6 +11,7 @@ import {
   type HarnessOption,
   type ModelOption,
   type ProviderId,
+  type ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
@@ -68,15 +69,24 @@ import {
 } from "@/components/providers/provider-profile-model";
 import { usePickerLeaderScope } from "@/components/home/pickers/use-picker-leader-scope";
 import { handleHarnessModelPickerKeyDown } from "@/components/home/pickers/harness-model-picker-keyboard";
-import { deriveHarnessModelPickerPresentation } from "@/components/home/pickers/harness-model-picker-presentation";
+import {
+  deriveHarnessModelPickerPresentation,
+  formatReasoningPosition,
+  type ReasoningStep,
+} from "@/components/home/pickers/harness-model-picker-presentation";
 import type {
   ReasoningFooterConfig,
   ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
+import { useReasoningMaxCue } from "@/components/home/pickers/use-reasoning-max-cue";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import {
+  useLayoutStore,
+  type ComposerReasoningIndicator,
+} from "@/stores/settings/layout-store";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -225,15 +235,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => findReasoningOptionsForModel(selectedModel),
     [selectedModel],
   );
-  const reasoningFooter = useMemo<ReasoningFooterConfig>(
-    () => ({
-      value: reasoning,
-      options: reasoningOptions,
-      disabled: selectedModel !== null && reasoningOptions.length === 0,
-      onChange: setReasoning,
-    }),
-    [reasoning, reasoningOptions, selectedModel, setReasoning],
-  );
   // Service-tier preference is intentionally NOT normalized here. The store's
   // `serviceTier` is the user's sticky preference; the wire filter lives in
   // the codex-adapter at thread/start. Normalizing in the UI would race the
@@ -270,6 +271,35 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.harnessId,
     selection.profileId,
     disabled,
+  );
+  const reasoningDisabled = hasNoReasoningLevels(
+    selectedModel,
+    reasoningOptions,
+  );
+  // The max-effort cue hangs off the CHANGE path rather than off the value, so
+  // a level that arrives by hydration, a catalog refresh or a model swap is not
+  // mistaken for someone moving the slider. Every route lands on
+  // `reasoningFooter.onChange` - the slider, the list, and the ⌥-digit chord
+  // through `usePickerLeaderScope` - so wrapping it here covers all of them.
+  const { config: reasoningMaxCue, onChange: handleReasoningChange } =
+    useReasoningMaxCue({
+      value: reasoning,
+      options: reasoningOptions,
+      disabled: reasoningDisabled,
+      open: visibleOpen,
+      hostId: runTargetHostId,
+      harnessId: selection.harnessId,
+      modelSlug: selection.modelSlug,
+      onSelect: setReasoning,
+    });
+  const reasoningFooter = useMemo<ReasoningFooterConfig>(
+    () => ({
+      value: reasoning,
+      options: reasoningOptions,
+      disabled: reasoningDisabled,
+      onChange: handleReasoningChange,
+    }),
+    [reasoning, reasoningOptions, reasoningDisabled, handleReasoningChange],
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const coarsePointer = useCoarsePointer();
@@ -936,11 +966,21 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
 
   const selectedHarnessLabel = selectedHarness?.label ?? selection.harnessId;
+  // Layout ▸ Composer ▸ Reasoning level. Read here rather than in the trigger
+  // so the chip stays a pure function of its props, and both surfaces that
+  // mount this picker (the chat composer, the terminal launcher) follow it.
+  const reasoningIndicator = useLayoutStore(
+    (state) => state.composer.reasoningIndicator,
+  );
   const tooltipLabel = (
     <HarnessModelPickerTooltip
       harnessLabel={selectedHarnessLabel}
       modelLabel={presentation.label}
-      reasoningLabel={presentation.reasoningLabel}
+      reasoningLabel={reasoningTooltipLabel(
+        reasoningIndicator,
+        presentation.reasoningLabel,
+        presentation.reasoningStep,
+      )}
       fastModeLabel={fastModeTooltipLabel(serviceTierFooter, selectedModel)}
       profileLabel={profileTooltipLabel(
         profilesByHarnessId.get(selection.harnessId) ?? [],
@@ -968,6 +1008,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
             selection={selection}
             label={presentation.label}
             reasoningLabel={presentation.reasoningLabel}
+            reasoningStep={presentation.reasoningStep}
+            reasoningIndicator={reasoningIndicator}
             serviceTierLabel={presentation.activeServiceTierLabel}
             serviceTierActive={presentation.serviceTierActive}
             profileLabel={presentation.profileLabel}
@@ -1022,6 +1064,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onActiveRow={setActiveRowId}
         onSelectRow={selectRow}
         reasoningFooter={reasoningFooter}
+        reasoningMaxCue={reasoningMaxCue}
         serviceTierFooter={serviceTierFooter}
         createProfileHostId={createProfileHostId}
         runTargetHostId={runTargetHostId}
@@ -1032,6 +1075,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       />
     </Popover>
   );
+}
+
+/**
+ * A model that reports no thinking levels at all, which greys the footer's
+ * control rather than removing it. A model that has not RESOLVED yet reports
+ * nothing either, and must not read as a model without levels.
+ */
+function hasNoReasoningLevels(
+  selectedModel: ModelOption | null,
+  options: ReadonlyArray<ReasoningLevelOption>,
+): boolean {
+  return selectedModel !== null && options.length === 0;
 }
 
 export const HarnessModelPicker = memo(HarnessModelPickerImpl);
@@ -1089,6 +1144,27 @@ function TooltipSummaryRow({
       <span className="min-w-0 truncate font-medium">{value}</span>
     </div>
   );
+}
+
+/**
+ * The Effort row while the chip shows the bars glyph: the level's name with
+ * the position the bars stand for, so the tooltip spells out what the glyph
+ * only draws. The `text` mode keeps the bare name - the chip already says it.
+ */
+function reasoningTooltipLabel(
+  reasoningIndicator: ComposerReasoningIndicator,
+  reasoningLabel: string | null,
+  reasoningStep: ReasoningStep | null,
+): string | null {
+  if (
+    reasoningIndicator === "text" ||
+    reasoningLabel === null ||
+    reasoningStep === null
+  ) {
+    return reasoningLabel;
+  }
+  const position = formatReasoningPosition(reasoningStep);
+  return position === null ? reasoningLabel : `${reasoningLabel} (${position})`;
 }
 
 function fastModeTooltipLabel(

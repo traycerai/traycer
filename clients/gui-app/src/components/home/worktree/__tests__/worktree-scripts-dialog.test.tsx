@@ -339,8 +339,9 @@ function setupDefaultField(): HTMLTextAreaElement {
 }
 
 function saveScriptsButton(): HTMLElement {
-  // Footer action is "Save scripts" (independent of Branch naming's Apply).
-  return screen.getByRole("button", { name: "Save scripts" });
+  // One footer action for the whole dialog (independent of Branch naming's
+  // Apply): it persists scripts and branch-prefix changes together.
+  return screen.getByRole("button", { name: "Save" });
 }
 
 describe("<WorktreeScriptsDialog />", () => {
@@ -459,7 +460,7 @@ describe("<WorktreeScriptsDialog />", () => {
   it("does not show 'Saved' (and keeps the dialog open) when the write fails", async () => {
     // Regression: the dialog used to animate to "Saved" + close on a fixed timer
     // regardless of the mutation outcome, so a failed setRepoScripts read as a
-    // false success. It must stay on "Save scripts" when the write rejects.
+    // false success. It must stay on "Save" when the write rejects.
     mocks.rejectSave.current = true;
     renderDialog(IN_EPIC_CONTEXT, summaryWith(null));
 
@@ -472,7 +473,7 @@ describe("<WorktreeScriptsDialog />", () => {
       await Promise.resolve();
     });
     expect(screen.queryByRole("button", { name: "Saved" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Save scripts" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
   });
 
   it("prefills from the staged override for a new worktree", () => {
@@ -577,17 +578,16 @@ describe("<WorktreeScriptsDialog />", () => {
     expect(setupDefaultField().value).toBe("echo wt-own");
   });
 
-  it("renders setup scripts first, Branch naming last, and titles the dialog Worktree environment", () => {
+  it("renders scripts, then Branch naming, and titles the dialog Repository settings", () => {
     renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
     expect(
-      screen.getByRole("heading", { name: "Worktree environment" }),
+      screen.getByRole("heading", { name: "Repository settings" }),
     ).toBeTruthy();
     expect(
-      screen.getByText(/Configure lifecycle scripts and branch prefix for a/),
+      screen.getByText(/Identity, lifecycle scripts, and branch prefix for a/),
     ).toBeTruthy();
     expect(screen.getByTestId("repo-branch-prefix-section")).toBeTruthy();
     expect(screen.getByText("Branch prefix")).toBeTruthy();
-    // Scripts section eyebrow only when Branch naming is present.
     expect(screen.getByText("Setup & teardown scripts")).toBeTruthy();
     // Information hierarchy: setup/teardown before branch naming.
     const scriptsEyebrow = screen.getByText("Setup & teardown scripts");
@@ -596,7 +596,7 @@ describe("<WorktreeScriptsDialog />", () => {
       scriptsEyebrow.compareDocumentPosition(branchNaming) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save scripts" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
     // New-branch worktree: no disconnected top-level branch path block.
     expect(screen.queryByText("New worktree branch")).toBeNull();
   });
@@ -612,7 +612,7 @@ describe("<WorktreeScriptsDialog />", () => {
     // (single unlabeled section - same as before the redesign).
     expect(screen.queryByText("Setup & teardown scripts")).toBeNull();
     expect(screen.getByText(/Configure lifecycle scripts for a/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save scripts" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
   });
 
   it("keeps Branch naming Apply and scripts Save as independent actions", () => {

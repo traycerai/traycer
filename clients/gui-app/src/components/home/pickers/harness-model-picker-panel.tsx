@@ -36,6 +36,7 @@ import {
   type ReasoningFooterConfig,
   type ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
+import type { ReasoningMaxCueConfig } from "@/components/home/pickers/use-reasoning-max-cue";
 
 interface HarnessModelPickerPanelProps {
   readonly trimmedQuery: string;
@@ -100,6 +101,8 @@ interface HarnessModelPickerPanelProps {
   readonly onActiveRow: (rowId: string) => void;
   readonly onSelectRow: (row: HarnessModelRow) => void;
   readonly reasoningFooter: ReasoningFooterConfig | null;
+  /** The max-effort cue's render half - see `useReasoningMaxCue`. */
+  readonly reasoningMaxCue: ReasoningMaxCueConfig;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
@@ -167,6 +170,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     onActiveRow,
     onSelectRow,
     reasoningFooter,
+    reasoningMaxCue,
     serviceTierFooter,
     createProfileHostId,
     runTargetHostId,
@@ -325,6 +329,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
           </div>
           <HarnessModelPickerModelSettingsFooter
             reasoning={reasoningFooter}
+            reasoningMax={reasoningMaxCue}
             serviceTier={serviceTierFooter}
           />
         </div>

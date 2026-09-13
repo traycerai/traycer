@@ -74,6 +74,7 @@ function createViewportHarness(): ViewportHarness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
@@ -1025,6 +1026,40 @@ describe("chat session viewport hydration: review fixes", () => {
       ]);
       expect(finalState.transcriptWindow.rowCount).toBe(0);
       expect(finalState.transcriptDerived).toBeNull();
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  // The upgrade, which a kept store now meets (G1): the chat's scope no longer
+  // carries the host version, so a host restarted onto a build that serves the
+  // windowed snapshot hands it to the store that held the legacy one, rather
+  // than to a new store. The downgrade is the test above.
+  it("a windowed snapshot after a legacy one seats the windowed line on the same store", () => {
+    const harness = createViewportHarness();
+    try {
+      harness
+        .callbacks()
+        .onSnapshot(legacySnapshot([userMessage("legacy-1", 1)]));
+      expect(harness.handle.store.getState().transcriptWindow.rowCount).toBe(0);
+
+      hydrateTail(harness);
+
+      const upgraded = harness.handle.store.getState();
+      expect(upgraded.transcriptWindow.rowCount).toBe(40);
+      expect(upgraded.transcriptDerived).not.toBeNull();
+      expect(
+        upgraded.messages.map((message) => message.messageId),
+      ).not.toContain("legacy-1");
+      // The windowed line is live: a visible gap is planned and requested.
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 20 });
+      expect(harness.rangeRequests).toHaveLength(1);
+      expect(harness.rangeRequests[0]).toMatchObject({
+        fromOrdinal: 10,
+        toOrdinal: 19,
+      });
     } finally {
       harness.handle.dispose();
     }

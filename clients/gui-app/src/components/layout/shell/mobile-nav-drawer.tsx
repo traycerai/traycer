@@ -1,6 +1,12 @@
 import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { LogOut, Pin, Settings, SquareArrowOutUpRight } from "lucide-react";
+import {
+  House,
+  LogOut,
+  Pin,
+  Settings,
+  SquareArrowOutUpRight,
+} from "lucide-react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -8,6 +14,10 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HistoryRowStatusIcon } from "@/components/epics/epics-list-shared";
+import {
+  historyRowProvenance,
+  historyRowProvenanceLabel,
+} from "@/components/epics/history-row-provenance";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
@@ -22,8 +32,10 @@ import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
 import {
   activateTabIntent,
+  homeTabIntent,
   openPhaseMigrationIntent,
 } from "@/lib/tab-navigation";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
@@ -62,6 +74,7 @@ export function MobileNavDrawer(): ReactNode {
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
+  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
   // Immutable after boot, so a plain read is stable for this component's
   // whole life - no resize can flip it the way the viewport hook flips.
   const installedApp = isMobileApp();
@@ -72,6 +85,10 @@ export function MobileNavDrawer(): ReactNode {
   const handleNewTask = () => {
     close();
     activateTabIntent(navigate, openNewEpicIntent(), undefined);
+  };
+  const handleHome = () => {
+    close();
+    activateTabIntent(navigate, homeTabIntent(), undefined);
   };
   const handleSettings = () => {
     close();
@@ -157,6 +174,22 @@ export function MobileNavDrawer(): ReactNode {
       {/* "New task" sits outside the scroll container so it stays pinned
             while the recent-task list below it scrolls. */}
       <nav className="flex min-h-0 flex-1 flex-col p-2">
+        {/* Above "New task": on the phone this row is the whole tab strip's
+            job - the one way back to what is happening across every task. It
+            stays a flat ghost row so the create action keeps the drawer's only
+            resting fill. */}
+        {homeTabEnabled ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className={cn(ROW_CLASS, "mb-1 shrink-0")}
+            data-testid="mobile-nav-home"
+            onClick={handleHome}
+          >
+            <House className="size-4" />
+            <span className="flex-1 text-left">Home</span>
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="default"
@@ -260,6 +293,30 @@ interface DrawerTaskListProps {
  * the list the way the user last filtered it, with no filter/sort/selection
  * chrome of its own; the full surface stays one tap away on the landing page.
  */
+/**
+ * The visible half of a drawer row's provenance: "Not synced" or "Deleted,
+ * edits kept" after the timestamp, on the rows that have one. Rendered as
+ * plain text rather than a tooltip because this row's tap opens the task,
+ * which leaves a tooltip nothing to open on.
+ */
+function DrawerRowProvenanceLabel(props: {
+  readonly item: HistoryItem;
+}): ReactNode {
+  const provenance = historyRowProvenance(props.item);
+  if (provenance === null) return null;
+  return (
+    <span
+      data-testid={`mobile-nav-task-provenance-label-${provenance}`}
+      className={cn(
+        "shrink-0 text-ui-xs text-muted-foreground",
+        provenance === "preserved-orphan" && "text-destructive",
+      )}
+    >
+      {historyRowProvenanceLabel(provenance)}
+    </span>
+  );
+}
+
 function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -277,6 +334,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    cloudPagePending,
   } = useHistoryQuery({ search, nowMs: null });
   // Memoized so the id list below only changes when the page does, not on
   // every render's fresh empty array.
@@ -359,6 +417,33 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
         ))}
       </div>
     );
+  } else if (cloudPagePending) {
+    body = (
+      <div
+        className="flex flex-col gap-1 px-1"
+        data-testid="mobile-nav-task-list-loading"
+        aria-busy="true"
+        aria-label="Loading tasks"
+      >
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-10 w-full rounded-md" />
+        ))}
+      </div>
+    );
+  } else if (data?.hostRequiresCloudToList === true) {
+    // No listing was requested: no cloud verdict, and a host too old to list
+    // from this device. `items` is empty because nothing was asked, so the
+    // "No tasks yet" arm below would state as fact something this session has
+    // no evidence for. The full explanation lives on History proper; this
+    // drawer is a shortcut list, so it says only what it can stand behind.
+    body = (
+      <p
+        className="px-3 py-2 text-ui-sm text-muted-foreground"
+        data-testid="mobile-nav-task-list-host-requires-cloud"
+      >
+        Tasks can&apos;t be listed until your sign-in is confirmed
+      </p>
+    );
   } else if (items.length === 0) {
     body = (
       <p className="px-3 py-2 text-ui-sm text-muted-foreground">No tasks yet</p>
@@ -410,6 +495,10 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
             <span className="shrink-0 text-ui-xs text-muted-foreground">
               {formatRelativeTimestamp(item.updatedAtMs, now)}
             </span>
+            {/* A tap on this row opens the task, so the status dot's sentence
+                has no hover to live in. The two-word label is the visible
+                half; the dot keeps the full sentence as its accessible name. */}
+            <DrawerRowProvenanceLabel item={item} />
           </Button>
         ))}
         {hasNextPage ? (

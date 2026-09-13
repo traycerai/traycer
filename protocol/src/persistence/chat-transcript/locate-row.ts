@@ -15,14 +15,14 @@ import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat
  * `chatTranscriptEventRowId` - and then reads the ordinal straight off the
  * skeleton it already holds.
  *
- * Four kinds cannot be derived that way, and they are the reason this module
+ * Five kinds cannot be derived that way, and they are the reason this module
  * exists. A `block` target is identified by walking the RENDERED segment tree,
  * a `sent-message` target by matching an `agentMessageSend` enrichment inside
- * one, and a `receipt` target by matching an `agentMessageReceipt` - and a
- * cold row has no rendered models at all. So the client can
- * neither find the row nor learn that it exists, and waiting for it to appear
- * deadlocks: the scroll is what drives hydration and the scroll is what is
- * being held back.
+ * one, a `receipt` target by matching an `agentMessageReceipt`, and an
+ * `approval` target by matching a plan block's `approvalId` - and a cold row
+ * has no rendered models at all. So the client can neither find the row nor
+ * learn that it exists, and waiting for it to appear deadlocks: the scroll is
+ * what drives hydration and the scroll is what is being held back.
  *
  * A `message` target is the fourth, and it fails for a different reason worth
  * stating separately, because "a message id is a row id" holds often enough to
@@ -77,7 +77,7 @@ import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat
 export const LOCATOR_MESSAGE_TEXT_MAX_CHARS = 64_000;
 
 /**
- * The four jump targets whose row a client cannot identify on its own.
+ * The five jump targets whose row a client cannot identify on its own.
  *
  * A zod schema rather than a bare type because it is also the wire shape - it
  * is re-exported by `host/agent/gui/subscribe-windowed.ts`, which is where a
@@ -114,6 +114,14 @@ export const transcriptRowLocatorSchema = z.discriminatedUnion("kind", [
    * degrades to the tile it already opened.
    */
   z.object({ kind: z.literal("receipt"), messageId: z.string() }),
+  /**
+   * The inline plan card named by a pending plan approval. Plan approvals are
+   * answered on that card, not the composer queue, so a jump that only has
+   * the approval id still has to find the plan block — and a cold row has
+   * none of those models. Composer-pending tool/file-edit approvals never
+   * send this: they are already on screen.
+   */
+  z.object({ kind: z.literal("approval"), approvalId: z.string() }),
   /**
    * A durable record id, for the case the client's own id-as-row-id read
    * cannot cover: an ASSISTANT record, whose rows are turn-keyed.
@@ -230,6 +238,28 @@ function receiptBlockId(
 }
 
 /**
+ * The plan block this approval names, or `null`.
+ *
+ * Exact on `approvalId`: one pending plan approval owns one inline plan card.
+ * Tool/file-edit approvals never stamp that field, so they miss here and the
+ * caller degrades the same way it does for any locator that found nothing.
+ */
+function planBlockIdForApproval(
+  messages: readonly Message[],
+  approvalId: string,
+): string | null {
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const block of message.blocks) {
+      if (block.type === "plan" && block.approvalId === approvalId) {
+        return block.blockId;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * The row that RENDERS this record, or `null`.
  *
  * "Renders" is the discriminating word, and it is what keeps this from being a
@@ -288,6 +318,8 @@ function blockIdForLocator(
       return sentMessageBlockId(messages, locator);
     case "receipt":
       return receiptBlockId(messages, locator.messageId);
+    case "approval":
+      return planBlockIdForApproval(messages, locator.approvalId);
   }
 }
 

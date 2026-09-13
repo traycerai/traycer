@@ -1,9 +1,14 @@
-import { AppearanceDetails } from "@/components/settings/themes/appearance-details";
+import {
+  AppearanceDetails,
+  AppearanceFontRows,
+} from "@/components/settings/themes/appearance-details";
+import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { useMemo } from "react";
 import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-icon-color-picker";
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
@@ -18,9 +23,9 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import {
   useRunnerZoomChangeSubscription,
   useRunnerZoomPercentQuery,
@@ -60,10 +65,6 @@ export function AppearanceSettingsPanel() {
   const setPointerCursors = useSettingsStore(
     (state) => state.setPointerCursors,
   );
-  const chatTurnMinimapSide = useSettingsStore(
-    (state) => state.chatTurnMinimapSide,
-  );
-  const setMinimapSide = useSettingsStore((state) => state.setMinimapSide);
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
   const codeFontSize = useSettingsStore((state) => state.codeFontSize);
@@ -121,25 +122,26 @@ export function AppearanceSettingsPanel() {
   return (
     <SettingsPanelShell
       title="Appearance"
-      description="Themes, typography, and display preferences."
+      description="Themes, fonts, and display preferences."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div
         className={cn("@container flex flex-col", compact ? "gap-5" : "gap-8")}
       >
         <ThemeGallery />
-        <AppearanceDetails />
+
+        <StartPageSettingsSection />
 
         <SettingsGroup
-          title="Interface"
+          group={APPEARANCE.definitions.interface}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <DesktopZoomSettingsRow />
           <SettingsRow
-            label="Use pointer cursors"
-            description="Change the cursor to a pointer when hovering over interactive elements."
+            row={APPEARANCE.definitions.pointerCursors}
             control={
               <Switch
                 checked={pointerCursors}
@@ -147,54 +149,21 @@ export function AppearanceSettingsPanel() {
                   "pointerCursors",
                   setPointerCursors,
                 )}
-                aria-label="Use pointer cursors"
+                aria-label="Show a hand cursor over clickable controls"
               />
-            }
-          />
-          <SettingsRow
-            label="Minimap side"
-            description="Place chat and artifact minimaps on the left or right, or hide both."
-            control={
-              <Select
-                value={chatTurnMinimapSide}
-                onValueChange={(value) => {
-                  if (
-                    value !== "left" &&
-                    value !== "right" &&
-                    value !== "hide"
-                  ) {
-                    return;
-                  }
-                  trackAppearanceSetting("chatTurnMinimapSide");
-                  setMinimapSide(value);
-                }}
-              >
-                <SelectTrigger
-                  size="sm"
-                  aria-label="Minimap side"
-                  className="w-[min(40vw,8rem)]"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="right">Right</SelectItem>
-                  <SelectItem value="left">Left</SelectItem>
-                  <SelectItem value="hide">Hide</SelectItem>
-                </SelectContent>
-              </Select>
             }
           />
         </SettingsGroup>
 
         <SettingsGroup
-          title="Typography"
+          group={APPEARANCE.definitions.typography}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="UI font"
-            description="Font and size used across the Traycer interface."
+            row={APPEARANCE.definitions.uiFont}
             control={
               <div className="flex flex-col items-end gap-2">
                 <FontPicker
@@ -206,7 +175,7 @@ export function AppearanceSettingsPanel() {
                   options={installedFonts}
                   defaultLabel="Figtree (Default)"
                   resetTooltip="Reset to default"
-                  ariaLabel="UI font"
+                  ariaLabel="Interface font"
                 />
                 <SettingsNumberInput
                   value={uiFontSize}
@@ -217,7 +186,7 @@ export function AppearanceSettingsPanel() {
                   min={10}
                   max={20}
                   unit="px"
-                  ariaLabel="UI font size"
+                  ariaLabel="Interface font size"
                   defaultValue={DEFAULT_UI_FONT_SIZE}
                   resetTooltip="Reset to default"
                 />
@@ -225,8 +194,7 @@ export function AppearanceSettingsPanel() {
             }
           />
           <SettingsRow
-            label="Code font"
-            description="Font and size used for code across agents and diffs."
+            row={APPEARANCE.definitions.codeFont}
             control={
               <div className="flex flex-col items-end gap-2">
                 <FontPicker
@@ -256,10 +224,14 @@ export function AppearanceSettingsPanel() {
               </div>
             }
           />
+          <AppearanceFontRows />
         </SettingsGroup>
 
+        <AppearanceDetails />
+
         <SettingsGroup
-          title="Terminal"
+          group={APPEARANCE.definitions.terminal}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
@@ -268,8 +240,7 @@ export function AppearanceSettingsPanel() {
             <div className="grid grid-cols-1 @min-[32rem]:grid-cols-[7fr_5fr]">
               <div className="flex flex-col">
                 <SettingsRow
-                  label="Terminal font"
-                  description="Font and size used in the terminal. Follows the code font until you set them."
+                  row={APPEARANCE.definitions.terminalFont}
                   control={
                     <div className="flex flex-col items-end gap-2">
                       <FontPicker
@@ -299,8 +270,7 @@ export function AppearanceSettingsPanel() {
                   }
                 />
                 <SettingsRow
-                  label="Terminal cursor"
-                  description="Shape of the cursor in the terminal."
+                  row={APPEARANCE.definitions.terminalCursor}
                   control={
                     <TerminalCursorStylePicker
                       value={terminalCursorStyle}
@@ -312,8 +282,7 @@ export function AppearanceSettingsPanel() {
                   }
                 />
                 <SettingsRow
-                  label="Blink cursor"
-                  description="Blink the terminal cursor while the terminal is focused."
+                  row={APPEARANCE.definitions.blinkCursor}
                   control={
                     <Switch
                       checked={terminalCursorBlink}
@@ -339,14 +308,14 @@ export function AppearanceSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Artifact icons"
+          group={APPEARANCE.definitions.artifactIcons}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="Artifact icon colors"
-            description="Turn on type-specific colors, or leave node icons neutral."
+            row={APPEARANCE.definitions.artifactIconColors}
             control={
               <EpicNodeIconColorPicker
                 enabled={artifactIconColorMode === "byType"}
@@ -372,7 +341,19 @@ export function AppearanceSettingsPanel() {
   );
 }
 
+/**
+ * The gate, and only the gate. Every hook the row needs reaches
+ * `useRunnerHost()`, which throws without a provider — so a host-less shell
+ * must decide "no row" BEFORE any of them run, which means they live in a
+ * child mounted only once the predicate has passed.
+ */
 function DesktopZoomSettingsRow() {
+  const availability = useSettingsAvailabilityContext();
+  if (!APPEARANCE.definitions.zoom.availableWhen(availability)) return null;
+  return <AvailableDesktopZoomSettingsRow />;
+}
+
+function AvailableDesktopZoomSettingsRow() {
   const zoom = useDesktopZoomBridge();
   const zoomQuery = useRunnerZoomPercentQuery(zoom);
   const setMutation = useRunnerZoomSetMutation(zoom);
@@ -380,14 +361,13 @@ function DesktopZoomSettingsRow() {
   useRunnerZoomChangeSubscription(zoom);
   const percent = zoomQuery.data ?? null;
 
-  if (zoom === null) {
-    return null;
-  }
+  // The predicate above is the gate; this only narrows the bridge for the
+  // control below, and resolves the same bridge from the same host.
+  if (zoom === null) return null;
 
   return (
     <SettingsRow
-      label="Zoom"
-      description="Scales the whole app; font sizes only adjust typography."
+      row={APPEARANCE.definitions.zoom}
       control={
         <div className="flex items-center gap-2">
           <Select

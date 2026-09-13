@@ -82,6 +82,8 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       noServiceRegister: args.noServiceRegister,
       force: args.force,
       acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+      // The real lookup: this is the command, not a test.
+      yankLookup: null,
       keepInstalled: args.keepInstalled,
       onProgress: (info) => ctx.progress(info),
       beforeMutate: async () => {

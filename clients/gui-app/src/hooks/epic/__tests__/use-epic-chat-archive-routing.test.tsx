@@ -348,6 +348,8 @@ function createRoutingFixture(): RoutingFixture {
         listCallsByHost[hostId] = (listCallsByHost[hostId] ?? 0) + 1;
         if (hostId === LOCAL.hostId) {
           return {
+            kind: "snapshot" as const,
+            listStamp: null,
             chats: [
               ...localRecords.map((row) => ({ ...row })),
               ...viewerForeign.map((row) => ({ ...row })),
@@ -364,9 +366,13 @@ function createRoutingFixture(): RoutingFixture {
               fatalDetails: null,
             });
           }
-          return { chats: remoteRecords.map((row) => ({ ...row })) };
+          return {
+            kind: "snapshot" as const,
+            listStamp: null,
+            chats: remoteRecords.map((row) => ({ ...row })),
+          };
         }
-        return { chats: [] };
+        return { kind: "snapshot" as const, listStamp: null, chats: [] };
       },
       "epic.setChatArchived": (request: SetChatArchivedRequest) => {
         const hostId = lastCallHost(messengerRef.current ?? messenger);

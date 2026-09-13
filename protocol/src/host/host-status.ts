@@ -125,6 +125,26 @@ export type HostUpdateState =
   | "required";
 
 /**
+ * The command interpreter a host runs a NEWLY resolved command under, as that
+ * host last reported it. `platform` cannot answer this on Windows, where the
+ * same command meets Git Bash, PowerShell or cmd depending on Settings → Shell.
+ *
+ * Absent OR `null` both mean unknown, and they are different facts about the
+ * SERVER, not about the host: absent means this response did not opt in
+ * (`GET /api/v3/hosts?include=commandInterpreter`), null means the server
+ * opted in and the host has never successfully reported one. Neither licenses
+ * inferring a value from `platform` — that inference is the defect the field
+ * exists to remove.
+ *
+ * Mirrors `HostCommandInterpreter` in `@traycerai/common/types/host`.
+ */
+export type HostCommandInterpreter =
+  | "posix-shell"
+  | "git-bash"
+  | "powershell"
+  | "cmd";
+
+/**
  * Per-host update policy (Architecture §13, T16). `manual` (default) means
  * updates are the user's explicit choice; `auto` is an explicit per-host
  * opt-in. Mirrors `@traycerai/common/types/host`'s `HostUpdatePolicy` /
@@ -165,6 +185,18 @@ export type HostListItem = {
   publicKey: string;
   createdAt: string;
   status: HostStatusDTO;
+  /**
+   * Present only when the request opted in, and `null` when the host has never
+   * reported one. Optional-AND-nullable is load-bearing in both directions:
+   * the un-opted response omits the key entirely, so requiring it would fail
+   * every default `GET /api/v3/hosts`, and an opted-in response can carry an
+   * explicit null, so a non-nullable optional would fail those.
+   *
+   * See {@link HostCommandInterpreter}. Advisory: it describes what a NEWLY
+   * resolved command meets, can lag a Settings change or an offline period,
+   * and says nothing about an already-persisted managed command.
+   */
+  commandInterpreter?: HostCommandInterpreter | null;
   /**
    * This host's configured update policy (Architecture §13, T16): `manual`
    * (default) surfaces "Update now" as an explicit action; `auto` means the
@@ -222,6 +254,13 @@ export const hostRegistryKindSchema = z.enum(["personal", "sandbox"]);
 
 export const hostUpdatePolicySchema = z.enum(["manual", "auto"]);
 
+export const hostCommandInterpreterSchema = z.enum([
+  "posix-shell",
+  "git-bash",
+  "powershell",
+  "cmd",
+]);
+
 // `.strict()` on every level (S5 / fix #5): a non-strict `z.object` silently
 // STRIPS a field the server adds, so a contract addition would render with a
 // piece quietly missing instead of failing loud. `.strict()` is not deep, so
@@ -248,6 +287,13 @@ export const hostListItemSchema: z.ZodType<HostListItem> = z
     publicKey: z.string(),
     createdAt: z.string(),
     status: hostStatusDtoSchema,
+    // `.optional().nullable()` under `.strict()`: absent is the un-opted
+    // response every released client already receives, and null is the
+    // opted-in "this host has never reported one". Adding it here does NOT
+    // make an older client tolerate it — a released binary carries its own
+    // frozen copy of this schema and would reject the extra key — which is
+    // exactly why the server keeps it behind an explicit `?include=`.
+    commandInterpreter: hostCommandInterpreterSchema.nullable().optional(),
     updatePolicy: hostUpdatePolicySchema,
   })
   .strict();

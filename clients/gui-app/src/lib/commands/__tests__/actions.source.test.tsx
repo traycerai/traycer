@@ -3,7 +3,9 @@ import { cleanup, render } from "@testing-library/react";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { ACTION_META, getDefaultBindings } from "@/lib/keybindings/actions";
+import { setMobileApp } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 function ctx(): CommandContext {
   return {
@@ -44,11 +46,14 @@ describe("actionsSource", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useSettingsStore.setState({ homeTabEnabled: false });
   });
 
   afterEach(() => {
     cleanup();
+    setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useSettingsStore.setState({ homeTabEnabled: false });
   });
 
   it("emits one item per chord-kind action and skips digit-kind ones", () => {
@@ -75,6 +80,41 @@ describe("actionsSource", () => {
     expect(ids).not.toContain("action:composer.stash");
   });
 
+  it("lists the desktop-only status-bar toggle on desktop", () => {
+    const ids = captureItems().map((item) => item.id);
+    expect(ids).toContain("action:app.status-bar.toggle");
+  });
+
+  it("omits desktop-only actions in the installed mobile app", () => {
+    setMobileApp(true);
+    // Home ON, so the row this test cares most about is actually in the list:
+    // the suite's default is off, and under it `app.home.open` never reached
+    // the `desktopOnly` loop below - the one row whose surface most obviously
+    // invites a `desktopOnly` that would take Home off the phone.
+    useSettingsStore.setState({ homeTabEnabled: true });
+
+    const items = captureItems();
+    const ids = items.map((item) => item.id);
+
+    // The footer the toggle moves the usage controls into is never drawn on
+    // the phone, and `AppShell` registers no handler there - so the row would
+    // offer a command that cannot run.
+    expect(ids).not.toContain("action:app.status-bar.toggle");
+    for (const item of items) {
+      if (item.actionId === null) continue;
+      expect(ACTION_META[item.actionId].desktopOnly).toBe(false);
+    }
+    // The flag drops the desktop-only rows, not the source: everything else
+    // still lists.
+    expect(ids).toContain("action:app.settings.open");
+    // Home named explicitly rather than left to the loop above. Home has a
+    // SECOND gate (`homeTabEnabled`), so if it ever fell out of the list the
+    // loop would go quiet about it instead of failing - and `desktopOnly` is
+    // exactly the flag that would take the phone's Home command away.
+    expect(ids).toContain("action:app.home.open");
+    expect(ACTION_META["app.home.open"].desktopOnly).toBe(false);
+  });
+
   it("reads the live shortcut from the keybinding store", () => {
     useKeybindingStore.getState().setBinding("app.settings.open", "mod+alt+s");
     const item = captureItems().find(
@@ -90,5 +130,28 @@ describe("actionsSource", () => {
       (row) => row.id === "action:app.settings.open",
     );
     expect(item?.shortcut).toBeNull();
+  });
+
+  // `isPaletteEligible` (actions.source.ts) special-cases app.home.open: its
+  // dispatch handler no-ops while the Home tab is off, so a palette row that
+  // does nothing would be worse than no row. Locks down both sides of that
+  // gate so the row can't reappear stale while the setting is off, or stay
+  // missing once it's on.
+  describe("app.home.open row (gated on the homeTabEnabled setting)", () => {
+    it("omits the row while the Home tab is off", () => {
+      useSettingsStore.setState({ homeTabEnabled: false });
+      const ids = captureItems().map((item) => item.id);
+      expect(ids).not.toContain("action:app.home.open");
+    });
+
+    it("includes the row, with its live shortcut, once the Home tab is on", () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      const item = captureItems().find(
+        (row) => row.id === "action:app.home.open",
+      );
+      expect(item).toBeDefined();
+      expect(item?.label).toBe("Go to Home");
+      expect(item?.shortcut).toBe("mod+shift+h");
+    });
   });
 });

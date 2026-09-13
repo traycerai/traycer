@@ -26,6 +26,7 @@ import {
 import { LiveActivityPromoteContext } from "./live-activity-promote-context";
 import { Shimmer } from "@/components/ui/shimmer";
 import { cn } from "@/lib/utils";
+import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
 import {
   useActivityGroupEverHeaded,
   useActivityGroupOpen,
@@ -354,7 +355,12 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
         {row}
       </LiveActivityPromoteContext.Provider>
     );
-  if (!revealed) return wrapped;
+  const anchored = (
+    <ChatBlockNavigationAnchor blockId={segment.id}>
+      {wrapped}
+    </ChatBlockNavigationAnchor>
+  );
+  if (!revealed) return anchored;
   return (
     <div
       ref={bindReveal}
@@ -363,7 +369,7 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
       aria-label={activityChildLabel(segment)}
       className="rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
-      {wrapped}
+      {anchored}
     </div>
   );
 }

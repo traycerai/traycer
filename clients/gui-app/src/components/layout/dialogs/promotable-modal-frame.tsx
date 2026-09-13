@@ -20,6 +20,11 @@ interface PromotableModalFrameProps {
   readonly closeTestId: string;
   readonly onPromote: () => void;
   readonly onClose: () => void;
+  /**
+   * The dialog's Escape hook. `preventDefault()` keeps the modal open — for a
+   * body that consumed the key itself.
+   */
+  readonly onEscapeKeyDown: (event: KeyboardEvent) => void;
   readonly onOpenAutoFocus: ((event: Event) => void) | undefined;
   readonly children: ReactNode;
 }
@@ -61,8 +66,9 @@ export function PromotableModalFrame(
   // A genuine backdrop click still closes the modal; any outside-dismissal whose
   // gesture did not start on the overlay, or started while a nested layer held
   // the pointer, is left to that inner layer - it must not close the whole modal.
-  // Escape is deliberately NOT guarded: Radix routes it to the top layer, so the
-  // first Escape closes an open dropdown and the next closes the modal.
+  // Escape is deliberately NOT guarded here: Radix routes it to the top layer,
+  // so the first Escape closes an open dropdown and the next closes the modal.
+  // The one exception is the caller's to make, through `onEscapeKeyDown`.
   const preventUnlessGenuineBackdropGesture = (event: {
     readonly detail: { readonly originalEvent: Event };
     readonly preventDefault: () => void;
@@ -97,6 +103,7 @@ export function PromotableModalFrame(
         onOpenAutoFocus={props.onOpenAutoFocus}
         onPointerDownOutside={preventUnlessGenuineBackdropGesture}
         onInteractOutside={preventUnlessGenuineBackdropGesture}
+        onEscapeKeyDown={props.onEscapeKeyDown}
         {...props.dataAttributes}
       >
         <header className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-secondary px-4 py-2">

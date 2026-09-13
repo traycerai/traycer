@@ -25,7 +25,10 @@ import {
   stopHostServiceWithAttempt,
   uninstallHostServiceWithAttempt,
 } from "../host/update-mutation";
-import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
+import {
+  discardAttemptRecordWithCapability,
+  type UpdateMutationCapability,
+} from "@traycer-clients/shared/host-update";
 import { readHostPidMetadata } from "../host/pid-metadata";
 import {
   getPublishedProcessIdentityVerdict,
@@ -123,6 +126,12 @@ export interface HostUninstallActuators {
     options: StopServiceOptions,
   ): Promise<void>;
   readonly verifyMutationCapability: () => Promise<void>;
+  /**
+   * Drops the canonical attempt record through the live handle. `null` on the
+   * legacy path, which has no capability to authorise a canonical write and
+   * therefore leaves the record alone.
+   */
+  readonly discardAttemptRecord: (() => Promise<void>) | null;
 }
 
 // Did the stop CALL resolve? Necessary for the runtime purge but not
@@ -159,7 +168,7 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
         reason: "host-uninstall",
         waitMs: 30_000,
         pollIntervalMs: 100,
-        admission: "uninstall-maintenance",
+        admission: "host-uninstall-maintenance",
       },
       (capability) =>
         runHostUninstallWithAttempt(
@@ -213,7 +222,7 @@ export async function runHostUninstallWithAttempt(
     reason: "host-uninstall",
     waitMs: 30_000,
     pollIntervalMs: 100,
-    admission: "uninstall-maintenance",
+    admission: "host-uninstall-maintenance",
   };
   const verifyMutationCapability = (): Promise<void> =>
     requireCliUpdateMutationCapability(capability, contenderOptions);
@@ -234,6 +243,17 @@ export async function runHostUninstallWithAttempt(
         options,
       ),
     verifyMutationCapability,
+    discardAttemptRecord: async () => {
+      const outcome = await discardAttemptRecordWithCapability(
+        capability,
+        capability.hostHomeDir,
+      );
+      if (outcome.kind !== "discarded") {
+        throw new Error(
+          `update attempt record discard was refused (${outcome.reason})`,
+        );
+      }
+    },
   });
 }
 
@@ -390,6 +410,7 @@ async function runHostUninstallWithActuators(
     environment: ctx.environment,
     purgeChannelRuntime,
     verifyMutationCapability: actuators.verifyMutationCapability,
+    discardAttemptRecord: actuators.discardAttemptRecord,
   });
   if (!args.all) {
     // AFTER the removal, deliberately. The default path stops nothing, so a

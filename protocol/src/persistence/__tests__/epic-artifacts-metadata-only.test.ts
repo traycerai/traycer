@@ -11,6 +11,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  buildDeletedEpicArtifact,
+  deletedEpicArtifactSchema,
   epicArtifactSchema,
   reviewArtifactSchema,
   specArtifactSchema,
@@ -129,5 +131,71 @@ describe("epic artifact schema metadata-only contract", () => {
     if (withStrayContent.success) {
       expect("content" in withStrayContent.data).toBe(false);
     }
+  });
+
+  it("accepts every legacy slim tombstone and strips future unknown keys", () => {
+    for (const kind of ["spec", "ticket", "story", "review"] as const) {
+      const parsed = deletedEpicArtifactSchema.parse({
+        id: `deleted-${kind}`,
+        kind,
+        title: `Deleted ${kind}`,
+        artifactRoomId: null,
+        deletedAt: "2026-08-14T00:00:00.000Z",
+        futureScalar: "ignored-by-current-reader",
+      });
+      expect(parsed).not.toHaveProperty("futureScalar");
+      expect(parsed).not.toHaveProperty("folderName");
+    }
+  });
+
+  it("builds one total enriched tombstone shape for every artifact kind", () => {
+    const ticket = ticketArtifactSchema.parse({
+      kind: "ticket",
+      ...BASE_ARTIFACT_FIELDS,
+      assignee: "user-1",
+      status: 2,
+    });
+    expect(
+      buildDeletedEpicArtifact(ticket, "2026-08-14T00:00:00.000Z"),
+    ).toEqual({
+      id: "art-1",
+      kind: "ticket",
+      title: "Title",
+      artifactRoomId: "artifact-room-0",
+      deletedAt: "2026-08-14T00:00:00.000Z",
+      folderName: "art-1",
+      parentId: null,
+      createdAt: 1000,
+      createdManually: false,
+      assignee: "user-1",
+      status: 2,
+    });
+
+    const spec = specArtifactSchema.parse({
+      kind: "spec",
+      ...BASE_ARTIFACT_FIELDS,
+      artifactRoomId: "",
+    });
+    expect(
+      buildDeletedEpicArtifact(spec, "2026-08-14T00:00:00.000Z"),
+    ).toMatchObject({
+      artifactRoomId: null,
+      assignee: null,
+      status: null,
+    });
+
+    const story = storyArtifactSchema.parse({
+      kind: "story",
+      ...BASE_ARTIFACT_FIELDS,
+      assignee: "user-2",
+      status: 1,
+    });
+    expect(
+      buildDeletedEpicArtifact(story, "2026-08-14T00:00:00.000Z"),
+    ).toMatchObject({
+      kind: "story",
+      assignee: "user-2",
+      status: 1,
+    });
   });
 });

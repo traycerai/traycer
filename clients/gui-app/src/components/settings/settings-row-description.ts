@@ -1,8 +1,9 @@
 import { createContext, useContext } from "react";
 
 /**
- * The id of the enclosing `SettingsRow`'s description `<p>`, or `undefined`
- * when the row has no description (or the control is not inside a row at all).
+ * The id of the enclosing `SettingsRow`'s description region — its static
+ * description or the status shown in its place — or `undefined` when the row
+ * renders neither (or the control is not inside a row at all).
  *
  * A context rather than a `control` render prop: the control reaches
  * `SettingsRow` as an already-built `ReactNode`, so the row cannot reach into

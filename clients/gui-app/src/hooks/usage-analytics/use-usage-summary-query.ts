@@ -47,6 +47,24 @@ export function buildUsageSummaryRequest(input: {
    * an epic's work wherever it ran).
    */
   readonly hostId?: string | null;
+  /**
+   * `host.usage.summary@2.0`'s reader selector. `null` = say nothing and let
+   * the HOST pick the plane, which is the released behavior and what every
+   * cloud-verdict-holding caller wants.
+   *
+   * REQUIRED, unlike the optional filters above, and that asymmetry is the
+   * point: those narrow a read, so forgetting one is a wider answer, while
+   * this one names the COHORT the caller is serving. A surface that has not
+   * decided cannot have the question answered for it by a default - the two
+   * epic/chat dialogs say `null` explicitly because they have not been given
+   * the unverified cohort, not because nobody thought about them.
+   *
+   * Only send it to a host that negotiated `@2.0`
+   * (`negotiatedUsageServesLocalOnly` in `lib/usage-plane-admission.ts`).
+   * `@1.0`'s request is `.strict()`, so an older peer REJECTS the key rather
+   * than stripping it and the whole read fails.
+   */
+  readonly plane: "local-only" | null;
 }): UsageSummaryRequest {
   return {
     timezone: getViewerTimeZone(),
@@ -55,6 +73,11 @@ export function buildUsageSummaryRequest(input: {
     chatId: input.chatId ?? undefined,
     hostId: input.hostId ?? undefined,
     window: input.window,
+    // `undefined`, never `null`: the key is dropped on serialization, so an
+    // unselected read is byte-identical to a `@1.0` request - and the `2 -> 1`
+    // downgrade path, which REFUSES a request carrying the selector, reads
+    // `!== undefined` to decide.
+    plane: input.plane ?? undefined,
   };
 }
 

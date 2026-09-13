@@ -59,11 +59,13 @@ const CLOUD_LINK_DOWN_STATES: ReadonlySet<EpicSyncPillState> =
  *   `deriveEpicSyncPillState`'s divergence arm: renderer-only work still
  *   awaiting the host's ack. An `open` transport proves the socket exists,
  *   never that the host received a frame, so closing the window discards it.
- * - `offlineWithHostPending` - "This device is still processing pending
- *   changes; keep it running." The host has acked everything this replica
- *   knows about, so the WINDOW is not the last holder - but the durability of
- *   the host's own flush is unknown, and the instruction is about the DEVICE.
- *   Quieting it invites the one shutdown that can interrupt persistence.
+ * - `offlineWithHostPending` - "Pending changes are still being processed on
+ *   the host serving this task; keep that host running." The host has acked
+ *   everything this replica knows about, so the WINDOW is not the last holder
+ *   - but the durability of the host's own flush is unknown, and the
+ *   instruction is about the SERVING HOST, which from a phone or a browser
+ *   attached to a remote host is not the process showing the pill. Quieting
+ *   it invites the one shutdown that can interrupt persistence.
  *
  * What is left graceable is the flap this hook exists for: `connecting` /
  * `reconnecting` mean the CLOUD leg is coming up while the transport is open

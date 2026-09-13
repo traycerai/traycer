@@ -533,6 +533,15 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     screen.getByTestId("worktrees-filter-trigger");
     screen.getByTestId("worktrees-sort-trigger");
     screen.getByRole("button", { name: "Refresh worktrees" });
+    // The automatic-cleanup policy rides in this toolbar as ONE chip. The card
+    // it replaced sat above the list and spent rows the list could not get
+    // back, and the panel header lost its subtitle with it - so the list card
+    // is the only thing under the title now.
+    screen.getByTestId("worktree-auto-cleanup-chip");
+    expect(screen.queryByTestId("worktree-auto-cleanup-section")).toBeNull();
+    expect(
+      screen.queryByText("Traycer-created worktrees on this host."),
+    ).toBeNull();
     // Same as the no-host empty state - host-scoped UI carries no
     // branch-prefix strip; that control lives in General settings now.
     assertBranchPrefixStripAbsent();

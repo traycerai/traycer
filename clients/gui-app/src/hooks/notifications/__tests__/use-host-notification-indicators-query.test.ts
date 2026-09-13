@@ -44,6 +44,17 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+// The indicator query addresses the NOTIFICATION host - the machine whose feed
+// the centre renders - rather than the app-wide active host, so a `home:
+// local` partition question is not asked of some other host's local partition.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => hostClient.getActiveHostId(),
+  useNotificationResolveHost: () => ({
+    hostId: hostClient.getActiveHostId(),
+    client: hostClient,
+  }),
+}));
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -59,6 +70,8 @@ describe("indicatorRequests", () => {
     const requests = indicatorRequests(
       [...epicIds, "epic-000"],
       ["chat-b", "chat-a"],
+      {},
+      undefined,
     );
 
     expect(requests).toHaveLength(2);
@@ -68,11 +81,14 @@ describe("indicatorRequests", () => {
     expect(requests[1].epicIds).toEqual([
       `epic-${String(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP).padStart(3, "0")}`,
     ]);
+    // EVERY epic chunk carries the complete live-chat whitelist: a task
+    // aggregate computed against a partial whitelist would silently narrow
+    // that epic's aggregate to the chats that happened to share its page.
     expect(requests[0].chatIds).toEqual(["chat-a", "chat-b"]);
-    expect(requests[1].chatIds).toEqual([]);
+    expect(requests[1].chatIds).toEqual(["chat-a", "chat-b"]);
   });
 
-  it("pairs epic and chat chunks without a cross-product", () => {
+  it("crosses epic chunks with chat chunks so every aggregate sees the whole whitelist", () => {
     const epicIds = Array.from(
       { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
       (_value, index) => `epic-${index}`,
@@ -82,7 +98,7 @@ describe("indicatorRequests", () => {
       (_value, index) => `chat-${index}`,
     );
 
-    const requests = indicatorRequests(epicIds, chatIds);
+    const requests = indicatorRequests(epicIds, chatIds, {}, undefined);
 
     const sortedEpicIds = [...epicIds].sort((left, right) =>
       left.localeCompare(right),
@@ -90,21 +106,137 @@ describe("indicatorRequests", () => {
     const sortedChatIds = [...chatIds].sort((left, right) =>
       left.localeCompare(right),
     );
+    const epicChunks = [
+      sortedEpicIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+      sortedEpicIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+    ];
+    const chatChunks = [
+      sortedChatIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+      sortedChatIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+    ];
 
-    expect(requests).toEqual([
-      {
-        epicIds: sortedEpicIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
-        chatIds: sortedChatIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
-      },
-      {
-        epicIds: sortedEpicIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
-        chatIds: sortedChatIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
-      },
-    ]);
+    // Crossed rather than paired index-wise: a chat id landing in a request
+    // without its epic would drop it from that epic's aggregate entirely.
+    expect(requests).toEqual(
+      epicChunks.flatMap((epicChunk) =>
+        chatChunks.map((chatChunk) => ({
+          epicIds: epicChunk,
+          chatIds: chatChunk,
+        })),
+      ),
+    );
+  });
+
+  it("scopes chatEpicIds to the chat ids known to have a parent epic", () => {
+    // `chat-b` has no entry in the map, so `Object.hasOwn` must keep it out
+    // of `chatEpicIds` even though it is still in the request's `chatIds`.
+    const requests = indicatorRequests(
+      [],
+      ["chat-a", "chat-b"],
+      { "chat-a": "epic-x" },
+      undefined,
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].chatIds).toEqual(["chat-a", "chat-b"]);
+    expect(requests[0].chatEpicIds).toEqual({ "chat-a": "epic-x" });
   });
 });
 
 describe("useHostNotificationIndicators recovery", () => {
+  it("carries a dispatch floor on a partitioned indicator read and none on a whole-origin one", async () => {
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "request-floor",
+      handlers: {
+        "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    hostClient = spine.createRequester(mockLocalHostEntry);
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+
+    // A partitioned read: `home` is on the request, so an older peer would
+    // STRIP it and answer 200 with whole-origin flags. The floor rides the
+    // frame so that peer refuses instead.
+    renderHook(
+      () =>
+        useHostNotificationIndicators({
+          hostId: mockLocalHostEntry.hostId,
+          epicIds: ["epic-a"],
+          chatIds: [],
+          enabled: true,
+          home: "local",
+        }),
+      { wrapper },
+    );
+    await act(async () => {
+      await flushQueryNotifications();
+    });
+    expect(messenger.calls).toHaveLength(1);
+    expect(messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+      method: "host.notifications.indicatorState",
+      version: { major: 1, minor: 1 },
+    });
+
+    // The control, differing in exactly one variable: no `home`, so there is
+    // no selector for an older peer to strip and no floor is owed. Without
+    // this, "a floor is attached" could equally be an unconditional floor that
+    // breaks the indicator against every host that never needed the minor.
+    cleanup();
+    const wholeOriginQueryClient = createAppQueryClient();
+    wholeOriginQueryClient.setDefaultOptions({
+      queries: {
+        ...wholeOriginQueryClient.getDefaultOptions().queries,
+        retry: false,
+      },
+    });
+    const wholeOriginWrapper = (props: {
+      readonly children: ReactNode;
+    }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: wholeOriginQueryClient },
+        props.children,
+      );
+    renderHook(
+      () =>
+        useHostNotificationIndicators({
+          hostId: mockLocalHostEntry.hostId,
+          epicIds: ["epic-b"],
+          chatIds: [],
+          enabled: true,
+        }),
+      { wrapper: wholeOriginWrapper },
+    );
+    await act(async () => {
+      await flushQueryNotifications();
+    });
+    expect(messenger.calls).toHaveLength(2);
+    expect(messenger.calls[1]?.requiredHostMethodVersion).toBeNull();
+  });
+
   it("self-heals stale indicator data after a transport-exhausted refetch", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const queryClient = createAppQueryClient();

@@ -25,6 +25,7 @@ import {
   documentAssetKindOf,
   type DocumentAssetKind,
 } from "@/lib/assets/image-extension-allowlist";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
@@ -218,7 +219,7 @@ function locationFor(request: FileAssetRequest): string {
 }
 
 /**
- * Composite key for `imageBlobCache`: `hostId`/`source`/location/`filePath`/
+ * Composite key for `imageBlobCache`: `hostScopeKey`/`source`/location/`filePath`/
  * `contentIdentity` (image-preview decision log, decision #11), as a JSON
  * array - not delimiter-joined, since any of those fields can legally
  * contain the delimiter and alias two different files onto the same key.
@@ -236,14 +237,16 @@ function locationFor(request: FileAssetRequest): string {
 const FILE_ASSET_SCOPE_KEY = "file-asset";
 
 function buildFileAssetCacheKey(parts: {
-  readonly hostId: string;
+  // Account-scoped (see `assetHostScope`), not a bare host id: a caller that
+  // ever passed one would collide across accounts.
+  readonly hostScopeKey: string;
   readonly source: FileAssetSource;
   readonly location: string;
   readonly filePath: string;
   readonly contentIdentity: string;
 }): string {
   return JSON.stringify([
-    parts.hostId,
+    parts.hostScopeKey,
     parts.source,
     parts.location,
     parts.filePath,
@@ -276,7 +279,7 @@ function requestKeyFor(request: FileAssetRequest): string {
 
 /**
  * The pre-header shared-subscription coalescing map's key (sol re-review) -
- * `hostId` + `requestKeyFor` + a git request's `coalesceRevision` (absent
+ * `hostScopeKey` + `requestKeyFor` + a git request's `coalesceRevision` (absent
  * for a workspace request, which has no revision concept) + this hook's
  * current `focusRefreshGeneration`. Deliberately WIDER than `requestKeyFor`
  * alone: two requests that are otherwise identical but at different git
@@ -312,12 +315,12 @@ function requestKeyFor(request: FileAssetRequest): string {
  * concurrent-first-mount coalescing for every non-worktree request.
  */
 function sharedSubscriptionKeyFor(
-  hostId: string,
+  hostScopeKey: string,
   request: FileAssetRequest,
   focusRefreshGeneration: number,
 ): string {
   return JSON.stringify([
-    hostId,
+    hostScopeKey,
     requestKeyFor(request),
     request.method === "git" ? request.coalesceRevision : null,
     isWorktreeBackedRequest(request) ? focusRefreshGeneration : 0,
@@ -574,15 +577,33 @@ export function useFileAsset(
   request: FileAssetRequest | null,
 ): UseFileAssetResult {
   const hostId = useTabHostId();
+  const focused = usePaneFocused();
+  return useHostFileAsset({ hostId, request, focused, refreshKey: 0 });
+}
+
+export function useHostFileAsset(args: {
+  readonly hostId: string | null;
+  readonly request: FileAssetRequest | null;
+  readonly focused: boolean;
+  readonly refreshKey: number;
+}): UseFileAssetResult {
+  const { hostId, request, focused: paneFocused } = args;
+  const refreshKey = args.refreshKey;
+  const accountId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
+  const assetHostScope = JSON.stringify([accountId, hostId]);
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
   // The full binding, not just its `.client` (Codex re-review) - the shared
   // subscription coalescing layer needs `pin`/`unpin` too, see
   // `acquireSharedAssetSubscription`'s call site below.
   const streamBinding = useHostStreamClientBindingFor(target, auth);
-  const paneFocused = usePaneFocused();
 
-  const requestKey = request === null ? null : requestKeyFor(request);
+  const requestKey =
+    request === null
+      ? null
+      : JSON.stringify([assetHostScope, requestKeyFor(request), refreshKey]);
   const latestRequestRef = useRef(request);
   useEffect(() => {
     latestRequestRef.current = request;
@@ -698,7 +719,11 @@ export function useFileAsset(
       requestKeyRef.current = null;
       return;
     }
-    const requestKey = requestKeyFor(normalizedRequest);
+    const requestKey = JSON.stringify([
+      assetHostScope,
+      requestKeyFor(normalizedRequest),
+      refreshKey,
+    ]);
     // Derived inside the effect from ITS request (not the component-scope
     // `renderKind`) so the closure can never pair a stale kind with a new
     // request's callbacks.
@@ -745,7 +770,7 @@ export function useFileAsset(
         });
 
         const key = buildFileAssetCacheKey({
-          hostId,
+          hostScopeKey: assetHostScope,
           source: assetSourceFor(normalizedRequest),
           location: locationFor(normalizedRequest),
           filePath: normalizedRequest.filePath,
@@ -787,7 +812,7 @@ export function useFileAsset(
           key,
           header.mediaType,
           // `key` is already the fully-scoped identity for this asset - it
-          // encodes hostId, source, location and path - so the namespace is
+          // encodes hostScopeKey, source, location and path - so the namespace is
           // all this adds, keeping asset entries disjoint from attachment
           // ones. The fetcher ignores its subject argument entirely: it reads
           // from the subscription opened above, not from a hash.
@@ -881,7 +906,7 @@ export function useFileAsset(
 
     const acquired = acquireSharedAssetSubscription(
       sharedSubscriptionKeyFor(
-        hostId,
+        JSON.stringify([assetHostScope, refreshKey]),
         normalizedRequest,
         focusRefreshGeneration,
       ),
@@ -921,7 +946,13 @@ export function useFileAsset(
       if (!usedForFetch) sharedSubscription.release();
       releaseLease?.();
     };
-  }, [requestKey, streamBinding, hostId, focusRefreshGeneration]);
+  }, [
+    requestKey,
+    streamBinding,
+    assetHostScope,
+    focusRefreshGeneration,
+    refreshKey,
+  ]);
 
   const state =
     resolved !== null && resolved.key === requestKey

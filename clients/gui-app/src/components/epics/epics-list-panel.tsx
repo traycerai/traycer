@@ -1,9 +1,11 @@
 import {
   memo,
+  type FocusEvent,
   type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -48,9 +50,13 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import {
+  useEpicBatchDelete,
+  usePendingDeleteEpicIds,
+} from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
 import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
@@ -70,6 +76,7 @@ import type {
   HistoryWorkspaceRef,
   HistorySortOption,
 } from "@/components/home/data/home-page.data";
+import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   canDeleteHistoryItem,
   canEditHistoryItemTitle,
@@ -78,21 +85,40 @@ import {
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import {
   EpicsListChatHostFilterUnsupported,
-  EpicsListEmpty,
   EpicsListError,
-  EpicsListFilteredEmpty,
-  EpicsListFilteringLoading,
+  EpicsListHostRequiresCloudToList,
   EpicsListLoading,
+  EpicsListNoRows,
   EpicsListShowMore,
   HistoryRowLeadingIcon,
 } from "@/components/epics/epics-list-shared";
+import {
+  historyPinControlLabel,
+  historyPinUnavailableReason,
+  historyPinUnavailableTooltip,
+} from "@/components/epics/history-pin-availability";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
 import { MobileHistoryList } from "@/components/epics/mobile/mobile-history-list";
 import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
-import { useHistoryListKeyboardNav } from "@/components/epics/use-history-list-keyboard-nav";
+import { HistoryDraftsList } from "@/components/epics/history-drafts-list";
+import {
+  ROW_TARGET_SELECTOR,
+  useHistoryListKeyboardNav,
+} from "@/components/epics/use-history-list-keyboard-nav";
+import {
+  closeOpenTooltips,
+  StatusGlyphFocusContext,
+  useStatusGlyphFocusHold,
+} from "@/components/notifications/status-glyph-focus";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
+import {
+  historyRowProvenance,
+  historyRowProvenanceLabel,
+  type HistoryRowProvenance,
+} from "@/components/epics/history-row-provenance";
 import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
@@ -109,9 +135,13 @@ import {
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type {
-  HistorySearchPatch,
-  HistorySearchState,
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import {
+  type HistorySearchPatch,
+  type HistorySearchState,
 } from "@/lib/history-search";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
@@ -128,6 +158,16 @@ const EMPTY_WORKTREES_BY_EPIC: ReadonlyMap<
 const VIEWER_DELETE_TOOLTIP = "Viewers cannot select task for deletion.";
 const NO_DELETE_PERMISSION_TOOLTIP =
   "You don't have permission to delete this task.";
+const PRESERVED_ORPHAN_DELETE_TOOLTIP =
+  "This task was already deleted. Only its unsynced edits remain, so there is nothing left to delete.";
+// States the CONDITION rather than predicting a reconnect, for the same reason
+// the pin tooltip does: the session may be unverified because authn refused the
+// credential, which no amount of waiting fixes - only signing in again does.
+// "Once it is" covers both the transient recovery and the re-sign-in without
+// promising either.
+const DELETE_IN_FLIGHT_TOOLTIP = "This task is being deleted.";
+const UNVERIFIED_SESSION_DELETE_TOOLTIP =
+  "Your sign-in couldn't be confirmed. Deleting this task will work again once it is.";
 const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
 export type EpicsListPanelVariant = "page" | "embedded" | "picker";
@@ -253,6 +293,48 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
   );
 }
 
+interface HistoryPanelView {
+  readonly items: ReadonlyArray<HistoryItem>;
+  readonly worktreesByEpicId: ReadonlyMap<
+    string,
+    readonly WorktreeHostEntryV12[]
+  >;
+  readonly availableRepos: ReadonlyArray<string>;
+  readonly availableWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
+  readonly facets: HistoryFacets | undefined;
+  readonly completeness: ListTasksCompleteness | null;
+}
+
+/** The panel's read of a possibly-absent fetch result, with the no-settled-page
+ * defaults stated once. */
+function historyPanelView(
+  data: HistoryFetchResult | undefined,
+): HistoryPanelView {
+  if (data === undefined) {
+    return {
+      items: EMPTY_ITEMS,
+      worktreesByEpicId: EMPTY_WORKTREES_BY_EPIC,
+      availableRepos: EMPTY_REPOS,
+      availableWorkspaces: EMPTY_WORKSPACES,
+      facets: undefined,
+      completeness: null,
+    };
+  }
+  return {
+    items: data.items,
+    worktreesByEpicId: data.worktreesByEpicId,
+    availableRepos: data.availableRepos,
+    availableWorkspaces: data.availableWorkspaces,
+    facets: data.facets,
+    // `?? null` rather than a straight read: `completeness` is declared
+    // non-optional but arrives absent from partial fixtures, and the body
+    // below dereferences it. The previous `data?.completeness ?? null` carried
+    // that same coercion, so dropping it turned an omitted field into a render
+    // crash.
+    completeness: data.completeness ?? null,
+  };
+}
+
 function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const { variant, onSelectEpic, onOpenItem, historySearch } = props;
   // Destructure the stable `update`/`clear` functions (the hook returns a fresh
@@ -284,6 +366,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    cloudPagePending,
   } = useHistoryQuery({
     search,
     nowMs: props.historyNowMs,
@@ -298,8 +381,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   });
   const refreshHistory = useCallback(() => refetchRef.current(), []);
 
-  const items = data?.items ?? EMPTY_ITEMS;
-  const worktreesByEpicId = data?.worktreesByEpicId ?? EMPTY_WORKTREES_BY_EPIC;
+  // One read of the fetch result rather than six independent `data?.x ?? d`
+  // sites: the empty-state defaults belong together (they all describe "no
+  // settled page yet"), and spreading them through the body made the panel
+  // body's branch count grow with every field the query gained.
+  const view = historyPanelView(data);
+  const items = view.items;
+  const worktreesByEpicId = view.worktreesByEpicId;
   const indicatorEpicIds = useMemo(
     () => items.map((item) => item.epicId),
     [items],
@@ -314,9 +402,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   });
   const { chatHostFilterSupported, chatHostFilterUnsupported } =
     useChatHostFilterGate(hostId, data);
-  const availableRepos = data?.availableRepos ?? EMPTY_REPOS;
-  const availableWorkspaces = data?.availableWorkspaces ?? EMPTY_WORKSPACES;
-  const facets = data?.facets;
+  // `=== true` rather than a straight read, for the reason `historyPanelView`
+  // spells out about `completeness`: this field is declared non-optional but
+  // partial fixtures omit it, and an `undefined` must read as "not refused"
+  // rather than being coerced into the branch that suppresses every row.
+  const hostRequiresCloudToList = data?.hostRequiresCloudToList === true;
+  const availableRepos = view.availableRepos;
+  const availableWorkspaces = view.availableWorkspaces;
+  const facets = view.facets;
 
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -338,9 +431,31 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const handleSetPinned = useCallback(
     (epicId: string, pinned: boolean) => {
-      setPinned({ epicId, pinned });
+      // Resolved HERE rather than widened into `onSetPinned`, which is
+      // declared in seven places across the desktop rows, the mobile row and
+      // both list shells. The row that rendered the control came out of this
+      // same array, so this is the reading it decided availability from, not a
+      // second derivation - and a row missing from it (an id from a stale
+      // control) reads cloud-homed, which lands on the verdict gate.
+      const isLocalHome =
+        items.find((item) => item.epicId === epicId)?.isLocalHome === true;
+      // `hostId: null` - follow the window - and here that is CORRECT by
+      // construction rather than a shortfall. History takes `isLocalHome` from
+      // `useEpicGetTaskContexts`, which dispatches on a SINGLE client
+      // (`useHostClient()`, the window's host) and merges `localHomedTaskIds`
+      // only across that host's own request chunks. So every id in that set is
+      // local-homed ON THE WINDOW'S HOST, and following the window sends the
+      // write to exactly the host that reported the row local-homed.
+      //
+      // An epic local-homed on a DIFFERENT host cannot arrive here down this
+      // arm at all: the window's host does not own it, so it never enters
+      // `localHomedTaskIds`, `isLocalHome` is false, and the row takes the
+      // cloud path every host proxies. The tab strip needs an explicit host
+      // because its readings DO span hosts (one per open tab's session); this
+      // surface's do not.
+      setPinned({ epicId, pinned, isLocalHome, hostId: null });
     },
-    [setPinned],
+    [items, setPinned],
   );
 
   const {
@@ -385,6 +500,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // select/delete/sweep flow, so every entry point into it is gated here
   // rather than in the chrome that merely renders it.
   const selectionEnabled = variant !== "picker";
+  // Deletion of a cloud-backed row is a capability spend on the account, and
+  // History renders under `unverified` where no verdict is held. Read once for
+  // the whole panel and hand it to `canDeleteHistoryItem` at each of the three
+  // admission points below - selection, the row control, and the confirmation.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
 
   // A sweep target is a SET: one id from a row action, the whole selection
   // from the bulk action. The set is load-bearing - a worktree shared between
@@ -407,12 +529,22 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     return item === undefined ? null : historyItemDisplayTitle(item);
   }, [items, sweepEpicIds]);
+  // A Task whose deletion is still in flight is not deletable AGAIN: the
+  // dialog closes at kickoff, so its row renders with its controls back while
+  // the host is still working, and nothing on the wire deduplicates a second
+  // `epic.batchDelete` for the same id. Excluded here so the row action, the
+  // bulk selection and the confirm re-filter all refuse it from one set.
+  const pendingDeleteEpicIds = usePendingDeleteEpicIds();
   const selectableItemIds = useMemo(
     () =>
       items
-        .filter((item) => canDeleteHistoryItem(item))
+        .filter(
+          (item) =>
+            canDeleteHistoryItem(item, cloudAuthorized) &&
+            !pendingDeleteEpicIds.has(item.epicId),
+        )
         .map((item) => item.epicId),
-    [items],
+    [cloudAuthorized, items, pendingDeleteEpicIds],
   );
   const selectableIdSet = useMemo(
     () => new Set(selectableItemIds),
@@ -485,44 +617,71 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   }, []);
 
   const handleConfirmDelete = () => {
+    if (pendingDeleteIds === null) return;
     // The host-wide census is asynchronous. Confirming before it settles lets
-    // the Task deletion start with zero approved worktrees; its rows can then
-    // arrive during the mutation and flash briefly before success closes the
-    // dialog. Hold confirmation until the choices the person is approving are
-    // stable. A disabled query (host unavailable) is not fetching, so cleanup
-    // remains additive and never blocks Task deletion indefinitely.
-    if (pendingDeleteIds === null || worktreeCandidatesFetching) return;
-    const ids = pendingDeleteIds;
+    // the Task deletion start with zero approved worktrees, silently skipping
+    // rows that were about to be offered. Hold confirmation until the choices
+    // the person is approving are stable. A disabled query (host unavailable)
+    // is not fetching, so cleanup remains additive and never blocks Task
+    // deletion indefinitely.
+    if (worktreeCandidatesFetching) return;
+    // The verdict is re-read HERE, from the store, rather than trusted from the
+    // render that opened this dialog. A confirmation is an unbounded pause with
+    // a human in it, and `unverified` arrives asynchronously - a wake, a failed
+    // refresh, an authn outage - so the session that opened the dialog is not
+    // necessarily the session that confirms it. Gating only at selection time
+    // leaves an already-open dialog dispatching `epic.batchDelete` on a bearer
+    // the cloud stopped vouching for a minute ago.
+    //
+    // Re-FILTERED rather than refused wholesale, because the local-home rows in
+    // a mixed selection are still deletable: they reclaim this machine's disk
+    // and spend nothing. A pending id whose row is no longer in `items` cannot
+    // be proven local-home, so it survives only while authorized - the one arm
+    // that has to fail closed, since "unknown row" is exactly what a withdrawn
+    // verdict must not be allowed to wave through.
+    const authorizedNow = authorizesCloudCapability(
+      useAuthStore.getState().status,
+    );
+    const itemsByEpicId = new Map(items.map((item) => [item.epicId, item]));
+    const ids = pendingDeleteIds.filter((id) => {
+      if (pendingDeleteEpicIds.has(id)) return false;
+      const item = itemsByEpicId.get(id);
+      if (item === undefined) return authorizedNow;
+      return canDeleteHistoryItem(item, authorizedNow);
+    });
+    if (ids.length === 0) {
+      closeDeleteDialog();
+      return;
+    }
     const approvedWorktrees = worktreeCandidates
       .filter((candidate) => isWorktreePathChecked(candidate.worktreePath))
       .map((candidate) => ({
         worktreePath: candidate.worktreePath,
         ownerEpicIds: candidate.ownerEpicIds,
       }));
-    deleteMutation.mutate(
-      {
-        ids: [...ids],
-        worktreeCleanup:
-          approvedWorktrees.length > 0
-            ? { candidates: approvedWorktrees }
-            : null,
-      },
-      {
-        onSuccess: () => {
-          setSelectedIds((prev) => {
-            let next: Set<string> | null = null;
-            for (const id of ids) {
-              if (!prev.has(id)) continue;
-              if (next === null) next = new Set(prev);
-              next.delete(id);
-            }
-            return next ?? prev;
-          });
-          setSelectionMode(false);
-          closeDeleteDialog();
-        },
-      },
-    );
+    deleteMutation.mutate({
+      ids: [...ids],
+      worktreeCleanup:
+        approvedWorktrees.length > 0 ? { candidates: approvedWorktrees } : null,
+    });
+    // The mutation cache owns the deletion after kickoff, exactly as the
+    // Sweep flow's kickoff does. Do not hold the person in the modal while the
+    // host deletes the Task(s) and streams the approved worktree cleanup: the
+    // hook's own `onSuccess` / `onError` toast the outcome and prune the rows
+    // wherever they are by then. No per-call callbacks either - TanStack
+    // drops `mutate(vars, { onSuccess })` callbacks on unmount, and this
+    // panel can be left before the host answers.
+    setSelectedIds((prev) => {
+      let next: Set<string> | null = null;
+      for (const id of ids) {
+        if (!prev.has(id)) continue;
+        if (next === null) next = new Set(prev);
+        next.delete(id);
+      }
+      return next ?? prev;
+    });
+    setSelectionMode(false);
+    closeDeleteDialog();
   };
 
   const hasActiveFilters = hasActiveHistoryFilters(search);
@@ -541,8 +700,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // row lands back in the query. At most one of the two search placements is
   // ever mounted, so a single ref covers whichever one is live.
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
-  const keyboardNav = useHistoryListKeyboardNav(searchInputRef, listRef);
+  // The SCROLL CONTAINER, not one `<ul>`: preserved-orphan rows render in a
+  // second list above the ordinary results, and arrow traversal has to cover
+  // both. See `rowTargets`.
+  const rowsScopeRef = useRef<HTMLDivElement>(null);
+  const keyboardNav = useHistoryListKeyboardNav(searchInputRef, rowsScopeRef);
 
   return (
     <TooltipProvider>
@@ -566,6 +728,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             isFetching={isFetching}
             focusOnMount={props.autoFocusSearch}
             placement="page"
+            placeholder="Search by title, repo, branch, or PR"
+            ariaLabel="Search tasks"
           />
         ) : null}
         <PanelChromeBar
@@ -581,6 +745,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                 isFetching={isFetching}
                 focusOnMount={props.autoFocusSearch}
                 placement="toolbar"
+                placeholder="Search by title, repo, branch, or PR"
+                ariaLabel="Search tasks"
               />
             ) : null
           }
@@ -630,37 +796,45 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
-          <HistoryListBody
-            variant={variant}
-            error={error}
-            isPending={isPending}
-            isFetching={isFetching}
-            hasActiveFilters={hasActiveFilters}
-            chatHostFilterUnsupported={chatHostFilterUnsupported}
-            items={items}
-            onRetry={handleRetry}
-            selectionMode={selectionMode}
-            selectionEnabled={selectionEnabled}
-            selectedIds={selectedIds}
-            onToggleSelection={toggleSelection}
-            onRequestDelete={requestDelete}
-            onRequestSweep={requestSweep}
-            onSetPinned={handleSetPinned}
-            pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-            hasNextPage={hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={fetchNextPage}
-            onSelectEpic={onSelectEpic}
-            onOpenItem={onOpenItem}
-            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-            openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
-            worktreesByEpicId={worktreesByEpicId}
-            surfaceHostId={hostId}
-            openEpicIds={openEpicIdSet}
-            listRef={listRef}
-            onRowKeyDown={keyboardNav.onRowKeyDown}
-            onRefresh={refreshHistory}
-          />
+          <>
+            {variant === "picker" ? null : (
+              <HistoryDraftsList hostId={hostId} onBeforeOpen={onSelectEpic} />
+            )}
+            <HistoryListBody
+              variant={variant}
+              error={error}
+              isPending={isPending}
+              isFetching={isFetching}
+              hasActiveFilters={hasActiveFilters}
+              chatHostFilterUnsupported={chatHostFilterUnsupported}
+              hostRequiresCloudToList={hostRequiresCloudToList}
+              items={items}
+              onRetry={handleRetry}
+              selectionMode={selectionMode}
+              selectionEnabled={selectionEnabled}
+              selectedIds={selectedIds}
+              onToggleSelection={toggleSelection}
+              onRequestDelete={requestDelete}
+              onRequestSweep={requestSweep}
+              onSetPinned={handleSetPinned}
+              pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+              hasNextPage={hasNextPage}
+              isFetchingNextPage={isFetchingNextPage}
+              onLoadMore={fetchNextPage}
+              onSelectEpic={onSelectEpic}
+              onOpenItem={onOpenItem}
+              onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+              openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+              worktreesByEpicId={worktreesByEpicId}
+              surfaceHostId={hostId}
+              openEpicIds={openEpicIdSet}
+              completeness={view.completeness}
+              cloudPagePending={cloudPagePending}
+              rowsScopeRef={rowsScopeRef}
+              onRowKeyDown={keyboardNav.onRowKeyDown}
+              onRefresh={refreshHistory}
+            />
+          </>
         </NotificationIndicatorsProvider>
       </section>
       <DeleteTasksDialog
@@ -670,7 +844,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         }}
         title={describeDeleteTitle(pendingDeleteIds, items)}
         description="This action cannot be undone."
-        isPending={deleteMutation.isPending}
         isCheckingWorktrees={worktreeCandidatesFetching}
         onConfirm={handleConfirmDelete}
         candidates={worktreeCandidates}
@@ -744,6 +917,8 @@ interface PanelSearchInputProps {
   readonly isFetching: boolean;
   readonly focusOnMount: boolean;
   readonly placement: "page" | "toolbar";
+  readonly placeholder: string;
+  readonly ariaLabel: string;
 }
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
@@ -789,8 +964,8 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
             props.onChange(event.target.value);
           }}
           onKeyDown={props.onKeyDown}
-          placeholder="Search by title, repo, branch, or PR"
-          aria-label="Search tasks"
+          placeholder={props.placeholder}
+          aria-label={props.ariaLabel}
         />
         {props.value.length > 0 ? (
           <InputGroupAddon align="inline-end">
@@ -1032,6 +1207,15 @@ function describeDeleteTitle(
 
 interface HistoryListBodyProps extends EpicsListBodyProps {
   readonly variant: EpicsListPanelVariant;
+  /**
+   * The DESKTOP scroll container's ref, and only it. Arrow traversal reads
+   * every `[data-history-row-target]` under this node, so it has to be the
+   * element that contains both the preserved-orphan list and the ordinary
+   * results - not either `<ul>`. The mobile branch deliberately does not take
+   * it: `MobileHistoryList` owns its own scrolling element for pull-to-refresh
+   * and has no keyboard-row contract to anchor.
+   */
+  readonly rowsScopeRef: React.RefObject<HTMLDivElement | null>;
   readonly onRefresh: () => Promise<unknown>;
 }
 
@@ -1062,7 +1246,10 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         isFetching={props.isFetching}
         hasActiveFilters={props.hasActiveFilters}
         chatHostFilterUnsupported={props.chatHostFilterUnsupported}
+        hostRequiresCloudToList={props.hostRequiresCloudToList}
         items={props.items}
+        completeness={props.completeness}
+        cloudPagePending={props.cloudPagePending}
         onRetry={props.onRetry}
         selectionMode={props.selectionMode}
         selectedIds={props.selectedIds}
@@ -1078,14 +1265,20 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
       />
     );
   }
+  // Destructured rather than read as `props.rowsScopeRef` in the JSX: the
+  // compiler lint treats a ref reached through `props` during render as a ref
+  // ACCESS and rejects it (and then flags every sibling prop in the same
+  // element). The base component did the same thing with its `listRef`.
+  const { rowsScopeRef } = props;
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto pb-10">
+    <div ref={rowsScopeRef} className="min-h-0 flex-1 overflow-y-auto pb-10">
       <EpicsListBody
         error={props.error}
         isPending={props.isPending}
         isFetching={props.isFetching}
         hasActiveFilters={props.hasActiveFilters}
         chatHostFilterUnsupported={props.chatHostFilterUnsupported}
+        hostRequiresCloudToList={props.hostRequiresCloudToList}
         items={props.items}
         onRetry={props.onRetry}
         selectionMode={props.selectionMode}
@@ -1106,7 +1299,8 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         worktreesByEpicId={props.worktreesByEpicId}
         surfaceHostId={props.surfaceHostId}
         openEpicIds={props.openEpicIds}
-        listRef={props.listRef}
+        completeness={props.completeness}
+        cloudPagePending={props.cloudPagePending}
         onRowKeyDown={props.onRowKeyDown}
       />
     </div>
@@ -1119,6 +1313,12 @@ interface EpicsListBodyProps {
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
   readonly chatHostFilterUnsupported: boolean;
+  /**
+   * Nothing was asked for: no cloud verdict, and a host that cannot list
+   * locally. Rendered ahead of every other empty branch - see
+   * `EpicsListHostRequiresCloudToList` for why each alternative is a lie.
+   */
+  readonly hostRequiresCloudToList: boolean;
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
@@ -1147,8 +1347,10 @@ interface EpicsListBodyProps {
    */
   readonly surfaceHostId: string | null;
   readonly openEpicIds: ReadonlySet<string>;
+  readonly completeness: ListTasksCompleteness | null;
+  /** Local-first cloud revalidation for the first page is still outstanding. */
+  readonly cloudPagePending: boolean;
   /** Anchors the arrow-key traversal: DOM order inside it is row order. */
-  readonly listRef: RefObject<HTMLUListElement | null>;
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
 
@@ -1159,6 +1361,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     isFetching,
     hasActiveFilters,
     chatHostFilterUnsupported,
+    hostRequiresCloudToList,
     items,
     onRetry,
     selectionMode,
@@ -1179,12 +1382,33 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     worktreesByEpicId,
     surfaceHostId,
     openEpicIds,
-    listRef,
+    completeness,
+    cloudPagePending,
     onRowKeyDown,
   } = props;
 
+  // Partitioned, not sorted into place. A preserved orphan is not a task with
+  // an unusual status - the server has deleted it and only the serving host's
+  // never-uploaded edits remain - so mixing it into the ordinary list under
+  // whatever sort happens to be active is how it stayed effectively invisible
+  // even once it was listable. The heading says the task was deleted and its
+  // edits kept; it does not say which side deleted it or which side kept them.
+  const preservedItems = items.filter(
+    (item) => item.isPreservedOrphan === true,
+  );
+  const ordinaryItems =
+    preservedItems.length === 0
+      ? items
+      : items.filter((item) => item.isPreservedOrphan !== true);
+
   if (error !== null) {
     return <EpicsListError error={error} onRetry={onRetry} />;
+  }
+  // Ahead of the spinner, because this state IS the spinner's false positive:
+  // the underlying query never ran, so it reports `pending` forever and every
+  // downstream branch below would describe a load that is not happening.
+  if (hostRequiresCloudToList) {
+    return <EpicsListHostRequiresCloudToList />;
   }
   if (isPending) {
     return <EpicsListLoading />;
@@ -1194,21 +1418,70 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
-  if (items.length === 0 && !hasActiveFilters) {
-    return <EpicsListEmpty />;
+  // Every "there are no rows" reading, decided once for both responsive bodies
+  // in `EpicsListNoRows` - the ordering there is load-bearing.
+  if (items.length === 0) {
+    return (
+      <EpicsListNoRows
+        cloudPagePending={cloudPagePending}
+        cloudPageUnavailable={completeness?.cloudPage === "unavailable"}
+        hasActiveFilters={hasActiveFilters}
+        isFetching={isFetching}
+        onRetry={onRetry}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        onLoadMore={onLoadMore}
+      />
+    );
   }
-  if (items.length === 0 && hasActiveFilters && isFetching) {
-    return <EpicsListFilteringLoading />;
-  }
+  const rowProps = {
+    selectionMode,
+    selectionEnabled,
+    selectedIds,
+    onToggleSelection,
+    onRequestDelete,
+    onRequestSweep,
+    onSetPinned,
+    pendingSetPinnedEpicIds,
+    onSelectEpic,
+    onOpenItem,
+    onOpenInNewWindow,
+    openInNewWindowAvailable,
+    worktreesByEpicId,
+    openEpicIds,
+  };
   return (
     <>
-      {items.length > 0 ? (
-        <ul
-          ref={listRef}
-          className="flex flex-col gap-2"
-          data-testid="epics-list-rows"
+      {preservedItems.length > 0 ? (
+        <section
+          className="mb-3 flex flex-col gap-2"
+          data-testid="epics-list-preserved-section"
         >
-          {items.map((item) => (
+          <h2 className="text-ui-xs font-medium text-destructive">
+            Deleted &mdash; unsynced edits kept
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {preservedItems.map((item) => (
+              <EpicsListRow
+                key={item.id}
+                item={item}
+                {...rowProps}
+                surfaceHostId={surfaceHostId}
+                onRowKeyDown={onRowKeyDown}
+                isSelected={selectedIds.has(item.epicId)}
+                isPinPending={pendingSetPinnedEpicIds.has(item.epicId)}
+                worktrees={
+                  worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES
+                }
+                isOpen={openEpicIds.has(item.epicId)}
+              />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {ordinaryItems.length > 0 ? (
+        <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
+          {ordinaryItems.map((item) => (
             <EpicsListRow
               key={item.id}
               item={item}
@@ -1231,9 +1504,13 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
             />
           ))}
         </ul>
-      ) : (
-        <EpicsListFilteredEmpty />
-      )}
+      ) : null}
+      {/*
+        No "no tasks match" here: zero rows returned above through
+        `EpicsListNoRows`, and a page whose only rows are preserved orphans is
+        not an empty filter result - telling the person "no tasks match" over a
+        section they can see would be the same untruth from the other direction.
+      */}
       <EpicsListShowMore
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
@@ -1267,11 +1544,24 @@ interface EpicsListRowProps {
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
 
+/**
+ * The row's trailing line: "updated …", the PR pills, and - for a coarse
+ * pointer only - the provenance label the phone row always shows.
+ *
+ * The responsive switch to the phone list is WIDTH-only
+ * (`use-mobile-viewport.ts`), so a landscape tablet or a touch-only laptop at
+ * md+ gets this desktop row, where the status glyph's sentence is a hover
+ * tooltip and a tap on the glyph forwards to the row target and opens the
+ * task. `pointer-coarse:` is the input-modality half the width switch lacks:
+ * such a person sees "Not synced" / "Deleted, edits kept" beside the
+ * timestamp, exactly as on the phone, and a fine pointer keeps the tooltip.
+ */
 function HistoryRowTrailingMetadata(props: {
   readonly epicId: string;
   readonly selectionMode: boolean;
   readonly updatedLabel: string;
   readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly provenance: HistoryRowProvenance | null;
 }): ReactNode {
   const hasPrPills =
     !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
@@ -1290,6 +1580,18 @@ function HistoryRowTrailingMetadata(props: {
         )}
       >
         updated {props.updatedLabel}
+        {props.provenance === null ? null : (
+          <span
+            data-testid={`epics-list-row-coarse-provenance-label-${props.provenance}`}
+            className={cn(
+              "hidden pointer-coarse:inline",
+              props.provenance === "preserved-orphan" && "text-destructive",
+            )}
+          >
+            {" · "}
+            {historyRowProvenanceLabel(props.provenance)}
+          </span>
+        )}
       </span>
       {hasPrPills ? (
         <WorktreePrPills
@@ -1321,6 +1623,13 @@ function HistoryOpenBadge(props: {
   );
 }
 
+/**
+ * Marks a row activation target that opens a tooltip of its own on focus (the
+ * selection-mode toggle of a row that cannot be selected). `onRowFocus` does
+ * not hold a status mark's tooltip open beside it - see `HistoryRowStatusSlot`.
+ */
+const ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE = "data-history-row-target-own-tooltip";
+
 const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const {
     item,
@@ -1351,13 +1660,22 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     onRequestSweep,
   });
   const displayTitle = historyItemDisplayTitle(item);
-  const canEditTitle = canEditHistoryItemTitle(item);
-  const canDeleteItem = canDeleteHistoryItem(item);
+  // The same verdict the panel gates selection on, read here too rather than
+  // threaded down as a prop: this row renders for a picker variant that never
+  // computes the panel's copy, and a control that admits on a rule its own
+  // panel does not is how the class reopens at a second surface.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canEditTitle = canEditHistoryItemTitle(item, cloudAuthorized);
+  const { canDeleteItem, deleteDisabledTooltip } = useHistoryRowDeleteGate(
+    item,
+    cloudAuthorized,
+  );
   const selectionDisabled = historySelectionDisabled(
     selectionMode,
     canDeleteItem,
   );
-  const deleteDisabledTooltip = historyDeleteDisabledTooltip(item);
   const { mutate: renameEpicTitle, isPending: isRenamePending } =
     useEpicUpdateTitle();
   const openHistoryItem = useHistoryOpenItem({ onSelectEpic, onOpenItem });
@@ -1373,6 +1691,16 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const commitEpicTitle = useCallback(
     (nextTitle: string) => {
       if (isPhase) return;
+      // Re-checked at COMMIT, not only at admission: a rename started before
+      // a demotion would otherwise land on the retained credential after the
+      // verdict was withdrawn. Same exemption as the gate - a local-home row
+      // spends nothing.
+      if (
+        item.isLocalHome !== true &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       renameEpicTitle({
         epicDelta: {
           id: item.epicId,
@@ -1381,7 +1709,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         },
       });
     },
-    [isPhase, item.epicId, renameEpicTitle],
+    [isPhase, item.epicId, item.isLocalHome, renameEpicTitle],
   );
   const {
     isEditing: isRenaming,
@@ -1422,6 +1750,81 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     if (!canDeleteItem) return;
     onToggleSelection(item.epicId);
   };
+  // Names the leading status slot so both row targets can be described by
+  // whatever status mark is showing - see `HistoryRowStatusSlot`.
+  const statusDescriptionId = useId();
+  const importedDescriptionId = useId();
+  // Both status slots describe the row targets; only the leading one holds
+  // its tooltip open on keyboard focus (see `HistoryRowStatusSlot`).
+  const rowDescribedBy = `${statusDescriptionId} ${importedDescriptionId}`;
+  // Keyboard focus on the row's activation target holds the leading status
+  // glyph's tooltip open (`StatusGlyphFocusContext`): the target is an
+  // overlay, the glyphs are deliberately not tab stops, and `aria-describedby`
+  // puts the sentence in the accessibility tree and nowhere on screen. "Keyboard" is
+  // the decision `:focus-visible` makes, taken here by the same rule - a focus
+  // that arrives during a pointer press is pointer focus, any other is
+  // keyboard - because jsdom matches nothing for `:focus-visible` and the
+  // behaviour would otherwise be untestable.
+  const pointerPressRef = useRef(false);
+  // A fresh id per keyboard-focus session, `null` while there is none: the
+  // slot remembers an Escape against the id, so the hold stays dismissed
+  // until focus leaves and returns (`StatusGlyphFocusContext`).
+  const focusSessionRef = useRef(0);
+  const [rowFocusSession, setRowFocusSession] = useState<number | null>(null);
+  // The press is forgotten on release ANYWHERE, not only over the row: a
+  // press that starts here and ends outside fires no row handler, and a ref
+  // left `true` would classify the next keyboard focus as a click. The focus
+  // that reads the ref also consumes it, for the release that never arrives
+  // at the document either (a pointer let go over a webview guest). The
+  // pending release listeners are the row's, so they leave with it: a row
+  // unmounted mid-press (the list re-sorting under a drag) must not leave a
+  // one-shot listener on the document to fire at some later release.
+  const forgetPointerPressRef = useRef<(() => void) | null>(null);
+  const rememberPointerPress = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      forgetPointerPressRef.current?.();
+      pointerPressRef.current = true;
+      const ownerDocument = event.currentTarget.ownerDocument;
+      const forgetPointerPress = () => {
+        pointerPressRef.current = false;
+        forgetPointerPressRef.current = null;
+        ownerDocument.removeEventListener("pointerup", forgetPointerPress);
+        ownerDocument.removeEventListener("pointercancel", forgetPointerPress);
+      };
+      forgetPointerPressRef.current = forgetPointerPress;
+      ownerDocument.addEventListener("pointerup", forgetPointerPress);
+      ownerDocument.addEventListener("pointercancel", forgetPointerPress);
+    },
+    [],
+  );
+  useEffect(
+    () => () => {
+      forgetPointerPressRef.current?.();
+    },
+    [],
+  );
+  const onRowFocus = useCallback((event: FocusEvent<HTMLDivElement>) => {
+    const byPointer = pointerPressRef.current;
+    pointerPressRef.current = false;
+    // A target that carries its own tooltip (the selection-mode toggle of a
+    // row that cannot be selected) explains itself on focus, and a second
+    // held-open tooltip beside it would overlap it.
+    const keyboardFocused =
+      !byPointer &&
+      event.target.matches(ROW_TARGET_SELECTOR) &&
+      !event.target.hasAttribute(ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE);
+    focusSessionRef.current += 1;
+    // A hold opens its tooltip through a controlled `open`, which Radix does
+    // not count as an opening, so a tooltip still up from a hover (a row
+    // control's, or a glyph's in another row) would stay beside the held
+    // one. Send Radix's own exclusivity signal first, so the hold arrives
+    // alone - the same rule a hover-opened tooltip applies to the others.
+    if (keyboardFocused) closeOpenTooltips(event.currentTarget.ownerDocument);
+    setRowFocusSession(keyboardFocused ? focusSessionRef.current : null);
+  }, []);
+  const onRowBlur = useCallback(() => {
+    setRowFocusSession(null);
+  }, []);
   const openEpicRow = (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     if (event.ctrlKey || event.metaKey) {
@@ -1429,6 +1832,21 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       return;
     }
     openEpic();
+  };
+  // A middle button arrives as `auxclick`, never `click` (`on-middle-click.ts`),
+  // and the app's convention for it is a background open (`tile-open/intent.ts`
+  // maps `button === 1` to `background`). Without this the anchor's own
+  // default ran instead - a window open the desktop shell denies. A phase has
+  // no background open (see `backgroundMenuItem`) and opens in place.
+  const openEpicRowInBackground = (
+    event: React.MouseEvent<HTMLAnchorElement>,
+  ) => {
+    event.preventDefault();
+    if (isPhase) {
+      openEpic();
+      return;
+    }
+    openInBackground();
   };
   const blockUnavailableDeleteAction = useCallback(
     (event: React.MouseEvent<HTMLElement>) => {
@@ -1498,12 +1916,14 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       item={item}
       canDeleteItem={canDeleteItem}
       deleteDisabledTooltip={deleteDisabledTooltip}
+      describedById={rowDescribedBy}
       onToggleSelection={toggleEpicSelection}
       onBlockUnavailableDelete={blockUnavailableDeleteAction}
       onRowKeyDown={onRowKeyDown}
     />
   ) : (
     <Link
+      aria-describedby={rowDescribedBy}
       to="/epics/$epicId/$tabId"
       params={{ epicId: item.epicId, tabId: linkTabId }}
       search={{
@@ -1515,6 +1935,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         focusTileInstanceId: undefined,
       }}
       onClick={openEpicRow}
+      onAuxClick={onMiddleClick(openEpicRowInBackground)}
       onKeyDown={onRowKeyDown}
       aria-label={`Open task ${displayTitle}`}
       data-history-row-target=""
@@ -1534,6 +1955,9 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     <div
       data-testid="epics-list-row-card"
       data-selection-disabled={selectionDisabled ? "true" : undefined}
+      onPointerDown={rememberPointerPress}
+      onFocus={onRowFocus}
+      onBlur={onRowBlur}
       className={historyRowCardClassName({
         selectionDisabled,
         selectedForDelete: historySelectedForDelete({
@@ -1550,7 +1974,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           "updated ..." label squeezes the title to nothing at phone width. */}
       <div className={historyRowContentClassName(rowSweep.isVisible)}>
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
-          <HistoryRowLeadingIcon item={item} />
+          <HistoryRowStatusSlot
+            id={statusDescriptionId}
+            rowFocusSession={rowFocusSession}
+          >
+            <HistoryRowLeadingIcon item={item} />
+          </HistoryRowStatusSlot>
           {isRenaming ? (
             <input
               {...renameInputProps}
@@ -1564,7 +1993,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
               <span className="truncate font-medium text-foreground">
                 {displayTitle}
               </span>
-              <ImportedUnseenDot epicId={item.epicId} />
+              <HistoryRowStatusSlot
+                id={importedDescriptionId}
+                rowFocusSession={null}
+              >
+                <ImportedUnseenDot epicId={item.epicId} />
+              </HistoryRowStatusSlot>
               <HistoryOpenBadge epicId={item.epicId} isOpen={isOpen} />
               {pinControl}
               {titleEditControl}
@@ -1576,6 +2010,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           selectionMode={selectionMode}
           updatedLabel={item.updatedLabel}
           worktrees={worktrees}
+          provenance={historyRowProvenance(item)}
         />
       </div>
       <HistoryRowSweepControl sweep={rowSweep} displayTitle={displayTitle} />
@@ -1637,17 +2072,74 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   );
 });
 
+/** Three visual states: permanently unavailable, pinned, and the
+ * hover-revealed default. */
+/**
+ * The three states composed rather than concatenated.
+ *
+ * Unavailable is deliberately the arm that gets NEITHER of main's touch
+ * affordances: no `active:press-scrim`, because press feedback tells the user
+ * the tap landed on something that acts, and no `pointer-coarse:opacity-100`,
+ * because permanently revealing a control that only ever refuses is an
+ * invitation to tap it. It reads as muted-and-inert, which is what it is; the
+ * tooltip carries the reason.
+ */
+function historyPinClassName(
+  pinUnavailable: boolean,
+  isPinned: boolean,
+): string {
+  if (pinUnavailable) return "cursor-default text-muted-foreground opacity-40";
+  if (isPinned) return "text-primary opacity-100 active:press-scrim";
+  // Touch has no hover to reveal the control, and tapping the row navigates -
+  // so on coarse pointers an ACTIONABLE pin stays visible.
+  return "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100 pointer-coarse:opacity-100 active:press-scrim";
+}
+
 function HistoryPinControl(props: {
   readonly item: HistoryItem;
   readonly isPending: boolean;
   readonly selectionMode: boolean;
   readonly onSetPinned: (epicId: string, pinned: boolean) => void;
 }): ReactNode {
+  // Ahead of the early return: this is a hook, and the return below is
+  // conditional on props.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  // Also ahead of the early return, and for the same reason.
+  //
+  // `null` - the window's host - which is the host this surface's local-home
+  // readings come from in the first place; see the dispatch handler above for
+  // why that makes gate and dispatch name the same machine here.
+  const localHomePinSupported = useEpicPinLocalHomeSupported(null);
   if (props.selectionMode || props.item.taskType === "phase") return null;
   const displayTitle = historyItemDisplayTitle(props.item);
-  const label = props.item.isPinned
-    ? `Unpin ${displayTitle} from top`
-    : `Pin ${displayTitle} to top`;
+  const unavailableReason = historyPinUnavailableReason(
+    props.item,
+    cloudAuthorized,
+    localHomePinSupported,
+  );
+  const pinUnavailable = unavailableReason !== null;
+  // "…is available after cloud sync" promised a sync that, for a free-tier
+  // account, never comes - and `s5-status-truthfulness` folds
+  // `s4-promotion-task-list-invalidation` in here for the sharper version of
+  // the same problem: a STALE `home: "local"` row keeps making that promise
+  // about an epic that is already in the cloud, and pin is one of the three
+  // mutations that would have cleared the cache, so it cannot self-heal by
+  // being used. The copy now states the CONDITION (this epic is on this
+  // device) rather than predicting an event, so it is true in both cases.
+  //
+  // The staleness itself is the list-invalidation fix and is not repaired
+  // here; this stops the copy from lying while it lasts.
+  const label = historyPinControlLabel({
+    displayTitle,
+    unavailableReason,
+    isPinned: props.item.isPinned,
+  });
+  const unavailableTooltip =
+    unavailableReason === null
+      ? null
+      : historyPinUnavailableTooltip(unavailableReason);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -1656,16 +2148,28 @@ function HistoryPinControl(props: {
           aria-label={label}
           aria-pressed={props.item.isPinned}
           data-testid="epics-list-row-pin"
+          data-local-home-pin-unavailable={pinUnavailable || undefined}
+          // `aria-disabled`, NOT `disabled`, for the PERMANENT unavailability:
+          // a natively disabled control is unfocusable and fires no pointer
+          // events, so the tooltip that carries the only explanation of why
+          // pinning is off could be reached with a mouse hover and by nothing
+          // else. `disabled` is kept for the transient in-flight window, where
+          // there is nothing to explain. The mutation stays blocked by the
+          // shared admission guard in `onClick`, which keyboard activation also
+          // routes through.
+          aria-disabled={pinUnavailable || undefined}
           disabled={props.isPending}
           className={cn(
-            "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-foreground/5 active:press-scrim focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
-            props.item.isPinned
-              ? "text-primary opacity-100"
-              : // Touch has no hover to reveal the control, and tapping the row
-                // navigates - so on coarse pointers it stays visible.
-                "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100 pointer-coarse:opacity-100",
+            // `active:press-scrim` is NOT here, though main had it in this
+            // static string: press feedback is a promise that the tap does
+            // something, and on the unavailable control it does not. It moves
+            // into the two actionable arms of `historyPinClassName` instead,
+            // which is the composition this merge owes both sides.
+            "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-foreground/5 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
+            historyPinClassName(pinUnavailable, props.item.isPinned),
           )}
           onClick={() => {
+            if (pinUnavailable) return;
             props.onSetPinned(props.item.epicId, !props.item.isPinned);
           }}
         >
@@ -1677,7 +2181,7 @@ function HistoryPinControl(props: {
           />
         </button>
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent>{unavailableTooltip ?? label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -1689,7 +2193,50 @@ function historySelectionDisabled(
   return selectionMode && !canDeleteItem;
 }
 
-function historyDeleteDisabledTooltip(item: HistoryItem): string {
+/**
+ * The row's delete admission plus the reason shown when it is refused. The
+ * in-flight arm sits ahead of the static verdict: deletion runs in the
+ * background and the dialog closes at kickoff, so this row is back on screen
+ * before the host has answered, and a second `epic.batchDelete` for the same
+ * id is not deduplicated anywhere on the wire.
+ */
+function useHistoryRowDeleteGate(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): {
+  readonly canDeleteItem: boolean;
+  readonly deleteDisabledTooltip: string;
+} {
+  const isDeleteInFlight = usePendingDeleteEpicIds().has(item.epicId);
+  if (isDeleteInFlight) {
+    return {
+      canDeleteItem: false,
+      deleteDisabledTooltip: DELETE_IN_FLIGHT_TOOLTIP,
+    };
+  }
+  return {
+    canDeleteItem: canDeleteHistoryItem(item, cloudAuthorized),
+    deleteDisabledTooltip: historyDeleteDisabledTooltip(item, cloudAuthorized),
+  };
+}
+
+function historyDeleteDisabledTooltip(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): string {
+  // Ahead of the role arms: a preserved orphan can carry an `owner` role and
+  // still be undeletable, so a role-derived reason would read as a permissions
+  // problem the user could fix by asking someone.
+  if (item.isPreservedOrphan === true) return PRESERVED_ORPHAN_DELETE_TOOLTIP;
+  // Also ahead of them, and for the sharper version of that reason: an
+  // unverified session leaves every role on screen exactly as it was, so a
+  // withdrawn verdict reported as "you don't have permission" sends the user to
+  // ask a collaborator for access they already hold. Behind the orphan arm
+  // though - that row could never be deleted, verdict or not, and naming the
+  // recoverable condition for it would be the same misdirection in reverse.
+  if (!cloudAuthorized && item.isLocalHome !== true) {
+    return UNVERIFIED_SESSION_DELETE_TOOLTIP;
+  }
   if (item.permissionRole === "viewer") return VIEWER_DELETE_TOOLTIP;
   return NO_DELETE_PERMISSION_TOOLTIP;
 }
@@ -1839,6 +2386,120 @@ function HistorySweepMenuItem(props: {
   );
 }
 
+/**
+ * The hover target for the row's status glyph.
+ *
+ * `historyRowContentClassName` makes the whole content layer
+ * `pointer-events-none` so the row's overlay link underneath receives every
+ * click, and each control that wants the pointer opts back in with
+ * `pointer-events-auto` (pin, title edit, delete, PR pills). The status
+ * marks never did, so none of their tooltips - the running spinner's, the
+ * attention tones', the imported-unseen dot's, and now the provenance dot's -
+ * could open on desktop: the pointer fell straight through to the link.
+ * Opting in restores the hover for the whole class at once; every status mark
+ * on the row renders inside one of these.
+ *
+ * Opting in also means a click on the glyph would stop at the glyph, and the
+ * glyph is not a control - it is a 14px status mark that used to be part of
+ * the row's click surface. So the click is handed on to the row's activation
+ * target with its modifiers intact, which is what keeps ctrl/cmd-click on the
+ * spinner toggling selection exactly as it did through the overlay. Dispatched
+ * as a real DOM event of the same type (`click`, or `auxclick` for a middle
+ * button, which the row link turns into a background open) rather than
+ * calling the row's handler directly, so this slot needs to know nothing
+ * about what activation means - the overlay link and the selection-mode
+ * toggle both carry `data-history-row-target`.
+ *
+ * The marks stay non-focusable - a tab stop on every row for a
+ * non-interactive mark would cost keyboard users a keypress per row - and
+ * keyboard users reach the sentence through the row instead: the leading
+ * slot carries an `id`, and both row activation targets (the overlay link and
+ * the selection-mode toggle) name it in `aria-describedby`. The description
+ * is computed from the slot's contents, so it is whatever status mark is
+ * showing - the running spinner's title, an attention tone's, or the
+ * provenance dot's - and empty for the plain layers glyph, which is
+ * `aria-hidden`. Both slots carry an id: the imported-unseen slot is described
+ * too, so its sentence is heard even though it is never held open on screen.
+ *
+ * That description is heard, not seen. For a sighted keyboard user the row
+ * also holds ONE tooltip open (`StatusGlyphFocusContext`, see the row's
+ * `onRowFocus`): while either activation target has keyboard focus, the mark
+ * in the slot given the row's `rowFocusSession` shows its sentence over the
+ * glyph without the glyph becoming a tab stop, until Escape dismisses it for
+ * that focus session. The dismissal is the SLOT's state
+ * (`useStatusGlyphFocusHold`), not the mark's: the mark under the slot is
+ * swapped as the task's state moves (a running spinner becomes a completion
+ * mark), and a dismissal kept in the mark would leave with it, so the next
+ * mark would open uninvited in the same focus session. One slot per row, on
+ * purpose - Radix keeps hover tooltips to one at a time through a signal a
+ * controlled open never sends (the row sends it itself before starting a
+ * hold, see `onRowFocus`), so two held-open marks would be two overlapping
+ * portals. The leading slot is the one; the imported-unseen slot is heard
+ * through `aria-describedby` like the rest and stays a quiet dot on screen,
+ * which is the unread idiom.
+ */
+function HistoryRowStatusSlot(props: {
+  readonly id: string;
+  /**
+   * The row's keyboard-focus session, for the one slot per row that holds
+   * its tooltip open on it; `null` for a slot that never does.
+   */
+  readonly rowFocusSession: number | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  const focusHold = useStatusGlyphFocusHold(props.rowFocusSession);
+  const forwardClickToRow = useCallback(
+    (event: React.MouseEvent<HTMLSpanElement>) => {
+      // `auxclick` is forwarded for the middle button only: the right button
+      // belongs to the context menu, which opens on `contextmenu` and needs
+      // no forwarding.
+      if (event.type === "auxclick" && event.button !== 1) return;
+      const target = event.currentTarget
+        .closest("li")
+        ?.querySelector<HTMLElement>(ROW_TARGET_SELECTOR);
+      if (target === null || target === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      target.dispatchEvent(
+        new MouseEvent(event.type, {
+          bubbles: true,
+          cancelable: true,
+          button: event.button,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+          altKey: event.altKey,
+        }),
+      );
+    },
+    [],
+  );
+  return (
+    // The handler is click FORWARDING, not an interaction of its own, which
+    // is why this is a presentational span and not a button: a button would
+    // announce itself and take focus, and the thing it activates already has
+    // both. `role="presentation"` states exactly that - the span contributes
+    // no semantics of its own; the status child keeps its `role="status"`.
+    // `empty:hidden`: a mark that renders nothing (the imported-unseen dot on
+    // a task with no unseen import) must not leave an empty flex item behind,
+    // or the parent's `gap` puts a stray space between the title and the next
+    // control. Decided by the DOM rather than by re-reading each mark's
+    // condition here, so a new mark cannot get the gap wrong.
+    <StatusGlyphFocusContext.Provider value={focusHold}>
+      <span
+        id={props.id}
+        role="presentation"
+        className="pointer-events-auto inline-flex shrink-0 items-center empty:hidden"
+        data-testid="epics-list-row-status-slot"
+        onClick={forwardClickToRow}
+        onAuxClick={forwardClickToRow}
+      >
+        {props.children}
+      </span>
+    </StatusGlyphFocusContext.Provider>
+  );
+}
+
 function historyRowContentClassName(hasSweepControl: boolean): string {
   return cn(
     "pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm",
@@ -1934,6 +2595,9 @@ function HistorySelectionOverlay(props: {
   readonly item: HistoryItem;
   readonly canDeleteItem: boolean;
   readonly deleteDisabledTooltip: string;
+  /** The row's status slot, so the toggle is described by the same sentence
+   * the overlay link is - see `HistoryRowStatusSlot`. */
+  readonly describedById: string;
   readonly onToggleSelection: () => void;
   readonly onBlockUnavailableDelete: (
     event: React.MouseEvent<HTMLElement>,
@@ -1945,6 +2609,7 @@ function HistorySelectionOverlay(props: {
       <button
         type="button"
         aria-label={`Toggle selection for ${historyItemDisplayTitle(props.item)}`}
+        aria-describedby={props.describedById}
         data-history-row-target=""
         className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         onClick={props.onToggleSelection}
@@ -1959,7 +2624,9 @@ function HistorySelectionOverlay(props: {
           type="button"
           aria-disabled="true"
           aria-label={`Cannot select ${historyItemDisplayTitle(props.item)}`}
+          aria-describedby={props.describedById}
           data-history-row-target=""
+          {...{ [ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE]: "" }}
           className="absolute inset-0 cursor-not-allowed rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={props.onBlockUnavailableDelete}
           onKeyDown={props.onRowKeyDown}

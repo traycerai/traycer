@@ -61,12 +61,12 @@ function ThemeContrastStatus({ draft }: { draft: ThemeDefinition }) {
   const hasTransparency = (["background", "foreground"] as const).some(
     (token) => colorFor(draft, token).slice(7) !== "ff",
   );
-  let message = `Text contrast ${contrast.toFixed(2)}:1. Increase text or background contrast for easier reading.`;
+  let message = `Main text contrast ${contrast.toFixed(2)}:1. Increase text or background contrast for easier reading.`;
   if (contrast >= 4.5)
-    message = `Text contrast ${contrast.toFixed(2)}:1. Meets the 4.5:1 target for normal text.`;
+    message = `Main text contrast ${contrast.toFixed(2)}:1. Meets the 4.5:1 target for normal text.`;
   if (hasTransparency)
     message =
-      "These colors use transparency. Text contrast depends on the underlying surface.";
+      "These colors use transparency. Main text contrast depends on the underlying surface.";
   return (
     <p
       role="status"
@@ -77,7 +77,7 @@ function ThemeContrastStatus({ draft }: { draft: ThemeDefinition }) {
           : "text-amber-200",
       )}
     >
-      {message}
+      {message} Only the main text and background colors are checked.
     </p>
   );
 }
@@ -97,6 +97,7 @@ function ColorField({
   onChange: (token: ThemeToken, value: string) => void;
   onSelect: (token: ThemeToken) => void;
 }) {
+  const errorId = useId();
   const [input, setInput] = useState({ rendered: color, text: color });
   if (input.rendered !== color) setInput({ rendered: color, text: color });
   const text = input.rendered === color ? input.text : color;
@@ -127,6 +128,7 @@ function ColorField({
       <Input
         aria-label={`${label} color value`}
         aria-invalid={invalid}
+        aria-describedby={invalid ? errorId : undefined}
         value={text}
         className="h-7 min-w-0 border-white/10 bg-transparent font-mono text-xs"
         onChange={(event) => {
@@ -135,10 +137,16 @@ function ColorField({
           setInput({ rendered: normalized ?? color, text: value });
           if (normalized) onChange(token, value);
         }}
-        onBlur={() => {
-          if (invalid) setInput({ rendered: color, text: color });
-        }}
       />
+      {invalid ? (
+        <p
+          id={errorId}
+          role="alert"
+          className="col-span-full text-xs text-rose-300"
+        >
+          Enter a color such as #8AB4F8. This value has not been applied.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -442,7 +450,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
             }}
           >
             <MousePointer2 />
-            {inspecting ? "Cancel inspect" : "Inspect"}
+            {inspecting ? "Cancel picking" : "Pick from interface"}
           </Button>
           <Button
             variant="ghost"
@@ -466,6 +474,10 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
         {!minimized && (
           <>
             <div className="min-h-0 space-y-3 overflow-y-auto p-3">
+              <p className="text-xs leading-relaxed text-[#bec6b5]">
+                Changes preview immediately. Save theme keeps and selects your
+                changes; Cancel restores your previous theme.
+              </p>
               <label
                 htmlFor={`${fieldId}-name`}
                 className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-center gap-3 text-sm"
@@ -506,8 +518,8 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
               </div>
               {copiedPair ? (
                 <p className="text-xs text-[#bec6b5]">
-                  This variant is now an independent light and dark theme. Its
-                  source pack is unchanged.
+                  You’re editing a copy with light and dark versions. The
+                  imported theme is unchanged.
                 </p>
               ) : null}
               <div className="space-y-2">
@@ -529,7 +541,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                       setQuery("");
                     }}
                   >
-                    Palette
+                    Basic colors
                   </Button>
                   <Button
                     variant="ghost"
@@ -544,6 +556,13 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                     All colors
                   </Button>
                 </div>
+                {!advanced ? (
+                  <p className="text-xs leading-relaxed text-[#bec6b5]">
+                    Changing either basic color regenerates the other theme
+                    colors and replaces individual color edits. Use All colors
+                    to edit one color at a time.
+                  </p>
+                ) : null}
                 {advanced ? (
                   <Input
                     aria-label="Filter theme colors"
@@ -561,19 +580,15 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                   tokens.length > 0 && (
                     <section key={group} className="space-y-1">
                       {advanced ? (
-                        <h4 className="pb-1 text-xs font-medium text-[#a6b19b]">
+                        <h3 className="pb-1 text-xs font-medium text-[#a6b19b]">
                           {group}
-                        </h4>
+                        </h3>
                       ) : null}
                       {tokens.map((token) => (
                         <ColorField
                           key={`${draft.appearance}:${token.key}`}
                           token={token.key}
-                          label={
-                            !advanced && token.key === "primary"
-                              ? "Accent"
-                              : token.label
-                          }
+                          label={token.label}
                           color={colorFor(draft, token.key)}
                           selected={selectedToken === token.key}
                           onChange={updateColor}
@@ -595,7 +610,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                 htmlFor={`${fieldId}-artwork`}
                 className="flex items-center justify-between gap-3 text-sm"
               >
-                Sidebar artwork
+                Show sidebar artwork for this theme
                 <Switch
                   id={`${fieldId}-artwork`}
                   checked={draft.sidebarArtwork ?? false}

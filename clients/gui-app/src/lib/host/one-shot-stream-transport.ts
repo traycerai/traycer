@@ -4,6 +4,10 @@ import type { HostEndpointProvider } from "@traycer-clients/shared/host-transpor
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { appLogger } from "@/lib/logger";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 /**
  * Builds a module-ownable host stream transport for a ONE-SHOT, side-effecting
@@ -43,6 +47,8 @@ export function openOneShotStreamTransport(params: {
     target: params.target,
     endpoint: params.endpoint,
     bearer: params.bearer,
+    cloudAuthorized: () =>
+      authorizesCloudCapability(useAuthStore.getState().status),
     authnBaseUrl: params.authnBaseUrl,
     auth: null,
     userId: params.userId,

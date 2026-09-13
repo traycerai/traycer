@@ -3,18 +3,34 @@ import {
   type ProviderId,
   type ProvidersAwaitLoginResponse,
 } from "@traycer/protocol/host/provider-schemas";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ProviderList } from "@/components/providers/provider-list";
 import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Switch } from "@/components/ui/switch";
-import { providerSignInUnavailableHint } from "@/components/providers/provider-signin-availability";
+import {
+  providerSignInUnavailableHint,
+  providerStartLoginFailureMessage,
+} from "@/components/providers/provider-signin-availability";
+import { CodePasteField } from "@/components/settings/panels/code-paste-field";
+import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
+import type { ProviderProfileLoginFlowCodePaste } from "@/components/settings/panels/use-provider-profile-login-flow";
+import {
+  openBrowserLabel,
+  useAutoOpenLoginUrl,
+} from "@/components/settings/panels/use-auto-open-login-url";
+import { waitingStepCopy } from "@/components/settings/panels/waiting-step-copy";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
+import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
+import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { useOpenLink } from "@/lib/links/open-link";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
@@ -278,6 +294,163 @@ function resolveAttemptAuthPhase(input: {
   };
 }
 
+const ONBOARDING_CODE_PASTE_KEEPALIVE_MS = 60_000;
+const ONBOARDING_COPY_RESET_MS = 1600;
+
+function useOnboardingWaitingCodePaste(args: {
+  readonly providerId: ProviderId;
+  readonly loginCapability: ProviderCliState["loginCapability"];
+  readonly loginUrl: string | null;
+  readonly userCode: string | null;
+}): ProviderProfileLoginFlowCodePaste {
+  const { providerId, loginCapability, loginUrl, userCode } = args;
+  const submitLoginCode = useProvidersSubmitLoginCode();
+  const touchLogin = useProvidersTouchLogin();
+  const codePasteEnabled = (loginCapability?.codePaste ?? null) !== null;
+  const touchLoginMutate = touchLogin.mutate;
+  const attemptKey = `${loginUrl ?? ""}|${userCode ?? ""}`;
+  const [acceptedAttempt, setAcceptedAttempt] = useState<string | null>(null);
+  useEffect(() => {
+    if (!codePasteEnabled || userCode !== null) return;
+    const intervalId = window.setInterval(() => {
+      touchLoginMutate({ providerId, profileId: null });
+    }, ONBOARDING_CODE_PASTE_KEEPALIVE_MS);
+    return () => window.clearInterval(intervalId);
+  }, [codePasteEnabled, providerId, touchLoginMutate, userCode]);
+  let phase: ProviderProfileLoginFlowCodePaste["phase"] = "idle";
+  if (submitLoginCode.isPending) phase = "submitting";
+  else if (acceptedAttempt === attemptKey) phase = "verifying";
+  return {
+    enabled: codePasteEnabled,
+    attemptId: 0,
+    restartNotice: null,
+    phase,
+    submitError: submitLoginCode.error,
+    submit: (code) => {
+      submitLoginCode.mutate(
+        { providerId, profileId: null, code },
+        {
+          onSuccess: (result) => {
+            if (result.outcome === "accepted") {
+              setAcceptedAttempt(attemptKey);
+            }
+          },
+        },
+      );
+    },
+    touch: () => {
+      touchLoginMutate({ providerId, profileId: null });
+    },
+  };
+}
+
+/**
+ * URL, device code, and Claude paste field for onboarding's ambient sign-in.
+ * The Sign in & enable button stays mounted (its enable-on-success callback
+ * is dropped if this row unmounts), so this is extra affordance, not a
+ * replacement for that button.
+ */
+function OnboardingLoginWaiting(props: {
+  readonly providerId: ProviderId;
+  readonly loginCapability: ProviderCliState["loginCapability"];
+  readonly loginUrl: string | null;
+  readonly userCode: string | null;
+  readonly isLocalHost: boolean;
+}): ReactNode {
+  const { providerId, loginCapability, loginUrl, userCode, isLocalHost } =
+    props;
+  const openLink = useOpenLink();
+  const autoOpen = useAutoOpenLoginUrl(
+    isLocalHost,
+    userCode,
+    loginUrl,
+    (url) => {
+      void openLink(url, "auth", null);
+    },
+  );
+  const { copied, copy } = useClipboardCopy({
+    resetMs: ONBOARDING_COPY_RESET_MS,
+    onSuccess: null,
+    onError: handleSignInLinkCopyError,
+  });
+  const codePaste = useOnboardingWaitingCodePaste({
+    providerId,
+    loginCapability,
+    loginUrl,
+    userCode,
+  });
+  const processingCode = codePaste.phase !== "idle";
+  const { title, guidance } = waitingStepCopy({
+    phase: codePaste.phase,
+    queuePending: false,
+    cancelRequested: false,
+    deviceCode: userCode !== null,
+  });
+  return (
+    <div className="flex min-w-0 flex-col gap-2" aria-live="polite">
+      <div className="text-ui-xs leading-relaxed text-white/70">
+        <div className="font-medium text-white/90">{title}</div>
+        {guidance !== null ? <p className="mt-0.5">{guidance}</p> : null}
+      </div>
+      {!processingCode && userCode !== null ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <code className="rounded-md border border-white/20 bg-white/5 px-2 py-0.5 font-mono text-ui tracking-[0.12em] text-white">
+            {userCode}
+          </code>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
+            onClick={() => copy(userCode)}
+          >
+            {copied ? (
+              <Check className="size-3.5" />
+            ) : (
+              <Copy className="size-3.5" />
+            )}
+          </Button>
+        </div>
+      ) : null}
+      {!processingCode && loginUrl !== null ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              void openLink(loginUrl, "auth", null);
+            }}
+          >
+            <ExternalLink className="size-3.5" />
+            {openBrowserLabel(autoOpen)}
+          </Button>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
+            onClick={() => copy(loginUrl)}
+          >
+            {copied ? (
+              <Check className="size-3.5" />
+            ) : (
+              <Copy className="size-3.5" />
+            )}
+          </Button>
+        </div>
+      ) : null}
+      {codePaste.enabled && userCode === null ? (
+        <CodePasteField
+          codePaste={codePaste}
+          disabled={false}
+          visibleLabel={false}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Split out so the host-runtime hooks below are instantiated ONLY on a row
  * that actually offers sign-in - the same shape as the sign-in terminal's
@@ -287,6 +460,53 @@ function resolveAttemptAuthPhase(input: {
  * this whole act require one even on a host that has no auto-enablement to
  * report and would never render a single one of these buttons.
  */
+function pressSignInToEnable(
+  authenticatedAwaitingEnable: boolean,
+  providerId: ProviderId,
+  onEnable: (providerId: ProviderId) => void,
+  onSignIn: (providerId: ProviderId) => void,
+): void {
+  if (authenticatedAwaitingEnable) {
+    onEnable(providerId);
+    return;
+  }
+  onSignIn(providerId);
+}
+
+function showOnboardingWaitingAffordance(
+  waitingLogin: {
+    readonly url: string | null;
+    readonly userCode: string | null;
+  } | null,
+  loginCapability: ProviderCliState["loginCapability"],
+): boolean {
+  if (waitingLogin === null) return false;
+  if (waitingLogin.url !== null) return true;
+  if (waitingLogin.userCode !== null) return true;
+  return (loginCapability?.codePaste ?? null) !== null;
+}
+
+function SignInToEnableAlerts(props: {
+  readonly declined: boolean;
+  readonly declinedMessage: string;
+  readonly notAuthenticated: boolean;
+}): ReactNode {
+  return (
+    <>
+      {props.declined ? (
+        <span className="text-ui-xs text-destructive" role="alert">
+          {props.declinedMessage}
+        </span>
+      ) : null}
+      {props.notAuthenticated ? (
+        <span className="text-ui-xs text-destructive" role="alert">
+          Sign-in did not complete. This provider is still off.
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function SignInToEnableButton(props: {
   readonly state: ProviderCliState;
   /** True while the parent's `providers.setEnabled` is in flight - see
@@ -297,9 +517,11 @@ function SignInToEnableButton(props: {
   const { state, enablementPending, onEnable } = props;
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
-  // Browser OAuth opens a browser on the machine running the host, so it is
-  // only offerable when that machine is this one. Read from the shared host
-  // list every picker in the app reads, not Settings' scoped `useHostScope`.
+  // Locality still matters: auto-open of the returned URL is skipped on a
+  // local host when the child opens a browser itself (Claude, Antigravity).
+  // Whether the button is offered at all is `providerSignInUnavailableHint`.
+  // Read from the shared host list every picker in the app reads, not
+  // Settings' scoped `useHostScope`.
   const { hosts } = useHostOptions();
   const isLocalHost =
     hosts.find((host) => host.isActive)?.isLocalMachine ?? false;
@@ -308,6 +530,10 @@ function SignInToEnableButton(props: {
   // this the button would re-arm mid-settle and invite a second login child
   // for a sign-in that is about to land.
   const [settling, setSettling] = useState(false);
+  const [waitingLogin, setWaitingLogin] = useState<{
+    readonly url: string | null;
+    readonly userCode: string | null;
+  } | null>(null);
   // Pending re-poll timer, plus the latch that stops one already in flight
   // from scheduling its successor after the act has moved on. Onboarding
   // unmounts this row the moment the user advances, and a `setSettling` or an
@@ -356,6 +582,10 @@ function SignInToEnableButton(props: {
   // it at the next attempt, so the message clears itself on retry instead of
   // needing an effect to.
   const declined = startLogin.isSuccess && !startLogin.data.started;
+  const declinedMessage = providerStartLoginFailureMessage(
+    startLogin.data?.failure,
+    "Sign-in did not start. Try again when ready.",
+  );
   // The counterpart to `declined`, for a login that STARTED and then did not
   // produce an authenticated account: a cancelled browser login, a settled
   // "not authenticated", or a re-poll budget spent without a verdict. All three
@@ -393,6 +623,7 @@ function SignInToEnableButton(props: {
     // separate mutation that nothing else touches, so its verdict has to be
     // dropped explicitly or it outlives the attempt it belongs to.
     awaitLogin.reset();
+    setWaitingLogin(null);
     // Start, then await the honest completion edge, then ENABLE.
     //
     // That third step is not a convenience, it is the whole contract: signing
@@ -410,6 +641,10 @@ function SignInToEnableButton(props: {
       {
         onSuccess: (result) => {
           if (!result.started) return;
+          setWaitingLogin({
+            url: result.url ?? null,
+            userCode: result.userCode ?? null,
+          });
           // Per-attempt budget, scoped to this closure so a later press starts
           // over with a full one - the same shape Settings' login flow gives
           // each attempt.
@@ -453,6 +688,7 @@ function SignInToEnableButton(props: {
               completion.state !== null &&
               isProviderAmbientAuthenticated(completion.state)
             ) {
+              setWaitingLogin(null);
               setSettling(false);
               onEnable(providerId);
               return;
@@ -464,6 +700,7 @@ function SignInToEnableButton(props: {
             ) {
               return;
             }
+            setWaitingLogin(null);
             setSettling(false);
           };
           const awaitOnce = (): void => {
@@ -476,6 +713,7 @@ function SignInToEnableButton(props: {
                 // failure would only stretch the spinner over it.
                 onError: () => {
                   if (unmountedRef.current) return;
+                  setWaitingLogin(null);
                   setSettling(false);
                 },
               },
@@ -513,37 +751,50 @@ function SignInToEnableButton(props: {
       </TooltipWrapper>
     );
   }
+  const waitingLoginToShow = showOnboardingWaitingAffordance(
+    waitingLogin,
+    state.loginCapability,
+  )
+    ? waitingLogin
+    : null;
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      {declined ? (
-        <span className="text-ui-xs text-destructive" role="alert">
-          Sign-in did not start. Try again when ready.
-        </span>
+    <span className="flex min-w-0 flex-col items-end gap-2">
+      {waitingLoginToShow !== null ? (
+        <OnboardingLoginWaiting
+          providerId={state.providerId}
+          loginCapability={state.loginCapability}
+          loginUrl={waitingLoginToShow.url}
+          userCode={waitingLoginToShow.userCode}
+          isLocalHost={isLocalHost}
+        />
       ) : null}
-      {notAuthenticated ? (
-        <span className="text-ui-xs text-destructive" role="alert">
-          Sign-in did not complete. This provider is still off.
-        </span>
-      ) : null}
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={isPending}
-        onClick={() => {
-          if (authenticatedAwaitingEnable) {
-            onEnable(state.providerId);
-            return;
+      <span className="flex min-w-0 items-center gap-2">
+        <SignInToEnableAlerts
+          declined={declined}
+          declinedMessage={declinedMessage}
+          notAuthenticated={notAuthenticated}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={isPending}
+          onClick={() =>
+            pressSignInToEnable(
+              authenticatedAwaitingEnable,
+              state.providerId,
+              onEnable,
+              onSignIn,
+            )
           }
-          onSignIn(state.providerId);
-        }}
-      >
-        Sign in &amp; enable
-        {/* Unchanged label + inline spinner: starting a login spawns the
-            provider CLI host-side, so a press with no feedback invites a
-            second one. */}
-        {isPending ? <MutedAgentSpinner /> : null}
-      </Button>
+        >
+          Sign in &amp; enable
+          {/* Unchanged label + inline spinner: starting a login spawns the
+              provider CLI host-side, so a press with no feedback invites a
+              second one. */}
+          {isPending ? <MutedAgentSpinner /> : null}
+        </Button>
+      </span>
     </span>
   );
 }

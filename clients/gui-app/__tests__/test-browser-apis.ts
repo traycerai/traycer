@@ -1,9 +1,41 @@
 import { configure } from "@testing-library/react";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
+import { resetLandingBrowserOpenReservationsForTests } from "@/components/home/terminal-panel/landing-browser-open-reservations";
 import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
 import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
 import { startEpicRuntimeWorkerHost } from "@/stores/epics/open-epic/runtime/worker/epic-runtime-worker-host";
 import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-runtime-worker-factory-slot";
+
+// ── Landing browser open reservations, for every jsdom suite ───────────────
+//
+// ONE place, for the same reason as the worker below: the reservation set is
+// MODULE state, so an unanswered open outlives the test that made it and hands
+// the next suite a budget already partly spent. That is not hypothetical - it
+// is exactly how the openers hold a device across an unmount, which is the
+// behaviour they are supposed to have.
+//
+// Here rather than in the suites that happen to open a tab today, because the
+// property is "any suite that reaches either opener", and that set grows
+// silently: a suite that merely mounts the Start Page panel reaches them
+// without naming them. Listing files got it wrong once already.
+//
+// What makes this SAFE to reach from here is that the store is a leaf - `react`
+// and nothing else - and that is enforced by
+// `landing-browser-open-reservations-leaf.test.ts`, not by anyone remembering.
+// Whatever this file imports lands in the setup of every jsdom suite, and both
+// ways of getting that wrong cost a round each. STATIC, the graph below it is
+// evaluated before the test file, and every module in it keeps the REAL binding
+// for dependencies that file goes on to `vi.mock` - reaching the store through
+// the presentation module pulled in `use-landing-browser-reconciliation`, whose
+// suite's `desktop-window-id` mock then stopped applying. LAZY, from inside the
+// hook, the same graph is evaluated during TEARDOWN instead, where a suite's
+// partial `vi.mock` of anything in it throws for a missing export - which is how
+// a file-edit recovery suite started failing on a `@/lib/persist` constant it
+// has never heard of. A leaf has neither failure because it has nothing to
+// drag.
+afterEach(() => {
+  resetLandingBrowserOpenReservationsForTests();
+});
 
 // ── The epic runtime worker, for every jsdom suite ──────────────────────────
 //

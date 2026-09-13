@@ -157,6 +157,42 @@ describe("v1 -> v2 persisted-key migration", () => {
     });
   });
 
+  it("keeps a persisted beside placement for the side-chat category intact", () => {
+    const migrated = migrateInitialChatHandoffState({
+      handoffs: {
+        [V1_KEY]: {
+          ...V1_RECORD,
+          placement: {
+            kind: "beside",
+            paneId: "pane-1",
+            category: "side-chat",
+          },
+        },
+      },
+    });
+
+    expect(migrated.handoffs[initialChatHandoffKey(SCOPE)].placement).toEqual({
+      kind: "beside",
+      paneId: "pane-1",
+      category: "side-chat",
+    });
+  });
+
+  it("drops a beside placement carrying a foreign category", () => {
+    const migrated = migrateInitialChatHandoffState({
+      handoffs: {
+        [V1_KEY]: {
+          ...V1_RECORD,
+          placement: { kind: "beside", paneId: "pane-1", category: "browser" },
+        },
+      },
+    });
+
+    expect(
+      migrated.handoffs[initialChatHandoffKey(SCOPE)].placement,
+    ).toBeNull();
+  });
+
   it("drops a record whose status is outside the union rather than stranding it", () => {
     const migrated = migrateInitialChatHandoffState({
       handoffs: {

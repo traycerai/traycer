@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatFullTimestamp,
+  formatMessageTime,
+  formatMessageTimeWithSeconds,
   formatRelativeTimestamp,
   formatResetCountdown,
   formatResetDateTime,
@@ -126,5 +129,157 @@ describe("formatResetDateTime", () => {
     const formatted = formatResetFullDateTime(timestamp);
     expect(formatted).toContain("2026");
     expect(formatted).not.toBe(formatResetDateTime(timestamp));
+  });
+});
+
+// `vitest.config.ts` pins neither `TZ` nor a locale, so every case below is
+// built from `new Date(year, month, day, hour, minute, second)` - local
+// calendar fields, interpreted in whatever zone the runner happens to use -
+// rather than a fixed UTC ISO string. That keeps a case deterministic without
+// needing to know or pin the zone: the day-boundary comparison inside
+// `formatMessageTime` reads the same local fields the fixture was built from,
+// so the two agree in any timezone. Expected strings are derived from
+// `toLocaleTimeString`/`toLocaleDateString` with the exact options the source
+// uses (no `hour12`), never a hard-coded literal like "3:45 PM" - that passes
+// on this machine and fails in CI under a different locale.
+describe("formatMessageTime", () => {
+  it("renders the time alone when the timestamp is on the same local day as `now`", () => {
+    const now = new Date(2026, 3, 23, 14, 30, 0).getTime();
+    const createdAt = new Date(2026, 3, 23, 9, 15, 0).getTime();
+    const expected = new Date(createdAt).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    const result = formatMessageTime(createdAt, now);
+    expect(result).toBe(expected);
+    // Structural guard: a date-prefixed render always joins with ", ", so an
+    // un-prefixed render must not contain one.
+    expect(result).not.toContain(",");
+  });
+
+  // The trap the day rule exists for: two instants only two hours apart, but
+  // 11pm and 1am are different CALENDAR days. A `< 24h` delta would call this
+  // "recent enough" and wrongly omit the date.
+  it("prefixes a short date for two instants only two hours apart that straddle local midnight", () => {
+    const yesterdayLate = new Date(2026, 3, 22, 23, 0, 0).getTime();
+    const todayEarly = new Date(2026, 3, 23, 1, 0, 0).getTime();
+
+    const result = formatMessageTime(yesterdayLate, todayEarly);
+
+    const expectedDate = new Date(yesterdayLate).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    const expectedTime = new Date(yesterdayLate).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    expect(result).toBe(`${expectedDate}, ${expectedTime}`);
+  });
+
+  // The mirror case: a ~23h gap that a `< 24h` delta would call "yesterday",
+  // but both instants fall on the same calendar day, so no date is added.
+  it("omits the date prefix for a ~23h-old instant that is still the same calendar day", () => {
+    const createdAt = new Date(2026, 3, 23, 0, 30, 0).getTime();
+    const now = new Date(2026, 3, 23, 23, 30, 0).getTime();
+
+    const result = formatMessageTime(createdAt, now);
+
+    const expectedTime = new Date(createdAt).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    expect(result).toBe(expectedTime);
+    expect(result).not.toContain(",");
+  });
+
+  // Documents the "locale decides 12h/24h" contract directly: unlike
+  // `formatResetDateTime` (which hard-codes `hour12: true`), this formatter
+  // passes no `hour12` at all, so its output must match the locale's own
+  // default rendering rather than a forced 12-hour one. Whether this actually
+  // differs from a `hour12: true` render depends on the runner's locale (most
+  // CI locales default to 12-hour), so the discriminating half of this
+  // contract cannot be asserted without pinning a 24-hour locale - this
+  // documents the intent and would catch a `hour12: true` regression under
+  // any 24-hour-default locale.
+  it("passes no explicit hour12 option, unlike formatResetDateTime", () => {
+    const now = new Date(2026, 3, 23, 15, 45, 0).getTime();
+    const expected = new Date(now).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    expect(formatMessageTime(now, now)).toBe(expected);
+  });
+});
+
+describe("formatMessageTimeWithSeconds", () => {
+  it("carries seconds on a same-day render", () => {
+    const now = new Date(2026, 3, 23, 14, 30, 0).getTime();
+    const createdAt = new Date(2026, 3, 23, 14, 25, 42).getTime();
+
+    const result = formatMessageTimeWithSeconds(createdAt, now);
+
+    const expected = new Date(createdAt).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    expect(result).toBe(expected);
+    expect(result).not.toContain(",");
+  });
+
+  it("follows the same day-scoping rule as formatMessageTime, seconds included", () => {
+    const now = new Date(2026, 3, 23, 10, 0, 0).getTime();
+    const createdAt = new Date(2026, 3, 20, 10, 0, 5).getTime();
+
+    const result = formatMessageTimeWithSeconds(createdAt, now);
+
+    const expectedDate = new Date(createdAt).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    const expectedTime = new Date(createdAt).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    expect(result).toBe(`${expectedDate}, ${expectedTime}`);
+  });
+});
+
+describe("formatFullTimestamp", () => {
+  it("restores the weekday, year and seconds that formatMessageTime drops", () => {
+    const timestamp = new Date(2026, 3, 23, 15, 45, 12).getTime();
+
+    const result = formatFullTimestamp(timestamp);
+
+    const options: Intl.DateTimeFormatOptions = {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    };
+    const expected = new Date(timestamp).toLocaleString(undefined, options);
+    expect(result).toBe(expected);
+    // The equality above still passes if the source and this fixture ever
+    // drift to the same wrong options, so anchor the year independently - it
+    // is the part this format exists to restore. It has to be read out of the
+    // formatter rather than written as "2026": per the note above the suite,
+    // no locale is pinned, and under one with non-Latin digits (ar-EG) or a
+    // non-Gregorian calendar (th-TH renders the Buddhist year 2569) the ASCII
+    // Gregorian year appears nowhere in `result`.
+    const yearPart = new Intl.DateTimeFormat(undefined, options)
+      .formatToParts(new Date(timestamp))
+      .find((part) => part.type === "year");
+    if (yearPart === undefined) {
+      throw new Error("the full format produced no year part to anchor on");
+    }
+    expect(result).toContain(yearPart.value);
+    // A day-scoped, same-day render of the same instant never carries a year
+    // - this is the "unabridged" form that restores it unconditionally.
+    expect(result).not.toBe(formatMessageTime(timestamp, timestamp));
   });
 });

@@ -58,6 +58,7 @@ try {
   const launched = await launchChromeWithDevTools(
     chromePath,
     "traycer-diff-edit-",
+    [],
   );
   chrome = launched.chrome;
   chromeProfilePath = launched.profilePath;

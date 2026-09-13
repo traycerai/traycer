@@ -36,6 +36,8 @@ interface BrowserViewEntryFactoryOptions {
     reason: string | null,
   ) => void;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
+  readonly requestZoom: (entry: BrowserViewEntry, factor: number) => void;
+  readonly refreshViewport: (entry: BrowserViewEntry) => void;
   readonly emitFocus: (entry: BrowserViewEntry) => void;
   readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
@@ -64,6 +66,11 @@ export class BrowserViewEntryFactory {
     reason: string | null,
   ) => void;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
+  private readonly requestZoom: (
+    entry: BrowserViewEntry,
+    factor: number,
+  ) => void;
+  private readonly refreshViewport: (entry: BrowserViewEntry) => void;
   private readonly emitFocus: (entry: BrowserViewEntry) => void;
   private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
@@ -77,6 +84,8 @@ export class BrowserViewEntryFactory {
     this.observePrimaryProfileOrigin = options.observePrimaryProfileOrigin;
     this.setStatus = options.setStatus;
     this.emitStatus = options.emitStatus;
+    this.requestZoom = options.requestZoom;
+    this.refreshViewport = options.refreshViewport;
     this.emitFocus = options.emitFocus;
     this.closeEntry = options.closeEntry;
   }
@@ -163,6 +172,7 @@ export class BrowserViewEntryFactory {
       rendererResetPending: false,
       closePromise: null,
       internalNavigation: false,
+      succeededByReplacement: false,
     };
     this.popups.installGuestGesture(webContents);
     // The tile's opener context is a live view of the entry: read at open time,
@@ -214,6 +224,7 @@ export class BrowserViewEntryFactory {
     this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     entry.certificateError = null;
     this.setStatus(entry, "ready", null);
+    this.refreshViewport(entry);
     void this.debugSessions
       .ensure(entry)
       .enableAfterCommit()
@@ -261,7 +272,10 @@ export class BrowserViewEntryFactory {
     // only place in the chain that knows a browser tile has focus, so the
     // whole focus-scoped input policy is decided here. `preventDefault` is
     // what stops a menu equivalent (Cmd+W's "Close Tab") from also firing.
-    const reserved = this.chords.match(input);
+    // The guest's OWN window decides the policy: each renderer registers a
+    // table derived from its own surface state, and this seam is the only
+    // place that knows which window's guest has focus.
+    const reserved = this.chords.match(entry.surface?.windowId ?? null, input);
     if (reserved !== null) {
       event.preventDefault();
       // Every reserved chord is one-shot - holding Cmd+T at ~25 Hz would open
@@ -276,7 +290,7 @@ export class BrowserViewEntryFactory {
     if (step === null) return;
     event.preventDefault();
     const factor = step === 0 ? 1 : steppedEntryZoom(entry, step);
-    if (applyEntryZoom(entry, factor)) this.emitStatus(entry);
+    this.requestZoom(entry, factor);
   }
 }
 

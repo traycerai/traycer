@@ -26,7 +26,6 @@ import {
   agentListDowngradeV9ToV8,
 } from "@traycer/protocol/host/agent/contracts";
 import {
-  listAgentsResponseSchema,
   listAgentsResponseSchemaV10,
   listAgentsResponseSchemaV20,
   listAgentsResponseSchemaV30,
@@ -34,6 +33,7 @@ import {
   listAgentsResponseSchemaV50,
   listAgentsResponseSchemaV60,
   listAgentsResponseSchemaV70,
+  listAgentsResponseSchema,
   listAgentsResponseSchemaV80,
 } from "@traycer/protocol/host/agent/shared";
 import {
@@ -149,6 +149,11 @@ function agentSummary(id: string, harnessId: string | null) {
       reasoningEffort: "high",
       fastMode: true,
     },
+    // The `@9.1` session facet. `null` is the row's own "this host cannot
+    // know" - a GUI chat has no PTY session - and every downgrade bridge
+    // below reparses through a frozen summary that drops both keys.
+    sessionState: null,
+    lastExit: null,
   };
 }
 

@@ -9,7 +9,9 @@ import {
 } from "@/stores/tabs/use-system-tab-modal";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import {
+  overlayConsumesEscape,
   overlayMeta,
+  prepareOverlayForPromotion,
   renderOverlayBody,
 } from "@/stores/tabs/system-overlay-registry";
 import { LEADER_SCOPE_SETTINGS } from "@/lib/keybindings/leader-scope";
@@ -65,14 +67,16 @@ export function SystemTabModalHost(): ReactNode {
   );
 }
 
-interface SystemTabModalSurfaceProps {
+export interface SystemTabModalSurfaceProps {
   readonly active: SystemModalActive;
   readonly editingTheme: boolean;
   readonly onClose: () => void;
   readonly onPromote: () => void;
 }
 
-function SystemTabModalSurface(props: SystemTabModalSurfaceProps): ReactNode {
+export function SystemTabModalSurface(
+  props: SystemTabModalSurfaceProps,
+): ReactNode {
   const { active, editingTheme, onClose, onPromote } = props;
   const meta = useMemo(() => overlayMeta(active), [active]);
   const Icon = meta.Icon;
@@ -95,8 +99,16 @@ function SystemTabModalSurface(props: SystemTabModalSurfaceProps): ReactNode {
       promoteAriaLabel={`Open ${meta.label} as a tab`}
       promoteTestId={`system-tab-modal-promote-${active.kind}`}
       closeTestId={`system-tab-modal-close-${active.kind}`}
-      onPromote={onPromote}
+      // The body gets its say while it is still mounted: promotion unmounts
+      // it, and the tab's body mounts only afterwards.
+      onPromote={() => {
+        prepareOverlayForPromotion(active);
+        onPromote();
+      }}
       onClose={onClose}
+      onEscapeKeyDown={(event) => {
+        if (overlayConsumesEscape(active)) event.preventDefault();
+      }}
       onOpenAutoFocus={(event) => {
         // Radix remounts its content when modality changes. Let the editor's
         // own autofocus finish instead of taking focus back into Settings.

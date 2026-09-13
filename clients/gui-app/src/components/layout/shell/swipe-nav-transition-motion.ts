@@ -1,7 +1,4 @@
-import {
-  NAV_DRAWER_SETTLE,
-  resolvesToOpen,
-} from "@/components/layout/shell/nav-drawer-motion";
+import { resolvesToOpen } from "@/components/layout/shell/nav-drawer-motion";
 import type { EdgeNavDirection } from "@/components/layout/shell/use-edge-nav-swipe";
 
 /**
@@ -9,19 +6,6 @@ import type { EdgeNavDirection } from "@/components/layout/shell/use-edge-nav-sw
  * kept apart from the surface that renders it so both the release decision and
  * every layer transform are pure functions with no DOM in reach.
  */
-
-/**
- * The settle, and the release rule, are the navigation drawer's - imported
- * rather than restated.
- *
- * Two direct-manipulation gestures live on the same phone screen, and a user
- * pulling the drawer out and swiping a screen away within the same second is
- * feeling for ONE set of physical constants. Deriving a second spring here, or
- * a second commit threshold, would make the app's weight depend on which
- * gesture you happened to make - which is how a surface starts feeling
- * arbitrary rather than physical.
- */
-export const SWIPE_NAV_SETTLE = NAV_DRAWER_SETTLE;
 
 /**
  * How far the destination trails the finger, as a fraction of its own travel.

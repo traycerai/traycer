@@ -1,4 +1,4 @@
-import { formatHex8, parse, rgb, wcagContrast } from "culori";
+import { formatHex8, parse, rgb, wcagContrast, type Rgb } from "culori";
 import {
   buildFontFamilyValue,
   DEFAULT_UI_FONT_STACK,
@@ -108,6 +108,7 @@ function applyFromState(): void {
     root.style.setProperty(`--${token}`, color);
   }
   root.style.setProperty("--glass-opacity", String(library.glassOpacity / 100));
+  root.toggleAttribute("data-glass-enabled", library.glassOpacity < 100);
   root.style.setProperty(
     "--traycer-font-prompt",
     library.promptFontFamily === null
@@ -124,8 +125,33 @@ function applyFromState(): void {
     "--panel-animation-duration",
     `${library.panelAnimationDuration}ms`,
   );
-  if (library.contrast !== 100) {
+  applyContrast(root, library.contrast, library.glassOpacity / 100);
+  root.setAttribute("data-theme-id", custom?.id ?? preset);
+  root.toggleAttribute(
+    "data-theme-sidebar-artwork",
+    custom?.sidebarArtwork === true,
+  );
+  themeRevision += 1;
+}
+
+function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
+  return {
+    mode: "rgb",
+    r: from.r + (to.r - from.r) * amount,
+    g: from.g + (to.g - from.g) * amount,
+    b: from.b + (to.b - from.b) * amount,
+    alpha: from.alpha,
+  };
+}
+
+function applyContrast(
+  root: HTMLElement,
+  contrast: number,
+  glassOpacity: number,
+): void {
+  if (contrast !== 100) {
     const computed = getComputedStyle(root);
+    const page = parse(computed.getPropertyValue("--background").trim());
     for (const [foreground, background] of [
       ["foreground", "background"],
       ["muted-foreground", "background"],
@@ -139,33 +165,33 @@ function applyFromState(): void {
       const bg = parse(computed.getPropertyValue(`--${background}`).trim());
       if (!fg || !bg) continue;
       const source = rgb(fg);
+      // `popover` is the one solid token that never reaches the screen on
+      // its own: every glass rule in `styles/theme-surfaces.css` tints from
+      // `var(--popover)` at `--glass-opacity` over the page, so a foreground
+      // optimized against the solid value is optimized against a colour that
+      // never ships. Nothing glass tints from `--card`, and
+      // `text-card-foreground` only labels solid surfaces, so card is left
+      // alone. The raw (unfloored) opacity is deliberate - dialogs floor
+      // theirs at 0.8, so the most translucent case is the conservative one
+      // for every surface sharing the token.
+      const surface =
+        glassOpacity < 1 && page && background === "popover"
+          ? mixRgb(rgb(page), rgb(bg), glassOpacity)
+          : rgb(bg);
       const destination =
-        library.contrast < 100
-          ? rgb(bg)
+        contrast < 100
+          ? surface
           : rgb(
-              wcagContrast(bg, "#fff") > wcagContrast(bg, "#000")
+              wcagContrast(surface, "#fff") > wcagContrast(surface, "#000")
                 ? { mode: "rgb", r: 1, g: 1, b: 1 }
                 : { mode: "rgb", r: 0, g: 0, b: 0 },
             );
-      const amount = Math.abs(library.contrast - 100) / 100;
       root.style.setProperty(
         `--${foreground}`,
-        formatHex8({
-          mode: "rgb",
-          r: source.r + (destination.r - source.r) * amount,
-          g: source.g + (destination.g - source.g) * amount,
-          b: source.b + (destination.b - source.b) * amount,
-          alpha: source.alpha,
-        }),
+        formatHex8(mixRgb(source, destination, Math.abs(contrast - 100) / 100)),
       );
     }
   }
-  root.setAttribute("data-theme-id", custom?.id ?? preset);
-  root.toggleAttribute(
-    "data-theme-sidebar-artwork",
-    custom?.sidebarArtwork === true,
-  );
-  themeRevision += 1;
 }
 
 function notify(): void {

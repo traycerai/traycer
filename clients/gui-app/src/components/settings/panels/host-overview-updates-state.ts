@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import type { HostStatusStoreFormats } from "@traycer/protocol/host/status/index";
+import type {
+  HostStatusInstall,
+  HostStatusStoreFormats,
+} from "@traycer/protocol/host/status/index";
 import {
   hostStoreFormatRestriction,
   hostStoreFormatRestrictionFromRpc,
@@ -130,6 +133,8 @@ export function useHostOverviewUpdates(input: {
   /** What the PROCESS reports about itself (`host.status.hostVersion`). */
   readonly runningVersion: string | null;
   readonly storeFormats: HostStatusStoreFormats | null;
+  /** See `HostStoreFormatOffer.install`. */
+  readonly install: HostStatusInstall | null;
   /**
    * The install record is ahead of the running host (`legacy-update-facts.ts`).
    * When set, every catalog comparison below is against the INSTALLED version,
@@ -373,6 +378,7 @@ export function useHostOverviewUpdates(input: {
     hostName,
     runningVersion: input.runningVersion,
     storeFormats: input.storeFormats,
+    install: input.install,
     manifest: actionableManifest,
     fallbackFailure: describeUpdateFailure({
       refusal: forceRefusal,
@@ -664,6 +670,7 @@ function useHostInstallStoreFloor(input: {
   readonly hostName: string;
   readonly runningVersion: string | null;
   readonly storeFormats: HostStatusStoreFormats | null;
+  readonly install: HostStatusInstall | null;
   readonly manifest: HostAvailableManifest | null;
   readonly fallbackFailure: string | null;
   /** Whether the negotiated install method carries the store-format floor. */
@@ -694,6 +701,7 @@ function useHostInstallStoreFloor(input: {
           ?.storeFormats ?? null,
       runningVersion: input.runningVersion,
       storeFormats: input.storeFormats,
+      install: input.install,
       installSupportsStoreFloor: input.installSupportsStoreFloor,
     });
     // Neither of these may be displaced by retained RPC evidence. `pending` is
@@ -733,11 +741,15 @@ function useHostInstallStoreFloor(input: {
     // This is the RECORD-derived staged wait - the park `legacyPark`
     // projects with no attempt id, which `installForce` resumes through
     // `host.update.install {force}`, the one dispatch that carries
-    // `acceptStoreFormatLoss`. A park that is a bound ATTEMPT resumes through
-    // `host.update.continue`, whose request carries no consent on the wire
-    // and whose dialog names no loss; a downgrade parked that way still
-    // finishes through a fresh Install anyway once the host is idle. Carrying
-    // consent on `continue` is a protocol change, recorded as a follow-up.
+    // `acceptStoreFormatLoss` on the wire. A park that is a bound ATTEMPT
+    // resumes through `host.update.continue`, which carries no consent and
+    // needs none: the CLI records the consent the attempt was created under
+    // on the attempt's claim (`HostUpdateAttemptClaimBaseline.
+    // acceptStoreFormatLoss`, beside `allowDowngrade`) and the resume acts on
+    // that authority, so a downgrade this page dispatched with Install anyway
+    // finishes through Force update without asking twice. Its dialog names
+    // no loss for the same reason `allowDowngrade` is not re-asked there - the
+    // person gave that consent when the attempt was created.
     stagedEntryOfferable: (offerable, version) => {
       if (!offerable || version === null) return false;
       const restriction = restrictionForVersion(version);

@@ -49,31 +49,14 @@ export const NAV_DRAWER_COMMIT_TRAVEL_FRACTION = 1 / 3;
  */
 export const NAV_DRAWER_TAP_SLOP_PX = 8;
 
-/**
- * The settle. One spring for both directions, because one physical object
- * cannot arrive by one rule and leave by another - a drawer that opens with a
- * different weight than it closes reads as two surfaces wearing the same
- * pixels.
- *
- * `visualDuration` describes the time to visually arrive rather than the time
- * for the spring's tail to decay, so this stays a ~220ms settle regardless of
- * how far the panel has left to travel; the near-zero bounce keeps it from
- * overshooting into the gap it just closed.
- */
-export const NAV_DRAWER_SETTLE: ValueAnimationTransition<number> = {
-  type: "spring",
-  visualDuration: 0.22,
-  bounce: 0.05,
-};
-
-/**
- * The settle under a reduced-motion preference: arrive, do not travel. The drag
- * itself is untouched - direct manipulation is not motion the interface chose
- * to play, it is the finger, and taking it away would leave no gesture at all.
- */
-export const NAV_DRAWER_SETTLE_REDUCED: ValueAnimationTransition<number> = {
-  duration: 0,
-};
+/** Shared settle for drawer and history navigation; dragging still tracks the finger. */
+export function navDrawerSettleTransition(
+  durationMs: number,
+): ValueAnimationTransition<number> {
+  return durationMs === 0
+    ? { duration: 0 }
+    : { type: "spring", visualDuration: durationMs / 1000, bounce: 0.05 };
+}
 
 export interface NavDrawerRelease {
   /** Panel travel at release: 0 fully closed, `widthPx` fully open. */

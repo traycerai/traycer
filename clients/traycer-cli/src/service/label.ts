@@ -50,6 +50,33 @@ function capitalizeEnvironment(environment: Environment): string {
   return environment.charAt(0).toUpperCase() + environment.slice(1);
 }
 
+/**
+ * The dev label for a NAMED slot, rather than for whichever slot this process
+ * happens to be running in.
+ *
+ * {@link serviceLabelFor} reads `DEV_DESKTOP_SLOT` from the environment, so it
+ * can only ever describe this process. The store-format floor needs the other
+ * slots' labels too: it enumerates every dev run slot's writer before a swap,
+ * and a job that can START one of those writers is exactly as disqualifying as
+ * a writer already running. `null` names the unslotted dev home.
+ */
+export function devServiceLabelForSlot(slot: string | null): ServiceLabel {
+  if (slot === null) {
+    return {
+      id: "ai.traycer.host.dev",
+      displayName: "Traycer Host (Dev)",
+      environment: "dev",
+      devSlot: null,
+    };
+  }
+  return {
+    id: `ai.traycer.host.dev.${slot}`,
+    displayName: `Traycer Host (Dev ${slot})`,
+    environment: "dev",
+    devSlot: slot,
+  };
+}
+
 export function serviceLabelFor(environment: Environment): ServiceLabel {
   if (environment === "production") return PRODUCTION_LABEL;
   const devSlot = devDesktopSlotForEnvironment(environment, process.env);

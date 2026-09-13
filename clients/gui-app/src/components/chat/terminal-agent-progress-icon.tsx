@@ -5,6 +5,7 @@ import {
   useEpicActiveAgentIds,
   useEpicAgentActivityTiers,
 } from "@/lib/epic-selectors";
+import { useAgentActivityCoverage } from "@/stores/agent-activity-store";
 
 /**
  * Terminal-agent (TUI) status glyph - the `ChatProgressIcon` counterpart for a
@@ -47,10 +48,16 @@ export function TerminalAgentProgressIcon(props: {
     { epicId: props.epicId, chatId: props.nodeId },
     props.originHostId,
   );
+  // Epic-wide awareness is this node's SOLE run authority (see the doc above),
+  // which is exactly what makes the plane's reach load-bearing here: a TUI
+  // agent has no renderer session to fall back on, so a union that does not
+  // cover its machine leaves the icon with nothing to say and it must say so.
+  const activityCoverage = useAgentActivityCoverage(props.originHostId);
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
       running={isActive ? (tier ?? "turn") : false}
+      activityCoverage={activityCoverage}
       subjectId={props.nodeId}
       testIdPrefix={props.testIdPrefix}
       className={props.className}

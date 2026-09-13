@@ -39,6 +39,7 @@ import type {
   IFileSaveHost,
   IMigrationHost,
   INotificationHost,
+  IRendererCrashTelemetryHost,
   IRunnerHost,
   ISecureStorage,
   IServiceHost,
@@ -394,6 +395,7 @@ export interface DesktopMigrationBridge {
 }
 
 export interface DesktopPlatformBridge {
+  crashTelemetry: IRendererCrashTelemetryHost;
   clipboard?: {
     writeImage(input: {
       readonly type: string;
@@ -636,6 +638,8 @@ export interface DesktopWindowsBridge {
     set(
       snapshot: DesktopAuthSessionSnapshot,
     ): Promise<DesktopAuthSessionSetResult>;
+    /** See `AuthSessionBridgeSurface.revoke` in the preload. */
+    revoke(rejectedToken: string): Promise<void>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose: () => void;
     };
@@ -686,6 +690,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly traycerCli: ITraycerCli;
   readonly migration: IMigrationHost;
   readonly platform: DesktopPlatformBridge;
+  readonly crashTelemetry: IRendererCrashTelemetryHost;
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
   readonly browserView: BrowserViewBridge;
@@ -723,6 +728,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.globalShortcuts = options.bridge.globalShortcuts;
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
+    this.crashTelemetry = options.bridge.platform.crashTelemetry;
     this.power = options.bridge.power;
     this.browserView = options.bridge.browserView;
     // Passed straight through: the client instance, its issued attach

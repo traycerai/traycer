@@ -105,6 +105,7 @@ describe("createAuthAwareMessenger", () => {
     const wrapped = createAuthAwareMessenger(inner, auth);
     await wrapped.request(METHOD, PARAMS, {
       replayMustBeKeyed: false,
+      requiredHostMethodVersion: null,
       idempotencyKey: null,
       authority: authorityFor(lease),
     });
@@ -125,6 +126,7 @@ describe("createAuthAwareMessenger", () => {
     await expect(
       wrapped.request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: authorityFor(lease),
       }),
@@ -147,6 +149,7 @@ describe("createAuthAwareMessenger", () => {
     const thrown = await wrapped
       .request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: authorityFor(lease),
       })
@@ -176,6 +179,7 @@ describe("createAuthAwareMessenger", () => {
     const thrown = await wrapped
       .request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: authorityFor(lease),
       })
@@ -198,6 +202,7 @@ describe("createAuthAwareMessenger", () => {
     await expect(
       wrapped.request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: authorityFor(lease),
       }),
@@ -226,6 +231,7 @@ describe("createAuthAwareMessenger", () => {
     const wrapped = createAuthAwareMessenger(inner, auth);
     await wrapped.request(METHOD, PARAMS, {
       replayMustBeKeyed: false,
+      requiredHostMethodVersion: null,
       idempotencyKey: null,
       authority: authorityFor(lease),
     });
@@ -247,6 +253,7 @@ describe("createAuthAwareMessenger", () => {
     await expect(
       wrapped.request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: authorityFor(lease),
       }),
@@ -276,6 +283,7 @@ describe("createAuthAwareMessenger", () => {
     await expect(
       wrapped.request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: authorityFor(staleLease),
       }),

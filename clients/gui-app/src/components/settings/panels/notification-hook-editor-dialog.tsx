@@ -44,7 +44,7 @@ export function NotificationHookEditorDialog(props: {
         if (!open) props.onCancel();
       }}
     >
-      <DialogContent className="max-h-[min(85vh,52rem)] w-[min(92vw,42rem)] overflow-y-auto">
+      <DialogContent className="flex max-h-[min(85vh,52rem)] w-[min(92vw,42rem)] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{props.title}</DialogTitle>
           <DialogDescription>
@@ -53,7 +53,7 @@ export function NotificationHookEditorDialog(props: {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5">
+        <div className="min-h-0 space-y-5 overflow-y-auto">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="hook-name">Name</Label>

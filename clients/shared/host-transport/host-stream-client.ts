@@ -4,6 +4,7 @@ import type {
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IStreamClient } from "./i-stream-client";
 import type { StreamMethodSupport } from "./ws-stream-client";
+import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
 
 /**
  * The stream-client lifecycle surface the app-wide/durable provider tree
@@ -74,6 +75,12 @@ export interface IHostStreamClient<
   readonly instanceId: string;
   notifyBearerRotated(): void;
   /**
+   * Pushes the current cloud verdict onto every open session, in place. Called
+   * on a verdict transition in either direction; see
+   * `WsStreamClient.notifyCloudVerdictChanged`.
+   */
+  notifyCloudVerdictChanged(): void;
+  /**
    * Nudges every open session to reconnect immediately (skip backoff) - used
    * when a LOCAL host respawns at a new `websocketUrl` under the same
    * identity, and by the OS/app wake path (`subscribeWakeSignals`). A remote
@@ -109,12 +116,30 @@ export interface IHostStreamClient<
    */
   isReady(): boolean;
   /**
-   * Learned per-method compatibility with the connected host, keyed by
-   * stream method name. `"unknown"` until a subscribe attempt resolves.
-   * `RemoteStreamClient` always reports `"unknown"` today - the mux session
-   * surfaces an incompatible method as a fatal error on that one stream
-   * rather than a cacheable pre-check, so remote hosts don't yet get the
-   * degrade-quietly treatment `WsStreamClient` provides for local hosts.
+   * Whether the connection behind this client is READY and has heard nothing
+   * from the host for at least `ms` - the transport's own verdict, read by the
+   * human Retry paths so a person's click can escalate from "re-subscribe" to
+   * "drop the socket and re-dial" when, and only when, the session is provably
+   * dead.
+   *
+   * OPTIONAL, in the shape `subscribeAtVersion?` already uses on
+   * `IStreamClient`: this interface is implemented structurally by two
+   * production classes, two `implements` test classes and a couple of dozen
+   * object literals, and a required member would be a sweep of all of them to
+   * express "not measured". ABSENT MEANS NOT MEASURED, never "silent" - every
+   * caller reads `?.(ms) ?? false`, so a transport with no answer never
+   * escalates anything.
+   *
+   * `WsStreamClient` deliberately leaves it absent: a local socket's failure
+   * modes are its own and nothing above it escalates on local silence.
+   */
+  isSilentFor?(ms: number): boolean;
+  /**
+   * Learned per-method compatibility with the connected host, keyed by stream
+   * method name. `"unknown"` until capability evidence is available:
+   * `WsStreamClient` learns it from its handshake and `RemoteStreamClient`
+   * learns it from the mux connection's `openAck` manifest. Both then predict
+   * whether a fresh subscription can negotiate before opening that stream.
    */
   getMethodSupport<Method extends keyof Registry & string>(
     method: Method,
@@ -123,8 +148,8 @@ export interface IHostStreamClient<
   subscribeMethodSupport(listener: () => void): () => void;
   /**
    * Learned wire schema version for the connected host, keyed by stream
-   * method name. `null` until a subscribe attempt resolves - mirrors
-   * `getMethodSupport`'s cacheable pre-check.
+   * method name. `null` until a handshake or remote `openAck` supplies enough
+   * manifest evidence - mirrors `getMethodSupport`'s cacheable pre-check.
    */
   getMethodSchemaVersion<Method extends keyof Registry & string>(
     method: Method,
@@ -133,14 +158,17 @@ export interface IHostStreamClient<
    * Positive host-recovery evidence: fires when a session (re)opens after a
    * drop or a stall-length silent gap - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
-   * points. Consumers drive `HostClient.notifyHostAvailabilityRecovered(hostId)`
-   * off it so stranded unary queries refetch. `RemoteStreamClient` delegates to
+   * points and the kind each reports. Consumers drive
+   * `HostClient.notifyHostAvailabilityRecovered(hostId, kind)` off it so
+   * stranded unary queries refetch. `RemoteStreamClient` delegates to
    * `RemoteSession.subscribeAvailabilityRecovered`, which fires at EVERY
    * ready boundary - including the clean first open, because a remote
    * session's first dial races (and strands) the very queries that created
-   * it.
+   * it - and reports each one as a `"reconnect"`.
    */
-  subscribeAvailabilityRecovered(listener: () => void): () => void;
+  subscribeAvailabilityRecovered(
+    listener: (kind: AvailabilityRecoveryKind) => void,
+  ): () => void;
 }
 
 /**

@@ -338,6 +338,7 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -451,6 +452,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -515,6 +517,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
       },
     });
@@ -560,6 +563,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -697,6 +701,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -841,6 +846,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -940,6 +946,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         // The catalog does NOT list "1.6.0" — the attempt's own target.
         // Falsifies: routing the dialog's Force through `installForce`
@@ -1019,6 +1026,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1125,6 +1133,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         // Registered so "never called" is a fact about the page's routing and
         // not about a handler that was missing anyway.
@@ -1221,6 +1230,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1347,6 +1357,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
               authority: "attempt" as const,
             },
             storeFormats: null,
+            install: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,
@@ -1620,6 +1631,7 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         ...overrides,
       },
@@ -1777,6 +1789,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
       },
     });
@@ -1827,6 +1840,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
       },
     });
@@ -1911,6 +1925,7 @@ describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend t
             authority: "attempt" as const,
           },
           storeFormats: null,
+          install: null,
         }),
         "host.update.check": () => {
           checkCalls += 1;
@@ -2099,6 +2114,7 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
               authority: "attempt" as const,
             },
             storeFormats: null,
+            install: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,

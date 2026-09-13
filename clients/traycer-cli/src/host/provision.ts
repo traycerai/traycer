@@ -214,6 +214,19 @@ export interface ProvisionHostOptions {
    * that completes the data loss.
    */
   readonly acceptStoreFormatLoss: boolean;
+  /**
+   * The registry yank lookup, or `null` to construct the real one.
+   *
+   * A REQUIRED seam, `null` rather than optional on purpose. The real lookup
+   * fetches the versions manifest under a 10 s watchdog, twice vitest's
+   * default test timeout, so a suite that reaches this function for real
+   * without stating the dependency makes a genuine network call and, on a
+   * runner with no egress, is killed by the test timeout where a laptop's
+   * refused connect merely looks slow. Two suites learned that by mocking
+   * `registry/client` wholesale; the field makes the choice explicit at every
+   * call site instead, and a test passes its stub here.
+   */
+  readonly yankLookup: RegistryYankLookup | null;
   // When true, record a version hold if this run's install branch commits a
   // strict DOWNGRADE (committed version below the previous install). Set by
   // `host ensure --release <concrete>` - the other explicit-version install
@@ -260,7 +273,8 @@ export async function provisionHost(
   // (finding D). Created once and threaded through the locked re-reads so a
   // lock-race loser re-evaluates the winner's install record without a
   // second network probe.
-  const yankLookup = createRegistryYankLookup(opts.runtime.environment);
+  const yankLookup =
+    opts.yankLookup ?? createRegistryYankLookup(opts.runtime.environment);
   opts.runtime.logger.info("Host provisioning started", {
     environment: opts.runtime.environment,
     registerService: opts.registerService,

@@ -51,11 +51,17 @@ vi.mock(
       lifecycle: "connecting",
       inventoryReady: false,
       canMaterializeElectron: false,
+      connectionGeneration: 0,
       items: [],
+      viewports: {},
+      setViewport: () => Promise.reject(new Error("not used")),
+      reportViewport: () => undefined,
       errorMessage: null,
       retry: () => undefined,
       openTab: () => Promise.reject(new Error("not used")),
       closeTab: () => Promise.reject(new Error("not used")),
+      attachTab: () => Promise.reject(new Error("not used")),
+      moveTab: () => Promise.reject(new Error("not used")),
     };
     return {
       BrowserSessionsProvider: (props: { readonly children: ReactNode }) => (
@@ -411,7 +417,7 @@ describe("<EpicSurface /> split isolation", () => {
 
     act(() => {
       streams.forEach((stream) => {
-        stream.callbacks.onConnectionStatus("open", null);
+        stream.callbacks.onConnectionStatus("open", null, true);
         stream.callbacks.onSnapshot(
           snapshotMeta(stream.epicId),
           Y.encodeStateAsUpdate(new Y.Doc()),

@@ -21,6 +21,7 @@ import type {
   Vibrancy,
 } from "../ipc-contracts/platform-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
+import type { RendererCrashTelemetryInput } from "@traycer-clients/shared/platform/runner-host";
 
 export type {
   AccessibilityThemeSnapshot,
@@ -37,6 +38,9 @@ export type {
 } from "../ipc-contracts/platform-types";
 
 export interface PlatformBridgeSurface {
+  crashTelemetry: {
+    persist(input: RendererCrashTelemetryInput): Promise<void>;
+  };
   clipboard: {
     writeImage(input: {
       readonly type: string;
@@ -146,6 +150,10 @@ export interface PlatformBridgeSurface {
 
 export function buildPlatformBridge(): PlatformBridgeSurface {
   return {
+    crashTelemetry: {
+      persist: (input) =>
+        ipcRenderer.invoke(RunnerHostInvoke.rendererCrashPersist, input),
+    },
     clipboard: {
       writeImage: (input) =>
         ipcRenderer.invoke(RunnerHostInvoke.clipboardWriteImage, input),

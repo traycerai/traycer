@@ -54,7 +54,8 @@ export type TabNavigationIntent =
     }
   | { readonly kind: "draft"; readonly draftId: string }
   | { readonly kind: "history" }
-  | { readonly kind: "settings"; readonly section: SettingsSectionId };
+  | { readonly kind: "settings"; readonly section: SettingsSectionId }
+  | { readonly kind: "home" };
 
 /**
  * Requests that need source resolution are deliberately distinct from canonical
@@ -99,7 +100,11 @@ export type TabActivationIntent =
       readonly name: string | undefined;
       readonly focus: EpicRouteFocus | undefined;
     }
-  | { readonly kind: "new-draft"; readonly settings: ChatRunSettings | null };
+  | {
+      readonly kind: "new-draft";
+      readonly settings: ChatRunSettings | null;
+      readonly groupId?: string;
+    };
 
 const DEFAULT_EPIC_FOCUS: EpicRouteFocus = {
   focusedAt: undefined,
@@ -271,6 +276,13 @@ export function historyTabIntent(): Extract<
   { kind: "history" }
 > {
   return { kind: "history" };
+}
+
+export function homeTabIntent(): Extract<
+  TabNavigationIntent,
+  { kind: "home" }
+> {
+  return { kind: "home" };
 }
 
 export function settingsTabIntent(

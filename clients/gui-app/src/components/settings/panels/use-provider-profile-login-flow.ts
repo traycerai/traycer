@@ -12,6 +12,7 @@ import {
   type ProviderLoginCapability,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import { providerStartLoginFailureMessage } from "@/components/providers/provider-signin-availability";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
@@ -66,6 +67,7 @@ export type ProviderProfileLoginFlowState =
       readonly kind: "waiting";
       readonly profileId: string | null;
       readonly url: string | null;
+      readonly userCode: string | null;
     }
   | {
       readonly kind: "identity";
@@ -618,6 +620,19 @@ export function useProviderProfileLoginFlow(
             // always the caller's own `existingProfileId`, including the
             // ambient `null`), so there is nothing to validate there beyond
             // `data.started`.
+            const failure = data.failure ?? null;
+            if (failure !== null) {
+              fail(
+                providerStartLoginFailureMessage(
+                  failure,
+                  failureMessages.notStarted,
+                ),
+                failure === "device_code_missing"
+                  ? "timeout"
+                  : "authentication",
+              );
+              return;
+            }
             if (
               !data.started ||
               (mode === "create" && nextProfileId === null)
@@ -631,6 +646,10 @@ export function useProviderProfileLoginFlow(
               kind: "waiting",
               profileId: nextProfileId,
               url: data.url,
+              // Test doubles (and a body that skipped 1.2 parse) omit the
+              // field; treat missing as "no device code" so the paste field
+              // still renders for Claude.
+              userCode: data.userCode ?? null,
             });
             // Per-attempt budget for the ambient `authPending` re-poll (see
             // the constant's doc comment). Scoped to this attempt's closure -

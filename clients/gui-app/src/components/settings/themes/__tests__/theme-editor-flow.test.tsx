@@ -20,7 +20,7 @@ import type { ThemeDefinition } from "@/lib/themes/theme-definition";
 function resetThemeStores(): void {
   window.localStorage.clear();
   useThemeLibraryStore.setState({
-    version: 1,
+    version: 2,
     themes: [],
     selected: { light: null, dark: null },
     glassOpacity: 100,
@@ -126,6 +126,46 @@ describe("theme editor flow", () => {
     expect(useThemeLibraryStore.getState().selected.dark).toBe(
       saved.selected.dark,
     );
+  });
+
+  it("keeps invalid color text visible with an inline alert", async () => {
+    renderThemes();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create theme" }));
+    const editor = await screen.findByRole("dialog", { name: "Theme editor" });
+    const background = within(editor).getByLabelText("Background color value");
+
+    fireEvent.change(background, { target: { value: "not-a-color" } });
+    fireEvent.blur(background);
+
+    expect((background as HTMLInputElement).value).toBe("not-a-color");
+    expect(background.getAttribute("aria-invalid")).toBe("true");
+    expect(within(editor).getByRole("alert").textContent).toContain(
+      "This value has not been applied.",
+    );
+    expect(useThemeLibraryStore.getState().draft?.colors.background).not.toBe(
+      "not-a-color",
+    );
+  });
+
+  it("uses clear basic color and interface picking labels", async () => {
+    renderThemes();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create theme" }));
+    const editor = await screen.findByRole("dialog", { name: "Theme editor" });
+
+    expect(
+      within(editor).getByRole("button", { name: "Basic colors" }),
+    ).toBeTruthy();
+    expect(
+      within(editor).getByRole("button", { name: "Background" }),
+    ).toBeTruthy();
+    expect(
+      within(editor).getByRole("button", { name: "Accent color" }),
+    ).toBeTruthy();
+    expect(
+      within(editor).getByRole("button", { name: "Pick from interface" }),
+    ).toBeTruthy();
   });
 
   it("requires confirmation before resetting the theme library", async () => {

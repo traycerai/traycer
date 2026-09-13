@@ -19,6 +19,7 @@ import type {
   BrowserViewNativeTabStatusChange,
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
+  BrowserViewGuestViewportRequested,
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
@@ -247,6 +248,16 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostEvent.browserViewGuestReleaseRequested,
           handler,
         ),
+      onGuestViewportRequested: (handler) =>
+        subscribe<BrowserViewGuestViewportRequested>(
+          RunnerHostEvent.browserViewGuestViewportRequested,
+          handler,
+        ),
+      reportGuestViewportResult: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewGuestViewportResult,
+          input,
+        ) as Promise<void>,
     },
   };
 }

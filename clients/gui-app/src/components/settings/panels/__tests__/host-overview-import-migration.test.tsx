@@ -137,6 +137,7 @@ function fakeStreamBinding(input: {
     isClosed: () => false,
     isReady: () => false,
     notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     getMethodSupport: () => input.scanSupport,
     subscribeMethodSupport: () => () => undefined,

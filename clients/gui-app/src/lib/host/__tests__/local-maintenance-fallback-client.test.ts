@@ -583,6 +583,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           };
         },
       },

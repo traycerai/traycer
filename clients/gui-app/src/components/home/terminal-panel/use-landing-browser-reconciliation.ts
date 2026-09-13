@@ -1,0 +1,302 @@
+import { useEffect } from "react";
+import { v4 as uuidv4 } from "uuid";
+import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { consumeIndependentPageOpenedTab } from "@/lib/browser-view/sessions/independent-page-open-registry";
+import { useDesktopWindowId } from "@/lib/windows/desktop-window-id";
+import {
+  activeLandingBrowserTab,
+  landingBrowserTabs,
+  landingTabRefKey,
+  useLandingPanelStore,
+  type LandingBrowserTabRef,
+  type LandingPanelTabRef,
+} from "@/stores/home/landing-panel-store";
+
+/**
+ * The Start Page's browser scope. Its tabs belong to the user on a device and
+ * to no task, which the wire spells `independent` rather than with a sentinel
+ * epic id.
+ */
+export const INDEPENDENT_BROWSER_SCOPE: HostResourceScope = {
+  kind: "independent",
+};
+
+/**
+ * The device's independent browser inventory, reconciled into the panel's
+ * `(device, browser)` slice.
+ *
+ * It mirrors the RULES of the terminal reconciler - adopt what the host has and
+ * the store does not, drop what the host no longer has unless it is tombstoned,
+ * refresh derived titles but never a manual one - and deliberately not its
+ * MACHINERY. The terminal side runs an abortable zero-stale `terminal.list`
+ * fetch with a latch and two wake sources because its authority is a request.
+ * This one's authority is a push stream the coordinator already holds, so the
+ * whole pass is a projection of `sessions.items` and re-runs when that changes.
+ *
+ * `inventoryReady` is the gate and it is not optional: the coordinator reports
+ * an empty `items` while a stream is still connecting, which is indistinguishable
+ * from "this device has no browser tabs" - and acting on it would drop every
+ * browser tab in the panel on every reconnect.
+ */
+export function useLandingBrowserReconciliation(args: {
+  readonly hostId: string;
+  readonly sessions: BrowserSessionsState;
+  /**
+   * `false` for a surface that shares the coordinator but must not write the
+   * store. Two reconcilers on one slice would each act against a snapshot the
+   * other had already applied.
+   */
+  readonly enabled: boolean;
+}): void {
+  const { hostId, sessions, enabled } = args;
+  const inventoryReady = sessions.inventoryReady;
+  const items = sessions.items;
+  const desktopWindowId = useDesktopWindowId();
+
+  useEffect(() => {
+    if (!enabled || !inventoryReady) return;
+    const store = useLandingPanelStore.getState();
+    const reconciliation = reconcileLandingBrowserTabs({
+      tabs: landingBrowserTabs(store.tabs).filter(
+        (tab) => tab.hostId === hostId,
+      ),
+      hostId,
+      sessions: items,
+      excludedTabKeys: new Set(
+        store.pendingKills
+          .filter((pending) => pending.hostId === hostId)
+          .map((pending) => landingTabRefKey(pending)),
+      ),
+      mintInstanceId: () => `landing-browser-${uuidv4()}`,
+    });
+    store.applyReconciliationSlice(
+      hostId,
+      "browser",
+      reconciliation.tabs,
+      reconciliation.collapseWhenEmpty,
+    );
+    // A tab the PAGE opened is a gesture the reader made, so the row it lands
+    // as is the one they should be on. Everything else the pass adopts is the
+    // device's existing inventory arriving - another window's tabs, a
+    // reconnect's snapshot - and yanking the selection onto those would move
+    // the panel for reasons the person at this keyboard did not cause.
+    //
+    // The last one wins because activation is single-valued and a pass can
+    // adopt several: the most recent open is the one still on screen in the
+    // reader's head.
+    //
+    // Consumed in every window, activated in one. `tabOpened` is broadcast to
+    // every subscriber of the device's independent stream, so each desktop
+    // window records the same popup in its own registry and would move its own
+    // panel onto it - a popup raised in one window stealing the selection in
+    // all of them. Which window's reader made the gesture is answered by
+    // `raisedInThisWindow`, from where the popup and its opener are on screen.
+    // The active row is read from the snapshot taken ABOVE the apply, which is
+    // what the reader had in front of them when the popup arrived.
+    const pageOpened = reconciliation.adoptedTabs.filter((tab) => {
+      const opened = consumeIndependentPageOpenedTab({
+        hostId: tab.hostId,
+        sessionId: tab.sessionId,
+        tabId: tab.tabId,
+      });
+      if (opened === null) return false;
+      return raisedInThisWindow({
+        popup: tab,
+        openerTabId: opened.openerTabId,
+        raisedWhileFocused: opened.raisedWhileFocused,
+        sessions: items,
+        activeTab: activeLandingBrowserTab(store),
+        desktopWindowId,
+      });
+    });
+    const landed = pageOpened.at(-1);
+    if (landed !== undefined) store.activateTab(landed.instanceId);
+  }, [desktopWindowId, enabled, hostId, inventoryReady, items]);
+}
+
+/**
+ * Was a page-opened tab this window's reader's doing?
+ *
+ * A NATIVE popup is a guest born in the window its opener lives in, and the
+ * device says which through `boundWindowId`: only that window's reader could
+ * have clicked in it. A HEADLESS popup - a remote device's tab, or a device
+ * with no desktop - is bound nowhere and its pixels reach every window that
+ * watches, so the question moves to the opener: for a native opener, the window
+ * it is bound in; otherwise the window whose reader had the opener on screen
+ * AND held focus when the frame arrived. Both terms are needed: the panel strip
+ * is shared across windows, so two windows can be on the same row of the same
+ * session, and only one of them was the one the reader clicked in. When the
+ * device could not name the opener (`noopener`, or an opener already gone) the
+ * row term relaxes to the session: the focused window looking at that session
+ * is the best answer left, and a window on a terminal, on another session, or
+ * behind the one the reader was in did not raise it.
+ */
+function raisedInThisWindow(args: {
+  readonly popup: LandingBrowserTabRef;
+  readonly openerTabId: string | null;
+  readonly raisedWhileFocused: boolean;
+  readonly sessions: readonly BrowserSessionInfo[];
+  readonly activeTab: LandingBrowserTabRef | null;
+  readonly desktopWindowId: string | null;
+}): boolean {
+  const {
+    popup,
+    openerTabId,
+    raisedWhileFocused,
+    sessions,
+    activeTab,
+    desktopWindowId,
+  } = args;
+  const popupBoundWindowId = boundWindowIdOf(sessions, popup);
+  if (popupBoundWindowId !== null) {
+    return popupBoundWindowId === desktopWindowId;
+  }
+  if (openerTabId !== null) {
+    const openerBoundWindowId = boundWindowIdOf(sessions, {
+      sessionId: popup.sessionId,
+      tabId: openerTabId,
+    });
+    if (openerBoundWindowId !== null) {
+      return openerBoundWindowId === desktopWindowId;
+    }
+  }
+  if (!raisedWhileFocused) return false;
+  if (
+    activeTab === null ||
+    activeTab.hostId !== popup.hostId ||
+    activeTab.sessionId !== popup.sessionId
+  ) {
+    return false;
+  }
+  return openerTabId === null || activeTab.tabId === openerTabId;
+}
+
+/** The window a tab's native guest is bound in, per the device; `null` if none. */
+function boundWindowIdOf(
+  sessions: readonly BrowserSessionInfo[],
+  tab: Pick<LandingBrowserTabRef, "sessionId" | "tabId">,
+): string | null {
+  return (
+    sessions
+      .find((session) => session.sessionId === tab.sessionId)
+      ?.tabs.find((candidate) => candidate.tabId === tab.tabId)
+      ?.boundWindowId ?? null
+  );
+}
+
+export interface LandingBrowserReconciliationInput {
+  /** The `(hostId, "browser")` slice, not the whole panel list. */
+  readonly tabs: ReadonlyArray<LandingBrowserTabRef>;
+  readonly hostId: string;
+  readonly sessions: readonly BrowserSessionInfo[];
+  /** Tombstoned tabs, which stay dropped rather than being re-adopted. */
+  readonly excludedTabKeys: ReadonlySet<string>;
+  readonly mintInstanceId: () => string;
+}
+
+export interface LandingBrowserReconciliationResult {
+  readonly tabs: ReadonlyArray<LandingPanelTabRef>;
+  readonly adoptedTabs: ReadonlyArray<LandingBrowserTabRef>;
+  readonly removedInstanceIds: ReadonlyArray<string>;
+  readonly collapseWhenEmpty: boolean;
+}
+
+/**
+ * A browser tab's default title: the page title, falling back to the address.
+ *
+ * The address is the fallback rather than a placeholder because it is what the
+ * user recognises a tab by before its title arrives, and a blank page has no
+ * title at all.
+ */
+export function defaultLandingBrowserTitle(tab: {
+  readonly title: string | null;
+  readonly url: string;
+}): string {
+  const title = tab.title?.trim() ?? "";
+  return title.length > 0 ? title : tab.url;
+}
+
+/**
+ * Pure so the adopt / drop / title rules can be driven directly, which is the
+ * only way to pin the tombstone exclusion: a tombstoned tab is still in the
+ * host's inventory until the close lands, so "absent from the snapshot" is not
+ * what keeps it out of the panel.
+ */
+export function reconcileLandingBrowserTabs(
+  input: LandingBrowserReconciliationInput,
+): LandingBrowserReconciliationResult {
+  // Only this device's independent sessions. The coordinator is keyed by scope
+  // and host, so its items are already both - filtering again is a guard, not a
+  // second opinion.
+  const hostSessions = input.sessions.filter(
+    (session) =>
+      session.hostId === input.hostId && session.scope.kind === "independent",
+  );
+  const tabBySessionTab = new Map(
+    hostSessions.flatMap((session) =>
+      session.tabs.map((tab) => [
+        landingTabRefKey({
+          kind: "browser",
+          hostId: input.hostId,
+          sessionId: session.sessionId,
+          tabId: tab.tabId,
+        }),
+        tab,
+      ]),
+    ),
+  );
+  const matchedKeys = new Set<string>();
+  const removedInstanceIds: string[] = [];
+
+  const tabs = input.tabs.flatMap((tab) => {
+    const key = landingTabRefKey(tab);
+    if (input.excludedTabKeys.has(key)) {
+      removedInstanceIds.push(tab.instanceId);
+      return [];
+    }
+    const live = tabBySessionTab.get(key);
+    if (live === undefined) {
+      // The host is publishing this device's whole inventory, so a tab it does
+      // not list is a tab that is gone - unlike a terminal, whose absence can
+      // mean a create still in flight under a client-supplied id. Every browser
+      // tab id here was minted by the host and reported before it was stored.
+      removedInstanceIds.push(tab.instanceId);
+      return [];
+    }
+    matchedKeys.add(key);
+    if (tab.titleSource === "manual") return [tab];
+    const name = defaultLandingBrowserTitle(live);
+    return [name === tab.name ? tab : { ...tab, name }];
+  });
+
+  const adoptedTabs = hostSessions.flatMap((session) =>
+    session.tabs.flatMap((live) => {
+      const key = landingTabRefKey({
+        kind: "browser",
+        hostId: input.hostId,
+        sessionId: session.sessionId,
+        tabId: live.tabId,
+      });
+      if (matchedKeys.has(key) || input.excludedTabKeys.has(key)) return [];
+      const adopted: LandingBrowserTabRef = {
+        kind: "browser",
+        instanceId: input.mintInstanceId(),
+        hostId: input.hostId,
+        sessionId: session.sessionId,
+        tabId: live.tabId,
+        name: defaultLandingBrowserTitle(live),
+        titleSource: "default",
+      };
+      return [adopted];
+    }),
+  );
+
+  return {
+    tabs: [...tabs, ...adoptedTabs],
+    adoptedTabs,
+    removedInstanceIds,
+    collapseWhenEmpty: removedInstanceIds.length > 0,
+  };
+}

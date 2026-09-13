@@ -9,12 +9,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type {
   WorktreeFolderIntent,
   WorktreeWorkspaceSummary,
 } from "@traycer/protocol/host/worktree-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
 import {
   contrastRatio,
   DARK_THEME_SURFACES,
@@ -55,17 +57,37 @@ vi.mock("@/components/ui/dropdown-menu", () => {
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly "data-testid"?: string;
-    }) => <div data-testid={props["data-testid"]}>{props.children}</div>,
+      readonly container?: HTMLElement;
+    }) => {
+      const content = (
+        <div data-testid={props["data-testid"]}>{props.children}</div>
+      );
+      return props.container === undefined
+        ? content
+        : createPortal(content, props.container);
+    },
     DropdownMenuItem: item,
     DropdownMenuLabel: (props: { readonly children: ReactNode }) => (
       <div>{props.children}</div>
     ),
     DropdownMenuSub: passthrough,
     DropdownMenuSubTrigger: item,
-    DropdownMenuSubContent: (props: { readonly children: ReactNode }) => (
-      <div>{props.children}</div>
-    ),
-    DropdownMenuPortal: passthrough,
+    DropdownMenuSubContent: (props: {
+      readonly children: ReactNode;
+      readonly container?: HTMLElement;
+    }) => {
+      const content = <div>{props.children}</div>;
+      return props.container === undefined
+        ? content
+        : createPortal(content, props.container);
+    },
+    DropdownMenuPortal: (props: {
+      readonly children: ReactNode;
+      readonly container?: HTMLElement;
+    }) =>
+      props.container === undefined
+        ? props.children
+        : createPortal(props.children, props.container),
   };
 });
 
@@ -334,7 +356,7 @@ describe("FolderRow", () => {
       edited = p;
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit setup and teardown scripts" }),
+      screen.getByRole("button", { name: "Repository settings" }),
     );
     expect(edited).toBe("/repo");
   });
@@ -818,6 +840,74 @@ describe("FolderRow", () => {
 });
 
 describe("WorkspaceFolderRows", () => {
+  function DialogBoundaryRows(): ReactNode {
+    const [boundaryEl, setBoundaryEl] = useState<HTMLDivElement | null>(null);
+    return (
+      <div data-testid="dialog-overlay-boundary" ref={setBoundaryEl}>
+        <DialogOverlayBoundaryContext.Provider value={boundaryEl}>
+          <div data-testid="folder-rows-host">
+            <WorkspaceFolderRows
+              recentWorkspaces={null}
+              moveToRecent={false}
+              items={[item({})]}
+              trailingSlot={null}
+              onAddFolder={NOOP_ADD}
+              addFolderPending={false}
+              addFolderDisabled={false}
+              addFolderDisabledReason={null}
+              onUpdate={null}
+              updateEnabled={false}
+              updatePending={false}
+              discardDisabled={false}
+              onEditEnvironment={NOOP}
+              readOnly={false}
+              bindingResolved
+            />
+          </div>
+        </DialogOverlayBoundaryContext.Provider>
+      </div>
+    );
+  }
+
+  it("keeps location menus and existing-worktree submenus under the dialog boundary", () => {
+    render(
+      <TooltipProvider>
+        <DialogBoundaryRows />
+      </TooltipProvider>,
+    );
+
+    const boundary = screen.getByTestId("dialog-overlay-boundary");
+    const rowsHost = screen.getByTestId("folder-rows-host");
+    fireEvent.click(screen.getByTestId("folder-location-trigger"));
+
+    const locationMenu = screen.getByTestId("folder-location-menu");
+    expect(boundary.contains(locationMenu)).toBe(true);
+    expect(rowsHost.contains(locationMenu)).toBe(false);
+
+    fireEvent.click(screen.getByTestId("folder-location-existing"));
+    const existingList = screen.getByTestId("folder-location-existing-list");
+    expect(boundary.contains(existingList)).toBe(true);
+    expect(locationMenu.contains(existingList)).toBe(false);
+  });
+
+  it("keeps the new-branch popover under the dialog boundary, outside the rows", async () => {
+    render(
+      <TooltipProvider>
+        <DialogBoundaryRows />
+      </TooltipProvider>,
+    );
+
+    const boundary = screen.getByTestId("dialog-overlay-boundary");
+    const rowsHost = screen.getByTestId("folder-rows-host");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose worktree branch" }),
+    );
+
+    const branchPopover = await screen.findByTestId("folder-branch-popover");
+    expect(boundary.contains(branchPopover)).toBe(true);
+    expect(rowsHost.contains(branchPopover)).toBe(false);
+  });
+
   it("renders the leading slot, the first folder, and an Add folder button", () => {
     render(
       <TooltipProvider>
@@ -835,7 +925,6 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
-          nestedInPopover={false}
           readOnly={false}
           bindingResolved
         />
@@ -889,7 +978,6 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
-          nestedInPopover={false}
           readOnly={false}
           bindingResolved
         />
@@ -947,7 +1035,6 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
-          nestedInPopover={false}
           readOnly={false}
           bindingResolved
         />
@@ -979,7 +1066,6 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
-          nestedInPopover={false}
           readOnly={false}
           bindingResolved={false}
         />
@@ -1006,7 +1092,6 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
-          nestedInPopover={false}
           readOnly
           bindingResolved
         />
@@ -1042,7 +1127,6 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
-          nestedInPopover={false}
           readOnly={false}
           bindingResolved
         />
@@ -1072,7 +1156,6 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
-          nestedInPopover={false}
           readOnly={false}
           bindingResolved
         />
@@ -1104,7 +1187,6 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
-          nestedInPopover={false}
           readOnly={false}
           bindingResolved
         />
@@ -1136,7 +1218,6 @@ describe("WorkspaceFolderRows", () => {
           discardDisabled={discardDisabled}
           draftPending
           onEditEnvironment={NOOP}
-          nestedInPopover={false}
           readOnly={false}
           bindingResolved
         />

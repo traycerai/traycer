@@ -17,19 +17,32 @@ import { cn } from "@/lib/utils";
 
 interface TabStripSkeletonProps {
   readonly count: number;
+  /** Whether the fixed Home tab will be there after hydration. Its slot is
+   * reserved here so the whole strip does not slide right by a tab's width the
+   * moment the bridge hydrates. */
+  readonly reserveHome: boolean;
 }
 
-export function TabStripSkeleton({ count }: TabStripSkeletonProps) {
+export function TabStripSkeleton({
+  count,
+  reserveHome,
+}: TabStripSkeletonProps) {
   return (
     <div
       data-testid="tab-strip-skeleton"
       aria-busy
       aria-label="Restoring open tabs"
       className={cn(
-        "flex h-10 w-full min-w-0 items-center gap-1 px-2",
+        "flex h-9 w-full min-w-0 items-center gap-1 px-2",
         "[-webkit-app-region:drag]",
       )}
     >
+      {reserveHome ? (
+        <Skeleton
+          data-testid="tab-strip-skeleton-home"
+          className="h-7 w-11 shrink-0 rounded-md [-webkit-app-region:no-drag]"
+        />
+      ) : null}
       {Array.from({ length: count }, (_, index) => (
         <Skeleton
           key={index}

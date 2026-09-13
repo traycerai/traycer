@@ -19,6 +19,7 @@ import { useHostLease } from "@/hooks/host/use-host-lease";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
 import { HostUpdateDrainGateRow } from "@/components/settings/host-scope/host-registry-updates";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import {
   HostOverviewHeaderActions,
@@ -49,6 +50,7 @@ import {
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import { HostImportMigrationSection } from "@/components/settings/panels/host-import-migration-section";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
+import { ArtifactVersionSettingsSection } from "@/components/settings/panels/artifact-version-settings-section";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { useRunnerReinstallTraycer } from "@/hooks/runner/use-runner-reinstall-traycer-mutation";
@@ -954,6 +956,7 @@ export function HostOverviewPanel(props: {
     hostId: scope.hostId,
     runningVersion: view.hostVersion,
     storeFormats: statusQuery.data?.storeFormats ?? null,
+    install: statusQuery.data?.install ?? null,
     // From the facts as READ, qualified by the record leg's liveness - see
     // `legacyFactsRead`.
     activationDebt:
@@ -1711,6 +1714,12 @@ export function HostOverviewPanel(props: {
             />
           )
         }
+      />
+
+      <ArtifactVersionSettingsSection
+        client={client}
+        hostId={scope.hostId}
+        enabled={usable}
       />
 
       {/* Everything about this host's OWN local data: the sessions on its disk
@@ -2735,7 +2744,8 @@ function HostOverviewInstallationCard(props: {
 }): ReactNode {
   return (
     <SettingsGroup
-      title="Installation"
+      group={HOST_OVERVIEW.definitions.installation}
+      showTitle
       tone="default"
       dataTestId="host-installation"
       fill={false}

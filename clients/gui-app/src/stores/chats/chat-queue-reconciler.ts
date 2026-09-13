@@ -9,18 +9,25 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
+import {
+  restoreResultManifestSchema,
+  type RestoreResultManifest,
+} from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import {
   classifyContentRecovery,
   recoveryTextFromContent,
 } from "@/lib/composer/content-recovery";
 import type {
   AcceptedChatAction,
+  ChatRestoreSlot,
   FailedSendRestorationState,
   PendingChatAction,
   PendingUserMessage,
   StagedWorktreeIntentSource,
 } from "@/stores/chats/chat-session-store";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
+import { queueItemCanPauseFromQueueHeader } from "@/lib/chat/queue-item-predicates";
 
 /**
  * Notice code for a send whose text the CLIENT is the last holder of - the
@@ -1780,6 +1787,8 @@ export function addAcceptedAction(
         clientActionId: pending.clientActionId,
         action: pending.action,
         queueItemId: pending.queueItemId,
+        checkpointId: pending.checkpointId,
+        revertArtifacts: pending.revertArtifacts,
         interviewBlockId: pending.interviewBlockId,
         interviewDeliveryRetry: pending.interviewDeliveryRetry,
         messageId: pending.messageId,
@@ -1884,12 +1893,584 @@ export function withoutResolvedAcceptedQueueCancellations(
   }, {});
 }
 
+/**
+ * What the host's `pauseQueue` leaves behind, read from the ROWS. The host
+ * holds every human backlog prompt it can (`queueItemCanPauseForUser`, which
+ * {@link queueItemCanPauseFromQueueHeader} mirrors), and the queue's overall
+ * `status` is DERIVED from the rows afterwards - `running` while any row is
+ * still runnable, `paused` only when none is. So a pause has landed once no
+ * row it would hold remains, whatever the derived status says: with a
+ * runnable system-owned row (an A2A reply, a managed-command digest) beside
+ * the held prompts the status stays `running` and a status-keyed verdict
+ * would never settle.
+ */
+export function queuePauseSettled(queue: ChatQueueState): boolean {
+  return !queue.items.some(queueItemCanPauseFromQueueHeader);
+}
+
+/**
+ * What the host's `resumeQueue` leaves behind: every `paused` row released
+ * to `pending`. Read from the rows for the same reason as {@link
+ * queuePauseSettled}, and because the header offers Resume on
+ * `items.some(paused)` regardless of `status` - a queue whose status reads
+ * `idle` or `running` can still carry paused rows, and a resume accepted
+ * against it is not settled until they are released.
+ */
+export function queueResumeSettled(queue: ChatQueueState): boolean {
+  return !queue.items.some((item) => item.status === "paused");
+}
+
+/**
+ * Retire `pauseQueue` / `resumeQueue` records once the authoritative queue
+ * shows the requested state on its rows ({@link queuePauseSettled} /
+ * {@link queueResumeSettled}) - the removal path {@link
+ * acceptedActionIsUnsettled}'s holds need so that settled history cannot come
+ * back as "unsettled".
+ *
+ * Without it, a record judged from LIVE state alone flips back: a pause that
+ * settled reads unsettled again the moment the queue is resumed by a later
+ * action, and would veto parking until the retention window happened to
+ * prune the record. Retiring at settlement is what keeps the hold bounded by
+ * the lifecycle rather than by the calendar. The same two predicates decide
+ * here and in the verdict, so the record and the hold expire together.
+ *
+ * Runs wherever the queue truth lands ({@link withoutResolvedAcceptedQueueCancellations}'s
+ * two doors).
+ */
+export function withoutSettledAcceptedQueueStatusActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  queue: ChatQueueState,
+): Readonly<Record<string, AcceptedChatAction>> {
+  return withoutAcceptedActions(acceptedActions, (action) => {
+    if (action.action === "pauseQueue") return queuePauseSettled(queue);
+    if (action.action === "resumeQueue") return queueResumeSettled(queue);
+    return false;
+  });
+}
+
+/**
+ * Retire ONE accepted `restoreCheckpoint` record for `checkpointId` - the
+ * earliest accepted - because a `restoreCompleted` frame for it has just
+ * arrived.
+ *
+ * Called from the frame door, so it only ever sees records accepted BEFORE
+ * the frame, which is the ordering {@link acceptedActionIsUnsettled}'s
+ * `restoreCheckpoint` arm relies on: a record exists exactly while no
+ * completion for its checkpoint has followed its acceptance. One record per
+ * frame because the host runs restores serially and each completion is one
+ * attempt finishing: two restores of the same checkpoint accepted back to
+ * back (the composer's gate reads `pendingActions`, so the first ack re-opens
+ * it) are two attempts, and one frame retiring both let the first attempt's
+ * completion park the epic before the second had started. Earliest first
+ * because that is the attempt the host reaches first.
+ *
+ * Completion, not start: the record used to retire at `restoreStarted` and
+ * hand the hold to the in-flight slot, but that slot is UI state a reconnect
+ * snapshot sweeps (`sweepStaleRestoreSlot`), so a restore still running
+ * across a reconnect had no hold left and the epic parked over it (Codex on
+ * b63aa85d7). The record is the bookkeeping now and the slot is only the
+ * spinner. The durable `checkpoint.restored` event is the other door
+ * ({@link settleRestoreAttemptsByEvidence}), exact by client action id, for a
+ * completion frame that died with the dropped stream.
+ *
+ * NOT for a frame the event door already answered: when the outcome reached
+ * the client ahead of its frame, the record is gone and the earliest record
+ * left for the checkpoint is a LATER attempt's. The caller asks the ledger
+ * first ({@link consumeSettledRestoreCompletion}) and only retires here when
+ * the frame is a completion no evidence has settled.
+ */
+export function withoutEarliestAcceptedRestoreActionFor(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  checkpointId: string,
+): Readonly<Record<string, AcceptedChatAction>> {
+  const earliest = Object.values(acceptedActions)
+    .filter(
+      (action) =>
+        action.action === "restoreCheckpoint" &&
+        (action.checkpointId === null || action.checkpointId === checkpointId),
+    )
+    .toSorted(
+      (a, b) =>
+        a.acceptedAt - b.acceptedAt ||
+        a.clientActionId.localeCompare(b.clientActionId),
+    )
+    .at(0);
+  if (earliest === undefined) return acceptedActions;
+  return withoutAcceptedActions(
+    acceptedActions,
+    (action) => action.clientActionId === earliest.clientActionId,
+  );
+}
+
+/**
+ * Evidence that a restore attempt is over, naming its action.
+ *
+ * `outcome`: the durable `checkpoint.restored` event - the attempt ran and a
+ * `restoreCompleted` frame for it exists (broadcast after the event, so it
+ * may still be on its way). `outcome` is the manifest it recorded, `null`
+ * when the metadata did not parse: the record still retires, the spinner is
+ * cleared rather than completed, and the frame is still owed.
+ *
+ * `refusal`: an error notice or a rejected ack for the action - the attempt
+ * is over WITHOUT a completion; no frame follows. The two kinds part at the
+ * completion ledger ({@link SettledRestoreCompletion}): only an `outcome`
+ * leaves an entry, because only an outcome has a frame to answer for.
+ */
+export type RestoreAttemptEvidence =
+  | {
+      readonly clientActionId: string;
+      readonly kind: "outcome";
+      readonly outcome: RestoreResultManifest | null;
+    }
+  | {
+      readonly clientActionId: string;
+      readonly kind: "refusal";
+    };
+
+/**
+ * The restore outcomes in `events`: every `checkpoint.restored` event, which
+ * the host writes BEFORE it broadcasts `restoreCompleted`, so a completion
+ * frame lost with a dropped stream still has this record of it in the next
+ * legacy snapshot's events and in the live `eventAppended` for the same
+ * event. An outcome whose metadata does not parse still names its action -
+ * the record retires, the spinner is cleared rather than completed.
+ */
+export function restoreOutcomesFrom(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<RestoreAttemptEvidence> {
+  const evidence: RestoreAttemptEvidence[] = [];
+  for (const event of events) {
+    if (event.type !== "checkpoint.restored" || event.clientActionId === null) {
+      continue;
+    }
+    const parsed = restoreResultManifestSchema.safeParse(event.metadata);
+    evidence.push({
+      clientActionId: event.clientActionId,
+      kind: "outcome",
+      outcome: parsed.success ? parsed.data : null,
+    });
+  }
+  return evidence;
+}
+
+/**
+ * A restore attempt whose record the durable outcome retired BEFORE its
+ * `restoreCompleted` frame arrived - the frame this entry now answers for.
+ *
+ * The host broadcasts the frame first and the outcome event second, so on
+ * the live line the frame door ({@link withoutEarliestAcceptedRestoreActionFor})
+ * retires the record and the event names nothing. The reverse order is
+ * reachable all the same: the outcome is journaled across an await, and a
+ * legacy snapshot serialized in that gap carries it ahead of the frame. The
+ * frame carries no action id, so when it then arrives it would retire the
+ * EARLIEST record for its checkpoint - a second attempt accepted back to
+ * back, whose own restore has not run yet (Codex on ad9f99fb8). This entry
+ * is how the frame door tells "already settled by the event" from "one more
+ * attempt finished": one entry per retired record, consumed by the next
+ * completion frame for the checkpoint on the same connection.
+ *
+ * `finishedAt` is the recorded `restoredAt`, which the frame repeats as its
+ * own `finishedAt`, so a matched frame is the same completion and not merely
+ * the same checkpoint; `null` when the recorded manifest did not parse and
+ * only the checkpoint is known. Stamped with the connection the evidence
+ * arrived on: the frame it waits for can only come on that connection (the
+ * gap above is a same-connection gap), so a reconnect drops it
+ * ({@link withoutSettledRestoreCompletionsBefore}) rather than letting it
+ * swallow a later attempt's frame.
+ */
+export interface SettledRestoreCompletion {
+  readonly checkpointId: string;
+  readonly finishedAt: number | null;
+  readonly connectionEpoch: number;
+}
+
+/** The restore-attempt bookkeeping that evidence settles, as one unit. */
+export interface SettledRestoreAttempts {
+  readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
+  readonly restore: ChatRestoreSlot | null;
+  readonly settledRestoreCompletions: ReadonlyArray<SettledRestoreCompletion>;
+}
+
+/**
+ * Retire the accepted `restoreCheckpoint` records the evidence names, and
+ * settle the progress slot that belonged to a retired attempt.
+ *
+ * Exact by client action id, unlike the completion frame's earliest-first
+ * retirement. The slot is settled only through a record: it carries no
+ * action id itself, so an outcome for a checkpoint the slot names is taken
+ * as the slot's own attempt only when it retires a record for that checkpoint
+ * - an old outcome for the same checkpoint (an earlier attempt, already
+ * retired) names no record and leaves a newer attempt's spinner alone. The
+ * attempts of one checkpoint run serially, so a live slot for the checkpoint
+ * is the retiring attempt's, never a later one's. With an outcome the slot
+ * becomes `completed` from the recorded result, exactly as the frame would
+ * have set it; a refusal or failure clears it.
+ *
+ * Both halves move together because both are parking holds
+ * (`hasUnsettledChatWork` reads the record AND the in-flight slot): the
+ * record retired by a live outcome event while the spinner stayed in flight
+ * held the epic until a reconnect happened to sweep it (Codex on ac6c4eca1).
+ *
+ * A record retired by an OUTCOME (not a refusal - a refused attempt sends no
+ * completion frame) also leaves a {@link SettledRestoreCompletion} for the
+ * frame that may still follow it on `connectionEpoch`. Returned as the whole
+ * next ledger so a caller can spread the result into the store state.
+ */
+export function settleRestoreAttemptsByEvidence(
+  current: SettledRestoreAttempts,
+  evidence: ReadonlyArray<RestoreAttemptEvidence>,
+  connectionEpoch: number,
+): SettledRestoreAttempts {
+  if (evidence.length === 0) return current;
+  const byAction = new Map(
+    evidence.map((item) => [item.clientActionId, item] as const),
+  );
+  let nextRestore = current.restore;
+  const settled: SettledRestoreCompletion[] = [];
+  const nextAccepted = withoutAcceptedActions(
+    current.acceptedActions,
+    (action) => {
+      if (action.action !== "restoreCheckpoint") return false;
+      const item = byAction.get(action.clientActionId);
+      if (item === undefined) return false;
+      const outcome = item.kind === "outcome" ? item.outcome : null;
+      if (
+        nextRestore !== null &&
+        nextRestore.kind !== "completed" &&
+        nextRestore.checkpointId === action.checkpointId
+      ) {
+        nextRestore =
+          outcome === null
+            ? null
+            : {
+                kind: "completed",
+                checkpointId: outcome.checkpointId,
+                finishedAt: outcome.restoredAt,
+                results: outcome.results,
+              };
+      }
+      if (item.kind === "outcome") {
+        // A frame follows an outcome, parsed or not; the checkpoint is known
+        // from the record when the manifest is not.
+        const checkpointId = outcome?.checkpointId ?? action.checkpointId;
+        if (checkpointId !== null) {
+          settled.push({
+            checkpointId,
+            finishedAt: outcome?.restoredAt ?? null,
+            connectionEpoch,
+          });
+        }
+      }
+      return true;
+    },
+  );
+  return {
+    acceptedActions: nextAccepted,
+    restore: nextRestore,
+    settledRestoreCompletions:
+      settled.length === 0
+        ? current.settledRestoreCompletions
+        : [...current.settledRestoreCompletions, ...settled],
+  };
+}
+
+/**
+ * The ledger entries whose frame can still arrive: those stamped with
+ * `connectionEpoch`. An entry from an older connection waited for a frame
+ * that died with it; kept, it would answer for the NEXT attempt's frame on
+ * the new connection and leave that attempt's record holding forever.
+ */
+export function withoutSettledRestoreCompletionsBefore(
+  entries: ReadonlyArray<SettledRestoreCompletion>,
+  connectionEpoch: number,
+): ReadonlyArray<SettledRestoreCompletion> {
+  const kept = entries.filter(
+    (entry) => entry.connectionEpoch === connectionEpoch,
+  );
+  return kept.length === entries.length ? entries : kept;
+}
+
+/** What answering a completion frame from the ledger leaves behind. */
+export interface ConsumedSettledRestoreCompletion {
+  readonly entries: ReadonlyArray<SettledRestoreCompletion>;
+  /** `true` when the frame was the evidence's own completion, already retired. */
+  readonly consumed: boolean;
+}
+
+/**
+ * Answer a `restoreCompleted` frame from the ledger: consume the earliest
+ * entry for its checkpoint whose `finishedAt` is the frame's (or unknown).
+ * One entry per frame, because one frame is one attempt finishing - an
+ * entry left in place would answer for the next attempt's frame too. No
+ * entry means the frame is a completion the evidence has not retired, and
+ * the frame door retires a record itself.
+ */
+export function consumeSettledRestoreCompletion(
+  entries: ReadonlyArray<SettledRestoreCompletion>,
+  checkpointId: string,
+  finishedAt: number,
+): ConsumedSettledRestoreCompletion {
+  const index = entries.findIndex(
+    (entry) =>
+      entry.checkpointId === checkpointId &&
+      (entry.finishedAt === null || entry.finishedAt === finishedAt),
+  );
+  if (index === -1) return { entries, consumed: false };
+  return {
+    entries: entries.filter((_entry, at) => at !== index),
+    consumed: true,
+  };
+}
+
+/**
+ * Settle a progress slot this window did NOT originate, from a LIVE outcome.
+ *
+ * An observer window - one that saw `restoreStarted` for a restore another
+ * window dispatched - has no accepted record, so {@link
+ * settleRestoreAttemptsByEvidence} (which settles the slot only through a
+ * record) leaves its spinner in flight when the completion frame is lost and
+ * the outcome event arrives, and `hasUnsettledChatWork` keeps vetoing the
+ * park on that spinner alone (Codex on ad9f99fb8). Matched by checkpoint,
+ * which is sound only for the live door: live events arrive in order, so an
+ * outcome for the checkpoint a live slot names is that attempt's, never an
+ * older attempt's. A snapshot's events can carry older outcomes for the same
+ * checkpoint and go through the record-matched path only.
+ */
+export function settleObservedRestoreSlot(
+  restore: ChatRestoreSlot | null,
+  evidence: ReadonlyArray<RestoreAttemptEvidence>,
+): ChatRestoreSlot | null {
+  if (restore === null || restore.kind === "completed") return restore;
+  let outcome: RestoreResultManifest | null = null;
+  for (const item of evidence) {
+    if (
+      item.kind === "outcome" &&
+      item.outcome !== null &&
+      item.outcome.checkpointId === restore.checkpointId
+    ) {
+      outcome = item.outcome;
+      break;
+    }
+  }
+  if (outcome === null) return restore;
+  return {
+    kind: "completed",
+    checkpointId: outcome.checkpointId,
+    finishedAt: outcome.restoredAt,
+    results: outcome.results,
+  };
+}
+
+/**
+ * The accepted `restoreCheckpoint` records dispatched on a connection older
+ * than `connectionEpoch` - the ones a reconnect has to RETRANSMIT.
+ *
+ * Their completion evidence was promised on the old connection: the
+ * `restoreCompleted` frame and the live `checkpoint.restored` event both
+ * died with it, and the windowed line's snapshot cannot carry the outcome
+ * (its tail is hydrated transcript rows; a restore outcome is not one). What
+ * survives is the host's journal, and the host answers a RETRIED client
+ * action id from it: an attempt that completed is acked and its completion
+ * replayed from the recorded outcome (by `handleRestoreCheckpoint` on a
+ * fresh session, by the dedup path's `replaySettledRestoreOutcomeTo` on a
+ * session another window kept alive - the cached ack alone says accepted,
+ * never finished); one that never finished is run again (the same bytes
+ * twice) and completes; one it will not run is rejected, which names the
+ * action too. Every branch produces the evidence the record is waiting for,
+ * so the retransmit is the bounded recovery path - once per reconnect per
+ * record, which is what re-stamping the epoch
+ * ({@link withRetransmittedRestoreActions}) enforces. A host older than the
+ * dedup replay answers the live-session case with the ack alone, and the
+ * record then holds until the tab closes: fail closed, as before.
+ */
+export function retransmittableRestoreActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  connectionEpoch: number,
+): ReadonlyArray<AcceptedChatAction> {
+  return Object.values(acceptedActions)
+    .filter(
+      (action) =>
+        action.action === "restoreCheckpoint" &&
+        action.checkpointId !== null &&
+        action.revertArtifacts !== null &&
+        action.connectionEpoch < connectionEpoch,
+    )
+    .toSorted(
+      (a, b) =>
+        a.acceptedAt - b.acceptedAt ||
+        a.clientActionId.localeCompare(b.clientActionId),
+    );
+}
+
+/** The records {@link retransmittableRestoreActions} named, re-stamped as dispatched on `connectionEpoch`. */
+export function withRetransmittedRestoreActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  retransmitted: ReadonlyArray<AcceptedChatAction>,
+  connectionEpoch: number,
+): Readonly<Record<string, AcceptedChatAction>> {
+  if (retransmitted.length === 0) return acceptedActions;
+  const next: Record<string, AcceptedChatAction> = { ...acceptedActions };
+  for (const action of retransmitted) {
+    if (!Object.hasOwn(next, action.clientActionId)) continue;
+    next[action.clientActionId] = {
+      ...next[action.clientActionId],
+      connectionEpoch,
+    };
+  }
+  return next;
+}
+
+function withoutAcceptedActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  retire: (action: AcceptedChatAction) => boolean,
+): Readonly<Record<string, AcceptedChatAction>> {
+  const retained = Object.values(acceptedActions).filter(
+    (action) => !retire(action),
+  );
+  if (retained.length === Object.keys(acceptedActions).length) {
+    return acceptedActions;
+  }
+  return retained.reduce<Record<string, AcceptedChatAction>>((next, action) => {
+    next[action.clientActionId] = action;
+    return next;
+  }, {});
+}
+
 function isAcceptedActionLifecycleLocked(action: AcceptedChatAction): boolean {
   return (
     action.interviewBlockId !== null ||
     action.interviewDeliveryRetry !== null ||
-    (action.action === "queueCancel" && action.queueItemId !== null)
+    (action.action === "queueCancel" && action.queueItemId !== null) ||
+    // A restore is file mutation still running on the host, and this record
+    // is the only parking hold that survives a reconnect: the progress slot
+    // is frame-driven and the post-reconnect snapshot sweeps it (Codex on
+    // b63aa85d7). Aging it out mid-restore would park over live work, so it
+    // is retired only by completion evidence - the `restoreCompleted` frame,
+    // the durable `checkpoint.restored` event (appended live or carried by a
+    // snapshot), or an error notice for the action. A host that dies
+    // mid-restore emits none of those, and the record then holds until the
+    // tab closes: fail closed, like the busy gate.
+    action.action === "restoreCheckpoint" ||
+    // AGE IS NOT SETTLEMENT, and for this record the difference is a destroyed
+    // prompt. An accepted send whose content is still the last copy has no
+    // other holder: dropping it here (by the retention window, or by the cap
+    // under enough unrelated traffic) leaves the text in no slot at all -
+    // `pendingActions` released it at the ack, `failedSendRestoration` never
+    // received it because nothing rejected, and the transcript never got it
+    // because the host never confirmed. It is retired by a real transition
+    // like every other lock: host confirmation, the reconnect passes'
+    // `withoutSettledAcceptedActions`, or `takeSetupFailedRestoration`
+    // nulling `restore` once the composer has it back.
+    acceptedActionHoldsUnrecoveredSend(action)
   );
+}
+
+/**
+ * The record still holds the ONLY copy of a prompt the host has not confirmed.
+ *
+ * Reads `restore`, not the action kind, because `restore` already IS this fact:
+ * it is `null` on every non-`send` action and is nulled by
+ * `takeSetupFailedRestoration` the moment the content is handed back. So a
+ * consumed restoration stops holding on its own, with no second flag to keep
+ * in step.
+ *
+ * Shared on purpose by the two places that must agree: {@link
+ * pruneAcceptedActions}, which must not evict such a record, and {@link
+ * acceptedActionIsUnsettled}, which must not let an epic park over one. A
+ * verdict that held on something the pruner was free to delete was exactly the
+ * defect - the hold was real, and one empty `queueChanged` later the record it
+ * depended on was gone.
+ */
+export function acceptedActionHoldsUnrecoveredSend(
+  action: AcceptedChatAction,
+): boolean {
+  return action.restore !== null && !action.confirmedByHost;
+}
+
+/** The live state an accepted action's settlement is judged against. */
+export interface AcceptedActionSettlementContext {
+  readonly queue: ChatQueueState;
+}
+
+/**
+ * Whether an accepted action still has a lifecycle of its own to finish.
+ *
+ * `confirmedByHost` cannot answer this. It is a SEND fact - the four doors that
+ * set it are all about a message reaching the transcript or the queue - and
+ * every non-send action is born with it `false` and never gains it. Read as a
+ * universal settlement flag it says "unsettled" forever, so a session that once
+ * paused its queue or restored a checkpoint would never park again.
+ *
+ * So each kind retires on its own evidence, read from LIVE state rather than
+ * from whether some pruning pass happened to run:
+ *
+ * | kind | held until |
+ * | --- | --- |
+ * | `send` / `editUserMessage` | confirmed, or the content is consumed |
+ * | `pauseQueue` / `resumeQueue` | the queue's ROWS show it ({@link queuePauseSettled} / {@link queueResumeSettled}) |
+ * | `queueCancel` | the target row leaves the authoritative queue |
+ * | `restoreCheckpoint` | a restore frame for its checkpoint follows the ack |
+ * | everything else | not at all - no local-only state to lose |
+ *
+ * Deriving from live state is what makes the `queueCancel` arm correct on both
+ * doors: `withoutResolvedAcceptedQueueCancellations` runs on `queueChanged`,
+ * and a cancel accepted before a reconnect used to survive every later
+ * snapshot, so a verdict keyed on the record's EXISTENCE could never expire.
+ * Keyed on the queue, the same answer falls out of either door.
+ *
+ * The pause and resume arms read the rows, not the derived `status`: the
+ * host computes `status` from the rows AFTER the mutation (`running` while
+ * any row is runnable), so a queue can carry paused rows under `running` or
+ * `idle`, and a status-keyed resume verdict parked over rows still held while
+ * a status-keyed pause verdict never settled beside a runnable system-owned
+ * row (Codex on 7f3f67441).
+ *
+ * `restoreCheckpoint` is the one kind whose settlement is NOT readable from
+ * live state, and the arm deliberately does not try. The restore slot cannot
+ * say whether it belongs to THIS action: `completed` persists for toast and
+ * dialog consumers, so with checkpoint A completed, a restore of B accepted
+ * afterwards read A's slot as its own settlement (fixed by matching ids), and
+ * a REPEAT restore of A accepted afterwards still did - same id, older slot -
+ * and parked before its own `restoreStarted` arrived (CodeRabbit and Codex on
+ * 7f3f67441). And the slot does not survive a reconnect: the snapshot sweeps
+ * an in-flight slot stamped on the old connection, so a restore still running
+ * on the host had no hold at all once the record had handed off to it (Codex
+ * on b63aa85d7). What does identify the action's own restore is ORDER: the
+ * record is added at the ack and retired one per `restoreCompleted` by the
+ * frame door ({@link withoutEarliestAcceptedRestoreActionFor}), or exactly by
+ * its id when the durable `checkpoint.restored` event or an error notice
+ * names it ({@link settleRestoreAttemptsByEvidence}, which settles the
+ * spinner of the retired attempt in the same step). Across a reconnect the
+ * record is RETRANSMITTED ({@link retransmittableRestoreActions}) so the
+ * host re-answers it from its journal, the evidence a windowed snapshot
+ * cannot carry. Existence IS the
+ * hold, from the ack to the completion evidence, and the record is
+ * lifecycle-locked for that span ({@link pruneAcceptedActions}) because
+ * age is not completion. The slot stays a spinner `hasUnsettledChatWork`
+ * also reads, for a restore another client started.
+ */
+export function acceptedActionIsUnsettled(
+  action: AcceptedChatAction,
+  context: AcceptedActionSettlementContext,
+): boolean {
+  if (acceptedActionHoldsUnrecoveredSend(action)) return true;
+  switch (action.action) {
+    case "pauseQueue":
+      return !queuePauseSettled(context.queue);
+    case "resumeQueue":
+      return !queueResumeSettled(context.queue);
+    case "queueCancel":
+      return (
+        action.queueItemId !== null &&
+        context.queue.items.some(
+          (item) => item.queueItemId === action.queueItemId,
+        )
+      );
+    case "restoreCheckpoint":
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**

@@ -10,8 +10,8 @@
  * instead of the assertion passing for the wrong reason.
  */
 import { describe, expect, it } from "vitest";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
-import type { EpicStateSubscribeServerFrameV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import type { EpicStateSubscribeServerFrameV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   EpicStateLaneEvent,
   EpicStateRow,
@@ -45,8 +45,8 @@ const EPOCH = "epoch-1";
  */
 function parseSnapshotFrame(
   raw: unknown,
-): Extract<EpicStateSubscribeServerFrameV10, { kind: "snapshot" }> {
-  const frame = epicStateSubscribeServerFrameSchemaV10.parse(raw);
+): Extract<EpicStateSubscribeServerFrameV11, { kind: "snapshot" }> {
+  const frame = epicStateSubscribeServerFrameSchemaV11.parse(raw);
   if (frame.kind !== "snapshot") {
     throw new Error(`expected a snapshot frame, got ${frame.kind}`);
   }
@@ -55,8 +55,8 @@ function parseSnapshotFrame(
 
 function parseDeltaFrame(
   raw: unknown,
-): Extract<EpicStateSubscribeServerFrameV10, { kind: "delta" }> {
-  const frame = epicStateSubscribeServerFrameSchemaV10.parse(raw);
+): Extract<EpicStateSubscribeServerFrameV11, { kind: "delta" }> {
+  const frame = epicStateSubscribeServerFrameSchemaV11.parse(raw);
   if (frame.kind !== "delta") {
     throw new Error(`expected a delta frame, got ${frame.kind}`);
   }

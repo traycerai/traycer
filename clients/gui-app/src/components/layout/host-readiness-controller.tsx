@@ -62,7 +62,12 @@ import {
 } from "@/providers/use-runner-host";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
+import {
+  admitsLocalPlane,
+  useAuthStore,
+  type AuthStatus,
+} from "@/stores/auth/auth-store";
+import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /** A single signed-in owner for host reachability and lifecycle state. */
@@ -142,7 +147,21 @@ export function HostReadinessControllerProvider(props: {
   // removal-state read, and burns the one-shot attempt latch on an episode
   // belonging to a machine the user is not pointed at. `hasLocalHost` is
   // folded into the intent - a shell with no local host is never booting one.
-  const canProvision = authStatus === "signed-in" && localBootIntent;
+  // SURFACE, not capability - and worth stating what this still drives, because
+  // its name outlived its old job. The automatic launch-time `convergeReady`
+  // was retired (D14/C5), so this no longer arms any process: what `enabled`
+  // reaches now is the removal-sentinel read in `useHostProvisioning`
+  // (`useRunnerHostRemovalStateQuery`), which asks this machine's own disk
+  // whether the user removed Traycer's background components. Every other
+  // lifecycle fact and gesture there is gated on `hasManagement` instead.
+  //
+  // That read is a purely local question, so it is admitted for `unverified`
+  // like the rest of the local plane - the same predicate this file already
+  // applies in `DefaultHostReadyGate` and `resolveSurfaceReadiness`. Left on
+  // the verdict, an offline user whose host had been removed got the generic
+  // "couldn't reach the host" narration with a Retry that could never succeed,
+  // instead of the removed card that tells them what actually happened.
+  const canProvision = admitsLocalPlane(authStatus) && localBootIntent;
   const directory = binding === null ? null : binding.directory;
   // Stable identities: the presentation is memoized on its inputs, and a
   // fresh closure each render would re-run every readiness consumer in the
@@ -519,7 +538,7 @@ export function DefaultHostReadyGate(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const readiness = useSurfaceReadiness("default-host", null);
-  const authStatus = useAuthStore((state) => state.status);
+  const shellAdmission = useShellLocalPlaneAdmission();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
@@ -537,7 +556,19 @@ export function DefaultHostReadyGate(props: {
   const predicateInput = {
     readiness,
     hasBeenReady: hasBeenDefaultHostReady,
-    signedIn: authStatus === "signed-in",
+    // Admission, not validation: an `unverified` session DOES have a local
+    // host that can be ready, so the gate must be allowed to narrate its
+    // startup rather than short-circuit to "not signed in" and mount the app
+    // over a host that cannot serve it yet.
+    //
+    // On a shell with no local host that premise fails, and `gateBlocksApp`'s
+    // own reason for the `!signedIn` short-circuit is exactly this case -
+    // "blocking anyone else would hide the sign-in surface behind a host that
+    // cannot exist yet". An `unverified` relay-only session cannot reach a host
+    // at all (the relay wants a cloud credential it does not have), so it must
+    // NOT be held behind a readiness card in front of the auth surface that is
+    // the only thing that can fix it.
+    signedIn: shellAdmission.admitted,
     bypassed: pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
   };
   if (!gateBlocksApp(predicateInput)) return props.children;

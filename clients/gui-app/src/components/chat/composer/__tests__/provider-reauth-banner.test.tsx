@@ -904,7 +904,7 @@ describe("<ProviderReauthBanner />", () => {
     fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open browser again" }));
+    fireEvent.click(screen.getByRole("button", { name: /Open browser/ }));
     expect(mocks.openLink).toHaveBeenCalledWith(
       "http://localhost:56988/callback",
       "auth",
@@ -920,6 +920,77 @@ describe("<ProviderReauthBanner />", () => {
       { providerId: "claude-code", profileId: null, code: "abc123#xyz789" },
       expect.anything(),
     );
+  });
+
+  it("offers Authenticate with a paste field on a remote host when codePaste is set", () => {
+    mocks.hostKind = "remote";
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    expect(screen.getByLabelText("Paste the code")).toBeDefined();
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "http://localhost:56988/callback",
+      "auth",
+      null,
+    );
+  });
+
+  it("surfaces device_auth_unavailable instead of provider-unavailable copy", () => {
+    mocks.startLoginMutate.mockImplementation(
+      (
+        _vars: unknown,
+        opts: {
+          readonly onSuccess: (data: {
+            readonly url: string | null;
+            readonly started: boolean;
+            readonly profileId: string | null;
+            readonly userCode: string | null;
+            readonly failure: "device_auth_unavailable";
+          }) => void;
+        },
+      ) => {
+        opts.onSuccess({
+          url: null,
+          started: false,
+          profileId: null,
+          userCode: null,
+          failure: "device_auth_unavailable",
+        });
+      },
+    );
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState({
+          oauthArgs: ["login", "--device-auth"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+        })}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    expect(screen.getByText(/Device-code login is not enabled/)).toBeDefined();
+    expect(screen.queryByText(/did not start/)).toBeNull();
   });
 
   it("touches the keepalive with the ambient (null) profile id when the paste field is focused", () => {
@@ -1313,9 +1384,7 @@ describe("<ProviderReauthBanner />", () => {
 
     expect(screen.getByText("Checking approval…")).toBeDefined();
     expect(input).toHaveProperty("readOnly", true);
-    expect(
-      screen.queryByRole("button", { name: "Open browser again" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open browser/ })).toBeNull();
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveProperty(
       "disabled",
       true,

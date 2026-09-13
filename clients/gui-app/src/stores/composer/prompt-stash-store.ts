@@ -1,9 +1,12 @@
 import { create } from "zustand";
 
 import type {
+  PromptStashEntry,
+  PromptStashImageBlob,
   PromptStashRow,
   PromptStashSnapshot,
 } from "@/lib/composer/prompt-stash-codec";
+import { promptStashRowId } from "@/lib/composer/prompt-stash-codec";
 import {
   deletePromptStashEntry,
   loadPromptStashSnapshot,
@@ -16,6 +19,16 @@ interface PromptStashState {
   readonly hydrate: () => Promise<void>;
   readonly save: (snapshot: PromptStashSnapshot) => Promise<void>;
   readonly remove: (entryId: string) => Promise<void>;
+  /**
+   * Host/cloud ingest of an immutable stash-entry. No-ops when the id
+   * is already local (the local copy may hold blobs the host echo does
+   * not). Never a host upsert — that would re-publish an own row.
+   */
+  readonly ingestRemote: (
+    entry: PromptStashEntry,
+    imagesByHash: ReadonlyMap<string, PromptStashImageBlob>,
+  ) => Promise<void>;
+  readonly dropRemote: (entryId: string) => Promise<void>;
   readonly markUnavailable: (entryId: string) => void;
 }
 
@@ -81,6 +94,30 @@ export const usePromptStashStore = create<PromptStashState>()((set, get) => ({
   },
   remove: async (entryId) => {
     await get().hydrate();
+    const { rows, revision } = await deletePromptStashEntry(entryId);
+    applyMutationResult(rows, revision);
+    publishPromptStashChange(revision);
+  },
+  ingestRemote: async (
+    entry,
+    imagesByHash: ReadonlyMap<string, PromptStashImageBlob>,
+  ) => {
+    await get().hydrate();
+    if (get().rows.some((row) => promptStashRowId(row) === entry.id)) {
+      return;
+    }
+    const { rows, revision } = await savePromptStashSnapshot({
+      entry,
+      imagesByHash,
+    });
+    applyMutationResult(rows, revision);
+    publishPromptStashChange(revision);
+  },
+  dropRemote: async (entryId) => {
+    await get().hydrate();
+    if (!get().rows.some((row) => promptStashRowId(row) === entryId)) {
+      return;
+    }
     const { rows, revision } = await deletePromptStashEntry(entryId);
     applyMutationResult(rows, revision);
     publishPromptStashChange(revision);

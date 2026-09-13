@@ -52,8 +52,10 @@ import {
 } from "@/components/epics/epics-list-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import {
   __resetTabNavigationControllerForTesting,
@@ -91,10 +93,6 @@ interface DeleteEpicsMutationVariables {
   } | null;
 }
 
-interface DeleteEpicsMutationOptions {
-  readonly onSuccess: () => void;
-}
-
 interface RenameEpicTitleVariables {
   readonly epicDelta: {
     readonly id: string;
@@ -104,19 +102,19 @@ interface RenameEpicTitleVariables {
 }
 
 interface SetEpicPinnedVariables {
+  // Mirrors production's dispatch-side host. Declared locally here, which is
+  // exactly why the compile cannot flag a drift - the assertions below are the
+  // only thing that can, and only if they name the key.
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly pinned: boolean;
 }
 
 const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
-  mutate:
-    vi.fn<
-      (
-        variables: DeleteEpicsMutationVariables,
-        options: DeleteEpicsMutationOptions,
-      ) => void
-    >(),
+  completeness: null as ListTasksCompleteness | null,
+  cloudPagePending: false,
+  mutate: vi.fn<(variables: DeleteEpicsMutationVariables) => void>(),
   renameMutate: vi.fn<(variables: RenameEpicTitleVariables) => void>(),
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   refetch: vi.fn<() => Promise<void>>(),
@@ -132,6 +130,7 @@ vi.mock("@/hooks/home/use-history-query", () => ({
       totalCount: testState.items.length,
       facets: { repos: [], workspaces: [], ownershipScopes: [] },
       worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
+      completeness: testState.completeness,
     },
     isPending: false,
     isFetching: false,
@@ -141,6 +140,7 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     fetchNextPage: testState.fetchNextPage,
     hasNextPage: false,
     isFetchingNextPage: false,
+    cloudPagePending: testState.cloudPagePending,
   }),
 }));
 
@@ -149,6 +149,7 @@ vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
     isPending: false,
     mutate: testState.mutate,
   }),
+  usePendingDeleteEpicIds: () => new Set<string>(),
 }));
 
 vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
@@ -174,6 +175,16 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
+}));
+
+/**
+ * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
+ * outside a `<HostRuntimeProvider>` - absent in this file. Fixed at `false`:
+ * every existing case here predates lane 9 item 5 and pins the pre-`@1.1`
+ * reading (`local-home` permanently unavailable).
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
 }));
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
@@ -365,6 +376,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     setViewportWidth(MOBILE_VIEWPORT_WIDTH);
     window.localStorage.clear();
     testState.items = [historyItem({})];
+    testState.completeness = null;
+    testState.cloudPagePending = false;
     testState.mutate.mockReset();
     testState.renameMutate.mockReset();
     testState.setPinnedMutate.mockReset();
@@ -375,11 +388,17 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    // Pin is a cloud CAPABILITY. The store defaults to `signed-out`, under
+    // which the tray's pin action is admitted but unavailable, and the
+    // assertions below would pass against a disabled control.
+    useAuthStore.setState({ status: "signed-in" });
     queryClient.clear();
   });
 
   afterEach(() => {
     cleanup();
+    // Module-scope store: a staged status outlives this file in the worker.
+    useAuthStore.setState({ status: "signed-out" });
     vi.useRealTimers();
     setViewportWidth(ORIGINAL_INNER_WIDTH);
     document.body.innerHTML = "";
@@ -634,7 +653,47 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(testState.setPinnedMutate).toHaveBeenCalledWith({
         epicId: "epic-from-history",
         pinned: true,
+        isLocalHome: false,
+        hostId: null,
       });
+    });
+
+    it("keeps the local-home pin action unavailable and does not mutate", async () => {
+      testState.items = [
+        historyItem({
+          title: "Local only epic",
+          isLocalHome: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const pin = await screen.findByRole("button", {
+        name: "Pinning Local only epic needs a newer Traycer host",
+      });
+      expect(pin.getAttribute("aria-disabled")).toBe("true");
+
+      fireEvent.click(pin);
+
+      expect(testState.setPinnedMutate).not.toHaveBeenCalled();
+    });
+
+    it("keeps the preserved-orphan pin action unavailable and does not mutate", async () => {
+      testState.items = [
+        historyItem({
+          title: "Orphaned epic",
+          isPreservedOrphan: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const pin = await screen.findByRole("button", {
+        name: "Pinning Orphaned epic is unavailable; the task was deleted and only its unsynced edits remain",
+      });
+      expect(pin.getAttribute("aria-disabled")).toBe("true");
+
+      fireEvent.click(pin);
+
+      expect(testState.setPinnedMutate).not.toHaveBeenCalled();
     });
 
     it("reveals the inline title input on rename", async () => {
@@ -645,6 +704,97 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(
         await screen.findByTestId("epics-list-row-title-input"),
       ).not.toBeNull();
+    });
+  });
+
+  describe("unavailable and pending cloud page", () => {
+    it("does not declare the account empty when the cloud page is unavailable", async () => {
+      testState.items = [];
+      testState.completeness = {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "present",
+        sort: "loaded-union",
+      };
+      renderPanel("embedded", "/");
+
+      const unavailable = await screen.findByTestId("epics-list-unavailable");
+      expect(unavailable).not.toBeNull();
+      expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+      expect(unavailable.getAttribute("data-remedy")).toBe("retry");
+    });
+
+    it("offers sign-in instead of a dead Retry when the session is unverified", async () => {
+      testState.items = [];
+      testState.completeness = {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "none",
+        sort: "server",
+      };
+      useAuthStore.setState({ status: "unverified" });
+      renderPanel("embedded", "/");
+
+      const unavailable = await screen.findByTestId("epics-list-unavailable");
+      expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
+      expect(screen.queryByTestId("epics-list-unavailable-retry")).toBeNull();
+      expect(unavailable.textContent).toMatch(/once it is/i);
+      expect(unavailable.textContent).not.toMatch(/sign in again/i);
+      expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+    });
+
+    it("renders the rows with no cloud or device notice when the cloud page is unavailable", async () => {
+      testState.items = [
+        historyItem({ id: "history-local", epicId: "local", title: "Local" }),
+      ];
+      testState.completeness = {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "present",
+        sort: "loaded-union",
+      };
+      renderPanel("embedded", "/");
+
+      const rows = await screen.findByTestId("epics-list-rows");
+      expect(rows.textContent).toContain("Local");
+      expect(screen.queryByRole("status")).toBeNull();
+      // Scoped to the list body's own container rather than the whole
+      // document: unrelated chrome (a filter chip label, for example) could
+      // otherwise fail this assertion for a reason that has nothing to do
+      // with the row or empty-state copy under test.
+      const listBody = rows.closest("section");
+      expect(listBody).not.toBeNull();
+      expect(listBody?.textContent ?? "").not.toMatch(/cloud/i);
+      expect(listBody?.textContent ?? "").not.toMatch(/device/i);
+    });
+
+    it("does not call a filtered result empty when the listing was unavailable", async () => {
+      testState.items = [];
+      testState.completeness = {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "suppressed-unprovable-filter",
+        sort: "server",
+      };
+      useHistorySearchStore.setState({
+        search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
+      });
+      renderPanel("embedded", "/");
+
+      expect(
+        await screen.findByTestId("epics-list-unavailable"),
+      ).not.toBeNull();
+      expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+      expect(screen.queryByTestId("epics-list-filtered-empty")).toBeNull();
+    });
+
+    it("shows the explicit cloud-pending state when local storage is empty", async () => {
+      testState.items = [];
+      testState.cloudPagePending = true;
+      renderPanel("embedded", "/");
+
+      expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+      expect(await screen.findByTestId("epics-list-loading")).not.toBeNull();
     });
   });
 
@@ -1156,6 +1306,114 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       fireTouchEnd(scroller);
 
       expect(testState.refetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("row provenance", () => {
+    it("renders the preserved-orphan provenance glyph with an export-oriented label", async () => {
+      testState.items = [
+        historyItem({
+          title: "Orphaned epic",
+          isPreservedOrphan: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const glyph = await screen.findByTestId(
+        "epics-list-row-provenance-preserved-orphan-epic-from-history",
+      );
+      expect(glyph.getAttribute("aria-label")).toMatch(/export/i);
+    });
+
+    it("renders the local-only provenance glyph for a local-home row", async () => {
+      testState.items = [
+        historyItem({
+          title: "Local only epic",
+          isLocalHome: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      expect(
+        await screen.findByTestId(
+          "epics-list-row-provenance-local-only-epic-from-history",
+        ),
+      ).not.toBeNull();
+    });
+
+    it("renders the local-only provenance label as text after the timestamp for a local-home row", async () => {
+      testState.items = [
+        historyItem({
+          title: "Local only epic",
+          isLocalHome: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const label = await screen.findByTestId(
+        "epics-list-row-provenance-label-local-only",
+      );
+      expect(label.textContent).toBe("· Not synced");
+      expect(label.className).toMatch(/\bshrink-0\b/);
+      expect(label.closest(".truncate")).toBeNull();
+
+      const metadataLine = label.parentElement;
+      if (metadataLine === null) {
+        throw new Error("expected the provenance label to have a parent");
+      }
+      expect(metadataLine.className).toMatch(/\bflex\b/);
+
+      const timestamp = label.previousElementSibling;
+      if (timestamp === null) {
+        throw new Error("expected a preceding timestamp sibling span");
+      }
+      expect(timestamp.className).toMatch(/\btruncate\b/);
+      expect(timestamp.textContent).toMatch(/^updated/);
+    });
+
+    it("renders the preserved-orphan provenance label with a destructive tint", async () => {
+      testState.items = [
+        historyItem({
+          title: "Orphaned epic",
+          isPreservedOrphan: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const label = await screen.findByTestId(
+        "epics-list-row-provenance-label-preserved-orphan",
+      );
+      expect(label.textContent).toBe("· Deleted, edits kept");
+      expect(label.className).toMatch(/text-destructive/);
+      expect(label.className).toMatch(/\bshrink-0\b/);
+      expect(label.closest(".truncate")).toBeNull();
+
+      const metadataLine = label.parentElement;
+      if (metadataLine === null) {
+        throw new Error("expected the provenance label to have a parent");
+      }
+      expect(metadataLine.className).toMatch(/\bflex\b/);
+
+      const timestamp = label.previousElementSibling;
+      if (timestamp === null) {
+        throw new Error("expected a preceding timestamp sibling span");
+      }
+      expect(timestamp.className).toMatch(/\btruncate\b/);
+      expect(timestamp.textContent).toMatch(/^updated/);
+    });
+
+    it("renders neither provenance label for an ordinary row carrying no marker", async () => {
+      renderPanel("embedded", "/");
+
+      await screen.findByTestId("epics-list-row-card");
+      expect(
+        screen.queryByTestId("epics-list-row-provenance-label-local-only"),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId(
+          "epics-list-row-provenance-label-preserved-orphan",
+        ),
+      ).toBeNull();
     });
   });
 

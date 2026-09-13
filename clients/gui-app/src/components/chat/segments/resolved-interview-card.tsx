@@ -360,6 +360,7 @@ function ReviewPage(props: {
           optionIndex: null,
           valueIndex: null,
         })}
+        modeHint={null}
       />
       {showsOptions ? (
         <StaticInterviewOptions

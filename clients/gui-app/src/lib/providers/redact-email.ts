@@ -2,8 +2,8 @@
 // first char (e.g. "alice@domain.com" -> "a•••@d…"). Not reversible-by-design
 // obfuscation, just a glance-proof default that still lets a reader confirm
 // it's the right account. Shared by every Providers-settings surface that
-// displays a profile's email (identity row reveal toggle, ambient drift
-// notice, add-profile success dialog) so the format can't drift between them.
+// displays a profile's email (identity row reveal toggle, add-profile
+// success dialog) so the format can't drift between them.
 export function redactEmail(email: string): string {
   const atIndex = email.indexOf("@");
   if (atIndex <= 0) return "•••";

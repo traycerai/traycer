@@ -1,13 +1,13 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, RefreshCwIcon } from "lucide-react";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   EpicsListChatHostFilterUnsupported,
-  EpicsListEmpty,
   EpicsListError,
-  EpicsListFilteredEmpty,
-  EpicsListFilteringLoading,
+  EpicsListHostRequiresCloudToList,
   EpicsListLoading,
+  EpicsListNoRows,
   EpicsListShowMore,
 } from "@/components/epics/epics-list-shared";
 import { MobileHistoryRow } from "@/components/epics/mobile/mobile-history-row";
@@ -23,10 +23,19 @@ const SETTLE_CLASS = "transition-transform duration-[220ms]";
 export interface MobileHistoryListProps {
   readonly error: Error | null;
   readonly isPending: boolean;
+  /**
+   * Nothing was asked for: no cloud verdict, and a host that cannot list
+   * locally. Must be checked ahead of `isPending` - a query that never ran
+   * reports `pending` forever, so the spinner below is this state's false
+   * positive rather than a load.
+   */
+  readonly hostRequiresCloudToList: boolean;
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
   readonly chatHostFilterUnsupported: boolean;
   readonly items: ReadonlyArray<HistoryItem>;
+  readonly completeness: ListTasksCompleteness | null;
+  readonly cloudPagePending: boolean;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
   readonly selectedIds: ReadonlySet<string>;
@@ -64,10 +73,13 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
   const {
     error,
     isPending,
+    hostRequiresCloudToList,
     isFetching,
     hasActiveFilters,
     chatHostFilterUnsupported,
     items,
+    completeness,
+    cloudPagePending,
     onRetry,
     selectionMode,
     selectedIds,
@@ -141,10 +153,13 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
         <MobileHistoryListBody
           error={error}
           isPending={isPending}
+          hostRequiresCloudToList={hostRequiresCloudToList}
           isFetching={isFetching}
           hasActiveFilters={hasActiveFilters}
           chatHostFilterUnsupported={chatHostFilterUnsupported}
           items={items}
+          completeness={completeness}
+          cloudPagePending={cloudPagePending}
           onRetry={onRetry}
           selectionMode={selectionMode}
           selectedIds={selectedIds}
@@ -213,10 +228,13 @@ function PullIndicator(props: {
 interface MobileHistoryListBodyProps {
   readonly error: Error | null;
   readonly isPending: boolean;
+  readonly hostRequiresCloudToList: boolean;
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
   readonly chatHostFilterUnsupported: boolean;
   readonly items: ReadonlyArray<HistoryItem>;
+  readonly completeness: ListTasksCompleteness | null;
+  readonly cloudPagePending: boolean;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
   readonly selectedIds: ReadonlySet<string>;
@@ -236,6 +254,9 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
   if (props.error !== null) {
     return <EpicsListError error={props.error} onRetry={props.onRetry} />;
   }
+  if (props.hostRequiresCloudToList) {
+    return <EpicsListHostRequiresCloudToList />;
+  }
   if (props.isPending) {
     return <EpicsListLoading />;
   }
@@ -244,35 +265,41 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
   if (props.chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
-  if (props.items.length === 0 && !props.hasActiveFilters) {
-    return <EpicsListEmpty />;
-  }
-  if (props.items.length === 0 && props.hasActiveFilters && props.isFetching) {
-    return <EpicsListFilteringLoading />;
+  // Every "there are no rows" reading, decided once for both responsive bodies
+  // in `EpicsListNoRows` - the same rules as the desktop panel by construction.
+  if (props.items.length === 0) {
+    return (
+      <EpicsListNoRows
+        cloudPagePending={props.cloudPagePending}
+        cloudPageUnavailable={props.completeness?.cloudPage === "unavailable"}
+        hasActiveFilters={props.hasActiveFilters}
+        isFetching={props.isFetching}
+        onRetry={props.onRetry}
+        hasNextPage={props.hasNextPage}
+        isFetchingNextPage={props.isFetchingNextPage}
+        onLoadMore={props.onLoadMore}
+      />
+    );
   }
   return (
     <>
-      {props.items.length > 0 ? (
-        <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
-          {props.items.map((item) => (
-            <MobileHistoryRow
-              key={item.id}
-              item={item}
-              selectionMode={props.selectionMode}
-              isSelected={props.selectedIds.has(item.epicId)}
-              isTrayOpen={props.openTrayEpicId === item.epicId}
-              isPinPending={props.pendingSetPinnedEpicIds.has(item.epicId)}
-              onTrayOpenChange={props.onTrayOpenChange}
-              onToggleSelection={props.onToggleSelection}
-              onRequestDelete={props.onRequestDelete}
-              onSetPinned={props.onSetPinned}
-              onOpen={props.onOpenItem}
-            />
-          ))}
-        </ul>
-      ) : (
-        <EpicsListFilteredEmpty />
-      )}
+      <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
+        {props.items.map((item) => (
+          <MobileHistoryRow
+            key={item.id}
+            item={item}
+            selectionMode={props.selectionMode}
+            isSelected={props.selectedIds.has(item.epicId)}
+            isTrayOpen={props.openTrayEpicId === item.epicId}
+            isPinPending={props.pendingSetPinnedEpicIds.has(item.epicId)}
+            onTrayOpenChange={props.onTrayOpenChange}
+            onToggleSelection={props.onToggleSelection}
+            onRequestDelete={props.onRequestDelete}
+            onSetPinned={props.onSetPinned}
+            onOpen={props.onOpenItem}
+          />
+        ))}
+      </ul>
       <EpicsListShowMore
         hasNextPage={props.hasNextPage}
         isFetchingNextPage={props.isFetchingNextPage}

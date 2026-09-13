@@ -114,6 +114,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   browserAnnotations: (a, b) => a.browserAnnotations === b.browserAnnotations,
   settings: (a, b) => a.settings === b.settings,
   createdAt: (a, b) => a.createdAt === b.createdAt,
+  sentAt: (a, b) => a.sentAt === b.sentAt,
   elapsedStartedAt: (a, b) => a.elapsedStartedAt === b.elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments: (a, b) =>
     a.turnHasOnlyAutonomousResumeSegments ===

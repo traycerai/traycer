@@ -115,6 +115,21 @@ async function sha256Hex(bytes: ImageBytes): Promise<string> {
 // write can't revoke session/known entries a concurrent sibling is relying on.
 const inFlightPuts = new Map<string, Promise<string>>();
 
+/**
+ * Store already-hashed bytes under `hash`. Refuses a digest mismatch
+ * (never writes). Used by `drafts.readBlob` so the local partition
+ * remains the render/GC tier after a host fetch.
+ */
+export async function putImageBytesAtHash(
+  hash: string,
+  bytes: ImageBytes,
+): Promise<boolean> {
+  const actual = await sha256Hex(bytes);
+  if (actual !== hash) return false;
+  await writeImageUnderHash(hash, bytes);
+  return true;
+}
+
 export async function putImage(bytes: ImageBytes): Promise<string> {
   const hash = await sha256Hex(bytes);
   const existing = inFlightPuts.get(hash);

@@ -8,18 +8,21 @@ import {
   Keyboard,
   LineChart,
   Palette,
+  PanelBottom,
   PanelsTopLeft,
   QrCode,
   Server,
   ShieldCheck,
   Settings as SettingsIcon,
   TerminalSquare,
+  Volume2,
 } from "lucide-react";
 import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
   | "general"
   | "appearance"
+  | "layout"
   | "opening-behavior"
   | "app-notifications"
   | "providers"
@@ -100,12 +103,13 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now sixteen. Providers,
- * Worktrees, the host's Notifications, Agent selection, Shell and Diagnostics
- * are the eleventh through sixteenth and go without. Providers is the newest
- * to lose one, to Opening behavior taking the third Application slot.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now seventeen. The whole
+ * host group - Overview, Providers, Worktrees, the host's Notifications, Agent
+ * selection, Shell and Diagnostics - is the eleventh through seventeenth and
+ * goes without. Overview is the newest to lose one, to Layout taking the
+ * seventh Application slot.
  *
- * Worktrees is the one that lost a digit to the app-scoped Notifications
+ * Worktrees is the one that lost a digit to the app-scoped Sounds
  * entry below. That follows from keeping Application entries together at the
  * start: giving Worktrees its digit back would require shortcut order to
  * diverge from both sidebar reading order and command-palette row order.
@@ -113,6 +117,16 @@ export interface SettingsSection {
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal panel table, the command palette and remembered tab paths key
  * off them — so ids never change even when labels do.
+ *
+ * The rail label names WHAT the page controls; the group heading names WHOSE
+ * it is. Two pages that control the same thing at two scopes share word and
+ * icon (Diagnostics). Two pages that control different things get different
+ * words and icons (Sounds vs Notifications). Surfaces with no scope carrier
+ * qualify the label themselves — report-issue route labels already do
+ * ("App diagnostics" / "Host diagnostics"). The mobile header still shows
+ * the bare section label; that case is unresolved, not an example of the rule.
+ * Putting the group word into a row the heading already scopes is the
+ * inconsistent move, not the consistent one.
  */
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   {
@@ -136,13 +150,13 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: PanelsTopLeft,
     group: "app",
   },
-  // Application and Host intentionally both have a Notifications page. The
-  // group heading states the scope: this one owns renderer sound and the
-  // phone's OS permission; the host one owns filtering and automation.
+  // Different controls than Host → Notifications, so a different word and
+  // icon (see the rail-table rule above). The section `id` stays
+  // `app-notifications`.
   {
     id: "app-notifications",
-    label: "Notifications",
-    icon: Bell,
+    label: "Sounds",
+    icon: Volume2,
     group: "app",
   },
   {
@@ -151,16 +165,25 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Keyboard,
     group: "app",
   },
-  // Application, not Host, and it is the same word as the host section on
-  // purpose: both pages ARE diagnostics, and the group heading above each is
-  // what says whose. The split exists because this half never varied by host —
-  // the app's log verbosity, its log file and its heap describe one window —
-  // so under the picker it was drawn once per host in the account, offering the
-  // same single setting from N places.
+  // Same kind of page as Host → Diagnostics, partitioned by scope, so the
+  // same word and icon. The split exists because this half never varied by
+  // host — the app's log verbosity, its log file and its heap describe one
+  // window — so under the picker it was drawn once per host in the account.
   {
     id: "app-diagnostics",
     label: "Diagnostics",
     icon: Activity,
+    group: "app",
+  },
+  // Where the app's own chrome SITS and how much of it shows - the status bar
+  // first, the composer and the sidebar's own layout beside it later. It is a
+  // page rather than a group inside Appearance because the controls answer
+  // "where does this live", not "what does it look like", and because a
+  // per-window rate-limit list needs room Appearance does not have.
+  {
+    id: "layout",
+    label: "Layout",
+    icon: PanelBottom,
     group: "app",
   },
   {
@@ -215,6 +238,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: GitBranch,
     group: "host",
   },
+  // Event policy and automation for the selected host. Different controls
+  // than Application → Sounds, so it keeps the generic word and the bell.
   {
     id: "notifications",
     label: "Notifications",
@@ -238,9 +263,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: TerminalSquare,
     group: "host",
   },
-  // The host half: `cli`/`host` log verbosity and that machine's own log
-  // files. Everything left here answers differently per host, which is what
-  // earns it a place under the picker.
+  // Same kind of page as Application → Diagnostics, partitioned by scope, so
+  // the same word and icon. Everything left here answers differently per host,
+  // which is what earns it a place under the picker.
   {
     id: "diagnostics",
     label: "Diagnostics",

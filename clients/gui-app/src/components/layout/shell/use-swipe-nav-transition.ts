@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   animate,
   useMotionValue,
-  useReducedMotion,
   type AnimationPlaybackControls,
   type MotionValue,
 } from "motion/react";
@@ -17,15 +16,14 @@ import {
   readScreenSnapshot,
   rememberScreenSnapshot,
 } from "@/components/layout/shell/screen-snapshot-cache";
-import {
-  SWIPE_NAV_SETTLE,
-  swipeNavCommits,
-} from "@/components/layout/shell/swipe-nav-transition-motion";
+import { swipeNavCommits } from "@/components/layout/shell/swipe-nav-transition-motion";
 import type { SwipeNavTransitionView } from "@/components/layout/shell/swipe-nav-transition-layers";
 import type {
   EdgeNavDirection,
   EdgeNavDragResponse,
 } from "@/components/layout/shell/use-edge-nav-swipe";
+import { usePanelAnimationDuration } from "@/hooks/use-panel-animation-duration";
+import { navDrawerSettleTransition } from "@/components/layout/shell/nav-drawer-motion";
 import { isMobileApp } from "@/lib/mobile-app";
 
 /**
@@ -110,12 +108,12 @@ export function useSwipeNavTransition(
   const takeoverTravelPxRef = useRef(0);
   const navigateRef = useRef(navigate);
   const resolveDestinationRef = useRef(resolveDestination);
-  const reducedMotion = useReducedMotion();
-  const reducedMotionRef = useRef(reducedMotion);
+  const animationDuration = usePanelAnimationDuration();
+  const animationDurationRef = useRef(animationDuration);
   useEffect(() => {
     navigateRef.current = navigate;
     resolveDestinationRef.current = resolveDestination;
-    reducedMotionRef.current = reducedMotion;
+    animationDurationRef.current = animationDuration;
   });
 
   // Armed for exactly the departure the commit itself initiates, and consumed
@@ -211,7 +209,7 @@ export function useSwipeNavTransition(
       // play - but the settle and the parallax are, and a reduced-motion
       // preference asks for neither. Standing down entirely leaves the instant
       // navigation this gesture has always performed.
-      if (reducedMotionRef.current === true) return "instant";
+      if (animationDurationRef.current === 0) return "instant";
       // The entry the NAVIGATION would land on, not the adjacent one: a
       // semantic step skips ineligible entries, so "one entry over" can be a
       // screen the commit never reaches - and a step nothing can resolve must
@@ -294,7 +292,7 @@ export function useSwipeNavTransition(
         navigateRef.current(active.direction);
       }
       settleRef.current = animate(progress, commits ? 1 : 0, {
-        ...SWIPE_NAV_SETTLE,
+        ...navDrawerSettleTransition(animationDurationRef.current),
         // Only an arrival takes the layers down. An interrupted settle was
         // overtaken by a new gesture, which owns them now.
         onComplete: clearView,

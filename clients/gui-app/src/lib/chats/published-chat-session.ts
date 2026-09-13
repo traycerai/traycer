@@ -266,6 +266,9 @@ export function publishedChatSessionState(
     // `connectionStatus: "closed"` above, in the vocabulary of the bounded
     // loading gate: there is nothing here that is still trying.
     preSnapshotRetries: null,
+    // And nothing will: `retry()` is what stamps this, and a frozen copy has
+    // no stream to re-subscribe.
+    preSnapshotReloadStartedAt: null,
     // A published copy is complete and frozen: this stands in for the
     // snapshot that established it, so the transcript is absorbed as
     // baseline history and nothing in it is ever announced as live.
@@ -343,11 +346,14 @@ export function publishedChatSessionState(
     pendingBackgroundStopAll: null,
     pendingBackgroundSessionStop: null,
     restore: null,
+    // No frames reach a published copy, so no completion is ever owed here.
+    settledRestoreCompletions: [],
     pendingActions: {},
     acceptedActions: {},
     pendingUserMessages: [],
     errorNotices: [],
     deliveredNoticeActionIds: new Set<string>(),
+    deliveredLastCopyActionIds: new Set<string>(),
     // Nothing streams into a published copy, so no card is ever opened here -
     // but the field is part of the state shape and a second construction site
     // that forgets one is how these two drift.
@@ -371,6 +377,8 @@ export function publishedChatSessionState(
     // perfectly well go on reading.
     refreshMissingWorktreePaths: () => undefined,
     retry: () => undefined,
+    retryFromUser: () => undefined,
+    wake: () => undefined,
     // A published copy is complete: every ordinal is hydrated by construction,
     // so a viewport report has nothing to request.
     reportVisibleTranscriptRange: () => undefined,

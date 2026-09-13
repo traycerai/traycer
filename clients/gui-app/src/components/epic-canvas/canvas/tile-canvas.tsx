@@ -10,7 +10,6 @@ import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { type SizesByGroupId } from "@/stores/epics/canvas/types";
-import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import {
   SplitContainer,
   type SplitPaneComponentProps,
@@ -169,7 +168,7 @@ function TileCanvasLive(
       return <CanvasSkeleton />;
     }
     if (!hasRecords) {
-      return <EmptyEpicBlankRoot tabId={tabId} />;
+      return <EmptyEpicRoot tabId={tabId} />;
     }
     // A phone reaches its tabs through the header's switcher trigger, so the
     // sheet has to be mounted here too - the empty shell's "drag from the
@@ -205,14 +204,16 @@ function TileCanvasLive(
   );
 }
 
-function EmptyEpicBlankRoot(props: { readonly tabId: string }) {
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
+function EmptyEpicRoot(props: { readonly tabId: string }) {
+  const ensureEmptyPaneInTab = useEpicCanvasStore(
+    (s) => s.ensureEmptyPaneInTab,
+  );
 
   useEffect(() => {
     const canvas = useEpicCanvasStore.getState().canvasByTabId[props.tabId];
     if (canvas !== undefined && canvas.root !== null) return;
-    openTileInTab(props.tabId, makeBlankTileRef());
-  }, [openTileInTab, props.tabId]);
+    ensureEmptyPaneInTab(props.tabId);
+  }, [ensureEmptyPaneInTab, props.tabId]);
 
   return <CanvasSkeleton />;
 }

@@ -580,12 +580,16 @@ export type WorktreeListByWorkspacePathsRequestV14 =
 //   worktree.listAllForHost       - released through 1.4, so `presence` could
 //     not widen that line and had to open a 1.5.
 //
-// Both presence-bearing lines are therefore UNRELEASED and still mutable; the
-// `V15` name records which minor the fact landed on for the OTHER method, not a
-// freeze. A further field belongs in these same two minors - widen the mutable
-// head rather than freezing 1.5 or opening a 1.6. Check the floors against
-// `__tests__/__fixtures__/released-baseline-surface.json` before assuming
-// otherwise; that fixture, not this comment, is the authority.
+// Both presence-bearing lines were UNRELEASED and still mutable WHEN THIS WAS
+// WRITTEN; the `V15` name records which minor the fact landed on for the OTHER
+// method, not a freeze. That window has closed, and this comment's own closing
+// instruction is how to see it: the fixture, not this comment, is the
+// authority, and `released-baseline-surface.json` now carries
+// `worktree.listAllForHost` at canonical 1.6 and
+// `worktree.listByWorkspacePaths` at 1.4. Both presence lines are therefore
+// RELEASED and frozen - a further field opens a new minor rather than widening
+// these, and the advice below to "widen the mutable head" no longer applies.
+// Re-check the fixture rather than trusting this paragraph either.
 export const worktreeListByWorkspacePathsResponseSchemaV14 = z.object({
   workspaces: z.array(worktreeWorkspaceSummarySchemaV15),
   scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
@@ -1406,6 +1410,33 @@ export const worktreeListAllForHostResponseSchemaV16 = z.object({
 export type WorktreeListAllForHostResponseV16 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV16
 >;
+
+/**
+ * `worktree.listAllForHost` v1.7 - a SEMANTIC minor. Request and response
+ * shapes are byte-identical to v1.6 (aliased, not re-declared, so the two can
+ * never drift): what the minor negotiates is what `lastActivityAt` MEANS.
+ *
+ * On v1.7 it is the authoritative activity timestamp
+ *   `max(worktree birthtime, git HEAD reflog, durable worktree activity)`,
+ * the same formula automatic cleanup applies its inactivity cutoff to. Through
+ * v1.6 it was `max(git HEAD reflog, binding-row updatedAt)` - and a binding
+ * row's `updatedAt` is a bookkeeping touch, not evidence anyone worked in the
+ * worktree, which is why it is not an input here.
+ *
+ * The minor exists because Settings and cleanup history must not present two
+ * different inactivity ages for the same worktree, and a client cannot tell the
+ * two formulas apart from the value alone. Older negotiated minors keep their
+ * released behavior; a client that needs the authoritative age must require
+ * v1.7 rather than assume it.
+ */
+export const worktreeListAllForHostRequestSchemaV17 =
+  worktreeListAllForHostRequestSchemaV16;
+export type WorktreeListAllForHostRequestV17 = WorktreeListAllForHostRequestV16;
+
+export const worktreeListAllForHostResponseSchemaV17 =
+  worktreeListAllForHostResponseSchemaV16;
+export type WorktreeListAllForHostResponseV17 =
+  WorktreeListAllForHostResponseV16;
 
 /**
  * Returns `null` when no row exists yet so a fresh terminal-agent

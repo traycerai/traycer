@@ -21,6 +21,7 @@ import {
   listAgentsResponseSchemaV50,
   listAgentsResponseSchemaV60,
   listAgentsResponseSchemaV70,
+  listAgentsResponseSchemaV90,
   listAgentsResponseSchema,
 } from "../../src/host/agent/shared";
 import {
@@ -97,8 +98,11 @@ const FIXTURES = {
   // this, which is why nothing local caught it - only the tag-based gate could.
   "agent.list@7.0": dump(listAgentsResponseSchemaV70),
   // The head line, pinned so the NEXT attempt to grow the live shape goes red
-  // here rather than on the release that ships it.
-  "agent.list@8.0": dump(listAgentsResponseSchema),
+  // here rather than on the release that ships it - keyed at the head VERSION,
+  // which this row stopped being when major 9 opened against live under a
+  // major-8 name. `@9.0` holds the pre-session-facet bytes it used to dump.
+  "agent.list@9.0": dump(listAgentsResponseSchemaV90),
+  "agent.list@9.1": dump(listAgentsResponseSchema),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
   // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this

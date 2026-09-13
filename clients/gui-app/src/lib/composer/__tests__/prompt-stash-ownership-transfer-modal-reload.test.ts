@@ -135,6 +135,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
             seedContent: seed,
             editorRef: editorModal.editorRef,
           }),
+          hostId: null,
         }),
       );
 
@@ -181,6 +182,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
               runtimeStore: runtime.store,
               editorRef: editorLanding.editorRef,
             }),
+            hostId: null,
           }),
         );
         let ok = false;
@@ -217,6 +219,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
               taskId,
               editorChat.editorRef,
             ),
+            hostId: null,
           }),
         );
         let ok = false;
@@ -279,6 +282,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
           taskId,
           editorChat.editorRef,
         ),
+        hostId: null,
       }),
     );
     const priorEpoch = stashHook.current.pulseEpoch;
@@ -319,6 +323,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
           runtimeStore: runtime.store,
           editorRef: editorLanding.editorRef,
         }),
+        hostId: null,
       }),
     );
     await act(async () => {
@@ -380,6 +385,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
           taskId,
           editorChat.editorRef,
         ),
+        hostId: null,
       }),
     );
     const priorEpoch = stashHook.current.pulseEpoch;
@@ -431,6 +437,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
           runtimeStore: runtime.store,
           editorRef: editorLanding.editorRef,
         }),
+        hostId: null,
       }),
     );
     let ok = false;
@@ -494,6 +501,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
           seedContent: seed,
           editorRef: editor.editorRef,
         }),
+        hostId: null,
       }),
     );
 
@@ -562,6 +570,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
           taskId,
           editor.editorRef,
         ),
+        hostId: null,
       }),
     );
 
@@ -648,6 +657,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
           runtimeStore: runtime.store,
           editorRef: editor.editorRef,
         }),
+        hostId: null,
       }),
     );
 

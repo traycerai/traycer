@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFakeMediaPeer,
   fakeMediaStream,
-} from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+} from "@/components/browser-tile/__tests__/browser-peek-tile-stream-fixture";
 import { usePipSharedVideoStream } from "@/lib/browser-view/pip/pip-video-plane";
 import {
   acquireBrowserMediaEntry,

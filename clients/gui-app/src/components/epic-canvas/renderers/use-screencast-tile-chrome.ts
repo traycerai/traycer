@@ -10,7 +10,6 @@ import type {
 } from "@/components/epic-canvas/renderers/tile-controller";
 import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-tab-display";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
-import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { toast } from "sonner";
 
 export const EMPTY_SCREENCAST_NAV_STATE: BrowserNavState = {
@@ -26,7 +25,6 @@ const SCREENCAST_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
   forward: true,
   reload: true,
   zoom: false,
-  viewportPreset: false,
   devtools: false,
   find: false,
   siteInfo: false,
@@ -37,8 +35,6 @@ const SCREENCAST_UNSUPPORTED_INTERACTION_TOASTS = {
   fileUpload: "File upload not supported",
   download: "Download saved on the host",
 } as const;
-
-const UNUSED_VIEWPORT_PRESET: BrowserViewViewportPresetId = "responsive";
 
 interface UseScreencastTileChromeArgs {
   readonly profile: BrowserSessionProfileKind;
@@ -99,6 +95,7 @@ export function useScreencastTileChrome(
   };
 
   const controller: TileController = {
+    viewport: null,
     capabilities: SCREENCAST_TILE_CHROME_CAPABILITIES,
     profile: args.profile,
     url: liveUrl,
@@ -109,7 +106,6 @@ export function useScreencastTileChrome(
     canGoBack: navState.canGoBack,
     canGoForward: navState.canGoForward,
     zoomPercent: 100,
-    viewportPreset: UNUSED_VIEWPORT_PRESET,
     disabled,
     zoomLocked: false,
     annotation: null,
@@ -132,7 +128,6 @@ export function useScreencastTileChrome(
     onZoomOut: ignoreChromeAction,
     onZoomIn: ignoreChromeAction,
     onResetZoom: ignoreChromeAction,
-    onViewportPresetChange: ignoreViewportPreset,
     onOpenDevTools: ignoreChromeAction,
     // A screencast tile watches a headless context on the host; there is no
     // local jar here to clear, and the host's own eviction is what reaches it.
@@ -147,5 +142,3 @@ export function useScreencastTileChrome(
 }
 
 function ignoreChromeAction(): void {}
-
-function ignoreViewportPreset(_preset: BrowserViewViewportPresetId): void {}

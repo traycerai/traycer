@@ -20,9 +20,13 @@ lifecycle, authn, cloud UI, or the dev-slot allocator.
 - No bundled local host — `onLocalHostChange` emits `null`, never transitions.
   `vite.config.ts` injects exactly one `kind: "remote"` directory entry from
   the selected dev slot; never hard-code ports.
-- Sign-in is the OAuth device flow. The return signal is payload-free
-  (`visibilitychange` resume edge via `IRunnerHost.onAuthCallback`); polling
-  must complete sign-in even with no signal. The return scheme comes from the
+- Sign-in is the OAuth device flow. The approval page opens in the in-app
+  auth sheet (`src/auth-sheet.ts`: ASWebAuthenticationSession / a Custom Tab,
+  sharing the browser's cookies; sign-in only, every other link goes to the
+  browser app). The return signal is payload-free (the foreground-resume edge,
+  the sheet's completion, or the return link's `appUrlOpen`, all via
+  `IRunnerHost.onAuthCallback`); polling must complete sign-in even with no
+  signal. The return scheme comes from the
   baked config (`returnScheme`): `traycer://` as checked into both native
   projects, re-stamped to `traycer-staging://` (with bundle id
   `ai.traycer.app.ios.staging`) by the iOS staging release lane so the two

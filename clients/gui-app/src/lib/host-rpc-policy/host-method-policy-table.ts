@@ -451,6 +451,18 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // Explicit, state-changing local-store repair. Unusually for this table the
+  // cross-queue caveat does not apply: the request is
+  // `{ confirmOldHostStopped: true }` and nothing else (`local-store/schemas.ts`),
+  // so every confirmation click on one host shares all four key components and
+  // they really are one queue. `fifo` is what that queue needs — under `latest`
+  // a second click arriving while the first is still QUEUED folds into it, and
+  // two deliberate confirmations of a destructive repair reach the host as one.
+  "host.rebindLocalStore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The provider-pull branch spawns a CLI subprocess on the host whose probe
   // can legitimately outlast the transport's 30s default frame timeout (a
   // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch
@@ -644,6 +656,26 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "managedCommand.create": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.list": { ...LATEST_SCHEDULING, poll: null },
+  "managedCommand.view": { ...LATEST_SCHEDULING, poll: null },
+  // The agent's configure, not the human switch above. Same `fifo` reasoning:
+  // two presses that differ in value are different params and so different
+  // queues, and two identical ones must stay distinct rather than coalesce.
+  "managedCommand.configureAgentShell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.restart": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "agent.gui.listHarnesses": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("agent.gui.listHarnesses", {
@@ -769,6 +801,46 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Forking an agent persists a new collaboration record, like agent.create.
   "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Archiving retires the agent record; fifo so a tap is not coalesced away.
+  "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
+  "host.directory.list": { ...LATEST_SCHEDULING, poll: null },
+  "host.fileCopy.start": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileCopy.status": { ...LATEST_SCHEDULING, poll: null },
+  "host.fileCopy.cancel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.enumerate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.open": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.readChunk": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.close": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.oneOffShell.run": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Migrating a phase changes the epic's persisted workflow state.
   "phase.migrateToEpic": {
     mode: "fifo",
@@ -836,6 +908,35 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Creating an artifact persists a new document node.
   "epic.createArtifact": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersions.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersions.getBlob": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersions.restore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.deletedArtifacts.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.deletedArtifacts.revive": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.get": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersionSettings.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.setRetentionPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.clearHistory": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -1184,6 +1285,24 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 45_000 },
   },
+  // Drafts live-sync rides `drafts.subscribe`. These unaries are the snapshot
+  // + mutation surface; an older host degrades them as unsupported and the
+  // client keeps device-local drafts. No poll: subscribe is the freshness
+  // channel, and a host missing the stream also misses these methods.
+  "drafts.list": { ...LATEST_SCHEDULING, poll: null },
+  // `fifo` here does NOT order two writes of the same draft: the coordinator
+  // keys its queue by the full params, so two revisions of one draft carry
+  // different params and get different queues. Per-draft ordering is owned by
+  // `DraftMirrorSession` (`sendUpsert`), which chains sends per `draftId` and
+  // drops a body an equal-or-newer generation already covers - the host
+  // applies an upsert as a whole-document LWW, so an older body arriving last
+  // would win.
+  "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.claim": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Unary byte channel, same posture as `epic.readChatAttachment`.
+  "drafts.putBlob": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.readBlob": { ...LATEST_SCHEDULING, poll: null },
   // Polled: no host-pushed invalidation channel exists for this event today
   // (see the implementation report), so without a cadence a fork detected
   // after this query first cached would never surface. 45s sits between the
@@ -1333,6 +1452,24 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Automatic-cleanup policy + history. The two reads are plain latest-wins
+  // panel reads. Writing the policy is `fifo`: it persists a setting whose
+  // revision is the token queued deletions are validated against, so two
+  // in-flight writes must not be reordered - and the host refuses a stale
+  // `expectedRevision` outright rather than letting the later write win.
+  //
+  // No polling on any of them. A cleanup pass runs about once a day and emits
+  // a notification when it finds anything, so a background poll would spend a
+  // request every interval to learn nothing - the panel refetches on mount and
+  // after a policy write, which is when the answer can actually differ.
+  "worktree.getAutoCleanupPolicy": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.setAutoCleanupPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "worktree.listAutoCleanupRuns": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.getAutoCleanupRun": { ...LATEST_SCHEDULING, poll: null },
   "worktree.getBinding": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("worktree.getBinding", {
