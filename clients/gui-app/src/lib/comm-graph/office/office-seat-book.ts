@@ -27,6 +27,7 @@ import type {
   OfficeLayout,
   OfficeRect,
   OfficeSeat,
+  OfficeSeatKind,
   OfficeTilePos,
 } from "@/lib/comm-graph/office/office-types";
 import {
@@ -61,10 +62,47 @@ import type { OfficeProjector } from "@/lib/comm-graph/office/views/office-view"
  */
 export type OfficeSeatAdoption = "keep" | "fresh";
 
+/**
+ * WHAT KIND OF SEAT a claim is for.
+ *
+ * `"desk"` is every wake: somewhere to work. It is deliberately not
+ * `OfficeSeatKind` - a console is a desk for this purpose and a wake has always
+ * been able to take one, so narrowing the want to the literal kind would be a
+ * behaviour change wearing a type change's clothes. What `"desk"` excludes is
+ * the civic seats, which a wake must never take: a bed is for a crash and a
+ * chair is for a wait, and an agent that merely woke up belongs in neither.
+ */
+export type OfficeSeatWant = "desk" | "bed" | "lounge";
+
+/**
+ * WHETHER A CLAIM THAT FINDS NOTHING ASKS THE PLAN TO GROW.
+ *
+ * `"plan"` is the wake's answer and the original behaviour: an agent that woke
+ * with nowhere to sit is a floor that is too small, so it goes into
+ * `needsCapacity` and the next layout makes room.
+ *
+ * `"none"` is the civic answer, and it is C2 - CAPACITY IS THE CAP. A floor
+ * with two beds and three crashed agents is not a floor that needs a third
+ * bed; it is a floor where one agent stays at its desk with its glyph up until
+ * a bed comes free. Letting civic demand reach `needsCapacity` would re-plan
+ * the office on every outbreak and grow a ward that empties again minutes
+ * later, so a civic claim that finds nothing free simply returns `null`.
+ */
+export type OfficeSeatShortfall = "plan" | "none";
+
 /** Where a waking agent would LIKE to sit: beside its team, on its own floor. */
 export interface OfficeSeatPreference {
   readonly roomId: string | null;
   readonly floorIndex: number;
+  readonly wants: OfficeSeatWant;
+  readonly shortfall: OfficeSeatShortfall;
+}
+
+/** The civic seats, as a want. A seat of any other kind answers `"desk"`. */
+function wantOfSeat(seat: OfficeSeat): OfficeSeatWant {
+  if (seat.kind === "bed") return "bed";
+  if (seat.kind === "lounge") return "lounge";
+  return "desk";
 }
 
 /**
@@ -299,7 +337,9 @@ export class OfficeSeatBook {
     }
     const seat = this.firstFreeSeat(layout, agentId, preference);
     if (seat === null) {
-      this.claimShortfall.add(agentId);
+      // C2: a civic claim that finds nothing is the cap doing its job, not a
+      // floor that owes anybody a seat. See `OfficeSeatShortfall`.
+      if (preference.shortfall === "plan") this.claimShortfall.add(agentId);
       return null;
     }
     this.claimSequence += 1;
@@ -311,6 +351,30 @@ export class OfficeSeatBook {
     this.claimShortfall.delete(agentId);
     this.refresh();
     return seat;
+  }
+
+  /**
+   * The civic seat this agent is HOLDING, by kind, or `null` for an agent that
+   * holds none.
+   *
+   * `held` only. A releasing claim is an agent already walking home, and every
+   * reader of this - the pose it draws in, the errand pass that leaves a civic
+   * holder alone, the wake pass that skips one - is asking "is this agent in a
+   * bed right now", to which "it is on its way out of one" is no.
+   *
+   * A reader rather than a second piece of state: the claim and the seat
+   * registry already know, and a civic flag kept beside them is one more thing
+   * that can disagree with where the agent actually is.
+   */
+  civicClaimOf(agentId: string): OfficeSeatKind | null {
+    const layout = this.layout;
+    if (layout === null) return null;
+    const claim = this.claims.get(agentId);
+    if (claim === undefined || claim.state !== "held") return null;
+    const seat = layout.seats.get(claim.seatId);
+    if (seat === undefined) return null;
+    if (seat.kind !== "bed" && seat.kind !== "lounge") return null;
+    return seat.kind;
   }
 
   /**
@@ -360,6 +424,8 @@ export class OfficeSeatBook {
       this.claim(agentId, {
         roomId: seat.roomId,
         floorIndex: seat.floorIndex,
+        wants: "desk",
+        shortfall: "plan",
       });
     }
   }
@@ -561,11 +627,28 @@ export class OfficeSeatBook {
     for (const seatId of this.seatIdsInOrder) {
       const seat = layout.seats.get(seatId);
       if (seat === undefined || seat.kind === "cubby") continue;
+      // The want is the first filter, so a wake can never be handed a bed and a
+      // crash can never be handed a desk - whatever the room and floor rules
+      // below would have preferred.
+      if (wantOfSeat(seat) !== preference.wants) continue;
       if (seat.hostId !== owner.hostId) continue;
       // Spoken for is spoken for, including by this agent: a renewed wake
       // reactivates its own reservation above and never reaches here.
       if (spoken.has(seatId)) continue;
       free.push(seat);
+    }
+    // A CIVIC CLAIM READS FLOOR, THEN BUILDING, and nothing else. `roomId` is
+    // the team's room and a bed has no team in it; the bullpen step is a
+    // question about desks. So the rule is the one the plan states for every
+    // view: a room of this kind on the agent's own storey if there is one,
+    // else any on its host - which is what sends a crash on storey seven down
+    // the stairwell to the plaza's beds where that view keeps them there.
+    if (preference.wants !== "desk") {
+      const onFloor = free.find(
+        (seat) => seat.floorIndex === preference.floorIndex,
+      );
+      if (onFloor !== undefined) return onFloor;
+      return free[0] ?? null;
     }
     if (preference.roomId !== null) {
       const inRoom = free.find((seat) => seat.roomId === preference.roomId);

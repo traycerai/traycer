@@ -5081,6 +5081,8 @@ export class OfficeScene {
         this.seats.claim(agentId, {
           roomId: assigned.roomId,
           floorIndex: assigned.floorIndex,
+          wants: "desk",
+          shortfall: "plan",
         });
       } else if (hot) {
         // Headed for the counter: no claim yet, and no release either - one it
