@@ -44,7 +44,7 @@ function baseProps(
 }
 
 function renderToolbar(
-  overrides: Partial<DocumentPreviewToolbarProps> = {},
+  overrides: Partial<DocumentPreviewToolbarProps>,
 ): DocumentPreviewToolbarProps {
   const props = baseProps(overrides);
   render(<DocumentPreviewToolbar {...props} />);
@@ -74,7 +74,7 @@ describe("<DocumentPreviewToolbar />", () => {
 
   describe("three-tier folding", () => {
     it("folds outline, fit-width, rotate, search and the separator ahead of search under @max-lg", () => {
-      renderToolbar();
+      renderToolbar({});
 
       expect(
         screen.getByRole("button", { name: "Document outline" }).className,
@@ -97,7 +97,7 @@ describe("<DocumentPreviewToolbar />", () => {
     });
 
     it("folds zoom out/level/in and their separator under @max-sm, but never page nav", () => {
-      renderToolbar();
+      renderToolbar({});
 
       expect(
         screen.getByRole("button", { name: "Zoom out" }).className,
@@ -124,7 +124,7 @@ describe("<DocumentPreviewToolbar />", () => {
     });
 
     it("shows the More actions trigger only under @max-lg", () => {
-      renderToolbar();
+      renderToolbar({});
 
       const trigger = screen.getByRole("button", { name: "More actions" });
       expect(trigger.className).toContain("hidden");
