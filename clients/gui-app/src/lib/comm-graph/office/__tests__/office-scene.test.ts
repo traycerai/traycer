@@ -3516,6 +3516,25 @@ function bothSidesTaken(
   return sides.every((tile) => standing.has(`${tile.col},${tile.row}`));
 }
 
+/**
+ * Long enough for TWO agents to be at the chess table at the same moment.
+ *
+ * Measured, and the measurement is the interesting part: this is a waiting
+ * time for a COINCIDENCE, not for a walk. Anchoring the infirmary at the foot
+ * of its column moved the first both-sides frame from 944 to 1418 while every
+ * chess walk stayed the same length to the tile - from the lobby (56) and from
+ * each of the twelve desks (53, 63, 68, 78, ...) - so what moved is the phase
+ * the two errand cycles fall into, not the distance either agent covers.
+ *
+ * It was `1_200`, which is 256 frames of headroom over a 944 that nothing in
+ * the case pinned or explained. Anything that shifts an errand's phase spends
+ * that, and this case has no opinion about phase at all: it is about chess
+ * being turn-based and ball-free once the two of them sit down. So the budget
+ * is now a named number with real margin over the measurement, rather than one
+ * that happened to clear it.
+ */
+const CHESS_PAIRING_TICKS = 3_000;
+
 describe("OfficeScene amenities", () => {
   it("pairs two agents across the foosball table and knocks a ball between them", () => {
     const scene = new OfficeScene(testView(onlyKinds(["foosball"])), null);
@@ -3556,7 +3575,11 @@ describe("OfficeScene amenities", () => {
     const seats = spotsOfKind(scene, "chess");
     expect(seats).toHaveLength(2);
 
-    const seated = frameWhere(scene, () => bothSidesTaken(scene, seats), 1_200);
+    const seated = frameWhere(
+      scene,
+      () => bothSidesTaken(scene, seats),
+      CHESS_PAIRING_TICKS,
+    );
     expect(seated, "no chess game started").not.toBeNull();
     if (seated === null) return;
 

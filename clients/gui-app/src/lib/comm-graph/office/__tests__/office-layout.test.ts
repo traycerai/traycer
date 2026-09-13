@@ -1294,15 +1294,39 @@ describe("layoutOffice floors", () => {
     ]);
 
     const rooms = columnRooms(floor);
+    const infirmary = floor.civic.find((room) => room.kind === "infirmary");
+    if (infirmary === undefined) throw new Error("no infirmary");
+
     for (let index = 1; index < rooms.length; index += 1) {
       const above = rooms[index - 1];
       const here = rooms[index];
+      // One column: every room's RIGHT edge lines up on the storey's own.
+      expect(here.col + here.cols).toBe(above.col + above.cols);
+      // GEOMETRY, RE-MEASURED: this asserted a corridor row under EVERY room,
+      // `here.row === above.row + above.rows + 1`, and the infirmary now
+      // breaks it on purpose - it is dropped to the foot of its column so its
+      // door opens onto the road, which leaves corridor above it rather than
+      // one row. Measured at 60 where the packed row was 56. Every other pair
+      // still follows immediately, which is the thing this case is for.
+      if (here.row === infirmary.bounds.row) continue;
       // A corridor row between them, so the upper room's door has somewhere to
       // open onto rather than straight into the lower room's cap.
       expect(here.row).toBe(above.row + above.rows + 1);
-      // One column: every room's RIGHT edge lines up on the storey's own.
-      expect(here.col + here.cols).toBe(above.col + above.cols);
     }
+
+    // ...and the infirmary's own rule, which is what it left the stack for: its
+    // bottom wall is the last row a room may occupy, so the tile its door opens
+    // onto IS the lobby row - the road - and its kerb is one tile from the door
+    // rather than one column of road that happens to share its column.
+    const road = floor.road;
+    if (road === null) throw new Error("no road");
+    const doorRow = infirmary.bounds.row + infirmary.bounds.rows - 1;
+    expect(infirmary.doorTile.row).toBe(doorRow);
+    expect(road.tiles[0].row).toBe(doorRow + 1);
+    expect(infirmary.kerbTile).toEqual({
+      col: infirmary.doorTile.col,
+      row: doorRow + 1,
+    });
   });
 
   it("opens a second room column when the storey runs out of rows", () => {

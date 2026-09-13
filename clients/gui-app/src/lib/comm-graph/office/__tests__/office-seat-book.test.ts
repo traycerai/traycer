@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { OfficeSeatBook } from "@/lib/comm-graph/office/office-seat-book";
-import type { OfficeSeatPreference } from "@/lib/comm-graph/office/office-seat-book";
+import type {
+  OfficeSeatPreference,
+  OfficeSeatWant,
+} from "@/lib/comm-graph/office/office-seat-book";
 import type {
   OfficeAgentStatus,
   OfficeDesk,
@@ -49,6 +52,17 @@ function tile(col: number, row: number): OfficeTilePos {
  */
 function wake(roomId: string | null, floorIndex: number): OfficeSeatPreference {
   return { roomId, floorIndex, wants: "desk", shortfall: "plan" };
+}
+
+/**
+ * A CIVIC claim: a seat of one kind, and a miss that never asks the plan to
+ * grow the office (C2 - capacity is the cap).
+ */
+function civic(
+  wants: OfficeSeatWant,
+  floorIndex: number,
+): OfficeSeatPreference {
+  return { roomId: null, floorIndex, wants, shortfall: "none" };
 }
 
 function makeSeat(spec: SeatSpec): OfficeSeat {
@@ -1551,6 +1565,430 @@ describe("OfficeSeatBook", () => {
     const scanned = book.claim("U", wake(null, 1));
     expect(scanned?.seatId).toBe("b-scan-desk");
     expect(scanned?.hostId).toBe("host-u");
+    assertNoDoubleBooking(book);
+  });
+
+  it("never wakes an agent into a bed or a lounge chair, and still takes a console", () => {
+    // Seat ids put the bed first, then the chair: if the want filter were
+    // missing, A would be handed the bed. A wake that took a civic seat
+    // would put a working agent in a crash bed, and the next crash would
+    // find none.
+    const civicOnly = buildLayout({
+      seats: [
+        {
+          seatId: "cubby-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "a-bed",
+          kind: "bed",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+          civicRoomId: "infirmary",
+        },
+        {
+          seatId: "b-lounge",
+          kind: "lounge",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(4, 0),
+          civicRoomId: "waiting-room",
+        },
+      ],
+      desks: new Map([["A", "cubby-a"]]),
+      stable: true,
+    });
+    const civicBook = new OfficeSeatBook();
+    civicBook.adopt(civicOnly, ["A"], "keep");
+    expect(civicBook.claim("A", wake(ROOM, 0))).toBeNull();
+    expect(civicBook.effectiveSeat("A")?.seatId).toBe("cubby-a");
+    expect(civicBook.occupant("a-bed")).toBeNull();
+    expect(civicBook.occupant("b-lounge")).toBeNull();
+    expect(civicBook.needsCapacity()).toEqual(["A"]);
+    assertNoDoubleBooking(civicBook);
+
+    // The same floor with a console added. A wake has always been able to
+    // take a console, so this pins "civic excluded" rather than the weaker
+    // "only desks". The bed still sorts first: a want that treated console
+    // as civic would leave A unseated (or in the bed).
+    const withConsole = buildLayout({
+      seats: [
+        {
+          seatId: "cubby-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "a-bed",
+          kind: "bed",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+          civicRoomId: "infirmary",
+        },
+        {
+          seatId: "b-lounge",
+          kind: "lounge",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(4, 0),
+          civicRoomId: "waiting-room",
+        },
+        {
+          seatId: "z-console",
+          kind: "console",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(6, 0),
+        },
+      ],
+      desks: new Map([["A", "cubby-a"]]),
+      stable: true,
+    });
+    const consoleBook = new OfficeSeatBook();
+    consoleBook.adopt(withConsole, ["A"], "keep");
+    expect(consoleBook.claim("A", wake(ROOM, 0))?.seatId).toBe("z-console");
+    expect(consoleBook.occupant("a-bed")).toBeNull();
+    expect(consoleBook.occupant("b-lounge")).toBeNull();
+    expect(consoleBook.needsCapacity()).toEqual([]);
+    assertNoDoubleBooking(consoleBook);
+  });
+
+  it("never seats a civic claim at a desk", () => {
+    // A free desk and no bed. If want were ignored, the civic claim would
+    // take "a-spare" (it sorts first among the free non-cubbies) and a
+    // crashed agent would look like a wake.
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "home",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "a-spare",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+      ],
+      desks: new Map([["A", "home"]]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A"], "keep");
+    expect(book.claim("A", civic("bed", 0))).toBeNull();
+    expect(book.effectiveSeat("A")?.seatId).toBe("home");
+    expect(book.occupant("a-spare")).toBeNull();
+    assertNoDoubleBooking(book);
+  });
+
+  it("never raises needsCapacity for a civic miss, and still does for a starved wake", () => {
+    // Same office as the civic-never-takes-a-desk case: a free desk, no bed.
+    const withDesk = buildLayout({
+      seats: [
+        {
+          seatId: "home",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "a-spare",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+      ],
+      desks: new Map([["A", "home"]]),
+      stable: true,
+    });
+    const civicBook = new OfficeSeatBook();
+    civicBook.adopt(withDesk, ["A"], "keep");
+    expect(civicBook.claim("A", civic("bed", 0))).toBeNull();
+    // C2: a civic miss is the cap doing its job, not a floor that owes a
+    // bed. The spare desk is still free; the miss must not ask the plan to
+    // grow around it.
+    expect(civicBook.needsCapacity()).toEqual([]);
+    assertNoDoubleBooking(civicBook);
+
+    // Control: the same agent, starved of desks, claiming as a wake. A
+    // wake against `withDesk` would take a-spare and never reach
+    // claimShortfall, so it would not prove that shortfall still writes.
+    // Without this, deleting shortfall (never writing claimShortfall)
+    // would still pass the civic assertion above.
+    const noDesk = buildLayout({
+      seats: [
+        {
+          seatId: "cubby-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "desk-1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+      ],
+      desks: new Map([
+        ["A", "cubby-a"],
+        ["B", "desk-1"],
+      ]),
+      stable: true,
+    });
+    const wakeBook = new OfficeSeatBook();
+    wakeBook.adopt(noDesk, ["A", "B"], "keep");
+    expect(wakeBook.claim("A", wake(ROOM, 0))).toBeNull();
+    expect(wakeBook.needsCapacity()).toEqual(["A"]);
+    assertNoDoubleBooking(wakeBook);
+  });
+
+  it("keeps occupant injective under mixed wakes and civic claims", () => {
+    // Two cubby wakes shopping for desks, two crashes for one bed, one
+    // wait for one chair. occupant is the injective view: if a wake could
+    // take a bed, or two civic claims could share one, this is where it
+    // would show - so the check runs after every mutation, not only at
+    // the end.
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "c-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "c-e",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+        {
+          seatId: "d-b",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(4, 0),
+        },
+        {
+          seatId: "d-c",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(6, 0),
+        },
+        {
+          seatId: "d-d",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(8, 0),
+        },
+        {
+          seatId: "r1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(10, 0),
+        },
+        {
+          seatId: "r2",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(12, 0),
+        },
+        {
+          seatId: "bed-1",
+          kind: "bed",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(14, 0),
+          civicRoomId: "infirmary",
+        },
+        {
+          seatId: "lounge-1",
+          kind: "lounge",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(16, 0),
+          civicRoomId: "waiting-room",
+        },
+      ],
+      desks: new Map([
+        ["A", "c-a"],
+        ["B", "d-b"],
+        ["C", "d-c"],
+        ["D", "d-d"],
+        ["E", "c-e"],
+      ]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A", "B", "C", "D", "E"], "keep");
+    assertNoDoubleBooking(book);
+
+    expect(book.claim("A", wake(ROOM, 0))?.seatId).toBe("r1");
+    assertNoDoubleBooking(book);
+
+    expect(book.claim("B", civic("bed", 0))?.seatId).toBe("bed-1");
+    // The desk stays assigned while the bed is held: occupancy still
+    // lists it, so a plan cannot hand B's desk to an arrival, and the
+    // walk home has somewhere to go.
+    expect(book.assignedSeat("B")?.seatId).toBe("d-b");
+    expect(book.effectiveSeat("B")?.seatId).toBe("bed-1");
+    expect(book.civicClaimOf("B")).toBe("bed");
+    assertNoDoubleBooking(book);
+
+    // C arrives at the same bed second: capacity is the cap, so it stays
+    // at its desk and is not a reason to grow the office.
+    expect(book.claim("C", civic("bed", 0))).toBeNull();
+    expect(book.effectiveSeat("C")?.seatId).toBe("d-c");
+    expect(book.needsCapacity()).not.toContain("C");
+    assertNoDoubleBooking(book);
+
+    expect(book.claim("D", civic("lounge", 0))?.seatId).toBe("lounge-1");
+    expect(book.civicClaimOf("D")).toBe("lounge");
+    assertNoDoubleBooking(book);
+
+    // Seat-id order among the remaining free desks: r2, not a civic seat
+    // and not anybody's home.
+    expect(book.claim("E", wake(ROOM, 0))?.seatId).toBe("r2");
+    expect(book.civicClaimOf("E")).toBeNull();
+    assertNoDoubleBooking(book);
+
+    expect(book.occupant("bed-1")).toBe("B");
+    expect(book.occupant("lounge-1")).toBe("D");
+    expect(book.occupant("r1")).toBe("A");
+    expect(book.occupant("r2")).toBe("E");
+    expect(book.occupant("d-b")).toBeNull();
+    expect(book.needsCapacity()).toEqual([]);
+    assertNoDoubleBooking(book);
+  });
+
+  it("keeps a civic claim across a stable keep-adopt and drops it on fresh", () => {
+    // The bed is still standing in both adoptions. "keep" is every ordinary
+    // re-plan: the claim is a reservation the plan was told about. "fresh"
+    // is a plan made from scratch, so the civic claim is dropped with every
+    // other claim - the scene re-derives them from statuses on the next
+    // line. If keep dropped it, a crash would stand up on every sync; if
+    // fresh kept it, the settle would leave a bed reservation the new
+    // plan never made.
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "desk-a",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "bed-1",
+          kind: "bed",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+          civicRoomId: "infirmary",
+        },
+      ],
+      desks: new Map([["A", "desk-a"]]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A"], "keep");
+    expect(book.claim("A", civic("bed", 0))?.seatId).toBe("bed-1");
+    expect(book.civicClaimOf("A")).toBe("bed");
+    expect(book.assignedSeat("A")?.seatId).toBe("desk-a");
+    assertNoDoubleBooking(book);
+
+    book.adopt(layout, ["A"], "keep");
+    expect(book.civicClaimOf("A")).toBe("bed");
+    expect(book.effectiveSeat("A")?.seatId).toBe("bed-1");
+    expect(book.assignedSeat("A")?.seatId).toBe("desk-a");
+    assertNoDoubleBooking(book);
+
+    book.adopt(layout, ["A"], "fresh");
+    expect(book.civicClaimOf("A")).toBeNull();
+    expect(book.effectiveSeat("A")?.seatId).toBe("desk-a");
+    expect(book.occupant("bed-1")).toBeNull();
+    assertNoDoubleBooking(book);
+  });
+
+  it("keeps a released civic seat held between endClaim and vacated", () => {
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "desk-a",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "desk-b",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+        {
+          seatId: "bed-1",
+          kind: "bed",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(4, 0),
+          civicRoomId: "infirmary",
+        },
+      ],
+      desks: new Map([
+        ["A", "desk-a"],
+        ["B", "desk-b"],
+      ]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A", "B"], "keep");
+    expect(book.claim("A", civic("bed", 0))?.seatId).toBe("bed-1");
+    expect(book.assignedSeat("A")?.seatId).toBe("desk-a");
+    expect(book.effectiveSeat("A")?.seatId).toBe("bed-1");
+    expect(book.civicClaimOf("A")).toBe("bed");
+    assertNoDoubleBooking(book);
+
+    book.endClaim("A");
+    // The character is walking home: its effective seat is the desk again
+    // and civicClaimOf is null (a releasing claim is not held), but the
+    // bed is still nobody else's until vacated. A second crash taking it
+    // in between would put two agents in one bed.
+    expect(book.effectiveSeat("A")?.seatId).toBe("desk-a");
+    expect(book.civicClaimOf("A")).toBeNull();
+    expect(book.occupancy().get("bed-1")).toBe("A");
+    expect(book.claim("B", civic("bed", 0))).toBeNull();
+    expect(book.effectiveSeat("B")?.seatId).toBe("desk-b");
+    assertNoDoubleBooking(book);
+
+    book.vacated("A");
+    expect(book.claim("B", civic("bed", 0))?.seatId).toBe("bed-1");
+    expect(book.civicClaimOf("B")).toBe("bed");
+    expect(book.assignedSeat("B")?.seatId).toBe("desk-b");
+    expect(book.occupant("bed-1")).toBe("B");
     assertNoDoubleBooking(book);
   });
 });
