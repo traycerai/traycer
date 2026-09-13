@@ -128,7 +128,10 @@ import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-g
 import * as officeAutoModule from "@/lib/comm-graph/office/office-auto";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
-import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
+import type {
+  OfficeSize,
+  OfficeViewId,
+} from "@/lib/comm-graph/office/office-types";
 import { OFFICE_BENCH_SEED } from "@/components/epic-canvas/comm-graph/office/office-bench";
 import {
   OFFICE_VIEWS,
@@ -386,40 +389,54 @@ const PERSISTED_CAMERA_FRAME = {
 };
 
 /**
- * The world box auto-fit lands on for a Floor that fills an `OFFICE_CANVAS`
- * tile - the OTHER thing a resolved Floor runtime can be framed by, and the
- * one the three cases below distinguish from `PERSISTED_CAMERA_FRAME`. Those
- * two rects are the whole assertion: a stale camera that rode through gives
- * you the persisted one, a camera correctly retired gives you this one.
- *
- * Unlike `PERSISTED_CAMERA_FRAME` this cannot be written as arithmetic on
- * `OFFICE_CANVAS` alone, because auto-fit's zoom depends on the Floor's world
- * box, which is a plan detail. So it is a MEASUREMENT, and here is the
- * arithmetic that says the measurement is the fitted frame rather than
- * whatever the run happened to emit - check it again after any plan change
- * instead of pasting a new received value:
- *
- *   zoom  = min((1040-48)/704, (1000-48)/1264) = 952/1264 = 0.753164...
- *           24px of padding per side; the Floor's 704x1264 world is
- *           height-constrained on this tile, as it was at 1040x700.
- *   width  = 1040 / zoom = 1380.8403361344538
- *   height = 1000 / zoom = 1327.7310924369747
- *   y      = 632 - height/2   (the world spans y in [0, 1264])
- *   x      = 288 - width/2    (the content centre; 280 before the civic
- *                             rooms widened the Floor 688 -> 704)
- *
- * The same arithmetic reproduces the pre-civic-rooms numbers exactly - at
- * 1040x700 over a 688x976 world it gives 1556.8098159509202 x
- * 1047.8527607361964, which is what these cases asserted before K1 moved the
- * Floor - so the model is pinned by two independent measurements, not fitted
- * to this one.
+ * Auto-fit's padding, RESTATED rather than imported. `FIT_PADDING` is private
+ * to `comm-graph-office-canvas`, and importing it would make the assertion
+ * below unfalsifiable: production and test would move together and no change
+ * to the padding could ever redden anything. 24 is a claim this file makes
+ * about the runtime, and the three cases below are what tests it.
  */
-const FITTED_FLOOR_FRAME = {
-  x: -402.4201680672269,
-  y: -31.865546218487395,
-  width: 1380.8403361344538,
-  height: 1327.7310924369747,
-};
+const FIT_PADDING = 24;
+
+/**
+ * The frame a fitted office lands on - auto-fit's model, restated as a
+ * FUNCTION of the world box and the tile rather than as three measured
+ * numbers. This is what `fitCamera` does: pad the tile by `FIT_PADDING` on
+ * every side, take the zoom at which the world fits inside what is left,
+ * centre the world in the tile, and read the visible world rect as the tile
+ * over that zoom.
+ *
+ * Live, not measured, and that is the point. These cases assert an EXACT rect
+ * - strictly stronger than "the centre is somewhere inside it", and enough to
+ * fail on the persisted camera's rect, on a Towers rect, or on a Floor rect at
+ * the wrong zoom - but the rect is now recomputed from the Floor the scene
+ * actually laid out, so a plan change moves it instead of reddening three
+ * cases whose claim has nothing to do with how big the Floor is. Twice now
+ * these three have been re-measured by hand for a Floor that grew; this is
+ * what stops there being a third time.
+ *
+ * The world box comes from the scene (`OfficeScene.worldSize()`, the same
+ * value `applyAutoFit` consumes) so the INPUT is live while the MODEL is the
+ * claim. Note it is neither the projector's `bounds` nor the plan's box: the
+ * two-agent Floor measures 576x1264 here, where the plan box is 704 wide.
+ *
+ * `fitCamera` also clamps - `MAX_FIT_ZOOM` 6, and zoom into [0.05, 8]. Nothing
+ * is within reach at this fixture's 0.753, so the clamps are deliberately left
+ * out of the restatement rather than copied in unexercised. A plan change that
+ * saturated one would redden these cases, which is the correct outcome: the
+ * model would then be incomplete and would need the clamp added.
+ */
+function fittedFrame(world: OfficeSize, tile: OfficeSize): OfficeRect {
+  const zoom = Math.min(
+    (tile.width - FIT_PADDING * 2) / world.width,
+    (tile.height - FIT_PADDING * 2) / world.height,
+  );
+  return {
+    x: -((tile.width - world.width * zoom) / 2 / zoom),
+    y: -((tile.height - world.height * zoom) / 2 / zoom),
+    width: tile.width / zoom,
+    height: tile.height / zoom,
+  };
+}
 
 const AUTO_TAB_ID = "tab-comm-graph-auto";
 
@@ -743,7 +760,12 @@ function lastCanvasReady(
 function lastFrameAndBounds(
   frames: SpiedCalls,
   sync: SpiedContexts,
-): { readonly frame: OfficeRect; readonly bounds: OfficeRect } {
+): {
+  readonly frame: OfficeRect;
+  readonly view: OfficeViewId;
+  readonly world: OfficeSize;
+  readonly bounds: OfficeRect;
+} {
   const frame = frames.mock.calls.at(-1)?.[1];
   const scene = sync.mock.contexts.at(-1);
   if (!isOfficeRect(frame) || !(scene instanceof OfficeScene)) {
@@ -753,6 +775,8 @@ function lastFrameAndBounds(
   if (layout === null) throw new Error("no layout");
   return {
     frame,
+    view: layout.view,
+    world: scene.worldSize(),
     bounds: OFFICE_VIEWS[layout.view].painter.projector(layout).bounds,
   };
 }
@@ -2575,7 +2599,7 @@ describe("CommGraphTile", () => {
       // props (which answers a different, weaker question and never
       // installs a canvas or steps a frame at all). With `officeCamera`
       // retired to `null`, `isDefaultCommGraphView` is true and auto-fit
-      // arms, so the Floor frame lands on `FITTED_FLOOR_FRAME`; the keep
+      // arms, so the Floor frame lands on `fittedFrame`'s rect; the keep
       // arm's unconditional preservation of the stale Towers camera would
       // instead have produced the far-off-screen `PERSISTED_CAMERA_FRAME`
       // that the sibling "keeps a resolved Floor camera" case pins - not
@@ -2583,7 +2607,14 @@ describe("CommGraphTile", () => {
       // same `OFFICE_CANVAS`, so the contrast this asserts survives the next
       // change to the tile box instead of decaying into two stale literals.
       const state = lastFrameAndBounds(frames, sync);
-      expect(state.frame).toEqual(FITTED_FLOOR_FRAME);
+      // The view the scene actually PAINTED, asserted before the frame is
+      // derived from it: `fittedFrame(state.world, ...)` reads the world of
+      // whatever got laid out, so a run that wrongly landed on Towers would
+      // compare a Towers frame against a fitted TOWERS frame and agree with
+      // itself. This is the line that stops the live derivation from being
+      // able to pass for the wrong view.
+      expect(state.view).toBe("floor");
+      expect(state.frame).toEqual(fittedFrame(state.world, OFFICE_CANVAS));
 
       // ASSERTION 3: the Graph's own camera was never anyone's business in
       // this sequence and has to read exactly as seeded throughout - not
@@ -2661,7 +2692,14 @@ describe("CommGraphTile", () => {
       // (no stamp at all) and would leave the stale Towers camera in place,
       // producing the far-off-screen frame instead.
       const state = lastFrameAndBounds(frames, sync);
-      expect(state.frame).toEqual(FITTED_FLOOR_FRAME);
+      // The view the scene actually PAINTED, asserted before the frame is
+      // derived from it: `fittedFrame(state.world, ...)` reads the world of
+      // whatever got laid out, so a run that wrongly landed on Towers would
+      // compare a Towers frame against a fitted TOWERS frame and agree with
+      // itself. This is the line that stops the live derivation from being
+      // able to pass for the wrong view.
+      expect(state.view).toBe("floor");
+      expect(state.frame).toEqual(fittedFrame(state.world, OFFICE_CANVAS));
 
       // ASSERTION 3: the Graph's camera, untouched throughout - the actual
       // seeded numbers, not merely "still the default".
@@ -2808,7 +2846,14 @@ describe("CommGraphTile", () => {
       // `PERSISTED_CAMERA_FRAME` the sibling "keeps a resolved Floor camera"
       // case pins, not the fitted rect below.
       const state = lastFrameAndBounds(frames, sync);
-      expect(state.frame).toEqual(FITTED_FLOOR_FRAME);
+      // The view the scene actually PAINTED, asserted before the frame is
+      // derived from it: `fittedFrame(state.world, ...)` reads the world of
+      // whatever got laid out, so a run that wrongly landed on Towers would
+      // compare a Towers frame against a fitted TOWERS frame and agree with
+      // itself. This is the line that stops the live derivation from being
+      // able to pass for the wrong view.
+      expect(state.view).toBe("floor");
+      expect(state.frame).toEqual(fittedFrame(state.world, OFFICE_CANVAS));
 
       // ASSERTION 2: the STORE agrees. RED today for the same reason -
       // `node.view.officeCamera` rides through unconditionally and the stamp
