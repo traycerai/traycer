@@ -385,6 +385,42 @@ const PERSISTED_CAMERA_FRAME = {
   height: OFFICE_CANVAS.height / 4,
 };
 
+/**
+ * The world box auto-fit lands on for a Floor that fills an `OFFICE_CANVAS`
+ * tile - the OTHER thing a resolved Floor runtime can be framed by, and the
+ * one the three cases below distinguish from `PERSISTED_CAMERA_FRAME`. Those
+ * two rects are the whole assertion: a stale camera that rode through gives
+ * you the persisted one, a camera correctly retired gives you this one.
+ *
+ * Unlike `PERSISTED_CAMERA_FRAME` this cannot be written as arithmetic on
+ * `OFFICE_CANVAS` alone, because auto-fit's zoom depends on the Floor's world
+ * box, which is a plan detail. So it is a MEASUREMENT, and here is the
+ * arithmetic that says the measurement is the fitted frame rather than
+ * whatever the run happened to emit - check it again after any plan change
+ * instead of pasting a new received value:
+ *
+ *   zoom  = min((1040-48)/704, (1000-48)/1264) = 952/1264 = 0.753164...
+ *           24px of padding per side; the Floor's 704x1264 world is
+ *           height-constrained on this tile, as it was at 1040x700.
+ *   width  = 1040 / zoom = 1380.8403361344538
+ *   height = 1000 / zoom = 1327.7310924369747
+ *   y      = 632 - height/2   (the world spans y in [0, 1264])
+ *   x      = 288 - width/2    (the content centre; 280 before the civic
+ *                             rooms widened the Floor 688 -> 704)
+ *
+ * The same arithmetic reproduces the pre-civic-rooms numbers exactly - at
+ * 1040x700 over a 688x976 world it gives 1556.8098159509202 x
+ * 1047.8527607361964, which is what these cases asserted before K1 moved the
+ * Floor - so the model is pinned by two independent measurements, not fitted
+ * to this one.
+ */
+const FITTED_FLOOR_FRAME = {
+  x: -402.4201680672269,
+  y: -31.865546218487395,
+  width: 1380.8403361344538,
+  height: 1327.7310924369747,
+};
+
 const AUTO_TAB_ID = "tab-comm-graph-auto";
 
 /**
@@ -2510,14 +2546,18 @@ describe("CommGraphTile", () => {
         fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
         await Promise.resolve();
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
 
       // REAL Auto, not a stub: this fixture's handful of agents fits the
-      // Floor comfortably at 1040x700, the same fixture every other Auto
-      // case in this file relies on.
+      // Floor on an `OFFICE_CANVAS` tile, the same fixture and the same box
+      // every other Auto case in this file relies on. Sized by that constant
+      // rather than by hand: at the 1040x700 these cases were written against
+      // the civic rooms now push the fit to 0.554 and Auto answers TOWERS, so
+      // a hand-written box turns this into a Towers case that still claims to
+      // be about a Floor. See `OFFICE_CANVAS`.
       await waitFor(() => {
         expect(storedView()?.officeAutoView).toBe("floor");
       });
@@ -2526,7 +2566,7 @@ describe("CommGraphTile", () => {
       // remount only reports its own eligibility on the frame this next
       // `step()` drives - same two-step pattern as "keeps a resolved Floor
       // camera when Auto answers" above.
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       step();
 
@@ -2535,18 +2575,15 @@ describe("CommGraphTile", () => {
       // props (which answers a different, weaker question and never
       // installs a canvas or steps a frame at all). With `officeCamera`
       // retired to `null`, `isDefaultCommGraphView` is true and auto-fit
-      // arms, so the Floor frame lands on the fitted rect below; the keep
+      // arms, so the Floor frame lands on `FITTED_FLOOR_FRAME`; the keep
       // arm's unconditional preservation of the stale Towers camera would
-      // instead have produced the far-off-screen frame the sibling "keeps a
-      // resolved Floor camera" case pins at `{ x: 2500, y: 5000, width:
-      // 260, height: 175 }` - not close to this one.
+      // instead have produced the far-off-screen `PERSISTED_CAMERA_FRAME`
+      // that the sibling "keeps a resolved Floor camera" case pins - not
+      // close to this one. Both rects are named constants derived from the
+      // same `OFFICE_CANVAS`, so the contrast this asserts survives the next
+      // change to the tile box instead of decaying into two stale literals.
       const state = lastFrameAndBounds(frames, sync);
-      expect(state.frame).toEqual({
-        x: -498.4049079754601,
-        y: -35.92638036809816,
-        width: 1556.8098159509202,
-        height: 1047.8527607361964,
-      });
+      expect(state.frame).toEqual(FITTED_FLOOR_FRAME);
 
       // ASSERTION 3: the Graph's own camera was never anyone's business in
       // this sequence and has to read exactly as seeded throughout - not
@@ -2603,7 +2640,7 @@ describe("CommGraphTile", () => {
         fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
         await Promise.resolve();
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
@@ -2612,7 +2649,7 @@ describe("CommGraphTile", () => {
         expect(storedView()?.officeAutoView).toBe("floor");
       });
 
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       step();
 
@@ -2624,12 +2661,7 @@ describe("CommGraphTile", () => {
       // (no stamp at all) and would leave the stale Towers camera in place,
       // producing the far-off-screen frame instead.
       const state = lastFrameAndBounds(frames, sync);
-      expect(state.frame).toEqual({
-        x: -498.4049079754601,
-        y: -35.92638036809816,
-        width: 1556.8098159509202,
-        height: 1047.8527607361964,
-      });
+      expect(state.frame).toEqual(FITTED_FLOOR_FRAME);
 
       // ASSERTION 3: the Graph's camera, untouched throughout - the actual
       // seeded numbers, not merely "still the default".
@@ -2745,14 +2777,18 @@ describe("CommGraphTile", () => {
         officeCameraView: "towers",
         officeCamera: { x: -10000, y: -20000, zoom: 4 },
       });
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       caughtUp();
       step();
 
       // REAL Auto, not a stub: this fixture's handful of agents fits the
-      // Floor comfortably at 1040x700, the same fixture every other Auto
-      // case in this file relies on.
+      // Floor on an `OFFICE_CANVAS` tile, the same fixture and the same box
+      // every other Auto case in this file relies on. Sized by that constant
+      // rather than by hand: at the 1040x700 these cases were written against
+      // the civic rooms now push the fit to 0.554 and Auto answers TOWERS, so
+      // a hand-written box turns this into a Towers case that still claims to
+      // be about a Floor. See `OFFICE_CANVAS`.
       await waitFor(() => {
         expect(storedView()?.officeAutoView).toBe("floor");
       });
@@ -2761,23 +2797,18 @@ describe("CommGraphTile", () => {
       // remount only reports its own eligibility on the frame this next
       // `step()` drives - same two-step pattern as every other real-Auto
       // frame read in this file.
-      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
       step();
 
       // ASSERTION 1, the strong route: the first resolved Floor runtime read
-      // off the ACTUAL scene it painted. RED today - the keep arm hands the
-      // canvas the stale Towers camera unconditionally on a Floor outcome,
-      // so the runtime frames the far-off-screen Towers rect the sibling
-      // "keeps a resolved Floor camera" case pins at `{ x: 2500, y: 5000,
-      // width: 260, height: 175 }`, not the fitted one below.
+      // off the ACTUAL scene it painted. RED before Finding E's fix - the
+      // keep arm handed the canvas the stale Towers camera unconditionally on
+      // a Floor outcome, so the runtime framed the far-off-screen
+      // `PERSISTED_CAMERA_FRAME` the sibling "keeps a resolved Floor camera"
+      // case pins, not the fitted rect below.
       const state = lastFrameAndBounds(frames, sync);
-      expect(state.frame).toEqual({
-        x: -498.4049079754601,
-        y: -35.92638036809816,
-        width: 1556.8098159509202,
-        height: 1047.8527607361964,
-      });
+      expect(state.frame).toEqual(FITTED_FLOOR_FRAME);
 
       // ASSERTION 2: the STORE agrees. RED today for the same reason -
       // `node.view.officeCamera` rides through unconditionally and the stamp
