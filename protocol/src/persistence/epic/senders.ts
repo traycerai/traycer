@@ -341,6 +341,22 @@ export const grokChatSessionAnchorSchema = z.object({
 });
 export type GrokChatSessionAnchor = z.infer<typeof grokChatSessionAnchorSchema>;
 
+// Wire-freeze copy of the grok anchor as every RELEASED `chat.subscribe` line
+// (`1.0–1.8`) shipped it: without `grokPromptIndex`, which lands on the
+// unreleased `@1.9`. Bound through the frozen anchor unions below, so a released
+// peer's `discriminatedUnion` keeps matching the shape it was cut with. A
+// field-for-field hand copy, NOT `.omit()` off the live shape — a future grok
+// anchor field must not silently leak onto the frozen wire.
+export const grokChatSessionAnchorSchemaPrePromptIndex = z.object({
+  harnessId: z.literal("grok"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+
 // Qwen (ACP) resumes at session granularity only — `session/load` reloads the
 // whole ACP session, with no per-message truncation/fork point — so the anchor
 // carries just the ACP session id. `sessionId` is that ACP session id.
@@ -580,10 +596,12 @@ export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
 // (`chat.subscribe@1.0–1.6`). It keeps every live anchor field (including the
 // Claude `turnTailUuid` - the released baseline proves all of those minors
 // shipped it) and drops only the discriminants a released client cannot
-// decode. A separate "pre-turnTailUuid" copy used to serve `1.0–1.5` on the
-// belief the field postdated them; the released-line-narrowing test showed
-// that transcription was a retroactive narrowing of what actually shipped,
-// and it was removed.
+// decode, plus the one anchor FIELD no released line shipped: the grok arm is
+// the pre-`grokPromptIndex` copy, because that field postdates every release
+// (it rides `@1.9`) and the released-baseline test proves it. A separate
+// "pre-turnTailUuid" copy used to serve `1.0–1.5` on the belief the field
+// postdated them; the released-line-narrowing test showed that transcription
+// was a retroactive narrowing of what actually shipped, and it was removed.
 export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
   "harnessId",
   [
@@ -593,7 +611,7 @@ export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
     cursorChatSessionAnchorSchema,
     traycerChatSessionAnchorSchema,
     openRouterChatSessionAnchorSchema,
-    grokChatSessionAnchorSchema,
+    grokChatSessionAnchorSchemaPrePromptIndex,
     qwenChatSessionAnchorSchema,
     kiroChatSessionAnchorSchema,
     droidChatSessionAnchorSchema,
@@ -623,7 +641,9 @@ export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
  *
  * Derived from the pre-Reasonix freeze plus Reasonix rather than re-listing
  * twenty arms: the two freezes then cannot drift, and a variant added above is
- * excluded from BOTH by construction instead of by a reviewer noticing.
+ * excluded from BOTH by construction instead of by a reviewer noticing. That
+ * also means the grok arm is the pre-`grokPromptIndex` copy here too: `@1.8`
+ * shipped without the field, and `@1.9` is where it rides.
  */
 export const chatSessionAnchorSchemaPreAntigravity = z.discriminatedUnion(
   "harnessId",

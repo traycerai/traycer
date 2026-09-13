@@ -1169,6 +1169,16 @@ export const grokUserMessageAnchorResolvedSchema = z.object({
   grokPromptIndex: z.number().int().nonnegative().nullable().default(null),
 });
 
+// Wire-freeze copy for the released `chat.subscribe@1.0–1.6` blockDelta frames:
+// no released line shipped `grokPromptIndex` (it rides the unreleased `@1.9`),
+// so the frozen anchor union below carries the grok arm without it. A hand copy,
+// NOT `.omit()`, so a future grok field cannot leak onto the frozen wire.
+const grokUserMessageAnchorResolvedSchemaPrePromptIndex = z.object({
+  harnessId: z.literal("grok"),
+  sessionId: z.string(),
+  grokSessionId: z.string().nullable(),
+});
+
 export const qwenUserMessageAnchorResolvedSchema = z.object({
   harnessId: z.literal("qwen"),
   sessionId: z.string(),
@@ -1328,7 +1338,7 @@ const userMessageAnchorResolvedEventSchemaPreReasonix = z.object({
     cursorUserMessageAnchorResolvedSchema,
     traycerUserMessageAnchorResolvedSchema,
     openRouterUserMessageAnchorResolvedSchema,
-    grokUserMessageAnchorResolvedSchema,
+    grokUserMessageAnchorResolvedSchemaPrePromptIndex,
     qwenUserMessageAnchorResolvedSchema,
     kiroUserMessageAnchorResolvedSchema,
     droidUserMessageAnchorResolvedSchema,
