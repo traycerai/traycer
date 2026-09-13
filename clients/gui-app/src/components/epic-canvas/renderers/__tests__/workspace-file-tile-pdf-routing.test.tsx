@@ -25,6 +25,7 @@ import type {
   FileAssetState,
   FileAssetStatus,
 } from "@/hooks/assets/use-file-asset";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 
 interface PdfRoutingTestState {
@@ -33,6 +34,7 @@ interface PdfRoutingTestState {
   readFileCalls: number;
   openPaths: Mock;
   triggerOpenExternally: Mock;
+  hostEntry: HostDirectoryEntry | null;
   /** Drives the mocked `PdfPreviewLazy` to call `onUnavailable` from an effect. */
   viewerUnavailable: boolean;
 }
@@ -50,15 +52,12 @@ const state = vi.hoisted((): PdfRoutingTestState => ({
   readFileCalls: 0,
   openPaths: vi.fn(),
   triggerOpenExternally: vi.fn(),
+  hostEntry: null,
   viewerUnavailable: false,
 }));
 
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
+  useHostDirectoryEntry: () => state.hostEntry,
 }));
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
@@ -232,6 +231,7 @@ vi.mock("@/components/epic-canvas/pdf-preview/pdf-preview-lazy", () => ({
     "The PDF viewer could not be loaded on this device.",
   PdfPreviewLazy: (props: {
     readonly url: string;
+    readonly toolbarActions: ReactNode;
     readonly onUnavailable: () => void;
   }) => {
     const { onUnavailable } = props;
@@ -243,7 +243,9 @@ vi.mock("@/components/epic-canvas/pdf-preview/pdf-preview-lazy", () => ({
         role="toolbar"
         aria-label="PDF preview controls"
         data-url={props.url}
-      />
+      >
+        {props.toolbarActions}
+      </div>
     );
   },
 }));
@@ -290,6 +292,17 @@ function nodeFor(filePath: string): WorkspaceFileRef {
   };
 }
 
+function hostEntry(kind: HostDirectoryEntry["kind"]): HostDirectoryEntry {
+  return {
+    hostId: "host-A",
+    label: "Host A",
+    kind,
+    websocketUrl: "ws://127.0.0.1:1234",
+    version: "1.2.0",
+    transportDialability: "dialable",
+  };
+}
+
 function renderTile(node: WorkspaceFileRef): RenderResult {
   return render(<WorkspaceFileTile node={node} viewTabId="tab-1" isActive />);
 }
@@ -306,6 +319,7 @@ describe("workspace file tile PDF routing", () => {
     };
     state.assetRequests.length = 0;
     state.readFileCalls = 0;
+    state.hostEntry = hostEntry("local");
     state.viewerUnavailable = false;
   });
 
@@ -336,6 +350,49 @@ describe("workspace file tile PDF routing", () => {
     // Single-bar contract: the viewer's own toolbar (carrying the path and
     // the Open Externally slot) is the tile's ONLY bar in the ready state.
     expect(screen.queryByTestId("workspace-file-toolbar")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Open externally" }),
+    ).toBeTruthy();
+  });
+
+  it.each(["ready", "loading", "fallback"] as const)(
+    "hides PDF Open Externally controls for a remote host in the %s state",
+    (status) => {
+      state.hostEntry = hostEntry("remote");
+      state.asset = {
+        status,
+        url: status === "ready" ? "blob:pdf" : null,
+        meta: null,
+        reason:
+          status === "fallback" ? "This PDF is too large to preview." : null,
+        totalBytes: null,
+        servedFromCache: false,
+      };
+
+      renderTile(nodeFor("docs/report.pdf"));
+
+      expect(
+        screen.queryByRole("button", { name: "Open externally" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Open Externally" }),
+      ).toBeNull();
+      expect(state.openPaths).not.toHaveBeenCalled();
+      expect(state.triggerOpenExternally).not.toHaveBeenCalled();
+    },
+  );
+
+  it("hides the PDF viewer open control for an unresolved host", () => {
+    state.hostEntry = null;
+
+    renderTile(nodeFor("docs/report.pdf"));
+
+    expect(
+      screen.getByRole("toolbar", { name: "PDF preview controls" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Open externally" }),
+    ).toBeNull();
   });
 
   it("renders the shared placeholder with the hook's PDF copy on fallback", () => {
@@ -380,6 +437,21 @@ describe("workspace file tile PDF routing", () => {
     expect(
       screen.queryByRole("toolbar", { name: "PDF preview controls" }),
     ).toBeNull();
+  });
+
+  it("hides the unavailable PDF fallback open action for a remote host", () => {
+    state.hostEntry = hostEntry("remote");
+    state.viewerUnavailable = true;
+
+    renderTile(nodeFor("docs/report.pdf"));
+
+    expect(
+      screen.getByText("The PDF viewer could not be loaded on this device."),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Open Externally" }),
+    ).toBeNull();
+    expect(state.openPaths).not.toHaveBeenCalled();
   });
 
   it("keeps image routing untouched by the PDF branch", () => {

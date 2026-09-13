@@ -334,10 +334,14 @@ function WorkspaceImageFileTile(props: {
       <WorkspaceMediaFileToolbar
         filePath={node.filePath}
         svgToggle={props.svgToggle}
-        openExternally={{
-          onOpenExternally: handleOpenExternally,
-          opening: openExternallyOpening,
-        }}
+        openExternally={
+          handleOpenExternally === null
+            ? null
+            : {
+                onOpenExternally: handleOpenExternally,
+                opening: openExternallyOpening,
+              }
+        }
       />
       <div className="min-h-0 flex-1">
         <ImagePreview
@@ -381,7 +385,7 @@ function WorkspaceDocumentFileTile(props: {
   const handleRenderFailure = assetState.reportDecodeFailure;
   // The viewer itself could not load or start on this device (old engine) -
   // distinct from a decode failure: the bytes are fine, so the blob stays
-  // cached and Open Externally remains the way to read the file.
+  // cached and local hosts can still offer Open Externally.
   const [viewerUnavailable, setViewerUnavailable] = useState(false);
   const handleViewerUnavailable = useCallback(
     () => setViewerUnavailable(true),
@@ -441,10 +445,12 @@ function WorkspaceDocumentFileTile(props: {
           fileName={node.filePath}
           compact={false}
           toolbarActions={
-            <OpenExternallyIconButton
-              onOpenExternally={handleOpenExternally}
-              opening={openExternallyOpening}
-            />
+            handleOpenExternally === null ? null : (
+              <OpenExternallyIconButton
+                onOpenExternally={handleOpenExternally}
+                opening={openExternallyOpening}
+              />
+            )
           }
           onRenderFailure={handleRenderFailure}
           onUnavailable={handleViewerUnavailable}
@@ -458,10 +464,14 @@ function WorkspaceDocumentFileTile(props: {
       <WorkspaceMediaFileToolbar
         filePath={node.filePath}
         svgToggle={null}
-        openExternally={{
-          onOpenExternally: handleOpenExternally,
-          opening: openExternallyOpening,
-        }}
+        openExternally={
+          handleOpenExternally === null
+            ? null
+            : {
+                onOpenExternally: handleOpenExternally,
+                opening: openExternallyOpening,
+              }
+        }
       />
       <div className="min-h-0 flex-1">
         <div className="flex size-full items-center justify-center">

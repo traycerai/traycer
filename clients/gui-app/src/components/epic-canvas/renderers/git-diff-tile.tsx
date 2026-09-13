@@ -8,6 +8,7 @@ import type {
 } from "@traycer/protocol/host";
 import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
+import { useHostPathOpenAvailability } from "@/hooks/editor/use-host-path-open-availability";
 import { useGitRefreshWorktreeStatus } from "@/hooks/git/use-git-refresh-worktree-status";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
@@ -277,7 +278,9 @@ interface GitDiffTileToolbarProps {
 
 function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   const queryClient = useQueryClient();
-  const effectiveEditor = useEffectiveDefaultEditor(useTabHostId());
+  const tabHostId = useTabHostId();
+  const effectiveEditor = useEffectiveDefaultEditor(tabHostId);
+  const canOpenHostPaths = useHostPathOpenAvailability(tabHostId);
   const diffViewerPreferences = useSettingsStore(
     (s) => s.diffViewerPreferences,
   );
@@ -356,7 +359,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   });
 
   const handleOpenFile = useCallback(() => {
-    if (props.onOpenFile === null) return;
+    if (!canOpenHostPaths || props.onOpenFile === null) return;
     if (openFileOpening) return;
     triggerOpenFileFeedback();
     editorOpen.mutate({
@@ -364,6 +367,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
       paths: [absoluteFilePath(props.node.diff.runningDir, props.onOpenFile)],
     });
   }, [
+    canOpenHostPaths,
     effectiveEditor,
     editorOpen,
     openFileOpening,
@@ -391,7 +395,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
       refreshing={refresh.refreshing}
       onRefresh={refresh.trigger}
       openFile={
-        props.onOpenFile !== null
+        canOpenHostPaths && props.onOpenFile !== null
           ? {
               onClick: handleOpenFile,
               label: openTargetActionLabel(effectiveEditor),
@@ -513,7 +517,9 @@ function showsDocumentDiffBlock(args: {
 
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const tabHostClient = useTabHostClient();
-  const effectiveEditor = useEffectiveDefaultEditor(useTabHostId());
+  const tabHostId = useTabHostId();
+  const effectiveEditor = useEffectiveDefaultEditor(tabHostId);
+  const canOpenHostPaths = useHostPathOpenAvailability(tabHostId);
   const editorOpen = useEditorOpenForClient(tabHostClient, "file");
   const {
     active: openExternallyFeedbackActive,
@@ -605,13 +611,14 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   );
 
   const handleOpenExternally = useCallback(() => {
-    if (openExternallyOpening) return;
+    if (!canOpenHostPaths || openExternallyOpening) return;
     triggerOpenExternallyFeedback();
     editorOpen.mutate({
       editorId: effectiveEditor,
       paths: [absoluteFilePath(props.node.diff.runningDir, props.file.path)],
     });
   }, [
+    canOpenHostPaths,
     effectiveEditor,
     editorOpen,
     openExternallyOpening,
@@ -619,6 +626,8 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     props.node.diff.runningDir,
     triggerOpenExternallyFeedback,
   ]);
+
+  const onOpenExternally = canOpenHostPaths ? handleOpenExternally : null;
 
   if (showImageDiff) {
     const sides = gitImageDiffSides(props.file);
@@ -637,7 +646,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
           fileName={props.file.path}
           conflicted={sides.conflicted}
           compact={false}
-          onOpenExternally={handleOpenExternally}
+          onOpenExternally={onOpenExternally}
           openExternallyOpening={openExternallyOpening}
         />
       </>
@@ -674,7 +683,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
           fileName={props.file.path}
           sizeBytes={props.file.sizeBytes}
           reason={null}
-          onOpenExternally={handleOpenExternally}
+          onOpenExternally={onOpenExternally}
           openExternallyOpening={openExternallyOpening}
           compact={false}
         />
@@ -712,7 +721,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
           fileName={props.file.path}
           sizeBytes={props.file.sizeBytes}
           reason={null}
-          onOpenExternally={handleOpenExternally}
+          onOpenExternally={onOpenExternally}
           openExternallyOpening={openExternallyOpening}
           compact={false}
         />

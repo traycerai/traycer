@@ -12,7 +12,7 @@ interface BinaryPlaceholderProps {
   readonly sizeBytes: number | null;
   /** One-line reason shown below the size (image-preview decision log, decision #14). `null` renders none. */
   readonly reason: string | null;
-  /** `null` when there is no single unambiguous file on disk to open (e.g. a per-side diff placeholder) - hides the button entirely rather than disabling it. */
+  /** `null` when no useful local open is available (remote host or no unambiguous file on disk) - hides the button entirely. */
   readonly onOpenExternally: (() => void) | null;
   readonly openExternallyOpening: boolean;
   /** Smaller icon/spacing, no heading, for a diff column rather than a full tile. */
