@@ -31,6 +31,10 @@ import { prepareSavedDraft } from "@/lib/tab-recovery/saved-draft";
 import type { ClosedHeaderTab } from "@/lib/tab-recovery/history";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import {
+  resetLandingDraftRetirementsForTests,
+  retireLandingDraft,
+} from "@/lib/drafts/landing-draft-retirement";
+import {
   emptyLandingDraftWorkspaceSnapshot,
   freshLandingMirrorState,
   useLandingDraftStore,
@@ -282,6 +286,7 @@ describe("prepareSavedDraft", () => {
     resetLandingImageBudgetReservationsForTesting();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useTabRecoveryHistory.setState({ entries: [], ready: true });
+    resetLandingDraftRetirementsForTests();
     mocks.resolveNamedHostClient.mockReset();
     originalCreateObjectURLDescriptor = Object.getOwnPropertyDescriptor(
       URL,
@@ -310,6 +315,7 @@ describe("prepareSavedDraft", () => {
     originalCreateObjectURLDescriptor = undefined;
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useTabRecoveryHistory.setState({ entries: [], ready: true });
+    resetLandingDraftRetirementsForTests();
     resetLandingImageBudgetReservationsForTesting();
   });
 
@@ -321,6 +327,21 @@ describe("prepareSavedDraft", () => {
 
     expect(result).toBe(false);
     expect(mocks.resolveNamedHostClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects a retired retained row before consulting its host", async () => {
+    const draftId = "retired-saved-row";
+    const content = textDocument("retained before retirement");
+    const row = { ...localDraft(draftId, content), closed: true };
+    useLandingDraftStore.setState({ drafts: [row], activeDraftId: null });
+    retireLandingDraft(draftId, HOST_ID);
+
+    await expect(
+      prepareSavedDraft(recoveryItem(draftId, HOST_ID), () => true),
+    ).resolves.toBe(false);
+
+    expect(mocks.resolveNamedHostClient).not.toHaveBeenCalled();
+    expect(useLandingDraftStore.getState().drafts).toEqual([row]);
   });
 
   it("returns false when the named host has an authoritative absence", async () => {

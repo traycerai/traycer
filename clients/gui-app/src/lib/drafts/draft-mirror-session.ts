@@ -541,11 +541,17 @@ export class DraftMirrorSession {
       // this write is waiting there, so gate again at actual RPC dispatch.
       if (this.isAbandoned() || this.writeIsRetired(draftId)) return;
       const response = await this.rpc.upsert(prepared);
-      if (this.isAbandoned() || this.writeIsRetired(draftId)) return;
-      this.held.set(response.draft.draftId, {
-        kind: "row",
-        revision: response.draft.revision,
-      });
+      if (this.isAbandoned()) return;
+      // A committed write still advances the host frontier after retirement.
+      // Deletion derives its tombstone from this frontier, and another stream
+      // may already have delivered a newer row or tombstone while RPC awaited.
+      if (response.draft.revision > this.revisionOfHeld(draftId)) {
+        this.held.set(draftId, {
+          kind: "row",
+          revision: response.draft.revision,
+        });
+      }
+      if (this.writeIsRetired(draftId)) return;
       this.sink.rememberSynced(
         response.draft.draftId,
         response.draft.revision,

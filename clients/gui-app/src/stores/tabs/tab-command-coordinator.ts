@@ -1382,9 +1382,14 @@ export class TabCommandCoordinator {
   }
 
   restoreClosedHeaderTabs(
-    items: readonly ClosedHeaderTab[],
+    requestedItems: readonly ClosedHeaderTab[],
     replaceEmptyDraftId: string | null,
   ): void {
+    // Another window can retire a retained row before its storage event
+    // removes the local recovery entry. Do not reserve or place that ID.
+    const items = requestedItems.filter(
+      (item) => item.kind !== "draft" || !landingDraftIsRetired(item.draftId),
+    );
     if (items.length === 0) return;
     const previousLayout = currentLayout();
     const previousActiveDraftId = useLandingDraftStore.getState().activeDraftId;
@@ -1958,11 +1963,14 @@ export class TabCommandCoordinator {
       (ref) => findStripItemForRef(withoutMissing, ref) === null,
     );
     const withAdditions = additions.reduce(createLayoutItem, withoutMissing);
+    const keepSelection =
+      withoutMissing.activeItemId !== null ||
+      layoutHomeIsActive(withoutMissing);
     return {
       // Background source updates must not select a newly mirrored draft.
       // Explicit tab commands focus their target separately.
       next:
-        additions.length === 0 || withoutMissing.activeItemId === null
+        additions.length === 0 || !keepSelection
           ? withAdditions
           : {
               ...withAdditions,

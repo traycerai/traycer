@@ -1208,6 +1208,206 @@ describe("DraftMirrorSession", () => {
     session.close();
   });
 
+  it("advances the committed upsert frontier before acknowledging deletion", async () => {
+    const draftId = "late-success-after-delete";
+    const heldRow = landingDocument({ draftId, revision: 4 });
+    const committedRow = landingDocument({ draftId, revision: 7 });
+    const stream = createStreamHarness();
+    const pendingDeletes = new Set<string>();
+    const writes: DraftDirtyWrite[] = [];
+    let upsertStarted = false;
+    let resolveUpsert:
+      | ((response: { readonly draft: DraftDocument }) => void)
+      | undefined;
+    const upsertResponse = new Promise<{ readonly draft: DraftDocument }>(
+      (resolve) => {
+        resolveUpsert = resolve;
+      },
+    );
+    const sink = createSink({
+      dirty: new Set(),
+      writes,
+      pendingDeletes,
+    });
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 0, EMPTY_LIST_TOMBSTONES)),
+        upsert: () => {
+          upsertStarted = true;
+          return upsertResponse;
+        },
+        delete: (id) => {
+          pendingDeletes.add(id);
+          return Promise.resolve({ deleted: true });
+        },
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(stream.subscribeCalls.count).toBe(1);
+    });
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 4,
+      draftId,
+      revision: heldRow.revision,
+      draft: heldRow,
+    });
+    await Promise.resolve();
+    expect(sink.upserts).toEqual([heldRow]);
+
+    writes.push({ write: landingWrite(draftId, 4), generation: 1 });
+    const upserting = session.flush([draftId]);
+    await vi.waitFor(() => {
+      expect(upsertStarted).toBe(true);
+    });
+    const deleting = session.deleteOnHost(draftId);
+    resolveUpsert?.({ draft: committedRow });
+    await deleting;
+    pendingDeletes.delete(draftId);
+    await upserting;
+
+    // The delete ACK clears the chat-style pending receipt. Deletion must
+    // include committed r7 in its tombstone frontier to reject the late echo.
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 7,
+      draftId,
+      revision: committedRow.revision,
+      draft: committedRow,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sink.upserts).toEqual([heldRow]);
+    expect(sink.synced).toEqual([
+      { draftId, hostRevision: 4 },
+      { draftId, hostRevision: 0 },
+    ]);
+    session.close();
+  });
+
+  it("preserves a newer held row when an older retired upsert completes", async () => {
+    const draftId = "late-upsert-after-delete";
+    const heldRow = landingDocument({ draftId, revision: 4 });
+    const committedRow = landingDocument({ draftId, revision: 7 });
+    const stream = createStreamHarness();
+    const pendingDeletes = new Set<string>();
+    const writes: DraftDirtyWrite[] = [];
+    let upsertStarted = false;
+    let resolveUpsert:
+      | ((response: { readonly draft: DraftDocument }) => void)
+      | undefined;
+    const upsertResponse = new Promise<{ readonly draft: DraftDocument }>(
+      (resolve) => {
+        resolveUpsert = resolve;
+      },
+    );
+    const sink = createSink({
+      dirty: new Set(),
+      writes,
+      pendingDeletes,
+    });
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 0, EMPTY_LIST_TOMBSTONES)),
+        upsert: () => {
+          upsertStarted = true;
+          return upsertResponse;
+        },
+        delete: (id) => {
+          pendingDeletes.add(id);
+          return Promise.resolve({ deleted: true });
+        },
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(stream.subscribeCalls.count).toBe(1);
+    });
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 4,
+      draftId,
+      revision: heldRow.revision,
+      draft: heldRow,
+    });
+    await Promise.resolve();
+    expect(sink.upserts).toEqual([heldRow]);
+
+    writes.push({ write: landingWrite(draftId, 4), generation: 1 });
+    const upserting = session.flush([draftId]);
+    await vi.waitFor(() => {
+      expect(upsertStarted).toBe(true);
+    });
+    const deleting = session.deleteOnHost(draftId);
+    const newerHeldRow = landingDocument({ draftId, revision: 9 });
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 9,
+      draftId,
+      revision: newerHeldRow.revision,
+      draft: newerHeldRow,
+    });
+    await Promise.resolve();
+    expect(sink.upserts).toEqual([heldRow, newerHeldRow]);
+    resolveUpsert?.({ draft: committedRow });
+    await deleting;
+    pendingDeletes.delete(draftId);
+    await upserting;
+
+    // The chat-style pending receipt is cleared after the ACK. The held
+    // tombstone, not a durable landing receipt, must still reject this late
+    // echo and any older response.
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 7,
+      draftId,
+      revision: committedRow.revision,
+      draft: committedRow,
+    });
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 9,
+      draftId,
+      revision: newerHeldRow.revision,
+      draft: newerHeldRow,
+    });
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 6,
+      draftId,
+      revision: 6,
+      draft: landingDocument({ draftId, revision: 6 }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sink.upserts).toEqual([heldRow, newerHeldRow]);
+    expect(sink.synced).toEqual([
+      { draftId, hostRevision: 4 },
+      { draftId, hostRevision: 0 },
+    ]);
+    session.close();
+  });
+
   it("drops waiting landing saves at delete and gates generations appended after it", async () => {
     const draftId = "cancelled-landing";
     const first = landingWrite(draftId, 0);

@@ -46,11 +46,15 @@ import { tabSourceRefs } from "@/stores/tabs/source-refs";
 function controlledStream(): {
   readonly client: never;
   readonly started: { value: boolean };
+  readonly emit: (frame: Parameters<ServerFrameHandler>[0]) => void;
 } {
   const started = { value: false };
+  let onFrame: ServerFrameHandler | null = null;
   const session: IStreamSession = {
     sendClientFrame: () => undefined,
-    onServerFrame: (_handler: ServerFrameHandler) => undefined,
+    onServerFrame: (handler: ServerFrameHandler) => {
+      onFrame = handler;
+    },
     onStatusChange: () => undefined,
     requestReconnect: () => undefined,
     close: () => undefined,
@@ -64,6 +68,9 @@ function controlledStream(): {
       },
     } as never,
     started,
+    emit: (frame) => {
+      onFrame?.(frame, null);
+    },
   };
 }
 
@@ -675,7 +682,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(landingDraftIsRetired(id)).toBe(true);
   });
 
-  it("keeps the host revision frontier when subscribe rows arrive out of order", () => {
+  it("keeps the host revision frontier for direct host-document application", () => {
     const id = "landing-revision-frontier";
     const base = {
       draftId: id,
@@ -729,6 +736,154 @@ describe("landing draft host-mirror bookkeeping", () => {
       .drafts.find((entry) => entry.id === id);
     expect(draft?.hostRevision).toBe(13);
     expect(draft?.content).toEqual(newest.portable.content);
+  });
+
+  it("keeps the latest landing row when real subscribe applies finish images out of order", async () => {
+    const hostId = "host-stream-frontier";
+    const id = "stream-frontier";
+    type MissingBlobResponse = {
+      readonly ok: false;
+      readonly reason: "missing";
+    };
+    const hashes = new Map<
+      string,
+      { readonly resolve: (response: MissingBlobResponse) => void }
+    >();
+    const readBlobStarted = new Set<string>();
+    const readBlob = (hash: string): Promise<MissingBlobResponse> => {
+      let resolve: (response: MissingBlobResponse) => void = () => undefined;
+      const promise = new Promise<MissingBlobResponse>((nextResolve) => {
+        resolve = nextResolve;
+      });
+      hashes.set(hash, { resolve });
+      readBlobStarted.add(hash);
+      return promise;
+    };
+    const stream = controlledStream();
+    const client = {
+      request: (method: string, params: unknown) => {
+        if (method === "drafts.list") {
+          return Promise.resolve({
+            drafts: [],
+            tombstones: [],
+            snapshotSeq: 0,
+            scopeId: null,
+          });
+        }
+        if (method === "drafts.readBlob") {
+          return readBlob((params as { readonly sha256: string }).sha256);
+        }
+        return Promise.reject(new Error(`unexpected ${method}`));
+      },
+    };
+    acquireDraftMirrorSession({
+      hostId,
+      client: client as never,
+      streamClient: stream.client,
+      timing: undefined,
+    });
+    await vi.waitFor(() => {
+      expect(stream.started.value).toBe(true);
+    });
+
+    const base = {
+      draftId: id,
+      kind: "landing" as const,
+      target: { epicId: null, chatId: null, blockId: null },
+      revision: 0,
+      lastTouchedAt: 1,
+      workspace: null,
+      ownerHostId: hostId,
+      origin: "own" as const,
+      adoption: { state: "adopted" as const, hostId },
+      publication: {
+        status: "unpublished" as const,
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: EMPTY_LANDING_DRAFT_CONTENT,
+        selection: null,
+        runSettings: null,
+        composerMode: "chat" as const,
+        blobHashes: [] as string[],
+        closed: false,
+      },
+    } satisfies DraftDocument;
+    const row = (
+      revision: number,
+      hash: string,
+      text: string,
+    ): Extract<DraftDocument, { readonly kind: "landing" }> => ({
+      ...base,
+      revision,
+      portable: {
+        ...base.portable,
+        blobHashes: [hash],
+        content: {
+          type: "doc",
+          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+        },
+      },
+    });
+    const hash11 = "aa".repeat(32);
+    const hash12 = "bb".repeat(32);
+    const hash13 = "cc".repeat(32);
+    const row11 = row(11, hash11, "older");
+    const row12 = row(12, hash12, "middle");
+    const row13 = row(13, hash13, "newest");
+
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 11,
+      draftId: id,
+      revision: row11.revision,
+      draft: row11,
+    });
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 12,
+      draftId: id,
+      revision: row12.revision,
+      draft: row12,
+    });
+    stream.emit({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 13,
+      draftId: id,
+      revision: row13.revision,
+      draft: row13,
+    });
+    await vi.waitFor(() => {
+      expect(readBlobStarted).toEqual(new Set([hash11, hash12, hash13]));
+    });
+
+    hashes.get(hash13)?.resolve({
+      ok: false,
+      reason: "missing",
+    });
+    hashes.get(hash11)?.resolve({
+      ok: false,
+      reason: "missing",
+    });
+    hashes.get(hash12)?.resolve({
+      ok: false,
+      reason: "missing",
+    });
+    // Let all three detached frame handlers consume their delayed reads and
+    // complete their landing-store attempts before checking the frontier.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === id);
+      expect(draft?.hostRevision).toBe(13);
+      expect(draft?.content).toEqual(row13.portable.content);
+    });
   });
 
   it("removes a dirty row on an external retirement event without losing the owner delete retry", () => {
@@ -902,6 +1057,8 @@ describe("landing draft host-mirror bookkeeping", () => {
       document,
     });
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(pendingLandingDraftDeleteIdsForHost("host-a")).toEqual([id]);
+    expect(pendingLandingDraftDeleteIdsForHost("host-b")).toEqual([]);
 
     completeLandingDraftDelete(id);
     expect(landingDraftIsRetired(id)).toBe(true);

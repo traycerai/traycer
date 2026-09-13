@@ -124,7 +124,7 @@ export const UNADOPTED_LANDING_DRAFT: LandingDraftAdoption = {
 };
 
 export function isOpenLandingDraft(draft: LandingDraftTab): boolean {
-  return !draft.closed;
+  return !draft.closed && !landingDraftIsRetired(draft.id);
 }
 
 /** Local persist cap for adopted mirrors; unadopted drafts are never LRU'd. */
@@ -638,6 +638,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       openDraft: (id) => {
+        if (landingDraftIsRetired(id)) return;
         const draft = get().drafts.find((d) => d.id === id);
         if (draft === undefined) return;
         // A pending create keeps the runtime alive through close. Reopen
@@ -677,7 +678,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
 
       setActiveDraft: (id) => {
         const draft = get().drafts.find((d) => d.id === id);
-        if (draft === undefined || draft.closed) return;
+        if (draft === undefined || !isOpenLandingDraft(draft)) return;
         set({ activeDraftId: id });
       },
 
@@ -1678,6 +1679,9 @@ export function applyLandingHostDocument(
     .getState()
     .drafts.find((draft) => draft.id === document.draftId);
   // Image reads can finish out of order after subscribe-frame admission.
+  // Cloud heads use synthetic revision 0 (unknown), even for a newer head
+  // fetched while the owner is offline. Compare only actual host revisions;
+  // permanent retirement above independently fences consumed cloud drafts.
   if (
     existing !== undefined &&
     existing.ownerHostId === document.ownerHostId &&
