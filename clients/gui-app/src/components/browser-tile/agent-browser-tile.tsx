@@ -50,6 +50,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { DEFAULT_BROWSER_TILE_URL } from "@/lib/browser-view/browser-tile-defaults";
 import { samePageKey } from "@/lib/links/normalize-url";
+import { handlePrimaryFocus } from "@/lib/focus/primary-focus-coordinator";
 
 interface ElectronTabSurfaceNode {
   readonly instanceId: string;
@@ -311,6 +312,9 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     if (browserView === null) return;
     const subscription = browserView.onTileFocused((focusedTile) => {
       if (!isSameBrowserViewTile(focusedTile, tileKey)) return;
+      // Native focus can arrive over IPC before the webview's DOM event.
+      // Hand off ownership before either viewport or pane activation commits.
+      handlePrimaryFocus(null);
       claimViewport();
       onNativeTileFocused?.();
     });
