@@ -10,8 +10,6 @@ import type {
   BrowserViewAttachSurface,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewDebugSnapshot,
-  BrowserViewDebugSnapshotData,
   BrowserViewDetachSurface,
   BrowserViewNativeTabStatusChange,
   BrowserViewStatus,
@@ -227,7 +225,6 @@ export class BrowserViewManager {
     this.viewport = new BrowserViewViewport(
       this.entries,
       this.annotations,
-      this.debugSessions,
       options.send,
     );
     this.find = new BrowserViewFind({
@@ -251,9 +248,7 @@ export class BrowserViewManager {
         void this.closeEntry(entry);
       },
     });
-    this.pip = new BrowserViewPipCapture({
-      debugSessions: this.debugSessions,
-    });
+    this.pip = new BrowserViewPipCapture();
     this.popups = new BrowserViewPopups({
       createPopupWindowOptions: options.createPopupWindowOptions,
       createPopupWindow: options.createPopupWindow,
@@ -266,7 +261,6 @@ export class BrowserViewManager {
       find: this.find,
       popups: this.popups,
       chords: this.chords,
-      debugSessions: this.debugSessions,
       observePrimaryProfileOrigin: options.observePrimaryProfileOrigin,
       setStatus: (entry, status, reason) => {
         this.setStatus(entry, status, reason);
@@ -574,24 +568,6 @@ export class BrowserViewManager {
     return registrableDomainForUrl(entry.currentUrl);
   }
 
-  getDebugSnapshot(
-    windowId: string,
-    input: BrowserViewTileKey,
-  ): BrowserViewDebugSnapshot {
-    const entry = this.entries.getTile(windowId, input);
-    if (entry === undefined) {
-      return {
-        ...input,
-        consoleEntries: [],
-        networkEntries: [],
-      };
-    }
-    return {
-      ...toTileKey(requireSurface(entry)),
-      ...this.readDebugSnapshot(entry),
-    };
-  }
-
   async dispatchElectronTabCdp(
     input: BrowserViewElectronTabCdpDispatch,
   ): Promise<BrowserCdpResult> {
@@ -628,7 +604,12 @@ export class BrowserViewManager {
       };
     }
     const debugSession = this.debugSessions.ensure(entry);
-    await debugSession.enableAfterCommit().catch(() => undefined);
+    // The first agent command attaches this tab's debugger for the rest of its
+    // incarnation. There is no "agent is done with the tab" signal on the wire,
+    // and a detach between two commands of one sequence would invalidate the
+    // frame routes that sequence resolved.
+    entry.agentCdpLease ??= debugSession.acquire();
+    await entry.agentCdpLease.ready().catch(() => undefined);
     return debugSession.dispatch(input.target, input.command);
   }
 
@@ -927,8 +908,9 @@ export class BrowserViewManager {
    * A tile's CDP debugger can detach for reasons outside our control - the
    * target being destroyed, a renderer crash, or an explicit
    * `Debugger.detach`. BrowserDebugSession synchronously drops its ready
-   * state; the next native ensure or CDP dispatch reattaches and enables
-   * domains before using the existing incarnation.
+   * state; a native ensure re-enables the domains only while a lease is still
+   * out, and the next CDP dispatch takes one and reattaches. A tab nobody is
+   * driving stays a plain Chromium tab.
    *
    * Verified 2026-07-28, live: opening DevTools does NOT trigger this path
    * on Electron 42.7.1/Chromium 148 - `webContents.debugger.attach()` and
@@ -947,17 +929,6 @@ export class BrowserViewManager {
     });
     this.annotations.end(entry, "crash");
     if (this.pip.isCapturing(entry)) this.pip.stop();
-  }
-
-  private readDebugSnapshot(
-    entry: BrowserViewEntry,
-  ): BrowserViewDebugSnapshotData {
-    return (
-      entry.debugSession?.snapshot() ?? {
-        consoleEntries: [],
-        networkEntries: [],
-      }
-    );
   }
 
   private setStatus(
@@ -1100,6 +1071,10 @@ export class BrowserViewManager {
     entry.annotationSession?.dispose("tile-close");
     entry.annotationSession = null;
     this.pip.forget(entry);
+    // Disposing the session ends every lease this guest handed out; the fields
+    // go with it so nothing can release into the next incarnation's session.
+    entry.seedLease = null;
+    entry.agentCdpLease = null;
     entry.debugSession?.dispose();
     entry.debugSession = null;
     this.releaseRendererGuest(
