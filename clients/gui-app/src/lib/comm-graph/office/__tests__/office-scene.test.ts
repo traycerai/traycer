@@ -11127,6 +11127,110 @@ describe("OfficeScene spot aliasing", () => {
     // remain able to (the aliasing is what makes that possible at all).
     expect(away.has("worker0") || away.has("worker1")).toBe(true);
   });
+
+  /**
+   * A DIRECT WITNESS of the reservation the case above only implies. That one
+   * shows a walker CAN take the shared tile; it never shows the tile refused
+   * to a SECOND walker while the first is on its way home, and its own
+   * assertion - `away(worker0) || away(worker1)` - is satisfied by two
+   * outbound walkers and says nothing about a return in progress.
+   *
+   * `claimedSpotKeys` reads every character's `errandTarget`, which
+   * `returnToDesk`'s walking branch keeps set through the walk home ON
+   * PURPOSE (see its comment and `startLeaving`'s, both of which cite this by
+   * name) - so the shared tile stays claimed for the whole round trip, not
+   * only the outbound leg. This layout's ONE errand spot, aliased onto both
+   * floors, makes that the only possible source of a refusal: if the second
+   * worker is ever kept seated here, it is because the first worker's spot is
+   * still reserved.
+   */
+  it("keeps a returning stroller's spot reserved until it is home, refusing it to a second walker", () => {
+    const layout = aliasedFloorsLayout();
+    const scene = new OfficeScene(
+      testView(() => layout),
+      null,
+    );
+    scene.sync(
+      sceneInput({
+        agents: [
+          agent({ id: "worker0", createdAt: 1 }),
+          agent({ id: "worker1", createdAt: 2 }),
+        ],
+        visibleAgentIds: new Set(["worker0", "worker1"]),
+      }),
+    );
+
+    const tileOfCharacter = (
+      agentId: string,
+    ): { readonly col: number; readonly row: number } => {
+      const rect = characterRect(frameOf(scene), agentId);
+      return { col: rect.x / OFFICE_TILE, row: (rect.y + 4) / OFFICE_TILE };
+    };
+    const distanceToSpot = (agentId: string): number => {
+      const tile = tileOfCharacter(agentId);
+      return Math.abs(tile.col - 10) + Math.abs(tile.row - 10);
+    };
+
+    // Whichever of the two claims the shared spot first - the case above
+    // already shows either can, so this does not pin which.
+    let goer: string | null = null;
+    for (let step = 0; step < 400 && goer === null; step += 1) {
+      scene.tick(100);
+      const away = frameOf(scene).awayAgentIds;
+      if (away.has("worker0")) goer = "worker0";
+      else if (away.has("worker1")) goer = "worker1";
+    }
+    if (goer === null) {
+      throw new Error("neither worker ever started the errand");
+    }
+    const waiter = goer === "worker0" ? "worker1" : "worker0";
+
+    // Walk the goer all the way to the shared tile, then watch for the leg
+    // back: distance to (10, 10) falls to zero and later climbs again once
+    // `returnToDesk` sends it home. From the moment it climbs and for every
+    // tick the goer is still away after that, the waiter - long past its own
+    // idle threshold by now - must stay seated: the reservation is what is
+    // keeping it there, not a coincidence of scheduling.
+    let reachedSpot = false;
+    let onReturnLeg = false;
+    let sampledDuringReturn = 0;
+    let home = false;
+    for (let step = 0; step < 800; step += 1) {
+      scene.tick(100);
+      const frame = frameOf(scene);
+      if (!frame.awayAgentIds.has(goer)) {
+        home = true;
+        break;
+      }
+      const distance = distanceToSpot(goer);
+      if (distance === 0) reachedSpot = true;
+      if (reachedSpot && distance > 0) onReturnLeg = true;
+      if (onReturnLeg) {
+        sampledDuringReturn += 1;
+        expect(
+          frame.awayAgentIds.has(waiter),
+          `${waiter} was let onto ${goer}'s reserved spot while it was still walking home`,
+        ).toBe(false);
+      }
+    }
+    expect(reachedSpot, `${goer} never reached the shared spot`).toBe(true);
+    expect(onReturnLeg, `${goer} never started walking home`).toBe(true);
+    expect(
+      sampledDuringReturn,
+      "never sampled the waiter during the goer's walk home",
+    ).toBeGreaterThan(0);
+    expect(home, `${goer} never made it back to its desk`).toBe(true);
+
+    // HOME, so the reservation is gone: a later stroll can take the same
+    // tile, and this is that stroll actually happening rather than merely
+    // permitted.
+    let waiterWentAway = false;
+    for (let step = 0; step < 400 && !waiterWentAway; step += 1) {
+      scene.tick(100);
+      waiterWentAway = frameOf(scene).awayAgentIds.has(waiter);
+    }
+    expect(waiterWentAway, `${waiter} never got the freed spot`).toBe(true);
+  });
 });
 
 describe("OfficeScene leads audience", () => {
