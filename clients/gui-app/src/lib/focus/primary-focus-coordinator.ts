@@ -8,7 +8,8 @@ export type PrimaryFocusTarget =
   | { readonly kind: "landing-terminal-new-tab" };
 
 export interface PrimaryFocusEndpoint {
-  readonly focus: () => void;
+  /** Deferred focus must check ownership again immediately before applying it. */
+  readonly focus: (isCurrent: () => boolean) => void;
   readonly containsActiveElement: (activeElement: Element | null) => boolean;
   readonly isEligible: () => boolean;
 }
@@ -156,7 +157,14 @@ export class PrimaryFocusCoordinator {
       return true;
     }
 
-    endpoint.focus();
+    endpoint.focus(
+      () =>
+        this.intent?.epoch === intent.epoch &&
+        this.endpoints.get(targetKey(intent.target)) === endpoint &&
+        !this.interactionActive &&
+        this.environment.documentVisible() &&
+        endpoint.isEligible(),
+    );
     if (this.intent?.epoch !== intent.epoch) return false;
     if (!endpoint.containsActiveElement(this.environment.activeElement())) {
       return false;
@@ -166,7 +174,7 @@ export class PrimaryFocusCoordinator {
     return true;
   }
 
-  handleFocusIn(target: Element | null): void {
+  handleFocus(target: Element | null): void {
     const intent = this.intent;
     if (intent === null) return;
     const endpoint = this.endpoints.get(targetKey(intent.target));
@@ -243,8 +251,8 @@ export function clearPrimaryFocusInteraction(): void {
   coordinator.clearInteraction();
 }
 
-export function handlePrimaryFocusIn(target: Element | null): void {
-  coordinator.handleFocusIn(target);
+export function handlePrimaryFocus(target: Element | null): void {
+  coordinator.handleFocus(target);
 }
 
 export function resetPrimaryFocusCoordinatorForTests(): void {
