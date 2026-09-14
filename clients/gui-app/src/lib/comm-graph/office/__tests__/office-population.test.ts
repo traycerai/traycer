@@ -567,6 +567,29 @@ describe("partitionOfficePopulation", () => {
     expect(after.hosts[0].solos).toEqual([]);
   });
 
+  /**
+   * HOW MANY ARRIVALS EACH RE-PARTITION ADDS - and the number the two counts
+   * at the end of this case are counts OF.
+   *
+   * The 28 and the 30 below are pinned deliberately ("the drift that matters
+   * is either one moving"), and 28 is not a property of chunked growth in
+   * general: it is what THIS schedule freezes, and it freezes hard. MEASURED,
+   * moving the chunk uniformly: 5, 10, 15, 19, 25, 30 and 50 all red on
+   * `expected N to be 28`, and only 20 and 21 are green. So the chunk is not a
+   * detail with headroom - it is half of the pin, and changing it reads as the
+   * fabricated-lead defect coming back.
+   *
+   * That is the reason it is a name. It was written out three times
+   * (`slice(0, 20)`, `size = 40`, `size += 20`) and a reader changing one of
+   * them got a red that named neither the schedule nor the count. Whoever
+   * needs a different chunk has to re-measure 28, and this says so.
+   *
+   * There is nothing special about twenty otherwise. The app adds ONE agent at
+   * a time; twenty is a stand-in that keeps 309 agents inside a few dozen
+   * partitions rather than 309 of them.
+   */
+  const GROWTH_CHUNK = 20;
+
   it("N1 at fixture scale: grows a triage epic in chunks without fabricating a team", () => {
     // The three-agent cases above name the defect; this one is the shape it
     // actually took in a real epic. Partitioning `triage` at 309 in twenty-
@@ -582,11 +605,15 @@ describe("partitionOfficePopulation", () => {
         : left.createdAt - right.createdAt,
     );
     let grown = partitionVerified({
-      agents: ordered.slice(0, 20),
+      agents: ordered.slice(0, GROWTH_CHUNK),
       statusById: epic.statusById,
       previous: null,
     });
-    for (let size = 40; size < ordered.length + 20; size += 20) {
+    for (
+      let size = GROWTH_CHUNK * 2;
+      size < ordered.length + GROWTH_CHUNK;
+      size += GROWTH_CHUNK
+    ) {
       grown = partitionVerified({
         agents: ordered.slice(0, Math.min(size, ordered.length)),
         statusById: epic.statusById,

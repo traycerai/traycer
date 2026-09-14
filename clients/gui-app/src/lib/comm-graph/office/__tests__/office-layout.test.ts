@@ -1939,12 +1939,31 @@ describe("layoutOffice amenities", () => {
     expect(reversed.walkable).toEqual(forward.walkable);
   });
 
+  /**
+   * THE TWO STOREYS, AND THE ONE NUMBER BOTH ARE MEASURED AGAINST: the gym's
+   * own `GYM_MIN_AGENTS`, which `office-layout.ts` sets at 10.
+   *
+   * The upper storey's ten IS that threshold, exactly - measured, nine loses
+   * the gym and the first assertion below reds. That zero headroom is the
+   * point rather than an oversight: the claim is that a storey is sized from
+   * ITS OWN agents, and the sharpest way to say it is a floor that only just
+   * earns the room over one that plainly does not. What was missing was any
+   * statement that it sits on the line, so `GYM_MIN_AGENTS` moving up would
+   * red a case about per-storey sizing and read as a sizing bug.
+   *
+   * The lower storey's four is six under the same threshold, and under
+   * `GARDEN_MIN_AGENTS` (6) as well - so it is a floor with neither, and the
+   * gym is simply the one this case asks about.
+   */
+  const GYM_STOREY_AGENTS = 10;
+  const NO_GYM_STOREY_AGENTS = 4;
+
   it("gives every storey of a stacked building its own amenities", () => {
     const layout = layoutOffice([
-      ...Array.from({ length: 10 }, (_, index) =>
+      ...Array.from({ length: GYM_STOREY_AGENTS }, (_, index) =>
         agent({ id: `a${index}`, hostId: "host-a", createdAt: index }),
       ),
-      ...Array.from({ length: 4 }, (_, index) =>
+      ...Array.from({ length: NO_GYM_STOREY_AGENTS }, (_, index) =>
         agent({ id: `b${index}`, hostId: "host-b", createdAt: 100 + index }),
       ),
     ]);
