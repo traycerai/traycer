@@ -11,6 +11,7 @@
  * and those are different bugs.
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamClient,
@@ -48,6 +49,11 @@ export interface RecordedSession {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ): void;
+  /**
+   * Drives the `reconnecting` transition a retryable close causes, carrying
+   * the host's details as its retry cause (see `StatusChangeHandler`).
+   */
+  emitRetryableReconnect(retryCause: FatalErrorDetails): void;
   setNegotiatedVersion(version: SchemaVersion | null): void;
   /** Re-reads the provider, as a wire re-subscribe would. */
   readParams(): unknown;
@@ -108,7 +114,10 @@ export function createRecordingStreamClient(): RecordingStreamClient {
         frameHandler?.(envelope, binaryPayload);
       },
       emitStatus: (status, reason) => {
-        statusHandler?.(status, reason);
+        statusHandler?.(status, reason, null);
+      },
+      emitRetryableReconnect: (retryCause) => {
+        statusHandler?.("reconnecting", null, retryCause);
       },
       setNegotiatedVersion: (version) => {
         negotiated = version;

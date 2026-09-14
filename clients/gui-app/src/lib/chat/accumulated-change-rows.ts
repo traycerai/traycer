@@ -311,6 +311,30 @@ export function accumulatedChangeRows(
 }
 
 /**
+ * The `+`/`-` across every delivered row.
+ *
+ * A `null` count contributes nothing, which is the right reading: it means the
+ * row has no diff to count (`diffSource: "none"`), not that it counted zero.
+ *
+ * Shared rather than restated because two surfaces print these numbers - the
+ * panel's own collapsed header, and the chip that stands in for the panel when
+ * the row is compact - and a chip reading `+395 −12` over a header saying
+ * something else is the one way this can be wrong.
+ */
+export function accumulatedDiffTotals(
+  rows: ReadonlyArray<AccumulatedChangeRow>,
+): DiffLineCounts {
+  let additions = 0;
+  let deletions = 0;
+  for (const row of rows) {
+    if (row.counts === null) continue;
+    additions += row.counts.additions;
+    deletions += row.counts.deletions;
+  }
+  return { additions, deletions };
+}
+
+/**
  * The active turn's file edits, merged per path, in the order it touched them.
  *
  * A `Map` rather than a set plus a parallel array: insertion order IS the

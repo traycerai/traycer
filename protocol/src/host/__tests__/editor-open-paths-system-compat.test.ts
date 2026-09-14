@@ -14,12 +14,21 @@
  * - 1.1's target enum is exactly the known set. Unlike 1.0 it is built from
  *   the LIVE `EDITORS` registry, so appending an editor widens it in place -
  *   the pin below is what turns that into a deliberate decision.
+ *
+ * 1.2 is a different animal: a BEHAVIOR minor that changes no schema at all.
+ * A 1.1 host accepts the `"system"` target for `.pdf` paths only, a 1.2 host
+ * also for `.docx`, and the bump exists purely so the client can tell the two
+ * apart at the handshake. Its pins are therefore about sameness - the request
+ * schema is the very same object 1.1 registers, and the upgrade is the
+ * identity - because that sameness is the whole claim being made.
  */
 import { describe, expect, it } from "vitest";
 import {
   editorOpenPathsUpgradeV10ToV11,
+  editorOpenPathsUpgradeV11ToV12,
   editorOpenPathsV10,
   editorOpenPathsV11,
+  editorOpenPathsV12,
 } from "@traycer/protocol/host/editor/contracts";
 import { EDITORS } from "@traycer/protocol/host/editor/unary-schemas";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
@@ -107,10 +116,83 @@ describe("editor.openPaths 1.0 -> 1.1 compatibility", () => {
     ).toBe(false);
   });
 
-  it("advertises latestMinor 1 with both minors registered", () => {
+  it("registers 1.0 and 1.1 on their own minors", () => {
     const method = hostRpcRegistry["editor.openPaths"][1];
-    expect(method.latestMinor).toBe(1);
     expect(method.versions[0]?.contract).toBe(editorOpenPathsV10);
     expect(method.versions[1]?.contract).toBe(editorOpenPathsV11);
+  });
+});
+
+/** Every target 1.1 legalised, reused to prove 1.2 changed none of them. */
+const V11_TARGETS = [
+  "vscode",
+  "cursor",
+  "windsurf",
+  "zed",
+  "vscodium",
+  "system",
+  "finder",
+];
+
+const V11_SYSTEM_REQUEST = {
+  editorId: "system" as const,
+  paths: ["/work/repo/docs/spec.docx"],
+};
+
+describe("editor.openPaths 1.1 -> 1.2 compatibility", () => {
+  it("reuses 1.1's request and response schema objects verbatim", () => {
+    // Reference equality, not structural: 1.2 is a behavior minor, so the two
+    // contracts must point at the SAME schema objects. A structurally equal
+    // copy would still pass a shape comparison while quietly making the wire
+    // schema forkable - the next edit to one would silently not reach the
+    // other.
+    expect(editorOpenPathsV12.requestSchema).toBe(
+      editorOpenPathsV11.requestSchema,
+    );
+    expect(editorOpenPathsV12.responseSchema).toBe(
+      editorOpenPathsV11.responseSchema,
+    );
+    expect(editorOpenPathsV12.schemaVersion).toEqual({ major: 1, minor: 2 });
+  });
+
+  it("accepts exactly the 1.1 target set under 1.2", () => {
+    for (const editorId of V11_TARGETS) {
+      expect(
+        editorOpenPathsV12.requestSchema.safeParse({ ...V10_REQUEST, editorId })
+          .success,
+      ).toBe(true);
+    }
+    expect(
+      editorOpenPathsV12.requestSchema.safeParse({
+        ...V10_REQUEST,
+        editorId: "not-a-real-target",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("upgrades 1.1 requests and responses by identity", () => {
+    // Same object back, not merely an equal one - there is nothing to
+    // transform when the minor carries behavior rather than schema.
+    expect(
+      editorOpenPathsUpgradeV11ToV12.upgradeRequest(V11_SYSTEM_REQUEST),
+    ).toBe(V11_SYSTEM_REQUEST);
+    expect(
+      editorOpenPathsUpgradeV11ToV12.upgradeRequest(V11_SYSTEM_REQUEST),
+    ).toEqual(V11_SYSTEM_REQUEST);
+    expect(editorOpenPathsUpgradeV11ToV12.upgradeResponse({})).toEqual({});
+  });
+
+  it("declares the minor pair it upgrades across", () => {
+    expect(editorOpenPathsUpgradeV11ToV12.from).toEqual({ major: 1, minor: 1 });
+    expect(editorOpenPathsUpgradeV11ToV12.to).toEqual({ major: 1, minor: 2 });
+  });
+
+  it("advertises latestMinor 2 with all three minors registered", () => {
+    const method = hostRpcRegistry["editor.openPaths"][1];
+    expect(method.latestMinor).toBe(2);
+    expect(method.versions[2]?.contract).toBe(editorOpenPathsV12);
+    expect(method.versions[2]?.upgradeFromPreviousVersion).toBe(
+      editorOpenPathsUpgradeV11ToV12,
+    );
   });
 });

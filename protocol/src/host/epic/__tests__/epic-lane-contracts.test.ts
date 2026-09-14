@@ -132,9 +132,9 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     }
   });
 
-  it("installs epic.listChatRecords with @1.0, @1.1 and @1.2 minors, latestMinor 2", () => {
+  it("installs epic.listChatRecords with @1.0-@1.3 minors, latestMinor 3", () => {
     const majorLine = hostRpcRegistry["epic.listChatRecords"][1];
-    expect(majorLine.latestMinor).toBe(2);
+    expect(majorLine.latestMinor).toBe(3);
     expect(majorLine.versions[0].contract.schemaVersion).toEqual({
       major: 1,
       minor: 0,
@@ -149,6 +149,14 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     expect(majorLine.versions[2].contract.schemaVersion).toEqual({
       major: 1,
       minor: 2,
+    });
+    // @1.3 gates the answer on the list revision the caller sends back, so a
+    // poll with nothing to report stops re-encoding the whole registry. The
+    // request grows by `knownRevision`; the response becomes the
+    // snapshot/unchanged union.
+    expect(majorLine.versions[3].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 3,
     });
   });
 });

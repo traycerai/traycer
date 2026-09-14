@@ -45,7 +45,7 @@ import {
  */
 interface AcceleratorEntry {
   count: number;
-  readonly timer: ReturnType<typeof setInterval>;
+  readonly timer: number;
 }
 
 /**
@@ -91,7 +91,7 @@ function acquireAccelerator(
   } else {
     hosts.set(hostId, {
       count: 1,
-      timer: setInterval(() => {
+      timer: window.setInterval(() => {
         // Non-canceling, or the cadence eats its own reads: `invalidateQueries`
         // refetches active observers with TanStack's default
         // `cancelRefetch: true`, so each tick would abort the round trip the
@@ -118,7 +118,7 @@ function acquireAccelerator(
     if (entry === undefined) return;
     entry.count -= 1;
     if (entry.count > 0) return;
-    clearInterval(entry.timer);
+    window.clearInterval(entry.timer);
     hosts.delete(hostId);
   };
 }

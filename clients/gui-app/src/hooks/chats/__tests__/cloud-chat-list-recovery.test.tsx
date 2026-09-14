@@ -121,7 +121,10 @@ describe("useCloudChatList recovery", () => {
 
     // No retry-delay time passes. The HostClient's recovery signal invalidates
     // the active host scope and the list asks again immediately.
-    fixture.client.notifyHostAvailabilityRecovered(mockLocalHostEntry.hostId);
+    fixture.client.notifyHostAvailabilityRecovered(
+      mockLocalHostEntry.hostId,
+      "reconnect",
+    );
     await flushTimers(0);
 
     expect(fixture.requests.value).toBe(2);

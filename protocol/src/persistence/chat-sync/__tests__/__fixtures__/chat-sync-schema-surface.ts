@@ -3848,6 +3848,56 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "null"
                                                 }
                                               ]
+                                            },
+                                            "failure": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "reason": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "auth",
+                                                        "rate_limit",
+                                                        "billing",
+                                                        "model_unavailable",
+                                                        "provider_unavailable",
+                                                        "provider_connection_failed",
+                                                        "context_exhausted",
+                                                        "request_rejected",
+                                                        "turn_start_timeout",
+                                                        "missing_terminal_event",
+                                                        "background_work_failed",
+                                                        "session_budget"
+                                                      ]
+                                                    },
+                                                    "resetsAt": {
+                                                      "type": "number"
+                                                    },
+                                                    "resetsAtSource": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "provider",
+                                                        "probe"
+                                                      ]
+                                                    },
+                                                    "scope": {
+                                                      "type": "string"
+                                                    },
+                                                    "providerDetail": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "reason"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
                                             }
                                           },
                                           "required": [
@@ -3857,7 +3907,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "type",
                                             "message",
                                             "recoverable",
-                                            "code"
+                                            "code",
+                                            "failure"
                                           ],
                                           "additionalProperties": false
                                         },
@@ -5207,6 +5258,36 @@ export const chatSyncSchemaSurfaceBaseline = {
                                 }
                               ]
                             }
+                          },
+                          "turnProfile": {
+                            "type": "object",
+                            "properties": {
+                              "profileId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "labelSnapshot": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "profileId",
+                              "labelSnapshot"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [

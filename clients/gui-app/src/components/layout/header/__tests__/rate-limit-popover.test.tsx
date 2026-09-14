@@ -22,7 +22,6 @@ import {
 } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProvidersConsumeRateLimitResetCreditRequest } from "@traycer/protocol/host/rate-limit";
-import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type {
   AuthenticatedUser,
@@ -38,6 +37,8 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
@@ -109,7 +110,7 @@ type MockState = {
   // provider's query state, not just the first.
   lastUseHostQueriesProviderIds: ReadonlyArray<string> | null;
   profileSelection: {
-    activeChatSettings: ChatRunSettings | null;
+    shownProfiles: Readonly<Record<string, ReadonlyArray<string | null>>>;
     lastProfileByHarness: Readonly<Record<string, string | null>>;
   };
 };
@@ -142,7 +143,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
   profileSelection: {
-    activeChatSettings: null,
+    shownProfiles: {},
     lastProfileByHarness: {},
   },
   authUser: {
@@ -337,6 +338,7 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 
 const NOW = Date.now();
 
@@ -443,6 +445,16 @@ function codexReady() {
     resetCredits: null,
     rateLimitReachedType: null,
   };
+}
+
+/** The ambient (profile-less) block's provider, for the header-link cases. */
+function kilocodeReady() {
+  return readyResult({
+    provider: "kilocode",
+    available: true,
+    creditBalance: 5,
+    passState: null,
+  });
 }
 
 function providerProfile(input: {
@@ -623,6 +635,8 @@ function renderPopoverWithScope(scope: HostScope, hasExplicitPick: boolean) {
         <Popover open>
           <PopoverTrigger>trigger</PopoverTrigger>
           <RateLimitPopover
+            side="bottom"
+            align="end"
             onClose={onClose}
             profileSelection={mocks.profileSelection}
             scope={scope}
@@ -853,15 +867,26 @@ beforeEach(() => {
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
   mocks.profileSelection = {
-    activeChatSettings: null,
+    shownProfiles: {},
     lastProfileByHarness: {},
   };
   mocks.authUser = coldAuthUser();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
-  useRateLimitPopoverStore.setState({ activeTab: "overview", size: null });
+  useRateLimitPopoverStore.setState({
+    activeTab: "overview",
+    size: null,
+    revealProfile: null,
+  });
   useRateLimitPopoverStore.persist.clearStorage();
+  useLayoutStore.setState(useLayoutStore.getInitialState(), true);
   useProvidersFocusStore.getState().clearFocusHarnessId();
   useProvidersFocusStore.getState().clearFocusTab();
+  // Both are written by the popover's Settings jumps - the reveal request the
+  // rail gear arms for Layout's Status bar group, and the viewed host the
+  // per-provider links carry across. Neither is reset by the render, so a
+  // leftover from the previous case would let an assertion pass on it.
+  useSettingsSearchStore.getState().clearReveal();
+  useSettingsHostScopeStore.getState().setScopedHostId(null);
   onClose = vi.fn();
 });
 
@@ -1229,7 +1254,12 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.queryByText("Pro 5x")).toBeNull();
   });
 
-  it("highlights the focused chat profile and the other harness's remembered profile", () => {
+  /**
+   * Two providers with two accounts each, both `ephemeralProcess`, with a
+   * reading for every card. Shared by the `Show in status bar` cases below,
+   * which differ only in what the layout store says about them.
+   */
+  function configureTwoAccountProviders(): void {
     const codexProfiles = [
       providerProfile({
         profileId: "ambient",
@@ -1281,16 +1311,12 @@ describe("<RateLimitPopover /> rail", () => {
       [resultKey("claude-code", "personal-profile")]:
         readyResult(claudeReady()),
     };
+  }
+
+  it("highlights the accounts the strip draws by default and offers a Status bar switch on every card", () => {
+    configureTwoAccountProviders();
     mocks.profileSelection = {
-      activeChatSettings: {
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        permissionMode: "supervised",
-        reasoningEffort: null,
-        serviceTier: null,
-        agentMode: "regular",
-        profileId: null,
-      },
+      shownProfiles: {},
       lastProfileByHarness: {
         codex: "work-profile",
         claude: "personal-profile",
@@ -1299,19 +1325,176 @@ describe("<RateLimitPopover /> rail", () => {
 
     renderPopover();
 
-    expect(screen.getByText("Codex")).toBeTruthy();
-    expect(screen.getByText("Claude Code")).toBeTruthy();
     expect(screen.getByText("Default Codex")).toBeTruthy();
     expect(screen.getByText("Default Claude")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Personal")).toBeTruthy();
-    expect(screen.getAllByText("Active")).toHaveLength(2);
+    // The `Active` badge went with the focused-chat rule it described.
+    expect(screen.queryByText("Active")).toBeNull();
+    // Nothing checked: each provider's last-used account is the one the strip
+    // draws, and its card carries the accent - with the switch OFF, since
+    // nothing was asked for.
     const activeRows = document.querySelectorAll('[aria-current="true"]');
     expect(activeRows).toHaveLength(2);
-    expect(activeRows[0].textContent).toContain("Default Codex");
-    expect(activeRows[0].textContent).not.toContain("Work");
+    expect(activeRows[0].textContent).toContain("Work");
     expect(activeRows[1].textContent).toContain("Personal");
+    const switches = screen.getAllByRole("switch", {
+      name: /in status bar$/,
+    });
+    expect(
+      switches.map((element) => element.getAttribute("aria-label")),
+    ).toEqual([
+      "Show Default Codex in status bar",
+      "Show Work in status bar",
+      "Show Default Claude in status bar",
+      "Show Personal in status bar",
+    ]);
+    expect(
+      switches.map((element) => element.getAttribute("aria-checked")),
+    ).toEqual(["false", "false", "false", "false"]);
     expect(screen.getByText("Pro 5x")).toBeTruthy();
+  });
+
+  it("writes the viewed host's Show in status bar entry from a card's switch", () => {
+    configureTwoAccountProviders();
+    renderPopover();
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show Work in status bar" }),
+    );
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+    ).toEqual({ "host-a": { codex: ["work-profile"] } });
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show Default Codex in status bar" }),
+    );
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+    ).toEqual({ "host-a": { codex: ["work-profile", null] } });
+
+    // The switch reads its checked state through the selection the caller
+    // resolved (a static double here), so re-render with both checked before
+    // flipping them off: unchecking the last one removes the entry rather
+    // than leaving `[]`.
+    cleanup();
+    mocks.profileSelection = {
+      shownProfiles: { codex: ["work-profile", null] },
+      lastProfileByHarness: {},
+    };
+    renderPopover();
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show Work in status bar" }),
+    );
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show Default Codex in status bar" }),
+    );
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+    ).toEqual({});
+  });
+
+  it("reads checked accounts for the viewed host and highlights exactly those cards", () => {
+    configureTwoAccountProviders();
+    mocks.profileSelection = {
+      shownProfiles: { codex: ["work-profile", null] },
+      lastProfileByHarness: { claude: "personal-profile" },
+    };
+    renderPopover();
+
+    const codexSwitches = [
+      screen.getByRole("switch", { name: "Show Default Codex in status bar" }),
+      screen.getByRole("switch", { name: "Show Work in status bar" }),
+    ];
+    expect(
+      codexSwitches.map((element) => element.getAttribute("aria-checked")),
+    ).toEqual(["true", "true"]);
+    // Both Codex cards are on the strip; Claude falls back to its last-used.
+    const activeRows = document.querySelectorAll('[aria-current="true"]');
+    expect(activeRows).toHaveLength(3);
+    expect(activeRows[0].textContent).toContain("Default Codex");
+    expect(activeRows[1].textContent).toContain("Work");
+    expect(activeRows[2].textContent).toContain("Personal");
+  });
+
+  it("hides the Status bar switch for a provider hidden from the strip", () => {
+    configureTwoAccountProviders();
+    useLayoutStore.getState().toggleStatusBarProvider("codex");
+    renderPopover();
+
+    expect(
+      screen.queryByRole("switch", { name: "Show Work in status bar" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("switch", { name: "Show Personal in status bar" }),
+    ).toBeTruthy();
+  });
+
+  it("scrolls the card a strip segment deep-linked to into view and consumes the request", () => {
+    configureTwoAccountProviders();
+    const scrollIntoView = vi.fn();
+    // jsdom has no `scrollIntoView`; install one for this case and put the
+    // prototype back exactly as it was (absent), since the next case is
+    // about that absence.
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: scrollIntoView,
+    });
+    try {
+      useRateLimitPopoverStore.getState().requestRevealProfile({
+        providerId: "codex",
+        profileId: "work-profile",
+      });
+      renderPopover();
+
+      // The reveal selected the provider's tab, so the detail pane is what
+      // rendered - and only the one card scrolled.
+      expect(
+        screen
+          .getByRole("tab", { name: "Codex" })
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(useRateLimitPopoverStore.getState().revealProfile).toBeNull();
+    } finally {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      } else {
+        Object.defineProperty(Element.prototype, "scrollIntoView", descriptor);
+      }
+    }
+  });
+
+  it("still consumes a deep-link request where scrollIntoView does not exist", () => {
+    configureTwoAccountProviders();
+    // The suite setup stubs `scrollIntoView`; take it away for this case so
+    // the effect meets the method's real absence, and put it back after.
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollIntoView",
+    );
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    try {
+      expect(
+        Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView"),
+      ).toBeUndefined();
+      useRateLimitPopoverStore.getState().requestRevealProfile({
+        providerId: "codex",
+        profileId: "work-profile",
+      });
+
+      expect(() => renderPopover()).not.toThrow();
+
+      expect(useRateLimitPopoverStore.getState().revealProfile).toBeNull();
+    } finally {
+      if (descriptor !== undefined) {
+        Object.defineProperty(Element.prototype, "scrollIntoView", descriptor);
+      }
+    }
   });
 
   it("renders the profile-card layout when a provider has only one profile", () => {
@@ -1830,6 +2013,8 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
           <Popover open>
             <PopoverTrigger>trigger</PopoverTrigger>
             <RateLimitPopover
+              side="bottom"
+              align="end"
               onClose={onClose}
               profileSelection={mocks.profileSelection}
               scope={SINGLE_HOST_SCOPE}
@@ -2674,18 +2859,169 @@ describe("<RateLimitPopover /> Refresh all", () => {
 });
 
 describe("<RateLimitPopover /> rail settings", () => {
-  it("opens provider settings and closes the popover from the rail settings icon", () => {
+  it("opens Layout on the status-bar group and closes the popover from the rail gear", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
     renderPopover();
-    fireEvent.click(screen.getByRole("button", { name: "Provider settings" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Status bar settings" }),
+    );
+
+    expect(mocks.openSettings).toHaveBeenCalledWith({
+      section: "layout",
+      resetToGeneral: false,
+    });
+    // The anchor cannot ride on `openSettings`, which carries a section and
+    // nothing finer - it travels in the reveal store the Layout panel's
+    // watcher polls, exactly as a settings search result's does.
+    expect(useSettingsSearchStore.getState().pendingReveal).toMatchObject({
+      section: "layout",
+      anchor: "layout-status-bar",
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the Providers deep-link intent untouched from the rail gear", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    renderPopover();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Status bar settings" }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: null,
+      focusTab: null,
+    });
+  });
+});
+
+describe("<RateLimitPopover /> manage provider links", () => {
+  it("deep-links a profile-bearing provider to Providers with the viewed host", () => {
+    const events: string[] = [];
+    onClose = vi.fn(() => {
+      events.push("close");
+    });
+    mocks.openSettings = vi.fn(() => {
+      events.push("settings");
+    });
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    renderPopover();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manage provider: Codex" }),
+    );
+
+    // Closing first matters for the same reason it does for the OpenCode
+    // link: the popover must be gone before Settings takes the surface.
+    expect(events).toEqual(["close", "settings"]);
     expect(mocks.openSettings).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
     });
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "codex",
+      // No tab named: Providers resolves this provider's own first tab.
+      focusTab: null,
+    });
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+  });
+
+  it("deep-links an ambient provider from its own header", () => {
+    mocks.configured = [
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+    ];
+    mocks.results = { kilocode: kilocodeReady() };
+    renderPopover();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manage provider: Kilo Code" }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "kilocode",
+      focusTab: null,
+    });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a previous deep link's tab so the provider opens on its own first tab", () => {
+    useProvidersFocusStore.getState().setFocusTab("modelProviders");
+    mocks.configured = [
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+    ];
+    mocks.results = { kilocode: kilocodeReady() };
+    renderPopover();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manage provider: Kilo Code" }),
+    );
+
+    expect(useProvidersFocusStore.getState().focusTab).toBeNull();
+  });
+
+  it("names one link per provider in Overview and orders it after the title", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      kilocode: kilocodeReady(),
+    };
+    renderPopover();
+
+    // The visible words repeat per block; the accessible name is what tells
+    // the two apart, which is the whole reason it is the provider's.
+    expect(screen.getAllByText("Manage provider").length).toBe(2);
+    const manageCodex = screen.getByRole("button", {
+      name: "Manage provider: Codex",
+    });
+    expect(
+      manageCodex.compareDocumentPosition(screen.getByText("Codex")) &
+        Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+  });
+
+  it("keeps the detail tab's refresh button after the manage link", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    useRateLimitPopoverStore.setState({ activeTab: "codex" });
+    renderPopover();
+
+    const manage = screen.getByRole("button", {
+      name: "Manage provider: Codex",
+    });
+    const refresh = screen.getByRole("button", { name: "Refresh Codex" });
+    expect(
+      manage.compareDocumentPosition(refresh) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
 

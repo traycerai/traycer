@@ -17,33 +17,34 @@ interface RateLimitPopoverSize {
   readonly heightPx: number;
 }
 
+/**
+ * One profile card the panel should bring into view on its next paint: the
+ * strip's deep link from a segment to the account it describes. `profileId`
+ * is `null` for the provider's ambient card.
+ */
+export interface RateLimitPopoverRevealTarget {
+  readonly providerId: RateLimitProviderId;
+  readonly profileId: string | null;
+}
+
 interface RateLimitPopoverStoreState {
   readonly activeTab: RateLimitPopoverTab;
   readonly size: RateLimitPopoverSize | null;
   /**
-   * Which host's usage this surface is READING — never which host the window
-   * runs on. Picking here swaps a transient client and nothing else, exactly
-   * like the Settings sidebar switcher (`settings-host-scope-store.ts`); where
-   * new work lands is still `HostDirectoryService.selectById`'s answer alone.
-   *
-   * `null` means "follow the active host", which is not the same as "no host":
-   * keeping the unset case distinct is what lets a single-host user never see
-   * a stale id after their only host is re-registered.
-   *
-   * Unlike the Settings viewing scope this one IS persisted, and the reason the
-   * two differ is what each scope can do. Settings is an administration surface
-   * whose scope aims destructive verbs, so a pick that outlived a relaunch
-   * would point them at a machine last touched days ago. This surface only
-   * READS usage, and someone who watches one machine's limits wants that same
-   * machine on the next launch rather than a pick they must redo every time.
-   * A pick that no longer resolves is still never substituted silently — it
-   * surfaces as `vanished`/`unreachable` with a way back to the active host.
+   * Session-only, never persisted: a reveal is a gesture, and a panel that
+   * scrolled to last week's card on every open would be answering a click
+   * nobody made.
    */
-  readonly scopedHostId: string | null;
+  readonly revealProfile: RateLimitPopoverRevealTarget | null;
   readonly setActiveTab: (tab: RateLimitPopoverTab) => void;
   readonly setSize: (size: RateLimitPopoverSize | null) => void;
-  /** `null` returns to following the active host. */
-  readonly setScopedHostId: (hostId: string | null) => void;
+  /**
+   * Arms a reveal AND selects the provider's tab, since the card can only be
+   * in view on the tab that draws it. The card consumes the reveal once it
+   * has scrolled (`clearRevealProfile`).
+   */
+  readonly requestRevealProfile: (target: RateLimitPopoverRevealTarget) => void;
+  readonly clearRevealProfile: () => void;
 }
 
 const RATE_LIMIT_POPOVER_PERSIST_KEY = persistKey(STORE_KEYS.rateLimitPopover);
@@ -80,33 +81,22 @@ function persistedSize(persistedState: unknown): RateLimitPopoverSize | null {
   return { widthPx, heightPx };
 }
 
-/**
- * A host id is opaque to this layer, so the only checkable claim is "a
- * non-empty string someone could have picked". Whether it still names a host
- * this client can reach is `resolveScopedHost`'s question, answered against
- * the live host lists rather than guessed at rehydration time.
- */
-function persistedScopedHostId(persistedState: unknown): string | null {
-  if (typeof persistedState !== "object" || persistedState === null) {
-    return null;
-  }
-  if (!("scopedHostId" in persistedState)) return null;
-  const scopedHostId = persistedState.scopedHostId;
-  if (typeof scopedHostId !== "string" || scopedHostId.length === 0) {
-    return null;
-  }
-  return scopedHostId;
-}
-
 export const useRateLimitPopoverStore = create<RateLimitPopoverStoreState>()(
   persist(
     (set, get) => ({
       activeTab: "overview",
       size: null,
-      scopedHostId: null,
+      revealProfile: null,
       setActiveTab: (activeTab) => {
         if (get().activeTab === activeTab) return;
         set({ activeTab });
+      },
+      requestRevealProfile: (target) => {
+        set({ activeTab: target.providerId, revealProfile: target });
+      },
+      clearRevealProfile: () => {
+        if (get().revealProfile === null) return;
+        set({ revealProfile: null });
       },
       setSize: (size) => {
         const currentSize = get().size;
@@ -118,10 +108,6 @@ export const useRateLimitPopoverStore = create<RateLimitPopoverStoreState>()(
         }
         set({ size });
       },
-      setScopedHostId: (scopedHostId) => {
-        if (get().scopedHostId === scopedHostId) return;
-        set({ scopedHostId });
-      },
     }),
     {
       ...basePersistOptions(RATE_LIMIT_POPOVER_PERSIST_KEY),
@@ -130,12 +116,11 @@ export const useRateLimitPopoverStore = create<RateLimitPopoverStoreState>()(
         ...currentState,
         activeTab: persistedActiveTab(persistedState),
         size: persistedSize(persistedState),
-        scopedHostId: persistedScopedHostId(persistedState),
+        revealProfile: null,
       }),
       partialize: (state) => ({
         activeTab: state.activeTab,
         size: state.size,
-        scopedHostId: state.scopedHostId,
       }),
     },
   ),

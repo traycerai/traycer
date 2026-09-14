@@ -9,6 +9,10 @@ import type {
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
+import {
+  mergeAvailabilityRecoveryKinds,
+  type AvailabilityRecoveryKind,
+} from "../host-transport/availability-recovery-kind";
 import type { HostDirectoryEntry } from "./host-directory";
 import { StaleHostBindingAuthorityError } from "./host-binding-authority-error";
 import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
@@ -34,12 +38,43 @@ export interface IHostQueryInvalidator {
   readonly cancelHostScope?: (hostId: string | null) => Promise<void>;
 }
 
-export interface HostQueryInvalidationOptions {
-  readonly refetchActive: boolean;
-}
+/**
+ * `refetchActive: false` marks the scope stale without refetching - an
+ * identity transition, whose request context may already be gone.
+ * `refetchActive: true` is a recovery sweep, and `recovery` names the edge
+ * that fired it, which decides how much of the scope the sweep re-asks
+ * (`AvailabilityRecoveryKind`).
+ */
+export type HostQueryInvalidationOptions =
+  | { readonly refetchActive: false }
+  | {
+      readonly refetchActive: true;
+      readonly recovery: AvailabilityRecoveryKind;
+    };
 
 /** One host-wide recovery sweep per window, with one trailing delivery. */
 export const HOST_AVAILABILITY_SWEEP_WINDOW_MS = 10_000;
+
+/**
+ * A host-scope sweep queued as a microtask. Every report for the same host
+ * that arrives before it runs merges into it: it announces if any of them
+ * asked to, and it runs as a reconnect if any of them was one.
+ */
+interface PendingHostScopeSweep {
+  emitChangeEvent: boolean;
+  kind: AvailabilityRecoveryKind;
+}
+
+/**
+ * One host's recovery window. `sweep` is the sweep the window last delivered;
+ * while that sweep is still pending, a report folds into it. `deferred` is the
+ * widest kind among the reports the window has held back for its trailing
+ * sweep, or `null` when it holds none.
+ */
+interface HostAvailabilitySweepGate {
+  sweep: PendingHostScopeSweep;
+  deferred: AvailabilityRecoveryKind | null;
+}
 
 /** Unsubscribe handle returned by `HostClient` event subscriptions. */
 export type HostClientUnsubscribe = () => void;
@@ -418,7 +453,10 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * Reports that an endpoint recovered availability, for a NAMED host.
    *
    * The announcing form: it invalidates that host's scope so active observers
-   * refetch, and emits the `"availability-recovered"` change event.
+   * refetch, and emits the `"availability-recovered"` change event. `kind`
+   * names the edge that fired: after a `"stall"` the sweep re-asks only the
+   * reads that failed, after a `"reconnect"` every settled read too
+   * (`AvailabilityRecoveryKind`). The change event is the same for both.
    *
    * There used to be a no-argument sibling that read the active slot to
    * decide whose queries to un-strand, and this method delegated to it when
@@ -433,22 +471,29 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * Delivery is coalesced per host both in the current microtask and across a
    * short time window. Independent consumer wirings have independent recovery
    * cooldowns, so their reports can otherwise arrive as a staggered burst.
+   * Coalesced reports sweep as the widest kind among them: a reconnect wins.
    */
-  notifyHostAvailabilityRecovered(hostId: string): void {
+  notifyHostAvailabilityRecovered(
+    hostId: string,
+    kind: AvailabilityRecoveryKind,
+  ): void {
     const gate = this.hostAvailabilitySweepGates.get(hostId);
-    if (gate !== undefined) {
-      if (!gate.leadingPending) gate.trailing = true;
+    if (gate === undefined) {
+      const opened: HostAvailabilitySweepGate = {
+        sweep: this.deliverHostScopeSweep(hostId, true, kind),
+        deferred: null,
+      };
+      this.hostAvailabilitySweepGates.set(hostId, opened);
+      this.armHostAvailabilitySweepGate(hostId, opened);
       return;
     }
-    const opened = { leadingPending: true, trailing: false };
-    this.hostAvailabilitySweepGates.set(hostId, opened);
-    this.deliverHostScopeSweep(hostId, true);
-    queueMicrotask(() => {
-      if (this.hostAvailabilitySweepGates.get(hostId) === opened) {
-        opened.leadingPending = false;
-      }
-    });
-    this.armHostAvailabilitySweepGate(hostId, opened);
+    if (this.pendingHostScopeSweeps.get(hostId) === gate.sweep) {
+      // The window's last sweep has not run yet, so this report is in its
+      // tick: fold into it rather than owing a trailing sweep.
+      this.deliverHostScopeSweep(hostId, true, kind);
+      return;
+    }
+    gate.deferred = mergeAvailabilityRecoveryKinds(gate.deferred, kind);
   }
 
   /**
@@ -478,34 +523,34 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * This used to be `invalidateHostScopeForAvailability`, documented as
    * existing for one caller. It has two, and a name naming one of their
    * reasons would have to be replaced by the next one.
+   *
+   * It sweeps as a `"reconnect"` for both. A remote binding's owed ready
+   * boundary is a new session to that host, and a rotated host is a machine
+   * rebuilt under its own id, so neither can vouch for a read that settled
+   * before it.
    */
   invalidateHostScopeUnannounced(hostId: string): void {
-    this.deliverHostScopeSweep(hostId, false);
+    this.deliverHostScopeSweep(hostId, false, "reconnect");
   }
 
   private readonly hostAvailabilitySweepGates = new Map<
     string,
-    { leadingPending: boolean; trailing: boolean }
+    HostAvailabilitySweepGate
   >();
 
   private armHostAvailabilitySweepGate(
     hostId: string,
-    gate: { leadingPending: boolean; trailing: boolean },
+    gate: HostAvailabilitySweepGate,
   ): void {
     setTimeout(() => {
       if (this.hostAvailabilitySweepGates.get(hostId) !== gate) return;
-      if (!gate.trailing) {
+      const deferred = gate.deferred;
+      if (deferred === null) {
         this.hostAvailabilitySweepGates.delete(hostId);
         return;
       }
-      gate.trailing = false;
-      gate.leadingPending = true;
-      this.deliverHostScopeSweep(hostId, true);
-      queueMicrotask(() => {
-        if (this.hostAvailabilitySweepGates.get(hostId) === gate) {
-          gate.leadingPending = false;
-        }
-      });
+      gate.deferred = null;
+      gate.sweep = this.deliverHostScopeSweep(hostId, true, deferred);
       this.armHostAvailabilitySweepGate(hostId, gate);
     }, HOST_AVAILABILITY_SWEEP_WINDOW_MS);
   }
@@ -518,30 +563,38 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * for one (the availability report does, the unannounced sweep deliberately
    * does not). A rotation sweep landing in the same tick as a genuine
    * availability recovery therefore still announces, and that is correct: the
-   * availability caller asked, and its announcement is true.
+   * availability caller asked, and its announcement is true. Kinds merge the
+   * same way: the sweep runs as a reconnect if any report in its tick was one,
+   * so a rotation sweep merged with a stall still re-asks every settled read.
+   *
+   * Returns the pending sweep the report landed in. The recovery window keeps
+   * it, so a later report in the same tick can fold into it.
    */
   private readonly pendingHostScopeSweeps = new Map<
     string,
-    { emitChangeEvent: boolean }
+    PendingHostScopeSweep
   >();
 
   private deliverHostScopeSweep(
     hostId: string,
     emitChangeEvent: boolean,
-  ): void {
+    kind: AvailabilityRecoveryKind,
+  ): PendingHostScopeSweep {
     const pending = this.pendingHostScopeSweeps.get(hostId);
     if (pending !== undefined) {
       if (emitChangeEvent) {
         pending.emitChangeEvent = true;
       }
-      return;
+      pending.kind = mergeAvailabilityRecoveryKinds(pending.kind, kind);
+      return pending;
     }
-    const entry = { emitChangeEvent };
+    const entry: PendingHostScopeSweep = { emitChangeEvent, kind };
     this.pendingHostScopeSweeps.set(hostId, entry);
     queueMicrotask(() => {
       this.pendingHostScopeSweeps.delete(hostId);
       this.invalidator.invalidateHostScope(hostId, {
         refetchActive: true,
+        recovery: entry.kind,
       });
       // No active-host gate: there is no active host. The event carries the
       // host it is about, and consumers that care which one filter on
@@ -555,6 +608,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         });
       }
     });
+    return entry;
   }
 
   /**

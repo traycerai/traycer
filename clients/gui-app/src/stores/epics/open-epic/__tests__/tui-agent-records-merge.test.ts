@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type {
   TuiAgentRecordSummaryV11,
-  TuiAgentRecordSummaryV12,
+  TuiAgentRecordSummaryV13,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -31,6 +31,11 @@ import {
   openStoreForTest,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import {
+  terminalAgentProjectionsEq,
+  tuiAgentProjectionFromRecord,
+} from "@/stores/epics/open-epic/projection-helpers";
+import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 
 const USER = "user-a";
 
@@ -79,7 +84,7 @@ function makeMeta(): SnapshotMetaEpic {
  */
 function row(
   overrides: Partial<TuiAgentRecordSummaryV11>,
-): Extract<TuiAgentRecordSummaryV12, { origin: "registry" | "doc" }> {
+): Extract<TuiAgentRecordSummaryV13, { origin: "registry" | "doc" }> {
   const base: TuiAgentRecordSummaryV11 = {
     tuiAgentId: "tui-1",
     ownerUserId: USER,
@@ -106,9 +111,13 @@ function row(
     docResident: false,
     ...overrides,
   };
+  // `@1.3`'s session facet, which the `@1.1` base this is built from has no
+  // field for. `null` - "this host cannot say" - because every case here is
+  // about the MERGE; a case about the facet stamps it onto the result.
+  const wire = { ...base, sessionState: null, lastExit: null };
   return base.docResident
-    ? { ...base, origin: "doc" as const }
-    : { ...base, origin: "registry" as const };
+    ? { ...wire, origin: "doc" as const }
+    : { ...wire, origin: "registry" as const };
 }
 
 /**
@@ -261,6 +270,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     const issuedAt = state.peekTuiAgentIngestSeq();
     state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "pushed" }),
     });
@@ -285,6 +295,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     const state = handle.store.getState();
     state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "doomed" }),
     });
@@ -304,6 +315,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     const state = handle.store.getState();
     state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "doomed" }),
     });
@@ -332,6 +344,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
 
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "tui-1", title: "After", revision: 2 }),
     });
@@ -519,6 +532,55 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 });
 
+describe("applyTuiAgentRecordDelta carries the session facet, held or stated", () => {
+  it("writes a STATED facet onto the retained row", () => {
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      sessionFacet: { sessionState: "sleeping", lastExit: "reaped" },
+      epicId: "epic-test",
+      record: row({ tuiAgentId: "tui-1" }),
+    });
+
+    const applied = handle.store.getState().tuiAgentRecords.byId["tui-1"];
+    expect(applied.sessionState).toBe("sleeping");
+    expect(applied.lastExit).toBe("reaped");
+  });
+
+  it("carries the HELD facet forward when the frame's minor could not state one", () => {
+    // Below `@1.4` `sessionFacet` is `null` - not the row's own "unknown", but
+    // "this minor had no field for it". Blanking the facet on every unrelated
+    // rename would report a sleeping agent as unknown until the next snapshot,
+    // exactly the regression `docResident`'s carry-forward already guards.
+    signedInAs(USER);
+    const handle = newSession();
+    const state = handle.store.getState();
+    state.applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      sessionFacet: { sessionState: "sleeping", lastExit: "reaped" },
+      epicId: "epic-test",
+      record: row({ tuiAgentId: "tui-1", revision: 1 }),
+    });
+
+    state.applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      sessionFacet: null,
+      epicId: "epic-test",
+      record: row({
+        tuiAgentId: "tui-1",
+        revision: 2,
+        title: "Renamed, unrelated to the session",
+      }),
+    });
+
+    const applied = handle.store.getState().tuiAgentRecords.byId["tui-1"];
+    expect(applied.title).toBe("Renamed, unrelated to the session");
+    expect(applied.sessionState).toBe("sleeping");
+    expect(applied.lastExit).toBe("reaped");
+  });
+});
+
 describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
   it("preserves what the frame stated, rather than re-deriving it", () => {
     // THIS USED TO STAMP `docResident: false` unconditionally, and that was
@@ -533,6 +595,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "tui-1" }),
     });
@@ -553,6 +616,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: {
         origin: "cloud",
@@ -583,6 +647,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: {
         origin: "cloud",
@@ -615,6 +680,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: {
         origin: "cloud",
@@ -688,6 +754,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     // announces it as an ordinary registry upsert.
     state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({
         tuiAgentId: "tui-1",
@@ -767,10 +834,14 @@ describe("the doc slice is handed through by reference in doc-only mode", () => 
 
 /** The narrow cross-host arm, as a delta or a snapshot row. */
 function cloudRow(
-  overrides: Partial<Extract<TuiAgentRecordSummaryV12, { origin: "cloud" }>>,
-): TuiAgentRecordSummaryV12 {
+  overrides: Partial<Extract<TuiAgentRecordSummaryV13, { origin: "cloud" }>>,
+): TuiAgentRecordSummaryV13 {
   return {
     origin: "cloud",
+    // See `row()`: the facet is `null` on a replica until the cloud metadata
+    // projection carries it, which is the state `@1.3` documents for this arm.
+    sessionState: null,
+    lastExit: null,
     tuiAgentId: "tui-1",
     ownerUserId: USER,
     hostId: "host-elsewhere",
@@ -817,11 +888,13 @@ describe("terminal-agent merge puts AUTHORITY before revision", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: cloudRow({ revision: 999 }),
     });
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "tui-1", revision: 1 }),
     });
@@ -865,5 +938,53 @@ describe("terminal-agent merge puts AUTHORITY before revision", () => {
     expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].title).toBe(
       "newer",
     );
+  });
+});
+
+/**
+ * `terminalAgentProjectionsEq` is the store's own CHANGE GATE - the projector
+ * publishes a new slice only when a row's fields actually differ, so a field
+ * missing from the comparison freezes it behind the gate forever, however
+ * often the wire restates it. The facet is the sharpest case: a spawn or a
+ * reap moves `sessionState`/`lastExit` and NOTHING else, so without these two
+ * in the comparison the sidebar badge and the tile's asleep state would freeze
+ * on the first answer of the session.
+ */
+describe("terminalAgentProjectionsEq treats the session facet as a change", () => {
+  function projection(
+    overrides: Partial<
+      Pick<
+        Extract<TuiAgentRecordSummaryV13, { origin: "registry" }>,
+        "sessionState" | "lastExit"
+      >
+    >,
+  ): TuiAgentProjection {
+    const record = row({ tuiAgentId: "tui-1" });
+    const projected = tuiAgentProjectionFromRecord({
+      ...record,
+      sessionState: null,
+      lastExit: null,
+      ...overrides,
+    });
+    if (projected === null) throw new Error("expected a projection");
+    return projected;
+  }
+
+  it("returns false when only sessionState differs", () => {
+    const a = projection({ sessionState: null });
+    const b = projection({ sessionState: "sleeping" });
+    expect(terminalAgentProjectionsEq(a, b)).toBe(false);
+  });
+
+  it("returns false when only lastExit differs", () => {
+    const a = projection({ sessionState: "sleeping", lastExit: null });
+    const b = projection({ sessionState: "sleeping", lastExit: "reaped" });
+    expect(terminalAgentProjectionsEq(a, b)).toBe(false);
+  });
+
+  it("returns true when the facet is unchanged and nothing else differs", () => {
+    const a = projection({ sessionState: "sleeping", lastExit: "reaped" });
+    const b = projection({ sessionState: "sleeping", lastExit: "reaped" });
+    expect(terminalAgentProjectionsEq(a, b)).toBe(true);
   });
 });

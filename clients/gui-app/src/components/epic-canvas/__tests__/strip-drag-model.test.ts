@@ -19,8 +19,8 @@ const ORIGIN = 200;
 
 function slots(
   widths: ReadonlyArray<number>,
-  mergeable: ReadonlyArray<boolean> | null = null,
-  gap = 0,
+  mergeable: ReadonlyArray<boolean> | null,
+  gap: number,
 ): ReadonlyArray<StripSlot> {
   let contentLeft = 0;
   return widths.map((width, index) => {
@@ -39,16 +39,16 @@ function slots(
 
 /** Slots alone, for the functions that do not need a full geometry. */
 function slotsFor(widths: ReadonlyArray<number>): ReadonlyArray<StripSlot> {
-  return slots(widths);
+  return slots(widths, null, 0);
 }
 
 /** Grab offset centred on the source, which is the common real gesture. */
 function geometryFor(
   widths: ReadonlyArray<number>,
   sourceIndex: number,
-  mergeable: ReadonlyArray<boolean> | null = null,
+  mergeable: ReadonlyArray<boolean> | null,
 ): StripDragGeometry {
-  const built = slots(widths, mergeable);
+  const built = slots(widths, mergeable, 0);
   if (sourceIndex < 0 || sourceIndex >= built.length) {
     throw new Error("bad source index");
   }
@@ -106,7 +106,7 @@ describe("header strip drag model", () => {
     });
 
     it("measures the real reversal distance on an asymmetric strip", () => {
-      const geometry = geometryFor([120, 300, 200], 0);
+      const geometry = geometryFor([120, 300, 200], 0, null);
       const forward = range(0, 900, 1).map((offset) => ({
         x: ORIGIN + offset,
         index: resolveStripDragState({
@@ -154,7 +154,7 @@ describe("header strip drag model", () => {
 
   describe("monotonicity", () => {
     it("never decreases the index under a rightward sweep", () => {
-      const geometry = geometryFor([191, 191, 191, 191], 0);
+      const geometry = geometryFor([191, 191, 191, 191], 0, null);
       const indices = sweep(geometry, range(ORIGIN, ORIGIN + 800, 3)).map(
         (state) => state.targetIndex,
       );
@@ -165,7 +165,7 @@ describe("header strip drag model", () => {
     });
 
     it("never increases the index under a leftward sweep", () => {
-      const geometry = geometryFor([191, 191, 191, 191], 3);
+      const geometry = geometryFor([191, 191, 191, 191], 3, null);
       const xs = range(ORIGIN, ORIGIN + 800, 3)
         .slice()
         .reverse();
@@ -179,7 +179,7 @@ describe("header strip drag model", () => {
     it("moves at most one boundary per sample even on a fast sweep", () => {
       // A frame that spans three tabs must still land three single-boundary
       // swaps rather than one jump, so every displaced tab animates.
-      const geometry = geometryFor([191, 191, 191, 191], 0);
+      const geometry = geometryFor([191, 191, 191, 191], 0, null);
       const indices = sweep(geometry, range(ORIGIN, ORIGIN + 800, 3)).map(
         (state) => state.targetIndex,
       );
@@ -191,7 +191,7 @@ describe("header strip drag model", () => {
     });
 
     it("settles a multi-tab jump deterministically in one resolution", () => {
-      const geometry = geometryFor([191, 191, 191, 191], 0);
+      const geometry = geometryFor([191, 191, 191, 191], 0, null);
       const jumped = resolveStripDragState({
         geometry,
         contentOriginX: ORIGIN,
@@ -215,7 +215,7 @@ describe("header strip drag model", () => {
     for (const widths of geometries) {
       for (let source = 0; source < widths.length; source += 1) {
         it(`never alternates for widths ${widths.join("/")} from index ${source}`, () => {
-          const geometry = geometryFor(widths, source);
+          const geometry = geometryFor(widths, source, null);
           const total = widths.reduce((sum, width) => sum + width, 0);
           const states = sweep(
             geometry,
@@ -244,7 +244,7 @@ describe("header strip drag model", () => {
           () => 40 + Math.floor(random() * 400),
         );
         const source = Math.floor(random() * count);
-        const geometry = geometryFor(widths, source);
+        const geometry = geometryFor(widths, source, null);
         const total = widths.reduce((sum, width) => sum + width, 0);
         const indices = sweep(
           geometry,
@@ -264,7 +264,7 @@ describe("header strip drag model", () => {
 
   describe("scroll independence", () => {
     it("fires the boundary at the same content position after a scroll", () => {
-      const geometry = geometryFor([191, 191, 191], 0);
+      const geometry = geometryFor([191, 191, 191], 0, null);
       const findBoundary = (originX: number): number | null => {
         let previous: StripDragState | null = null;
         for (let offset = 0; offset < 800; offset += 1) {
@@ -290,7 +290,7 @@ describe("header strip drag model", () => {
       const widths = [100, 100, 100];
       const targetCentre = ORIGIN + 150;
 
-      const fromLeft = geometryFor(widths, 0);
+      const fromLeft = geometryFor(widths, 0, null);
       const leftApproach = resolveStripDragState({
         geometry: fromLeft,
         contentOriginX: ORIGIN,
@@ -314,7 +314,7 @@ describe("header strip drag model", () => {
         }).kind,
       ).toBe("reorder");
 
-      const fromRight = geometryFor(widths, 2);
+      const fromRight = geometryFor(widths, 2, null);
       const rightApproach = resolveStripDragState({
         geometry: fromRight,
         contentOriginX: ORIGIN,
@@ -344,7 +344,7 @@ describe("header strip drag model", () => {
       // arming period, so a single resolve on the neighbour's half IS the
       // merge. (The 400ms dwell this replaced existed to disambiguate a
       // full-tab merge target; the approach-half split killed the ambiguity.)
-      const geometry = geometryFor([191, 191, 191], 0);
+      const geometry = geometryFor([191, 191, 191], 0, null);
       const merged = resolveStripDragState({
         geometry,
         contentOriginX: ORIGIN,
@@ -358,7 +358,7 @@ describe("header strip drag model", () => {
     });
 
     it("keeps a merge on the approaching half, then reorders past midpoint", () => {
-      const geometry = geometryFor([191, 191, 191], 0);
+      const geometry = geometryFor([191, 191, 191], 0, null);
       const centre = ORIGIN + 191 + 191 / 2;
       const pointerX = pointerForCentre(geometry, centre);
       const merge: StripDragState = {
@@ -390,7 +390,7 @@ describe("header strip drag model", () => {
       // past item-1 (swap), then bring the centre back onto item-1's right
       // half: item-1 now occupies the leading slot, the centre is visibly on
       // it, and the merge must arm - side "right", the approach side.
-      const geometry = geometryFor([100, 100, 100], 0);
+      const geometry = geometryFor([100, 100, 100], 0, null);
       const swapped = resolveStripDragState({
         geometry,
         contentOriginX: ORIGIN,
@@ -439,7 +439,7 @@ describe("header strip drag model", () => {
       // their hand; the zones must follow its centre, wherever it was grabbed.
       const widths = [100, 100, 100];
       const targetCentre = ORIGIN + 50;
-      const centreGrab = geometryFor(widths, 1);
+      const centreGrab = geometryFor(widths, 1, null);
       const edgeGrab: StripDragGeometry = { ...centreGrab, grabOffsetX: 95 };
 
       for (const geometry of [centreGrab, edgeGrab]) {
@@ -472,7 +472,7 @@ describe("header strip drag model", () => {
     it("keeps the merge band reachable rather than shadowed by the swap", () => {
       // The regression this guards: if the swap boundary sat AT the neighbour's
       // centre, the band could never be occupied and merge would be unreachable.
-      const geometry = geometryFor([191, 191, 191], 0);
+      const geometry = geometryFor([191, 191, 191], 0, null);
       const centre = ORIGIN + 191 + 191 / 2;
       const state = resolveStripDragState({
         geometry,
@@ -487,7 +487,7 @@ describe("header strip drag model", () => {
 
   describe("degenerate strips", () => {
     it("cannot reorder a single-tab strip", () => {
-      const geometry = geometryFor([191], 0);
+      const geometry = geometryFor([191], 0, null);
       const indices = sweep(geometry, range(ORIGIN - 300, ORIGIN + 300, 7)).map(
         (state) => state.targetIndex,
       );
@@ -495,7 +495,7 @@ describe("header strip drag model", () => {
     });
 
     it("handles a two-tab strip in both directions", () => {
-      const geometry = geometryFor([191, 191], 0);
+      const geometry = geometryFor([191, 191], 0, null);
       expect(
         sweep(geometry, range(ORIGIN, ORIGIN + 400, 4)).at(-1)?.targetIndex,
       ).toBe(1);
@@ -504,15 +504,18 @@ describe("header strip drag model", () => {
 
   describe("mid-drag strip mutation", () => {
     it("remaps the source by id when neighbours appear", () => {
-      const geometry = geometryFor([191, 191], 1);
-      const grown = remapGeometryToSlots(geometry, slots([191, 191, 191, 191]));
+      const geometry = geometryFor([191, 191], 1, null);
+      const grown = remapGeometryToSlots(
+        geometry,
+        slots([191, 191, 191, 191], null, 0),
+      );
       // `item-1` is still at index 1 here, but the lookup is by id, not index.
       expect(grown?.sourceIndex).toBe(1);
       expect(grown?.slots).toHaveLength(4);
     });
 
     it("returns null when the dragged item is gone", () => {
-      const geometry = geometryFor([191, 191], 1);
+      const geometry = geometryFor([191, 191], 1, null);
       const removed: ReadonlyArray<StripSlot> = [
         {
           itemId: "item-0",
@@ -528,7 +531,7 @@ describe("header strip drag model", () => {
 
   describe("layout reconstruction is checked, not assumed", () => {
     it("reconstructs a contiguous strip exactly", () => {
-      expect(reconstructionErrorPx(slots([191, 191, 191]))).toBe(0);
+      expect(reconstructionErrorPx(slots([191, 191, 191], null, 0))).toBe(0);
     });
 
     it("reconstructs a gapped strip exactly, because advance is measured", () => {
@@ -718,7 +721,7 @@ describe("header strip drag model", () => {
 
   describe("explicit displacement offsets", () => {
     it("is all-zero when the item sits at its own index", () => {
-      const geometry = geometryFor([130, 101, 192], 1);
+      const geometry = geometryFor([130, 101, 192], 1, null);
       const offsets = stripOffsetsFor(geometry, 1);
       expect([...offsets.values()].every((v) => v === 0)).toBe(true);
     });
@@ -726,7 +729,7 @@ describe("header strip drag model", () => {
     it("swaps exactly two tiles by their widths on a one-boundary move", () => {
       // Unequal widths: tile 0 is 130 wide, tile 1 is 101. Moving 0 past 1
       // shifts 1 left by 130 and 0 right by 101 - not by a shared constant.
-      const geometry = geometryFor([130, 101, 192], 0);
+      const geometry = geometryFor([130, 101, 192], 0, null);
       const offsets = stripOffsetsFor(geometry, 1);
       expect(offsets.get("item-1")).toBe(-130);
       expect(offsets.get("item-0")).toBe(101);
@@ -734,13 +737,13 @@ describe("header strip drag model", () => {
     });
 
     it("keeps the origin placeholder when the tile has left the strip", () => {
-      const geometry = geometryFor([130, 101, 192], 0);
+      const geometry = geometryFor([130, 101, 192], 0, null);
       const offsets = stripOffsetsFor(geometry, null);
       expect(offsets.size).toBe(0);
     });
 
     it("does not displace either side of a retained origin placeholder", () => {
-      const geometry = geometryFor([130, 101, 192], 1);
+      const geometry = geometryFor([130, 101, 192], 1, null);
       const offsets = stripOffsetsFor(geometry, null);
       expect(offsets.size).toBe(0);
     });

@@ -231,6 +231,10 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
+  getChatSessionRegistry: () => ({
+    listHandles: () => [],
+    subscribe: () => () => undefined,
+  }),
   useExistingChatSessionHandle: () => null,
   useExistingChatSessionFatalClose: (_epicId: string, chatId: string) => {
     const code = testState.fatalCloseCodeByChatId.get(chatId);

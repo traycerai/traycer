@@ -5,7 +5,7 @@ import {
   getEmptyShellDropId,
   getEpicCanvasDropPreview,
   getLeftPanelGroupDropPreview,
-  getLeftPanelRailDropPositionFromPoint,
+  getLeftPanelRailDropPositionOnAxis,
   getSidebarReparentPanelDropId,
   getSidebarReparentRowDropId,
   readEpicCanvasDragSourceData,
@@ -401,11 +401,26 @@ describe("epic canvas dnd-kit data guards", () => {
         kind: "left-panel-rail-item",
         viewTabId: "tab-a",
         panelId: "artifacts",
+        orientation: "vertical",
       }),
     ).toEqual({
       kind: "left-panel-rail-item",
       viewTabId: "tab-a",
       panelId: "artifacts",
+      orientation: "vertical",
+    });
+    expect(
+      readEpicCanvasDropTargetData({
+        kind: "left-panel-rail-item",
+        viewTabId: "tab-a",
+        panelId: "artifacts",
+        orientation: "horizontal",
+      }),
+    ).toEqual({
+      kind: "left-panel-rail-item",
+      viewTabId: "tab-a",
+      panelId: "artifacts",
+      orientation: "horizontal",
     });
     expect(
       readEpicCanvasDropTargetData({
@@ -586,6 +601,23 @@ describe("epic canvas dnd-kit data guards", () => {
         panelId: "source-control",
       }),
     ).toBeNull();
+    // No orientation is no axis to band the drop along, so the target is
+    // unusable rather than silently vertical.
+    expect(
+      readEpicCanvasDropTargetData({
+        kind: "left-panel-rail-item",
+        viewTabId: "tab-a",
+        panelId: "artifacts",
+      }),
+    ).toBeNull();
+    expect(
+      readEpicCanvasDropTargetData({
+        kind: "left-panel-rail-item",
+        viewTabId: "tab-a",
+        panelId: "artifacts",
+        orientation: "sideways",
+      }),
+    ).toBeNull();
     expect(
       readEpicCanvasDropTargetData({
         kind: "left-panel-group",
@@ -601,7 +633,10 @@ describe("epic canvas dnd-kit data guards", () => {
   });
 });
 
-describe("getLeftPanelRailDropPositionFromPoint", () => {
+describe("getLeftPanelRailDropPositionOnAxis", () => {
+  // Width (36) and height (30) deliberately differ, so a call site that reads
+  // the wrong extent for its axis lands in a different band instead of
+  // silently agreeing.
   const rect = {
     left: 0,
     top: 10,
@@ -609,22 +644,43 @@ describe("getLeftPanelRailDropPositionFromPoint", () => {
     height: 30,
   };
 
-  it("uses top and bottom bands for reorder positions", () => {
-    expect(getLeftPanelRailDropPositionFromPoint({ x: 10, y: 11 }, rect)).toBe(
-      "before",
-    );
-    expect(getLeftPanelRailDropPositionFromPoint({ x: 10, y: 39 }, rect)).toBe(
-      "after",
-    );
+  it("bands the x axis across the rect's WIDTH, not its height", () => {
+    // 30% of the 36px width is 10.8, but 30% of the 30px height is only 9 -
+    // offset 10 clears the height threshold already, so this only reads
+    // "before" when the width is what gets consulted.
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, rect, "x"),
+    ).toBe("before");
+    // 70% of the width is 25.2, 70% of the height is 21 - offset 23 clears
+    // the height threshold but not the width one, so reading height for x
+    // would answer "after" here instead of "combine".
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 23, y: 25 }, rect, "x"),
+    ).toBe("combine");
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 30, y: 25 }, rect, "x"),
+    ).toBe("after");
   });
 
-  it("uses the middle band for combine", () => {
-    expect(getLeftPanelRailDropPositionFromPoint({ x: 10, y: 25 }, rect)).toBe(
-      "combine",
-    );
-    expect(getLeftPanelRailDropPositionFromPoint({ x: 10, y: 25 }, null)).toBe(
-      "combine",
-    );
+  it("bands the y axis across the rect's HEIGHT", () => {
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 11 }, rect, "y"),
+    ).toBe("before");
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, rect, "y"),
+    ).toBe("combine");
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 39 }, rect, "y"),
+    ).toBe("after");
+  });
+
+  it("returns combine for a null rect on both axes", () => {
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, null, "x"),
+    ).toBe("combine");
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, null, "y"),
+    ).toBe("combine");
   });
 });
 
@@ -774,6 +830,7 @@ describe("getEpicCanvasDropPreview", () => {
         {
           kind: "left-panel-rail-item",
           panelId: "artifacts",
+          orientation: "vertical",
         },
         rect,
         { x: 20, y: 50 },
@@ -807,6 +864,59 @@ describe("getEpicCanvasDropPreview", () => {
         false,
       ),
     ).toBeNull();
+  });
+
+  // A rail slot is square, so which axis the bands run along is decided by the
+  // target's orientation and nothing else - the same point resolves
+  // differently on the two rails.
+  const railSlot = { left: 0, top: 0, width: 36, height: 36 };
+  /** Leading band, middle band, trailing band of the 36px slot. */
+  const bandOffsets = [4, 18, 32];
+  /** Offsets across the axis NOT being read - none of them may matter. */
+  const offAxisOffsets = [2, 18, 34];
+
+  it("bands a horizontal rail item across its width, at any pointer height", () => {
+    for (const y of offAxisOffsets) {
+      const positions = bandOffsets.map((x) =>
+        getEpicCanvasDropPreview(
+          {
+            kind: "left-panel-rail-item",
+            panelId: "artifacts",
+            orientation: "horizontal",
+          },
+          railSlot,
+          { x, y },
+          false,
+        ),
+      );
+      expect(positions).toEqual([
+        { kind: "left-panel-rail", panelId: "artifacts", position: "before" },
+        { kind: "left-panel-rail", panelId: "artifacts", position: "combine" },
+        { kind: "left-panel-rail", panelId: "artifacts", position: "after" },
+      ]);
+    }
+  });
+
+  it("keeps banding a vertical rail item down its height", () => {
+    for (const x of offAxisOffsets) {
+      const positions = bandOffsets.map((y) =>
+        getEpicCanvasDropPreview(
+          {
+            kind: "left-panel-rail-item",
+            panelId: "artifacts",
+            orientation: "vertical",
+          },
+          railSlot,
+          { x, y },
+          false,
+        ),
+      );
+      expect(positions).toEqual([
+        { kind: "left-panel-rail", panelId: "artifacts", position: "before" },
+        { kind: "left-panel-rail", panelId: "artifacts", position: "combine" },
+        { kind: "left-panel-rail", panelId: "artifacts", position: "after" },
+      ]);
+    }
   });
 
   it("resolves grouped left panel insertion by nearest section boundary", () => {

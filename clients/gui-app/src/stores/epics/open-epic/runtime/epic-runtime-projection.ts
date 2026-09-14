@@ -153,6 +153,31 @@ export interface EpicRecordsProjection extends EpicProjectedSlices {
    */
   readonly chatIngestSeq: number;
   readonly tuiAgentIngestSeq: number;
+  /**
+   * The record tables' INCOMPLETE-APPLY counters, projected alongside the
+   * ingest ones and from the same `publish` helper.
+   *
+   * A revision-gated list read can answer `unchanged`, which re-serves no rows
+   * at all - so the client may only claim to hold what an answer described when
+   * it actually took every row that answer carried. These counters move when it
+   * did not (the request-time fence held a row back), and the poll's stamp
+   * holder drops any stamp it captured before the move, which makes the next
+   * read a full snapshot. See `RecordTable.snapshotIncompleteSeq`.
+   */
+  readonly chatSnapshotIncompleteSeq: number;
+  readonly tuiAgentSnapshotIncompleteSeq: number;
+  /**
+   * The DELTA half of the same rule: a push delta introduced a row this table
+   * cannot fully state (a chat with no home, an agent with no session facet).
+   *
+   * Projected separately from the snapshot counters because the repair is
+   * different - a delta has no dispatch to bind a stamp to, so a move here is
+   * treated as a revision gap (drop the stamp, re-read once) rather than as a
+   * reason to refuse a dispatch-bound one. See
+   * `RecordTable.deltaIncompleteSeq`.
+   */
+  readonly chatDeltaIncompleteSeq: number;
+  readonly tuiAgentDeltaIncompleteSeq: number;
   /** Chats the record plane RETRACTED while this session was open, and why. */
   readonly chatRetractions: Readonly<Record<string, ChatRecordRemovalReason>>;
   /** The host's registry-backed terminal-agent rows (`epic.listTuiAgents`). */
@@ -194,6 +219,10 @@ export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
   chatRecordListAuthoritative: false,
   chatIngestSeq: 0,
   tuiAgentIngestSeq: 0,
+  chatSnapshotIncompleteSeq: 0,
+  chatDeltaIncompleteSeq: 0,
+  tuiAgentDeltaIncompleteSeq: 0,
+  tuiAgentSnapshotIncompleteSeq: 0,
   chatRetractions: EMPTY_CHAT_RETRACTIONS,
   tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
   // The same shared "nothing retracted" identity as the chats': one frozen

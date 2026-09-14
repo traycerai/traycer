@@ -1,7 +1,8 @@
 import { useCallback, useMemo } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { LANDING_ROUTE } from "@/lib/routes";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { homeTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
 import { tabActivationHistory, tabRefKey } from "@/stores/tabs/layout";
 import { pickNeighborAfterRemovingTabs } from "@/stores/tabs/neighbor";
 import { readTabStripLayout } from "@/stores/tabs/store";
@@ -50,6 +51,13 @@ export function useNeighborTabPicker(): NeighborTabPicker {
     (captured: CapturedNeighbor) => {
       if (!captured.wasActive) return;
       if (captured.neighbor === null) {
+        // Closing the last tab lands on Home rather than on the landing route:
+        // `/` redirects there anyway once Home is on, and going straight to the
+        // intent keeps the activation and the URL in one commit.
+        if (isHomeTabEnabled()) {
+          navigateToTabIntent(navigate, homeTabIntent(), undefined);
+          return;
+        }
         void navigate(LANDING_ROUTE);
         return;
       }

@@ -21,6 +21,7 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 
@@ -106,6 +107,7 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
  * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
@@ -232,6 +234,61 @@ function wrapper(props: { readonly children: ReactNode }): ReactNode {
   );
 }
 
+const LOCAL_HOST_ID = "chat-registry-local-host";
+
+/**
+ * This machine's host as the directory lists it: dialable at `websocketUrl`,
+ * or, with a null URL, the booting twin `HostDirectoryService.snapshot()`
+ * substitutes while the local snapshot is absent.
+ */
+function localEntry(
+  websocketUrl: string | null,
+  version: string,
+): HostDirectoryEntry {
+  return {
+    hostId: LOCAL_HOST_ID,
+    label: "This Mac",
+    kind: "local",
+    websocketUrl,
+    version,
+    transportDialability: websocketUrl === null ? "not-dialable" : "dialable",
+  };
+}
+
+/** Publishes one host's lease the way the selection bridge does. */
+function publishLease(lease: HostLeaseSnapshot): void {
+  useSelectionAuthorityStore.getState().applyKernelSnapshot({
+    attached: true,
+    preferredHostId: lease.hostId,
+    targetHostId: lease.hostId,
+    effectiveHostId: lease.hostId,
+    leases: [lease],
+    selectionRevision: 1,
+  });
+}
+
+function signIn(): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: {
+      userId: CHAT_PROFILE_USER_ID,
+      userName: CHAT_PROFILE_USER_ID,
+      email: `${CHAT_PROFILE_USER_ID}@example.com`,
+    },
+  });
+}
+
+/**
+ * Flushes effects and microtasks before a survival assertion: a release is
+ * asynchronous, so a synchronous read would stay green even if a regression
+ * released the handle one microtask after the rerender.
+ */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 describe("useChatSessionHandle owner identity (R-1)", () => {
   afterEach(() => {
     cleanup();
@@ -290,6 +347,38 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     expect(tracked.records()[0].closeCount).toBe(1);
     expect(tracked.records()[1].closeCount).toBe(0);
   });
+
+  // G1's control: the scope dropped the websocket URL, but only for a LOCAL
+  // host. A remote host's relay attach URL is part of its owner identity, so
+  // a move there still rebuilds, exactly as the public-key rotation above does.
+  it("still rebuilds when a remote host's relay attach URL changes", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-relay-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const firstHandle = result.current;
+
+    hostEntryRef.value = {
+      ...remoteTarget("pubkey-a"),
+      websocketUrl: "wss://relay-2.test/attach",
+    };
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current).not.toBe(firstHandle);
+    });
+    expect(tracked.records()).toHaveLength(2);
+    expect(tracked.records()[0].closeCount).toBe(1);
+  });
 });
 
 /**
@@ -298,7 +387,7 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
  * The isolated tests all passed while this was broken, which is the point of
  * putting it here: the mapper collapsed `unknown` into a non-dialable entry,
  * `hostTransportKey` refused anything non-dialable, THIS registry released the
- * handle on the changed key, and `chat-tile` rendered `ChatTileLoading`
+ * handle on the changed key, and `chat-tile` rendered its loading state
  * forever — while `useHostReachability` one layer up had just decided the same
  * host was reachable. Every layer was individually defensible.
  *
@@ -317,6 +406,7 @@ describe("a live chat session survives a degraded liveness read", () => {
     openTransportRef.fn = null;
     readySessionHosts.value = new Set();
     useAuthStore.setState({ profile: null, status: "signed-out" });
+    useSelectionAuthorityStore.getState().reset();
   });
 
   function mappedEntry(connectivity: HostConnectivity): HostDirectoryEntry {
@@ -467,6 +557,226 @@ describe("a live chat session survives a degraded liveness read", () => {
     expect(tracked.records()).toHaveLength(1);
     expect(tracked.records()[0].closeCount).toBe(0);
   });
+
+  // G1 for a remote host, which has no booting shape: what changes when it
+  // restarts is the cloud's verdict, and a confirmed `offline` nulls the
+  // transport key. The lease is what knows the restart was announced. The
+  // control is the test above that still releases on the same verdict with no
+  // lease vouching.
+  it("keeps the handle through a confirmed offline while the lease says the restart is expected, and the same store revives", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-restart-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const liveHandle = result.current;
+
+    // The host announced its restart, then went down.
+    act(() => {
+      publishLease({
+        hostId: REMOTE_HOST_ID,
+        status: "restarting-expected",
+        dead: null,
+      });
+    });
+    hostEntryRef.value = mappedEntry("offline");
+    rerender();
+    await settle();
+    expect(result.current).toBe(liveHandle);
+
+    // And it is back.
+    act(() => {
+      publishLease({ hostId: REMOTE_HOST_ID, status: "ready", dead: null });
+    });
+    hostEntryRef.value = mappedEntry("connectable");
+    rerender();
+    await settle();
+    expect(result.current).toBe(liveHandle);
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
+
+  it("releases the held handle once the lease stops vouching and the host is still offline", async () => {
+    signIn();
+    openTransportRef.fn = createTrackedOpenTransport().openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-restart-2", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    act(() => {
+      publishLease({
+        hostId: REMOTE_HOST_ID,
+        status: "restarting-expected",
+        dead: null,
+      });
+    });
+    hostEntryRef.value = mappedEntry("offline");
+    rerender();
+    await settle();
+    expect(result.current).not.toBeNull();
+
+    // The episode ran out with the host still down.
+    act(() => {
+      publishLease({
+        hostId: REMOTE_HOST_ID,
+        status: "dead",
+        dead: { reason: "offline" },
+      });
+    });
+    await waitFor(() => {
+      expect(result.current).toBeNull();
+    });
+  });
+});
+
+/**
+ * G1: a local host restart keeps the chat's store. The scope is the chat's
+ * identity (host id, kind and owner identity), so neither the websocket URL
+ * nor the host version is part of it, and the handle is held while the host is
+ * coming back. Before this, every restart disposed the store and its
+ * transcript: the scope moved with the port, and the booting entry's null URL
+ * released the handle outright.
+ */
+describe("useChatSessionHandle through a local host restart (G1)", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllChatSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  const FIRST_URL = "ws://127.0.0.1:55300/rpc";
+  const RESPAWN_URL = "ws://127.0.0.1:61234/rpc";
+
+  it.each([
+    ["the websocket URL", localEntry(RESPAWN_URL, "1.0.0")],
+    ["the host version", localEntry(FIRST_URL, "1.1.0")],
+  ] as const)(
+    "keeps the same store when %s changes, and never reopens the transport",
+    async (_label, changed) => {
+      signIn();
+      const tracked = createTrackedOpenTransport();
+      openTransportRef.fn = tracked.openTransport;
+      globalClientRef.value = buildGlobalClient();
+      hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+
+      const { result, rerender } = renderHook(
+        () => useChatSessionHandle("chat-local-1", LOCAL_HOST_ID, true),
+        { wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current).not.toBeNull();
+      });
+      const liveHandle = result.current;
+
+      hostEntryRef.value = changed;
+      rerender();
+      await settle();
+
+      // The same handle is the same store, so the same transcript. The owned
+      // transport stays open and follows the endpoint itself: its re-dial on
+      // an endpoint move is pinned in `durable-stream-transport.test.ts`.
+      expect(result.current).toBe(liveHandle);
+      expect(tracked.records()).toHaveLength(1);
+      expect(tracked.records()[0].closeCount).toBe(0);
+    },
+  );
+
+  it("holds the handle while the host boots, and the URL returning revives the same store", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-boot-1", LOCAL_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const liveHandle = result.current;
+
+    // The restart: the directory swaps in the booting twin.
+    hostEntryRef.value = localEntry(null, "1.0.0");
+    rerender();
+    await settle();
+    expect(result.current).toBe(liveHandle);
+
+    // The host publishes again, on a new port and a new build.
+    hostEntryRef.value = localEntry(RESPAWN_URL, "1.1.0");
+    rerender();
+    await settle();
+    expect(result.current).toBe(liveHandle);
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
+
+  const losses: ReadonlyArray<
+    readonly [string, (client: HostClient<HostRpcRegistry>) => void]
+  > = [
+    [
+      "the request context is cleared",
+      (client) => {
+        client.setRequestContext(null);
+      },
+    ],
+    [
+      "the directory entry goes missing",
+      () => {
+        hostEntryRef.value = null;
+      },
+    ],
+  ];
+
+  it.each(losses)(
+    "still releases the booting host's handle when %s",
+    async (_label, loseIt) => {
+      signIn();
+      openTransportRef.fn = createTrackedOpenTransport().openTransport;
+      const globalClient = buildGlobalClient();
+      globalClientRef.value = globalClient;
+      hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+
+      const { result, rerender } = renderHook(
+        () => useChatSessionHandle("chat-boot-lost-1", LOCAL_HOST_ID, true),
+        { wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current).not.toBeNull();
+      });
+      hostEntryRef.value = localEntry(null, "1.0.0");
+      rerender();
+      await settle();
+      // Held by the booting shape, so the release below is the loss's doing.
+      expect(result.current).not.toBeNull();
+
+      loseIt(globalClient);
+      rerender();
+      await waitFor(() => {
+        expect(result.current).toBeNull();
+      });
+    },
+  );
 });
 
 describe("useChatSessionHandle retryFromUser silence gate", () => {

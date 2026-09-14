@@ -1,8 +1,11 @@
 import "../../../../__tests__/test-browser-apis";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { TileSelectAllBridge } from "@/components/epic-canvas/tile-select-all-bridge";
-import { selectAllInActiveTile } from "@/lib/commands/tile-select-all";
+import {
+  registerTileSelectionRoot,
+  selectAllInActiveTile,
+} from "@/lib/commands/tile-select-all";
 import { createUnavailableTileFindAdapter } from "@/stores/tile-find";
 import { useTileFindStore } from "@/stores/tile-find/tile-find-store";
 import type { TileFindOwnerBlockerReason } from "@/stores/tile-find/types";
@@ -77,6 +80,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useTileFindStore.getState().resetForTests();
+  vi.restoreAllMocks();
   document.body.innerHTML = "";
 });
 
@@ -120,6 +124,62 @@ describe("selectAllInActiveTile", () => {
     makeOwner("inst-rootless");
 
     expect(selectAllInActiveTile()).toBe(false);
+  });
+
+  it("selects registered shadow content through the outer declaration marker", () => {
+    makeOwner(TILE_A);
+    const declaration = document.querySelector<HTMLElement>(
+      `[data-tile-instance-id="${TILE_A}"] [data-selection-root]`,
+    );
+    if (declaration === null) throw new Error("missing selection declaration");
+    declaration.replaceChildren();
+    const shadowHost = document.createElement("div");
+    declaration.append(shadowHost);
+    const content = document.createElement("div");
+    content.textContent = "SHADOW FILE BODY";
+    shadowHost.attachShadow({ mode: "open" }).append(content);
+    const unregister = registerTileSelectionRoot(declaration, content);
+    const selectedRanges: Range[] = [];
+    const selection = window.getSelection();
+    if (selection === null) throw new Error("missing document selection");
+    vi.spyOn(selection, "addRange").mockImplementation((range) => {
+      selectedRanges.push(range);
+    });
+
+    expect(selectAllInActiveTile()).toBe(true);
+    expect(selectedRanges.at(-1)?.toString()).toBe("SHADOW FILE BODY");
+
+    unregister();
+    expect(selectAllInActiveTile()).toBe(true);
+    expect(selectedRanges.at(-1)?.toString()).toBe("");
+  });
+
+  it("cleans a registration without removing a replacement registration", () => {
+    makeOwner(TILE_A);
+    const declaration = document.querySelector<HTMLElement>(
+      `[data-tile-instance-id="${TILE_A}"] [data-selection-root]`,
+    );
+    if (declaration === null) throw new Error("missing selection declaration");
+    const firstContent = document.createElement("div");
+    firstContent.textContent = "FIRST CONTENT";
+    const secondContent = document.createElement("div");
+    secondContent.textContent = "SECOND CONTENT";
+    const unregisterFirst = registerTileSelectionRoot(
+      declaration,
+      firstContent,
+    );
+    registerTileSelectionRoot(declaration, secondContent);
+    const selectedRanges: Range[] = [];
+    const selection = window.getSelection();
+    if (selection === null) throw new Error("missing document selection");
+    vi.spyOn(selection, "addRange").mockImplementation((range) => {
+      selectedRanges.push(range);
+    });
+
+    unregisterFirst();
+
+    expect(selectAllInActiveTile()).toBe(true);
+    expect(selectedRanges.at(-1)?.toString()).toBe("SECOND CONTENT");
   });
 });
 

@@ -109,17 +109,65 @@ const artifactKindSchema = getRecordSchema(
 // prompt, and whatever else that channel grows). It is deliberately
 // metadata-less; the other three name a specific provider behaviour and each
 // has a `providerNoticeNormalizedMetadataSchema` variant.
+// `fallback_applied` / `fallback_returned` / `fallback_return_blocked` /
+// `fallback_wait_resumed` / `fallback_settled` are the provider-fallback
+// attribution arms: the durable transcript record that the host moved this chat
+// onto another profile/tuple after a failed turn, that it moved the chat BACK
+// to its preferred tuple, that a return ended with the chat staying where it
+// was, that a turn parked on a rate-limit reset has resumed, and that a
+// traversal ENDED - what was tried, why it stopped, and where the chat was
+// left. Metadata-less like `harness_message` - their facts (rung, from -> to
+// tuple, reason, resetsAt, settlement code/cause/hops) are ordinary `details`
+// label/value pairs, which need no `providerNoticeNormalizedMetadataSchema`
+// variant and therefore no growth of that discriminated union.
+//
+// The three MOVE arms are three kinds rather than one because they are three
+// different claims about the chat: it left its preferred tuple, it came back to
+// it, or it tried to come back and did not. They shared `fallback_applied`
+// until the audit found that a reader given only the kind could not tell a hop
+// from a switch-back - and a blocked return, where nothing moved at all, was
+// being announced under a kind whose name asserts that something did. The host
+// has always distinguished them (`FallbackOutcomeRecord["kind"]`), but that
+// vocabulary rides the separate last-outcome SLOT, which holds only the most
+// recent one; the transcript rows themselves carried no discriminator.
+//
+// `fallback_settled` exists because the settlement receipt reached only the
+// NOTIFICATION: the transcript's only settlement row was the queue-paused
+// notice, which is appended solely when items were actually held and carries no
+// cause. A settle with an empty queue therefore left the chat with nothing but
+// an `info` terminal, and a client had no rendered account of a traversal that
+// had walked its whole ladder.
 export const providerNoticeKindSchema = z.enum([
   "model_rerouted",
   "model_verification",
   "safety_buffering",
   "harness_message",
+  "fallback_applied",
+  "fallback_returned",
+  "fallback_return_blocked",
+  "fallback_wait_resumed",
+  "fallback_settled",
 ]);
 export type ProviderNoticeKind = z.infer<typeof providerNoticeKindSchema>;
 
 /**
- * The notice kinds as every RELEASED line shipped them - `host-v1.2.0`, which
- * carries epic record `2.0` and `chat.subscribe@1.0`-`1.6`.
+ * The notice kinds `host-v1.2.0` shipped - epic record `2.0` and
+ * `chat.subscribe@1.0`-`1.6`. `host-v1.3.0` has since shipped `1.7` and `1.8`
+ * (the baseline fixture records them), which admit `harness_message` as well;
+ * those two and the frozen `1.9` bind `providerNoticeKindSchemaPreFallback`
+ * below, and this list stays the freeze at or below `1.6`. Neither list names a
+ * fallback kind, which is what keeps every fallback kind off every line below
+ * `1.10`. The host half of that guarantee is `chat-frame-projection.ts`, and it
+ * selects per NEGOTIATED MINOR rather than stripping against one list:
+ * `providerNoticeKindsForSchemaVersion` answers `null` for a peer that already
+ * accepts fallback notices (`1.10`+, nothing to strip),
+ * `providerNoticeKindSchemaPreFallback`'s options for `1.7`-`1.9`, and THIS
+ * list at or below `1.6` - see the note there. What every branch has in common
+ * is the shape that matters: each reads a frozen enum's `.options` and strips
+ * whatever falls OUTSIDE it, rather than naming kinds one at a time. That is
+ * why `fallback_settled` needed no projection change to be safe - a value added
+ * to the LIVE enum is automatically outside every frozen list, and so outside
+ * every branch.
  *
  * An enum VALUE addition is the one growth a frozen `z.object` copy does not
  * absorb on its own: a released peer strips an unknown KEY, but strict-decodes
@@ -136,6 +184,37 @@ export const providerNoticeKindSchemaPreHarnessMessage = z.enum([
   "model_verification",
   "safety_buffering",
 ]);
+
+/**
+ * The notice kinds `chat.subscribe@1.7`, `@1.8` and `@1.9` ship - everything
+ * before the provider-fallback attribution arms.
+ *
+ * `1.7` and `1.8` shipped in `host-v1.3.0` and `1.9` in the `v1.3.x` staging
+ * builds, so each has a peer population, and an enum VALUE addition is the
+ * growth their frozen `z.object` copies cannot absorb on their own - same as
+ * `providerNoticeKindSchemaPreHarnessMessage` above. `1.10` is the only line
+ * that admits any fallback attribution kind - `fallback_applied`,
+ * `fallback_returned`, `fallback_return_blocked`, `fallback_wait_resumed` or
+ * `fallback_settled`.
+ *
+ * Derived with `.extract()` off the live enum rather than re-spelled, so this
+ * list can only ever name kinds the live enum still has. Note what that does
+ * NOT catch: adding a value to the live enum leaves this extract compiling
+ * unchanged, which is the CORRECT default (a new kind is born unreleased and
+ * must stay off these lines) but means the freeze story for a new kind is a
+ * decision to make, not a compile error to wait for. `fallback_settled` was
+ * added under exactly that rule and deliberately left out here, and so were
+ * `fallback_returned` / `fallback_return_blocked` when the three move arms were
+ * split apart.
+ * Do NOT add new kinds.
+ */
+export const providerNoticeKindSchemaPreFallback =
+  providerNoticeKindSchema.extract([
+    "model_rerouted",
+    "model_verification",
+    "safety_buffering",
+    "harness_message",
+  ]);
 
 export const providerNoticeToneSchema = z.enum(["info", "warning"]);
 export type ProviderNoticeTone = z.infer<typeof providerNoticeToneSchema>;
@@ -793,14 +872,169 @@ export const planBlockSchema = z.object({
 });
 export type PlanBlock = z.infer<typeof planBlockSchema>;
 
+/**
+ * The stopped-reason taxonomy a typed failure payload names.
+ *
+ * Re-declared here rather than imported: this is the persistence layer and the
+ * canonical list lives in the host layer
+ * (`HOST_NOTIFICATION_STOPPED_REASONS`, `host/notifications/payloads.ts`), and
+ * the dependency runs host -> persistence. Same reason `taskTodoItemStatusSchema`
+ * above re-declares `RuntimeTodoStatus`. The two lists are held together at
+ * COMPILE time, not by review: `runtimeFailureReason()`
+ * (`host/agent/gui/agent-runtime.ts`) proves host ⊆ persisted and
+ * `fallbackReasonLabel()` (`host/notifications/presentation.ts`) proves
+ * persisted ⊆ host, so adding a reason on either side without the other is a
+ * type error.
+ *
+ * Growing this list is an enum VALUE addition on a persisted+streamed schema -
+ * the one growth a frozen `z.object` copy does not absorb (see
+ * `providerNoticeKindSchemaPreHarnessMessage` above). A new reason therefore
+ * needs the same treatment: a hand-frozen pre-image for every released line and
+ * an emission gate, not just an entry here.
+ */
+export const AGENT_FAILURE_REASONS = [
+  "auth",
+  "rate_limit",
+  "billing",
+  "model_unavailable",
+  "provider_unavailable",
+  "provider_connection_failed",
+  "context_exhausted",
+  "request_rejected",
+  "turn_start_timeout",
+  "missing_terminal_event",
+  "background_work_failed",
+  // EXEMPT from the rule stated directly above, and only because it ships in
+  // the SAME release as `failure` itself. The rule binds a member added to a
+  // list a released peer parses; no released peer parses this one yet. `failure`
+  // joined the error block at `chat.subscribe@1.10`, every released 1.0-1.9 line
+  // binds `errorBlockSchemaPreFallback` / `errorEventSchemaPreFallback`, and
+  // those are hand-written `z.object`s that omit `failure` outright rather than
+  // aliases over the live schema - so there is no shipped reader to hand a
+  // reason it has never heard of. Do NOT copy this exemption for the next
+  // member: once 1.10 is released, that one needs the frozen pre-image and the
+  // emission gate the rule asks for.
+  "session_budget",
+] as const;
+export const agentFailureReasonSchema = z.enum(AGENT_FAILURE_REASONS);
+export type AgentFailureReason = z.infer<typeof agentFailureReasonSchema>;
+
+/**
+ * Structured description of WHY a turn died, stamped once by the host at emit
+ * time and carried unchanged from the runtime `error` event through the
+ * persisted error block and the synthesized `turn.interrupted`.
+ *
+ * Everything a consumer would otherwise have to re-derive from `message` /
+ * `code` prose lives here instead. The rules that make it trustworthy:
+ *
+ *   - `reason` is derived ONCE, at the emitter, via
+ *     `deriveHostNotificationStoppedReason`. Nothing downstream re-derives it.
+ *   - `resetsAt` is present ONLY together with `resetsAtSource`, and only for a
+ *     boundary the PROVIDER reported or an authoritative PROBE read. A gauge
+ *     estimate (a synthesized `now + window duration`) never reaches the wire -
+ *     it exists only to age out a host-side hard-limit mark. A consumer may
+ *     therefore render `resetsAt` as a time without qualifying it. The
+ *     refinement below is what makes that safe to rely on rather than a habit
+ *     the emitters happen to keep.
+ *   - `scope` names the limiting window that SET `resetsAt` (e.g.
+ *     `"five_hour"`, a model-scoped bucket's display name, a codex limit id) -
+ *     free text, because the window vocabulary is per provider and is not a
+ *     wire contract.
+ *   - `providerDetail` is bounded, charset-safe host-built text
+ *     (`describeErrorBody` discipline), never a raw provider body.
+ */
+export const agentFailureSchema = z
+  .object({
+    reason: agentFailureReasonSchema,
+    resetsAt: z.number().optional(),
+    resetsAtSource: z.enum(["provider", "probe"]).optional(),
+    scope: z.string().optional(),
+    providerDetail: z.string().optional(),
+  })
+  .superRefine((failure, ctx) => {
+    // The pair is what makes the `resetsAt` bullet above true for a CONSUMER,
+    // and a consumer is already spending it: the error card reads
+    // `attempt.failure.resetsAt` straight into a clock time
+    // (`fallback-manual-rungs.tsx`) and never looks at `resetsAtSource`. That
+    // is correct only while the source is what certifies the boundary - a
+    // `resetsAt` arriving alone renders as a verified time with nothing behind
+    // it, which is exactly the gauge estimate this payload exists to keep off
+    // the wire.
+    //
+    // Refused in both directions, not only the dangerous one: a
+    // `resetsAtSource` with no boundary names who verified a time that is not
+    // there, which no reader can act on either.
+    //
+    // Deliberately NOT extended to `scope`. It is documented as free text
+    // labelling the window, not as part of the boundary's proof, and the
+    // vocabulary is per provider - binding it here would hold emitters to a
+    // rule this contract has never stated.
+    //
+    // Narrowing a PERSISTED schema is normally breaking (see
+    // `src/persistence/COMPATIBILITY.md`); it is free here because nothing has
+    // shipped. `failure` joined the error block for `chat.subscribe@1.10`, and
+    // every released `1.0`-`1.9` line binds `errorBlockSchemaPreFallback` /
+    // `errorEventSchemaPreFallback` instead, so no shipped peer reaches this
+    // schema and no released host has ever written the key to disk. The frozen
+    // JSON-Schema surfaces do not move either - a Zod refinement has no
+    // JSON-Schema form, which is why `providerNoticeMetadataSchema`'s own
+    // `superRefine` leaves no trace in `epic-schema-surface.ts`. After a
+    // release pins the record, the same edit needs a new major.
+    if (
+      (failure.resetsAt === undefined) ===
+      (failure.resetsAtSource === undefined)
+    ) {
+      return;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "resetsAt and resetsAtSource must be present together",
+      path: [failure.resetsAt === undefined ? "resetsAt" : "resetsAtSource"],
+    });
+  });
+export type AgentFailure = z.infer<typeof agentFailureSchema>;
+
 export const errorBlockSchema = z.object({
   ...baseBlockFields,
   type: z.literal("error"),
   message: z.string(),
   recoverable: z.boolean(),
   code: z.string().nullable(),
+  // Additive typed description of the failure - see `agentFailureSchema`.
+  // Nullable + defaulted (not `.optional()`) for the same reason
+  // `providerNotice` above is: blocks persisted before this field must parse
+  // cleanly, and every consumer then reads one shape without null-checking the
+  // key's presence as well as its value.
+  //
+  // Tolerance on the PERSISTED side is not permission on the WIRE side: every
+  // `chat.subscribe` minor below `1.10` ships this block inside a snapshot, and
+  // a key the released baseline never carried is a breaking addition on a
+  // host→client slot regardless of how forgiving the decoder is. The frozen
+  // copy below is what those lines bind.
+  failure: agentFailureSchema.nullable().default(null),
 });
 export type ErrorBlock = z.infer<typeof errorBlockSchema>;
+
+/**
+ * Wire-freeze copy of the `error` block from before `failure` existed.
+ *
+ * Bound by every frozen `contentBlockSchema*` union below, which is where the
+ * released `chat.subscribe` lines reach this block through their snapshot's
+ * chat tree. Those unions already list their members explicitly - the gap this
+ * closes is that naming the LIVE `errorBlockSchema` there froze the union
+ * without freezing the member, so the block grew underneath four shipped lines
+ * at once.
+ *
+ * Written out rather than derived, for the reason every pre-image here is: a
+ * copy that tracks the live schema is not a freeze.
+ */
+export const errorBlockSchemaPreFallback = z.object({
+  ...baseBlockFields,
+  type: z.literal("error"),
+  message: z.string(),
+  recoverable: z.boolean(),
+  code: z.string().nullable(),
+});
 
 export const compactionBlockSchema = z.object({
   ...baseBlockFields,
@@ -1650,7 +1884,7 @@ export const contentBlockSchemaPreReasonix = z.discriminatedUnion("type", [
   approvalBlockSchema,
   todoBlockSchema,
   planBlockSchemaPreReasonix,
-  errorBlockSchema,
+  errorBlockSchemaPreFallback,
   compactionBlockSchema,
   autonomousResumeBlockSchema,
   steerBlockSchemaPreReasonix,
@@ -1679,7 +1913,7 @@ export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
   approvalBlockSchema,
   todoBlockSchema,
   planBlockSchemaPreReasonix,
-  errorBlockSchema,
+  errorBlockSchemaPreFallback,
   compactionBlockSchema,
   autonomousResumeBlockSchemaV18,
   steerBlockSchemaPreReasonix,
@@ -1707,11 +1941,73 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
   approvalBlockSchema,
   todoBlockSchema,
   planBlockSchemaPreReasonix,
-  errorBlockSchema,
+  errorBlockSchemaPreFallback,
   compactionBlockSchema,
   autonomousResumeBlockSchemaV18,
   steerBlockSchemaPreReasonix,
   interviewBlockSchemaPreSettlement,
+  artifactOperationBlockSchema,
+]);
+
+// ── Wire-freeze variants (pre-fallback, `chat.subscribe@1.7`-`@1.9`) ────────
+//
+// Those three minors ship the FULL block vocabulary of their day - Reasonix
+// ids, interview settlement, images, the lot - so unlike every freeze above
+// these hold back only the provider-fallback growth of `1.10`: the
+// fallback-attribution notice KINDS (here) and the error block's `failure`
+// (`errorBlockSchemaPreFallback`). `contentBlockSchemaPreFallback` is the
+// frozen `1.9` union; `1.7` and `1.8` reach the same two members through
+// `contentBlockSchemaV18` below, which also holds back `1.9`'s delivery
+// placement. Field-for-field hand copies, not `.extend()` off the live shape,
+// for the reason every freeze in this file is: a future field must not
+// silently leak onto a line that has shipped peers.
+export const providerNoticeMetadataSchemaPreFallback = z
+  .object({
+    harnessId: harnessIdSchema,
+    noticeKind: providerNoticeKindSchemaPreFallback,
+    tone: providerNoticeToneSchema,
+    title: z.string(),
+    message: z.string().nullable(),
+    details: z.array(providerNoticeDetailSchema),
+    metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+  })
+  .superRefine((notice, ctx) => {
+    if (
+      notice.metadata !== null &&
+      notice.noticeKind !== notice.metadata.type
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "noticeKind must match metadata.type",
+        path: ["metadata", "type"],
+      });
+    }
+  });
+
+const textBlockSchemaPreFallback = z.object({
+  ...baseBlockFields,
+  type: z.literal("text"),
+  text: z.string(),
+  providerNotice: providerNoticeMetadataSchemaPreFallback
+    .nullable()
+    .default(null),
+});
+
+export const contentBlockSchemaPreFallback = z.discriminatedUnion("type", [
+  textBlockSchemaPreFallback,
+  reasoningBlockSchema,
+  toolCallBlockSchema,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchema,
+  errorBlockSchemaPreFallback,
+  compactionBlockSchema,
+  autonomousResumeBlockSchema,
+  steerBlockSchema,
+  interviewBlockSchema,
   artifactOperationBlockSchema,
 ]);
 
@@ -1730,9 +2026,16 @@ export type PersistedContentBlock =
   | Exclude<ContentBlock, AutonomousResumeBlock>
   | PersistedAutonomousResumeBlock;
 
-/** chat.subscribe 1.8 checkpoint; 1.9 adds notification placement. */
+/**
+ * chat.subscribe 1.8 checkpoint, also bound by 1.7's chat tree. 1.9 adds
+ * notification placement, and 1.10 adds the fallback notice kinds and the error
+ * block's `failure` - so `text` and `error` here are the pre-fallback copies,
+ * not the live members. Every other member still binds its live schema: a field
+ * added to one of them later reaches this line too, so freeze the member here
+ * before adding it.
+ */
 export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
-  textBlockSchema,
+  textBlockSchemaPreFallback,
   reasoningBlockSchema,
   toolCallBlockSchema,
   fileChangeBlockSchema,
@@ -1741,7 +2044,7 @@ export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
   approvalBlockSchema,
   todoBlockSchema,
   planBlockSchema,
-  errorBlockSchema,
+  errorBlockSchemaPreFallback,
   compactionBlockSchema,
   autonomousResumeBlockSchemaV18,
   steerBlockSchema,

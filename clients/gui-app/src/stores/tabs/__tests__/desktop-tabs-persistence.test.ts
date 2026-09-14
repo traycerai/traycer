@@ -23,9 +23,11 @@ import {
 } from "@/stores/tabs/layout";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { getTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
+import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 
 const CAPABILITIES = {
   schemaVersion: 2,
@@ -89,7 +91,55 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
+  useSettingsStore.setState({ homeTabEnabled: false });
   tabCommandCoordinator.resetReconciliationForTesting();
+}
+
+/**
+ * A snapshot with two epic tabs whose layout selection is Home's - a null
+ * `activeItemId` over a populated strip, which only means Home while the flag
+ * is on and means "unset" while it is off.
+ */
+function homeSelectedSnapshot(
+  tabA: string,
+  tabB: string,
+  activeRoute: string,
+): DesktopPerWindowSnapshot {
+  return {
+    ...emptySnapshot(),
+    revision: 11,
+    epicTabs: [
+      { id: tabA, epicId: "epic-a", name: "Alpha" },
+      { id: tabB, epicId: "epic-b", name: "Beta" },
+    ],
+    activeTabId: null,
+    tabStripLayout: {
+      version: 2,
+      items: [
+        {
+          kind: "tab",
+          id: tabItemId({ kind: "epic", id: tabA }),
+          ref: { kind: "epic", id: tabA },
+        },
+        {
+          kind: "tab",
+          id: tabItemId({ kind: "epic", id: tabB }),
+          ref: { kind: "epic", id: tabB },
+        },
+      ],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+    },
+    activeRoute,
+  };
+}
+
+function openTwoEpicTabs(): { readonly tabA: string; readonly tabB: string } {
+  const canvas = useEpicCanvasStore.getState();
+  return {
+    tabA: canvas.openEpicTabWithId("tab-a", "epic-a", "Alpha"),
+    tabB: canvas.openEpicTabWithId("tab-b", "epic-b", "Beta"),
+  };
 }
 
 beforeEach(() => {
@@ -414,5 +464,133 @@ describe("desktop tabs persistence", () => {
       focusedSide: "right",
       routeBackingSide: "left",
     });
+  });
+
+  /**
+   * The desktop snapshot is the only path where a Home selection has to survive
+   * a round trip through code that knows nothing about it: `repairLayout`
+   * resolves a null active id to the first item, and every ref-keyed lookup in
+   * this module answers `null` for a surface with no ref. Four private helpers
+   * carry Home across that boundary, so the only way any of them can regress is
+   * silently - hence both halves of the flag for each.
+   */
+  describe("Home selection across the desktop snapshot", () => {
+    it("restores a Home-selected snapshot with the null selection, both tabs, and the /home route", () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      const { tabA, tabB } = openTwoEpicTabs();
+
+      const hydration = hydrateDesktopTabs(
+        homeSelectedSnapshot(tabA, tabB, "/home"),
+        true,
+        null,
+      );
+
+      expect(useTabsStore.getState().activeItemId).toBeNull();
+      expect(flattenLayoutRefs(useTabsStore.getState())).toEqual([
+        { kind: "epic", id: tabA },
+        { kind: "epic", id: tabB },
+      ]);
+      expect(hydration.route).toBe("/home");
+    });
+
+    it("restores the same snapshot onto the first tab with the flag off", () => {
+      const { tabA, tabB } = openTwoEpicTabs();
+
+      const hydration = hydrateDesktopTabs(
+        homeSelectedSnapshot(tabA, tabB, "/home"),
+        true,
+        null,
+      );
+
+      // The byte-identical-when-off half: `repairLayout`'s own fallback stands,
+      // and `routeRef("/home")` names nothing, so the route follows the layout.
+      expect(useTabsStore.getState().activeItemId).toBe(
+        tabItemId({ kind: "epic", id: tabA }),
+      );
+      expect(flattenLayoutRefs(useTabsStore.getState())).toEqual([
+        { kind: "epic", id: tabA },
+        { kind: "epic", id: tabB },
+      ]);
+      expect(hydration.route).toBe("/epics/epic-a/tab-a");
+    });
+
+    it("schedules a layout write while Home is active only once the route agrees", async () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      const { tabA, tabB } = openTwoEpicTabs();
+      useTabsStore.getState().setStripOrder([
+        { kind: "epic", id: tabA },
+        { kind: "epic", id: tabB },
+      ]);
+      const updates: DesktopPerWindowStatePatch[] = [];
+      installDesktopTabsPersistence(acknowledgedBridge(updates), 0);
+
+      // Home selected, but the URL still says `/` - the state a back-step onto
+      // the landing route used to leave behind. Incoherent, so nothing is
+      // written, and a layout change made here would be lost on quit.
+      updateDesktopTabsActiveRoute("/");
+      expect(
+        tabCommandCoordinator.activateTab({ kind: "home" }),
+      ).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(updates).toHaveLength(0);
+
+      updateDesktopTabsActiveRoute("/home");
+      await flushDesktopTabsPersistence();
+
+      expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({
+        activeRoute: "/home",
+        tabStripLayout: { activeItemId: null },
+      });
+    });
+  });
+});
+
+/**
+ * RG6: this module's own `legacySystemTabs` consumes the SAME shared
+ * `SETTINGS_PATHS` allowlist (`stores/tabs/settings-paths.ts`) that
+ * `store.ts` does - deliberately NOT derived from `SETTINGS_SECTIONS`, for
+ * the reason stated on that shared constant: sharing removes the
+ * repeated-omission mechanism. `hydrateDesktopTabs` reaches
+ * `legacySystemTabs` only on the LEGACY path - no persisted v2 layout - via a
+ * legacy HISTORY ROUTE, so a settings tab here comes from that route rather
+ * than from `systemTabs` in the snapshot.
+ */
+describe("RG6: desktop-tabs-persistence's own legacySystemTabs recognizes every registered settings route", () => {
+  it.each(SETTINGS_SECTIONS.map((section) => section.id))(
+    "a legacy history route of /settings/%s hydrates a settings system tab at that route",
+    (sectionId) => {
+      hydrateDesktopTabs(emptySnapshot(), true, `/settings/${sectionId}`);
+      // Falsification: remove any one id from the shared `SETTINGS_PATHS` -
+      // exactly that section's case reddens here AND in the sibling sweep in
+      // `settings-kind.test.ts`, since both this module's `legacySystemTabs`
+      // and `store.ts`'s migration path now read the same constant. Each
+      // sweep still pins its own consumer's wiring to it, which is why
+      // unifying the DATA didn't make either sweep redundant.
+      expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+        `/settings/${sectionId}`,
+      );
+    },
+  );
+
+  it("explicitly covers the three ids the audit found omitted: fallback, app-notifications, link-phone", () => {
+    for (const id of ["fallback", "app-notifications", "link-phone"]) {
+      hydrateDesktopTabs(emptySnapshot(), true, `/settings/${id}`);
+      expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+        `/settings/${id}`,
+      );
+    }
+  });
+
+  it("an unknown settings path falls back rather than being accepted", () => {
+    hydrateDesktopTabs(emptySnapshot(), true, "/settings/not-a-section");
+    expect(useTabsStore.getState().systemTabs.settings).toBeNull();
+  });
+
+  it("the retired 'service' id is still ACCEPTED - a persisted old path must still hydrate", () => {
+    hydrateDesktopTabs(emptySnapshot(), true, "/settings/service");
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/service",
+    );
   });
 });

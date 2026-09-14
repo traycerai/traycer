@@ -412,7 +412,7 @@ class MockStreamSession implements IStreamSession {
 
   requestReconnect(): void {}
   close(): void {
-    this.statusChangeHandler?.("closed", { kind: "caller" });
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
   }
   emitFrame(frame: WorkspaceSubscribeFileListServerFrame): void {
     this.serverFrameHandler?.(frame, null);

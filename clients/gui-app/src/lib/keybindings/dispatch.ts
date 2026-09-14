@@ -1,3 +1,5 @@
+import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
+import { reopenClosedTab } from "@/lib/tab-recovery/reopen";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -13,6 +15,7 @@ import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { useTabsStore } from "@/stores/tabs/store";
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
 import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
 import type {
   NavigateNestedFocus,
@@ -377,6 +380,10 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   "epic.next": (r) => moveHeaderTabFocus(r, 1),
   "epic.prev": (r) => moveHeaderTabFocus(r, -1),
   "epic.close": (r) => closeActiveEpic(r),
+  "tab.reopen": (r) => {
+    void reopenClosedTab(r);
+    return true;
+  },
   "tab.new": (r) => openBlankTabInActiveGroup(r),
   "tab.close": (r) => closeActiveTab(r),
   "tab.close-others": (r) => closeOtherTabsInActive(r),
@@ -405,6 +412,13 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   },
   "app.history.open": (r) => {
     r.navigateToEpicList();
+    return true;
+  },
+  // Reports `false` while the Home tab is off, so the provider leaves the chord
+  // unhandled rather than swallowing it for a surface this build has not got.
+  "app.home.open": (r) => {
+    if (!isHomeTabEnabled()) return false;
+    r.navigateHome();
     return true;
   },
   "app.settings.open": (r) => {
@@ -462,6 +476,9 @@ const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
   "app.browser.new",
   "app.terminal.maximize",
   "tab.new",
+  // Unbound by default, so only a user-chosen chord can be held - and holding
+  // it would walk the status bar between header and footer once per repeat.
+  "app.status-bar.toggle",
 ]);
 
 export function isRepeatSensitiveAction(id: ActionId): boolean {
@@ -724,6 +741,7 @@ function openBlankTabInActiveGroup(router: KeybindingRouter): boolean {
       .getState()
       .prepareOpenBlankTabInPaneFocusTarget(tab.tabId, groupId),
   );
+  requestPaneOpenerFocus(tab.tabId, groupId);
   return true;
 }
 

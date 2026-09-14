@@ -70,7 +70,7 @@ class MockStreamSession implements IStreamSession {
 
   close(): void {
     this.closed = true;
-    this.statusChangeHandler?.("closed", { kind: "caller" });
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
   }
 
   emitFrame(frame: PrSubscribeListForEpicServerFrame): void {
@@ -85,7 +85,7 @@ class MockStreamSession implements IStreamSession {
     status: "connecting" | "open" | "reconnecting" | "closed",
     reason: StreamCloseReason | null,
   ): void {
-    this.statusChangeHandler?.(status, reason);
+    this.statusChangeHandler?.(status, reason, null);
   }
 }
 

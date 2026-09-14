@@ -115,6 +115,27 @@ export const hostCredentialStateSchema = z.enum([
  */
 export const STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE = "STREAM_SUBSCRIBE_TIMEOUT";
 
+/**
+ * The lifecycle codes a host's chat session answers when a `chat.subscribe`
+ * reaches it at the wrong moment, rather than with a verdict on the chat:
+ *
+ *   - `SESSION_NOT_READY` - the session has not finished opening, or a field a
+ *     subscribe needs was released under it.
+ *   - `SESSION_CLOSED` - the session is shutting down. The next subscribe
+ *     opens a fresh one.
+ *
+ * Either one means "ask again". Hosts released before these codes were
+ * flagged send them as plain fatals without `retryable`, so a client that read
+ * only the flag went terminal on a chat its next attempt would have opened.
+ * That is the "Still opening this agent" incident: Try again closed the socket
+ * while the open was under way, the host tore the session down under the
+ * subscribe that was joining it, and that subscribe answered
+ * `SESSION_NOT_READY`. See `isRetryableSessionLifecycleFatal` for the method
+ * guard both transports apply.
+ */
+export const SESSION_NOT_READY_FATAL_CODE = "SESSION_NOT_READY";
+export const SESSION_CLOSED_FATAL_CODE = "SESSION_CLOSED";
+
 /** First frame sent by the client: bearer token + per-method version manifest. */
 export type ClientStreamOpenFrame = {
   readonly kind: "open";

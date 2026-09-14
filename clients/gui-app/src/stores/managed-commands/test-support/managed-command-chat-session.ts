@@ -152,7 +152,7 @@ export function installManagedCommandChatSession(args: {
     },
     setConnectionStatus: (status: StreamConnectionStatus) => {
       const reason: StreamCloseReason | null = null;
-      callbacks().onConnectionStatus(status, reason);
+      callbacks().onConnectionStatus(status, reason, null);
     },
     dispose: () => {
       registry.forceRelease(epicId, chatId, hostId);

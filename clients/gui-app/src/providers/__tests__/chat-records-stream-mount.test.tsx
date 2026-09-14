@@ -19,6 +19,7 @@ import type {
   ChatRecordSummaryV11,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { RecordListRevision } from "@traycer/protocol/host/epic/record-list-revision";
 import type { ChatRecordsStreamDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
@@ -38,9 +39,13 @@ import {
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
 import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
+import { subscribeRecordListDeltaStamps } from "@/lib/records/record-list-delta-stamps";
 
 interface OpenedStream {
-  readonly emit: (delta: ChatRecordsStreamDelta) => void;
+  readonly emit: (
+    delta: ChatRecordsStreamDelta,
+    listRevision: RecordListRevision | null,
+  ) => void;
   readonly emitStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -80,7 +85,10 @@ vi.mock(
     ChatRecordsStreamClient: class {
       constructor(options: {
         readonly callbacks: {
-          readonly onDelta: (d: ChatRecordsStreamDelta) => void;
+          readonly onDelta: (
+            d: ChatRecordsStreamDelta,
+            listRevision: RecordListRevision | null,
+          ) => void;
           readonly onConnectionStatus: (
             status: StreamConnectionStatus,
             reason: StreamCloseReason | null,
@@ -216,11 +224,14 @@ function openEpic(epicId: string, hostId: string | null): OpenEpicStoreHandle {
   return handle;
 }
 
-function emit(delta: ChatRecordsStreamDelta): void {
+function emit(
+  delta: ChatRecordsStreamDelta,
+  listRevision: RecordListRevision | null,
+): void {
   const stream = streamState.opened.at(-1);
   if (stream === undefined) throw new Error("no stream opened");
   act(() => {
-    stream.emit(delta);
+    stream.emit(delta, listRevision);
   });
 }
 
@@ -271,11 +282,14 @@ describe("<ChatRecordsStreamMount />", () => {
     const two = openEpic("epic-2", "host-A");
     render(<ChatRecordsStreamMount />);
 
-    emit({
-      kind: "upsert",
-      epicId: "epic-1",
-      record: record({ chatId: "pushed", title: "Pushed" }),
-    });
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({ chatId: "pushed", title: "Pushed" }),
+      },
+      null,
+    );
 
     expect(one.store.getState().chats.byId.pushed.title).toBe("Pushed");
     // Frames name their epic precisely BECAUSE one subscription covers them
@@ -291,12 +305,15 @@ describe("<ChatRecordsStreamMount />", () => {
       .applyChatRecords([pollRecord({ chatId: "gone" })], null);
     render(<ChatRecordsStreamMount />);
 
-    emit({
-      kind: "remove",
-      epicId: "epic-1",
-      chatId: "gone",
-      reason: "revoked",
-    });
+    emit(
+      {
+        kind: "remove",
+        epicId: "epic-1",
+        chatId: "gone",
+        reason: "revoked",
+      },
+      null,
+    );
 
     expect(handle.store.getState().chats.allIds).toEqual([]);
     expect(handle.store.getState().chatRetractions).toEqual({
@@ -316,18 +333,25 @@ describe("<ChatRecordsStreamMount />", () => {
     const foreign = openEpic("epic-1", "host-B");
     render(<ChatRecordsStreamMount />);
 
-    emit({
-      kind: "upsert",
-      epicId: "epic-1",
-      record: record({ chatId: "from-host-a" }),
-    });
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({ chatId: "from-host-a" }),
+      },
+      null,
+    );
     // The terminal-agent frame too, so the assertion on its table is about
     // the GATE and not about a table nothing ever wrote to.
-    emit({
-      kind: "tuiUpsert",
-      epicId: "epic-1",
-      record: tuiRecord({ tuiAgentId: "tui-from-host-a" }),
-    });
+    emit(
+      {
+        kind: "tuiUpsert",
+        sessionFacet: null,
+        epicId: "epic-1",
+        record: tuiRecord({ tuiAgentId: "tui-from-host-a" }),
+      },
+      null,
+    );
 
     expect(foreign.store.getState().chats.allIds).toEqual([]);
     // Same gate for both tables, not just the terminal-agent arm.
@@ -341,16 +365,23 @@ describe("<ChatRecordsStreamMount />", () => {
     const bound = openEpic("epic-1", "host-A");
     render(<ChatRecordsStreamMount />);
 
-    emit({
-      kind: "upsert",
-      epicId: "epic-1",
-      record: record({ chatId: "from-host-a" }),
-    });
-    emit({
-      kind: "tuiUpsert",
-      epicId: "epic-1",
-      record: tuiRecord({ tuiAgentId: "tui-from-host-a" }),
-    });
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({ chatId: "from-host-a" }),
+      },
+      null,
+    );
+    emit(
+      {
+        kind: "tuiUpsert",
+        sessionFacet: null,
+        epicId: "epic-1",
+        record: tuiRecord({ tuiAgentId: "tui-from-host-a" }),
+      },
+      null,
+    );
 
     expect(bound.store.getState().chats.allIds).toEqual(["from-host-a"]);
     expect(bound.store.getState().tuiAgentRecords.allIds).toEqual([
@@ -361,11 +392,14 @@ describe("<ChatRecordsStreamMount />", () => {
   it("drops a delta for an epic with no live session rather than acquiring one", () => {
     render(<ChatRecordsStreamMount />);
 
-    emit({
-      kind: "upsert",
-      epicId: "epic-closed",
-      record: record({ chatId: "chat-x" }),
-    });
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-closed",
+        record: record({ chatId: "chat-x" }),
+      },
+      null,
+    );
 
     // Constructing a session (Y.Doc replica + stream) because a record changed
     // in an epic nobody is looking at is exactly the background work the
@@ -430,6 +464,98 @@ describe("<ChatRecordsStreamMount />", () => {
 
     expect(streamState.closes).toBe(1);
     expect(streamState.opened).toHaveLength(2);
+  });
+});
+
+/**
+ * The `@1.4` list-revision announcement (`publishRecordListDeltaStamp`) - the
+ * seam that lets the two record-list hooks stop re-reading a list on every
+ * unrelated change. Announced AFTER the rows are routed, and ONLY on the paths
+ * that routed them - see `chat-records-stream-mount.tsx`'s doc for why the two
+ * early-return drops (no session, wrong host) must never announce.
+ */
+describe("<ChatRecordsStreamMount /> the @1.4 list revision announcement", () => {
+  function stampSpy(epicId: string): {
+    readonly calls: RecordListRevision[];
+    readonly unsubscribe: () => void;
+  } {
+    const calls: RecordListRevision[] = [];
+    const unsubscribe = subscribeRecordListDeltaStamps(epicId, (revision) => {
+      calls.push(revision);
+    });
+    return { calls, unsubscribe };
+  }
+
+  it("announces the stamp of a delta it actually routed", () => {
+    openEpic("epic-1", "host-A");
+    render(<ChatRecordsStreamMount />);
+    const spy = stampSpy("epic-1");
+
+    const stamp: RecordListRevision = { epoch: "E", revision: 5 };
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({ chatId: "pushed" }),
+      },
+      stamp,
+    );
+
+    expect(spy.calls).toEqual([stamp]);
+    spy.unsubscribe();
+  });
+
+  it("announces nothing for a delta dropped because no session is open for the epic", () => {
+    render(<ChatRecordsStreamMount />);
+    const spy = stampSpy("epic-closed");
+
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-closed",
+        record: record({ chatId: "chat-x" }),
+      },
+      { epoch: "E", revision: 5 },
+    );
+
+    expect(spy.calls).toEqual([]);
+    spy.unsubscribe();
+  });
+
+  it("announces nothing for a delta dropped because the session is bound to a DIFFERENT host", () => {
+    openEpic("epic-1", "host-B");
+    render(<ChatRecordsStreamMount />);
+    const spy = stampSpy("epic-1");
+
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({ chatId: "from-host-a" }),
+      },
+      { epoch: "E", revision: 5 },
+    );
+
+    expect(spy.calls).toEqual([]);
+    spy.unsubscribe();
+  });
+
+  it("announces nothing for a delta whose listRevision is null - a host below @1.4", () => {
+    openEpic("epic-1", "host-A");
+    render(<ChatRecordsStreamMount />);
+    const spy = stampSpy("epic-1");
+
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({ chatId: "pushed" }),
+      },
+      null,
+    );
+
+    expect(spy.calls).toEqual([]);
+    spy.unsubscribe();
   });
 });
 

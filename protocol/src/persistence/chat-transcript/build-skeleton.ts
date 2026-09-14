@@ -291,6 +291,7 @@ function contextFingerprint(context: TranscriptRowContext): string {
   } = {
     legacyRowAnchorAt: context.legacyRowAnchorAt ?? null,
     sessionAnchor: context.sessionAnchor ?? null,
+    profileWalkUnprovable: context.profileWalkUnprovable ?? null,
     hasLaterOverlappingChanges: context.hasLaterOverlappingChanges ?? null,
     setupWindowIndex: context.setupWindowIndex ?? null,
     setupWindowIsActive: context.setupWindowIsActive ?? null,

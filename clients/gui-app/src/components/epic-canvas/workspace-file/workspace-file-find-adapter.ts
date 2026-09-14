@@ -1,3 +1,4 @@
+import { findTextMatches } from "@/lib/find-engine/find-text";
 import {
   FindEngine,
   isFindEngineSupported,
@@ -403,16 +404,17 @@ function collectSourceMatches(args: {
   readonly matchCase: boolean;
 }): readonly SourceMatch[] {
   if (args.query.length === 0) return [];
-  const haystack = args.matchCase ? args.content : args.content.toLowerCase();
-  const needle = args.matchCase ? args.query : args.query.toLowerCase();
   const lineStarts = collectLineStarts(args.content);
   const matches: SourceMatch[] = [];
-  const step = Math.max(args.query.length, 1);
   // Matches are found in increasing offset order, so advance the line cursor
   // forward monotonically instead of rescanning lineStarts for every hit.
   let lineCursor = 0;
-  let index = haystack.indexOf(needle, 0);
-  while (index !== -1) {
+  for (const match of findTextMatches(
+    args.content,
+    args.query,
+    args.matchCase,
+  )) {
+    const index = match.offset;
     while (
       lineCursor + 1 < lineStarts.length &&
       (lineStarts.at(lineCursor + 1) ?? Number.POSITIVE_INFINITY) <= index
@@ -424,9 +426,8 @@ function collectSourceMatches(args: {
       line: lineCursor + 1,
       column: index - lineStart + 1,
       offset: index,
-      length: args.query.length,
+      length: match.length,
     });
-    index = haystack.indexOf(needle, index + step);
   }
   return matches;
 }

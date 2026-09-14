@@ -818,6 +818,125 @@ describe("<BackgroundItemsPanel />", () => {
       screen.getByTestId("confirm-destructive-dialog").textContent,
     ).toContain("Stopping the session ends all 2 background items.");
   });
+
+  it("titles a fallback-wait row with the provider display name and a 12-hour resume time", () => {
+    const at = new Date(2026, 5, 15, 15, 0, 0).getTime();
+    const wait = backgroundItem({
+      kind: "fallback-wait",
+      taskId: "wait-1",
+      title: "raw title should not win",
+      blockId: "wait-1",
+      parentTaskId: null,
+      scheduledFor: at,
+      providerId: "claude-code",
+      profileLabel: "work-account",
+    });
+    const ambient = backgroundItem({
+      kind: "fallback-wait",
+      taskId: "wait-ambient",
+      title: "ambient wait",
+      blockId: "wait-ambient",
+      parentTaskId: null,
+      scheduledFor: at,
+      providerId: "claude-code",
+      profileLabel: null,
+    });
+    const wakeup = backgroundItem({
+      kind: "wakeup",
+      taskId: "wake-1",
+      title: "Review status",
+      blockId: "wake-1",
+      parentTaskId: null,
+      scheduledFor: at,
+    });
+
+    renderPanel({
+      items: [wait, wakeup],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+
+    // Derived from the SAME formatter `formatClockTime` uses, rather than a
+    // hard-coded Latin "AM"/"PM": `toLocaleTimeString(undefined, …)` resolves
+    // the runner's own ICU locale, and ja-JP renders "午後3:00" - the
+    // designator leads and is never "AM"/"PM". A literal `[AP]M` regex asserts
+    // English specifically and goes red on a formatter doing exactly what it
+    // is documented to do. Same style of anchor this file already uses for
+    // the weekday form below, and `relative-time.test.ts` uses for
+    // `formatClockTime` itself.
+    const dayPeriod = new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+      .formatToParts(new Date(at))
+      .find((part) => part.type === "dayPeriod")?.value;
+    if (dayPeriod === undefined) {
+      throw new Error("the format produced no dayPeriod part to anchor on");
+    }
+    const waitTitle = screen.getByText(
+      /Waiting for Claude Code · work-account's limit/,
+    ).textContent;
+    expect(waitTitle).toContain("resumes ");
+    expect(waitTitle).toContain(dayPeriod);
+    // Falsification: use item.providerId directly instead of fallbackProviderLabelFor and THIS assertion must go red.
+    expect(waitTitle).toContain("Claude Code");
+    expect(waitTitle).not.toContain("claude-code");
+    // Falsification: swap formatClockTime for formatWakeupTime in that branch and THIS assertion must go red.
+    expect(waitTitle).not.toMatch(/\b\d{2}:\d{2}\b/);
+
+    const wakeupTitle = screen.getByText(/Waiting until/).textContent;
+    expect(wakeupTitle).toMatch(/^Waiting until \d{2}:\d{2} · Review status$/);
+
+    cleanup();
+    renderPanel({
+      items: [ambient],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+    const ambientTitle = screen.getByText(
+      /Waiting for Claude Code's limit/,
+    ).textContent;
+    expect(ambientTitle).toMatch(/^Waiting for Claude Code's limit · resumes /);
+    expect(ambientTitle).not.toMatch(/Claude Code · /);
+  });
+
+  // The policy's wait cap reaches seven days, so this row's resume time
+  // needs its weekday once it is that far out - the bare clock time alone
+  // would name the wrong day.
+  it("titles a fallback-wait row with its weekday once the resume time is a day or more away", () => {
+    const at = Date.now() + 4 * 24 * 60 * 60_000;
+    const wait = backgroundItem({
+      kind: "fallback-wait",
+      taskId: "wait-far",
+      title: "raw title should not win",
+      blockId: "wait-far",
+      parentTaskId: null,
+      scheduledFor: at,
+      providerId: "claude-code",
+      profileLabel: "work-account",
+    });
+    renderPanel({
+      items: [wait],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+    const waitTitle = screen.getByText(
+      /Waiting for Claude Code · work-account's limit/,
+    ).textContent;
+    // Falsification: `formatWaitTime` always returning `formatClockTime` -
+    // this reads the bare clock time instead of the weekday-qualified form.
+    const weekday = new Date(at).toLocaleDateString(undefined, {
+      weekday: "short",
+    });
+    expect(waitTitle).toContain(weekday);
+  });
 });
 
 interface PanelInput {
