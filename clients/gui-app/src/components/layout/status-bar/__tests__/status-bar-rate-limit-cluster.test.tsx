@@ -20,6 +20,7 @@ import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-lim
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import type { StatusBarUsageDetail } from "@/components/layout/status-bar/status-bar-usage-ladder";
+import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 import {
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
@@ -108,7 +109,7 @@ Object.defineProperty(globalThis, "ResizeObserver", {
 });
 
 const PROFILE_SELECTION: RateLimitProfileSelection = {
-  activeChatSettings: null,
+  shownProfiles: {},
   lastProfileByHarness: {},
 };
 
@@ -118,6 +119,8 @@ function segmentFixture(
 ): StatusBarProviderSegmentModel {
   return {
     providerId,
+    profileId: null,
+    account: null,
     state: "live",
     reason: null,
     windows: tightest === null ? [] : [tightest],
@@ -175,6 +178,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useRateLimitPopoverStore.setState({
+    activeTab: "overview",
+    revealProfile: null,
+  });
   mocks.cluster = { kind: "no-providers" };
   mocks.refresh = { queueTargets: [], httpRefetches: [], httpFetching: false };
   useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
@@ -685,6 +692,164 @@ describe("<StatusBarRateLimitCluster /> usage ladder", () => {
         `${providerDisplayName("claude-code")} ${windowPercentText(57, "used")}` +
           `${providerDisplayName("grok")} ${windowPercentText(12, "used")}`,
       );
+    });
+  });
+
+  describe("accounts", () => {
+    /** Codex twice - Work and Personal - then Claude. Three segments. */
+    function twoAccountCluster(): void {
+      mocks.cluster = {
+        kind: "segments",
+        segments: [
+          {
+            ...segmentFixture(
+              "codex",
+              windowFixture({ windowKey: "codex:primary", usedPercent: 34 }),
+            ),
+            profileId: "work",
+            account: {
+              profileId: "work",
+              accentColor: "#ff0000",
+              label: "Work",
+            },
+          },
+          {
+            ...segmentFixture(
+              "codex",
+              windowFixture({ windowKey: "codex:primary", usedPercent: 80 }),
+            ),
+            profileId: "personal",
+            account: {
+              profileId: "personal",
+              accentColor: "#00ff00",
+              label: "Personal",
+            },
+          },
+          segmentFixture(
+            "claude-code",
+            windowFixture({
+              windowKey: "claude-code:fiveHour",
+              usedPercent: 57,
+            }),
+          ),
+        ],
+      };
+    }
+
+    function accountDotColor(segment: HTMLElement): string | undefined {
+      return segment
+        .querySelector('[data-testid="status-bar-provider-account-dot"]')
+        ?.querySelector<HTMLElement>("span[style]")?.style.backgroundColor;
+    }
+
+    it("draws one segment per account, each with its own accent dot and reading", () => {
+      twoAccountCluster();
+      renderLadderCluster({ tooltipDelayDuration: 0 });
+
+      const codexSegments = screen.getAllByTestId(
+        "status-bar-provider-segment-codex",
+      );
+      expect(
+        codexSegments.map((segment) => segment.getAttribute("data-profile-id")),
+      ).toEqual(["work", "personal"]);
+      expect(
+        codexSegments.map(
+          (segment) =>
+            segment.querySelector('[data-testid="status-bar-provider-account"]')
+              ?.textContent,
+        ),
+      ).toEqual(["Work", "Personal"]);
+      expect(
+        codexSegments.map(
+          (segment) =>
+            segment.querySelector(
+              '[data-testid="status-bar-window-percent-codex:primary"]',
+            )?.textContent,
+        ),
+      ).toEqual(["34%", "80%"]);
+      // The dot is the account's identity mark, and a provider with one
+      // account (claude here) draws none.
+      expect(codexSegments.map(accountDotColor)).toEqual([
+        "rgb(255, 0, 0)",
+        "rgb(0, 255, 0)",
+      ]);
+      expect(
+        accountDotColor(
+          screen.getByTestId("status-bar-provider-segment-claude-code"),
+        ),
+      ).toBeUndefined();
+      // The trigger's name tells the two accounts apart too.
+      expect(
+        screen
+          .getByTestId("status-bar-rate-limit-trigger")
+          .getAttribute("aria-label"),
+      ).toBe(
+        "Usage limits: Codex · Work 34% used, Codex · Personal 80% used, Claude Code 57% used",
+      );
+    });
+
+    it("counts accounts, not providers, when folding into +N, and names each in the chip", async () => {
+      twoAccountCluster();
+      renderLadderCluster({ tooltipDelayDuration: 0 });
+
+      setOverflowing();
+      for (let i = 0; i < 7; i += 1) fireRoomResize();
+
+      const chip = screen.getByTestId("status-bar-folded-providers");
+      expect(chip.textContent).toBe("+2");
+      // Only Codex · Work survives on the strip.
+      expect(
+        screen
+          .getAllByTestId("status-bar-provider-segment-codex")
+          .map((segment) => segment.getAttribute("data-profile-id")),
+      ).toEqual(["work"]);
+      fireEvent.pointerMove(chip);
+      const tooltip = await screen.findByRole("tooltip");
+      expect(tooltip.textContent).toBe(
+        `Codex · Personal ${windowPercentText(80, "used")}` +
+          `${providerDisplayName("claude-code")} ${windowPercentText(57, "used")}`,
+      );
+    });
+
+    it("keeps the dot at icon-only, where it is the only thing telling two accounts apart", () => {
+      twoAccountCluster();
+      renderLadderCluster({ tooltipDelayDuration: 0 });
+
+      setOverflowing();
+      for (let i = 0; i < 5; i += 1) fireRoomResize();
+      expect(usageDetail()).toBe("icon-only");
+
+      const codexSegments = screen.getAllByTestId(
+        "status-bar-provider-segment-codex",
+      );
+      expect(codexSegments).toHaveLength(2);
+      expect(codexSegments.map(accountDotColor)).toEqual([
+        "rgb(255, 0, 0)",
+        "rgb(0, 255, 0)",
+      ]);
+      expect(screen.queryByTestId("status-bar-provider-account")).toBeNull();
+    });
+
+    it("arms the panel to reveal the clicked account's card, on that provider's tab", () => {
+      twoAccountCluster();
+      renderLadderCluster({ tooltipDelayDuration: 0 });
+
+      const [, personal] = screen.getAllByTestId(
+        "status-bar-provider-segment-codex",
+      );
+      fireEvent.click(personal);
+
+      expect(useRateLimitPopoverStore.getState().activeTab).toBe("codex");
+      expect(useRateLimitPopoverStore.getState().revealProfile).toEqual({
+        providerId: "codex",
+        profileId: "personal",
+      });
+      // And the click still reached the trigger, so the panel is opening.
+      expect(
+        screen
+          .getByTestId("status-bar-rate-limit-trigger")
+          .getAttribute("data-state"),
+      ).toBe("open");
     });
   });
 

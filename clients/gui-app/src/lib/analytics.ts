@@ -314,6 +314,7 @@ export type AnalyticsSetting =
   | "layout.statusBar.rateLimits.showBar"
   | "layout.statusBar.rateLimits.showModeWord"
   | "layout.statusBar.rateLimits.showTimer"
+  | "layout.statusBar.shownProfiles"
   | "layout.statusBar.resources.enabled"
   | "layout.statusBar.resources.metric"
   | "layout.statusBar.resources.scope"
@@ -1243,6 +1244,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     "layout.statusBar.rateLimits.showBar": true,
     "layout.statusBar.rateLimits.showModeWord": true,
     "layout.statusBar.rateLimits.showTimer": true,
+    "layout.statusBar.shownProfiles": true,
     "layout.statusBar.resources.enabled": true,
     "layout.statusBar.resources.metric": true,
     "layout.statusBar.resources.scope": true,

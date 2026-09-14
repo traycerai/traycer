@@ -37,6 +37,7 @@ describe("useLayoutStore", () => {
           enabled: true,
           hiddenProviders: [],
           providers: {},
+          shownProfiles: {},
           percentMode: "used",
           showTimer: true,
           showBar: true,
@@ -129,6 +130,7 @@ describe("useLayoutStore", () => {
               },
               codex: { automatic: false, limitKeys: ["codex:secondary"] },
             },
+            shownProfiles: { "host-a": { codex: ["work", null] } },
             percentMode: "remaining",
             showTimer: false,
             showBar: false,
@@ -155,6 +157,7 @@ describe("useLayoutStore", () => {
             },
             codex: { automatic: false, limitKeys: ["codex:secondary"] },
           },
+          shownProfiles: { "host-a": { codex: ["work", null] } },
           percentMode: "remaining",
           showTimer: false,
           showBar: false,
@@ -195,6 +198,7 @@ describe("useLayoutStore", () => {
           enabled: true,
           hiddenProviders: [],
           providers: {},
+          shownProfiles: {},
           percentMode: "used",
           showTimer: true,
           showBar: false,
@@ -664,6 +668,77 @@ describe("useLayoutStore", () => {
       expect(statusBar.rateLimits.enabled).toBe(false);
       expect(statusBar.resources.enabled).toBe(false);
       expect(statusBar.resources.scope).toBe("desktop-app");
+    });
+
+    describe("shown profiles", () => {
+      it("checks and unchecks one account per host and provider, dropping emptied entries", () => {
+        const store = useLayoutStore.getState();
+        store.setStatusBarProfileShown("host-a", "codex", "work", true);
+        store.setStatusBarProfileShown("host-a", "codex", null, true);
+        store.setStatusBarProfileShown("host-b", "claude-code", "p1", true);
+        expect(
+          useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+        ).toEqual({
+          "host-a": { codex: ["work", null] },
+          "host-b": { "claude-code": ["p1"] },
+        });
+
+        // Already checked: a no-op that keeps the same state object.
+        const before = useLayoutStore.getState().statusBar;
+        useLayoutStore
+          .getState()
+          .setStatusBarProfileShown("host-a", "codex", "work", true);
+        expect(useLayoutStore.getState().statusBar).toBe(before);
+
+        useLayoutStore
+          .getState()
+          .setStatusBarProfileShown("host-a", "codex", "work", false);
+        useLayoutStore
+          .getState()
+          .setStatusBarProfileShown("host-a", "codex", null, false);
+        expect(
+          useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+        ).toEqual({ "host-b": { "claude-code": ["p1"] } });
+
+        useLayoutStore.getState().clearStatusBarShownProfiles();
+        expect(
+          useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+        ).toEqual({});
+      });
+
+      it("drops unknown shapes on rehydration and keeps only string-or-null ids under known providers", async () => {
+        await rehydrateFrom({
+          statusBar: {
+            rateLimits: {
+              shownProfiles: {
+                "host-a": {
+                  codex: ["work", null, 7, "", "work"],
+                  "not-a-provider": ["x"],
+                  grok: "not-a-list",
+                  "claude-code": [],
+                },
+                "": { codex: ["work"] },
+                "host-b": "not-a-record",
+                "host-c": { openrouter: [true] },
+              },
+            },
+          },
+        });
+
+        expect(
+          useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+        ).toEqual({ "host-a": { codex: ["work", null] } });
+      });
+
+      it("falls back to nothing checked when the map is not a record", async () => {
+        await rehydrateFrom({
+          statusBar: { rateLimits: { shownProfiles: ["host-a"] } },
+        });
+
+        expect(
+          useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+        ).toEqual({});
+      });
     });
 
     it("leaves state untouched when a setter is handed the value already held", () => {

@@ -1698,6 +1698,55 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     into a `+N` chip - skipping any rung whose setting is already off, since
     taking away something invisible would free no width. The percentage is
     severity-coloured at every rung, bar or no bar.
+  - **Which ACCOUNTS a provider's segments describe is chosen in the usage
+    panel, not on this page** (`layout/header/rate-limit-popover.tsx`). Every
+    profile card - managed and ambient, Overview and detail tab alike -
+    carries a `Status bar` switch right of its enable toggle, and the strip
+    draws **one segment per checked account** for the host it is watching:
+    provider icon, the profile's inline `AccentDot`, its name on the rungs
+    that still print words, and its own limits, mini bars and countdowns
+    resolved through the provider's limit selection above. The ladder folds
+    segments, so `+N` counts accounts and its tooltip names each
+    (`Codex · Work 57%`). Store:
+    `rateLimits.shownProfiles[hostId][providerId] = [profileId | null, …]`
+    (`stores/settings/layout-store.ts`; `null` is the ambient login), keyed by
+    host because a profile id names a credential on ONE machine - the panel
+    writes the entry for `displayedHostId`, the strip and the header glyph
+    read the entry for the watch scope's host, and the background refresh
+    queue reads the app-wide host's (`useRateLimitProfileSelection(hostId)`
+    takes the host as an argument for exactly this reason). A checked id
+    whose profile has since gone is skipped at read time, never pruned; the
+    guard drops anything that is not a string-or-null list under a known
+    provider id. It lives on this page's slice but is NOT a display
+    preference: no density preset carries it (`applyLayoutPreset` carries it
+    over like `placement`), only `Reset to defaults` clears it, and Layout
+    draws no control for it because Layout is app-level and the accounts are
+    not. Analytics: `layout.statusBar.shownProfiles`, from the switch.
+    - **Nothing checked draws ONE account**, resolved by
+      `resolveStatusBarProfileIds` (`hooks/rate-limits/use-rate-limit-profile-selection.ts`):
+      the profile last picked in a composer on THAT host if the provider still
+      has it, else the provider's first profile, else ambient. The focused
+      chat's account is deliberately no longer an input - it was read for a
+      chat on ANY host, so a tile bound to another machine made the segment
+      jump to an account this host does not have and fall to ambient. The
+      card for the fallback account is highlighted (`aria-current`) with its
+      switch off and a tooltip saying it is shown by default; checked cards
+      are highlighted with the switch on. The old `Active` badge is gone with
+      the rule it described. The switch is hidden while the provider itself is
+      off the strip (`hiddenProviders`), since there is no segment for it to
+      govern.
+    - **A segment is a deep link.** Clicking one arms
+      `rate-limit-popover-store.revealProfile` (session-only, never persisted)
+      and selects the provider's tab; the card scrolls itself into view and
+      consumes the request. The click is handled on the segment and left to
+      bubble to the cluster's `PopoverTrigger`, which is what opens the panel.
+    - The header glyph has two slots and no room to name an account, so it
+      draws the FIRST of the accounts the strip would draw per provider
+      (`resolveRateLimitProfileId`); Layout's limits list reads the same one,
+      since the limit selection is per provider.
+    - The dot and the name are drawn only for a provider with two or more
+      profiles - the composer rail's rule, and for the same reason: one
+      account needs telling apart from nothing.
   - **A limit is NAMED on the strip only when the name disambiguates**
     (`windowLabelText`, `lib/rate-limits/status-bar-window-text.ts`). A
     provider with ONE visible limit reads `100% used 6d` - there is nothing

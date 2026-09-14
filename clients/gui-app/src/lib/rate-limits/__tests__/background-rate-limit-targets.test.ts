@@ -13,7 +13,7 @@ import {
 const NOW = 1_700_000_000_000;
 
 const NO_SELECTION: RateLimitProfileSelection = {
-  activeChatSettings: null,
+  shownProfiles: {},
   lastProfileByHarness: {},
 };
 
@@ -74,7 +74,7 @@ function selectionFor(
   profileId: string,
 ): RateLimitProfileSelection {
   return {
-    activeChatSettings: null,
+    shownProfiles: {},
     lastProfileByHarness: { [harness]: profileId },
   };
 }
@@ -313,13 +313,14 @@ describe("selectBackgroundRateLimitTargets", () => {
       NOW,
       BACKGROUND_RATE_LIMIT_TARGET_BUDGET,
     );
-    // A never-read profile (`usageUpdatedAt: null`) sorts as the oldest
-    // possible reading (`Number.NEGATIVE_INFINITY`), ahead of any timestamped
-    // stale reading.
+    // With nothing checked the strip still draws ONE account - the provider's
+    // first profile - and that segment's target leads. Behind it, a never-read
+    // profile (`usageUpdatedAt: null`) sorts as the oldest possible reading
+    // (`Number.NEGATIVE_INFINITY`), ahead of any timestamped stale reading.
     expect(targets.map((t) => t.profileId)).toEqual([
+      "newer-stale",
       "never-read",
       "oldest-stale",
-      "newer-stale",
     ]);
   });
 
@@ -363,7 +364,52 @@ describe("selectBackgroundRateLimitTargets", () => {
       BACKGROUND_RATE_LIMIT_TARGET_BUDGET,
     );
     expect(targets).toHaveLength(BACKGROUND_RATE_LIMIT_TARGET_BUDGET);
-    expect(targets.map((t) => t.profileId)).toEqual(["p1", "p2", "p3"]);
+    // Each provider's fallback account (its first profile) is a drawn segment
+    // and leads; the one slot left goes to the oldest of the rest.
+    expect(targets.map((t) => t.profileId)).toEqual(["p1", "p3", "p2"]);
+  });
+
+  it("puts every account checked for the strip ahead of the unchecked ones", () => {
+    const providers = [
+      provider({
+        providerId: "codex",
+        profiles: [
+          profile({ profileId: "p1", kind: "managed", usageUpdatedAt: null }),
+          profile({
+            profileId: "p2",
+            kind: "managed",
+            usageUpdatedAt: NOW - 3_000_000,
+          }),
+          profile({
+            profileId: "p3",
+            kind: "managed",
+            usageUpdatedAt: NOW - 2_000_000,
+          }),
+        ],
+      }),
+    ];
+    const targets = selectBackgroundRateLimitTargets(
+      providers,
+      { shownProfiles: { codex: ["p3", "p2"] }, lastProfileByHarness: {} },
+      NOW,
+      BACKGROUND_RATE_LIMIT_TARGET_BUDGET,
+    );
+    // Both checked accounts have segments to keep fresh, so both lead - in
+    // staleness order among themselves - and the never-read unchecked one
+    // waits behind them despite being the oldest.
+    expect(targets.map((t) => t.profileId)).toEqual(["p2", "p3", "p1"]);
+    // And the membership key sees the checks, so a flip re-plans the window.
+    expect(
+      backgroundRateLimitMembershipKey(providers, {
+        shownProfiles: { codex: ["p3"] },
+        lastProfileByHarness: {},
+      }),
+    ).not.toBe(
+      backgroundRateLimitMembershipKey(providers, {
+        shownProfiles: { codex: ["p3", "p2"] },
+        lastProfileByHarness: {},
+      }),
+    );
   });
 
   it("respects a custom, smaller budget than the default", () => {

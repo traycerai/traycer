@@ -6,12 +6,13 @@ import {
 import {
   DEFAULT_COMPOSER_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_STATUS_BAR_RATE_LIMIT_DISPLAY,
   useLayoutStore,
   type ComposerCompactableMode,
   type ComposerHideableMode,
   type ComposerReasoningIndicator,
   type StatusBarProviderLimitSelections,
-  type StatusBarRateLimitPreferences,
+  type StatusBarRateLimitDisplayPreferences,
   type StatusBarResourcePreferences,
   type ResourceMetric,
 } from "@/stores/settings/layout-store";
@@ -47,17 +48,20 @@ export const LAYOUT_PRESET_IDS: ReadonlyArray<LayoutPresetId> = [
 
 /**
  * The status bar's contribution, which is its two subjects and NOT its
- * `placement` or its `mobileFooter` switch.
+ * `placement`, its `mobileFooter` switch, or which ACCOUNTS its usage
+ * segments describe (`rateLimits.shownProfiles`).
  *
- * Both are a structural choice - which surface hosts the usage gauge and
- * the resource monitor - rather than a level of detail, so they are treated
- * exactly as the sidebar's panel order is: carried by no bundle, `default`
- * included, restored by `resetLayoutToDefaults` alone, and not part of the
- * match. A user who moved the strip to the header and then asks for a density
- * gets that density, not the footer back.
+ * The first two are a structural choice - which surface hosts the usage gauge
+ * and the resource monitor - rather than a level of detail, so they are
+ * treated exactly as the sidebar's panel order is: carried by no bundle,
+ * `default` included, restored by `resetLayoutToDefaults` alone, and not part
+ * of the match. A user who moved the strip to the header and then asks for a
+ * density gets that density, not the footer back. The accounts are a choice
+ * about WHAT is read, made per host from the usage panel, and a density has
+ * no more opinion about them than about which providers are connected.
  */
 export interface LayoutPresetStatusBarValues {
-  readonly rateLimits: StatusBarRateLimitPreferences;
+  readonly rateLimits: StatusBarRateLimitDisplayPreferences;
   readonly resources: StatusBarResourcePreferences;
 }
 
@@ -152,7 +156,8 @@ const DETAILED_RESOURCE_METRICS: ReadonlyArray<ResourceMetric> = [
  */
 const DEFAULT_PRESET: LayoutPresetBundle = {
   statusBar: {
-    rateLimits: DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
+    // The display half only: the accounts map is not a bundle value.
+    rateLimits: DEFAULT_STATUS_BAR_RATE_LIMIT_DISPLAY,
     resources: DEFAULT_STATUS_BAR_LAYOUT.resources,
   },
   // Each VALUE still comes from the constant; only the field list is named
@@ -324,7 +329,12 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
     // whether a phone draws the strip at all is which surface hosts it on that
     // device, not how much detail the strip spells out.
     mobileFooter: layout.statusBar.mobileFooter,
-    rateLimits: bundle.statusBar.rateLimits,
+    rateLimits: {
+      ...bundle.statusBar.rateLimits,
+      // Carried over too: which accounts the strip reads is a per-host choice
+      // made from the usage panel, not a density.
+      shownProfiles: layout.statusBar.rateLimits.shownProfiles,
+    },
     resources: bundle.statusBar.resources,
   });
   layout.setComposerPreferences({
@@ -345,9 +355,9 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
 
 /**
  * Every Layout value back to its default: the Default bundle, PLUS the
- * structural settings no bundle carries - the status bar's placement and its
- * mobile-footer switch, the picker footer's reasoning control, and the rail's
- * arrangement.
+ * structural settings no bundle carries - the status bar's placement, its
+ * mobile-footer switch and its checked accounts, the picker footer's reasoning
+ * control, and the rail's arrangement.
  *
  * This is where the button and the `Default` segment deliberately part
  * company. The segment answers "which density bundle am I on", so it has to
@@ -367,6 +377,7 @@ export function resetLayoutToDefaults(): void {
   const layout = useLayoutStore.getState();
   layout.setStatusBarPlacement(DEFAULT_STATUS_BAR_LAYOUT.placement);
   layout.setStatusBarMobileFooter(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter);
+  layout.clearStatusBarShownProfiles();
   layout.setComposerReasoningFooterControl(
     DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl,
   );

@@ -38,7 +38,31 @@ export function statusBarUsageContentClass(
 }
 
 /**
- * One provider and its tightest reading, or the provider alone when it has none.
+ * What a segment is called wherever a segment is named: the provider, and the
+ * account after it when the provider has more than one (`Codex · Work`). The
+ * account is named only where the dot is drawn, for the same reason the dot is
+ * drawn only then - one account needs telling apart from nothing.
+ */
+export function statusBarSegmentName(
+  segment: StatusBarProviderSegmentModel,
+): string {
+  const name = providerDisplayName(segment.providerId);
+  return segment.account === null ? name : `${name} · ${segment.account.label}`;
+}
+
+/**
+ * Stable identity for one segment across renders: a provider can draw several
+ * accounts, so the provider id alone is not one.
+ */
+export function statusBarSegmentKey(
+  segment: StatusBarProviderSegmentModel,
+): string {
+  return `${segment.providerId}:${segment.profileId ?? ""}`;
+}
+
+/**
+ * One segment and its tightest reading, or the segment's name alone when it
+ * has none.
  *
  * Here rather than beside the `+N` chip that draws it, because the Settings
  * preview's caption has to say the same line OUTSIDE its frame - `inert` puts
@@ -49,7 +73,7 @@ export function providerReadingText(
   segment: StatusBarProviderSegmentModel,
   percentMode: PercentMode,
 ): string {
-  const name = providerDisplayName(segment.providerId);
+  const name = statusBarSegmentName(segment);
   if (segment.tightest === null) return name;
   return `${name} ${windowPercentText(segment.tightest.usedPercent, percentMode)}`;
 }
@@ -114,7 +138,7 @@ export function statusBarClusterSegments(
 export function statusBarSegmentTooltip(
   segment: StatusBarProviderSegmentModel,
 ): string {
-  const providerName = providerDisplayName(segment.providerId);
+  const providerName = statusBarSegmentName(segment);
   if (segment.state === "degraded") {
     return segment.reason === null
       ? `${providerName} · couldn't refresh usage, showing the last reading`

@@ -8,6 +8,7 @@ import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-
 import {
   providerReadingText,
   statusBarClusterSegments,
+  statusBarSegmentKey,
   type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
 import type { StatusBarUsageStop } from "@/components/layout/status-bar/status-bar-usage-ladder";
@@ -46,7 +47,7 @@ export function StatusBarUsageReadings(props: {
         <>
           {segments.slice(0, shownCount).map((segment) => (
             <StatusBarProviderSegment
-              key={segment.providerId}
+              key={statusBarSegmentKey(segment)}
               segment={segment}
               detail={stop.detail}
               percentMode={display.percentMode}
@@ -76,16 +77,20 @@ export function StatusBarUsageReadings(props: {
 }
 
 /**
- * The providers the strip ran out of room for, as one chip.
+ * The segments the strip ran out of room for, as one chip.
  *
  * Folding from the right rather than dropping: the last thing a strip should do
  * with a limit it cannot fit is pretend the provider is not configured. The
  * chip sits inside the trigger, so clicking it opens the panel that lists every
  * one of them in full — the tooltip is the glance, the panel is the answer.
  *
- * A provider with no reading yet is named without one. `+2` promising two
- * numbers and delivering one would be a worse chip than one that says which
- * providers are behind it.
+ * It counts SEGMENTS, which is to say accounts: two checked accounts of one
+ * provider that both fell off the strip are `+2`, and the tooltip names each
+ * (`Codex · Work 57%`). A provider folded as `+1` while two of its readings
+ * went missing would be the chip under-promising the way it must not
+ * over-promise - a segment with no reading yet is named without one, since
+ * `+2` promising two numbers and delivering one would be a worse chip than one
+ * that says which accounts are behind it.
  */
 function FoldedProvidersChip(props: {
   readonly segments: ReadonlyArray<StatusBarProviderSegmentModel>;
@@ -104,7 +109,7 @@ function FoldedProvidersChip(props: {
       <TooltipContent side="top" sideOffset={6}>
         <span className="flex flex-col">
           {props.segments.map((segment) => (
-            <span key={segment.providerId}>
+            <span key={statusBarSegmentKey(segment)}>
               {providerReadingText(segment, props.percentMode)}
             </span>
           ))}

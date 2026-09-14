@@ -63,7 +63,7 @@ vi.mock(
 );
 
 vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
-  resolveRateLimitProfileId: () => null,
+  resolveStatusBarProfileIds: () => [null],
 }));
 
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -74,7 +74,7 @@ import {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 
 const PROFILE_SELECTION = {
-  activeChatSettings: null,
+  shownProfiles: {},
   lastProfileByHarness: {},
 };
 
