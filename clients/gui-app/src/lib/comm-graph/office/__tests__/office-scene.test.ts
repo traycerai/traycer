@@ -1468,6 +1468,24 @@ describe("OfficeScene", () => {
     expect(mostAtOnce).toBe(IDLE_CREW.length);
   });
 
+  /**
+   * How long the floor takes to EMPTY - long enough that the sampling below is
+   * about an agent coming back, not about one that has not left yet.
+   *
+   * MEASURED, both ends. The last of the four is out of its chair at 85 ticks,
+   * so 85 is the floor; the sampling that follows is green at every budget up
+   * to 800, so there is no ceiling to sit under. This was `90` - five ticks of
+   * headroom over a measurement nothing in the case stated, 5.6 %, and any
+   * change to the errand stagger would have spent it and reddened a case about
+   * something else entirely.
+   *
+   * 180 is about twice the measurement, which is the margin a wait for a
+   * COINCIDENCE wants (the same reading `CHESS_PAIRING_TICKS` is written
+   * against): what moves it is the phase the four errand cycles fall into, not
+   * the distance any one of them covers.
+   */
+  const IDLE_FLOOR_EMPTIED_TICKS = 180;
+
   it("keeps every idle agent away for as long as it stays idle", () => {
     const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
@@ -1476,7 +1494,9 @@ describe("OfficeScene", () => {
     // chair. Sampled across a full minute rather than at one instant, because
     // the failure this catches is an agent that goes back between errands - and
     // that reads as a single frame of somebody seated, not as a floor at rest.
-    for (let step = 0; step < 90; step += 1) scene.tick(100);
+    for (let step = 0; step < IDLE_FLOOR_EMPTIED_TICKS; step += 1) {
+      scene.tick(100);
+    }
     let seatedFrames = 0;
     for (let step = 0; step < 600; step += 1) {
       scene.tick(100);
@@ -2418,6 +2438,33 @@ describe("OfficeScene", () => {
     expect(afterWalk[0].x).toBe(desk.deskTile.col * OFFICE_TILE + 3);
   });
 
+  /**
+   * THE WINDOW IN WHICH A RECOVERED AGENT IS BACK IN ITS CHAIR, and it is a
+   * window at both ends - which is the whole reason this is a named number.
+   *
+   * MEASURED: the walk home lands at 60 ticks, and at 138 the agent is out of
+   * that chair again on an ordinary errand. So the case is green on
+   * [60, 137] and red on either side of it, and the `60` this used to carry
+   * sat EXACTLY on the lower edge - 59 reds. Nothing said so, and either edge
+   * moving (a slower walk home, an earlier first errand) would have reddened a
+   * case that is about the crash CLEARING, not about how long anything takes.
+   *
+   * 98 is the middle of the window: 38 ticks of slack below and 39 above,
+   * rather than 0 and 77.
+   *
+   * BOTH NUMBERS ARE MEASURED AGAINST THE FIRST WAIT, which is not "the crash
+   * settling". Alpha is in `failure` for those 60 ticks, so it spends them
+   * WALKING OUT to its bed - a partial outbound lead-in - and where it has got
+   * to when the resolve lands is what sets how far it has to come back. Move
+   * the first wait and the window above moves with it; the two are one
+   * measurement taken in two places, not a settle and a budget.
+   *
+   * The first wait was left at 60 because it is green at every cut it was
+   * given, down to half (30). It was NOT probed upward, so nothing here claims
+   * it has no ceiling of its own - only that it has room below.
+   */
+  const CRASH_CLEARED_TICKS = 98;
+
   it("clears the crash and walks the agent back when the failure resolves", () => {
     const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
@@ -2429,7 +2476,7 @@ describe("OfficeScene", () => {
     );
     for (let step = 0; step < 60; step += 1) scene.tick(100);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
-    for (let step = 0; step < 60; step += 1) scene.tick(100);
+    for (let step = 0; step < CRASH_CLEARED_TICKS; step += 1) scene.tick(100);
 
     const frame = frameOf(scene);
     expect(sprites(frame.props, "monitor-crash")).toHaveLength(0);
@@ -2666,6 +2713,31 @@ describe("OfficeScene", () => {
     expect(standing).toBe(slots.length);
   });
 
+  /**
+   * HOW LONG THE WALK OUT OF THE DOOR TAKES, after the 400 ms this case spends
+   * proving the leaver is on its feet.
+   *
+   * MEASURED: 116 ticks. This carried `120` - four ticks, 3.3 % - over a
+   * number nothing here stated. There is no upper edge to sit under: an
+   * archived agent that has vanished stays vanished, and the case is green at
+   * every budget probed up to 800, so the fix is simply to stop standing on
+   * the lower one.
+   *
+   * IT IS THE SAME WALK `office-scene-replay.test.ts` WAITS FOR, and the two
+   * measurements are the same number rather than two nearby ones: both run
+   * `testView(layoutOffice)` with the same alpha/beta pair, and 400 ms of
+   * lead-in plus 116 ticks is 12 000 ms of scene clock - exactly the 120 ticks
+   * that file measures with no lead-in at all. They agree to the millisecond,
+   * and the only reason they are two constants is that a reader of either case
+   * should see what THAT case waits for.
+   *
+   * `ARCHIVAL_WALK_OUT_TICKS` in "%s view behaviour" is the third, and its 127
+   * is not a third floor: that describe is `describe.each(OFFICE_VIEW_IDS)`, so
+   * its budget has to cover the SLOWEST of the six views, not the Floor. A
+   * single shared constant would hide which of those three moved.
+   */
+  const CURSOR_ARCHIVAL_WALK_TICKS = 240;
+
   it("walks an agent out of the door when the cursor crosses its archival", () => {
     const leaver = agent({ id: "alpha", createdAt: 1, archivedAt: 500 });
     const live = sceneInput({
@@ -2691,7 +2763,9 @@ describe("OfficeScene", () => {
     );
     expect(hasCharacter(frameOf(scene), "alpha")).toBe(true);
 
-    for (let step = 0; step < 120; step += 1) scene.tick(100);
+    for (let step = 0; step < CURSOR_ARCHIVAL_WALK_TICKS; step += 1) {
+      scene.tick(100);
+    }
     const gone = frameOf(scene);
     expect(hasCharacter(gone, "alpha")).toBe(false);
     expect(sprites(gone.props, "dust-sheet")).toHaveLength(1);
@@ -2946,6 +3020,27 @@ describe("OfficeScene", () => {
     expect(launched.x).toBe(seatedHead("beta").x);
   });
 
+  /**
+   * HOW LONG THE SUMMONS WALK TO RECEPTION TAKES, before the place beta is
+   * holding can be read off a frame at all.
+   *
+   * MEASURED: 67 ticks. The `80` this carried is 16 % over that, and the walk
+   * has no ceiling to sit under - beta holds its place for as long as it needs
+   * a person, so the case is green at every budget probed to 800. The number
+   * was not a knife edge by a one-unit reading and is one by the reading this
+   * suite has been using: it is the same shape as the walk-out waits below,
+   * and the only thing that told you which was a mutation run.
+   *
+   * NOT `QUEUE_WALK_TICKS` above, which is the SECOND agent crossing the floor
+   * (100 ticks measured, 140 budgeted). Here only beta walks, so the two
+   * measurements are different and each stays with the case that took it.
+   *
+   * 160 is about twice the measurement. It costs 8 seconds of scene clock on a
+   * two-agent floor, which is nothing, and it means the queue walk getting
+   * slower reddens the cases that are ABOUT the queue walk instead of this one.
+   */
+  const QUEUED_AT_RECEPTION_TICKS = 160;
+
   it("leaves a queued agent at reception when a message arrives for it", () => {
     const scene = new OfficeScene(testView(layoutOffice), null);
     const needsHelp = new Map<string, OfficeAgentStatus>([
@@ -2958,7 +3053,9 @@ describe("OfficeScene", () => {
         statusById: needsHelp,
       }),
     );
-    for (let step = 0; step < 80; step += 1) scene.tick(100);
+    for (let step = 0; step < QUEUED_AT_RECEPTION_TICKS; step += 1) {
+      scene.tick(100);
+    }
     const queued = characterRect(frameOf(scene), "beta");
     expect(queued).not.toEqual(seatedRect("beta"));
 
@@ -4469,6 +4566,26 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     expect(characterRect(frameOf(scene), "alpha")).toEqual(seatedBox);
   });
 
+  /**
+   * HOW LONG THE WALK OUT OF THE DOOR TAKES on the view under test, with no
+   * lead-in - this case syncs the archival and then waits.
+   *
+   * MEASURED: 127 ticks, against the `150` this carried - 15 %. Like the other
+   * two waits for this same walk it has no ceiling (green at every budget
+   * probed to 800), so 260 is twice the measurement and costs nothing.
+   *
+   * IT IS THE SAME WALK the other two wait for, at a WIDER SCOPE. This
+   * describe is `describe.each(OFFICE_VIEW_IDS)`, so one budget covers all six
+   * views and 127 is the slowest of them - not a different Floor from the one
+   * `CURSOR_ARCHIVAL_WALK_TICKS` and `office-scene-replay.test.ts` measure.
+   * Those two are the Floor alone and agree exactly with each other: 400 ms of
+   * lead-in plus 116 ticks there is 12 000 ms, which is that file's 120 ticks
+   * with no lead-in. So the three numbers are one walk read at two scopes, and
+   * they stay three constants only so that a view getting slower reddens here
+   * and names the scope, rather than moving a number two other cases share.
+   */
+  const ARCHIVAL_WALK_OUT_TICKS = 260;
+
   it("walks an archived agent out of the door and sheets its desk", () => {
     const leaver = agent({ id: "alpha", createdAt: 1, archivedAt: 500 });
     const scene = newScene();
@@ -4487,7 +4604,9 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       }),
     );
 
-    for (let step = 0; step < 150; step += 1) scene.tick(100);
+    for (let step = 0; step < ARCHIVAL_WALK_OUT_TICKS; step += 1) {
+      scene.tick(100);
+    }
     const gone = frameOf(scene);
     expect(hasCharacter(gone, "alpha")).toBe(false);
     expect(sprites(visibleDrawables(gone), "dust-sheet")).toHaveLength(1);
@@ -9003,14 +9122,33 @@ describe.each(OFFICE_VIEW_IDS)("%s view vehicles", (viewId) => {
     expect(vehicles.length).toBeLessThanOrEqual(2);
   });
 
+  /**
+   * THE CREW SIZE, AND THE INDEX THAT HAS TO BE ITS LAST ONE.
+   *
+   * `inherit-b` is the NEWEST agent on this floor - it is what makes the third
+   * crash land on a trip that is already standing - so its index is the crew's
+   * last, and the two numbers were written out separately: `{ length: 40 }`
+   * with a hard `39` in the id map beside it. Measured: 40 -> 39 does not
+   * shrink a margin, it deletes `inherit-b` outright and the case reds with
+   * "expected [ 'ambulance' ] to include 'fire-engine'" - a fire engine that
+   * never had a third crash to answer. Five cases in this describe read the
+   * same pair.
+   *
+   * So the index is DERIVED here rather than restated. The forty itself is a
+   * floor big enough to earn a two-bed ward and a road, which the case checks
+   * for and skips on rather than assuming.
+   */
+  const INHERIT_CREW = 40;
+  const INHERIT_NEWEST = INHERIT_CREW - 1;
+
   it("keeps inherited ambulance riders waiting when a fire engine replaces their van", (context) => {
     const specialIds = new Map<number, string>([
       [0, "a"],
-      [39, "b"],
+      [INHERIT_NEWEST, "b"],
       [1, "c"],
     ]);
     const agents: ReadonlyArray<OfficeAgentInput> = Array.from(
-      { length: 40 },
+      { length: INHERIT_CREW },
       (_unused, index) =>
         agent({
           id: `inherit-${specialIds.get(index) ?? `filler-${index}`}`,

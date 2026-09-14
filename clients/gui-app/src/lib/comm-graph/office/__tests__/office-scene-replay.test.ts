@@ -241,6 +241,32 @@ describe("OfficeScene replay", () => {
     expect(frameOf(scene).hitRegions.length).toBeGreaterThan(0);
   });
 
+  /**
+   * HOW LONG ALPHA'S WALK OUT OF THE DOOR TAKES on this suite's floor.
+   *
+   * MEASURED: 120 ticks. The `150` this carried is 20 % over it, which reads
+   * like plenty and is the same margin the chess pairing frame had before
+   * `CHESS_PAIRING_TICKS` named it - a budget nothing in the case explains,
+   * over a walk length nothing in the case pins. A deeper storey (which is
+   * exactly what the civic rooms made the Floor) spends it.
+   *
+   * There is no upper edge: an archived agent that has vanished stays
+   * vanished, and the case is green at every budget probed up to 800. So 260
+   * is a little over twice the measurement, and the scrub back below is
+   * unaffected either way.
+   *
+   * `office-scene.test.ts` waits for the SAME walk twice more, and the
+   * relationship is arithmetic rather than coincidence. Its
+   * `CURSOR_ARCHIVAL_WALK_TICKS` case runs `testView(layoutOffice)` with the
+   * same alpha/beta pair this one does, and spends 400 ms proving the leaver is
+   * on its feet before it starts counting: 400 ms + 116 ticks is 12 000 ms,
+   * which is exactly the 120 above. Same floor, same walk, same answer. Its
+   * `ARCHIVAL_WALK_OUT_TICKS` is 127 because that describe is
+   * `describe.each(OFFICE_VIEW_IDS)` and one budget there has to cover the
+   * slowest of six views - a wider scope, not a third floor.
+   */
+  const ARCHIVAL_WALK_OUT_TICKS = 260;
+
   it("archives an agent, walks it out and sheets its desk, then reverses all of it on a scrub back across the same cursor", () => {
     const leaver = agent({ id: "alpha", createdAt: 1, archivedAt: 500 });
     const beta = agent({ id: "beta", createdAt: 2 });
@@ -267,7 +293,9 @@ describe("OfficeScene replay", () => {
     scene.sync(
       sceneInput({ agents: family, visibleAgentIds: both, cursorMs: 900 }),
     );
-    for (let step = 0; step < 150; step += 1) scene.tick(100);
+    for (let step = 0; step < ARCHIVAL_WALK_OUT_TICKS; step += 1) {
+      scene.tick(100);
+    }
     const archived = frameOf(scene);
     expect(hasCharacterRegion(archived, "alpha")).toBe(false);
     const dustSheets = archived.props.filter(
