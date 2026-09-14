@@ -68,7 +68,7 @@ async function establishOopif(
   browserDebugger.responses.set("Target.attachToTarget", {
     sessionId: "child-1",
   });
-  await harness.session.enableAfterCommit();
+  await harness.session.acquire().ready();
   await recordRootFrame(harness, ROOT_FRAME_ID);
   await expect(
     harness.session.dispatch(frameTarget("frame-1", ROOT_FRAME_ID), {
@@ -128,7 +128,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     const browserDebugger = harness.webContents.debugger;
     browserDebugger.deferResponse("Page.enable", undefined);
 
-    const enabling = harness.session.enableAfterCommit();
+    const enabling = harness.session.acquire().ready();
     await vi.waitFor(() => {
       expect(browserDebugger.commands).toContainEqual({
         method: "Page.enable",
@@ -150,7 +150,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.getTargets", {
       targetInfos: [],
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
 
     expect(
@@ -198,7 +198,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     const harness = createHarness();
     const browserDebugger = harness.webContents.debugger;
     browserDebugger.responses.set("Target.getTargets", { targetInfos: [] });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
 
     browserDebugger.emitMessage(
@@ -253,7 +253,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.attachToTarget", {
       sessionId: "child-1",
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
 
     await expect(
@@ -304,7 +304,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.attachToTarget", {
       sessionId: "child-1",
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     browserDebugger.onSendCommand = ({ method, sessionId }) => {
       if (method !== "Page.enable" || sessionId !== "child-1") return;
@@ -353,7 +353,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.getTargets", {
       targetInfos: [{ targetId: "frame-1", type: "iframe" }],
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
 
     await expect(
@@ -383,7 +383,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.getTargets", {
       targetInfos: [{ targetId: "frame-1", type: "iframe" }],
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     browserDebugger.onSendCommand = ({ method }) => {
       if (method !== "Target.getTargets") return;
@@ -424,7 +424,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.attachToTarget", {
       sessionId: "child-1",
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
 
     const results = await Promise.all([
@@ -471,7 +471,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.attachToTarget", {
       sessionId: "stale-child",
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     browserDebugger.onSendCommand = ({ method }) => {
       if (method !== "Target.attachToTarget") return;
@@ -512,7 +512,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.attachToTarget", {
       sessionId: "detached-child",
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     browserDebugger.onSendCommand = ({ method }) => {
       if (method !== "Target.attachToTarget") return;
@@ -561,7 +561,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
       targetInfos: [{ targetId: "frame-1", type: "iframe" }],
     });
     browserDebugger.deferResponse("Target.attachToTarget", undefined);
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
 
     const pending = harness.session.dispatch(
@@ -588,7 +588,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
         message: "Browser debugger detached while enabling",
       },
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     browserDebugger.resolveResponse("Target.attachToTarget", undefined, {
       sessionId: "late-child",
     });
@@ -765,7 +765,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.attachToTarget", {
       sessionId: "late-child",
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     browserDebugger.onSendCommand = ({ method }) => {
       if (method === "Target.attachToTarget") harness.session.dispose();
@@ -797,7 +797,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.attachToTarget", {
       sessionId: "child-1",
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     await harness.session.dispatch(frameTarget("frame-1", ROOT_FRAME_ID), {
       kind: "cdpInsertText",
@@ -938,7 +938,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     browserDebugger.responses.set("Target.attachToTarget", {
       sessionId: "child-1",
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     await harness.session.dispatch(frameTarget("frame-1", ROOT_FRAME_ID), {
       kind: "cdpInsertText",
@@ -968,7 +968,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
       commandKey("DOM.enable", "child-1"),
       new Error("DOM unavailable"),
     );
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
 
     await expect(
@@ -1012,7 +1012,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     harness.webContents.debugger.responses.set("Target.getTargets", {
       targetInfos: [],
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     await harness.session.dispatch(frameTarget("frame-1", ROOT_FRAME_ID), {
       kind: "cdpInsertText",
@@ -1039,7 +1039,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     const harness = createHarness();
     const browserDebugger = harness.webContents.debugger;
     browserDebugger.responses.set("Target.getTargets", { targetInfos: [] });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     await harness.session.dispatch(frameTarget("frame-1", ROOT_FRAME_ID), {
       kind: "cdpInsertText",
@@ -1078,7 +1078,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
   it("does not commit a frame tree invalidated while Page.getFrameTree is in flight", async () => {
     const harness = createHarness();
     const browserDebugger = harness.webContents.debugger;
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     browserDebugger.onSendCommand = ({ method }) => {
       if (method !== "Page.getFrameTree") return;
@@ -1142,7 +1142,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
         ],
       },
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
 
     await expect(
       harness.session.dispatch(ROOT_TARGET, { kind: "cdpGetFrameTree" }),
@@ -1160,7 +1160,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     const harness = createHarness();
     const browserDebugger = harness.webContents.debugger;
     browserDebugger.responses.set("Target.getTargets", { targetInfos: [] });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
     await harness.session.dispatch(frameTarget("frame-1", ROOT_FRAME_ID), {
       kind: "cdpInsertText",
@@ -1202,7 +1202,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
   it("classifies a command rejection from actual post-failure attach state", async () => {
     const harness = createHarness();
     const browserDebugger = harness.webContents.debugger;
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     browserDebugger.failures.set(
       "Page.captureScreenshot",
       new Error("transport rejected"),
@@ -1233,7 +1233,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
       targetInfos: [{ targetId: "frame-1", type: "iframe" }],
     });
     browserDebugger.deferResponse("Target.attachToTarget", undefined);
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
 
     const stale = harness.session.dispatch(
@@ -1327,7 +1327,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     ).rejects.toThrow("Browser debugger is not ready.");
     expect(browserDebugger.attached).toBe(false);
 
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
 
     expect(browserDebugger.attached).toBe(true);
     expect(
@@ -1367,7 +1367,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
   it("preserves JavaScript undefined separately from JSON null", async () => {
     const harness = createHarness();
     const browserDebugger = harness.webContents.debugger;
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     browserDebugger.responses.set("Runtime.evaluate", {
       result: { value: undefined },
     });
@@ -1451,7 +1451,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     harness.webContents.debugger.responses.set("Target.getTargets", {
       targetInfos: [],
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await recordRootFrame(harness, ROOT_FRAME_ID);
 
     await expect(
@@ -1486,7 +1486,7 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
         ],
       },
     });
-    await harness.session.enableAfterCommit();
+    await harness.session.acquire().ready();
     await harness.session.dispatch(ROOT_TARGET, { kind: "cdpGetFrameTree" });
     await harness.session.dispatch(frameTarget("frame-1", ROOT_FRAME_ID), {
       kind: "cdpInsertText",

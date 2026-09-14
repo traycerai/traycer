@@ -6,7 +6,10 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
 import type { BrowserSessionProfile } from "../browser-session";
-import type { BrowserDebugSession } from "../debug/browser-debug-session";
+import type {
+  BrowserDebugLease,
+  BrowserDebugSession,
+} from "../debug/browser-debug-session";
 import type { BrowserViewEntryKey } from "./browser-view-entry-registry";
 import type {
   BrowserViewDevToolsWindow,
@@ -57,6 +60,18 @@ export interface BrowserViewEntry {
   findState: BrowserViewEntryFindState;
   certificateError: BrowserViewCertificateErrorChange | null;
   debugSession: BrowserDebugSession | null;
+  /**
+   * Held while the storage seed script is installed - from provisioning until
+   * `navigateAccepted` removes it. A tab with nothing to seed never takes one,
+   * and so never attaches a debugger at birth.
+   */
+  seedLease: BrowserDebugLease | null;
+  /**
+   * Taken by the first agent CDP dispatch and held for the rest of this tab
+   * incarnation. Nothing on the wire says when an agent is done with a tab, and
+   * the frame routes a command sequence resolves must stay valid across it.
+   */
+  agentCdpLease: BrowserDebugLease | null;
   annotationSession: BrowserAnnotationSession | null;
   devToolsWindow: BrowserViewDevToolsWindow | null;
   /**

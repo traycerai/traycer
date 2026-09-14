@@ -227,7 +227,6 @@ export class BrowserViewManager {
     this.viewport = new BrowserViewViewport(
       this.entries,
       this.annotations,
-      this.debugSessions,
       options.send,
     );
     this.find = new BrowserViewFind({
@@ -266,7 +265,6 @@ export class BrowserViewManager {
       find: this.find,
       popups: this.popups,
       chords: this.chords,
-      debugSessions: this.debugSessions,
       observePrimaryProfileOrigin: options.observePrimaryProfileOrigin,
       setStatus: (entry, status, reason) => {
         this.setStatus(entry, status, reason);
@@ -628,7 +626,12 @@ export class BrowserViewManager {
       };
     }
     const debugSession = this.debugSessions.ensure(entry);
-    await debugSession.enableAfterCommit().catch(() => undefined);
+    // The first agent command attaches this tab's debugger for the rest of its
+    // incarnation. There is no "agent is done with the tab" signal on the wire,
+    // and a detach between two commands of one sequence would invalidate the
+    // frame routes that sequence resolved.
+    entry.agentCdpLease ??= debugSession.acquire();
+    await entry.agentCdpLease.ready().catch(() => undefined);
     return debugSession.dispatch(input.target, input.command);
   }
 
@@ -949,6 +952,13 @@ export class BrowserViewManager {
     if (this.pip.isCapturing(entry)) this.pip.stop();
   }
 
+  /**
+   * Console and network entries are recorded only while the guest's debugger is
+   * attached, which is only while something holds a lease on it. The renderer
+   * pulls this snapshot with no open/close signal to hold a lease of its own,
+   * so a tab nobody is driving answers empty - which is the honest answer, not
+   * a reason to attach a debugger to every tab.
+   */
   private readDebugSnapshot(
     entry: BrowserViewEntry,
   ): BrowserViewDebugSnapshotData {
@@ -1100,6 +1110,10 @@ export class BrowserViewManager {
     entry.annotationSession?.dispose("tile-close");
     entry.annotationSession = null;
     this.pip.forget(entry);
+    // Disposing the session ends every lease this guest handed out; the fields
+    // go with it so nothing can release into the next incarnation's session.
+    entry.seedLease = null;
+    entry.agentCdpLease = null;
     entry.debugSession?.dispose();
     entry.debugSession = null;
     this.releaseRendererGuest(

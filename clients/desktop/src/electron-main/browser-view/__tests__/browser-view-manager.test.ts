@@ -10,6 +10,7 @@ import { MAX_BROWSER_VIEW_POPUPS } from "../manager/browser-view-popups";
 import type {
   BrowserViewCapturedImage,
   BrowserViewDebugger,
+  BrowserViewEnsureTab,
   BrowserViewGuestAttachRequest,
   BrowserViewGuestAttachResult,
   BrowserViewNativeTabTransfer,
@@ -1188,12 +1189,12 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(view.loadUrls).toEqual(["about:blank"]);
     expect(view.lifecycle).toEqual([
       "loadURL",
-      "Page.addScriptToEvaluateOnNewDocument",
       "Page.enable",
       "Runtime.enable",
       "Log.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.addScriptToEvaluateOnNewDocument",
     ]);
 
     await harness.manager.acceptTab(provisioned);
@@ -1205,12 +1206,12 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ]);
     expect(view.lifecycle).toEqual([
       "loadURL",
-      "Page.addScriptToEvaluateOnNewDocument",
       "Page.enable",
       "Runtime.enable",
       "Log.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.addScriptToEvaluateOnNewDocument",
       "loadURL",
       "Page.removeScriptToEvaluateOnNewDocument",
     ]);
@@ -1246,7 +1247,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ]);
   });
 
-  it("does not report a native tab provisioned until its tab-keyed CDP route is enabled", async () => {
+  it("provisions a tab with nothing to seed without attaching a debugger", async () => {
     const harness = createHarness();
     const ensure = harness.manager.ensureTab("window-1", {
       hostId: "host-1",
@@ -1259,31 +1260,14 @@ describe("BrowserViewManager native tab lifecycle", () => {
     });
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
-    view.debugger.deferCommands = true;
 
-    let settled = false;
-    void ensure.finally(() => {
-      settled = true;
-    });
-    await flushCloseEntry();
-
-    expect(settled).toBe(false);
-    expect(view.debugger.commands.map(({ method }) => method)).toEqual([
-      "Page.enable",
-      "Runtime.enable",
-      "Log.enable",
-      "Network.enable",
-      "DOM.enable",
-    ]);
-
-    for (const resolve of view.debugger.commandResolvers.splice(0)) {
-      resolve(null);
-    }
     await expect(ensure).resolves.toMatchObject({
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
     });
+    expect(view.debugger.attached).toBe(false);
+    expect(view.debugger.commands).toEqual([]);
   });
 
   it("reattaches an existing native guest after its debugger detaches", async () => {
@@ -1301,6 +1285,16 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
     await harness.manager.acceptTab(ready);
+    // An agent command is what attaches this tab's debugger, and its lease is
+    // what makes a later detach worth recovering from.
+    await harness.manager.dispatchElectronTabCdp({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: ready.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpGetFrameTree" },
+    });
 
     view.emit("did-navigate", {}, "https://example.com/next", 200, "OK");
     view.debugger.emitDetach("target closed");
@@ -1340,16 +1334,23 @@ describe("BrowserViewManager native tab lifecycle", () => {
     });
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
-    view.debugger.emitDetach("target closed");
-
-    await expect(
+    const dispatch = () =>
       harness.manager.dispatchElectronTabCdp({
         ...nativeKey,
         registrationId: ready.registrationId,
         target: { kind: "root" },
         command: { kind: "cdpGetFrameTree" },
-      }),
-    ).resolves.toMatchObject({ kind: "cdpGetFrameTree", ok: true });
+      });
+    await expect(dispatch()).resolves.toMatchObject({
+      kind: "cdpGetFrameTree",
+      ok: true,
+    });
+    view.debugger.emitDetach("target closed");
+
+    await expect(dispatch()).resolves.toMatchObject({
+      kind: "cdpGetFrameTree",
+      ok: true,
+    });
     expect(
       view.debugger.commands.filter(
         ({ method, sessionId }) =>
@@ -1850,15 +1851,25 @@ describe("BrowserViewManager native tab lifecycle", () => {
   // on a guest that is being closed, and the second window gets its own birth.
   it("supersedes a provisioning tab's birth from another window once its entry exists", async () => {
     const harness = createHarness();
+    // Seeded, because the storage seed script is the one thing that attaches a
+    // debugger at birth - and so the only birth with CDP left to stall.
     const ensureInput = {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
       requestedUrl: "https://example.com/",
       profile: "primary",
-      seedStorageState: null,
+      seedStorageState: {
+        cookies: [],
+        origins: [
+          {
+            origin: "https://example.com",
+            localStorage: [{ name: "token", value: "carried" }],
+          },
+        ],
+      },
       connectionId: null,
-    } as const;
+    } satisfies BrowserViewEnsureTab;
     const firstEnsure = harness.manager.ensureTab("window-1", ensureInput);
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
@@ -2646,11 +2657,12 @@ describe("BrowserViewManager annotation session", () => {
   it("starts an annotation session after a committed navigation", async () => {
     const harness = createHarness();
     const { view } = await attachAnnotationTab(harness);
-    expect(view.debugger.attached).toBe(true);
+    expect(view.debugger.attached).toBe(false);
 
     await expect(
       harness.manager.annotations.start("window-1", BASE_KEY),
     ).resolves.toEqual({ ok: true });
+    expect(view.debugger.attached).toBe(true);
     expect(
       harness.guests[0]?.debugger.commands.some(
         (command) =>
@@ -3638,12 +3650,12 @@ describe("BrowserViewManager renderer guest capability", () => {
     expect(guest.loadUrls).toEqual(["about:blank"]);
     expect(guest.lifecycle).toEqual([
       "loadURL",
-      "Page.addScriptToEvaluateOnNewDocument",
       "Page.enable",
       "Runtime.enable",
       "Log.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.addScriptToEvaluateOnNewDocument",
     ]);
 
     await harness.manager.acceptTab(provisioned);
@@ -3655,12 +3667,12 @@ describe("BrowserViewManager renderer guest capability", () => {
     ]);
     expect(guest.lifecycle).toEqual([
       "loadURL",
-      "Page.addScriptToEvaluateOnNewDocument",
       "Page.enable",
       "Runtime.enable",
       "Log.enable",
       "Network.enable",
       "DOM.enable",
+      "Page.addScriptToEvaluateOnNewDocument",
       "loadURL",
       "Page.removeScriptToEvaluateOnNewDocument",
     ]);

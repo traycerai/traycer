@@ -14,7 +14,10 @@ import {
   originFromPageUrl,
 } from "./browser-annotation-crop";
 import { ANNOTATION_OVERLAY_GUEST_SOURCE } from "./browser-annotation-overlay-guest.generated";
-import { BrowserDebugSession } from "../debug/browser-debug-session";
+import {
+  BrowserDebugSession,
+  type BrowserDebugLease,
+} from "../debug/browser-debug-session";
 import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
 import type {
   BrowserCdpCommand,
@@ -76,6 +79,7 @@ export class BrowserAnnotationSession {
   private readonly onAttached: (
     result: BrowserAnnotationAttachedResult,
   ) => Promise<boolean>;
+  private lease: BrowserDebugLease | null = null;
   private removeBindingListener: (() => void) | null = null;
   private contextId: number | null = null;
   private ended = false;
@@ -150,7 +154,10 @@ export class BrowserAnnotationSession {
   async start(): Promise<BrowserAnnotationStartResult> {
     if (this.ended) return { ok: false, reason: "inject-failed" };
     try {
-      await this.debugSession.enableAfterCommit();
+      // The overlay is a CDP consumer for as long as it is on the page: an
+      // isolated world, a Runtime binding, and evaluates in both directions.
+      this.lease = this.debugSession.acquire();
+      await this.lease.ready();
       if (this.ended) return this.abortStart("inject-failed");
       await this.debugSession.sendCommand(
         "Runtime.addBinding",
@@ -265,6 +272,7 @@ export class BrowserAnnotationSession {
     this.sendCancel();
     this.teardownListeners();
     this.removeBinding();
+    this.releaseLease();
     this.contextId = null;
     return { ok: false, reason };
   }
@@ -276,12 +284,18 @@ export class BrowserAnnotationSession {
     this.sendCancel();
     this.teardownListeners();
     this.removeBinding();
+    this.releaseLease();
     if (!this.started) return;
     if (reason === "cancelled") {
       this.onEvent({ type: "cancelled" });
       return;
     }
     this.onEvent({ type: "ended", reason });
+  }
+
+  private releaseLease(): void {
+    this.lease?.release();
+    this.lease = null;
   }
 
   private attachMessageListener(): void {

@@ -7,7 +7,11 @@ interface BrowserViewPipCaptureOptions {
   readonly debugSessions: BrowserViewDebugSessions;
 }
 
-/** At most one tab streams PiP frames at a time; starting a second stops the first. */
+/**
+ * At most one tab streams PiP frames at a time; starting a second stops the
+ * first. Frames come from `webContents.capturePage()`, so this takes no
+ * debugger lease - PiP never needs CDP.
+ */
 export class BrowserViewPipCapture {
   private readonly debugSessions: BrowserViewDebugSessions;
   private capturingEntry: BrowserViewEntry | null = null;

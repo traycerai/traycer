@@ -28,6 +28,14 @@ interface CdpEvent {
   readonly sessionId: string | undefined;
 }
 
+/** One consumer's claim on the guest's attached debugger. */
+export interface BrowserDebugLease {
+  /** Attaches and enables the CDP domains; resolves once they are live. */
+  ready(): Promise<void>;
+  /** Idempotent. The last release detaches the debugger. */
+  release(): void;
+}
+
 export class BrowserDebugSession {
   private readonly webContents: BrowserDebugWebContents;
   private readonly onDetached: (reason: string) => void;
@@ -44,6 +52,7 @@ export class BrowserDebugSession {
     this.handleDebuggerDetach(args);
   };
   private enabled = false;
+  private leases = 0;
   private enablePromise: Promise<void> | null = null;
   private attachedBySession = false;
   private listening = false;
@@ -178,10 +187,37 @@ export class BrowserDebugSession {
     );
   }
 
-  enableAfterCommit(): Promise<void> {
+  /**
+   * A consumer that needs CDP takes a lease. The first one attaches the
+   * debugger and enables the domains; the last release detaches again, so a
+   * tab nobody is driving stays a plain Chromium tab rather than one running
+   * with `Runtime.enable` side effects for the page to read.
+   */
+  acquire(): BrowserDebugLease {
+    if (this.disposed) throw new Error("Browser debug session is disposed");
+    this.leases += 1;
+    let released = false;
+    return {
+      ready: () => this.enableWhileLeased(),
+      release: () => {
+        if (released) return;
+        released = true;
+        this.leases -= 1;
+        this.detachIfUnleased();
+      },
+    };
+  }
+
+  /**
+   * Brings the domains back up after a navigation or a renderer reload, for a
+   * tab a lease holder is still driving. Recovery only: a tab nobody has
+   * leased must not gain a debugger here.
+   */
+  enableWhileLeased(): Promise<void> {
     if (this.disposed) {
       return Promise.reject(new Error("Browser debug session is disposed"));
     }
+    if (this.leases === 0) return Promise.resolve();
     if (this.isAttached()) {
       if (this.enabled) return Promise.resolve();
       if (this.enablePromise !== null) return this.enablePromise;
@@ -331,6 +367,24 @@ export class BrowserDebugSession {
       this.attachedBySession = true;
     }
     return browserDebugger;
+  }
+
+  private detachIfUnleased(): void {
+    if (this.leases > 0 || this.disposed) return;
+    const browserDebugger = this.webContents.debugger;
+    const attachedBySession = this.attachedBySession;
+    // Listeners off first: this detach is deliberate, and the detach listener
+    // exists to report the ones we did not ask for.
+    this.stopListening();
+    this.resetDetachedState();
+    if (!attachedBySession || !browserDebugger.isAttached()) return;
+    try {
+      browserDebugger.detach();
+    } catch (err) {
+      log.warn("[browser-view] debugger detach failed", {
+        error: describeLogError(err),
+      });
+    }
   }
 
   private resetDetachedState(): void {
