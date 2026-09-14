@@ -1213,6 +1213,148 @@ describe("BrowserViewManager native tab lifecycle", () => {
       "loadURL",
       "Page.removeScriptToEvaluateOnNewDocument",
     ]);
+    // The seed script was the only reason this tab had a debugger, so the
+    // lease that installed it goes when the script does - once the removal
+    // the assertion above only saw SENT has come back.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(view.debugger.attached).toBe(false);
+    expect(view.debugger.detached).toBe(true);
+
+    // That detach reset the attachment, so an agent driving the tab later
+    // enables the domains again instead of dispatching against a stale one.
+    await harness.manager.dispatchElectronTabCdp({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: provisioned.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpGetFrameTree" },
+    });
+
+    expect(view.debugger.attached).toBe(true);
+    expect(
+      view.lifecycle.filter((step) => step === "Page.enable"),
+    ).toHaveLength(2);
+  });
+
+  it("attaches on the first agent dispatch and keeps that attachment for the incarnation", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+    const dispatch = () =>
+      harness.manager.dispatchElectronTabCdp({
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        target: { kind: "root" },
+        command: { kind: "cdpGetFrameTree" },
+      });
+    const enableCount = () =>
+      view.debugger.commands.filter(({ method }) => method === "Page.enable")
+        .length;
+    expect(view.debugger.attached).toBe(false);
+
+    await expect(dispatch()).resolves.toMatchObject({ ok: true });
+
+    expect(view.debugger.attached).toBe(true);
+    expect(enableCount()).toBe(1);
+
+    // There is no "agent is done" signal on the wire, so the lease the first
+    // command took is held for the rest of the incarnation: a second command
+    // re-enables nothing, and the attachment survives both the command
+    // settling and a navigation that commits under it.
+    await expect(dispatch()).resolves.toMatchObject({ ok: true });
+    view.emit("did-navigate", {}, "https://example.com/next", 200, "OK");
+    await Promise.resolve();
+
+    expect(view.debugger.attached).toBe(true);
+    expect(view.debugger.detached).toBe(false);
+    expect(enableCount()).toBe(1);
+  });
+
+  it("sends nothing on an unleased tab's navigation, and recovers a leased one", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+
+    view.emit("did-navigate", {}, "https://example.com/one", 200, "OK");
+    await Promise.resolve();
+
+    // Navigation recovery is for a tab something is driving - never an attach
+    // of its own.
+    expect(view.debugger.attached).toBe(false);
+    expect(view.debugger.commands).toEqual([]);
+
+    await harness.manager.dispatchElectronTabCdp({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpGetFrameTree" },
+    });
+    view.debugger.emitDetach("target closed");
+    expect(view.debugger.attached).toBe(false);
+
+    view.emit("did-navigate", {}, "https://example.com/two", 200, "OK");
+    await Promise.resolve();
+
+    expect(view.debugger.attached).toBe(true);
+    expect(
+      view.debugger.commands.filter(({ method }) => method === "Page.enable"),
+    ).toHaveLength(2);
+  });
+
+  it("re-ensures an unleased tab without attaching a debugger or closing its guest", async () => {
+    const harness = createHarness();
+    const input = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", input);
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+
+    // `restoreExistingNativeTab` recovers the domains for a lease holder; with
+    // no holder it must neither attach nor read the recovery as a failure and
+    // re-mint the guest.
+    await expect(harness.manager.ensureTab("window-1", input)).resolves.toEqual(
+      ready,
+    );
+
+    expect(harness.guests).toHaveLength(1);
+    expect(harness.releasedRendererGuests).toEqual([]);
+    expect(view.debugger.attached).toBe(false);
+    expect(view.debugger.commands).toEqual([]);
   });
 
   it("keeps the host's intended URL when the guest's birth about:blank commits before acceptance", async () => {
@@ -2429,9 +2571,15 @@ describe("BrowserViewManager native tab lifecycle", () => {
       ),
     ).resolves.toBe(true);
     expect(view.backgroundThrottlingStates).toEqual([false]);
+    // PiP reads the window's own pixels through `capturePage`. It is not a CDP
+    // consumer, so it takes no lease and the guest keeps its bare debugger.
+    expect(view.debugger.attached).toBe(false);
+    expect(view.debugger.commands).toEqual([]);
 
     harness.manager.pip.stop();
     expect(view.backgroundThrottlingStates).toEqual([false, true]);
+    expect(view.debugger.attached).toBe(false);
+    expect(view.debugger.commands).toEqual([]);
   });
 
   it("starts PiP on a bound guest and restores throttling on stop", async () => {
@@ -2672,6 +2820,37 @@ describe("BrowserViewManager annotation session", () => {
     ).toBe(true);
     expect(annotationBindingCommands(view)).toEqual(["Runtime.addBinding"]);
     expect(annotationEventTypes(harness)).toEqual([]);
+  });
+
+  it("keeps the agent's attachment when the overlay ends, and drops it with the tab", async () => {
+    const harness = createHarness();
+    const { capability, view } = await attachAnnotationTab(harness);
+    await expect(
+      harness.manager.dispatchElectronTabCdp({
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: BASE_TILE_KEY.pageSessionId,
+        registrationId: capability.registrationId,
+        target: { kind: "root" },
+        command: { kind: "cdpGetFrameTree" },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(view.debugger.attached).toBe(true);
+
+    await expect(
+      harness.manager.annotations.start("window-1", BASE_KEY),
+    ).resolves.toEqual({ ok: true });
+    harness.manager.annotations.cancel("window-1", BASE_KEY);
+
+    // Two holders, and the overlay's is the one that ended. The agent's lease
+    // is still out, so its frame routes must survive the overlay's release.
+    expect(view.debugger.attached).toBe(true);
+    expect(view.debugger.detached).toBe(false);
+
+    await expect(harness.manager.releaseTab(capability)).resolves.toBe(true);
+    await flushCloseEntry();
+
+    expect(view.debugger.attached).toBe(false);
   });
 
   it("replaces an active session on a second startAnnotation", async () => {

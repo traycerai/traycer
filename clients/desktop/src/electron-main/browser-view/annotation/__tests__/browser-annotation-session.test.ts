@@ -1125,6 +1125,32 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     expect(disposed.webContents.debugger.listenerCount("message")).toBe(0);
   });
 
+  it("detaches a debugger it attached itself after cancel, dispose, or a failed start", async () => {
+    // The harnesses above start from an ALREADY attached debugger, which the
+    // session must leave alone (it did not attach it). These start detached,
+    // so the overlay's own lease is the whole attachment and the release has
+    // to take it back down - otherwise a cancelled overlay leaves the page
+    // running with `Runtime.enable` side effects it can read.
+    const cancelled = createHarness(false);
+    await expect(cancelled.session.start()).resolves.toEqual({ ok: true });
+    expect(cancelled.webContents.debugger.isAttached()).toBe(true);
+    cancelled.session.cancel();
+    expect(cancelled.webContents.debugger.isAttached()).toBe(false);
+
+    const disposed = createHarness(false);
+    await disposed.session.start();
+    disposed.session.dispose("navigation");
+    expect(disposed.webContents.debugger.isAttached()).toBe(false);
+
+    const failed = createHarness(false);
+    failed.webContents.debugger.failEvaluate = true;
+    await expect(failed.session.start()).resolves.toEqual({
+      ok: false,
+      reason: "inject-failed",
+    });
+    expect(failed.webContents.debugger.isAttached()).toBe(false);
+  });
+
   it("locks zoom from sanitized markCount and clears it on reset", async () => {
     const harness = createHarness(true);
     await harness.session.start();
