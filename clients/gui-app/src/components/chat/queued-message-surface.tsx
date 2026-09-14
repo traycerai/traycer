@@ -850,7 +850,7 @@ function QueuedMessageFloatingChrome(props: {
       className={cn(
         "sticky top-0 z-10 float-right ml-2 mb-1 flex shrink-0 items-center",
         props.framed
-          ? "gap-1 rounded-md border border-border/60 bg-background/70 p-0.5 shadow-lg backdrop-blur-md supports-backdrop-filter:bg-background/60"
+          ? "gap-1 rounded-md border border-border/60 bg-background/70 p-0.5 shadow-lg supports-backdrop-filter:bg-background/60"
           : null,
       )}
       data-testid="queued-message-row-toolbar"
