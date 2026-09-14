@@ -462,50 +462,6 @@ export type LoginImportResult =
    */
   | { readonly status: "cancelled" };
 
-export type BrowserViewConsoleLevel =
-  | "log"
-  | "info"
-  | "warning"
-  | "error"
-  | "debug"
-  | "trace";
-
-export interface BrowserViewConsoleEntry {
-  readonly id: string;
-  readonly timestamp: number;
-  readonly source: string;
-  readonly level: BrowserViewConsoleLevel;
-  readonly text: string;
-  readonly url: string | null;
-  readonly lineNumber: number | null;
-  readonly columnNumber: number | null;
-}
-
-export type BrowserViewNetworkStatus = "pending" | "finished" | "failed";
-
-export interface BrowserViewNetworkEntry {
-  readonly id: string;
-  readonly requestId: string;
-  readonly url: string;
-  readonly method: string;
-  readonly status: BrowserViewNetworkStatus;
-  readonly statusCode: number | null;
-  readonly statusText: string | null;
-  readonly mimeType: string | null;
-  readonly startedAt: number;
-  readonly completedAt: number | null;
-  readonly durationMs: number | null;
-  readonly failureText: string | null;
-}
-
-export interface BrowserViewDebugSnapshotData {
-  readonly consoleEntries: readonly BrowserViewConsoleEntry[];
-  readonly networkEntries: readonly BrowserViewNetworkEntry[];
-}
-
-export interface BrowserViewDebugSnapshot
-  extends BrowserViewTileKey, BrowserViewDebugSnapshotData {}
-
 export interface BrowserViewCapturePageResult extends BrowserViewTileKey {
   readonly mediaType: string;
   readonly base64: string;
@@ -754,9 +710,6 @@ export interface BrowserViewBridge {
   cancelDownload(input: BrowserViewDownloadCancel): Promise<void>;
   trustCertificate(input: BrowserViewCertificateTrust): Promise<void>;
   capturePage(input: BrowserViewTileKey): Promise<BrowserViewCapturePageResult>;
-  getDebugSnapshot(
-    input: BrowserViewTileKey,
-  ): Promise<BrowserViewDebugSnapshot>;
   startAnnotation(
     input: BrowserAnnotationStartInput,
   ): Promise<BrowserAnnotationStartResult>;

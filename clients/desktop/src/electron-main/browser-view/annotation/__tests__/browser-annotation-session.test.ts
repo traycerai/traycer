@@ -427,7 +427,6 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     expect(harness.webContents.debugger.commandMethods()).toEqual([
       "Page.enable",
       "Runtime.enable",
-      "Log.enable",
       "Network.enable",
       "DOM.enable",
       "Runtime.addBinding",
@@ -485,7 +484,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
       ok: false,
       reason: "no-main-frame",
     });
-    expect(harness.webContents.debugger.listenerCount("message")).toBe(1);
+    expect(harness.webContents.debugger.listenerCount("message")).toBe(0);
     expect(
       harness.webContents.debugger.find("Runtime.removeBinding")?.params,
     ).toEqual({
@@ -500,7 +499,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
       ok: false,
       reason: "no-isolated-world",
     });
-    expect(harness.webContents.debugger.listenerCount("message")).toBe(1);
+    expect(harness.webContents.debugger.listenerCount("message")).toBe(0);
     expect(
       harness.webContents.debugger.find("Runtime.removeBinding")?.params,
     ).toEqual({
@@ -515,7 +514,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
       ok: false,
       reason: "inject-failed",
     });
-    expect(harness.webContents.debugger.listenerCount("message")).toBe(1);
+    expect(harness.webContents.debugger.listenerCount("message")).toBe(0);
     expect(harness.events).toEqual([]);
     expect(evaluateExpressions(harness.webContents.debugger)).toContain(
       ANNOTATION_CANCEL_EXPRESSION,
@@ -996,7 +995,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
 
     expect(harness.session.isActive()).toBe(false);
     expect(harness.events).toEqual([{ type: "cancelled" }]);
-    expect(harness.webContents.debugger.listenerCount("message")).toBe(1);
+    expect(harness.webContents.debugger.listenerCount("message")).toBe(0);
     const cancelEvaluate = harness.webContents.debugger
       .finds("Runtime.evaluate")
       .find(
@@ -1029,7 +1028,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
 
     expect(harness.session.isActive()).toBe(false);
     expect(harness.events).toEqual([{ type: "cancelled" }]);
-    expect(harness.webContents.debugger.listenerCount("message")).toBe(1);
+    expect(harness.webContents.debugger.listenerCount("message")).toBe(0);
     expect(
       harness.webContents.debugger.find("Runtime.removeBinding")?.params,
     ).toEqual({
@@ -1046,12 +1045,12 @@ describe("BrowserAnnotationSession annotation overlay", () => {
       await flush();
 
       expect(harness.events).toEqual([{ type: "ended", reason }]);
-      expect(harness.webContents.debugger.listenerCount("message")).toBe(1);
+      expect(harness.webContents.debugger.listenerCount("message")).toBe(0);
       expect(harness.session.isActive()).toBe(false);
     },
   );
 
-  it("a second session on the same debugger after dispose has no leftover listeners from the first", async () => {
+  it("a second session re-leases the same debugger after the first detaches it", async () => {
     const webContents = new FakeWebContents(true);
     const debugSession = createDebugSession(webContents);
     const firstEvents: BrowserAnnotationSessionEvent[] = [];
@@ -1068,7 +1067,10 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     await first.start();
     expect(webContents.debugger.listenerCount("message")).toBe(1);
     first.dispose("replaced");
-    expect(webContents.debugger.listenerCount("message")).toBe(1);
+    // The debugger listeners come off with the lease release, which waits for
+    // the overlay's cancel evaluate and binding removal to settle.
+    await flush();
+    expect(webContents.debugger.listenerCount("message")).toBe(0);
 
     const secondEvents: BrowserAnnotationSessionEvent[] = [];
     const second = new BrowserAnnotationSession({
@@ -1095,7 +1097,8 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     ]);
 
     second.dispose("tile-close");
-    expect(webContents.debugger.listenerCount("message")).toBe(1);
+    await flush();
+    expect(webContents.debugger.listenerCount("message")).toBe(0);
   });
 
   it("evaluates hideChromeForCapture, resetAfterAttach, and captureFailed", async () => {
@@ -1114,16 +1117,56 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     expect(expressions).toContain(ANNOTATION_CAPTURE_FAILED_EXPRESSION);
   });
 
-  it("leaves only the shared debugger listener after dispose or cancel", async () => {
+  it("detaches the shared debugger after dispose or cancel", async () => {
     const cancelled = createHarness(true);
     await cancelled.session.start();
     cancelled.session.cancel();
-    expect(cancelled.webContents.debugger.listenerCount("message")).toBe(1);
+    await flush();
+    expect(cancelled.webContents.debugger.listenerCount("message")).toBe(0);
 
     const disposed = createHarness(true);
     await disposed.session.start();
     disposed.session.dispose("navigation");
-    expect(disposed.webContents.debugger.listenerCount("message")).toBe(1);
+    await flush();
+    expect(disposed.webContents.debugger.listenerCount("message")).toBe(0);
+  });
+
+  it("detaches a debugger it attached itself after cancel, dispose, or a failed start", async () => {
+    // The harnesses above start from an ALREADY attached debugger, which the
+    // session must leave alone (it did not attach it). These start detached,
+    // so the overlay's own lease is the whole attachment and the release has
+    // to take it back down - otherwise a cancelled overlay leaves the page
+    // running with `Runtime.enable` side effects it can read.
+    const cancelled = createHarness(false);
+    await expect(cancelled.session.start()).resolves.toEqual({ ok: true });
+    expect(cancelled.webContents.debugger.isAttached()).toBe(true);
+    cancelled.session.cancel();
+    // The release rides the shutdown commands: detaching in this tick would
+    // reject the cancel evaluate that takes the marks off the page.
+    expect(cancelled.webContents.debugger.isAttached()).toBe(true);
+    expect(evaluateExpressions(cancelled.webContents.debugger)).toContain(
+      ANNOTATION_CANCEL_EXPRESSION,
+    );
+    expect(
+      cancelled.webContents.debugger.find("Runtime.removeBinding"),
+    ).toBeDefined();
+    await flush();
+    expect(cancelled.webContents.debugger.isAttached()).toBe(false);
+
+    const disposed = createHarness(false);
+    await disposed.session.start();
+    disposed.session.dispose("navigation");
+    await flush();
+    expect(disposed.webContents.debugger.isAttached()).toBe(false);
+
+    const failed = createHarness(false);
+    failed.webContents.debugger.failEvaluate = true;
+    await expect(failed.session.start()).resolves.toEqual({
+      ok: false,
+      reason: "inject-failed",
+    });
+    await flush();
+    expect(failed.webContents.debugger.isAttached()).toBe(false);
   });
 
   it("locks zoom from sanitized markCount and clears it on reset", async () => {
@@ -1211,7 +1254,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
       reason: "inject-failed",
     });
     expect(first.events).toEqual([]);
-    expect(first.webContents.debugger.listenerCount("message")).toBe(1);
+    expect(first.webContents.debugger.listenerCount("message")).toBe(0);
     expect(
       first.webContents.debugger.find("Runtime.removeBinding")?.params,
     ).toEqual({

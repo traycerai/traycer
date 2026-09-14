@@ -12,7 +12,6 @@ import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import type { BrowserViewEntry, BrowserViewSend } from "./browser-view-entry";
 import type { BrowserViewEntryRegistry } from "./browser-view-entry-registry";
 import type { BrowserViewAnnotationHost } from "./browser-view-annotation-host";
-import type { BrowserViewDebugSessions } from "./debug-session-for";
 import { applyEntryZoom } from "./browser-view-entry-factory";
 
 interface ViewportEntry {
@@ -40,7 +39,6 @@ export class BrowserViewViewport {
   constructor(
     private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>,
     private readonly annotations: BrowserViewAnnotationHost,
-    private readonly debugSessions: BrowserViewDebugSessions,
     private readonly send: BrowserViewSend,
   ) {}
 
@@ -241,18 +239,21 @@ export class BrowserViewViewport {
     const zoom = entry.webContents.getZoomFactor();
     let width = Math.max(1, Math.round(input.geometry.width * zoom));
     let height = Math.max(1, Math.round(input.geometry.height * zoom));
-    const debug = this.debugSessions.ensure(entry);
-    await debug.enableAfterCommit();
-    signal.throwIfAborted();
     // The guest's intrinsic CSS size is the native viewport authority. Clear
     // stale agent/device metrics before changing that size, so Chromium never
     // paints an old emulated layout into a differently scaled new surface.
-    await debug.sendCommand(
-      "Emulation.clearDeviceMetricsOverride",
-      {},
-      undefined,
-    );
-    signal.throwIfAborted();
+    // Only a curated agent command can set that override, and it holds a
+    // debugger lease for the tab's life - so an unattached tab has no override
+    // to clear, and must not attach a debugger to find that out.
+    const debug = entry.debugSession;
+    if (debug !== null && debug.isReady()) {
+      await debug.sendCommand(
+        "Emulation.clearDeviceMetricsOverride",
+        {},
+        undefined,
+      );
+      signal.throwIfAborted();
+    }
     if (!this.entries.isCurrent(entry))
       throw new Error("The browser tab closed during resize.");
     // Chromium takes whole native pixels. Try the adjacent pixel if rounding
