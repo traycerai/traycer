@@ -217,44 +217,71 @@
   animation: chat-dock-chip-pulse 620ms ease-out forwards;
 }
 
-/* The model picker's LAST thinking level. Below it the pill is a solid
-   `--primary` fill; at it the fill becomes a gradient running into the accent,
-   the pill takes a soft glow of the same colour, and a fixed constellation of
-   sparkles twinkles over it. Everything here is the STATE of being at the top,
-   not a celebration of arriving there - a picker opened at max looks exactly
-   like one dragged there.
-
-   The two ends of the gradient are both theme tokens: `--primary` and
-   `--reasoning-max-accent` (registered in `themeTokens`, default violet), so a
-   custom theme can recolour max without touching this file and an achromatic
-   default still reads, because the accent carries the hue the monochrome
-   primary has none of. */
-.reasoning-effort-slider {
-  --reasoning-max-glow: color-mix(
-    in srgb,
-    var(--reasoning-max-accent) 32%,
-    transparent
-  );
-  --reasoning-max-edge: color-mix(
-    in srgb,
-    var(--reasoning-max-accent) 35%,
-    transparent
-  );
+/* The thumb and fill share one response: quick eased follow while dragging,
+   then a softer arrival on release or direct selection. The drag target has
+   a small attraction to catalog stops; the brief follow gives it weight
+   without coasting past the chosen level. */
+.reasoning-effort-slider .reasoning-effort-range,
+.reasoning-effort-slider > span:has(> [data-slot="slider-thumb"]) {
+  transition:
+    left 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    right 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin-inline-end 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.reasoning-effort-max-range {
+.reasoning-effort-slider[data-dragging="true"] .reasoning-effort-range,
+.reasoning-effort-slider[data-dragging="true"]
+  > span:has(> [data-slot="slider-thumb"]) {
+  transition-duration: 80ms;
+}
+
+/* Scale the disc, not Radix's positioning wrapper: pickup must not change
+   the measured track geometry or the location of the thumb's centre. */
+.reasoning-effort-slider [data-slot="slider-thumb"] {
+  scale: 1;
+  transition:
+    scale 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 180ms ease-out,
+    border-color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.reasoning-effort-slider[data-pressed="true"] [data-slot="slider-thumb"] {
+  scale: 1.12;
+  box-shadow: 0 3px 8px rgb(0 0 0 / 22%);
+  transition-duration: 120ms;
+}
+
+.reasoning-effort-label {
+  color: color-mix(in oklab, var(--primary) 60%, var(--foreground));
+}
+
+.reasoning-effort-label[data-max="true"] {
+  color: var(--reasoning-max-accent);
+}
+
+/* A crossfade keeps entering and leaving the top level as smooth as moving
+   the thumb. The accent remains theme-owned; no provider-specific hue or
+   usage claim is implied by this treatment. */
+.reasoning-effort-range::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
   background: linear-gradient(
     to right,
     var(--primary),
     var(--reasoning-max-accent)
   );
+  opacity: 0;
+  transition: opacity 320ms ease-out;
 }
 
-/* `[dir="rtl"]` rather than `:dir(rtl)`: Tailwind v4's floor is Chrome 111 and
-   `:dir()` did not ship until Chrome 120, so the pseudo-class silently left
-   111-119 on the left-to-right gradient. The attribute is what the document
-   sets anyway, and matches every descendant of it. */
-[dir="rtl"] .reasoning-effort-max-range {
+.reasoning-effort-max-range::after {
+  opacity: 1;
+}
+
+[dir="rtl"] .reasoning-effort-range::after {
   background: linear-gradient(
     to left,
     var(--primary),
@@ -262,43 +289,76 @@
   );
 }
 
-/* Sized to the clearance the row reserves: `0 0 12px 2px` reaches 14px, which
-   is the slider's `py-2` plus the footer's `py-1.5`, so the popover's
-   `overflow-hidden` has nothing of it to cut. The 1px spread underneath draws
-   the pill's own edge, which is what keeps the glow reading as light coming
-   OFF the control rather than a blur sitting behind it. */
+/* A fine edge defines the capsule without a bloom outside the footer. The
+   slow-moving light lives INSIDE the track and is driven by the shared clock. */
 .reasoning-effort-max-glow {
-  box-shadow:
-    0 0 0 1px var(--reasoning-max-edge),
-    0 0 12px 2px var(--reasoning-max-glow);
+  box-shadow: 0 0 0 1px
+    color-mix(in srgb, var(--reasoning-max-accent) 24%, transparent);
 }
 
-/* A sparkle is white at every theme, not `--foreground`: it is a specular
-   highlight on a saturated fill, and a light theme's near-black foreground
-   would read as dirt on the gradient rather than as a glint. Its opacity is
-   written per tick from the shared status clock into the custom property the
-   component names; the fallback is what a still field sits at, so reduced
-   motion and a hidden pane need no rule of their own. */
+.reasoning-effort-max-sparkles {
+  animation: reasoning-sparkles-enter 320ms ease-out both;
+}
+
+.reasoning-effort-max-sparkles::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  background: radial-gradient(
+    ellipse at center,
+    rgb(255 255 255 / 0.24),
+    transparent 60%
+  );
+  transform: translateX(var(--reasoning-sheen-x, 0%));
+}
+
+@keyframes reasoning-sparkles-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Small specular highlights, not stop markers. Per-point opacity and the
+   field's gentle drift are written by one shared status-clock subscription. */
 .reasoning-effort-sparkle {
   background: #fff;
-  filter: drop-shadow(0 0 2px rgb(255 255 255 / 0.8));
+  filter: drop-shadow(0 0 1px rgb(255 255 255 / 0.5));
 }
 
 .reasoning-effort-sparkle-glint {
   color: #fff;
-  font-size: 8px;
+  font-size: 5px;
   line-height: 1;
 }
 
-/* Decoration with no information in it, so it simply goes: the level's name is
-   above the track and `aria-valuetext` says it too. The fill and the thumb
-   carry the state in a forced palette. */
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-effort-slider .reasoning-effort-range,
+  .reasoning-effort-slider > span:has(> [data-slot="slider-thumb"]),
+  .reasoning-effort-slider[data-dragging] .reasoning-effort-range,
+  .reasoning-effort-slider[data-dragging]
+    > span:has(> [data-slot="slider-thumb"]),
+  .reasoning-effort-slider [data-slot="slider-thumb"],
+  .reasoning-effort-slider[data-pressed] [data-slot="slider-thumb"],
+  .reasoning-effort-range::after {
+    transition: none;
+  }
+  .reasoning-effort-slider[data-pressed] [data-slot="slider-thumb"] {
+    scale: 1;
+  }
+  .reasoning-effort-max-sparkles {
+    animation: none;
+  }
+}
+
 @media (forced-colors: active) {
   .reasoning-effort-max-glow {
     box-shadow: none;
   }
-  .reasoning-effort-sparkle,
-  .reasoning-effort-sparkle-glint {
+  .reasoning-effort-range::after,
+  .reasoning-effort-max-sparkles {
     display: none;
   }
 }

@@ -260,10 +260,10 @@ describe("reasoning slider max treatment", () => {
       expect(track().className).not.toContain("reasoning-effort-max-glow");
     });
 
-    // The glow is a `box-shadow` and the popover is `overflow-hidden`, so the
-    // row has to carry its reach: `py-2` here plus the footer's own `py-1.5`
-    // is the 14px `0 0 12px 2px` needs.
-    it("keeps the pill far enough from the popover's clipped edge for the glow", () => {
+    // The glow is now a fine 1px edge with no blur to reach past the track,
+    // so this padding is no longer glow clearance - it is the slider's own
+    // pointer target and focus-ring room around the slimmer pill.
+    it("keeps the slider's own padding independent of the footer's row padding", () => {
       mount({ value: "ultra", serviceTier: true });
 
       expect(slider().className).toContain("py-2");
@@ -384,13 +384,16 @@ describe("reasoning slider max treatment", () => {
           expect(opacity).toBeLessThanOrEqual(1);
         }
 
-        // The slow cadence: every second 40ms tick, not every one.
+        // The smooth cadence (every 40ms tick, not every other one): both of
+        // the next two ticks write a new frame.
         tick(1);
-        expect(readAll()).toEqual(first);
+        const afterOneTick = readAll();
+        expect(afterOneTick).not.toEqual(first);
         tick(1);
-        expect(readAll()).not.toEqual(first);
+        expect(readAll()).not.toEqual(afterOneTick);
 
-        // 2400ms is one period, and 60 ticks is exactly that.
+        // 2400ms is one full period; 60 ticks (all of them writing now) land
+        // back on the values the field opened with.
         tick(58);
         expect(readAll()).toEqual(first);
         for (const sparkle of sparkles()) {

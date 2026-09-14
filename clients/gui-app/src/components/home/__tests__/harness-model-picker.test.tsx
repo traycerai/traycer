@@ -3623,7 +3623,7 @@ describe("<HarnessModelPicker />", () => {
     // digits (⌥) are untouched, disjoint index spaces - this never collides
     // with `model.provider.byDigit` / `model.reasoning.byDigit`.
     act(() => {
-      fireLeaderDigit(2, "modShift");
+      fireLeaderDigit(2, "modShift", false);
     });
 
     expect(selections.at(-1)?.harnessId).toBe("claude");
@@ -3694,7 +3694,7 @@ describe("<HarnessModelPicker />", () => {
     // A disabled row refuses a click; the digit shortcut must refuse the
     // same way, or it bypasses the exact gate the row enforces.
     act(() => {
-      fireLeaderDigit(2, "modShift");
+      fireLeaderDigit(2, "modShift", false);
     });
 
     expect(selections.at(-1)).toBe(baselineSelection);
@@ -3756,7 +3756,7 @@ describe("<HarnessModelPicker />", () => {
     // Only 2 profiles exist - digit 5 is out of range and must no-op, exactly
     // mirroring the provider rail's own overflow behavior.
     act(() => {
-      fireLeaderDigit(5, "modShift");
+      fireLeaderDigit(5, "modShift", false);
     });
 
     expect(selections.at(-1)).toBe(baselineSelection);
@@ -3824,7 +3824,7 @@ describe("<HarnessModelPicker />", () => {
     // dropdown's row clicks use, so the lock rule applies identically - no
     // second commit path to keep in sync.
     act(() => {
-      fireLeaderDigit(2, "modShift");
+      fireLeaderDigit(2, "modShift", false);
     });
 
     expect(selections.at(-1)?.harnessId).toBe("claude");
@@ -4111,7 +4111,7 @@ describe("<HarnessModelPicker />", () => {
     // ⌘2 → the 2nd rail provider (Claude). Now COMMITS the switch (was
     // browse-only), exactly like clicking the rail icon; the popover stays open.
     act(() => {
-      fireLeaderDigit(2, "mod");
+      fireLeaderDigit(2, "mod", false);
     });
 
     await waitFor(() => {
@@ -4144,7 +4144,7 @@ describe("<HarnessModelPicker />", () => {
     // ⌥2 → second thinking level. The browsed provider (Codex) matches the
     // selected model's, so the footer is actionable.
     act(() => {
-      fireLeaderDigit(2, "alt");
+      fireLeaderDigit(2, "alt", false);
     });
 
     expect(reasoningChanges).toEqual(["high"]);
@@ -4175,7 +4175,7 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
 
     act(() => {
-      fireLeaderDigit(2, "alt");
+      fireLeaderDigit(2, "alt", false);
     });
 
     const slider = screen.getByTestId("model-reasoning-slider");
@@ -4203,7 +4203,7 @@ describe("<HarnessModelPicker />", () => {
 
     await openPicker();
     act(() => {
-      fireLeaderDigit(1, "alt");
+      fireLeaderDigit(1, "alt", false);
     });
 
     expect(
@@ -4246,10 +4246,191 @@ describe("<HarnessModelPicker />", () => {
       }),
     ]);
     act(() => {
-      fireLeaderDigit(2, "alt");
+      fireLeaderDigit(2, "alt", false);
     });
 
     expect(reasoningChanges.at(-1)).toBe("high");
+  });
+
+  it("toggles fast mode with the sub-leader digit 0, mirroring the click toggle", async () => {
+    const { serviceTierChanges } = renderPicker({
+      withServiceTier: true,
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    const input = await openPicker();
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+
+    expect(serviceTierChanges).toEqual(["fast"]);
+    // A pure state write, same as the rail/reasoning digits above - the
+    // search box keeps focus and the popover stays open.
+    expect(document.activeElement).toBe(input);
+    expect(screen.getByRole("textbox", { name: /^Search/ })).toBe(input);
+  });
+
+  it("toggles fast mode off with a second sub-leader digit 0", async () => {
+    const { serviceTierChanges } = renderPicker({
+      withServiceTier: true,
+      serviceTier: "fast",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+
+    expect(serviceTierChanges).toEqual([""]);
+  });
+
+  it("toggles fast mode with the sub-leader digit 0 on a model with no thinking levels", async () => {
+    const { serviceTierChanges, reasoningChanges } = renderPicker({
+      withServiceTier: true,
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [],
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+
+    expect(serviceTierChanges).toEqual(["fast"]);
+    expect(reasoningChanges).toEqual([]);
+  });
+
+  it("no-ops the sub-leader digit 0 when the selected model reports no service tiers", async () => {
+    const { serviceTierChanges } = renderPicker({
+      withServiceTier: true,
+      reasoning: "low",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+          supportedServiceTiers: [],
+        }),
+      ],
+    });
+
+    await openPicker();
+
+    // The footer config is present (`withServiceTier: true`) - this is the
+    // per-model conditional case, not a caller that disabled Fast outright:
+    // `findUpgradeServiceTierForModel` has nothing to offer, so no Fast
+    // button renders at all.
+    expect(screen.queryByRole("button", { name: "Fast mode" })).toBeNull();
+
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+
+    // `toggleServiceTier` bails out on the missing upgrade tier rather than
+    // throwing.
+    expect(serviceTierChanges).toEqual([]);
+  });
+
+  it("reserves the sub-leader digit 0 for Fast - it no longer reaches a tenth thinking level", async () => {
+    const tenLevels = Array.from({ length: 10 }, (_, i) => ({
+      id: `l${i + 1}`,
+      label: `Level ${i + 1}`,
+      description: null,
+    }));
+    const { reasoningChanges, serviceTierChanges } = renderPicker({
+      reasoning: "l1",
+      withServiceTier: true,
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: tenLevels,
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    await openPicker();
+    // ⌥9 still reaches the 9th (and now last reachable) level.
+    act(() => {
+      fireLeaderDigit(9, "alt", false);
+    });
+    expect(reasoningChanges).toEqual(["l9"]);
+
+    // ⌥0 toggles Fast instead of the 10th level ("l10") the old
+    // `digit === 0 ? 9 : digit - 1` mapping used to reach.
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+    expect(reasoningChanges).toEqual(["l9"]);
+    expect(serviceTierChanges).toEqual(["fast"]);
+  });
+
+  it("consumes a repeated sub-leader digit 0 keydown without re-toggling fast mode", async () => {
+    const { serviceTierChanges } = renderPicker({
+      withServiceTier: true,
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+    expect(serviceTierChanges).toEqual(["fast"]);
+
+    // OS key-repeat while the chord is held must not flip the toggle again.
+    act(() => {
+      fireLeaderDigit(0, "alt", true);
+    });
+    expect(serviceTierChanges).toEqual(["fast"]);
   });
 
   it("does not commit a degraded provider (browse + reauth CTA only)", async () => {
@@ -4449,6 +4630,7 @@ describe("<HarnessModelPicker />", () => {
 function fireLeaderDigit(
   digit: number,
   modifier: "mod" | "alt" | "modShift",
+  repeat: boolean,
 ): void {
   const match = matchDigitAction(
     new KeyboardEvent("keydown", {
@@ -4456,6 +4638,7 @@ function fireLeaderDigit(
       metaKey: modifier === "mod" || modifier === "modShift",
       shiftKey: modifier === "modShift",
       altKey: modifier === "alt",
+      repeat,
     }),
   );
   match?.run();
