@@ -5,9 +5,10 @@ import {
   useState,
   type ProfilerOnRenderCallback,
 } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { EditorView } from "@tiptap/pm/view";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { composerInlineChipClassNames } from "@/components/chat/composer/nodes/composer-inline-chip-classnames";
@@ -27,13 +28,18 @@ import {
   registerTerminalFocus,
   resetTerminalFocusRegistryForTests,
 } from "@/lib/terminals/terminal-focus-registry";
+import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
-import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
+import {
+  handlePrimaryFocus,
+  resetPrimaryFocusCoordinatorForTests,
+} from "@/lib/focus/primary-focus-coordinator";
 
 afterEach(() => {
   cleanup();
   resetTerminalFocusRegistryForTests();
   resetPrimaryFocusCoordinatorForTests();
+  vi.restoreAllMocks();
 });
 
 function MaximizedTerminalFocusProbe() {
@@ -140,6 +146,48 @@ function Harness({
 }
 
 describe("ComposerPromptEditor render isolation", () => {
+  it("drops its queued DOM focus after another surface takes ownership", async () => {
+    const handleRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const view = render(
+      <Harness
+        profileRender={() => undefined}
+        handleRef={handleRef}
+        initialContent={emptyContent()}
+        initialSelection={null}
+        stabilizeImageAttachmentCaret={false}
+      />,
+    );
+    await waitFor(() => expect(handleRef.current?.isReady()).toBe(true));
+    const competingSurface = document.createElement("button");
+    view.container.append(competingSurface);
+    competingSurface.focus();
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const viewFocus = vi.spyOn(EditorView.prototype, "focus");
+
+    expect(focusActiveComposer()).toBe(true);
+    expect(frames).toHaveLength(1);
+    handlePrimaryFocus(document.createElement("webview"));
+    act(() => {
+      frames[0]?.(0);
+    });
+
+    expect(document.activeElement).toBe(competingSurface);
+    expect(viewFocus).not.toHaveBeenCalled();
+
+    expect(focusActiveComposer()).toBe(true);
+    expect(frames).toHaveLength(2);
+    act(() => {
+      frames[1]?.(0);
+    });
+    expect(viewFocus).toHaveBeenCalledTimes(1);
+  });
+
   it("does not overwrite restored terminal focus after its delayed editor mount", async () => {
     const view = render(
       <PrimaryFocusCoordinatorProvider>
