@@ -898,6 +898,15 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Dial-only: one host calls this on another, never the renderer. It is here
+  // because this table is exhaustive over the registry, not because the GUI
+  // has a caller. `fifo` matches `agent.create`, whose effect it shares -
+  // persisting a new collaboration record, which must never be coalesced.
+  "host.agent.createFromRemoteSender": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Migrating a phase changes the epic's persisted workflow state.
   "phase.migrateToEpic": {
     mode: "fifo",

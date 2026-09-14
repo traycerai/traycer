@@ -903,11 +903,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   }, [coarsePointer, visibleOpen]);
 
   // Leader-key scope: while open, ⌘+digit switches the browsed rail entry
-  // (suppressing epic-tab switching) and ⌥+digit sets the thinking level.
+  // (suppressing epic-tab switching), ⌥+1–9 sets thinking, and ⌥+0 toggles Fast.
   // `railEntries` mirrors what `ProviderRail` renders so digits line up with
   // the badges. Both handlers are pure state writes, so the search input keeps
   // focus and the user can keep typing after switching.
-  // ⌥-reasoning is armed whenever the selected model exposes thinking levels.
+  // Unavailable settings consume their digits while the picker is open.
   // The footer always reflects the selected model (not the browsed rail), so
   // ⌥+digit sets that model's level even while ⌘ browses a different provider.
   const reasoningActionable =
@@ -918,6 +918,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     onEntryChange: handleRailEntryChange,
     reasoning: reasoningFooter,
     reasoningActionable,
+    serviceTier: serviceTierFooter,
     activeProviderId: resolvedActiveProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission: profileAdmission,
