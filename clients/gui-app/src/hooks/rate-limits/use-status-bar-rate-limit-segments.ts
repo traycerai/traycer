@@ -223,6 +223,15 @@ export function useStatusBarWindowedProviders(): ReadonlyArray<ConfiguredRateLim
 
 interface StatusBarRateLimitTarget {
   readonly provider: ConfiguredRateLimitProvider;
+  /**
+   * Where this target sat in the resolved list, before the lane split. The
+   * split sends one provider's accounts to different batches by eligibility
+   * (an ineligible http account observes, an eligible one polls), and the
+   * provider-order sort that puts the batches back together cannot see
+   * accounts - so this is what puts a provider's accounts back in the order
+   * `resolveStatusBarProfileIds` gave them.
+   */
+  readonly order: number;
   readonly profileId: string | null;
   readonly account: ProfileAccentDotInput | null;
   readonly fetchEligible: boolean;
@@ -240,7 +249,7 @@ interface StatusBarRateLimitTarget {
 function resolveTargets(
   provider: ConfiguredRateLimitProvider,
   profileSelection: RateLimitProfileSelection,
-): ReadonlyArray<StatusBarRateLimitTarget> {
+): ReadonlyArray<Omit<StatusBarRateLimitTarget, "order">> {
   const profileIds = resolveStatusBarProfileIds(
     profileSelection,
     provider.providerId,
@@ -418,6 +427,11 @@ function hasContent(segment: StatusBarProviderSegmentModel): boolean {
  * One batch's targets folded together with that batch's results, which arrive
  * in the order the requests were passed.
  */
+interface OrderedSegment {
+  readonly order: number;
+  readonly segment: StatusBarProviderSegmentModel;
+}
+
 function toSegments(
   targets: ReadonlyArray<StatusBarRateLimitTarget>,
   queries: ReadonlyArray<
@@ -425,7 +439,7 @@ function toSegments(
   >,
   selections: StatusBarProviderLimitSelections,
   now: number,
-): ReadonlyArray<StatusBarProviderSegmentModel> {
+): ReadonlyArray<OrderedSegment> {
   return targets.map((target, index) => {
     const query = queries[index];
     const envelope = query.data ?? null;
@@ -440,13 +454,16 @@ function toSegments(
       statusBarProviderLimitSelection(selections, target.provider.providerId),
     );
     return {
-      providerId: target.provider.providerId,
-      profileId: target.profileId,
-      account: target.account,
-      ...segmentState(retained, envelope, query.isError),
-      windows,
-      shown,
-      tightest: tightestRateLimitWindow(shown),
+      order: target.order,
+      segment: {
+        providerId: target.provider.providerId,
+        profileId: target.profileId,
+        account: target.account,
+        ...segmentState(retained, envelope, query.isError),
+        windows,
+        shown,
+        tightest: tightestRateLimitWindow(shown),
+      },
     };
   });
 }
@@ -508,7 +525,8 @@ export function useStatusBarRateLimitSegments(input: {
     .filter(
       (provider) => !rateLimits.hiddenProviders.includes(provider.providerId),
     )
-    .flatMap((provider) => resolveTargets(provider, input.profileSelection));
+    .flatMap((provider) => resolveTargets(provider, input.profileSelection))
+    .map((target, order) => ({ ...target, order }));
   const queueObserved = targets.filter(
     (target) => target.lane === "ephemeralProcess",
   );
@@ -554,20 +572,32 @@ export function useStatusBarRateLimitSegments(input: {
   });
 
   // Each batch is paired with its own results by index, then the three are put
-  // back into catalog order - rather than the targets being looked up in
-  // whichever batch happens to hold them, which is the same join written with a
-  // fallback branch that can never run. The sort is stable, so one provider's
-  // accounts keep the order `resolveStatusBarProfileIds` gave them.
-  const segments = sortProviderStatesByProviderOrder([
-    ...toSegments(
-      queueObserved,
-      queueObservedQueries,
-      rateLimits.providers,
-      now,
-    ),
-    ...toSegments(httpPolling, httpPollingQueries, rateLimits.providers, now),
-    ...toSegments(httpObserved, httpObservedQueries, rateLimits.providers, now),
-  ]).filter(hasContent);
+  // back together - rather than the targets being looked up in whichever batch
+  // happens to hold them, which is the same join written with a fallback
+  // branch that can never run. Back together in TWO steps: first into the
+  // order the targets were resolved in, which is what restores one provider's
+  // accounts to the order `resolveStatusBarProfileIds` gave them after the
+  // lane split scattered them by eligibility; then the (stable) catalog sort
+  // over providers on top.
+  const segments = sortProviderStatesByProviderOrder(
+    [
+      ...toSegments(
+        queueObserved,
+        queueObservedQueries,
+        rateLimits.providers,
+        now,
+      ),
+      ...toSegments(httpPolling, httpPollingQueries, rateLimits.providers, now),
+      ...toSegments(
+        httpObserved,
+        httpObservedQueries,
+        rateLimits.providers,
+        now,
+      ),
+    ]
+      .sort((left, right) => left.order - right.order)
+      .map((entry) => entry.segment),
+  ).filter(hasContent);
 
   return {
     cluster: clusterFor(input.providers.length, segments),

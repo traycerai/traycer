@@ -890,6 +890,55 @@ describe("useStatusBarRateLimitSegments", () => {
       expect(segments.map((segment) => segment.account)).toEqual([null]);
     });
 
+    it("keeps one provider's accounts in resolved order across the http lane's eligibility split", () => {
+      // Two OpenCode accounts, both checked, the FIRST signed out: it lands
+      // in the observed batch while the second polls, and the recombination
+      // must put them back as resolved - not eligible-first.
+      const signedOut: ProviderProfile = {
+        ...profileFixture("first", "managed"),
+        auth: {
+          status: "unauthenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      };
+      const provider = configuredProvider({
+        providerId: "opencode",
+        lane: "httpFetch",
+        profiles: [signedOut, profileFixture("second", "managed")],
+      });
+      const reading: MockQueryResult = {
+        data: freshEnvelope(
+          opencodeRateLimits({
+            fiveHour: opencodeWindow(5),
+            weekly: opencodeWindow(5),
+            monthly: opencodeWindow(5),
+          }),
+        ),
+        isError: false,
+      };
+      mocks.results.set("opencode:first", reading);
+      mocks.results.set("opencode:second", reading);
+
+      const { result } = renderSegmentsFor([provider], {
+        shownProfiles: { opencode: ["first", "second"] },
+        lastProfileByHarness: {},
+      });
+
+      // The split happened: one target per http batch.
+      expect(
+        mocks.batches
+          .filter((batch) => batch.requests.length === 1)
+          .map((batch) => batch.requests[0].profileId),
+      ).toEqual(["second", "first"]);
+      // And the strip still draws them as resolved.
+      expect(segmentIdentities(result.current.cluster)).toEqual([
+        ["opencode", "first"],
+        ["opencode", "second"],
+      ]);
+    });
+
     it("swaps the whole set when the selection changes host", () => {
       mocks.results.set("codex:work", codexReading(70));
       mocks.results.set("codex:personal", codexReading(40));

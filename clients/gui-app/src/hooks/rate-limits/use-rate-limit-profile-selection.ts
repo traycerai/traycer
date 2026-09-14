@@ -88,9 +88,10 @@ const NO_HOST_SHOWN_PROFILES: StatusBarHostShownProfiles = {};
  *
  * With nothing checked - or nothing checked that still exists - the provider
  * draws ONE account, and the chain is: the profile last picked in a composer
- * on this host, if the provider still has it; else the provider's first
- * profile; else ambient (`null`), which is also the only answer a provider
- * with no profiles at all can give.
+ * on this host, if the provider still has it (a remembered `null` is a real
+ * pick of the ambient login, honoured while the provider lists one); else
+ * the provider's first profile; else ambient (`null`), which is also the
+ * only answer a provider with no profiles at all can give.
  */
 export function resolveStatusBarProfileIds(
   selection: RateLimitProfileSelection,
@@ -131,7 +132,20 @@ function resolveFallbackProfileId(
   profiles: ReadonlyArray<ProviderProfile>,
 ): string | null {
   const harnessId = providerIdToGuiHarnessId(providerId);
+  // Presence and value are two different facts here: the memory stores `null`
+  // as an EXPLICIT pick of the ambient login, so a missing key (never picked)
+  // and a stored `null` (picked Terminal) must not collapse into one - the
+  // first falls through to the provider's first profile, the second is the
+  // ambient login whenever the provider still lists one.
+  const remembered = Object.hasOwn(selection.lastProfileByHarness, harnessId);
   const lastUsed = selection.lastProfileByHarness[harnessId] ?? null;
+  if (
+    remembered &&
+    lastUsed === null &&
+    profiles.some((profile) => profile.kind === "ambient")
+  ) {
+    return null;
+  }
   // A remembered id that no longer addresses a profile here falls through to
   // the next rule rather than short-circuiting to ambient: the memory is
   // about a credential that is gone, and the provider still has others.

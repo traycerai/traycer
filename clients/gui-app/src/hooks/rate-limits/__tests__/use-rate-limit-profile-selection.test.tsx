@@ -144,6 +144,36 @@ describe("resolveStatusBarProfileIds", () => {
     ).toEqual([null]);
   });
 
+  it("honours a remembered ambient pick over a managed profile listed first, and only while ambient is listed", () => {
+    // `null` in the memory is a real pick of the Terminal login, not the
+    // absence of one - so with a managed profile ahead of ambient in the
+    // host's order, the remembered `null` still wins.
+    const managedFirst = [
+      profile("work-profile", "managed"),
+      profile("ambient", "ambient"),
+    ];
+    expect(
+      resolveStatusBarProfileIds(
+        selection({ lastProfileByHarness: { codex: null } }),
+        "codex",
+        managedFirst,
+      ),
+    ).toEqual([null]);
+    // No key at all: nothing was ever picked, so the first profile stands.
+    expect(
+      resolveStatusBarProfileIds(selection({}), "codex", managedFirst),
+    ).toEqual(["work-profile"]);
+    // A remembered ambient pick on a provider that no longer lists an ambient
+    // row falls through like any other stale id.
+    expect(
+      resolveStatusBarProfileIds(
+        selection({ lastProfileByHarness: { codex: null } }),
+        "codex",
+        [profile("work-profile", "managed")],
+      ),
+    ).toEqual(["work-profile"]);
+  });
+
   it("checks are per provider: another provider's checks do not leak across", () => {
     const shared = selection({
       shownProfiles: { codex: ["work-profile"] },
