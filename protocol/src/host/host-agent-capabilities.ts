@@ -17,7 +17,16 @@
  * ever holding them. Do not reintroduce a byte-carrying file RPC.
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
+import { agentModeSchema } from "@traycer/protocol/common/schemas";
+import {
+  chatRunSettingsStrictSchema,
+  tuiHarnessIdSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
+import {
+  createAgentRequestSchemaV30,
+  createAgentResponseSchema,
+} from "./agent/shared";
 import {
   hostCommandInterpreterSchema,
   hostConnectivitySchema,
@@ -596,4 +605,91 @@ export const hostFileTransferCloseV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostFileTransferCloseRequestSchema,
   responseSchema: hostFileTransferCloseResponseSchema,
+});
+
+/**
+ * Everything the target host needs to know about a creating agent that lives
+ * on ANOTHER machine — resolved on the sending host, where the sender's own
+ * record is authoritative, and carried in the request.
+ *
+ * `agent.create`'s target-side path resolves these from its OWN storage. That
+ * is correct for a local sender and unfixable for a remote one: replica
+ * presence is feed-driven, so the target need not hold the sender's chat
+ * record at all, and even when it does the create path refuses a sender whose
+ * `hostId` is not the target's. Both failures are the sender being looked up
+ * in the wrong place, so the facts travel instead.
+ *
+ * The arms mirror the create service's own `SenderAgent` field for field —
+ * they ARE its type — so what inheritance reads locally and what crosses the
+ * wire cannot drift. A GUI sender contributes its run-settings tuple
+ * (harness, model, permission mode, reasoning effort, service tier, agent
+ * mode, profile), `null` when the record carries none; a TUI sender
+ * contributes the launch tuple `agent.create` inherits from.
+ *
+ * `hostId` is the ORIGIN host of the sender, and it is not taken on trust: the
+ * target requires it to equal the dialing principal's `originHostId`, so a
+ * dialed host may only ever speak for its own agents.
+ */
+export const hostAgentRemoteSenderFactsSchema = z.discriminatedUnion(
+  "surface",
+  [
+    z.object({
+      surface: z.literal("gui"),
+      hostId: z.string().min(1),
+      settings: chatRunSettingsStrictSchema.nullable(),
+    }),
+    z.object({
+      surface: z.literal("tui"),
+      hostId: z.string().min(1),
+      harnessId: tuiHarnessIdSchema,
+      model: z.string().nullable(),
+      reasoningEffort: z.string().nullable(),
+      agentMode: agentModeSchema,
+      profileId: z.string().nullable(),
+    }),
+  ],
+);
+export type HostAgentRemoteSenderFacts = z.infer<
+  typeof hostAgentRemoteSenderFactsSchema
+>;
+
+/**
+ * Dial-only create. `agent.create@3.0` is a RELEASED client contract and
+ * cannot grow a field, so the sender-facts envelope lives here, on the
+ * host-agent optional channel, where it is free to change in place.
+ *
+ * The v3.0 request is EXTENDED rather than nested for two reasons, both
+ * load-bearing:
+ *
+ *  - `defineEditorResolver` and the comm-graph's host-agent verb capture both
+ *    read `params.epicId` at the TOP level. A nested request would have to
+ *    repeat `epicId` beside it, and two copies of one id is a disagreement
+ *    waiting to be authorized against the wrong one.
+ *  - the extension is a new schema object; the released v3.0 shape it is
+ *    derived from is untouched, exactly as v3.0 itself extends v2.0.
+ *
+ * `workspaceIntent` rides along for the same reason the facts do:
+ * "folderless" has no encoding in the released create params (the local path
+ * passes it to the service as an argument), so without a field here a
+ * cross-host folderless create would silently reach the target as
+ * inherit-from-parent — and the parent it would try to inherit from is the
+ * record the target does not have.
+ */
+export const hostAgentCreateFromRemoteSenderRequestSchema =
+  createAgentRequestSchemaV30.extend({
+    senderFacts: hostAgentRemoteSenderFactsSchema,
+    workspaceIntent: z.literal("folderless").nullable(),
+  });
+export type HostAgentCreateFromRemoteSenderRequest = z.infer<
+  typeof hostAgentCreateFromRemoteSenderRequestSchema
+>;
+
+export const hostAgentCreateFromRemoteSenderV10 = defineRpcContract({
+  method: "host.agent.createFromRemoteSender",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostAgentCreateFromRemoteSenderRequestSchema,
+  // Same response as `agent.create`: the created agent's id plus resolution
+  // warnings. The caller briefs it with `agent.sendMessage`, which already
+  // routes cross-host.
+  responseSchema: createAgentResponseSchema,
 });

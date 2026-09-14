@@ -382,6 +382,7 @@ import {
   managedCommandViewV10,
 } from "@traycer/protocol/host/managed-command/contracts";
 import {
+  hostAgentCreateFromRemoteSenderV10,
   hostDirectoryListV10,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
@@ -8232,6 +8233,23 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: hostOneOffShellRunV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Dial-only: a host that predates cross-host `create_agent` simply lacks it,
+  // and the caller gets per-call upgrade guidance rather than a fatal
+  // handshake mismatch - the same `degrade: unsupported` channel every other
+  // host-agent verb rides.
+  "host.agent.createFromRemoteSender": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostAgentCreateFromRemoteSenderV10,
           upgradeFromPreviousVersion: null,
         },
       },
