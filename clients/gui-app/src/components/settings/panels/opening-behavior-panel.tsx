@@ -35,10 +35,11 @@ import {
 
 /**
  * Settings > Opening behavior: the one page that answers "where does the thing
- * I just clicked end up". Two groups - links (which surface a URL opens on)
- * and tile placement (this pane, a split, or picture-in-picture, plus what a
- * host-opened browser tab does, which is a placement question wearing another
- * name) - so the page reads as two questions rather than three.
+ * I just clicked end up". Three groups - links (which surface a URL opens on),
+ * tile placement (this pane, a split, or picture-in-picture), and agent-opened
+ * tabs (whether a tab the agent opened surfaces at all). The last one used to
+ * sit as a standalone row under tile placement, where it read as a fifth
+ * per-type override drawn with the wrong tint; it is a gate, not a placement.
  *
  * Every control is a plain enum select over the settings store. The modifier
  * keys that override a choice per click get ONE platform-aware legend under
@@ -254,6 +255,15 @@ export function OpeningBehaviorPanel(): ReactNode {
               />
             </div>
           ) : null}
+        </SettingsGroup>
+
+        <SettingsGroup
+          group={OPENING_BEHAVIOR.definitions.agentTabs}
+          showTitle
+          tone="default"
+          dataTestId="settings-opening-agent-tabs"
+          fill={false}
+        >
           <SettingsRow
             row={OPENING_BEHAVIOR.definitions.agentOpenedTabs}
             control={

@@ -158,16 +158,16 @@ describe("<OpeningBehaviorPanel /> agent-opened tabs", () => {
     expect(useSettingsStore.getState().agentTabSurfacing).toBe("surface");
   });
 
-  it("lives in Tile placement rather than a group of its own", () => {
+  it("lives in a group of its own, not under Tile placement", () => {
     render(<OpeningBehaviorPanel />);
 
-    const tiles = screen.getByTestId("settings-opening-tiles");
+    const control = screen.getByRole("combobox", { name: "Agent-opened tabs" });
     expect(
-      tiles.contains(
-        screen.getByRole("combobox", { name: "Agent-opened tabs" }),
-      ),
+      screen.getByTestId("settings-opening-agent-tabs").contains(control),
     ).toBe(true);
-    expect(screen.queryByTestId("settings-opening-agent-tabs")).toBeNull();
+    expect(screen.getByTestId("settings-opening-tiles").contains(control)).toBe(
+      false,
+    );
   });
 
   it("stays put when the placement default hides the per-type rows", () => {
