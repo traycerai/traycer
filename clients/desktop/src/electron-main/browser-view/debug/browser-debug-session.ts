@@ -255,6 +255,10 @@ export class BrowserDebugSession {
         this.enablePromise = null;
         this.enabled = false;
         this.frameRoutes.clear();
+        // Listeners off first, the order `detachIfUnleased` and `dispose` use:
+        // the detach below is ours, and the detach listener exists to report
+        // the ones we did not ask for.
+        this.stopListening();
         if (this.attachedBySession && browserDebugger.isAttached()) {
           try {
             browserDebugger.detach();
@@ -265,7 +269,6 @@ export class BrowserDebugSession {
           }
         }
         this.attachedBySession = false;
-        this.stopListeningIfIdle();
         log.warn("[browser-view] debugger domain enable failed", {
           error: describeLogError(err),
         });

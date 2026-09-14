@@ -1067,6 +1067,9 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     await first.start();
     expect(webContents.debugger.listenerCount("message")).toBe(1);
     first.dispose("replaced");
+    // The debugger listeners come off with the lease release, which waits for
+    // the overlay's cancel evaluate and binding removal to settle.
+    await flush();
     expect(webContents.debugger.listenerCount("message")).toBe(0);
 
     const secondEvents: BrowserAnnotationSessionEvent[] = [];
@@ -1094,6 +1097,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     ]);
 
     second.dispose("tile-close");
+    await flush();
     expect(webContents.debugger.listenerCount("message")).toBe(0);
   });
 
@@ -1117,11 +1121,13 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     const cancelled = createHarness(true);
     await cancelled.session.start();
     cancelled.session.cancel();
+    await flush();
     expect(cancelled.webContents.debugger.listenerCount("message")).toBe(0);
 
     const disposed = createHarness(true);
     await disposed.session.start();
     disposed.session.dispose("navigation");
+    await flush();
     expect(disposed.webContents.debugger.listenerCount("message")).toBe(0);
   });
 
@@ -1135,11 +1141,22 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     await expect(cancelled.session.start()).resolves.toEqual({ ok: true });
     expect(cancelled.webContents.debugger.isAttached()).toBe(true);
     cancelled.session.cancel();
+    // The release rides the shutdown commands: detaching in this tick would
+    // reject the cancel evaluate that takes the marks off the page.
+    expect(cancelled.webContents.debugger.isAttached()).toBe(true);
+    expect(evaluateExpressions(cancelled.webContents.debugger)).toContain(
+      ANNOTATION_CANCEL_EXPRESSION,
+    );
+    expect(
+      cancelled.webContents.debugger.find("Runtime.removeBinding"),
+    ).toBeDefined();
+    await flush();
     expect(cancelled.webContents.debugger.isAttached()).toBe(false);
 
     const disposed = createHarness(false);
     await disposed.session.start();
     disposed.session.dispose("navigation");
+    await flush();
     expect(disposed.webContents.debugger.isAttached()).toBe(false);
 
     const failed = createHarness(false);
@@ -1148,6 +1165,7 @@ describe("BrowserAnnotationSession annotation overlay", () => {
       ok: false,
       reason: "inject-failed",
     });
+    await flush();
     expect(failed.webContents.debugger.isAttached()).toBe(false);
   });
 

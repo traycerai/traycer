@@ -58,7 +58,11 @@ export class FakeDebugger implements BrowserViewDebugger {
   }
 
   detach(): void {
+    // Electron's `Debugger::Detach()` emits `detach` ("target closed") for the
+    // detaches we ask for too, so the listener-ordering invariant is only real
+    // if the fake does the same.
     this.attached = false;
+    this.events.emit("detach", {}, "target closed");
   }
 
   deferResponse(method: string, sessionId: string | undefined): void {
@@ -265,14 +269,19 @@ export interface BrowserDebugSessionHarness {
   readonly session: BrowserDebugSession;
   readonly webContents: FakeWebContents;
   readonly frames: PipCaptureIpcPayload[];
+  /** Every detach the session reported as one it did not ask for. */
+  readonly detachReports: string[];
 }
 
 export function createHarness(): BrowserDebugSessionHarness {
   const webContents = new FakeWebContents();
   const frames: PipCaptureIpcPayload[] = [];
+  const detachReports: string[] = [];
   const session = new BrowserDebugSession({
     webContents,
-    onDetached: () => undefined,
+    onDetached: (reason) => {
+      detachReports.push(reason);
+    },
   });
-  return { session, webContents, frames };
+  return { session, webContents, frames, detachReports };
 }

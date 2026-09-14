@@ -9,7 +9,7 @@ import { createHarness } from "./browser-debug-session-test-support";
  */
 describe("BrowserDebugSession leases", () => {
   it("detaches on the last release, and not on a second release of one holder", async () => {
-    const { session, webContents } = createHarness();
+    const { session, webContents, detachReports } = createHarness();
     const agent = session.acquire();
     await agent.ready();
     const overlay = session.acquire();
@@ -28,6 +28,23 @@ describe("BrowserDebugSession leases", () => {
 
     expect(webContents.debugger.isAttached()).toBe(false);
     expect(session.isReady()).toBe(false);
+    // The detach is ours, so it must not travel the "we did not ask for this"
+    // path - which tears down the annotation overlay and PiP for the tile.
+    expect(detachReports).toEqual([]);
+  });
+
+  it("does not report its own detach after a failed domain enable", async () => {
+    const { session, webContents, detachReports } = createHarness();
+    webContents.debugger.failures.set(
+      "Page.enable",
+      new Error("Page.enable rejected"),
+    );
+
+    const lease = session.acquire();
+    await expect(lease.ready()).rejects.toThrow("Page.enable rejected");
+
+    expect(webContents.debugger.isAttached()).toBe(false);
+    expect(detachReports).toEqual([]);
   });
 
   it("refuses a lease on a disposed session rather than attaching", () => {

@@ -209,8 +209,12 @@ class FakeDebugger implements BrowserViewDebugger {
   }
 
   detach(): void {
+    // Electron's `Debugger::Detach()` emits `detach` ("target closed") for the
+    // detaches we ask for too. The fake must, or nothing here can see that the
+    // session stops listening BEFORE it detaches itself.
     this.detached = true;
     this.attached = false;
+    this.events.emit("detach", {}, "target closed");
   }
 
   sendCommand(

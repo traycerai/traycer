@@ -269,10 +269,10 @@ export class BrowserAnnotationSession {
       | "no-main-frame"
       | "no-isolated-world",
   ): BrowserAnnotationStartResult {
-    this.sendCancel();
+    const cancelled = this.sendCancel();
     this.teardownListeners();
-    this.removeBinding();
-    this.releaseLease();
+    const bindingRemoved = this.removeBinding();
+    this.releaseLease(Promise.all([cancelled, bindingRemoved]));
     this.contextId = null;
     return { ok: false, reason };
   }
@@ -281,10 +281,10 @@ export class BrowserAnnotationSession {
     if (this.ended) return;
     this.ended = true;
     this.markCount = 0;
-    this.sendCancel();
+    const cancelled = this.sendCancel();
     this.teardownListeners();
-    this.removeBinding();
-    this.releaseLease();
+    const bindingRemoved = this.removeBinding();
+    this.releaseLease(Promise.all([cancelled, bindingRemoved]));
     if (!this.started) return;
     if (reason === "cancelled") {
       this.onEvent({ type: "cancelled" });
@@ -293,9 +293,21 @@ export class BrowserAnnotationSession {
     this.onEvent({ type: "ended", reason });
   }
 
-  private releaseLease(): void {
-    this.lease?.release();
+  /**
+   * The lease is dropped the moment the session ends, but the DEBUGGER must
+   * not be: on a solo-lease tab the last release detaches in the same tick,
+   * which rejects the cancel evaluate that takes the overlay off the page and
+   * leaves the marks painted with no channel left to clear them. So the
+   * release rides the commands already in flight.
+   */
+  private releaseLease(pending: Promise<unknown>): void {
+    const lease = this.lease;
+    if (lease === null) return;
     this.lease = null;
+    const release = (): void => {
+      lease.release();
+    };
+    void pending.then(release, release);
   }
 
   private attachMessageListener(): void {
@@ -336,22 +348,25 @@ export class BrowserAnnotationSession {
     this.onEvent(sanitized);
   }
 
-  private sendCancel(): void {
-    void this.evaluateBestEffort(
+  private sendCancel(): Promise<void> {
+    return this.evaluateBestEffort(
       callGuestHook("__traycerAnnotationCancel", []),
       false,
     );
   }
 
-  private removeBinding(): void {
-    if (!this.debugSession.isAttached()) return;
-    this.debugSession
+  private removeBinding(): Promise<void> {
+    if (!this.debugSession.isAttached()) return Promise.resolve();
+    return this.debugSession
       .sendCommand(
         "Runtime.removeBinding",
         { name: ANNOTATION_BINDING_NAME },
         undefined,
       )
-      .catch(() => undefined);
+      .then(
+        () => undefined,
+        () => undefined,
+      );
   }
 
   private captureAttach(
