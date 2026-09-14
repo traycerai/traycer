@@ -11,8 +11,6 @@ import type {
 import { describeLogError, log } from "../../app/logger";
 import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
 import { BrowserFrameRoutes } from "./browser-frame-routes";
-import { BrowserPipCapture } from "./browser-pip-capture";
-import type { BrowserPipCaptureStartInput } from "./browser-pip-capture";
 import { isRecord, recordValue } from "../guards";
 
 interface BrowserDebugSessionOptions {
@@ -38,7 +36,6 @@ export class BrowserDebugSession {
   private readonly webContents: BrowserDebugWebContents;
   private readonly onDetached: (reason: string) => void;
   private readonly frameRoutes: BrowserFrameRoutes;
-  private readonly pipCapture: BrowserPipCapture;
   private readonly bindingCalledListeners = new Set<
     (params: Record<string, unknown>) => void
   >();
@@ -61,7 +58,6 @@ export class BrowserDebugSession {
   constructor(options: BrowserDebugSessionOptions) {
     this.webContents = options.webContents;
     this.onDetached = options.onDetached;
-    this.pipCapture = new BrowserPipCapture(options.webContents);
     this.frameRoutes = new BrowserFrameRoutes({
       browserDebugger: () => this.webContents.debugger,
       isAttached: () => this.isAttached(),
@@ -278,25 +274,10 @@ export class BrowserDebugSession {
     return enablePromise;
   }
 
-  startPipCapture(input: BrowserPipCaptureStartInput): Promise<void> {
-    if (this.disposed) throw new Error("Browser debug session is disposed");
-    this.pipCapture.start(input);
-    return Promise.resolve();
-  }
-
-  stopPipCapture(): void {
-    this.pipCapture.stop();
-  }
-
-  isPipCapturing(): boolean {
-    return this.pipCapture.isCapturing();
-  }
-
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.enablePromise = null;
-    this.pipCapture.stall();
     const browserDebugger = this.webContents.debugger;
     this.stopListening();
     this.sessionEnd.resolve();
@@ -439,10 +420,7 @@ export class BrowserDebugSession {
   }
 }
 
-type BrowserDebugWebContents = Pick<
-  BrowserViewWebContents,
-  "id" | "debugger" | "capturePage"
->;
+type BrowserDebugWebContents = Pick<BrowserViewWebContents, "id" | "debugger">;
 
 function cdpFailure(
   command: BrowserCdpCommand,

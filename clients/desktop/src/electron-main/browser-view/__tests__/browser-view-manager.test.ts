@@ -142,19 +142,12 @@ const BASE_KEY = {
 
 type PopupWindowOpenHandler = NonNullable<FakeWebContents["windowOpenHandler"]>;
 
-type FakeAdoptedWebContents = WebContents & {
-  readonly setUserAgent: Mock<(userAgent: string) => void>;
-};
-
 // Stands in for the popup contents Chromium pre-creates for a scripted
-// window.open. WebContents extends EventEmitter, so a bare emitter satisfies the
-// structural cast the adoption path only ever passes through, never inspects -
-// `setUserAgent` is spied on only to assert the adoption path no longer calls
-// it - the popup keeps Electron's own default UA, same as the opener.
-function fakeAdoptedContents(): FakeAdoptedWebContents {
-  return Object.assign(new EventEmitter(), {
-    setUserAgent: vi.fn(),
-  }) as FakeAdoptedWebContents;
+// window.open. WebContents extends EventEmitter, so a bare emitter satisfies
+// the structural cast the adoption path only ever passes through, never
+// inspects.
+function fakeAdoptedContents(): WebContents {
+  return new EventEmitter() as WebContents;
 }
 
 // Drives a native popup the way Electron does: a fresh gesture on the opener,
@@ -569,11 +562,6 @@ class FakePopupWebContents extends EventEmitter {
 
   once(event: "destroyed", listener: () => void): this {
     return super.once(event, listener);
-  }
-
-  setUserAgent(_userAgent: string): void {
-    // Not asserted through this fake - the popup-adoption test drives the
-    // pre-created contents directly via `fakeAdoptedContents()`.
   }
 
   setWindowOpenHandler(
@@ -3564,35 +3552,6 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
     });
     expect(opened.openTileRequests).toEqual([]);
     expect(safelyOpenExternalMock).not.toHaveBeenCalled();
-  });
-
-  it("does not set a per-contents UA on adopted popup contents", async () => {
-    // A pre-created popup WebContents keeps Electron's own default UA - the
-    // same one the guest that opened it uses. This only asserts createWindow
-    // never overrides it with a per-contents setUserAgent call.
-    const harness = createHarness();
-    const { view } = await attachNativeTab(
-      harness,
-      "window-1",
-      BASE_KEY,
-      "https://opener.example/",
-    );
-    const handler = view.windowOpenHandler;
-    if (handler === null) throw new Error("expected a window-open handler");
-    view.emit("input-event", {}, { type: "mouseDown" });
-    const result = handler({
-      url: "https://accounts.example/o/oauth2/auth",
-      frameName: "popup",
-      features: "width=400,height=300",
-      disposition: "new-window",
-    });
-    if (result.action !== "allow") {
-      throw new Error(`expected a popup allow, received ${result.action}`);
-    }
-    const adopted = fakeAdoptedContents();
-    result.createWindow({ webContents: adopted });
-
-    expect(adopted.setUserAgent).not.toHaveBeenCalled();
   });
 
   it("denies a real popup opened without a recent user gesture", async () => {

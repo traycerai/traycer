@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserDebugSession } from "../browser-debug-session";
+import { BrowserPipCapture } from "../browser-pip-capture";
 import type { PipCaptureIpcPayload } from "../../../../ipc-contracts/pip-capture-types";
-import { createHarness } from "./browser-debug-session-test-support";
+import { FakeWebContents } from "./browser-debug-session-test-support";
 
 vi.mock("../../app/logger", () => ({
   log: {
@@ -15,11 +15,26 @@ const CAPTURE_MAX_WIDTH = 400;
 const CAPTURE_MAX_HEIGHT = 300;
 const CAPTURE_QUALITY = 80;
 
+interface PipHarness {
+  readonly capture: BrowserPipCapture;
+  readonly webContents: FakeWebContents;
+  readonly frames: PipCaptureIpcPayload[];
+}
+
+function createHarness(): PipHarness {
+  const webContents = new FakeWebContents();
+  return {
+    capture: new BrowserPipCapture(webContents),
+    webContents,
+    frames: [],
+  };
+}
+
 function startCapture(
-  session: BrowserDebugSession,
+  capture: BrowserPipCapture,
   frames: PipCaptureIpcPayload[],
-): Promise<void> {
-  return session.startPipCapture({
+): void {
+  capture.start({
     maxWidth: CAPTURE_MAX_WIDTH,
     maxHeight: CAPTURE_MAX_HEIGHT,
     quality: CAPTURE_QUALITY,
@@ -42,14 +57,14 @@ function startedPayload(): PipCaptureIpcPayload {
   };
 }
 
-describe("BrowserDebugSession PiP capture", () => {
+describe("BrowserPipCapture", () => {
   it("emits started then captures an immediate seq-0 JPEG", async () => {
     const harness = createHarness();
 
-    await startCapture(harness.session, harness.frames);
+    startCapture(harness.capture, harness.frames);
     await Promise.resolve();
 
-    expect(harness.session.isPipCapturing()).toBe(true);
+    expect(harness.capture.isCapturing()).toBe(true);
     expect(harness.webContents.captureCount).toBe(1);
     expect(harness.webContents.qualities).toEqual([CAPTURE_QUALITY]);
     expect(harness.frames).toEqual([
@@ -72,14 +87,14 @@ describe("BrowserDebugSession PiP capture", () => {
         jpegBytes: Uint8Array.from([1, 2, 3]),
       },
     ]);
-    harness.session.stopPipCapture();
+    harness.capture.stop();
   });
 
   it("captures a fresh JPEG on the next polling interval", async () => {
     vi.useFakeTimers();
     const harness = createHarness();
     try {
-      await startCapture(harness.session, harness.frames);
+      startCapture(harness.capture, harness.frames);
       await Promise.resolve();
       harness.webContents.setCaptureBytes(Uint8Array.from([4, 5, 6]));
 
@@ -99,7 +114,7 @@ describe("BrowserDebugSession PiP capture", () => {
         jpegBytes: Uint8Array.from([4, 5, 6]),
       });
     } finally {
-      harness.session.stopPipCapture();
+      harness.capture.stop();
       vi.useRealTimers();
     }
   });
@@ -107,23 +122,23 @@ describe("BrowserDebugSession PiP capture", () => {
   it("ignores an in-flight frame after stop", async () => {
     const harness = createHarness();
     harness.webContents.deferCaptures = true;
-    await startCapture(harness.session, harness.frames);
+    startCapture(harness.capture, harness.frames);
 
-    harness.session.stopPipCapture();
+    harness.capture.stop();
     harness.webContents.resolveNextCapture(Uint8Array.from([7, 8, 9]));
     await Promise.resolve();
 
-    expect(harness.session.isPipCapturing()).toBe(false);
+    expect(harness.capture.isCapturing()).toBe(false);
     expect(harness.frames).toEqual([startedPayload()]);
   });
 
   it("routes a replacement capture only to its new owner", async () => {
     const harness = createHarness();
     harness.webContents.deferCaptures = true;
-    await startCapture(harness.session, harness.frames);
+    startCapture(harness.capture, harness.frames);
     const owner2Frames: PipCaptureIpcPayload[] = [];
 
-    await startCapture(harness.session, owner2Frames);
+    startCapture(harness.capture, owner2Frames);
     harness.webContents.resolveNextCapture(Uint8Array.from([1, 1, 1]));
     harness.webContents.resolveNextCapture(Uint8Array.from([2, 2, 2]));
     await Promise.resolve();
@@ -144,19 +159,19 @@ describe("BrowserDebugSession PiP capture", () => {
         jpegBytes: Uint8Array.from([2, 2, 2]),
       },
     ]);
-    harness.session.stopPipCapture();
+    harness.capture.stop();
   });
 
-  it("emits stalled and ignores an in-flight frame on dispose", async () => {
+  it("emits stalled and ignores an in-flight frame when the tile goes", async () => {
     const harness = createHarness();
     harness.webContents.deferCaptures = true;
-    await startCapture(harness.session, harness.frames);
+    startCapture(harness.capture, harness.frames);
 
-    harness.session.dispose();
+    harness.capture.stall();
     harness.webContents.resolveNextCapture(Uint8Array.from([7, 8, 9]));
     await Promise.resolve();
 
-    expect(harness.session.isPipCapturing()).toBe(false);
+    expect(harness.capture.isCapturing()).toBe(false);
     expect(harness.frames).toEqual([
       startedPayload(),
       {

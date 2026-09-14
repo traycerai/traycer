@@ -63,7 +63,10 @@ export interface BrowserViewEntry {
   /**
    * Held while the storage seed script is installed - from provisioning until
    * `navigateAccepted` removes it. A tab with nothing to seed never takes one,
-   * and so never attaches a debugger at birth.
+   * and so never attaches a debugger at birth. A tab that was provisioned but
+   * never accepted a navigation keeps this lease, and with it the attached
+   * debugger, until the entry closes - bounded by the entry's lifetime, since
+   * `destroyEntry` disposes the session and every lease with it.
    */
   seedLease: BrowserDebugLease | null;
   /**

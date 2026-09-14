@@ -248,9 +248,7 @@ export class BrowserViewManager {
         void this.closeEntry(entry);
       },
     });
-    this.pip = new BrowserViewPipCapture({
-      debugSessions: this.debugSessions,
-    });
+    this.pip = new BrowserViewPipCapture();
     this.popups = new BrowserViewPopups({
       createPopupWindowOptions: options.createPopupWindowOptions,
       createPopupWindow: options.createPopupWindow,
@@ -910,8 +908,9 @@ export class BrowserViewManager {
    * A tile's CDP debugger can detach for reasons outside our control - the
    * target being destroyed, a renderer crash, or an explicit
    * `Debugger.detach`. BrowserDebugSession synchronously drops its ready
-   * state; the next native ensure or CDP dispatch reattaches and enables
-   * domains before using the existing incarnation.
+   * state; a native ensure re-enables the domains only while a lease is still
+   * out, and the next CDP dispatch takes one and reattaches. A tab nobody is
+   * driving stays a plain Chromium tab.
    *
    * Verified 2026-07-28, live: opening DevTools does NOT trigger this path
    * on Electron 42.7.1/Chromium 148 - `webContents.debugger.attach()` and
