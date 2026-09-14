@@ -1,3 +1,7 @@
+import {
+  withoutTabRecovery,
+  pruneRecoveryTiles,
+} from "@/lib/tab-recovery/history";
 /**
  * This is the main orchestrator that composes extracted sub-components:
  * - epic-sidebar-header.tsx: header with collapse/drag
@@ -1534,6 +1538,12 @@ function SidebarBulkDeleteController(props: {
         const successfulIds = targets.flatMap((target, index) =>
           results[index].status === "fulfilled" ? [target.id] : [],
         );
+        pruneRecoveryTiles(
+          (tile, epicId) =>
+            epicId === props.epicId &&
+            tile.type !== "chat" &&
+            successfulIds.includes(tile.id),
+        );
         const failedIds = targets.flatMap((target, index) =>
           results[index].status === "rejected" ? [target.id] : [],
         );
@@ -1553,7 +1563,9 @@ function SidebarBulkDeleteController(props: {
         if (openTargets.length > 0) {
           navigateNested(props.epicId, props.tabId, () => {
             openTargets.forEach((found) => {
-              closeCanvasTab(props.tabId, found.paneId, found.instanceId);
+              withoutTabRecovery(() =>
+                closeCanvasTab(props.tabId, found.paneId, found.instanceId),
+              );
             });
             const canvas =
               useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??

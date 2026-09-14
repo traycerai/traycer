@@ -687,7 +687,12 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
 
     assertSettingsSearchTargets(
       "app-diagnostics",
-      { runnerHost: host, featureSettings: null, mobileApp: false },
+      {
+        runnerHost: host,
+        featureSettings: null,
+        mobileApp: false,
+        mobileFooter: false,
+      },
       document.body,
     );
   });
@@ -701,7 +706,12 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
 
     assertSettingsSearchTargets(
       "app-diagnostics",
-      { runnerHost: host, featureSettings: null, mobileApp: false },
+      {
+        runnerHost: host,
+        featureSettings: null,
+        mobileApp: false,
+        mobileFooter: false,
+      },
       document.body,
     );
   });

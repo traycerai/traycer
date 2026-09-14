@@ -11,7 +11,7 @@ import type {
 import { createDiffTileViewState } from "@/lib/diff/diff-tile-view-state";
 import {
   isImageAssetPath,
-  isPdfAssetPath,
+  isDocumentAssetPath,
   isSvgAssetPath,
 } from "@/lib/assets/image-extension-allowlist";
 
@@ -189,29 +189,30 @@ export function gitImageDiffRouting(file: GitChangedFile): GitImageDiffRouting {
 }
 
 /**
- * Whether the single-file diff tile shows the PDF summary-card view (PDF
- * preview design, Q7 follow-up): per-side "PDF · size · View" cards instead
- * of the plain binary placeholder. Checked AFTER `gitImageDiffRouting` in
- * the tile - a rename straddling both allowlists (`a.png -> b.pdf`) keeps
- * routing to the image diff, whose non-image side already explains itself.
+ * Whether the single-file diff tile shows the compact document diff block
+ * (PDF preview design, Q7 follow-up; Word documents ride the same block):
+ * "path · Added/Modified · size · Open" instead of the plain binary
+ * placeholder. Checked AFTER `gitImageDiffRouting` in the tile - a rename
+ * straddling both allowlists (`a.png -> b.pdf`) keeps routing to the image
+ * diff, whose non-image side already explains itself.
  *
  * Extension-only for the CURRENT side, no `isBinary` requirement - the SVG
  * precedent: a PDF can be authored as pure ASCII (no NUL bytes), which git's
- * content sniff calls text, yet the cards are still the right rendering and
- * the asset stream's `%PDF-` magic check still guards the open tile. No
+ * content sniff calls text, yet the block is still the right rendering and
+ * the asset stream's magic check still guards the open tile. No
  * host-version gate: the open tile's own stream negotiation is the authority
  * on whether the host can serve the bytes.
  */
-export function gitRoutesToPdfDiffCards(file: GitChangedFile): boolean {
-  if (isPdfAssetPath(file.path)) return true;
-  // Renamed OFF the allowlist. `old.pdf -> new.bin` keeps the cards, which at
-  // least offer the old side where a binary placeholder offers nothing - but
+export function gitRoutesToDocumentDiffBlock(file: GitChangedFile): boolean {
+  if (isDocumentAssetPath(file.path)) return true;
+  // Renamed OFF the allowlist. `old.pdf -> new.bin` keeps the block, which at
+  // least names the old side where a binary placeholder offers nothing - but
   // `old.pdf -> new.txt` has a real source diff on the surviving side, and a
-  // summary card about a file that is no longer a PDF is a worse answer than
-  // the text it was turned into.
+  // summary block about a file that is no longer a document is a worse
+  // answer than the text it was turned into.
   return (
     file.previousPath !== null &&
-    isPdfAssetPath(file.previousPath) &&
+    isDocumentAssetPath(file.previousPath) &&
     file.isBinary
   );
 }

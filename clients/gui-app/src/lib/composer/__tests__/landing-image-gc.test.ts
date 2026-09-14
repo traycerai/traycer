@@ -38,6 +38,8 @@ vi.mock("sonner", () => ({
 }));
 
 let urlCounter = 0;
+let originalCreateObjectURLDescriptor: PropertyDescriptor | undefined;
+let originalRevokeObjectURLDescriptor: PropertyDescriptor | undefined;
 
 function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
   return new Uint8Array(values);
@@ -149,8 +151,32 @@ function makeDraft(
 describe("landing-image-gc", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
-    URL.revokeObjectURL = vi.fn();
+    originalCreateObjectURLDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "createObjectURL",
+    );
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => `blob:mock/${++urlCounter}`,
+      });
+    }
+    vi.spyOn(URL, "createObjectURL").mockImplementation(
+      () => `blob:mock/${++urlCounter}`,
+    );
+    originalRevokeObjectURLDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "revokeObjectURL",
+    );
+    if (typeof URL.revokeObjectURL !== "function") {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => undefined,
+      });
+    }
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     toastInfo.mockClear();
     toastError.mockClear();
     window.localStorage.clear();
@@ -159,6 +185,25 @@ describe("landing-image-gc", () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    if (originalCreateObjectURLDescriptor === undefined)
+      Reflect.deleteProperty(URL, "createObjectURL");
+    else
+      Object.defineProperty(
+        URL,
+        "createObjectURL",
+        originalCreateObjectURLDescriptor,
+      );
+    if (originalRevokeObjectURLDescriptor === undefined)
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    else
+      Object.defineProperty(
+        URL,
+        "revokeObjectURL",
+        originalRevokeObjectURLDescriptor,
+      );
+    originalCreateObjectURLDescriptor = undefined;
+    originalRevokeObjectURLDescriptor = undefined;
     Reflect.deleteProperty(globalThis, "runnerHost");
   });
 

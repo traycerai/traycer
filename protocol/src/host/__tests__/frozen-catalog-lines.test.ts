@@ -8,6 +8,7 @@ import {
   listAgentsResponseSchemaV50,
   listAgentsResponseSchemaV60,
   listAgentsResponseSchemaV70,
+  listAgentsResponseSchemaV90,
   listAgentsResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
@@ -85,8 +86,20 @@ const LIVE_FROZEN_EXPORTS = {
   // live schema and `agent.list` had NO head-line row here at all, so nothing
   // local could have caught the growth - only the tag-based gate.
   "agent.list@7.0": listAgentsResponseSchemaV70,
-  // The head line, pinned so the next growth attempt fails here first.
-  "agent.list@8.0": listAgentsResponseSchema,
+  // The head line, pinned so the next growth attempt fails here first - keyed
+  // at the head VERSION. It read `agent.list@8.0` while major 8 was head and
+  // was not re-keyed when major 9 opened against live, so it has been pinning
+  // the MAJOR-9 head under a major-8 name ever since.
+  //
+  // `@9.0` is the shape this row held until the session facet landed. Major 9
+  // is UNRELEASED (`host-v1.3.0` registers `agent.list` 1.0 through 8.0 and no
+  // 9), so by the release-status rule spelled out on `providers.list@8.0`
+  // below, growing it regenerates rather than freezes - and the pre-facet
+  // bytes are kept anyway, under the reserved `V90` name the head-contract
+  // rule forced out when `@9.1` took the canonical alias. Nothing leaves the
+  // fixture; the rows are simply named what they are.
+  "agent.list@9.0": listAgentsResponseSchemaV90,
+  "agent.list@9.1": listAgentsResponseSchema,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,

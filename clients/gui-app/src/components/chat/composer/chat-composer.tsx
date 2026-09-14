@@ -43,6 +43,12 @@ import {
   type ChatComposerSubmitSource,
 } from "@/lib/chats/resolve-steer-submit";
 import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
+import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
+import { composerRateLimitAdvisory } from "@/components/chat/fallback/fallback-return-low-usage";
+import {
+  fallbackComposerCardVisible,
+  type ChatProviderFallbackState,
+} from "@/components/chat/fallback/fallback-state";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
@@ -114,6 +120,19 @@ interface ChatComposerProps {
    * view) should pass `true`.
    */
   readonly isActive: boolean;
+  /**
+   * The caller's "this surface may not dispatch against this chat" flag, and
+   * therefore the chat's ACT CAPABILITY as this composer sees it: the only
+   * mount (`chat-tile-lower-surfaces.tsx`) passes `!access.canAct`, which folds
+   * role, chat-stream connection and sign-in exactly as the session store's
+   * `canSendAction` does for the stream-side hold/release lease.
+   *
+   * It is read as that capability, not only as a button state — the
+   * provider-fallback controls below gate on it (`fallbackControlsCanAct`). A
+   * caller that sets this for a reason OTHER than the chat's act capability
+   * would silence those controls too; block send from inside the composer
+   * instead, the way the profile/reauth/pack gates do.
+   */
   readonly sendDisabled: boolean | undefined;
   /**
    * Why `sendDisabled` is true, shown as the send button's hover/focus
@@ -136,6 +155,13 @@ interface ChatComposerProps {
   readonly viewTabId: string | null;
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
+  /**
+   * This chat's provider-fallback surfaces (the grace card and the switch-back
+   * offer). Unrelated to `fallbackSettingsSeed` above, which is "the settings to
+   * use when there is no seed" - see `ChatProviderFallbackState` for why the
+   * longer name is used everywhere this is threaded.
+   */
+  readonly providerFallback: ChatProviderFallbackState;
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
@@ -266,6 +292,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     viewTabId,
     settingsSeed,
     fallbackSettingsSeed,
+    providerFallback,
     onSubmitMessage,
     onSideChat,
     onSettingsChange,
@@ -577,8 +604,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const topBannerKind = resolveComposerTopBannerKind({
+    // The UNION of the two card predicates, and only for the slot question -
+    // which banner wins. Which CARD renders is decided inside
+    // `ChatComposerFallbackBanners`, by each predicate on its own.
+    fallbackVisible: fallbackComposerCardVisible(providerFallback.pending),
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
+    // BY VALUE. The key is present on every live `1.10` frame with `undefined`
+    // meaning "no offer", so a `"pendingReturn" in ...` test here would pin the
+    // banner open for the life of the chat.
+    fallbackReturnVisible: providerFallback.pendingReturn !== undefined,
     rateLimitVisible:
       !reauthGate.signedOut && rateLimitPrompt.kind === "visible",
   });
@@ -615,6 +650,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
   return (
     <>
       <ChatComposerDraftAuthorityBanner authority={authority} />
+      <ChatComposerFallbackBanners
+        topBannerKind={topBannerKind}
+        fallback={providerFallback}
+        // The return banner OUTRANKS the advisory in the chain above, so it
+        // absorbs its sentence rather than silencing it (MF09, UX §2). Same
+        // suppression as `rateLimitVisible`, from one helper.
+        rateLimitAdvisory={composerRateLimitAdvisory(
+          rateLimitPrompt,
+          reauthGate.signedOut,
+        )}
+        client={hostClient}
+        chatId={taskId}
+        epicId={currentEpicId}
+        hostId={tabHostId}
+        canAct={fallbackControlsCanAct(sendDisabled)}
+      />
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
           <div className="pointer-events-none px-4">
@@ -901,6 +952,32 @@ function resolveSendBlockedHint(args: {
   if (args.packPreparingHint !== null) return args.packPreparingHint;
   if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
   return null;
+}
+
+/**
+ * Whether the provider-fallback controls (cancel a wait, choose a different
+ * destination, run a manual rung, switch back) may dispatch.
+ *
+ * The four verbs behind those controls are plain host RPCs
+ * (`components/chat/fallback/use-fallback-actions.ts`) — unlike the choice
+ * LEASE beside them, which goes through the session store and is refused by
+ * `canSendAction` when `access.canAct !== true`. Nothing refuses the unary
+ * verbs client-side, so this is the whole gate, and it has to be the real
+ * capability. It used to be `onSubmitMessage !== null`, which is a constant:
+ * the tile's `onSubmitMessage` is non-nullable and returns `false` on its own
+ * `canAct` check, so a viewer — or an owner on a dropped chat stream — got
+ * enabled buttons issuing actions the host cannot accept.
+ *
+ * `sendDisabled`, not `sendBlocked`. `sendBlocked` widens the caller's flag
+ * with reasons a fallback action is the ESCAPE from — the profile is disabled,
+ * the provider is signed out, a managed pack is preparing — and gating on it
+ * would strand a chat on a destination it is no longer allowed to leave.
+ *
+ * `!== true` rather than `!`: `undefined` is "the caller has no opinion", which
+ * is not a refusal.
+ */
+function fallbackControlsCanAct(sendDisabled: boolean | undefined): boolean {
+  return sendDisabled !== true;
 }
 
 function canSubmitDraft(args: CanSubmitDraftArgs): boolean {

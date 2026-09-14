@@ -71,6 +71,19 @@ describe("reserved browser chords", () => {
     }
   });
 
+  it("forwards reopen at its default, rebound, and unbound chords", () => {
+    const defaults = getDefaultBindings();
+    expect(defaults["tab.reopen"]).toBe("mod+shift+t");
+    expect(defaultCommandFor("mod+shift+t")).toBeNull();
+
+    const rebound = bindingsWith({ "tab.reopen": "mod+alt+r" });
+    expect(commandFor(rebound, "mod+alt+r")).toBeNull();
+    expect(commandFor(rebound, "mod+shift+t")).toBeUndefined();
+
+    const unbound = bindingsWith({ "tab.reopen": null });
+    expect(commandFor(unbound, "mod+shift+t")).toBeUndefined();
+  });
+
   // The Start Page panel's own chords, from inside one of its browser tabs.
   // `terminalPolicy: "app"` does not cover this: it is about an xterm eating a
   // chord, and a native guest is not an xterm - the renderer's registry is not

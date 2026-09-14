@@ -12,9 +12,11 @@ import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notification
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { DEVICES } from "@/components/settings/panels/devices-sessions.definitions";
 import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
+import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { KEYBINDINGS } from "@/components/settings/panels/keybindings-settings.definitions";
+import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { LINK_PHONE } from "@/components/settings/panels/link-phone.definitions";
 import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { OPENING_BEHAVIOR } from "@/components/settings/panels/opening-behavior.definitions";
@@ -37,6 +39,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     APP_NOTIFICATIONS,
     KEYBINDINGS,
     APP_DIAGNOSTICS,
+    LAYOUT,
     DEVICES,
     LINK_PHONE,
     USAGE,
@@ -45,6 +48,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     WORKTREES,
     HOST_NOTIFICATIONS,
     AGENT_SELECTION,
+    FALLBACK,
     SHELL,
     HOST_DIAGNOSTICS,
   ];

@@ -9,10 +9,26 @@ import { getActiveTileOwner } from "@/stores/active-tile-owner";
  * the tile's CONTENT root only - not the tile wrapper - so headers, toolbars and
  * absolutely-positioned chrome (a chat composer overlay, an approval dock) stay
  * out of the selection. First match inside the owning tile wins, so an outer
- * root shadows any nested one. A tile that declares none keeps the browser
- * default.
+ * root shadows any nested one. Content inside a shadow root registers its
+ * actual content element against this declaration. A tile that declares none
+ * keeps the browser default.
  */
 const TILE_SELECTION_ROOT_ATTRIBUTE = "data-selection-root";
+
+const registeredContentRoots = new WeakMap<HTMLElement, HTMLElement>();
+
+/** Connect a tile's declaration to content that lives inside a shadow root. */
+export function registerTileSelectionRoot(
+  declaration: HTMLElement,
+  content: HTMLElement,
+): () => void {
+  registeredContentRoots.set(declaration, content);
+  return () => {
+    if (registeredContentRoots.get(declaration) === content) {
+      registeredContentRoots.delete(declaration);
+    }
+  };
+}
 
 /**
  * Confines select-all to the active tile's content.
@@ -53,7 +69,7 @@ function findTileSelectionRoot(tileInstanceId: string): HTMLElement | null {
   for (const root of roots) {
     const owner = root.closest<HTMLElement>("[data-tile-instance-id]");
     if (owner !== null && owner.dataset.tileInstanceId === tileInstanceId) {
-      return root;
+      return registeredContentRoots.get(root) ?? root;
     }
   }
   return null;

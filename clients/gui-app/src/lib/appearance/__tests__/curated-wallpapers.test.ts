@@ -8,7 +8,7 @@ import {
 
 const MANIFEST_URL = "https://assets.traycer.ai/start-page/wallpapers/v1.json";
 
-function validEntry(overrides: Partial<Record<string, unknown>> = {}) {
+function validEntry(overrides: Partial<Record<string, unknown>>) {
   return {
     id: "dunes",
     title: "Dunes",
@@ -24,7 +24,7 @@ function validEntry(overrides: Partial<Record<string, unknown>> = {}) {
 
 function jsonResponse(
   body: unknown,
-  init: { readonly status?: number } = {},
+  init: { readonly status?: number },
 ): Response {
   return new Response(JSON.stringify(body), {
     status: init.status ?? 200,
@@ -50,7 +50,7 @@ describe("fetchCuratedWallpaperManifest", () => {
       vi
         .fn()
         .mockResolvedValue(
-          jsonResponse({ version: 1, wallpapers: [validEntry()] }),
+          jsonResponse({ version: 1, wallpapers: [validEntry({})] }, {}),
         ),
     );
 
@@ -75,7 +75,7 @@ describe("fetchCuratedWallpaperManifest", () => {
   it("issues the request with credentials omitted and no referrer", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(jsonResponse({ version: 1, wallpapers: [] }));
+      .mockResolvedValue(jsonResponse({ version: 1, wallpapers: [] }, {}));
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchCuratedWallpaperManifest(new AbortController().signal);
@@ -165,7 +165,7 @@ describe("fetchCuratedWallpaperManifest", () => {
       "a duplicate id",
       {
         version: 1,
-        wallpapers: [validEntry(), validEntry({ title: "Dunes 2" })],
+        wallpapers: [validEntry({}), validEntry({ title: "Dunes 2" })],
       },
     ],
     ["an unsupported version", { version: 2, wallpapers: [] }],
@@ -174,7 +174,7 @@ describe("fetchCuratedWallpaperManifest", () => {
   it.each(rejectedManifests)(
     "rejects the whole manifest for %s",
     async (_label, body) => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body)));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body, {})));
 
       await expect(
         fetchCuratedWallpaperManifest(new AbortController().signal),

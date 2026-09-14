@@ -585,6 +585,44 @@ export function browserSessionsCoordinatorsForEpic(
   return out;
 }
 
+/** One live EPIC-scoped coordinator, with the epic it belongs to. */
+export interface BrowserSessionsEpicCoordinatorEntry extends BrowserSessionsCoordinatorEntry {
+  readonly epicId: string;
+}
+
+/**
+ * Every live EPIC-scoped coordinator, whatever epic it belongs to, in registry
+ * (insertion) order.
+ *
+ * The cross-epic sibling of {@link browserSessionsCoordinatorsForEpic}, for the
+ * one surface that ENUMERATES the epics rather than asking about one it already
+ * holds an id for. Home lists browser tabs across every task at once, and there
+ * is no id to scope by - so it needs the registry itself rather than a scan per
+ * epic, which it could not write without first knowing which epics to scan.
+ *
+ * READ-ONLY, and that is the whole contract: acquiring a coordinator opens a
+ * `browser.sessions` stream on a host, and a page that lists browsers must not
+ * be the reason one exists. What this returns is the coordinators some OTHER
+ * surface has already opened - a task whose canvas is mounted in this window -
+ * which is exactly the window-local limit Home declares in its caption.
+ *
+ * `independent` coordinators are skipped for the same reason they are skipped
+ * above: a Start Page browser session belongs to the device rather than to any
+ * task, so it has no task to be listed under.
+ */
+export function browserSessionsCoordinatorEntries(): readonly BrowserSessionsEpicCoordinatorEntry[] {
+  const out: BrowserSessionsEpicCoordinatorEntry[] = [];
+  browserSessionsCoordinators.forEach((coordinator, key) => {
+    if (coordinator.scope.kind !== "epic") return;
+    out.push({
+      key,
+      epicId: coordinator.scope.epicId,
+      state: coordinator.state,
+    });
+  });
+  return out;
+}
+
 /**
  * The live session with this id on ANY host whose EPIC-scoped coordinator is
  * open, or `null`.

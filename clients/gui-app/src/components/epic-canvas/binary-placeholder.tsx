@@ -1,5 +1,8 @@
 import { FileQuestionMarkIcon, FileTextIcon } from "lucide-react";
-import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import {
+  DOCUMENT_ASSET_LABELS,
+  documentAssetKindOf,
+} from "@/lib/assets/image-extension-allowlist";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
@@ -9,7 +12,7 @@ interface BinaryPlaceholderProps {
   readonly sizeBytes: number | null;
   /** One-line reason shown below the size (image-preview decision log, decision #14). `null` renders none. */
   readonly reason: string | null;
-  /** `null` when there is no single unambiguous file on disk to open (e.g. a per-side diff placeholder) - hides the button entirely rather than disabling it. */
+  /** `null` when no useful local open is available (remote host or no unambiguous file on disk) - hides the button entirely. */
   readonly onOpenExternally: (() => void) | null;
   readonly openExternallyOpening: boolean;
   /** Smaller icon/spacing, no heading, for a diff column rather than a full tile. */
@@ -17,11 +20,12 @@ interface BinaryPlaceholderProps {
 }
 
 export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
-  // A PDF is a KNOWN type here (the heading below already says so) - the
-  // question-mark file icon reads as "unidentified", and the PDF diff block
-  // uses the document icon, so keep the two surfaces consistent.
-  const isPdf = isPdfAssetPath(props.fileName);
-  const Icon = isPdf ? FileTextIcon : FileQuestionMarkIcon;
+  // A PDF or Word file is a KNOWN type here (the heading below already says
+  // so) - the question-mark file icon reads as "unidentified", and the
+  // document diff block uses the document icon, so keep the two surfaces
+  // consistent.
+  const documentKind = documentAssetKindOf(props.fileName);
+  const Icon = documentKind === null ? FileQuestionMarkIcon : FileTextIcon;
   return (
     <div
       className={cn(
@@ -39,7 +43,9 @@ export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
         // "Binary File" above "This PDF is too large..." reads as a
         // contradiction (live-testing review, D4) - name the type we know.
         <h3 className="text-base font-semibold">
-          {isPdf ? "PDF" : "Binary File"}
+          {documentKind === null
+            ? "Binary File"
+            : DOCUMENT_ASSET_LABELS[documentKind]}
         </h3>
       )}
       <p

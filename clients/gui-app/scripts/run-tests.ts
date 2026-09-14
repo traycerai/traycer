@@ -174,6 +174,10 @@ if (runsFirstShard) {
       exitCode,
       runBrowserRegression("scripts/toast-close-button-touch-browser.mjs"),
     );
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/docx-preview-browser-regression.mjs"),
+    );
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design

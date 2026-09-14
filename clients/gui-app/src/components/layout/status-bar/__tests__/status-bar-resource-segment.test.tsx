@@ -1,0 +1,236 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  EMPTY_GLOBAL_RESOURCE_PROJECTION,
+  type GlobalResourceProjection,
+} from "@/stores/resources/resources-registry";
+import {
+  DEFAULT_STATUS_BAR_LAYOUT,
+  useLayoutStore,
+  type ResourceMetric,
+} from "@/stores/settings/layout-store";
+
+/**
+ * What the segment does with the data it is handed — attribution above all,
+ * since the strip watches a host at all times and the registry publishes ONE
+ * projection for the window. `status-bar-resource-reading.test.ts` owns the
+ * rule; this owns the wiring, which is the half a prop rename would break
+ * silently.
+ */
+const registry: {
+  projection: GlobalResourceProjection;
+  unsupported: boolean;
+} = {
+  projection: EMPTY_GLOBAL_RESOURCE_PROJECTION,
+  unsupported: false,
+};
+
+vi.mock("@/stores/resources/resources-registry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/stores/resources/resources-registry")
+    >();
+  return {
+    ...actual,
+    useGlobalResourceProjection: () => registry.projection,
+  };
+});
+
+const desktopAppResourceUsageMock = vi.hoisted(() => vi.fn(() => null));
+
+vi.mock("@/hooks/resources/use-desktop-app-resource-usage", () => ({
+  useDesktopAppResourceUsage: desktopAppResourceUsageMock,
+}));
+
+vi.mock("@/hooks/resources/use-global-resources-unsupported", () => ({
+  useGlobalResourcesUnsupported: () => registry.unsupported,
+}));
+
+import { StatusBarResourceSegment } from "@/components/layout/status-bar/status-bar-resource-segment";
+
+const GIB = 1024 * 1024 * 1024;
+
+function liveProjection(hostId: string | null): GlobalResourceProjection {
+  return {
+    ...EMPTY_GLOBAL_RESOURCE_PROJECTION,
+    hostId,
+    sampledAt: 1,
+    hostTree: {
+      sampledAt: 1,
+      processCount: 14,
+      cpuPercent: 12,
+      rssBytes: GIB,
+      pssBytes: null,
+      privateBytes: null,
+    },
+    app: {
+      sampledAt: 1,
+      hostTotalMemoryBytes: 16 * GIB,
+      process: null,
+      processCount: 3,
+      cpuPercent: 4,
+      rssBytes: 256 * 1024 * 1024,
+      pssBytes: null,
+      privateBytes: null,
+    },
+  };
+}
+
+function renderSegment(props: { readonly hasExplicitPick: boolean }): void {
+  render(
+    <TooltipProvider delayDuration={0}>
+      <StatusBarResourceSegment
+        density="full"
+        hostId="host-b"
+        hostLabel="Office Linux"
+        hasExplicitPick={props.hasExplicitPick}
+      />
+    </TooltipProvider>,
+  );
+}
+
+function metricText(metric: ResourceMetric): string {
+  return screen.getByTestId(`status-bar-resource-metric-${metric}`).textContent;
+}
+
+describe("<StatusBarResourceSegment />", () => {
+  beforeEach(() => {
+    registry.projection = EMPTY_GLOBAL_RESOURCE_PROJECTION;
+    registry.unsupported = false;
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    desktopAppResourceUsageMock.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    desktopAppResourceUsageMock.mockClear();
+  });
+
+  it("subscribes desktop-app usage only under the desktop-app scope, never host-tree", () => {
+    // The sampler starts a once-a-second IPC poll on its first subscriber, so
+    // asking for it under the default host-tree scope - where the strip never
+    // renders it - would run that poll all session for a number nothing shows.
+    renderSegment({ hasExplicitPick: false });
+
+    expect(desktopAppResourceUsageMock).toHaveBeenCalledWith(false);
+  });
+
+  it("enables the sampler under the desktop-app scope", () => {
+    useLayoutStore.setState({
+      statusBar: {
+        ...DEFAULT_STATUS_BAR_LAYOUT,
+        resources: {
+          ...DEFAULT_STATUS_BAR_LAYOUT.resources,
+          scope: "desktop-app",
+        },
+      },
+    });
+
+    renderSegment({ hasExplicitPick: false });
+
+    expect(desktopAppResourceUsageMock).toHaveBeenCalledWith(true);
+  });
+
+  it("renders the watched host's numbers", () => {
+    registry.projection = liveProjection("host-b");
+
+    renderSegment({ hasExplicitPick: true });
+
+    expect(metricText("cpu")).toContain("12%");
+    expect(metricText("processes")).toContain("14");
+  });
+
+  it("draws no numbers from a projection belonging to another machine", () => {
+    // The failure this closes: a picked host that cannot serve a global stream
+    // has no registry entry, so the projection falls back to the per-epic
+    // aggregate on the AMBIENT transport - the active host - and the strip
+    // would print it under the picked host's name.
+    registry.projection = liveProjection("host-a");
+
+    renderSegment({ hasExplicitPick: true });
+
+    expect(metricText("cpu")).not.toContain("12%");
+    expect(screen.getAllByText("cpu: unavailable")).toHaveLength(1);
+  });
+
+  it("says the host is too old once its foreign numbers are gone", async () => {
+    registry.projection = liveProjection("host-a");
+    registry.unsupported = true;
+
+    renderSegment({ hasExplicitPick: true });
+    // The sentence lives on the tooltip, which is only reached for a metric
+    // with NO value - which is exactly why an unattributed projection used to
+    // swallow it.
+    fireEvent.focus(screen.getByTestId("status-bar-resource-metric-cpu"));
+
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Office Linux is running an older Traycer host",
+    );
+  });
+
+  it("keeps reading an unattributed projection while following the active host", () => {
+    registry.projection = liveProjection(null);
+
+    renderSegment({ hasExplicitPick: false });
+
+    expect(metricText("cpu")).toContain("12%");
+  });
+
+  it("says so when every metric is switched off", () => {
+    // Reachable from Settings, which has one switch per metric. An icon with no
+    // readout beside it is what a broken segment looks like.
+    useLayoutStore.setState({
+      statusBar: {
+        ...DEFAULT_STATUS_BAR_LAYOUT,
+        resources: { ...DEFAULT_STATUS_BAR_LAYOUT.resources, metrics: [] },
+      },
+    });
+
+    renderSegment({ hasExplicitPick: false });
+
+    expect(screen.getByTestId("status-bar-resource-no-metrics")).not.toBeNull();
+    // In the button's NAME, not in hidden text inside it: an `aria-label`
+    // replaces the flattened contents, so a sentence in there is announced to
+    // nobody - and here it is the only explanation there is.
+    expect(
+      screen.getByRole("button", { name: "Resources, no metrics selected" }),
+    ).not.toBeNull();
+    // Still the resource panel's trigger: the numbers are one click away.
+    expect(screen.getByTestId("status-bar-resource-segment")).not.toBeNull();
+  });
+
+  it("names every metric and its reading, so the numbers survive the label", () => {
+    // The same `aria-label` rule the empty state relies on cuts the other way
+    // once there IS a readout: the name REPLACES the flattened contents, so a
+    // bare "Resources" hid every figure in the segment from a screen reader at
+    // every density - not only the ones that drop the visible label.
+    registry.projection = liveProjection("host-b");
+
+    renderSegment({ hasExplicitPick: true });
+
+    const name = screen
+      .getByTestId("status-bar-resource-segment")
+      .getAttribute("aria-label");
+    expect(name).toContain("Resources:");
+    expect(name).toContain("cpu 12%");
+    expect(name).toContain("procs 14");
+  });
+
+  it("names a metric it cannot read as unavailable rather than dropping it", () => {
+    // `StatusBarMetric` writes that sentence as `sr-only` text INSIDE the
+    // button, where the label makes it unreachable - so the name has to carry
+    // it, or a reader who turned the metric on cannot tell it from one this
+    // build never draws.
+    registry.projection = liveProjection("host-a");
+
+    renderSegment({ hasExplicitPick: true });
+
+    expect(
+      screen
+        .getByTestId("status-bar-resource-segment")
+        .getAttribute("aria-label"),
+    ).toContain("cpu unavailable");
+  });
+});

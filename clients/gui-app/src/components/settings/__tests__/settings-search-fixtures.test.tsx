@@ -7,15 +7,38 @@ import {
   type SettingsSearchFixtureSection,
 } from "@/components/settings/__tests__/settings-search-fixture-registry";
 import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
+import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { setMobileApp } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import {
+  DEFAULT_STATUS_BAR_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
+
+// Layout's provider list is read through the WATCHED host's scope. It carries
+// no anchors - the set exists only for providers a host has reported - so the
+// contract needs the page mounted, not connected, and resolving a real scope
+// would need a whole host runtime for content this test never asserts. Mocked
+// at the same boundary the panel's own suite uses.
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => null,
+}));
+
+vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
+  useRateLimitResolveHostScope: () => ({
+    scope: hostScopeFixture({}),
+    hasExplicitPick: false,
+  }),
+}));
 
 // General's replay button and Sounds' host link navigate; nothing here clicks
 // them, but both hooks need a router to be CALLED.
@@ -40,6 +63,7 @@ const MOUNTS: {
 } = {
   general: <GeneralSettingsPanel />,
   appearance: <AppearanceSettingsPanel />,
+  layout: <LayoutSettingsPanel />,
   "opening-behavior": <OpeningBehaviorPanel />,
   "app-notifications": <AppNotificationsSettingsPanel />,
   "app-diagnostics": <AppDiagnosticsSettingsPanel />,
@@ -51,6 +75,7 @@ afterEach(() => {
   cleanup();
   setMobileApp(false);
   setFeatureSettingsBridge(null);
+  setMobileFooter(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter);
 });
 
 describe("settings search fixtures", () => {
@@ -96,6 +121,7 @@ function mountInShell(
 ): HTMLElement {
   setMobileApp(context.mobileApp);
   setFeatureSettingsBridge(context.featureSettings);
+  setMobileFooter(context.mobileFooter);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -133,4 +159,17 @@ function setFeatureSettingsBridge(
 ): void {
   (globalThis as { runnerHost?: unknown }).runnerHost =
     featureSettings === null ? undefined : { platform: { featureSettings } };
+}
+
+/**
+ * The one shell fact that lives in a store rather than on the window or the
+ * runner host. Written straight into `layout-store` so the panel and the
+ * probe below resolve the same value the registry names - the mobile footer
+ * decides whether that build has a strip at all, and the whole group's gate
+ * reads it.
+ */
+function setMobileFooter(mobileFooter: boolean): void {
+  useLayoutStore.setState((state) => ({
+    statusBar: { ...state.statusBar, mobileFooter },
+  }));
 }

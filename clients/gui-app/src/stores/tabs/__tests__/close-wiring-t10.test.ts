@@ -11,12 +11,13 @@
  * resulting `useTabsStore` layout, so a regression back to the direct-source
  * bypass shows up here.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tabRequestClose } from "@/stores/tabs/registry";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { resetLandingDraftRetirementsForTests } from "@/lib/drafts/landing-draft-retirement";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
 import type { TabRef } from "@/stores/tabs/types";
@@ -45,10 +46,15 @@ function seedEpicTabs(
   });
 }
 
+beforeEach(() => {
+  resetLandingDraftRetirementsForTests();
+});
+
 afterEach(() => {
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  resetLandingDraftRetirementsForTests();
 });
 
 describe("T10 Area 1: requestClose routes through the coordinator", () => {

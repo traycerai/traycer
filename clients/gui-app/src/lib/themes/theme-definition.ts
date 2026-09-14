@@ -38,6 +38,11 @@ export const themeTokens = [
   { key: "border", label: "Border", group: "Controls" },
   { key: "input", label: "Input border", group: "Controls" },
   { key: "ring", label: "Focus ring", group: "Controls" },
+  {
+    key: "reasoning-max-accent",
+    label: "Max reasoning accent",
+    group: "Controls",
+  },
   { key: "destructive", label: "Destructive actions", group: "Status" },
   { key: "success", label: "Success", group: "Status" },
   { key: "success-foreground", label: "Success text", group: "Status" },

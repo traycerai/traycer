@@ -187,6 +187,10 @@ export function useReducedMotion(): boolean {
  * referentially stable (`useCallback`): the effect resubscribes when either
  * changes. Under reduced motion neither runs and nothing subscribes.
  *
+ * The target may be an HTML or an SVG element - both carry the inline `style`
+ * a writer writes, and a glyph animated in place (a chip's lucide icon) is an
+ * `<svg>`, not a wrapper around one.
+ *
  * Each tick re-reads `ref`, so a host element swapped underneath the same
  * component (a polymorphic `as` prop) picks up the animation on the next tick.
  * `cadenceMs` is one of the `STATUS_ANIMATION_*_CADENCE_MS` constants.
@@ -196,7 +200,7 @@ export function useReducedMotion(): boolean {
  * hidden (`usePaneVisible`, `true` outside a pane) and resume on the next show
  * - the same gate the stream flush coordinator's hidden tier follows.
  */
-export function useStatusAnimation<T extends HTMLElement>(
+export function useStatusAnimation<T extends HTMLElement | SVGElement>(
   ref: RefObject<T | null>,
   write: (element: T, elapsedMs: number) => void,
   clear: (element: T) => void,

@@ -604,6 +604,7 @@ export function startEpicRuntimeWorkerHost(
           event.status.streamId,
           event.status.status,
           event.status.reason,
+          event.status.retryCause,
         );
         return;
       }

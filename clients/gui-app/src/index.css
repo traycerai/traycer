@@ -192,6 +192,117 @@
   animation: prompt-stash-count-flash 700ms ease-out both;
 }
 
+/* A compact dock chip acknowledging the thing it stands for changing - the
+   first agent starting, the line counts moving. A ring radiating out of the
+   chip and nothing else: `box-shadow` alone, so the chip's own background
+   survives the animation (see the note on `prompt-stash-count-flash` above for
+   what a `both` background frame does to it), and the end frame is transparent
+   so a finished pulse leaves no residue.
+
+   Deliberately no reduced-motion override. The base layer already collapses
+   every animation to 0.01ms, which still fires `animationend` - and that event
+   is what takes `data-pulse` back off. `animation: none` would suppress it and
+   leave the attribute set for good, so the chip could never pulse again. */
+@keyframes chat-dock-chip-pulse {
+  from {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--color-primary) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+[data-chat-dock-chip][data-pulse="true"] {
+  animation: chat-dock-chip-pulse 620ms ease-out forwards;
+}
+
+/* The model picker's LAST thinking level. Below it the pill is a solid
+   `--primary` fill; at it the fill becomes a gradient running into the accent,
+   the pill takes a soft glow of the same colour, and a fixed constellation of
+   sparkles twinkles over it. Everything here is the STATE of being at the top,
+   not a celebration of arriving there - a picker opened at max looks exactly
+   like one dragged there.
+
+   The two ends of the gradient are both theme tokens: `--primary` and
+   `--reasoning-max-accent` (registered in `themeTokens`, default violet), so a
+   custom theme can recolour max without touching this file and an achromatic
+   default still reads, because the accent carries the hue the monochrome
+   primary has none of. */
+.reasoning-effort-slider {
+  --reasoning-max-glow: color-mix(
+    in srgb,
+    var(--reasoning-max-accent) 32%,
+    transparent
+  );
+  --reasoning-max-edge: color-mix(
+    in srgb,
+    var(--reasoning-max-accent) 35%,
+    transparent
+  );
+}
+
+.reasoning-effort-max-range {
+  background: linear-gradient(
+    to right,
+    var(--primary),
+    var(--reasoning-max-accent)
+  );
+}
+
+/* `[dir="rtl"]` rather than `:dir(rtl)`: Tailwind v4's floor is Chrome 111 and
+   `:dir()` did not ship until Chrome 120, so the pseudo-class silently left
+   111-119 on the left-to-right gradient. The attribute is what the document
+   sets anyway, and matches every descendant of it. */
+[dir="rtl"] .reasoning-effort-max-range {
+  background: linear-gradient(
+    to left,
+    var(--primary),
+    var(--reasoning-max-accent)
+  );
+}
+
+/* Sized to the clearance the row reserves: `0 0 12px 2px` reaches 14px, which
+   is the slider's `py-2` plus the footer's `py-1.5`, so the popover's
+   `overflow-hidden` has nothing of it to cut. The 1px spread underneath draws
+   the pill's own edge, which is what keeps the glow reading as light coming
+   OFF the control rather than a blur sitting behind it. */
+.reasoning-effort-max-glow {
+  box-shadow:
+    0 0 0 1px var(--reasoning-max-edge),
+    0 0 12px 2px var(--reasoning-max-glow);
+}
+
+/* A sparkle is white at every theme, not `--foreground`: it is a specular
+   highlight on a saturated fill, and a light theme's near-black foreground
+   would read as dirt on the gradient rather than as a glint. Its opacity is
+   written per tick from the shared status clock into the custom property the
+   component names; the fallback is what a still field sits at, so reduced
+   motion and a hidden pane need no rule of their own. */
+.reasoning-effort-sparkle {
+  background: #fff;
+  filter: drop-shadow(0 0 2px rgb(255 255 255 / 0.8));
+}
+
+.reasoning-effort-sparkle-glint {
+  color: #fff;
+  font-size: 8px;
+  line-height: 1;
+}
+
+/* Decoration with no information in it, so it simply goes: the level's name is
+   above the track and `aria-valuetext` says it too. The fill and the thumb
+   carry the state in a forced palette. */
+@media (forced-colors: active) {
+  .reasoning-effort-max-glow {
+    box-shadow: none;
+  }
+  .reasoning-effort-sparkle,
+  .reasoning-effort-sparkle-glint {
+    display: none;
+  }
+}
+
 /* A label-only tooltip must never win hit-testing from what it covers.
    `TooltipContent`'s own `pointer-events-none` is NOT enough: Radix Popper
    renders the content inside a positioning wrapper of exactly the same size,
@@ -848,6 +959,11 @@
   --color-muted: var(--muted);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
+  /* The reasoning slider's max accent is a registered theme token
+     (`themeTokens` in `lib/themes/theme-definition.ts`): its default lives in
+     `builtin-palettes.ts`, the fallback stylesheet carries it, the applier
+     writes it, and a custom theme overrides it like any other role. */
+  --color-reasoning-max-accent: var(--reasoning-max-accent);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
@@ -1228,21 +1344,6 @@
   [data-composer-editor] blockquote {
     @apply my-0.5 border-l-2 border-primary/60 pl-3 leading-snug text-muted-foreground;
   }
-}
-
-/*
- * Find-in-page highlight paints (`lib/find-engine/find-engine.ts`).
- * Uses the CSS Custom Highlight API so painting never touches
- * `window.getSelection()` - contenteditable editors don't see a
- * selection change and don't grab focus away from the find input.
- */
-::highlight(traycer-find-match) {
-  background-color: color-mix(in srgb, var(--primary) 35%, transparent);
-  color: inherit;
-}
-::highlight(traycer-find-match-active) {
-  background-color: color-mix(in srgb, var(--primary) 75%, transparent);
-  color: var(--primary-foreground);
 }
 
 /*

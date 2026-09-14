@@ -14,6 +14,8 @@ import {
   getEpicSessionHandleHostId,
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
+import { publishRecordListDeltaStamp } from "@/lib/records/record-list-delta-stamps";
+import type { RecordListRevision } from "@traycer/protocol/host/epic/record-list-revision";
 
 /**
  * The record-change PUSH stream, mounted once per app.
@@ -36,6 +38,16 @@ import {
  * is constructed, and the record table refreshes exactly as it did before. The
  * same arm covers a reconnect gap - deltas missed while the socket was down are
  * repaired by the next poll rather than by a replay no host retains a log for.
+ *
+ * ## `@1.4`: the poll is the backup and the deltas now keep it quiet
+ *
+ * Each `@1.4` record frame carries the LIST revision the write left behind.
+ * This mount routes the rows as it always has and announces that stamp on the
+ * epic's channel (`publishRecordListDeltaStamp`); the two record-list hooks
+ * hold the revision they last answered with, and a stamp exactly one past it
+ * lets them advance without re-reading. Without the announcement every change
+ * would still cost one full snapshot per open tab at the next 20s tick - the
+ * deltas would be fresh and the list would be re-shipped anyway.
  *
  * ## Terminal closes reopen on the host's lane
  *
@@ -102,7 +114,10 @@ export function ChatRecordsStreamMount(): ReactNode {
     // Narrowed capture: the guard above does not narrow `wsStreamClient`
     // inside the nested `openClient` function declaration.
     const streamClient = wsStreamClient;
-    const applyDelta = (delta: ChatRecordsStreamDelta): void => {
+    const applyDelta = (
+      delta: ChatRecordsStreamDelta,
+      listRevision: RecordListRevision | null,
+    ): void => {
       // Peek, not acquire, for every delta kind - a record change must never
       // construct an epic session or reorder the MRU (see the doc above).
       const handle = getOpenEpicRegistry().peek(delta.epicId);
@@ -116,9 +131,22 @@ export function ChatRecordsStreamMount(): ReactNode {
       // the terminal-agent reducer, everything else to the chat reducer.
       if (delta.kind === "tuiUpsert" || delta.kind === "tuiRemove") {
         handle.store.getState().applyTuiAgentRecordDelta(delta);
-        return;
+      } else {
+        handle.store.getState().applyChatRecordDelta(delta);
       }
-      handle.store.getState().applyChatRecordDelta(delta);
+      // AFTER the rows are dispatched, and only on the paths that dispatched
+      // them: the stamp announces "this client now holds the list at that
+      // revision", and announcing it for a delta that was dropped above - no
+      // session, or another host's - would advance a held revision past rows
+      // no store received. Both drops are early returns for exactly that
+      // reason. `null` is a host below `@1.4` with no stamp to announce; its
+      // clients stay on a snapshot per change, as before.
+      //
+      // Announced for BOTH record kinds regardless of which table took the
+      // rows, because one composite revision covers both lists - see
+      // `record-list-delta-stamps.ts`.
+      if (listRevision === null) return;
+      publishRecordListDeltaStamp(delta.epicId, listRevision);
     };
     const hostConnection = acquireHostConnection(hostId);
     let disposed = false;
@@ -137,12 +165,12 @@ export function ChatRecordsStreamMount(): ReactNode {
       client = new ChatRecordsStreamClient({
         wsStreamClient: streamClient,
         callbacks: {
-          onDelta: (delta) => {
+          onDelta: (delta, listRevision) => {
             if (currentClient !== client) return;
             // A delivered delta is the usable-session proof for this stream
             // (it has no initial state frame to reset on).
             reopenScheduler.resetBackoff();
-            applyDelta(delta);
+            applyDelta(delta, listRevision);
           },
           onConnectionStatus: (status, reason) => {
             if (currentClient !== client) return;

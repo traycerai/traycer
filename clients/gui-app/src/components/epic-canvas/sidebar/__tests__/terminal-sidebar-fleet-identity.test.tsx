@@ -40,6 +40,7 @@ const resourceChipCalls = vi.hoisted(() => ({
     readonly kind: string;
     readonly ownerId: string;
     readonly hostId: string | null;
+    readonly metrics: ReadonlyArray<string>;
   }>,
 }));
 
@@ -105,6 +106,7 @@ vi.mock("@/components/resources/resource-usage-chip", () => ({
     readonly kind: string;
     readonly ownerId: string;
     readonly hostId: string | null;
+    readonly metrics: ReadonlyArray<string>;
   }) => {
     resourceChipCalls.calls.push(props);
     return (
@@ -233,7 +235,7 @@ describe("terminal sidebar fleet identity consumers", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     draggableCalls.calls = [];
     resourceChipCalls.calls = [];
-    useSettingsStore.setState({ showNavigatorResourceStats: true });
+    useSettingsStore.setState({ navigatorResourceMetrics: ["cpu", "memory"] });
     durableCollection.value = freshPlainCollection([
       epicRunningPlainTerminal(SHARED_ID, HOST_A, "Host A shell"),
       epicRunningPlainTerminal(SHARED_ID, HOST_B, "Host B shell"),
@@ -242,7 +244,7 @@ describe("terminal sidebar fleet identity consumers", () => {
 
   afterEach(() => {
     cleanup();
-    useSettingsStore.setState({ showNavigatorResourceStats: false });
+    useSettingsStore.setState({ navigatorResourceMetrics: [] });
   });
 
   it("highlights, registers DnD, and selects resources per owner host", () => {
@@ -292,11 +294,13 @@ describe("terminal sidebar fleet identity consumers", () => {
           kind: "terminal",
           ownerId: SHARED_ID,
           hostId: HOST_A,
+          metrics: ["cpu", "memory"],
         }),
         expect.objectContaining({
           kind: "terminal",
           ownerId: SHARED_ID,
           hostId: HOST_B,
+          metrics: ["cpu", "memory"],
         }),
       ]),
     );

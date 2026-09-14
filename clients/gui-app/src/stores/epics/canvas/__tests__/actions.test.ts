@@ -58,6 +58,7 @@ import {
   rootPane,
 } from "./canvas-test-fixtures";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
+import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 
 /** Permanent (pinned) open - `openTile` with `preview: false`. */
 function openPinned(
@@ -462,6 +463,45 @@ describe("closeTab cascade", () => {
     expect(pane.activationHistory).toEqual([]);
     expect(next.activePaneId).toBe(pane.id);
     expectCanvasInvariants(next);
+  });
+
+  it("preserves a non-root pane when its last tab is a blank picker", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    const blank = makeBlankTileRef();
+    state = splitPaneAtEdge(state, sourcePaneId, "right", {
+      kind: "node",
+      node: blank,
+    });
+    if (state.activePaneId === null) throw new Error("expected active pane");
+    const blankPaneId = state.activePaneId;
+
+    const next = closeTab(state, blankPaneId, blank.instanceId);
+
+    expect(paneById(next, blankPaneId).tabInstanceIds).toEqual([]);
+    expect(next.tilesByInstanceId[blank.instanceId]).toBeUndefined();
+    expect(collectPanes(next.root).map((item) => item.id)).toContain(
+      blankPaneId,
+    );
+  });
+
+  it("preserves a blank-only pane when closing all tabs", () => {
+    const blank = makeBlankTileRef();
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    state = splitPaneAtEdge(state, sourcePaneId, "right", {
+      kind: "node",
+      node: blank,
+    });
+    if (state.activePaneId === null) throw new Error("expected active pane");
+    const blankPaneId = state.activePaneId;
+
+    const next = closeAllTabs(state, blankPaneId);
+
+    expect(paneById(next, blankPaneId).tabInstanceIds).toEqual([]);
+    expect(collectPanes(next.root).map((item) => item.id)).toContain(
+      blankPaneId,
+    );
   });
 
   it("collapses non-root pane when its last tab closes; sibling absorbs into root pane", () => {
@@ -1289,6 +1329,19 @@ describe("openTileInPane (non-dedup, target-scoped open)", () => {
 });
 
 describe("openBlankTabInPane", () => {
+  it("leaves an already-empty pane empty", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    state = splitPaneEmpty(state, sourcePaneId, "horizontal");
+    if (state.activePaneId === null) throw new Error("expected active pane");
+    const emptyPaneId = state.activePaneId;
+
+    const next = openBlankTabInPane(state, emptyPaneId);
+
+    expect(next).toBe(state);
+    expect(paneById(next, emptyPaneId).tabInstanceIds).toEqual([]);
+  });
+
   it("appends a blank, active 'New tab' to a populated pane", () => {
     let state = openPinned(createEmptyCanvas(), SPEC_A);
     const paneId = rootPane(state).id;
@@ -1318,6 +1371,27 @@ describe("openBlankTabInPane", () => {
     const pane = rootPane(state);
     expect(pane.tabInstanceIds).toHaveLength(2);
     expect(pane.activeTabId).toBe(firstBlankId);
+  });
+
+  it("reuses an existing blank even when another tab is active", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+    state = openBlankTabInPane(state, paneId);
+    const blankId = rootPane(state).activeTabId;
+    if (blankId === null) throw new Error("expected blank tab");
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    const next = openBlankTabInPane(state, paneId);
+
+    expect(paneById(next, paneId).tabInstanceIds).toHaveLength(2);
+    expect(paneById(next, paneId).activeTabId).toBe(blankId);
+    expect(
+      isBlankTileRef(
+        paneTabRefs(next, paneById(next, paneId)).find(
+          (tab) => tab.instanceId === blankId,
+        ) ?? SPEC_A,
+      ),
+    ).toBe(true);
   });
 
   it("is a no-op when the target pane does not exist", () => {

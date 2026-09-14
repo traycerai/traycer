@@ -78,7 +78,7 @@ function makeSessionWithInjector(negotiated: SchemaVersion): {
       if (statusHandler === null) {
         throw new Error("no status handler");
       }
-      statusHandler("open", null);
+      statusHandler("open", null, null);
     },
   };
 }
