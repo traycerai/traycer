@@ -1079,12 +1079,24 @@ describe.each(["campus", "city"] as const)(
       // A point just inside the district's own near corner, and a 2560x1400
       // camera - a real viewport's world rect at zoom 0.5 - positioned so
       // that point sits 10px inside the camera's own far corner.
+      //
+      // THE BOX IS ONE VALUE, not four literals that have to agree. Its size
+      // appears twice: once as the rect's own extent and once inside the
+      // origin that puts the probe point in its far corner, and the case only
+      // asks anything while the two are the same number. Measured: shrinking
+      // BOTH by a tenth keeps every case here green (the pan is generous - the
+      // probe sits 10px in, and a 1px inset is green too), while shrinking the
+      // extent alone moves the far corner 246px off the point and the case
+      // reds on "expected 0 to be greater than 0", an anti-vacuity guard
+      // firing for a reason that has nothing to do with the corner query.
+      // `REPORTED_CAMERA` below is the same box, named the same way.
+      const CAMERA = { width: 2560, height: 1400 };
       const [point] = overviewSamplePoints(storey.shape, [0.001]);
       const camera: OfficeRect = {
-        x: point.x + 10 - 2560,
-        y: point.y + 10 - 1400,
-        width: 2560,
-        height: 1400,
+        x: point.x + 10 - CAMERA.width,
+        y: point.y + 10 - CAMERA.height,
+        width: CAMERA.width,
+        height: CAMERA.height,
       };
       const visible = scene.frame(0, camera).floor;
       const topmostAt = (

@@ -277,13 +277,29 @@ describe("the grown-City overview coverage (H1)", () => {
     // eighteen tiles wide and four hundred and ten deep - runs nowhere near
     // it. A camera aimed there now sees empty world, correctly, and a case
     // built on it would pass while asking nothing.
+    //
+    // THE BOX IS ONE VALUE for the same reason the derivation exists: its size
+    // is used twice, as the rect's extent and inside the origin that puts the
+    // corner ten pixels inside it, and the case only asks anything while the
+    // two agree.
+    //
+    // MEASURED HERE, and this fixture has slack in every direction tried:
+    // shrinking both halves a tenth is green, shrinking the EXTENT ALONE a
+    // tenth is green too, and so is a 1px inset in place of the ten. So the
+    // name is not fixing an observed red in this case - it is removing the
+    // shape that produced one next door, where the same four literals are
+    // tighter: in `office-plan-perf.test.ts`'s corner-coverage case a tenth off
+    // the extent alone moves the far corner 246px off the probe point and the
+    // anti-vacuity guard fires (`expected 0 to be greater than 0`) for a reason
+    // that has nothing to do with the corner query it guards.
+    const CAMERA = { width: 2560, height: 1400 };
     const [corner] = overviewSamplePoints(storey.shape, [0.999]);
     const point: OfficeRect = { x: corner.x, y: corner.y, width: 1, height: 1 };
     const camera: OfficeRect = {
-      x: corner.x + 10 - 2560,
-      y: corner.y + 10 - 1400,
-      width: 2560,
-      height: 1400,
+      x: corner.x + 10 - CAMERA.width,
+      y: corner.y + 10 - CAMERA.height,
+      width: CAMERA.width,
+      height: CAMERA.height,
     };
     const wanted = topmostAt(wholeMapFloor(view, layout), corner);
     if (wanted === undefined) {
