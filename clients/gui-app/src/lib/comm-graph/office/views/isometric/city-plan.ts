@@ -254,9 +254,10 @@ function cityDistrictAgents(work: CityDistrictWork): number {
  *
  *   six-tile plates, one gap row: 26 overprints across the sweep, every one the
  *   same-column pair at 2.8 px - and NONE of them at 12, 309 or 1,000. The shared
- *   plate case stays green under that mutant; City's own structural clearance case
- *   is the only guard, which is why it asserts the two rows against the rooms the
- *   packer placed.
+ *   plate suite samples 15 agents (`office-plans.test.ts`'s `TRIAGE_SCALES`) for
+ *   exactly this reason: that case reds under the one-gap-row mutant while City's
+ *   own structural clearance case asserts the two rows against the rooms the
+ *   packer placed - two guards now, not one.
  *
  *   six-tile plates, two gap rows - as shipped: zero overprints, in both
  *   isometric views, across every population in the sweep.
