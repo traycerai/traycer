@@ -9,8 +9,13 @@ import {
 } from "@/lib/comm-graph/office/office-test-epic";
 import {
   OFFICE_TILE,
+  type OfficeCivicRoom,
+  type OfficeDrawable,
+  type OfficeFloor,
+  type OfficeLayout,
   type OfficeSeat,
   type OfficeSize,
+  type OfficeTileRect,
   type OfficeWorldDrawable,
 } from "@/lib/comm-graph/office/office-types";
 import type { OfficeDeskState, OfficePlanInput } from "../office-view";
@@ -164,5 +169,178 @@ describe("floorPainter.seatProps: civic seats", () => {
     // instead of drifting to where a live screen sits.
     expect(monitor.drawable.x).toBe(deskX + 3);
     expect(monitor.drawable.y).toBe(deskY - 8);
+  });
+});
+
+// ---- Fixtures for the civic ring's enclosure check ------------------- //
+
+const RING_SPRITE_NAMES: ReadonlySet<string> = new Set([
+  "wall",
+  "wall-top",
+  "door",
+  "planter",
+]);
+
+function allWalkable(
+  rows: number,
+  cols: number,
+): ReadonlyArray<ReadonlyArray<boolean>> {
+  return Array.from({ length: rows }, () =>
+    Array.from({ length: cols }, () => true),
+  );
+}
+
+/**
+ * A civic room away from the floor's own outer wall - `floorSpriteAt` draws
+ * the building's OWN "wall" / "wall-top" / "door" on `bounds.row`, the two
+ * rows just inside it, and `col` 0 and `cols - 1`. Keeping this room's rows
+ * and columns clear of all of those is what lets a ring sprite found on ITS
+ * perimeter be attributed to `pushRoomRing` alone.
+ */
+function civicRoom(overrides: {
+  readonly civicRoomId: string;
+  readonly kind: OfficeCivicRoom["kind"];
+  readonly enclosure: OfficeCivicRoom["enclosure"];
+  readonly bounds: OfficeTileRect;
+}): OfficeCivicRoom {
+  return {
+    civicRoomId: overrides.civicRoomId,
+    kind: overrides.kind,
+    bounds: overrides.bounds,
+    enclosure: overrides.enclosure,
+    doorTile: { col: overrides.bounds.col, row: overrides.bounds.row },
+    signTile: { col: overrides.bounds.col, row: overrides.bounds.row },
+    name: overrides.kind,
+    seatIds: [],
+    floorIndex: 0,
+    hostId: null,
+    hostScope: "host",
+    kerbTile: null,
+  };
+}
+
+/** One storey holding only the given civic rooms, well clear of its own walls. */
+function civicFloor(civic: ReadonlyArray<OfficeCivicRoom>): OfficeFloor {
+  return {
+    hostId: null,
+    bounds: { col: 0, row: 0, cols: 24, rows: 24 },
+    doorTile: { col: 0, row: 0 },
+    lobbyTile: { col: 0, row: 1 },
+    receptionTile: { col: 0, row: 2 },
+    receptionQueueTiles: [],
+    queueFacing: "down",
+    corridorTiles: [],
+    clockTile: { col: 23, row: 0 },
+    stairsTile: null,
+    errandSpots: [],
+    cafeteria: null,
+    gameRoom: null,
+    areaSigns: [],
+    amenities: [],
+    civic,
+    road: null,
+  };
+}
+
+function layoutWithCivic(civic: ReadonlyArray<OfficeCivicRoom>): OfficeLayout {
+  return {
+    view: "floor",
+    cols: 24,
+    rows: 24,
+    desks: new Map(),
+    seats: new Map(),
+    signs: [],
+    rooms: [],
+    floors: [civicFloor(civic)],
+    doorTile: { col: 0, row: 0 },
+    lobbyTile: { col: 0, row: 1 },
+    props: [],
+    walkable: allWalkable(24, 24),
+    frozen: null,
+    shiftFromPrevious: null,
+    stable: true,
+  };
+}
+
+/** Every tile on `bounds`'s own perimeter - the ring `pushRoomRing` walks. */
+function perimeterTiles(
+  bounds: OfficeTileRect,
+): ReadonlyArray<{ readonly col: number; readonly row: number }> {
+  const { col, row, cols, rows } = bounds;
+  const right = col + cols - 1;
+  const bottom = row + rows - 1;
+  const tiles: { readonly col: number; readonly row: number }[] = [];
+  for (let atCol = col; atCol <= right; atCol += 1) {
+    tiles.push({ col: atCol, row });
+    tiles.push({ col: atCol, row: row + 1 });
+    tiles.push({ col: atCol, row: bottom });
+  }
+  for (let atRow = row + 2; atRow < bottom; atRow += 1) {
+    tiles.push({ col, row: atRow });
+    tiles.push({ col: right, row: atRow });
+  }
+  return tiles;
+}
+
+/** How many ring-only sprites (wall, wall-top, door, planter) sit on `bounds`'s perimeter. */
+function ringSpritesOn(
+  drawables: ReadonlyArray<OfficeDrawable>,
+  bounds: OfficeTileRect,
+): number {
+  const tiles = new Set(
+    perimeterTiles(bounds).map(
+      (tile) => `${tile.col * OFFICE_TILE},${tile.row * OFFICE_TILE}`,
+    ),
+  );
+  let count = 0;
+  for (const drawable of drawables) {
+    if (drawable.kind !== "sprite") continue;
+    if (!RING_SPRITE_NAMES.has(drawable.sprite.name)) continue;
+    if (!tiles.has(`${drawable.x},${drawable.y}`)) continue;
+    count += 1;
+  }
+  return count;
+}
+
+describe("floorPainter.floor: civic ring follows enclosure, not size alone", () => {
+  const OPEN_ROOM_BOUNDS: OfficeTileRect = {
+    col: 8,
+    row: 8,
+    cols: 4,
+    rows: 4,
+  };
+  const WALLED_ROOM_BOUNDS: OfficeTileRect = {
+    col: 15,
+    row: 8,
+    cols: 4,
+    rows: 4,
+  };
+
+  it("draws no ring sprites on an OPEN civic room's perimeter, even at 4x4", () => {
+    const layout = layoutWithCivic([
+      civicRoom({
+        civicRoomId: "h/civic/help-desk",
+        kind: "help-desk",
+        enclosure: "open",
+        bounds: OPEN_ROOM_BOUNDS,
+      }),
+    ]);
+    const tiles: OfficeTileRect = { col: 0, row: 0, cols: 24, rows: 24 };
+    const drawables = floorPainter.floor(layout, tiles, 2);
+    expect(ringSpritesOn(drawables, OPEN_ROOM_BOUNDS)).toBe(0);
+  });
+
+  it("CONTROL: still draws a ring on a WALLED civic room of the same size", () => {
+    const layout = layoutWithCivic([
+      civicRoom({
+        civicRoomId: "h/civic/infirmary",
+        kind: "infirmary",
+        enclosure: "walled",
+        bounds: WALLED_ROOM_BOUNDS,
+      }),
+    ]);
+    const tiles: OfficeTileRect = { col: 0, row: 0, cols: 24, rows: 24 };
+    const drawables = floorPainter.floor(layout, tiles, 2);
+    expect(ringSpritesOn(drawables, WALLED_ROOM_BOUNDS)).toBeGreaterThan(0);
   });
 });

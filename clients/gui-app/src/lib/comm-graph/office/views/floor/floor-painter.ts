@@ -644,10 +644,14 @@ function floorChunk(
         tiles,
       });
     }
-    // The civic rooms wear the same ring. A one-tile room is a DOOR standing
-    // in the outer wall - the archive - and has no ring to draw: its own wall
-    // is the building's, and `records-door` is already a prop on that tile.
+    // The civic rooms wear the same ring, but only the WALLED ones - the plan
+    // states enclosure, and an "open" room's bounds are furniture, not
+    // structure. The size check stays as the degenerate-ring guard for a
+    // one-tile room, a DOOR standing in the outer wall - the archive - whose
+    // own wall is the building's, with `records-door` already a prop on that
+    // tile.
     for (const room of floorPlan.civic) {
+      if (room.enclosure !== "walled") continue;
       if (room.bounds.cols < 3 || room.bounds.rows < 3) continue;
       pushRoomRing(out, layout, room.bounds, { hedge: false, tiles });
     }
