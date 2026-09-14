@@ -161,6 +161,11 @@ import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
+import {
+  PLAN_RESTRICTED_MOBILE_DETAIL,
+  planRestrictedMobileTitle,
+} from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -1062,13 +1067,26 @@ function ResourceMonitorHostUnavailableNotice(props: {
         className="flex flex-col items-center gap-2 px-6 py-8 text-center"
         data-testid="resource-monitor-host-plan-restricted"
       >
+        {/* The installed mobile app may not offer the purchase or the upgrade
+            (App Store guideline 3.1.1), so it states the same fact without
+            either; `PlanRestrictedUpgradeAction` withholds the button itself
+            on that shell. The host is still named - that is the reason this
+            notice exists. */}
         <p className="max-w-[40ch] text-ui-sm font-medium text-foreground">
-          Reading {scope.hostLabel} needs a paid plan
+          {isMobileApp()
+            ? planRestrictedMobileTitle(scope.hostLabel)
+            : `Reading ${scope.hostLabel} needs a paid plan`}
         </p>
         <p className="max-w-[40ch] text-ui-sm text-muted-foreground">
-          It keeps working on its own machine. This app just can&apos;t attach
-          to it remotely on the current plan, so its processes can&apos;t be
-          streamed here.
+          {isMobileApp() ? (
+            PLAN_RESTRICTED_MOBILE_DETAIL
+          ) : (
+            <>
+              It keeps working on its own machine. This app just can&apos;t
+              attach to it remotely on the current plan, so its processes
+              can&apos;t be streamed here.
+            </>
+          )}
         </p>
         <PlanRestrictedUpgradeAction />
         <button

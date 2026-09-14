@@ -141,6 +141,7 @@ import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-sco
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 
@@ -2835,11 +2836,20 @@ function TraycerAccountCards({
                 <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
                   {account.label}
                 </span>
-                <Badge variant="secondary" className="font-normal">
-                  {subscriptionPlanLabel(
-                    account.subscription.subscriptionStatus,
-                  )}
-                </Badge>
+                {/* The plan tier is the one chip here that names something
+                    for sale. The installed mobile app may not present a
+                    subscription it cannot sell through Apple (App Store
+                    guideline 3.1.1), and this popover IS reachable there -
+                    `MobileAppHeader` renders `RateLimitIconButton`. The card
+                    keeps its account name, its Active state and the whole
+                    usage body underneath; only the tier goes. */}
+                {isMobileApp() ? null : (
+                  <Badge variant="secondary" className="font-normal">
+                    {subscriptionPlanLabel(
+                      account.subscription.subscriptionStatus,
+                    )}
+                  </Badge>
+                )}
                 {active ? (
                   <Badge variant="outline" className="font-normal">
                     Active
