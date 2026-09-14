@@ -14,10 +14,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { usePublishBrowserGuestTile } from "@/components/epic-canvas/browser-guest/use-publish-browser-guest-tile";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
 import { BrowserTileFindAdapterBridge } from "@/components/epic-canvas/renderers/browser-tile-find-adapter";
-import {
-  BrowserTileCertificateInterstitial,
-  BrowserTileDownloadStrip,
-} from "@/components/epic-canvas/renderers/browser-tile-status-panels";
+import { BrowserTileCertificateInterstitial } from "@/components/epic-canvas/renderers/browser-tile-status-panels";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "./browser-start-page";
 import {
@@ -372,8 +369,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const {
     controller: chromeController,
     navigateToUrl,
-    downloads,
-    cancelDownload,
     certificateError,
     certificateProceeding,
     proceedCertificate,
@@ -551,10 +546,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
             onRetry={retryNavigation}
           />
         </div>
-        <BrowserTileDownloadStrip
-          downloads={downloads}
-          onCancel={cancelDownload}
-        />
         <BrowserTileCertificateInterstitial
           certificateError={certificateError}
           proceeding={certificateProceeding}

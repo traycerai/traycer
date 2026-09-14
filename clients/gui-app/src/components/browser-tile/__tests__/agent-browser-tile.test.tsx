@@ -96,8 +96,6 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
     return {
       controller: CHROME_CONTROLLER,
       navigateToUrl: state.navigateToUrl,
-      downloads: [],
-      cancelDownload: vi.fn(),
       certificateError: null,
       certificateProceeding: false,
       proceedCertificate: vi.fn(),
