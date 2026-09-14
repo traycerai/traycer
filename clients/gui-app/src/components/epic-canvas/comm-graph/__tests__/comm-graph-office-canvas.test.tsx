@@ -1911,16 +1911,20 @@ describe("CommGraphOfficeCanvas", () => {
  */
 const MONOSPACE_ADVANCE_EM = 0.6;
 
+/** The face's em size in CSS pixels, as the caller set it. */
+function modelledFontPx(font: string): number {
+  const px = /(\d+(?:\.\d+)?)px/.exec(font);
+  return px === null ? 10 : Number(px[1]);
+}
+
 function modelledTextWidth(
   text: string,
   font: string,
   letterSpacing: string,
 ): number {
-  const px = /(\d+(?:\.\d+)?)px/.exec(font);
   const tracking = /(-?\d+(?:\.\d+)?)em/.exec(letterSpacing);
-  const size = px === null ? 10 : Number(px[1]);
   const spacing = tracking === null ? 0 : Number(tracking[1]);
-  return text.length * size * (MONOSPACE_ADVANCE_EM + spacing);
+  return text.length * modelledFontPx(font) * (MONOSPACE_ADVANCE_EM + spacing);
 }
 
 /**
@@ -2013,6 +2017,9 @@ function sixNumberTransform(
  * was never in force. That silence is what let a rotation around the beacon
  * through - the recorder logged `rotate`, the stepper ignored it, and the
  * reconstructed CTM stayed the DPR-only one while the real paint turned.
+ *
+ * `reset` is listed WITHOUT a rule on purpose, so the stepper refuses it.
+ * See {@link stepCanvasTransform} for why it is not modelled.
  */
 const TRANSFORM_AFFECTING_METHODS: ReadonlySet<string> = new Set([
   "save",
@@ -2023,6 +2030,7 @@ const TRANSFORM_AFFECTING_METHODS: ReadonlySet<string> = new Set([
   "translate",
   "transform",
   "rotate",
+  "reset",
 ]);
 
 /** The six numbers a matrix op was called with, or a throw naming the op. */
@@ -2089,6 +2097,25 @@ function composeCanvasTransform(
   return current;
 }
 
+/**
+ * The matrix after one call.
+ *
+ * `reset` is deliberately NOT modelled here, and is listed in
+ * {@link TRANSFORM_AFFECTING_METHODS} so that this throws on it. Modelling
+ * the matrix half would be easy - identity CTM, empty stack - and would be a
+ * worse answer than refusing, because a real `reset()` also ERASES THE
+ * BITMAP. This recorder's whole premise is that the stream IS what was
+ * painted; after a `reset()` every call before it has been wiped and no
+ * reader models that. Handling only the matrix would close the obvious
+ * escape (a `reset()` before a draw, leaving its recorded coordinates
+ * unchanged while the real paint lands under identity) and open a quieter
+ * one in its place: every earlier call still reading as painted. The
+ * oracle already states it does not reconstruct a raster - the beacon's
+ * clearance case carries that scope ruling - so erasure is out of its reach
+ * by construction, and the honest reply is to stop rather than to model half
+ * of it. If the renderer ever calls `reset()`, this throw is the prompt to
+ * decide what a recorded stream means across one, not to guess.
+ */
 function stepCanvasTransform(
   current: CanvasTransform,
   stack: CanvasTransform[],
@@ -2370,28 +2397,50 @@ const COORDINATE_FREE_METHODS: ReadonlySet<string> = new Set([
   "getLineDash",
   "createImageData",
   "createPattern",
-  "reset",
 ]);
 
 /** How a property assignment is recorded: `set:fillStyle`, `set:font`. */
 const RECORDED_PROPERTY_PREFIX = "set:";
 
 /**
- * The one factor a CTM applies to a LENGTH - a radius, a `maxWidth`.
+ * The one factor a CTM applies to a LENGTH - a radius, a `maxWidth`, a
+ * glyph's advance.
  *
- * A length has no direction, so there is an answer only where the matrix
- * scales both axes alike; a squash or a shear turns a circle into an
- * ellipse, and the honest reply is a throw rather than a number picked off
- * one axis. Nothing in the office renderer draws under such a matrix.
+ * A length has no direction, so there is a single answer only under a
+ * SIMILARITY: the matrix's two columns must have the same norm AND be
+ * orthogonal. Equal norms alone are not enough, and the gap is not academic
+ * - `transform(1, 0, 1, 0, …)` gives both columns norm 1 while collapsing
+ * the plane onto a line, so every length would report unchanged while
+ * nothing has any area at all. Equal-but-not-orthogonal is a shear, which
+ * scales a length differently depending on which way it points, and the
+ * honest reply is a throw rather than a number picked off one column.
+ *
+ * A DEGENERATE similarity - both columns zero - is deliberately allowed
+ * through with the answer `0`. That is not a matrix this helper cannot
+ * express; it is one that paints nothing, and zero is the true length. What
+ * must not happen is a CASE reading that zero as a tag it can see, which is
+ * {@link tagBoxesFrom}'s refusal, not this one's.
  */
-function uniformScaleOf(transform: CanvasTransform, method: string): number {
-  const scaleX = Math.hypot(transform[0], transform[1]);
-  const scaleY = Math.hypot(transform[2], transform[3]);
+function similarityScaleOf(transform: CanvasTransform, method: string): number {
+  const [a, b, c, d] = transform;
+  const scaleX = Math.hypot(a, b);
+  const scaleY = Math.hypot(c, d);
   if (Math.abs(scaleX - scaleY) > 1e-9) {
     throw new Error(
       `recordCallGeometry: ${method} carries a length under a CTM scaling x ` +
         `by ${scaleX} and y by ${scaleY}; a length under a non-uniform ` +
         "transform is not modelled",
+    );
+  }
+  // Relative to the columns' own size: a dot product of two vectors of norm
+  // `scale` is on the order of `scale²`, so a fixed absolute floor would be
+  // far too strict at zoom 4 and far too slack near zero.
+  const columnDot = Math.abs(a * c + b * d);
+  if (columnDot > 1e-9 * Math.max(1, scaleX * scaleY)) {
+    throw new Error(
+      `recordCallGeometry: ${method} carries a length under a CTM whose ` +
+        `columns are not orthogonal (a*c + b*d = ${a * c + b * d}); a length ` +
+        "under a shear is not modelled",
     );
   }
   return scaleX;
@@ -2420,7 +2469,9 @@ function projectCallGeometry(
   const geometry = reader(call);
   if (DEVICE_SPACE_METHODS.has(call.method)) return geometry;
   const scale =
-    geometry.lengths.length === 0 ? 1 : uniformScaleOf(transform, call.method);
+    geometry.lengths.length === 0
+      ? 1
+      : similarityScaleOf(transform, call.method);
   return {
     points: geometry.points.map((point) =>
       applyCanvasTransform(transform, point.x, point.y),
@@ -2938,7 +2989,7 @@ function replayFillText(
           y: anchor.y / dpr,
           font,
           letterSpacing,
-          cssScale: uniformScaleOf(call.transform, call.method) / dpr,
+          cssScale: similarityScaleOf(call.transform, call.method) / dpr,
           blockId: blockStack[blockStack.length - 1] ?? 0,
         });
       }
@@ -2951,6 +3002,12 @@ interface TagBox {
   readonly left: number;
   readonly right: number;
   readonly y: number;
+  /**
+   * The em box's height in CSS pixels on screen. A tag box is otherwise a
+   * span at a baseline, and a span cannot say whether anything was actually
+   * covered - see {@link tagBoxesFrom}'s refusal.
+   */
+  readonly height: number;
   readonly text: string;
 }
 
@@ -2976,6 +3033,16 @@ interface TagBox {
  * the glyphs by the same matrix that moves the anchor. Under the renderer's
  * screen-space reset that scale is 1 and the widths are the face's own - the
  * case that pins the reset itself is F5.
+ *
+ * A READING WITH NO AREA IS NOT A READING, and this throws on one rather
+ * than reporting it. Every case here that counts boxes is claiming a tag was
+ * PAINTED - "both desk tags actually painted, not zero/one of them" - and a
+ * box of zero width or zero height satisfies a count while covering no pixel
+ * at all. It is reachable: a CTM that collapses the plane onto a point is a
+ * degenerate similarity, which {@link similarityScaleOf} answers honestly
+ * with `0`, leaving every anchor where it was and every box an empty one at
+ * it. `collisions` would then find nothing to report either, since it asks
+ * for a strict overlap. Presence is the claim; area is what makes it one.
  */
 function tagBoxesFrom(
   records: ReadonlyArray<FillTextRecord>,
@@ -2997,10 +3064,19 @@ function tagBoxesFrom(
     const width =
       modelledTextWidth(last.text, last.font, last.letterSpacing) *
       last.cssScale;
+    const height = modelledFontPx(last.font) * last.cssScale;
+    if (width <= 0 || height <= 0) {
+      throw new Error(
+        `tagBoxesFrom: "${last.text}" was painted with no area on screen ` +
+          `(${width} x ${height} CSS px), so no case can call it a tag that ` +
+          "is there",
+      );
+    }
     boxes.push({
       left: last.x - width / 2,
       right: last.x + width / 2,
       y: last.y,
+      height,
       text: last.text,
     });
   }
