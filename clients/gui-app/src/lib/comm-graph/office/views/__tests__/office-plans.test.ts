@@ -193,7 +193,36 @@ import {
   CIVIC_ROOMS_EXPECTED,
 } from "@/lib/comm-graph/office/__tests__/civic-rooms-expected";
 
-const TRIAGE_SCALES: ReadonlyArray<number> = [12, 309, 1000];
+/**
+ * THE POPULATIONS EVERY VIEW'S CONTRACT IS READ AT - three round ones, and a
+ * fourth that is here for a measurement.
+ *
+ * `12`, `309` and `1000` are the small, large and ceiling fixtures the rest of
+ * the office suites use, and they were the whole list. `15` is the KNIFE-EDGE
+ * POPULATION: the smallest at which City's `CITY_CIVIC_CLEARANCE_ROWS = 2` is
+ * load-bearing for the plate rule this suite owns.
+ *
+ * MEASURED, and the gap is the point. Cutting that clearance to one row
+ * overprints a district's lowest lot plate on its hospital plate by 2.8 px at
+ * office zoom - at 15-21, 50-52 and 100 agents on a 2..60, 80, 100, 150, 200,
+ * 309, 500, 700, 1,000 sweep, and at NONE of 12, 309 or 1,000. So with three
+ * round populations this suite passed all 330 cases under that mutant and the
+ * rule it exists to guard was pinned nowhere but City's own structural case
+ * (`expected 48 to be less than or equal to 47`). A rule this suite states and
+ * cannot fail is not a pin.
+ *
+ * WHY THE SMALLEST INSTANCE rather than the widest margin: the overprints are
+ * all the same pair at the same 2.8 px, so no instance is a stronger witness
+ * than another, and 15 is the cheapest to plan - a fourth population costs
+ * every view every case in this block. Measured: 6.98s against 7.20s for the
+ * three, because the cost of this suite is the 1,000-agent column.
+ *
+ * `city-plan.ts`'s own note at `CITY_CIVIC_CLEARANCE_ROWS` still reads "the
+ * shared plate case stays green under that mutant". That was true of the three
+ * populations and is what this fourth one is here to stop being true; the note
+ * describes the measurement that was taken, not the state of this suite.
+ */
+const TRIAGE_SCALES: ReadonlyArray<number> = [12, 15, 309, 1000];
 
 /**
  * How much screen-space overlap between two plate backings is not an overlap.
