@@ -101,7 +101,7 @@ const quotePlacementObserver = new MutationObserver(() => {
     return;
   }
   const rect =
-    quoteRange.getClientRects()[0] ?? quoteRange.getBoundingClientRect();
+    quoteRange.getClientRects().item(0) ?? quoteRange.getBoundingClientRect();
   initialQuotePopover = {
     surface: surfaceSnapshot(surface),
     anchor: { x: rect.x, y: rect.y },
@@ -113,7 +113,7 @@ quotePlacementObserver.observe(document.body, {
   subtree: true,
 });
 
-function Fixture(): ReactElement {
+export function Fixture(): ReactElement {
   return (
     <>
       {TRANSFORM_SLOTS.filter((slot) => slot !== "quote-selection-popover").map(
@@ -168,7 +168,9 @@ function Fixture(): ReactElement {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />);
+const root = document.getElementById("root");
+if (root === null) throw new Error("Missing panel-motion fixture root");
+createRoot(root).render(<Fixture />);
 
 function surfaceSnapshot(element: Element | null): SurfaceSnapshot {
   if (!(element instanceof HTMLElement)) {
@@ -292,7 +294,7 @@ window.__panelMotionProbe = {
     }
     const popoverAnchorRect = popoverAnchor.getBoundingClientRect();
     const quoteAnchorRect =
-      quoteRange.getClientRects()[0] ?? quoteRange.getBoundingClientRect();
+      quoteRange.getClientRects().item(0) ?? quoteRange.getBoundingClientRect();
     return {
       anchor: currentAnchor,
       ...positionSnapshot(),
