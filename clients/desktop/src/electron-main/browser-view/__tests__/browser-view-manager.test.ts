@@ -2453,6 +2453,105 @@ describe("BrowserViewManager native tab lifecycle", () => {
   });
 });
 
+describe("BrowserViewManager in-page navigation settle", () => {
+  it("settles a history move back to ready on the trailing did-navigate-in-page", async () => {
+    const harness = createHarness();
+    // `attachNativeTab` already drives a committed `did-navigate` to settle
+    // the tile to `ready`, so `capability` is a live, accepted native tab.
+    const { view, capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    // The fake history must report a back destination for
+    // `moveEntryInHistory` to actually drive `goBack()` rather than no-op.
+    view.canGoBackValue = true;
+    harness.nativeTabStatuses.length = 0;
+
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "goBack" },
+    });
+
+    // Back/forward between two pushState history entries (GitHub etc.) sets
+    // `loading` here and fires only `did-navigate-in-page`, never
+    // `did-navigate` - so this is the only way the tile ever leaves `loading`
+    // for such a move.
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "loading",
+      reason: null,
+    });
+
+    view.emit(
+      "did-navigate-in-page",
+      {},
+      "https://example.com/second",
+      true,
+      1,
+      2,
+    );
+
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "ready",
+      reason: null,
+      url: "https://example.com/second",
+    });
+  });
+
+  it("still publishes url/title on an in-page navigation while already ready", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    harness.nativeTabStatuses.length = 0;
+
+    // An ordinary pushState/hash change with no preceding history move: the
+    // entry is already `ready`, so `setStatus` would dedupe and emit nothing
+    // on its own - the bare `emitStatus` fallback is what still has to
+    // publish the new url.
+    view.emit(
+      "did-navigate-in-page",
+      {},
+      "https://example.com/first#section",
+      true,
+      1,
+      2,
+    );
+
+    expect(harness.nativeTabStatuses).toHaveLength(1);
+    expect(harness.nativeTabStatuses[0]).toMatchObject({
+      status: "ready",
+      url: "https://example.com/first#section",
+    });
+  });
+
+  it("emits nothing for a subframe did-navigate-in-page", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    harness.nativeTabStatuses.length = 0;
+
+    view.emit(
+      "did-navigate-in-page",
+      {},
+      "https://example.com/first/iframe",
+      false,
+      1,
+      2,
+    );
+
+    expect(harness.nativeTabStatuses).toEqual([]);
+  });
+});
+
 describe("BrowserViewManager host window renderer reset", () => {
   function emitHostReset(harness: Harness): void {
     emitHostWindowNavigation(harness, "window-1");

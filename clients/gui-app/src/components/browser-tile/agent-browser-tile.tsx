@@ -146,6 +146,13 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   // the clock and only a genuinely stalled tab trips it.
   const [stalledNonce, setStalledNonce] = useState<number | null>(null);
   const [loadingNonce, setLoadingNonce] = useState(0);
+  // Whether this guest has ever committed a document. Before the first
+  // `ready` the guest is blank and the loader is the only thing to show;
+  // after it, a `loading` is a navigation AWAY from a page that stays painted
+  // until the next commit, and the loader must not sit over it (see
+  // `resolveTileOverlay`). A `dead` guest is re-materialized from blank, so
+  // it clears the flag.
+  const [documentCommitted, setDocumentCommitted] = useState(false);
   const attemptedNavigationRef = useRef<AttemptedNavigation | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -267,6 +274,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         setStatus(change.status);
         setStatusReason(change.reason);
         setStatusUrl(change.url);
+        if (change.status === "ready") setDocumentCommitted(true);
+        if (change.status === "dead") setDocumentCommitted(false);
         setCanGoBack(change.canGoBack);
         setCanGoForward(change.canGoForward);
         setZoomPercent(change.zoomPercent);
@@ -493,6 +502,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     effectiveStatus,
     surfaceReady,
     navigationStalled,
+    documentCommitted,
   );
 
   return (
@@ -526,8 +536,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         <div
           hidden={showStartPage}
           // Transparent is not hidden: without this a presented, live guest
-          // still exposes the loader's role and "Reconnecting" text to
-          // assistive tech. Hide it from AT whenever it is not the shown layer.
+          // still exposes the loader's role and "Loading" text to assistive
+          // tech. Hide it from AT whenever it is not the shown layer.
           aria-hidden={!overlay.visible}
           className={cn(
             "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
@@ -678,9 +688,7 @@ function ElectronTabSurfaceStatus(props: ElectronTabSurfaceStatusProps) {
         testId={undefined}
         variant={undefined}
       />
-      <div className="text-ui-base font-medium">
-        Reconnecting to this session
-      </div>
+      <div className="text-ui-base font-medium">Loading</div>
       <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
     </>
   );
