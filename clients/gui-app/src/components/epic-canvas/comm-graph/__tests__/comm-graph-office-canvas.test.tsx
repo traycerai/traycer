@@ -2720,6 +2720,77 @@ function stubGetContext(factory: () => unknown): () => void {
 }
 
 /**
+ * THE RECORDER'S OWN CONTRACT, as cases rather than as comments.
+ *
+ * Both throws below exist for one reason: to stop a POSITION arriving that no
+ * case can check. That is not a hypothetical failure mode here - it is the
+ * history of this file, where an oracle that recorded transforms and applied
+ * none of them let the renderer's screen-space reset be deleted without
+ * disturbing a single assertion in eighty cases.
+ *
+ * Proving a throw by running a mutant once is evidence for that day. These
+ * are the rule the next author trips over, and they sit beside the recorder
+ * because that is what they describe.
+ */
+describe("the recording context's geometry classification", () => {
+  let calls: RecordedCall[] = [];
+  let restoreGetContext: (() => void) | null = null;
+
+  /** The recording context itself, through the seam the renderer gets it by. */
+  function recordingContext(): CanvasRenderingContext2D {
+    const context = document.createElement("canvas").getContext("2d");
+    if (context === null) throw new Error("expected a recording context");
+    return context;
+  }
+
+  beforeEach(() => {
+    calls = [];
+    restoreGetContext = stubGetContext(() => createRecordingContext(calls));
+  });
+
+  afterEach(() => {
+    restoreGetContext?.();
+    restoreGetContext = null;
+  });
+
+  it("refuses to record a context method no classification names", () => {
+    // `drawFocusIfNeeded` is a real 2D method the office never calls, and it
+    // is absent from all three classifications DELIBERATELY - it is the probe
+    // this case needs. Should the office ever draw a focus ring, list it in
+    // `COORDINATE_FREE_METHODS` and point this case at another unclassified
+    // method: what is under test is the refusal, not this particular name.
+    const context = recordingContext();
+    expect(() =>
+      context.drawFocusIfNeeded(document.createElement("div")),
+    ).toThrow(
+      "drawFocusIfNeeded is classified neither as a call that takes " +
+        "coordinates nor as one that does not",
+    );
+    // And nothing reached the stream: a call half-written before the throw
+    // would carry exactly the unchecked geometry the throw exists to refuse.
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses to answer where a call with no coordinates landed", () => {
+    const context = recordingContext();
+    context.beginPath();
+    const beginPath = calls.find((call) => call.method === "beginPath");
+    if (beginPath === undefined) {
+      throw new Error("expected a recorded beginPath");
+    }
+    // The absence is honest - `beginPath` really has no geometry, and its
+    // `screen.points` really is empty. What must not happen is the READER
+    // answering anyway: an `undefined` anchor lets an assertion compare two
+    // nothings and pass, which is the silence one level down from the one
+    // the classification above removes.
+    expect(beginPath.screen.points).toEqual([]);
+    expect(() => screenPointOf(beginPath)).toThrow(
+      "beginPath carries no coordinates to read",
+    );
+  });
+});
+
+/**
  * Deliberately NOT `DEFAULT_COMM_GRAPH_VIEW` (`{x:0,y:0,zoom:1}`) - a view
  * equal to the default enables auto-fit, which frames the floor and leaves
  * the camera at whatever position that produced rather than the identity
