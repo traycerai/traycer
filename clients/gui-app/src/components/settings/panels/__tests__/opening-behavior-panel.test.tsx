@@ -213,7 +213,7 @@ describe("<OpeningBehaviorPanel /> side chats", () => {
   it("writes the side-chat placement", () => {
     render(<OpeningBehaviorPanel />);
 
-    choose("Side chats", "As a tab of the source chat");
+    choose("Side chats", "In this pane");
 
     expect(useSettingsStore.getState().tilePlacement.sideChat).toBe("tab");
   });

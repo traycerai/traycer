@@ -154,7 +154,7 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
     search: { anchor: "opening-tiles-agent-opened" },
     label: "Agent-opened tabs",
     description:
-      "When an agent or a page opens a browser tab without you clicking anything.",
+      "Tabs an agent opens while driving a browser session. Tabs a page opens, including links you click in it, always land as browser tiles.",
     availableWhen: alwaysAvailable,
     keywords: ["agent", "popup", "automatic", "background", "browser"],
   },
