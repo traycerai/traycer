@@ -85,8 +85,8 @@ try {
     throw new Error("Chrome did not return a page debugger URL");
   }
   client = await connectCdp(target.webSocketDebuggerUrl);
-  await client.send("Runtime.enable");
-  await client.send("Page.enable");
+  await client.send("Runtime.enable", undefined);
+  await client.send("Page.enable", undefined);
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: 1000,
     height: 800,
@@ -502,12 +502,25 @@ async function connectCdp(url) {
     const socket = new WebSocket(url);
     const pending = new Map();
     let nextId = 0;
-    const connectTimer = setTimeout(() => {
+    let connectTimer;
+    const rejectPending = (error) => {
+      for (const request of pending.values()) request.reject(error);
+      pending.clear();
+    };
+    const fail = (error) => {
+      clearTimeout(connectTimer);
+      reject(error);
+      rejectPending(error);
+    };
+    connectTimer = setTimeout(() => {
+      fail(new Error("Timed out connecting to the CDP socket"));
       socket.close();
-      reject(new Error("Timed out connecting to the CDP socket"));
     }, 15_000);
     socket.addEventListener("error", () =>
-      reject(new Error("CDP socket failed")),
+      fail(new Error("CDP socket failed")),
+    );
+    socket.addEventListener("close", () =>
+      fail(new Error("CDP socket closed")),
     );
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data));
@@ -521,11 +534,32 @@ async function connectCdp(url) {
     socket.addEventListener("open", () => {
       clearTimeout(connectTimer);
       resolve({
-        send(method, params = {}) {
+        send(method, params) {
           return new Promise((requestResolve, requestReject) => {
             const id = ++nextId;
-            pending.set(id, { resolve: requestResolve, reject: requestReject });
-            socket.send(JSON.stringify({ id, method, params }));
+            const timer = setTimeout(() => {
+              pending.delete(id);
+              requestReject(
+                new Error(`Timed out sending CDP command ${method}`),
+              );
+            }, 15_000);
+            pending.set(id, {
+              resolve(value) {
+                clearTimeout(timer);
+                requestResolve(value);
+              },
+              reject(error) {
+                clearTimeout(timer);
+                requestReject(error);
+              },
+            });
+            try {
+              socket.send(JSON.stringify({ id, method, params }));
+            } catch (error) {
+              pending.delete(id);
+              clearTimeout(timer);
+              requestReject(error);
+            }
           });
         },
         close() {
