@@ -2406,6 +2406,44 @@ const RECORDED_PROPERTY_PREFIX = "set:";
 const SIMILARITY_TOLERANCE = 1e-9;
 
 /**
+ * A number DERIVED from a matrix, or a throw naming the matrix it came from.
+ *
+ * Neither `NaN` nor `Infinity` is a value a geometric comparison can judge,
+ * and they are not unjudgeable in the same way.
+ *
+ * Every ordered comparison with `NaN` is false, whichever way it is written,
+ * so a guard reading `> tolerance` and a guard reading `<= 0` BOTH pass on
+ * one. `Infinity` is different: against a finite number it compares
+ * perfectly well - `Infinity > tolerance` is true - and it defeats a
+ * narrower set of guards. One that compares it with ITSELF
+ * (`Infinity > Infinity` is false, which is how a matrix with one enormous
+ * column and one empty one read as uniform). One that asks for a LOWER
+ * bound (`Infinity <= 0` is false, so an infinite tag box counts as
+ * painted). And any arithmetic that turns it into a `NaN`
+ * (`Infinity - Infinity`, `Infinity / Infinity`), after which the first rule
+ * applies again.
+ *
+ * Both are reachable from a perfectly finite matrix, because the arithmetic
+ * in between can overflow. That is the same silence the classification and
+ * the non-finite-CTM refusal exist to remove, one level further in, so every
+ * derived quantity is checked where it is produced, before anything compares
+ * it or divides by it.
+ */
+function requiredFiniteDerivation(
+  value: number,
+  what: string,
+  method: string,
+  transform: CanvasTransform,
+): number {
+  if (Number.isFinite(value)) return value;
+  // Built only on the failing path: this runs for every recorded call.
+  throw new Error(
+    `recordCallGeometry: ${method}'s ${what} came out ${String(value)} ` +
+      `under the CTM [${transform.join(", ")}]`,
+  );
+}
+
+/**
  * The one factor a CTM applies to a LENGTH - a radius, a `maxWidth`, a
  * glyph's advance.
  *
@@ -2421,12 +2459,25 @@ const SIMILARITY_TOLERANCE = 1e-9;
  * matrix whose columns are exactly PARALLEL to pass as perpendicular. The
  * magnitudes a CTM can take are not bounded below, so nothing absolute can
  * be a tolerance on this shape.
+ *
+ * The matrix reaching here is finite - `recordCall` refuses one that is not
+ * - but that says nothing about what the arithmetic BELOW can produce, so
+ * each derived value is checked as it is made.
  */
 function similarityScaleOf(transform: CanvasTransform, method: string): number {
   const [a, b, c, d] = transform;
-  const firstColumn = Math.hypot(a, b);
-  const secondColumn = Math.hypot(c, d);
-  const largestColumn = Math.max(firstColumn, secondColumn);
+  // PRE-SCALED BY THE LARGEST COMPONENT, so no norm can overflow for any
+  // finite matrix. `hypot(MAX_VALUE, MAX_VALUE)` is `Infinity`, and an
+  // infinite norm compares EQUAL to another infinite one - which is how a
+  // matrix with one enormous column and one empty one read as uniform.
+  // Dividing through first holds both norms in [0, 2] whatever the matrix's
+  // magnitude, and the magnitude goes back onto the answer at the end.
+  const largestComponent = Math.max(
+    Math.abs(a),
+    Math.abs(b),
+    Math.abs(c),
+    Math.abs(d),
+  );
   // THE ALL-ZERO MATRIX, said out loud rather than left to fall out of the
   // arithmetic below - which cannot judge it, since every test that follows
   // measures against a magnitude this matrix is the absence of, and "zero is
@@ -2434,15 +2485,27 @@ function similarityScaleOf(transform: CanvasTransform, method: string): number {
   // It paints nothing, and zero is the true length under it: not a shape
   // this helper cannot express. Refusing to credit that zero as something a
   // reader can SEE is `tagBoxesFrom`'s job, and it does it by area.
-  if (largestColumn === 0) return 0;
+  if (largestComponent === 0) return 0;
+  const derived = (value: number, what: string): number =>
+    requiredFiniteDerivation(value, what, method, transform);
+  const firstColumn = derived(
+    Math.hypot(a / largestComponent, b / largestComponent),
+    "first column norm",
+  );
+  const secondColumn = derived(
+    Math.hypot(c / largestComponent, d / largestComponent),
+    "second column norm",
+  );
+  const largestColumn = Math.max(firstColumn, secondColumn);
   if (
     Math.abs(firstColumn - secondColumn) >
     SIMILARITY_TOLERANCE * largestColumn
   ) {
     throw new Error(
-      `recordCallGeometry: ${method} carries a length under a CTM scaling x ` +
-        `by ${firstColumn} and y by ${secondColumn}; a length under a ` +
-        "non-uniform transform is not modelled",
+      `recordCallGeometry: ${method} carries a length under a CTM whose ` +
+        `columns have different norms (${firstColumn} and ${secondColumn}, ` +
+        `relative to its largest component ${largestComponent}); a length ` +
+        "under a non-uniform transform is not modelled",
     );
   }
   // PERPENDICULAR AND NON-DEGENERATE, IN ONE NUMBER. Lagrange's identity
@@ -2456,17 +2519,25 @@ function similarityScaleOf(transform: CanvasTransform, method: string): number {
   // instead would need a second test for the collapse, and the two could
   // disagree.
   //
-  // ON THE UNIT COLUMNS, so that NO PRODUCT OF TWO MAGNITUDES IS EVER
-  // FORMED. Comparing `|det|` against `‖c1‖‖c2‖` directly says the same
-  // thing in exact arithmetic and not in this one: at a scale of 1e-200 both
-  // norms are ordinary numbers while their product underflows to zero, and
-  // the comparison degenerates to `0 > 0` - which accepts a matrix whose
-  // columns are exactly parallel. Dividing first keeps every quantity here
-  // of order one, whatever the matrix's own magnitude, and the perpendicular
-  // case is then simply 1.
-  const spanned = Math.abs(
-    (a / firstColumn) * (d / secondColumn) -
-      (b / firstColumn) * (c / secondColumn),
+  // On the UNIT columns, so that no product of two magnitudes is ever formed:
+  // comparing `|det|` against `‖c1‖‖c2‖` says the same thing in exact
+  // arithmetic and not in this one, since at a scale of 1e-200 both norms are
+  // ordinary numbers while their product underflows to zero and the
+  // comparison degenerates to `0 > 0`. After the pre-scaling the largest
+  // absolute component is exactly 1, so the LARGER of the two norms lies in
+  // [1, √2]. The smaller is not bounded below by that on its own: it is
+  // positive here only because the relative-norm test above has already
+  // thrown unless it sits within a billionth of the larger. The unit
+  // components these divisions produce are bounded rather than individually
+  // guarded, which is what the check on `spanned` is for.
+  const spanned = derived(
+    Math.abs(
+      (a / largestComponent / firstColumn) *
+        (d / largestComponent / secondColumn) -
+        (b / largestComponent / firstColumn) *
+          (c / largestComponent / secondColumn),
+    ),
+    "unit column span",
   );
   if (1 - spanned > SIMILARITY_TOLERANCE) {
     throw new Error(
@@ -2477,7 +2548,13 @@ function similarityScaleOf(transform: CanvasTransform, method: string): number {
         "modelled",
     );
   }
-  return firstColumn;
+  // The magnitude put back, and checked: a similarity whose TRUE norm
+  // exceeds `MAX_VALUE` has honest unit columns and an answer that does not
+  // fit. A `MAX_VALUE` DIAGONAL is not that case - its columns are already
+  // unit after scaling, so the answer is `MAX_VALUE` itself - but
+  // `[MAX, MAX, -MAX, MAX]` is: unit columns of norm √2, and √2 × MAX_VALUE
+  // overflows.
+  return derived(firstColumn * largestComponent, "length scale");
 }
 
 /** A call's coordinates, on screen. See {@link CALL_GEOMETRY_READERS}. */
@@ -2506,11 +2583,36 @@ function projectCallGeometry(
     geometry.lengths.length === 0
       ? 1
       : similarityScaleOf(transform, call.method);
+  // CHECKED WHERE THEY ARE MADE. The arguments were finite and the matrix
+  // was, and the product of two finite numbers still need not be: a
+  // coordinate under a `MAX_VALUE` scale overflows to `Infinity`, and from
+  // there every comparison in every consumer takes its passing branch.
   return {
-    points: geometry.points.map((point) =>
-      applyCanvasTransform(transform, point.x, point.y),
+    points: geometry.points.map((point) => {
+      const projected = applyCanvasTransform(transform, point.x, point.y);
+      return {
+        x: requiredFiniteDerivation(
+          projected.x,
+          "projected x",
+          call.method,
+          transform,
+        ),
+        y: requiredFiniteDerivation(
+          projected.y,
+          "projected y",
+          call.method,
+          transform,
+        ),
+      };
+    }),
+    lengths: geometry.lengths.map((length) =>
+      requiredFiniteDerivation(
+        length * scale,
+        "scaled length",
+        call.method,
+        transform,
+      ),
     ),
-    lengths: geometry.lengths.map((length) => length * scale),
   };
 }
 
@@ -3063,6 +3165,25 @@ interface TagBox {
 }
 
 /**
+ * One of a tag box's own numbers, or a throw naming the reading.
+ *
+ * Same reason as {@link requiredFiniteDerivation}, at the other end of the
+ * pipe: `collisions` asks `left < right`, and the area guard below asks
+ * `width <= 0`, and BOTH pass on an `Infinity` or a `NaN`. A box whose
+ * numbers are not real numbers is not a box a case can reason about.
+ */
+function requiredFiniteTagNumber(
+  value: number,
+  what: string,
+  text: string,
+): number {
+  if (Number.isFinite(value)) return value;
+  throw new Error(
+    `tagBoxesFrom: "${text}"'s ${what} came out ${String(value)}`,
+  );
+}
+
+/**
  * ONE ENTRY A TAG. `drawScreenLabel` paints a name tag five times inside
  * one save/restore pair - four backing offsets, then the true anchor -
  * and never draws anything else in between; a sign plate's own bold
@@ -3112,10 +3233,17 @@ function tagBoxesFrom(
     const key = `${last.text}\0${last.x}\0${last.y}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const width =
+    const width = requiredFiniteTagNumber(
       modelledTextWidth(last.text, last.font, last.letterSpacing) *
-      last.cssScale;
-    const height = modelledFontPx(last.font) * last.cssScale;
+        last.cssScale,
+      "width",
+      last.text,
+    );
+    const height = requiredFiniteTagNumber(
+      modelledFontPx(last.font) * last.cssScale,
+      "height",
+      last.text,
+    );
     if (width <= 0 || height <= 0) {
       throw new Error(
         `tagBoxesFrom: "${last.text}" was painted with no area on screen ` +
@@ -3124,8 +3252,8 @@ function tagBoxesFrom(
       );
     }
     boxes.push({
-      left: last.x - width / 2,
-      right: last.x + width / 2,
+      left: requiredFiniteTagNumber(last.x - width / 2, "left", last.text),
+      right: requiredFiniteTagNumber(last.x + width / 2, "right", last.text),
       y: last.y,
       height,
       text: last.text,
@@ -6120,15 +6248,28 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
    * the renderer passed to the canvas. Its matrix is the blit's own.
    */
   function cssBox(matrix: CanvasTransform, box: ScreenBox): ScreenBox {
+    // The only projection in this file that is NOT a recorded call's own, so
+    // it is the only one `projectCallGeometry`'s finiteness check does not
+    // already cover. Checked here for the same reason it is checked there.
+    const finiteCorner = (corner: Point2D): Point2D => ({
+      x: requiredFiniteDerivation(corner.x, "lens pixel x", "cssBox", matrix),
+      y: requiredFiniteDerivation(corner.y, "lens pixel y", "cssBox", matrix),
+    });
     const corners = [
-      cssOf(applyCanvasTransform(matrix, box.left, box.top)),
-      cssOf(applyCanvasTransform(matrix, box.left + box.width, box.top)),
-      cssOf(applyCanvasTransform(matrix, box.left, box.top + box.height)),
-      cssOf(
-        applyCanvasTransform(
-          matrix,
-          box.left + box.width,
-          box.top + box.height,
+      finiteCorner(cssOf(applyCanvasTransform(matrix, box.left, box.top))),
+      finiteCorner(
+        cssOf(applyCanvasTransform(matrix, box.left + box.width, box.top)),
+      ),
+      finiteCorner(
+        cssOf(applyCanvasTransform(matrix, box.left, box.top + box.height)),
+      ),
+      finiteCorner(
+        cssOf(
+          applyCanvasTransform(
+            matrix,
+            box.left + box.width,
+            box.top + box.height,
+          ),
         ),
       ),
     ];
