@@ -185,6 +185,13 @@ function useLayoutIsFullyDefault(match: LayoutPresetMatch): boolean {
   const reasoningFooterControl = useLayoutStore(
     (state) => state.composer.reasoningFooterControl,
   );
+  // The strip's checked accounts: carried by no bundle, cleared by Reset -
+  // the same shape as `mobileFooter`, and the same dead-button failure if
+  // left out. The resolver drops emptied entries, so "nothing checked" IS
+  // an empty map rather than a map of empty lists.
+  const shownProfiles = useLayoutStore(
+    (state) => state.statusBar.rateLimits.shownProfiles,
+  );
   const panelGroups = useLeftPanelStore((state) => state.panelGroups);
   const visibilityOverrides = useLeftPanelStore(
     (state) => state.panelVisibilityOverrideById,
@@ -194,6 +201,7 @@ function useLayoutIsFullyDefault(match: LayoutPresetMatch): boolean {
     placement === DEFAULT_STATUS_BAR_LAYOUT.placement &&
     mobileFooter === DEFAULT_STATUS_BAR_LAYOUT.mobileFooter &&
     reasoningFooterControl === DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl &&
+    Object.keys(shownProfiles).length === 0 &&
     areLeftPanelGroupsEqual(panelGroups, DEFAULT_LEFT_PANEL_GROUPS) &&
     Object.keys(visibilityOverrides).length === 0
   );

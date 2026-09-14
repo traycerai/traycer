@@ -489,14 +489,15 @@ export class BrowserViewProvisioning {
    * drops the storage seed script so it cannot replay on later navigations.
    */
   async navigateAccepted(entry: BrowserViewEntry): Promise<void> {
-    const debugSession = this.debugSessions.ensure(entry);
     try {
       await this.navigate(entry, entry.requestedUrl);
     } finally {
       const seedScriptId = entry.identity.lifecycle.takeSeedScriptId();
       if (seedScriptId !== null) {
         try {
-          await debugSession.removeScriptBeforeNavigation(seedScriptId);
+          await this.debugSessions
+            .ensure(entry)
+            .removeScriptBeforeNavigation(seedScriptId);
         } catch (error) {
           log.warn("[browser-view] failed to remove native tab seed script", {
             error: describeLogError(error),
@@ -505,6 +506,9 @@ export class BrowserViewProvisioning {
           });
         }
       }
+      // The script is gone, so the debugger the seed needed can go with it.
+      entry.seedLease?.release();
+      entry.seedLease = null;
     }
   }
 
@@ -519,7 +523,7 @@ export class BrowserViewProvisioning {
       return this.ensureTab(windowId, input);
     }
     try {
-      await this.debugSessions.ensure(entry).enableAfterCommit();
+      await entry.debugSession?.enableWhileLeased();
       const provisioned = this.resolveNativeTabProvisioned(entry);
       // A renderer reload destroys the guest, so the availability check above
       // re-ensures a dead one and a surviving entry only needs the state the
@@ -660,15 +664,37 @@ export class BrowserViewProvisioning {
     const seeded = await this.seedStorageState(input, entry.webContents);
     const seedScript = browserLocalStorageSeedScript(seeded);
     await this.activateNativeTabTarget(entry, input, startedAt);
-    const debugSession = this.debugSessions.ensure(entry);
     const seedScriptId =
       seedScript === null
         ? null
-        : await debugSession.installScriptBeforeNavigation(seedScript);
-    await debugSession.enableAfterCommit();
+        : await this.installSeedScript(entry, seedScript);
     const provisioned = this.resolveNativeTabProvisioned(entry);
     logEnsureStage(input, startedAt, "manager_settled", "ok", null);
     return { provisioned, seedScriptId };
+  }
+
+  /**
+   * The one reason a tab attaches a debugger at birth, and only a tab the host
+   * seeds storage into has it: the script must be registered before the first
+   * navigation and removed after it, so the lease spans exactly that window
+   * (`navigateAccepted`). Provisioning failures and closes drop it with the
+   * entry's debug session.
+   */
+  private async installSeedScript(
+    entry: BrowserViewEntry,
+    seedScript: string,
+  ): Promise<string> {
+    const debugSession = this.debugSessions.ensure(entry);
+    const lease = debugSession.acquire();
+    entry.seedLease = lease;
+    try {
+      await lease.ready();
+      return await debugSession.installScriptBeforeNavigation(seedScript);
+    } catch (error) {
+      entry.seedLease = null;
+      lease.release();
+      throw error;
+    }
   }
 
   private async activateNativeTabTarget(
@@ -693,11 +719,8 @@ export class BrowserViewProvisioning {
   private resolveNativeTabProvisioned(
     entry: BrowserViewEntry,
   ): BrowserViewNativeTabCapability {
-    if (
-      !isNativeTabAvailable(this.entries, entry) ||
-      entry.debugSession?.isReady() !== true
-    ) {
-      throw new Error("Native browser tab CDP route is no longer available.");
+    if (!isNativeTabAvailable(this.entries, entry)) {
+      throw new Error("Native browser tab is no longer available.");
     }
     return {
       ...entry.identity.key,

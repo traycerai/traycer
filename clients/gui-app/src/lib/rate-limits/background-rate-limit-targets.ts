@@ -2,7 +2,7 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import {
-  resolveRateLimitProfileId,
+  resolveStatusBarProfileIds,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import {
@@ -28,7 +28,10 @@ function candidates(
 ): ReadonlyArray<BackgroundCandidate> {
   return providers.flatMap((provider) => {
     if (provider.lane !== "ephemeralProcess") return [];
-    const selectedProfileId = resolveRateLimitProfileId(
+    // Every account the strip is drawing for this provider, not one: each
+    // checked profile has its own segment to keep fresh, so each is a
+    // `selected` target ahead of the unchecked ones.
+    const selectedProfileIds = resolveStatusBarProfileIds(
       selection,
       provider.providerId,
       provider.profiles,
@@ -59,7 +62,7 @@ function candidates(
           accountContext: DEFAULT_ACCOUNT_CONTEXT,
           profileId,
           usageUpdatedAt: profile.usageUpdatedAt,
-          selected: profileId === selectedProfileId,
+          selected: selectedProfileIds.includes(profileId),
         },
       ];
     });

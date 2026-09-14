@@ -200,6 +200,11 @@ function selectGlyphBars(
  * (popover-only). See `selectGlyphBars` for the exact selection and the
  * partial-load policy; a return of `[]` means "render the neutral placeholder".
  *
+ * One account per provider, and it is the FIRST of the accounts the strip
+ * would draw (`resolveRateLimitProfileId`): the glyph has two slots and no
+ * room to say whose numbers they are, so a provider with several accounts
+ * checked contributes the first of them here and all of them to the strip.
+ *
  * Mounting `useHostQueriesWithResponseMap` here drives the initial
  * fetch-on-mount for the two glyph providers (both `ephemeralProcess`); the
  * serial queue only bounds their *subsequent* background/turn/manual

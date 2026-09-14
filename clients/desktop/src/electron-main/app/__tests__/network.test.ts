@@ -42,7 +42,7 @@ describe("configureUserAgent", () => {
     electronState.defaultSessionUserAgent = "";
   });
 
-  it("sets a branded UA on the default session and a clean UA as the fallback", async () => {
+  it("sets a branded UA on the default session only, leaving the app-wide fallback untouched", async () => {
     const { configureUserAgent } = await import("../network");
     configureUserAgent();
 
@@ -50,9 +50,9 @@ describe("configureUserAgent", () => {
       "TraycerDesktop/1.2.3 Electron/30.0.0 Chrome/125.0.6422.0",
     );
 
-    const fallback = electronState.app.userAgentFallback;
-    expect(fallback).toMatch(/Chrome\/.+Safari\/537\.36/);
-    expect(fallback).not.toMatch(/Electron/);
-    expect(fallback).not.toMatch(/Traycer/);
+    // Guests and popups keep Electron's own default UA - `configureUserAgent`
+    // must never set `app.userAgentFallback` (that was the spoof Google's
+    // sign-in rejected as "not secure").
+    expect(electronState.app.userAgentFallback).toBe("");
   });
 });

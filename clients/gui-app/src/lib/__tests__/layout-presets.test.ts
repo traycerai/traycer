@@ -16,6 +16,7 @@ import {
 import {
   DEFAULT_COMPOSER_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_STATUS_BAR_RATE_LIMIT_DISPLAY,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
 import {
@@ -35,7 +36,17 @@ function currentSnapshot(): LayoutPresetBundle {
     // Placement is not a value a bundle carries, so it is not one the snapshot
     // offers either - see `LayoutPresetStatusBarValues`.
     statusBar: {
-      rateLimits: layout.statusBar.rateLimits,
+      // Nor are the strip's checked accounts - a per-host choice made from
+      // the usage panel - so the snapshot names the display half only.
+      rateLimits: {
+        enabled: layout.statusBar.rateLimits.enabled,
+        hiddenProviders: layout.statusBar.rateLimits.hiddenProviders,
+        providers: layout.statusBar.rateLimits.providers,
+        percentMode: layout.statusBar.rateLimits.percentMode,
+        showTimer: layout.statusBar.rateLimits.showTimer,
+        showBar: layout.statusBar.rateLimits.showBar,
+        showModeWord: layout.statusBar.rateLimits.showModeWord,
+      },
       resources: layout.statusBar.resources,
     },
     // Nor is the picker footer's reasoning CONTROL - see
@@ -114,7 +125,7 @@ describe("layout presets", () => {
     // it, and this fails the moment the two drift.
     expect(LAYOUT_PRESETS.default).toEqual({
       statusBar: {
-        rateLimits: DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
+        rateLimits: DEFAULT_STATUS_BAR_RATE_LIMIT_DISPLAY,
         resources: DEFAULT_STATUS_BAR_LAYOUT.resources,
       },
       // Every value read from the constant, minus the one field no bundle
@@ -386,6 +397,30 @@ describe("layout presets", () => {
   // The one place the literal is pinned outside the store's own suite: every
   // other read here goes through `DEFAULT_STATUS_BAR_LAYOUT`, so without this
   // the whole file would follow the constant wherever it moved.
+  it("leaves the strip's checked accounts alone for every preset, and clears them on Reset", () => {
+    useLayoutStore
+      .getState()
+      .setStatusBarProfileShown("host-a", "codex", "work", true);
+    const checked = { "host-a": { codex: ["work"] } };
+
+    for (const id of LAYOUT_PRESET_IDS) {
+      applyLayoutPreset(id);
+      expect(
+        useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+      ).toEqual(checked);
+      // Not part of the match either: a page with an account checked is still
+      // on whichever density it is on.
+      expect(matchLayoutPreset(currentSnapshot())).toBe(id);
+    }
+
+    resetLayoutToDefaults();
+
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+    ).toEqual({});
+    expect(matchLayoutPreset(currentSnapshot())).toBe("default");
+  });
+
   it("lands the strip in the FOOTER on reset, from either placement", () => {
     for (const placement of ["header", "status-bar"] as const) {
       resetStores();

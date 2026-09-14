@@ -17,6 +17,7 @@ import {
 import {
   providerReadingText,
   statusBarClusterSegments,
+  statusBarSegmentKey,
   statusBarSegmentTooltip,
   statusBarUsageContentClass,
   useStatusBarUsageDisplay,
@@ -33,7 +34,6 @@ import {
   type StatusBarRateLimitCluster,
   type StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import type { RateLimitWindowKind } from "@/lib/rate-limits/rate-limit-window-catalog";
 import { useSampledNow } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -157,7 +157,7 @@ export function StatusBarPreview(props: {
   const widthOption = PREVIEW_WIDTHS[width];
   const density = statusBarDensityForWidth(widthOption.widthPx);
   const display = useStatusBarUsageDisplay();
-  const liveCluster = usePreviewCluster();
+  const liveCluster = usePreviewCluster(props.scope.hostId);
   // The same 60s clock the countdowns read, so the sample's reset instants are
   // always the same distance from the `now` they are formatted against and the
   // sample never ticks.
@@ -328,7 +328,7 @@ export function StatusBarPreview(props: {
           hasExplicitPick={props.hasExplicitPick}
           liveCluster={liveCluster}
           drawnCluster={cluster}
-          sampledProviderIds={sample?.providerIds ?? NO_SAMPLED_PROVIDERS}
+          sampledSegmentKeys={sample?.segmentKeys ?? NO_SAMPLED_SEGMENTS}
           display={display}
           stop={ladder.stop}
           dimmed={!stripDrawn}
@@ -533,8 +533,8 @@ function StatusBarPreviewNotes(props: {
   readonly liveCluster: StatusBarRateLimitCluster;
   /** The cluster in the frame, which the sample may have stood in for. */
   readonly drawnCluster: StatusBarRateLimitCluster;
-  /** The providers whose reading in the frame is invented. Usually empty. */
-  readonly sampledProviderIds: ReadonlyArray<RateLimitProviderId>;
+  /** The segments whose reading in the frame is invented. Usually empty. */
+  readonly sampledSegmentKeys: ReadonlyArray<string>;
   readonly display: StatusBarUsageDisplay;
   /** The rung the frame settled on, and with it which providers it folded. */
   readonly stop: StatusBarUsageStop;
@@ -554,7 +554,7 @@ function StatusBarPreviewNotes(props: {
     ? statusBarPreviewUsageNotes({
         liveCluster: props.liveCluster,
         drawnCluster: props.drawnCluster,
-        sampledProviderIds: props.sampledProviderIds,
+        sampledSegmentKeys: props.sampledSegmentKeys,
         stop: props.stop,
         display: props.display,
       })
@@ -606,7 +606,7 @@ function StatusBarPreviewNotes(props: {
 function statusBarPreviewUsageNotes(input: {
   readonly liveCluster: StatusBarRateLimitCluster;
   readonly drawnCluster: StatusBarRateLimitCluster;
-  readonly sampledProviderIds: ReadonlyArray<RateLimitProviderId>;
+  readonly sampledSegmentKeys: ReadonlyArray<string>;
   readonly stop: StatusBarUsageStop;
   readonly display: StatusBarUsageDisplay;
 }): ReadonlyArray<string> {
@@ -614,7 +614,7 @@ function statusBarPreviewUsageNotes(input: {
     .filter(
       (segment) =>
         segment.state !== "live" &&
-        !input.sampledProviderIds.includes(segment.providerId),
+        !input.sampledSegmentKeys.includes(statusBarSegmentKey(segment)),
     )
     .map(statusBarSegmentTooltip);
   if (input.stop.foldedCount === 0) return notes;
@@ -627,7 +627,7 @@ function statusBarPreviewUsageNotes(input: {
   // one place a folded reading appears and the caption above it names
   // providers the fold has just taken off the strip.
   const sampled = folded.some((segment) =>
-    input.sampledProviderIds.includes(segment.providerId),
+    input.sampledSegmentKeys.includes(statusBarSegmentKey(segment)),
   );
   return [
     ...notes,
@@ -636,7 +636,7 @@ function statusBarPreviewUsageNotes(input: {
 }
 
 /** One empty list, for the usual case of a preview drawing real readings. */
-const NO_SAMPLED_PROVIDERS: ReadonlyArray<RateLimitProviderId> = [];
+const NO_SAMPLED_SEGMENTS: ReadonlyArray<string> = [];
 
 /** One empty list, so a preview with nothing to explain re-renders for nothing. */
 const NO_NOTES: ReadonlyArray<string> = [];
@@ -696,9 +696,9 @@ function StatusBarPreviewResourceNote(props: {
  * same keys - the cost was never duplicate reads - but the ladder cannot be
  * stepped twice against two boxes and asked for one answer.
  */
-function usePreviewCluster(): StatusBarRateLimitCluster {
+function usePreviewCluster(hostId: string | null): StatusBarRateLimitCluster {
   const providers = useStatusBarWindowedProviders();
-  const profileSelection = useRateLimitProfileSelection();
+  const profileSelection = useRateLimitProfileSelection(hostId);
   const { cluster } = useStatusBarRateLimitSegments({
     providers,
     profileSelection,
@@ -753,7 +753,7 @@ const SAMPLE_READINGS: ReadonlyArray<StatusBarPreviewSampleReading> = [
 /** The frame's cluster while the sample is speaking, and who it spoke for. */
 interface StatusBarPreviewSample {
   readonly cluster: StatusBarRateLimitCluster;
-  readonly providerIds: ReadonlyArray<RateLimitProviderId>;
+  readonly segmentKeys: ReadonlyArray<string>;
 }
 
 /**
@@ -786,30 +786,32 @@ function statusBarPreviewSample(
   if (!cluster.segments.some((segment) => segment.state === "cold")) {
     return null;
   }
-  // Resolved as a list first, then applied: one segment per provider, so the
-  // position of a provider in this list is also which reading it gets, and the
-  // notes below need the same list to know whose line the caption now covers.
-  const providerIds = cluster.segments
+  // Resolved as a list first, then applied: the position of a segment in this
+  // list is also which reading it gets, and the notes below need the same
+  // list to know whose line the caption now covers. Keyed by SEGMENT rather
+  // than provider, since a provider with two accounts checked is two cold
+  // tracks, and both deserve a different number.
+  const segmentKeys = cluster.segments
     .filter((segment) => segment.state === "cold")
     .slice(0, SAMPLE_READINGS.length)
-    .map((segment) => segment.providerId);
+    .map(statusBarSegmentKey);
   const segments = cluster.segments.map((segment) => {
-    const index = providerIds.indexOf(segment.providerId);
+    const index = segmentKeys.indexOf(statusBarSegmentKey(segment));
     return index === -1
       ? segment
-      : sampleSegment(segment.providerId, SAMPLE_READINGS[index], now);
+      : sampleSegment(segment, SAMPLE_READINGS[index], now);
   });
-  return { cluster: { kind: "segments", segments }, providerIds };
+  return { cluster: { kind: "segments", segments }, segmentKeys };
 }
 
 function sampleSegment(
-  providerId: RateLimitProviderId,
+  segment: StatusBarProviderSegmentModel,
   reading: StatusBarPreviewSampleReading,
   now: number,
 ): StatusBarProviderSegmentModel {
   const resetsAt = now + reading.resetsInMs;
   const window: StatusBarRateLimitWindow = {
-    windowKey: `${providerId}:sample`,
+    windowKey: `${segment.providerId}:sample`,
     label: reading.label,
     labelIsDuration: true,
     kind: reading.kind,
@@ -824,7 +826,7 @@ function sampleSegment(
     }),
   };
   return {
-    providerId,
+    ...segment,
     state: "live",
     reason: null,
     windows: [window],

@@ -9,6 +9,7 @@ import {
 } from "@/components/layout/status-bar/status-bar-usage-ladder";
 import {
   statusBarClusterSegments,
+  statusBarSegmentName,
   statusBarUsageContentClass,
   useStatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
@@ -26,7 +27,11 @@ import {
   type StatusBarRateLimitRefreshModel,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
-import { providerDisplayName } from "@/lib/provider-ordering";
+import { rateLimitCapableProviderIdSchema } from "@traycer/protocol/host/rate-limit";
+import {
+  useRateLimitPopoverStore,
+  type RateLimitPopoverRevealTarget,
+} from "@/stores/rate-limits/rate-limit-popover-store";
 import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import type { PercentMode } from "@/stores/settings/layout-store";
@@ -56,6 +61,9 @@ export function StatusBarRateLimitCluster(props: {
   readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
   const display = useStatusBarUsageDisplay();
+  const requestRevealProfile = useRateLimitPopoverStore(
+    (state) => state.requestRevealProfile,
+  );
   const { cluster, mountTargets, refresh } = useStatusBarRateLimitSegments({
     providers: props.providers,
     profileSelection: props.profileSelection,
@@ -110,6 +118,14 @@ export function StatusBarRateLimitCluster(props: {
             // The bar's own right-click menu stands down over a control that is
             // itself a way into the surface the menu summarises.
             {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
+            // A click ON a segment is a deep link to that account's card; the
+            // panel still opens through the trigger's own toggle, this only
+            // arms which card it opens on. A click beside the segments, or
+            // the keyboard, opens the panel where it was.
+            onClick={(event) => {
+              const target = statusBarSegmentAtClick(event.target);
+              if (target !== null) requestRevealProfile(target);
+            }}
             // No padding of its own: the readings inside carry it, so the
             // natural width the ladder measures is the width this button would
             // need - hover fill and focus ring included - rather than that
@@ -181,10 +197,34 @@ export function StatusBarRateLimitCluster(props: {
 }
 
 /**
+ * The account segment a click on the trigger landed in, if any. Read from the
+ * segment's own `data-*` naming rather than from a handler on the segment,
+ * because the segment is a `span` inside a button: the button is the control,
+ * and the segment saying what it is lets the control answer for it.
+ */
+function statusBarSegmentAtClick(
+  target: EventTarget,
+): RateLimitPopoverRevealTarget | null {
+  if (!(target instanceof Element)) return null;
+  const segment = target.closest("[data-provider-id]");
+  if (segment === null) return null;
+  const providerId = rateLimitCapableProviderIdSchema.safeParse(
+    segment.getAttribute("data-provider-id"),
+  );
+  if (!providerId.success) return null;
+  const profileId = segment.getAttribute("data-profile-id") ?? "";
+  return {
+    providerId: providerId.data,
+    profileId: profileId === "" ? null : profileId,
+  };
+}
+
+/**
  * What a screen reader hears on the trigger: the strip's headline, then the
- * tightest reading for each provider it is showing.
+ * tightest reading for each segment it is showing - named by provider, and by
+ * account too where the provider has more than one.
  *
- * One reading per provider rather than every window, because this is a control
+ * One reading per segment rather than every window, because this is a control
  * name and a name is read in full before anything else can happen. The tightest
  * window is the one the compact densities already choose to show for the same
  * reason - it is the number that decides whether the panel is worth opening.
@@ -198,7 +238,7 @@ function triggerAccessibleName(
     segment.tightest === null
       ? []
       : [
-          `${providerDisplayName(segment.providerId)} ${windowPercentText(
+          `${statusBarSegmentName(segment)} ${windowPercentText(
             segment.tightest.usedPercent,
             percentMode,
           )}`,
