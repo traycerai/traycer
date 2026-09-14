@@ -4,14 +4,12 @@ import type {
   BrowserCdpResult,
   BrowserCdpTarget,
 } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserViewDebugSnapshotData } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserViewDebugger,
   BrowserViewWebContents,
 } from "../browser-view-port";
 import { describeLogError, log } from "../../app/logger";
 import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
-import { BrowserDebugTelemetry } from "./browser-debug-telemetry";
 import { BrowserFrameRoutes } from "./browser-frame-routes";
 import { BrowserPipCapture } from "./browser-pip-capture";
 import type { BrowserPipCaptureStartInput } from "./browser-pip-capture";
@@ -39,7 +37,6 @@ export interface BrowserDebugLease {
 export class BrowserDebugSession {
   private readonly webContents: BrowserDebugWebContents;
   private readonly onDetached: (reason: string) => void;
-  private readonly telemetry: BrowserDebugTelemetry;
   private readonly frameRoutes: BrowserFrameRoutes;
   private readonly pipCapture: BrowserPipCapture;
   private readonly bindingCalledListeners = new Set<
@@ -64,7 +61,6 @@ export class BrowserDebugSession {
   constructor(options: BrowserDebugSessionOptions) {
     this.webContents = options.webContents;
     this.onDetached = options.onDetached;
-    this.telemetry = new BrowserDebugTelemetry(options.webContents.id);
     this.pipCapture = new BrowserPipCapture(options.webContents);
     this.frameRoutes = new BrowserFrameRoutes({
       browserDebugger: () => this.webContents.debugger,
@@ -238,7 +234,6 @@ export class BrowserDebugSession {
       Promise.all([
         browserDebugger.sendCommand("Page.enable", {}, undefined),
         browserDebugger.sendCommand("Runtime.enable", {}, undefined),
-        browserDebugger.sendCommand("Log.enable", {}, undefined),
         browserDebugger.sendCommand("Network.enable", {}, undefined),
         // DOM.describeNode requires its domain to be enabled first.
         browserDebugger.sendCommand("DOM.enable", {}, undefined),
@@ -294,10 +289,6 @@ export class BrowserDebugSession {
     return this.pipCapture.isCapturing();
   }
 
-  snapshot(): BrowserViewDebugSnapshotData {
-    return this.telemetry.snapshot();
-  }
-
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -336,11 +327,6 @@ export class BrowserDebugSession {
       this.frameRoutes.handleFrameNavigated(event.params, event.sessionId);
     } else if (event.method === "Page.frameDetached") {
       this.frameRoutes.handleFrameDetached(event.params, event.sessionId);
-    }
-    if (
-      this.telemetry.handleEvent(event.method, event.params, event.sessionId)
-    ) {
-      return;
     }
     if (event.method === "Runtime.bindingCalled") {
       for (const listener of this.bindingCalledListeners) {

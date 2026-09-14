@@ -10,8 +10,6 @@ import type {
   BrowserViewAttachSurface,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewDebugSnapshot,
-  BrowserViewDebugSnapshotData,
   BrowserViewDetachSurface,
   BrowserViewNativeTabStatusChange,
   BrowserViewStatus,
@@ -572,24 +570,6 @@ export class BrowserViewManager {
     return registrableDomainForUrl(entry.currentUrl);
   }
 
-  getDebugSnapshot(
-    windowId: string,
-    input: BrowserViewTileKey,
-  ): BrowserViewDebugSnapshot {
-    const entry = this.entries.getTile(windowId, input);
-    if (entry === undefined) {
-      return {
-        ...input,
-        consoleEntries: [],
-        networkEntries: [],
-      };
-    }
-    return {
-      ...toTileKey(requireSurface(entry)),
-      ...this.readDebugSnapshot(entry),
-    };
-  }
-
   async dispatchElectronTabCdp(
     input: BrowserViewElectronTabCdpDispatch,
   ): Promise<BrowserCdpResult> {
@@ -950,24 +930,6 @@ export class BrowserViewManager {
     });
     this.annotations.end(entry, "crash");
     if (this.pip.isCapturing(entry)) this.pip.stop();
-  }
-
-  /**
-   * Console and network entries are recorded only while the guest's debugger is
-   * attached, which is only while something holds a lease on it. The renderer
-   * pulls this snapshot with no open/close signal to hold a lease of its own,
-   * so a tab nobody is driving answers empty - which is the honest answer, not
-   * a reason to attach a debugger to every tab.
-   */
-  private readDebugSnapshot(
-    entry: BrowserViewEntry,
-  ): BrowserViewDebugSnapshotData {
-    return (
-      entry.debugSession?.snapshot() ?? {
-        consoleEntries: [],
-        networkEntries: [],
-      }
-    );
   }
 
   private setStatus(

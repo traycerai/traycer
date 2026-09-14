@@ -163,7 +163,6 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     ).toEqual([
       "Page.enable",
       "Runtime.enable",
-      "Log.enable",
       "Network.enable",
       "DOM.enable",
     ]);
@@ -272,7 +271,6 @@ describe("BrowserDebugSession curated CDP dispatch", () => {
     ).toEqual([
       "Page.enable",
       "Runtime.enable",
-      "Log.enable",
       "Network.enable",
       "DOM.enable",
       "Input.insertText",

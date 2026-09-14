@@ -595,7 +595,6 @@ export class BrowserFrameRoutes {
         Promise.all([
           browserDebugger.sendCommand("Page.enable", {}, sessionId),
           browserDebugger.sendCommand("Runtime.enable", {}, sessionId),
-          browserDebugger.sendCommand("Log.enable", {}, sessionId),
           browserDebugger.sendCommand("Network.enable", {}, sessionId),
           browserDebugger.sendCommand("DOM.enable", {}, sessionId),
         ]).then(() => undefined),

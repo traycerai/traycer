@@ -427,7 +427,6 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     expect(harness.webContents.debugger.commandMethods()).toEqual([
       "Page.enable",
       "Runtime.enable",
-      "Log.enable",
       "Network.enable",
       "DOM.enable",
       "Runtime.addBinding",
