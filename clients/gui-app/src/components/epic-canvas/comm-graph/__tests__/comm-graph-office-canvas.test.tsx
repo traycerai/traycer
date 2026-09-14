@@ -2446,27 +2446,35 @@ function similarityScaleOf(transform: CanvasTransform, method: string): number {
     );
   }
   // PERPENDICULAR AND NON-DEGENERATE, IN ONE NUMBER. Lagrange's identity
-  // gives det² + (c1·c2)² = ‖c1‖²‖c2‖², so |det| - the area the columns
-  // actually span - equals ‖c1‖‖c2‖ exactly when they are perpendicular, and
-  // falls away from it as they close up, reaching 0 when they are parallel
-  // and the plane has collapsed onto a line. So one comparison rejects a
-  // shear and a singular transform together, which is the right shape: a
-  // rank-one collapse is not a separate defect, it is a shear taken to its
-  // limit, and both are matrices under which a length has no one factor.
-  // Testing the dot product instead would need a second test for the
-  // collapse, and the two could disagree.
-  const spannedByPerpendicular = firstColumn * secondColumn;
-  const spanned = Math.abs(a * d - b * c);
-  if (
-    spannedByPerpendicular - spanned >
-    SIMILARITY_TOLERANCE * spannedByPerpendicular
-  ) {
+  // gives det² + (c1·c2)² = ‖c1‖²‖c2‖², so the area the columns span equals
+  // ‖c1‖‖c2‖ exactly when they are perpendicular, and falls away from it as
+  // they close up, reaching 0 when they are parallel and the plane has
+  // collapsed onto a line. So one comparison rejects a shear and a singular
+  // transform together, which is the right shape: a rank-one collapse is not
+  // a separate defect, it is a shear taken to its limit, and both are
+  // matrices under which a length has no one factor. Testing the dot product
+  // instead would need a second test for the collapse, and the two could
+  // disagree.
+  //
+  // ON THE UNIT COLUMNS, so that NO PRODUCT OF TWO MAGNITUDES IS EVER
+  // FORMED. Comparing `|det|` against `‖c1‖‖c2‖` directly says the same
+  // thing in exact arithmetic and not in this one: at a scale of 1e-200 both
+  // norms are ordinary numbers while their product underflows to zero, and
+  // the comparison degenerates to `0 > 0` - which accepts a matrix whose
+  // columns are exactly parallel. Dividing first keeps every quantity here
+  // of order one, whatever the matrix's own magnitude, and the perpendicular
+  // case is then simply 1.
+  const spanned = Math.abs(
+    (a / firstColumn) * (d / secondColumn) -
+      (b / firstColumn) * (c / secondColumn),
+  );
+  if (1 - spanned > SIMILARITY_TOLERANCE) {
     throw new Error(
       `recordCallGeometry: ${method} carries a length under a CTM that is ` +
-        `not a similarity: its columns span ${spanned} where two ` +
-        `perpendicular columns of the same norms would span ` +
-        `${spannedByPerpendicular}. A shear scales a length by which way it ` +
-        "points, and a collapse leaves it no area at all; neither is modelled",
+        `not a similarity: its unit columns span ${spanned} of the 1 that ` +
+        "two perpendicular columns would. A shear scales a length by which " +
+        "way it points, and a collapse leaves it no area at all; neither is " +
+        "modelled",
     );
   }
   return firstColumn;
@@ -2631,7 +2639,24 @@ function recordCall(
     transform,
     screen: projectCallGeometry(call, transform),
   });
-  state.transform = stepCanvasTransform(transform, state.matrixStack, call);
+  const next = stepCanvasTransform(transform, state.matrixStack, call);
+  // FINITE, the same bar `requiredCoordinate` already sets for a draw
+  // coordinate - the matrix had no equivalent, and the asymmetry is the whole
+  // argument. A `NaN` component poisons every number derived from it and then
+  // fails every comparison downstream SILENTLY, because a comparison with
+  // `NaN` is false whichever way it is written: the column-norm test, the
+  // span test and `tagBoxesFrom`'s area guard all take their passing branch,
+  // so a case counting tags finds them and a case asking whether they overlap
+  // finds they do not. Here is where every route into the matrix meets -
+  // `setTransform`, `transform`, `scale`, `translate`, `rotate`, and any
+  // composition of them - so it is the one place the check belongs.
+  if (!next.every((value) => Number.isFinite(value))) {
+    throw new Error(
+      `stepCanvasTransform: ${method} left the CTM non-finite ` +
+        `[${next.join(", ")}]`,
+    );
+  }
+  state.transform = next;
 }
 
 /**
