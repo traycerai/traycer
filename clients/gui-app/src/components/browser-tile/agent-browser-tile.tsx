@@ -146,13 +146,18 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   // the clock and only a genuinely stalled tab trips it.
   const [stalledNonce, setStalledNonce] = useState<number | null>(null);
   const [loadingNonce, setLoadingNonce] = useState(0);
-  // Whether this guest has ever committed a document. Before the first
-  // `ready` the guest is blank and the loader is the only thing to show;
-  // after it, a `loading` is a navigation AWAY from a page that stays painted
-  // until the next commit, and the loader must not sit over it (see
-  // `resolveTileOverlay`). A `dead` guest is re-materialized from blank, so
-  // it clears the flag.
-  const [documentCommitted, setDocumentCommitted] = useState(false);
+  // The binding registration whose guest has committed a document, or null.
+  // Before the first `ready` the guest is blank and the loader is the only
+  // thing to show; after it, a `loading` is a navigation AWAY from a page
+  // that stays painted until the next commit, and the loader must not sit
+  // over it (see `resolveTileOverlay`). Keyed by registration rather than a
+  // bare flag because the directory can replace the binding under a mounted
+  // surface (a re-ensured tab is a fresh guest at `about:blank`), and a
+  // `dead` guest is re-materialized from blank - both must derive as
+  // uncommitted.
+  const [committedRegistrationId, setCommittedRegistrationId] = useState<
+    string | null
+  >(null);
   const attemptedNavigationRef = useRef<AttemptedNavigation | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -274,8 +279,10 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         setStatus(change.status);
         setStatusReason(change.reason);
         setStatusUrl(change.url);
-        if (change.status === "ready") setDocumentCommitted(true);
-        if (change.status === "dead") setDocumentCommitted(false);
+        if (change.status === "ready") {
+          setCommittedRegistrationId(change.registrationId);
+        }
+        if (change.status === "dead") setCommittedRegistrationId(null);
         setCanGoBack(change.canGoBack);
         setCanGoForward(change.canGoForward);
         setZoomPercent(change.zoomPercent);
@@ -502,7 +509,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     effectiveStatus,
     surfaceReady,
     navigationStalled,
-    documentCommitted,
+    committedRegistrationId === registrationId,
   );
 
   return (

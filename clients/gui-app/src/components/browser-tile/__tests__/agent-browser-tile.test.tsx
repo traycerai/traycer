@@ -156,6 +156,7 @@ interface NativeStatusChange {
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
+  readonly registrationId: string;
   readonly url: string;
   readonly title: string | null;
   readonly status: "loading" | "ready" | "dead";
@@ -640,6 +641,7 @@ describe("ElectronTabSurface", () => {
         hostId: "host-1",
         sessionId: "session-1",
         tabId: "foreign-tab",
+        registrationId: "registration-1",
         url: "https://foreign.example/",
         title: null,
         status: "dead",
@@ -656,6 +658,7 @@ describe("ElectronTabSurface", () => {
         hostId: "host-1",
         sessionId: "session-1",
         tabId: "tab-1",
+        registrationId: "registration-1",
         url: "https://example.com/",
         title: null,
         status: "dead",
@@ -834,6 +837,7 @@ describe("ElectronTabSurface navigation stall", () => {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
+      registrationId: "registration-1",
       url: "https://example.com/",
       title: null,
       status: "loading",
@@ -969,6 +973,7 @@ describe("ElectronTabSurface echo-less settle", () => {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
+      registrationId: "registration-1",
       url,
       title: null,
       status,
@@ -1079,11 +1084,13 @@ describe("ElectronTabSurface echo-less settle", () => {
 });
 
 /**
- * `documentCommitted` tracks whether the tile has ever painted a committed
- * document: true after an accepted `ready`, reset to false on `dead`. It
- * gates the loading overlay so a navigation AWAY from an already-painted page
- * does not sit the loader back over live content - only the toolbar spinner
- * carries that in-flight navigation, as in any ordinary browser.
+ * The tile remembers WHICH binding registration committed a document: true
+ * after an accepted `ready` for the current registration, reset on `dead`,
+ * and derived false again when the directory replaces the binding under the
+ * mounted surface. It gates the loading overlay so a navigation AWAY from an
+ * already-painted page does not sit the loader back over live content - only
+ * the toolbar spinner carries that in-flight navigation, as in any ordinary
+ * browser.
  */
 describe("ElectronTabSurface document-committed loader gating", () => {
   function statusChange(
@@ -1093,6 +1100,7 @@ describe("ElectronTabSurface document-committed loader gating", () => {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
+      registrationId: "registration-1",
       url: NODE.url,
       title: null,
       status,
@@ -1164,6 +1172,44 @@ describe("ElectronTabSurface document-committed loader gating", () => {
     const overlay = loaderOverlayElement();
     expect(overlay.className).toContain("opacity-0");
     expect(overlay.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("paints the loader again when the binding is replaced under the mounted surface", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    const binding = createBinding(() =>
+      Promise.resolve({ detach: () => Promise.resolve() }),
+    );
+    const view = renderTile(binding);
+    await act(() => Promise.resolve());
+
+    act(() => {
+      bridge.emitStatus(statusChange("ready"));
+    });
+    expect(loaderOverlayElement().className).toContain("opacity-0");
+
+    // The directory re-ensured the tab: same tile, same tab id, a fresh
+    // registration whose guest is a new `about:blank`. Its `loading` is a
+    // first load again, not a navigation away from a painted page, so the
+    // previous registration's commit must not hide the loader.
+    const replacement: ElectronTabBinding = {
+      ...binding,
+      registrationId: "registration-2",
+    };
+    await act(async () => {
+      view.rerender(surfaceElement(NODE, replacement));
+      await Promise.resolve();
+    });
+    act(() => {
+      bridge.emitStatus({
+        ...statusChange("loading"),
+        registrationId: "registration-2",
+      });
+    });
+
+    const overlay = loaderOverlayElement();
+    expect(overlay.className).toContain("opacity-100");
+    expect(overlay.getAttribute("aria-hidden")).toBe("false");
   });
 
   it("shows the dead surface after ready, then paints the loader again on the next loading (documentCommitted reset)", async () => {
