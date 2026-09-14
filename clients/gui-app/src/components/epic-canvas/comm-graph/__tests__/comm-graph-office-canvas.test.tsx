@@ -1923,7 +1923,14 @@ function modelledTextWidth(
   return text.length * size * (MONOSPACE_ADVANCE_EM + spacing);
 }
 
-interface RecordedCall {
+/**
+ * A call as the renderer made it, before the recorder has said anything
+ * about where it landed. The stepper below reads calls in this shape while
+ * a recording is still being built, which is why it is not
+ * {@link RecordedCall}: the matrix a call is stamped with is computed FROM
+ * the call, so it cannot be an input to reading it.
+ */
+interface CanvasCall {
   readonly method: string;
   readonly args: ReadonlyArray<unknown>;
 }
@@ -2019,7 +2026,7 @@ const TRANSFORM_AFFECTING_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 /** The six numbers a matrix op was called with, or a throw naming the op. */
-function requiredTransformArgs(call: RecordedCall): CanvasTransform {
+function requiredTransformArgs(call: CanvasCall): CanvasTransform {
   const six = sixNumberTransform(call.args);
   if (six !== null) return six;
   // The `DOMMatrix` / `DOMMatrix2DInit` overload is VALID and is REJECTED
@@ -2037,7 +2044,7 @@ function requiredTransformArgs(call: RecordedCall): CanvasTransform {
 }
 
 /** Two numeric arguments, or a throw naming the op that wanted them. */
-function requiredNumberPair(call: RecordedCall): readonly [number, number] {
+function requiredNumberPair(call: CanvasCall): readonly [number, number] {
   const first = call.args[0];
   const second = call.args[1];
   if (typeof first !== "number" || typeof second !== "number") {
@@ -2052,7 +2059,7 @@ function requiredNumberPair(call: RecordedCall): readonly [number, number] {
  */
 function composeCanvasTransform(
   current: CanvasTransform,
-  call: RecordedCall,
+  call: CanvasCall,
 ): CanvasTransform {
   if (call.method === "scale") {
     const [sx, sy] = requiredNumberPair(call);
@@ -2085,7 +2092,7 @@ function composeCanvasTransform(
 function stepCanvasTransform(
   current: CanvasTransform,
   stack: CanvasTransform[],
-  call: RecordedCall,
+  call: CanvasCall,
 ): CanvasTransform {
   if (call.method === "save") {
     stack.push(current);
@@ -2100,33 +2107,388 @@ function stepCanvasTransform(
   return composeCanvasTransform(current, call);
 }
 
+/** A coordinate pair. In {@link RecordedCall.screen}, device pixels. */
+interface Point2D {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** An axis-aligned box, in whichever space the value that carries it names. */
+interface ScreenBox {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 /**
- * THE MATRIX IN FORCE AT CALL INDEX `index`.
+ * EVERY COORDINATE A CALL TOOK, projected through the matrix in force when
+ * it was made.
  *
- * The recording context records `setTransform` / `scale` / `translate` /
- * `save` / `restore` as `{method, args}` and never applies them, so every
- * assertion that reads a draw argument's x/y is talking about PRE-TRANSFORM
- * numbers. Walk the stream up to that call and this is the CTM a real
- * context would have had when it ran.
+ * `points` are the (x, y) pairs, in argument order, with a rect expanded to
+ * its four corners (see {@link rectGeometry}). `lengths` are the scalars a
+ * call carries that are distances rather than positions - a radius, a
+ * `maxWidth` - scaled by the same matrix.
  *
- * The recorder's own `save`/`restore` snapshots only the property bag
- * (font, letterSpacing). This stack is the matrix, and it is separate.
- *
- * `index` is the call being issued: the matrix is the state AFTER every
- * earlier call and BEFORE this one, which is what a `roundRect` or a blit
- * actually draws under.
+ * Units are DEVICE pixels, which is what a CTM maps into: a caller that
+ * wants CSS pixels divides by `devicePixelRatio`, as the renderer's own
+ * screen-space reset multiplies by it.
  */
-function canvasTransformAt(
-  recorded: ReadonlyArray<RecordedCall>,
-  index: number,
-): CanvasTransform {
-  let current: CanvasTransform = CANVAS_IDENTITY;
-  const stack: CanvasTransform[] = [];
-  const last = Math.min(Math.max(index, 0), recorded.length);
-  for (let i = 0; i < last; i += 1) {
-    current = stepCanvasTransform(current, stack, recorded[i]);
+interface CallGeometry {
+  readonly points: ReadonlyArray<Point2D>;
+  readonly lengths: ReadonlyArray<number>;
+}
+
+const NO_CALL_GEOMETRY: CallGeometry = { points: [], lengths: [] };
+
+/**
+ * A call the renderer made, with WHERE IT LANDED already worked out.
+ *
+ * `args` is the raw argument list, and stays the right thing to read for
+ * everything that is not a position: a string, a sprite ref, a colour, an
+ * arity. `screen` is the same call's coordinates after the CTM, and is the
+ * right thing to read for every position and size. See
+ * {@link createRecordingContext} for why that split is the default.
+ */
+interface RecordedCall extends CanvasCall {
+  /** The CTM in force when this call was made - before it, for a matrix op. */
+  readonly transform: CanvasTransform;
+  /** `args`' coordinates, projected through {@link transform}. */
+  readonly screen: CallGeometry;
+}
+
+/** Reads a call's coordinates IN ITS OWN SPACE, for the recorder to project. */
+type CallGeometryReader = (call: CanvasCall) => CallGeometry;
+
+/** One numeric argument, or a throw naming the slot that wanted one. */
+function requiredCoordinate(call: CanvasCall, index: number): number {
+  const value = call.args[index];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(
+      `recordCallGeometry: ${call.method} argument ${index} is ` +
+        `${String(value)}, not a finite number, so the coordinate it is ` +
+        "meant to carry cannot be projected",
+    );
   }
-  return current;
+  return value;
+}
+
+/** The coordinate pairs sitting at these argument index pairs. */
+function coordinatesAt(
+  call: CanvasCall,
+  ...slots: ReadonlyArray<readonly [number, number]>
+): ReadonlyArray<Point2D> {
+  return slots.map(([xIndex, yIndex]) => ({
+    x: requiredCoordinate(call, xIndex),
+    y: requiredCoordinate(call, yIndex),
+  }));
+}
+
+function pointGeometry(
+  call: CanvasCall,
+  ...slots: ReadonlyArray<readonly [number, number]>
+): CallGeometry {
+  return { points: coordinatesAt(call, ...slots), lengths: [] };
+}
+
+/**
+ * An `(x, y, width, height)` rect as its FOUR CORNERS, in perimeter order,
+ * rather than an origin and a size.
+ *
+ * Under a rotated or skewed CTM a rect is not a box, and an origin plus a
+ * scaled size cannot be turned back into what was actually painted. Four
+ * projected corners always can; a consumer that wants a box takes their
+ * bounding box, which is what {@link screenBoxOf} does.
+ */
+function rectGeometry(
+  call: CanvasCall,
+  /** The argument indices of `x`, `y`, `width` and `height`, in that order. */
+  slots: readonly [number, number, number, number],
+): CallGeometry {
+  const x = requiredCoordinate(call, slots[0]);
+  const y = requiredCoordinate(call, slots[1]);
+  const width = requiredCoordinate(call, slots[2]);
+  const height = requiredCoordinate(call, slots[3]);
+  return {
+    points: [
+      { x, y },
+      { x: x + width, y },
+      { x: x + width, y: y + height },
+      { x, y: y + height },
+    ],
+    lengths: [],
+  };
+}
+
+const RECT_READER: CallGeometryReader = (call) =>
+  rectGeometry(call, [0, 1, 2, 3]);
+
+/** `fillText`/`strokeText`: the anchor, and `maxWidth` when it was passed. */
+const TEXT_READER: CallGeometryReader = (call) => ({
+  points: coordinatesAt(call, [1, 2]),
+  lengths: call.args.length > 3 ? [requiredCoordinate(call, 3)] : [],
+});
+
+/** `arc`: the centre and the radius. The angles that follow are neither. */
+const ARC_READER: CallGeometryReader = (call) => ({
+  points: coordinatesAt(call, [0, 1]),
+  lengths: [requiredCoordinate(call, 2)],
+});
+
+/** `arcTo`: the two tangent points, then the radius. */
+const ARC_TO_READER: CallGeometryReader = (call) => ({
+  points: coordinatesAt(call, [0, 1], [2, 3]),
+  lengths: [requiredCoordinate(call, 4)],
+});
+
+/** `ellipse`: the centre, then both radii. The rotation is an angle. */
+const ELLIPSE_READER: CallGeometryReader = (call) => ({
+  points: coordinatesAt(call, [0, 1]),
+  lengths: [requiredCoordinate(call, 2), requiredCoordinate(call, 3)],
+});
+
+/** `createRadialGradient`: a centre and a radius, twice over. */
+const RADIAL_GRADIENT_READER: CallGeometryReader = (call) => ({
+  points: coordinatesAt(call, [0, 1], [3, 4]),
+  lengths: [requiredCoordinate(call, 2), requiredCoordinate(call, 5)],
+});
+
+/**
+ * `roundRect`: the rect, plus a single numeric corner radius when one was
+ * passed. The list-of-radii form is refused rather than guessed at - the
+ * same call this file makes on the `DOMMatrix` form of `setTransform`.
+ */
+const ROUND_RECT_READER: CallGeometryReader = (call) => {
+  const box = rectGeometry(call, [0, 1, 2, 3]);
+  const radii = call.args[4];
+  if (radii === undefined) return box;
+  if (typeof radii === "number") {
+    return { points: box.points, lengths: [radii] };
+  }
+  throw new Error(
+    "recordCallGeometry: roundRect's list-of-radii form is not modelled",
+  );
+};
+
+/**
+ * `drawImage`, told apart by arity exactly as the API itself is.
+ *
+ * The nine-argument form's FIRST rect addresses the source image's own
+ * pixels and is deliberately left alone; only the destination rect is on
+ * this canvas.
+ */
+const DRAW_IMAGE_READER: CallGeometryReader = (call) => {
+  if (call.args.length === 3) return pointGeometry(call, [1, 2]);
+  if (call.args.length === 5) return rectGeometry(call, [1, 2, 3, 4]);
+  if (call.args.length === 9) return rectGeometry(call, [5, 6, 7, 8]);
+  throw new Error(
+    `recordCallGeometry: drawImage took ${call.args.length} arguments, ` +
+      "which is none of its three forms",
+  );
+};
+
+/** This suite's own blit marker: `drawOfficeSprite(ref, at, theme)`. */
+const OFFICE_SPRITE_READER: CallGeometryReader = (call) => {
+  const at = call.args[1];
+  if (typeof at !== "object" || at === null || !("x" in at) || !("y" in at)) {
+    throw new Error(
+      "recordCallGeometry: drawOfficeSprite was not given a point to blit at",
+    );
+  }
+  const { x, y } = at;
+  if (typeof x !== "number" || typeof y !== "number") {
+    throw new Error(
+      "recordCallGeometry: drawOfficeSprite's point is not numeric",
+    );
+  }
+  return { points: [{ x, y }], lengths: [] };
+};
+
+/**
+ * WHERE EACH METHOD'S COORDINATES SIT IN ITS ARGUMENT LIST.
+ *
+ * Together with {@link COORDINATE_FREE_METHODS} and
+ * {@link TRANSFORM_AFFECTING_METHODS} this is a total classification of what
+ * the renderer may call: {@link projectCallGeometry} throws on a method in
+ * none of the three. That throw is the tripwire. A context op nobody
+ * classified would otherwise be recorded with no geometry at all, which
+ * reads exactly like an op that genuinely has none - and a position no case
+ * can check is how the whole suite came to measure raw arguments and call
+ * them screen pixels.
+ *
+ * Ten of these were measured against this renderer rather than guessed at
+ * (`clearRect`, `fillRect`, `strokeRect`, `roundRect`, `fillText`, `moveTo`,
+ * `lineTo`, `arc`, `drawImage`, `putImageData`, plus the sprite marker); the
+ * rest are the remainder of the 2D API that takes coordinates, classified
+ * ahead of the first caller rather than after it.
+ */
+const CALL_GEOMETRY_READERS: ReadonlyMap<string, CallGeometryReader> = new Map([
+  ["clearRect", RECT_READER],
+  ["fillRect", RECT_READER],
+  ["strokeRect", RECT_READER],
+  ["rect", RECT_READER],
+  ["roundRect", ROUND_RECT_READER],
+  ["fillText", TEXT_READER],
+  ["strokeText", TEXT_READER],
+  ["moveTo", (call) => pointGeometry(call, [0, 1])],
+  ["lineTo", (call) => pointGeometry(call, [0, 1])],
+  ["quadraticCurveTo", (call) => pointGeometry(call, [0, 1], [2, 3])],
+  ["bezierCurveTo", (call) => pointGeometry(call, [0, 1], [2, 3], [4, 5])],
+  ["arc", ARC_READER],
+  ["arcTo", ARC_TO_READER],
+  ["ellipse", ELLIPSE_READER],
+  ["drawImage", DRAW_IMAGE_READER],
+  ["createLinearGradient", (call) => pointGeometry(call, [0, 1], [2, 3])],
+  ["createRadialGradient", RADIAL_GRADIENT_READER],
+  ["putImageData", (call) => pointGeometry(call, [1, 2])],
+  ["getImageData", RECT_READER],
+  ["drawOfficeSprite", OFFICE_SPRITE_READER],
+]);
+
+/**
+ * The two methods the 2D spec EXEMPTS from the current transform: they
+ * address the backing bitmap directly, so their coordinates are already
+ * device pixels and projecting them would invent a displacement the browser
+ * does not apply.
+ */
+const DEVICE_SPACE_METHODS: ReadonlySet<string> = new Set([
+  "putImageData",
+  "getImageData",
+]);
+
+/**
+ * Methods that mark the canvas or move its state without naming a position.
+ * Listed rather than assumed, so that the classification is total.
+ */
+const COORDINATE_FREE_METHODS: ReadonlySet<string> = new Set([
+  "beginPath",
+  "closePath",
+  "fill",
+  "stroke",
+  "clip",
+  "setLineDash",
+  "getLineDash",
+  "createImageData",
+  "createPattern",
+  "reset",
+]);
+
+/** How a property assignment is recorded: `set:fillStyle`, `set:font`. */
+const RECORDED_PROPERTY_PREFIX = "set:";
+
+/**
+ * The one factor a CTM applies to a LENGTH - a radius, a `maxWidth`.
+ *
+ * A length has no direction, so there is an answer only where the matrix
+ * scales both axes alike; a squash or a shear turns a circle into an
+ * ellipse, and the honest reply is a throw rather than a number picked off
+ * one axis. Nothing in the office renderer draws under such a matrix.
+ */
+function uniformScaleOf(transform: CanvasTransform, method: string): number {
+  const scaleX = Math.hypot(transform[0], transform[1]);
+  const scaleY = Math.hypot(transform[2], transform[3]);
+  if (Math.abs(scaleX - scaleY) > 1e-9) {
+    throw new Error(
+      `recordCallGeometry: ${method} carries a length under a CTM scaling x ` +
+        `by ${scaleX} and y by ${scaleY}; a length under a non-uniform ` +
+        "transform is not modelled",
+    );
+  }
+  return scaleX;
+}
+
+/** A call's coordinates, on screen. See {@link CALL_GEOMETRY_READERS}. */
+function projectCallGeometry(
+  call: CanvasCall,
+  transform: CanvasTransform,
+): CallGeometry {
+  const reader = CALL_GEOMETRY_READERS.get(call.method);
+  if (reader === undefined) {
+    if (
+      call.method.startsWith(RECORDED_PROPERTY_PREFIX) ||
+      TRANSFORM_AFFECTING_METHODS.has(call.method) ||
+      COORDINATE_FREE_METHODS.has(call.method)
+    ) {
+      return NO_CALL_GEOMETRY;
+    }
+    throw new Error(
+      `recordCallGeometry: ${call.method} is classified neither as a call ` +
+        "that takes coordinates nor as one that does not. Give it a reader " +
+        "in `CALL_GEOMETRY_READERS` or list it in `COORDINATE_FREE_METHODS`.",
+    );
+  }
+  const geometry = reader(call);
+  if (DEVICE_SPACE_METHODS.has(call.method)) return geometry;
+  const scale =
+    geometry.lengths.length === 0 ? 1 : uniformScaleOf(transform, call.method);
+  return {
+    points: geometry.points.map((point) =>
+      applyCanvasTransform(transform, point.x, point.y),
+    ),
+    lengths: geometry.lengths.map((length) => length * scale),
+  };
+}
+
+/**
+ * THE FIRST COORDINATE A CALL TOOK, on screen.
+ *
+ * Throws for a call that took none, which is the reader's half of the
+ * tripwire: asking a `beginPath` or a `set:fillStyle` where it landed is a
+ * question about the wrong call, and answering `undefined` would let an
+ * assertion compare two nothings and pass.
+ */
+function screenPointOf(call: RecordedCall): Point2D {
+  const { points } = call.screen;
+  if (points.length === 0) {
+    throw new Error(
+      `screenPointOf: ${call.method} carries no coordinates to read`,
+    );
+  }
+  return points[0];
+}
+
+/** The bounding box, on screen, of every coordinate a call took. */
+function screenBoxOf(call: RecordedCall): ScreenBox {
+  const { points } = call.screen;
+  if (points.length === 0) {
+    throw new Error(
+      `screenBoxOf: ${call.method} carries no coordinates to read`,
+    );
+  }
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return {
+    left,
+    top,
+    width: Math.max(...xs) - left,
+    height: Math.max(...ys) - top,
+  };
+}
+
+/**
+ * A screen point in CSS pixels - what a reader's own units are.
+ *
+ * `screen` is device pixels because that is what a CTM maps into; the
+ * renderer's screen-space reset is `setTransform(dpr, …)`, so dividing it
+ * back out is what turns a matrix result into the geometry a person sees.
+ */
+function cssOf(point: Point2D): Point2D {
+  const dpr = window.devicePixelRatio || 1;
+  return { x: point.x / dpr, y: point.y / dpr };
+}
+
+/** {@link screenBoxOf}, in CSS pixels. */
+function cssBoxOf(call: RecordedCall): ScreenBox {
+  const dpr = window.devicePixelRatio || 1;
+  const box = screenBoxOf(call);
+  return {
+    left: box.left / dpr,
+    top: box.top / dpr,
+    width: box.width / dpr,
+    height: box.height / dpr,
+  };
 }
 
 /**
@@ -2149,9 +2511,57 @@ function isDeviceScaleTransform(
 }
 
 /**
- * Pushes a `drawOfficeSprite` marker onto the recording stream, in the
- * order the real call ran, so {@link canvasTransformAt} can see it among
- * the `setTransform`s.
+ * ONE RECORDING CONTEXT'S LIVE MATRIX, stepped as the calls arrive.
+ *
+ * Kept beside the call list rather than reconstructed afterwards: a replay
+ * that walks the stream from the start is O(n) per lookup and, worse, is
+ * something a case has to remember to ask for.
+ */
+interface RecorderState {
+  readonly calls: RecordedCall[];
+  readonly matrixStack: CanvasTransform[];
+  transform: CanvasTransform;
+}
+
+/**
+ * Every live recording context, keyed by the proxy handed to the renderer.
+ *
+ * `drawOfficeSprite` is SPIED rather than called through (see
+ * {@link recordDrawOfficeSprite}), so its marker is pushed from outside the
+ * proxy - and a marker stamped with anything other than the CTM of the
+ * context the blit was issued ON is exactly the fiction this path exists to
+ * remove. This map is how the spy reaches that context's matrix.
+ */
+const RECORDING_CONTEXTS = new WeakMap<object, RecorderState>();
+
+/**
+ * Records one call, stamped with where it landed, and then steps the matrix.
+ *
+ * The stamp is the state BEFORE this call - what a `roundRect` or a blit
+ * actually draws under - so a `setTransform` carries the matrix it replaced
+ * rather than the one it installed.
+ */
+function recordCall(
+  state: RecorderState,
+  method: string,
+  args: ReadonlyArray<unknown>,
+): void {
+  const call: CanvasCall = { method, args };
+  const transform = state.transform;
+  state.calls.push({
+    method,
+    args,
+    transform,
+    screen: projectCallGeometry(call, transform),
+  });
+  state.transform = stepCanvasTransform(transform, state.matrixStack, call);
+}
+
+/**
+ * Pushes a `drawOfficeSprite` marker onto the recording stream of the
+ * context the blit was issued on, in the order the real call ran - so it
+ * carries the same CTM and the same screen point every other recorded call
+ * does.
  *
  * Does NOT call through. `officeSpriteSurface` asks `getContext` on a
  * detached canvas; this suite's stub hands back a fresh recorder bound to
@@ -2159,16 +2569,60 @@ function isDeviceScaleTransform(
  * / `putImageData` / an empty `drawImage` into the painted context's
  * stream. The marker's ORDER is the fact; the blit itself would be fiction.
  */
-function recordDrawOfficeSprite(
-  recorded: RecordedCall[],
-): MockInstance<typeof OfficePixelArt.drawOfficeSprite> {
+function recordDrawOfficeSprite(): MockInstance<
+  typeof OfficePixelArt.drawOfficeSprite
+> {
   const blitSpy = vi.spyOn(OfficePixelArt, "drawOfficeSprite");
-  blitSpy.mockImplementation((_ctx, ref, at, theme) => {
-    recorded.push({ method: "drawOfficeSprite", args: [ref, at, theme] });
+  blitSpy.mockImplementation((ctx, ref, at, theme) => {
+    const state = RECORDING_CONTEXTS.get(ctx);
+    if (state === undefined) {
+      throw new Error(
+        "recordDrawOfficeSprite: this blit was issued on a context the suite " +
+          "did not create, so there is no CTM to stamp its marker with",
+      );
+    }
+    recordCall(state, "drawOfficeSprite", [ref, at, theme]);
   });
   return blitSpy;
 }
 
+/**
+ * THE RECORDING 2D CONTEXT, and the default every case reads through.
+ *
+ * WHAT IT RECORDS. Each call is pushed as a {@link RecordedCall}: the method
+ * name, the RAW `args` the renderer passed, the CTM in force at that moment,
+ * and `screen` - the same call's coordinates projected through that CTM.
+ *
+ * WHICH ONE TO READ. `screen` for every POSITION and SIZE, through
+ * {@link screenPointOf} / {@link screenBoxOf}. `args` for everything that is
+ * not one: the string a `fillText` painted, a sprite ref, a colour, an arity.
+ *
+ * WHY IT IS THE DEFAULT, and not a helper a case opts into. This recorder
+ * used to log `setTransform`/`scale`/`translate` faithfully and apply none of
+ * them, so every case reading a draw argument's x/y was talking about
+ * PRE-transform numbers while believing it had screen pixels. Deleting the
+ * renderer's screen-space reset - which governs every sign label and name tag
+ * in the office - disturbed no assertion in eighty cases. The measurement
+ * that followed was reassuring about what had already landed (three cases
+ * change verdict once the oracle transforms; the rest group, dedupe or
+ * compare relatively, which a uniform affine preserves) and said nothing
+ * about the next case: opt-in accuracy is accuracy nobody opts into, and the
+ * next absolute-position assertion would have been born blind in exactly the
+ * same way. So the projection is not something to reach for. It is what a
+ * call arrives already carrying.
+ *
+ * WHY `args` SURVIVES BESIDE IT. The raw list is the renderer's INPUT and is
+ * a fact in its own right - it is where the text, the sprite ref and the
+ * colour live, and a case that means to pin a model-space coordinate can
+ * still say so deliberately. Dropping it would not make the default clearer;
+ * it would only push every case into unpacking `screen` for a string.
+ *
+ * WHAT CANNOT BE RECORDED BLIND. {@link projectCallGeometry} throws for any
+ * method it has not been told about, and {@link screenPointOf} throws when
+ * asked where a call with no coordinates landed. Between them, a new context
+ * op cannot quietly arrive with an empty geometry that reads like an honest
+ * absence.
+ */
 function createRecordingContext(calls: RecordedCall[]): unknown {
   const backing: Record<string, unknown> = {};
   // A STATE STACK for `save`/`restore`, the way a real 2D context works.
@@ -2182,7 +2636,15 @@ function createRecordingContext(calls: RecordedCall[]): unknown {
   // a sign plate as if it were tracked. Restoring past the bottom of an
   // empty stack is a no-op, matching a real context's own behaviour.
   const stack: Array<Record<string, unknown>> = [];
-  return new Proxy(backing, {
+  // The MATRIX stack is a second one, deliberately: `save`/`restore` unwind
+  // the property bag above and the CTM together, but they are different
+  // state, and `stepCanvasTransform` owns the matrix half.
+  const state: RecorderState = {
+    calls,
+    matrixStack: [],
+    transform: CANVAS_IDENTITY,
+  };
+  const context = new Proxy(backing, {
     get(_target, prop) {
       if (typeof prop !== "string") return undefined;
       if (prop === "measureText") {
@@ -2209,7 +2671,7 @@ function createRecordingContext(calls: RecordedCall[]): unknown {
       if (prop === "save") {
         return (...args: ReadonlyArray<unknown>): void => {
           stack.push({ ...backing });
-          calls.push({ method: prop, args });
+          recordCall(state, prop, args);
         };
       }
       if (prop === "restore") {
@@ -2219,21 +2681,23 @@ function createRecordingContext(calls: RecordedCall[]): unknown {
             for (const key of Object.keys(backing)) delete backing[key];
             Object.assign(backing, previous);
           }
-          calls.push({ method: prop, args });
+          recordCall(state, prop, args);
         };
       }
       return (...args: ReadonlyArray<unknown>): void => {
-        calls.push({ method: prop, args });
+        recordCall(state, prop, args);
       };
     },
     set(_target, prop, value) {
       if (typeof prop === "string") {
         backing[prop] = value;
-        calls.push({ method: `set:${prop}`, args: [value] });
+        recordCall(state, `${RECORDED_PROPERTY_PREFIX}${prop}`, [value]);
       }
       return true;
     },
   });
+  RECORDING_CONTEXTS.set(context, state);
+  return context;
 }
 
 /** Installs a `getContext` stub and returns its undo. */
@@ -2328,10 +2792,18 @@ const BOUNDING_RECT_STUB: DOMRect = {
 
 interface FillTextRecord {
   readonly text: string;
+  /** The anchor in CSS pixels ON SCREEN, not the argument the caller passed. */
   readonly x: number;
   readonly y: number;
   readonly font: string;
   readonly letterSpacing: string;
+  /**
+   * What the CTM does to a length here, relative to a CSS pixel. `1` while
+   * the text is painted in screen space; the camera's zoom while it is not.
+   * {@link tagBoxesFrom} needs it because a glyph's width comes from the FONT
+   * STRING, which the matrix scales as surely as it scales the anchor.
+   */
+  readonly cssScale: number;
   readonly blockId: number;
 }
 
@@ -2341,6 +2813,9 @@ interface FillTextRecord {
  * and `set:letterSpacing` the same way the fixed `createRecordingContext`
  * now tracks them, so this mirrors the fixed harness rather than
  * assuming a global, unwound state.
+ *
+ * The anchor comes off the recorded call's SCREEN geometry, so these records
+ * describe where the text landed rather than what the renderer asked for.
  */
 function replayFillText(
   recordedCalls: ReadonlyArray<RecordedCall>,
@@ -2382,18 +2857,17 @@ function replayFillText(
       continue;
     }
     if (call.method === "fillText") {
-      const [text, x, y] = call.args;
-      if (
-        typeof text === "string" &&
-        typeof x === "number" &&
-        typeof y === "number"
-      ) {
+      const [text] = call.args;
+      if (typeof text === "string") {
+        const dpr = window.devicePixelRatio || 1;
+        const anchor = screenPointOf(call);
         records.push({
           text,
-          x,
-          y,
+          x: anchor.x / dpr,
+          y: anchor.y / dpr,
           font,
           letterSpacing,
+          cssScale: uniformScaleOf(call.transform, call.method) / dpr,
           blockId: blockStack[blockStack.length - 1] ?? 0,
         });
       }
@@ -2424,6 +2898,13 @@ interface TagBox {
  * repeats of one frame, not several agents that coincide. Keeping every
  * copy would make an unmoved tag "collide" with its own earlier frame at
  * zero distance, which is not the finding this case checks.
+ *
+ * EVERY NUMBER HERE IS CSS PIXELS ON SCREEN. The anchor is the recorded
+ * call's projected one; the width is modelled from the font string and then
+ * scaled by what the CTM does to a length, because a real context magnifies
+ * the glyphs by the same matrix that moves the anchor. Under the renderer's
+ * screen-space reset that scale is 1 and the widths are the face's own - the
+ * case that pins the reset itself is F5.
  */
 function tagBoxesFrom(
   records: ReadonlyArray<FillTextRecord>,
@@ -2442,7 +2923,9 @@ function tagBoxesFrom(
     const key = `${last.text}\0${last.x}\0${last.y}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const width = modelledTextWidth(last.text, last.font, last.letterSpacing);
+    const width =
+      modelledTextWidth(last.text, last.font, last.letterSpacing) *
+      last.cssScale;
     boxes.push({
       left: last.x - width / 2,
       right: last.x + width / 2,
@@ -2650,45 +3133,39 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // thirty-two pixels - below every reading of a roster, so the board fell
     // to a bare total and there was no "0D" on the canvas to find.
     //
-    // The INDEX in the whole stream, not a filtered copy: the transform in
-    // force is a property of the position a call holds among the
-    // `setTransform`s, and a filtered array has thrown that away.
-    const boardTextIndex = calls.findIndex(
+    // A FILTERED COPY IS FINE. The matrix a call was made under travels on
+    // the call itself, so picking one out of the stream no longer loses it -
+    // this used to have to take the index in the whole recording and replay
+    // up to it.
+    const boardText = calls.find(
       (call) =>
         call.method === "fillText" &&
         typeof call.args[0] === "string" &&
         call.args[0].startsWith("0D"),
     );
-    expect(boardTextIndex).toBeGreaterThanOrEqual(0);
-    const boardTextCall = calls[boardTextIndex];
-    const anchorX = boardTextCall.args[1];
-    const anchorY = boardTextCall.args[2];
-    if (typeof anchorX !== "number" || typeof anchorY !== "number") {
-      throw new Error("expected a numeric anchor on the board's lettering");
+    if (boardText === undefined) {
+      throw new Error("expected the board's abbreviated roster on the canvas");
     }
 
-    // MEASURED THROUGH THE TRANSFORM, not off the raw argument. A board label
-    // is drawn AFTER the screen-space reset, so its argument is already a
-    // screen coordinate and the CTM is meant to be the device scale alone -
-    // which makes the assertion below identical to the raw one while the
-    // renderer is right, and different the moment it is not. Reading
-    // `args[1]` directly cannot tell those apart: deleting the reset leaves
-    // every argument in this file untouched and moves the paint, which is how
-    // it survived the whole suite.
-    const boardMatrix = canvasTransformAt(calls, boardTextIndex);
+    // MEASURED WHERE IT LANDED, not off the raw argument. A board label is
+    // drawn AFTER the screen-space reset, so its argument is already a screen
+    // coordinate and the CTM is meant to be the device scale alone - which
+    // makes the assertion below identical to the raw one while the renderer
+    // is right, and different the moment it is not. Reading `args[1]` cannot
+    // tell those apart: deleting the reset leaves every argument in this file
+    // untouched and moves the paint, which is how it survived the whole suite.
     const dpr = window.devicePixelRatio || 1;
     expect(
-      isDeviceScaleTransform(boardMatrix, dpr),
+      isDeviceScaleTransform(boardText.transform, dpr),
       "board lettering is drawn in screen space",
     ).toBe(true);
-    const painted = applyCanvasTransform(boardMatrix, anchorX, anchorY);
 
     // Fixed camera (zoom 1, x=5, y=0): the projected anchor for tile (2,2)
     // with an eight-tile board centred on it is
     // x = 2048 + 2*16 + (8*16)/2 = 2144, screenX = 2144 * 1 + 5 = 2149. The
     // unfixed renderer instead multiplies the raw tile by OFFICE_TILE with no
     // projector at all, landing four figures short at screenX = 101.
-    expect(painted.x / dpr).toBe(2149);
+    expect(screenPointOf(boardText).x / dpr).toBe(2149);
   });
 
   it("F10: an unhovered, unselected, unmatched agent's name tag draws nothing at LOD 1", () => {
@@ -3352,13 +3829,15 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       },
     };
 
+    // Below `OFFICE_LOD_OFFICE_ZOOM` (0.7): the camera this suite's other
+    // cases hold at zoom 1 sits in the lod-1 band, which would route through
+    // the real painter and never reach the override. Named, because the
+    // screen corners asserted below are this zoom's own arithmetic.
+    const QUAD_ZOOM = 0.5;
     render(
       withQueryClient(
         officeElementWithView(view, new Set<string>(), [], {
-          // Below `OFFICE_LOD_OFFICE_ZOOM` (0.7): the camera this suite's
-          // other cases hold at zoom 1 sits in the lod-1 band, which would
-          // route through the real painter and never reach the override.
-          view: { ...FIXED_CAMERA_VIEW, zoom: 0.5 },
+          view: { ...FIXED_CAMERA_VIEW, zoom: QUAD_ZOOM },
         }),
       ),
     );
@@ -3398,10 +3877,22 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // opening `moveTo` at the first point, then a `lineTo` per remaining
     // corner - proving the renderer traces the drawable's own points rather
     // than deriving a shape from a bounding box.
-    expect(traced[1]?.args).toEqual([quadPoints[0].x, quadPoints[0].y]);
-    expect(traced[2]?.args).toEqual([quadPoints[1].x, quadPoints[1].y]);
-    expect(traced[3]?.args).toEqual([quadPoints[2].x, quadPoints[2].y]);
-    expect(traced[4]?.args).toEqual([quadPoints[3].x, quadPoints[3].y]);
+    //
+    // WHERE THEY LAND, not what was passed. A block map is painted under the
+    // CAMERA's transform, so the screen corner of a drawable point is
+    // `point * zoom + camera` in CSS pixels - the same arithmetic F5 spells
+    // out for a sign anchor, one layer earlier. Asserting the raw arguments
+    // proved the renderer read the drawable's points; asserting these proves
+    // the quad it traced is also the quad the camera puts on the screen.
+    const dpr = window.devicePixelRatio || 1;
+    const onScreen = (point: OfficePoint): Point2D => ({
+      x: (point.x * QUAD_ZOOM + FIXED_CAMERA_VIEW.x) * dpr,
+      y: (point.y * QUAD_ZOOM + FIXED_CAMERA_VIEW.y) * dpr,
+    });
+    expect(traced[1]?.screen.points).toEqual([onScreen(quadPoints[0])]);
+    expect(traced[2]?.screen.points).toEqual([onScreen(quadPoints[1])]);
+    expect(traced[3]?.screen.points).toEqual([onScreen(quadPoints[2])]);
+    expect(traced[4]?.screen.points).toEqual([onScreen(quadPoints[3])]);
     const fillAfter = calls
       .slice(drawCallIndex)
       .find((call) => call.method === "fill" || call.method === "fillRect");
@@ -3416,7 +3907,10 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // covers the full viewport and is unrelated to the quad's own bounds.
     const rectCalls = calls.filter((call) => call.method === "fillRect");
     expect(rectCalls).toHaveLength(1);
-    expect(rectCalls[0]?.args.slice(0, 2)).toEqual([0, 0]);
+    // The clear starts at the viewport's own origin ON SCREEN - it runs under
+    // the frame-top screen-space reset, before the camera transform goes in,
+    // so the camera's `x: 5` must not reach it.
+    expect(screenBoxOf(rectCalls[0])).toMatchObject({ left: 0, top: 0 });
   });
 
   describe("CommGraphOfficeCanvas fixup 3 - N1 Find annotates an agent, not its parts", () => {
@@ -3553,9 +4047,10 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
             typeof call.args[0] === "string" &&
             call.args[0].startsWith(ONLY_MATCH.slice(0, 6)),
         );
-        if (painted !== undefined && typeof painted.args[1] === "number") {
-          anchors.push(painted.args[1]);
-        }
+        // WHERE THE NAME LANDED, not the anchor asked for: a tag that tracked
+        // a moving character while the camera cancelled the motion is a name
+        // that never moved on screen, and only the projected point can say so.
+        if (painted !== undefined) anchors.push(screenPointOf(painted).x);
       }
       // The office really did move under it, so the frames above were not six
       // copies of one still picture.
@@ -5082,19 +5577,19 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
    */
   const LENS_CLEARANCE_PX = 3;
 
-  interface PlateBox {
-    readonly left: number;
-    readonly top: number;
-    readonly width: number;
-    readonly height: number;
-  }
-
   interface SirenBlit {
     readonly name: "siren-light" | "siren-light-b";
+    /**
+     * The blit's top-left in the space the renderer drew it in, kept because
+     * a LENS PIXEL is an offset from it - the lamp's own sprite grid, which
+     * no recorded call ever names on its own.
+     */
     readonly x: number;
     readonly y: number;
     readonly theme: "light" | "dark";
     readonly matrix: CanvasTransform;
+    /** The same top-left, in CSS pixels on screen. */
+    readonly screen: Point2D;
   }
 
   function mapNamed(name: OfficeSpriteName): ReadonlyArray<string> {
@@ -5266,22 +5761,6 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
     setIntersecting(true);
   }
 
-  function plateBoxFromArgs(args: ReadonlyArray<unknown>): PlateBox | null {
-    const left = args[0];
-    const top = args[1];
-    const width = args[2];
-    const height = args[3];
-    if (
-      typeof left !== "number" ||
-      typeof top !== "number" ||
-      typeof width !== "number" ||
-      typeof height !== "number"
-    ) {
-      return null;
-    }
-    return { left, top, width, height };
-  }
-
   function sirenNameOf(ref: unknown): "siren-light" | "siren-light-b" | null {
     if (typeof ref !== "object" || ref === null) return null;
     if (!("name" in ref)) return null;
@@ -5295,13 +5774,23 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
     return null;
   }
 
+  /**
+   * The lamp right-aligned above this plate, matched IN SCREEN SPACE.
+   *
+   * Both the plate and the lamp are chrome, painted under the same
+   * screen-space transform, so the alignment the reader sees is the one in
+   * CSS pixels - and `LAMP_SIZE` is the sprite's own CSS size, which is what
+   * that transform makes of it.
+   */
   function chromeSirenOn(
     blits: ReadonlyArray<SirenBlit>,
-    plate: PlateBox,
+    plate: ScreenBox,
   ): SirenBlit {
     const expectedX = plate.left + plate.width - LAMP_SIZE.width;
     const above = blits.filter(
-      (blit) => blit.x === expectedX && blit.y + LAMP_SIZE.height <= plate.top,
+      (blit) =>
+        blit.screen.x === expectedX &&
+        blit.screen.y + LAMP_SIZE.height <= plate.top,
     );
     if (above.length === 0) {
       throw new Error(
@@ -5320,12 +5809,14 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
    * property if they forget.
    */
   interface PlacedPlate {
-    readonly box: PlateBox;
+    /** The plate's box in CSS pixels on screen. */
+    readonly box: ScreenBox;
     readonly matrix: CanvasTransform;
   }
 
   interface SirenPair {
-    readonly plate: PlateBox;
+    /** The plate's box in CSS pixels on screen. */
+    readonly plate: ScreenBox;
     readonly plateMatrix: CanvasTransform;
     readonly blit: SirenBlit;
   }
@@ -5344,10 +5835,7 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
    * every call that is not one. Its own function so the narrowing of an
    * `unknown` point stays out of the walk below.
    */
-  function sirenBlitFrom(
-    call: RecordedCall,
-    matrix: CanvasTransform,
-  ): SirenBlit | null {
+  function sirenBlitFrom(call: RecordedCall): SirenBlit | null {
     if (call.method !== "drawOfficeSprite") return null;
     const name = sirenNameOf(call.args[0]);
     const theme = sirenThemeOf(call.args[2]);
@@ -5356,7 +5844,14 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
     if (typeof at !== "object" || at === null) return null;
     if (!("x" in at) || !("y" in at)) return null;
     if (typeof at.x !== "number" || typeof at.y !== "number") return null;
-    return { name, x: at.x, y: at.y, theme, matrix };
+    return {
+      name,
+      x: at.x,
+      y: at.y,
+      theme,
+      matrix: call.transform,
+      screen: cssOf(screenPointOf(call)),
+    };
   }
 
   function sirenPairOf(
@@ -5392,12 +5887,9 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
     let pendingBlits: SirenBlit[] = [];
     let pair: SirenPair | null = null;
 
-    for (let index = 0; index < frame.length; index += 1) {
-      const call = frame[index];
-      const matrix = canvasTransformAt(frame, index);
+    for (const call of frame) {
       if (call.method === "roundRect" || call.method === "rect") {
-        const box = plateBoxFromArgs(call.args);
-        if (box !== null) lastRect = { box, matrix };
+        lastRect = { box: cssBoxOf(call), matrix: call.transform };
       }
       if (isMedbayLettering(call)) {
         if (pendingPlate !== null) {
@@ -5407,7 +5899,7 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
         pendingBlits = [];
         continue;
       }
-      const blit = sirenBlitFrom(call, matrix);
+      const blit = sirenBlitFrom(call);
       if (blit !== null) pendingBlits.push(blit);
     }
     if (pendingPlate !== null) {
@@ -5421,22 +5913,26 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
     return pair;
   }
 
-  function cssPoint(
-    matrix: CanvasTransform,
-    x: number,
-    y: number,
-  ): { readonly x: number; readonly y: number } {
-    const dpr = window.devicePixelRatio || 1;
-    const device = applyCanvasTransform(matrix, x, y);
-    return { x: device.x / dpr, y: device.y / dpr };
-  }
-
-  function cssBox(matrix: CanvasTransform, box: PlateBox): PlateBox {
+  /**
+   * A box the RENDERER never drew as one call, in CSS pixels.
+   *
+   * Every recorded call already carries its own screen geometry, so this is
+   * needed for exactly one thing: a single LENS PIXEL inside the lamp's
+   * sprite, which is an offset from the blit's origin rather than anything
+   * the renderer passed to the canvas. Its matrix is the blit's own.
+   */
+  function cssBox(matrix: CanvasTransform, box: ScreenBox): ScreenBox {
     const corners = [
-      cssPoint(matrix, box.left, box.top),
-      cssPoint(matrix, box.left + box.width, box.top),
-      cssPoint(matrix, box.left, box.top + box.height),
-      cssPoint(matrix, box.left + box.width, box.top + box.height),
+      cssOf(applyCanvasTransform(matrix, box.left, box.top)),
+      cssOf(applyCanvasTransform(matrix, box.left + box.width, box.top)),
+      cssOf(applyCanvasTransform(matrix, box.left, box.top + box.height)),
+      cssOf(
+        applyCanvasTransform(
+          matrix,
+          box.left + box.width,
+          box.top + box.height,
+        ),
+      ),
     ];
     const xs = corners.map((corner) => corner.x);
     const ys = corners.map((corner) => corner.y);
@@ -5455,7 +5951,7 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
    * not overlap the box at all. No slack: an antialiased fringe sitting on
    * the edge is inside.
    */
-  function pixelFullyOutside(pixel: PlateBox, box: PlateBox): boolean {
+  function pixelFullyOutside(pixel: ScreenBox, box: ScreenBox): boolean {
     const right = box.left + box.width;
     const bottom = box.top + box.height;
     return (
@@ -5487,13 +5983,14 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
 
   function lensClearancePx(
     captured: {
-      readonly plate: PlateBox;
-      readonly plateMatrix: CanvasTransform;
+      readonly plate: ScreenBox;
       readonly blit: SirenBlit;
     },
     lens: ReadonlyArray<{ readonly x: number; readonly y: number }>,
   ): number {
-    const plateCss = cssBox(captured.plateMatrix, captured.plate);
+    // The plate arrives already projected - it is a recorded call's own
+    // screen box - so only the lens pixels still need the matrix.
+    const plateCss = captured.plate;
     const outside = lens.filter((pixel) => {
       const footprint = cssBox(captured.blit.matrix, {
         left: captured.blit.x + pixel.x,
@@ -5573,7 +6070,7 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
     for (const zoom of [OFFICE_LOD_OFFICE_ZOOM, OFFICE_LOD_CLOSEUP_ZOOM]) {
       const motion = installReducedMotion(true);
       seedFailure(HALL_LEAD.id, HALL_LEAD.hostId);
-      const blitSpy = recordDrawOfficeSprite(calls);
+      const blitSpy = recordDrawOfficeSprite();
       const tally = vi.spyOn(OfficeScene.prototype, "civicTally");
       renderMissionControl(zoom);
       let taken = 0;
@@ -5638,7 +6135,7 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
     for (const theme of ["light", "dark"] as const) {
       resolvedThemeMock.current = theme;
 
-      const blitSpy = recordDrawOfficeSprite(calls);
+      const blitSpy = recordDrawOfficeSprite();
       renderMissionControl(OFFICE_LOD_OFFICE_ZOOM);
       calls.length = 0;
       flushRaf(4);
@@ -5672,7 +6169,7 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
 
       const motion = installReducedMotion(true);
       seedFailure(HALL_LEAD.id, HALL_LEAD.hostId);
-      const occupiedSpy = recordDrawOfficeSprite(calls);
+      const occupiedSpy = recordDrawOfficeSprite();
       renderMissionControl(OFFICE_LOD_OFFICE_ZOOM);
       calls.length = 0;
       flushRaf(4);
