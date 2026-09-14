@@ -149,7 +149,7 @@ type FakeAdoptedWebContents = WebContents & {
 // window.open. WebContents extends EventEmitter, so a bare emitter satisfies the
 // structural cast the adoption path only ever passes through, never inspects -
 // `setUserAgent` is spied on only to assert the adoption path no longer calls
-// it (that UA now comes from app.userAgentFallback, see network.ts).
+// it - the popup keeps Electron's own default UA, same as the opener.
 function fakeAdoptedContents(): FakeAdoptedWebContents {
   return Object.assign(new EventEmitter(), {
     setUserAgent: vi.fn(),
@@ -3373,11 +3373,10 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
     expect(safelyOpenExternalMock).not.toHaveBeenCalled();
   });
 
-  it("does not set a per-contents UA on adopted popup contents (app.userAgentFallback covers it)", async () => {
-    // A pre-created popup WebContents ignores both the guest session's UA
-    // and a per-contents setUserAgent call, so that responsibility moved to
-    // `app.userAgentFallback` (set once in configureUserAgent()) - see
-    // network.ts. This only asserts createWindow no longer calls it here.
+  it("does not set a per-contents UA on adopted popup contents", async () => {
+    // A pre-created popup WebContents keeps Electron's own default UA - the
+    // same one the guest that opened it uses. This only asserts createWindow
+    // never overrides it with a per-contents setUserAgent call.
     const harness = createHarness();
     const { view } = await attachNativeTab(
       harness,
