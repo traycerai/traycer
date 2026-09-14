@@ -17,11 +17,34 @@ interface RateLimitPopoverSize {
   readonly heightPx: number;
 }
 
+/**
+ * One profile card the panel should bring into view on its next paint: the
+ * strip's deep link from a segment to the account it describes. `profileId`
+ * is `null` for the provider's ambient card.
+ */
+export interface RateLimitPopoverRevealTarget {
+  readonly providerId: RateLimitProviderId;
+  readonly profileId: string | null;
+}
+
 interface RateLimitPopoverStoreState {
   readonly activeTab: RateLimitPopoverTab;
   readonly size: RateLimitPopoverSize | null;
+  /**
+   * Session-only, never persisted: a reveal is a gesture, and a panel that
+   * scrolled to last week's card on every open would be answering a click
+   * nobody made.
+   */
+  readonly revealProfile: RateLimitPopoverRevealTarget | null;
   readonly setActiveTab: (tab: RateLimitPopoverTab) => void;
   readonly setSize: (size: RateLimitPopoverSize | null) => void;
+  /**
+   * Arms a reveal AND selects the provider's tab, since the card can only be
+   * in view on the tab that draws it. The card consumes the reveal once it
+   * has scrolled (`clearRevealProfile`).
+   */
+  readonly requestRevealProfile: (target: RateLimitPopoverRevealTarget) => void;
+  readonly clearRevealProfile: () => void;
 }
 
 const RATE_LIMIT_POPOVER_PERSIST_KEY = persistKey(STORE_KEYS.rateLimitPopover);
@@ -63,9 +86,17 @@ export const useRateLimitPopoverStore = create<RateLimitPopoverStoreState>()(
     (set, get) => ({
       activeTab: "overview",
       size: null,
+      revealProfile: null,
       setActiveTab: (activeTab) => {
         if (get().activeTab === activeTab) return;
         set({ activeTab });
+      },
+      requestRevealProfile: (target) => {
+        set({ activeTab: target.providerId, revealProfile: target });
+      },
+      clearRevealProfile: () => {
+        if (get().revealProfile === null) return;
+        set({ revealProfile: null });
       },
       setSize: (size) => {
         const currentSize = get().size;
@@ -85,6 +116,7 @@ export const useRateLimitPopoverStore = create<RateLimitPopoverStoreState>()(
         ...currentState,
         activeTab: persistedActiveTab(persistedState),
         size: persistedSize(persistedState),
+        revealProfile: null,
       }),
       partialize: (state) => ({
         activeTab: state.activeTab,

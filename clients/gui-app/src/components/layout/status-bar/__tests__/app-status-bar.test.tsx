@@ -69,7 +69,7 @@ vi.mock(
 
 vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
   useRateLimitProfileSelection: () => ({
-    activeChatSettings: null,
+    shownProfiles: {},
     lastProfileByHarness: {},
   }),
 }));
@@ -461,6 +461,8 @@ describe("<AppStatusBar />", () => {
       segments: [
         {
           providerId: "codex",
+          profileId: null,
+          account: null,
           state: "live",
           reason: null,
           windows: [],

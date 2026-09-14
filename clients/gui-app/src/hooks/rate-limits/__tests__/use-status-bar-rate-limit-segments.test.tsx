@@ -38,7 +38,8 @@ interface RecordedBatch {
 }
 
 interface MockState {
-  results: Map<RateLimitProviderId, MockQueryResult>;
+  /** Keyed by `providerId` or, for one account's reading, `providerId:profileId`. */
+  results: Map<string, MockQueryResult>;
   batches: RecordedBatch[];
   windowedProviders: ReadonlyArray<ConfiguredRateLimitProvider>;
 }
@@ -70,10 +71,6 @@ vi.mock(
   },
 );
 
-vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
-  resolveRateLimitProfileId: () => null,
-}));
-
 // Records EACH batch's `options` and `requests`, in call order, so a test can
 // assert per-batch (which lane a provider landed in, and what options that
 // exact batch carried) rather than only the flattened final segment list.
@@ -95,6 +92,9 @@ function mockUseHostQueriesImpl(args: {
   });
   return args.requests.map(
     (request) =>
+      mocks.results.get(
+        `${request.params.providerId}:${request.params.profileId ?? ""}`,
+      ) ??
       mocks.results.get(request.params.providerId) ?? {
         data: undefined,
         isError: false,
@@ -111,13 +111,21 @@ import {
   useStatusBarWindowedProviders,
   type StatusBarRateLimitCluster,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 
-const PROFILE_SELECTION = {
-  activeChatSettings: null,
+const PROFILE_SELECTION: RateLimitProfileSelection = {
+  shownProfiles: {},
   lastProfileByHarness: {},
 };
 
 function renderSegments(providers: ReadonlyArray<ConfiguredRateLimitProvider>) {
+  return renderSegmentsFor(providers, PROFILE_SELECTION);
+}
+
+function renderSegmentsFor(
+  providers: ReadonlyArray<ConfiguredRateLimitProvider>,
+  profileSelection: RateLimitProfileSelection,
+) {
   return renderHook(() => {
     // The batches describe ONE render. The hook samples the clock through
     // `useSampledNow`, whose cold start notifies its first subscriber and so
@@ -126,10 +134,59 @@ function renderSegments(providers: ReadonlyArray<ConfiguredRateLimitProvider>) {
     mocks.batches = [];
     return useStatusBarRateLimitSegments({
       providers,
-      profileSelection: PROFILE_SELECTION,
+      profileSelection,
       mode: "live",
     });
   });
+}
+
+function profileFixture(
+  profileId: string,
+  kind: ProviderProfile["kind"],
+): ProviderProfile {
+  return {
+    profileId,
+    enabled: true,
+    kind,
+    authType: "oauth",
+    label: kind === "ambient" ? "Terminal" : profileId,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+}
+
+/** Codex with an ambient login and two managed accounts, host order. */
+function codexWithAccounts(): ConfiguredRateLimitProvider {
+  return configuredProvider({
+    providerId: "codex",
+    lane: "ephemeralProcess",
+    profiles: [
+      profileFixture("ambient", "ambient"),
+      profileFixture("personal", "managed"),
+      profileFixture("work", "managed"),
+    ],
+  });
+}
+
+function segmentIdentities(
+  cluster: StatusBarRateLimitCluster,
+): ReadonlyArray<readonly [string, string | null]> {
+  return cluster.kind === "segments"
+    ? cluster.segments.map(
+        (segment) => [segment.providerId, segment.profileId] as const,
+      )
+    : [];
 }
 
 function renderWindowedProviders() {
@@ -738,6 +795,128 @@ describe("useStatusBarRateLimitSegments", () => {
           reason: "cli_not_found",
         }),
       ],
+    });
+  });
+
+  describe("accounts", () => {
+    function codexReading(usedPercent: number): MockQueryResult {
+      return {
+        data: freshEnvelope(
+          codexRateLimits({
+            primary: rlWindow({ usedPercent, resetsAt: null }),
+          }),
+        ),
+        isError: false,
+      };
+    }
+
+    it("draws one segment per checked account, in profile order with ambient last, each on its own reading", () => {
+      mocks.results.set("codex:work", codexReading(70));
+      mocks.results.set("codex:", codexReading(10));
+      mocks.results.set("codex:personal", codexReading(40));
+
+      const { result } = renderSegmentsFor([codexWithAccounts()], {
+        shownProfiles: { codex: [null, "work"] },
+        lastProfileByHarness: {},
+      });
+
+      expect(segmentIdentities(result.current.cluster)).toEqual([
+        ["codex", "work"],
+        ["codex", null],
+      ]);
+      const segments =
+        result.current.cluster.kind === "segments"
+          ? result.current.cluster.segments
+          : [];
+      expect(segments.map((segment) => segment.tightest?.usedPercent)).toEqual([
+        70, 10,
+      ]);
+      // Each carries the profile's own identity mark, the ambient row's too.
+      expect(segments.map((segment) => segment.account?.label)).toEqual([
+        "work",
+        "Terminal",
+      ]);
+      // And each is its own query, mount target and refresh target.
+      expect(mocks.batches[0].requests).toEqual([
+        { providerId: "codex", profileId: "work" },
+        { providerId: "codex", profileId: null },
+      ]);
+      expect(
+        result.current.refresh.queueTargets.map((target) => target.profileId),
+      ).toEqual(["work", null]);
+      expect(
+        result.current.mountTargets.map((target) => target.profileId),
+      ).toEqual(["work", null]);
+    });
+
+    it("draws one last-used segment when nothing is checked, and skips a checked id that no longer exists", () => {
+      mocks.results.set("codex:personal", codexReading(40));
+
+      const nothingChecked = renderSegmentsFor([codexWithAccounts()], {
+        shownProfiles: {},
+        lastProfileByHarness: { codex: "personal" },
+      });
+      expect(segmentIdentities(nothingChecked.result.current.cluster)).toEqual([
+        ["codex", "personal"],
+      ]);
+      nothingChecked.unmount();
+
+      const stale = renderSegmentsFor([codexWithAccounts()], {
+        shownProfiles: { codex: ["removed", "personal"] },
+        lastProfileByHarness: {},
+      });
+      expect(segmentIdentities(stale.result.current.cluster)).toEqual([
+        ["codex", "personal"],
+      ]);
+    });
+
+    it("carries no identity mark for a provider with fewer than two profiles", () => {
+      mocks.results.set("codex:work", codexReading(40));
+      const { result } = renderSegmentsFor(
+        [
+          configuredProvider({
+            providerId: "codex",
+            lane: "ephemeralProcess",
+            profiles: [profileFixture("work", "managed")],
+          }),
+        ],
+        { shownProfiles: { codex: ["work"] }, lastProfileByHarness: {} },
+      );
+      const segments =
+        result.current.cluster.kind === "segments"
+          ? result.current.cluster.segments
+          : [];
+      expect(segments.map((segment) => segment.profileId)).toEqual(["work"]);
+      expect(segments.map((segment) => segment.account)).toEqual([null]);
+    });
+
+    it("swaps the whole set when the selection changes host", () => {
+      mocks.results.set("codex:work", codexReading(70));
+      mocks.results.set("codex:personal", codexReading(40));
+      const hostA: RateLimitProfileSelection = {
+        shownProfiles: { codex: ["work"] },
+        lastProfileByHarness: {},
+      };
+      const hostB: RateLimitProfileSelection = {
+        shownProfiles: { codex: ["personal"] },
+        lastProfileByHarness: {},
+      };
+      const { result, rerender } = renderHook(
+        (props: { readonly selection: RateLimitProfileSelection }) =>
+          useStatusBarRateLimitSegments({
+            providers: [codexWithAccounts()],
+            profileSelection: props.selection,
+            mode: "live",
+          }),
+        { initialProps: { selection: hostA } },
+      );
+      expect(segmentIdentities(result.current.cluster)).toEqual([
+        ["codex", "work"],
+      ]);
+      rerender({ selection: hostB });
+      expect(segmentIdentities(result.current.cluster)).toEqual([
+        ["codex", "personal"],
+      ]);
     });
   });
 

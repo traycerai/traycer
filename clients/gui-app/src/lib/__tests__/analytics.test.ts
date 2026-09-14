@@ -1231,6 +1231,7 @@ describe("Layout page settings analytics", () => {
       "layout.statusBar.rateLimits.showBar",
       "layout.statusBar.rateLimits.showModeWord",
       "layout.statusBar.rateLimits.showTimer",
+      "layout.statusBar.shownProfiles",
       "layout.statusBar.resources.enabled",
       "layout.statusBar.resources.metric",
       "layout.statusBar.resources.scope",

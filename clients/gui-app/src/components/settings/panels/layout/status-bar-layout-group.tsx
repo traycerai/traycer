@@ -460,7 +460,7 @@ function UsageProvidersBand(props: {
         {`Providers on ${props.hostLabel}`}
       </h4>
       {props.scopedToOwnHost ? (
-        <ScopedStatusBarRateLimitProviders />
+        <ScopedStatusBarRateLimitProviders hostId={props.scope.hostId} />
       ) : (
         <UnresolvedWatchHostRow scope={props.scope} />
       )}
@@ -522,8 +522,10 @@ interface StatusBarLimitFigure extends StatusBarLimitReading {
  * provider alone: which of its limits the segment draws - the tightest at the
  * moment, any it names explicitly, or both.
  */
-function ScopedStatusBarRateLimitProviders(): ReactNode {
-  const rows = useStatusBarProviderRows();
+function ScopedStatusBarRateLimitProviders(props: {
+  readonly hostId: string | null;
+}): ReactNode {
+  const rows = useStatusBarProviderRows(props.hostId);
   const hiddenProviders = useLayoutStore(
     (state) => state.statusBar.rateLimits.hiddenProviders,
   );
@@ -856,9 +858,13 @@ function providerRowDescription(row: StatusBarProviderRow): string {
  * they already wrote into the shared cache, and a provider with nothing there
  * yet renders its "waiting" chips row instead.
  */
-function useStatusBarProviderRows(): ReadonlyArray<StatusBarProviderRow> {
+function useStatusBarProviderRows(
+  hostId: string | null,
+): ReadonlyArray<StatusBarProviderRow> {
   const client = useHostClient();
-  const profileSelection = useRateLimitProfileSelection();
+  // The limit selection is per PROVIDER, so the list reads one account's
+  // windows: the first of what the strip draws for it on the watched host.
+  const profileSelection = useRateLimitProfileSelection(hostId);
   // The same shared 60s clock the strip samples, so a window that expires while
   // this page is open loses its figure within the minute instead of printing a
   // period that has already rolled.

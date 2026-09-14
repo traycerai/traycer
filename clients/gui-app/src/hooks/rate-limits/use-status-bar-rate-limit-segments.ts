@@ -22,9 +22,14 @@ import {
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import {
-  resolveRateLimitProfileId,
+  resolveStatusBarProfileIds,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
+import {
+  profileAccentDotInput,
+  profileCommitId,
+  type ProfileAccentDotInput,
+} from "@/components/providers/provider-profile-model";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { sortProviderStatesByProviderOrder } from "@/lib/provider-ordering";
 import {
@@ -58,13 +63,13 @@ import {
  * the exact windows each segment draws.
  *
  * Generalises `useHeaderRateLimitBars`: every windowed provider rather than two,
- * every window the catalog reports rather than a fixed pair, and the layout
- * store's provider deny-list and per-provider limit selections applied on top.
- * Everything about a provider that is
- * NOT a display preference (which profile is read, whether that profile may
- * fetch, which lane it fetches on) is resolved exactly as the header hook and
- * the popover resolve it, so the three surfaces cannot disagree about what they
- * are describing.
+ * every window the catalog reports rather than a fixed pair, every ACCOUNT the
+ * user checked for a provider rather than one, and the layout store's provider
+ * deny-list and per-provider limit selections applied on top. Everything about
+ * a provider that is NOT a display preference (which profiles are read,
+ * whether each may fetch, which lane it fetches on) is resolved exactly as the
+ * header hook and the popover resolve it, so the three surfaces cannot
+ * disagree about what they are describing.
  */
 
 /**
@@ -105,6 +110,20 @@ export interface StatusBarRateLimitWindow {
 
 export interface StatusBarProviderSegmentModel {
   readonly providerId: RateLimitProviderId;
+  /**
+   * The account this segment describes: a managed profile's id, or `null` for
+   * the provider's ambient login. One provider contributes one segment per
+   * account checked `Show in status bar` for the watched host, and exactly one
+   * when nothing is checked (`resolveStatusBarProfileIds`).
+   */
+  readonly profileId: string | null;
+  /**
+   * The identity mark drawn beside the provider icon - the profile's accent
+   * dot and its label - or `null` when the provider has fewer than two
+   * profiles, where a dot would be telling one account apart from nothing
+   * (the same rule the composer's rail applies).
+   */
+  readonly account: ProfileAccentDotInput | null;
   readonly state: StatusBarProviderSegmentState;
   /**
    * Why this segment is degraded or unavailable, when the provider named a
@@ -205,47 +224,55 @@ export function useStatusBarWindowedProviders(): ReadonlyArray<ConfiguredRateLim
 interface StatusBarRateLimitTarget {
   readonly provider: ConfiguredRateLimitProvider;
   readonly profileId: string | null;
+  readonly account: ProfileAccentDotInput | null;
   readonly fetchEligible: boolean;
   readonly usageUpdatedAt: number | null;
   readonly lane: RateLimitFetchLane;
 }
 
 /**
- * Which profile this provider's segment describes, and whether that profile may
- * pull. Same resolution as `useHeaderRateLimitBars`: the focused chat's own
- * settings win for their harness, then per-harness memory, then ambient - and a
- * profile that resolved to nothing inherits the provider's ambient eligibility.
+ * Which accounts this provider's segments describe, and whether each may pull.
+ * Same resolution as `useHeaderRateLimitBars` and the popover: the checked
+ * accounts for the watched host, else the one last-used / first / ambient
+ * account - and an account that resolved to no profile (ambient on a provider
+ * that lists none) inherits the provider's ambient eligibility.
  */
-function resolveTarget(
+function resolveTargets(
   provider: ConfiguredRateLimitProvider,
   profileSelection: RateLimitProfileSelection,
-): StatusBarRateLimitTarget {
-  const profileId = resolveRateLimitProfileId(
+): ReadonlyArray<StatusBarRateLimitTarget> {
+  const profileIds = resolveStatusBarProfileIds(
     profileSelection,
     provider.providerId,
     provider.profiles,
   );
-  const selectedProfile = provider.profiles.find(
-    (profile) =>
-      (profile.kind === "ambient" ? null : profile.profileId) === profileId,
-  );
-  return {
-    provider,
-    profileId,
-    fetchEligible:
-      selectedProfile === undefined
-        ? provider.fetchEligibility.ambient
-        : isRateLimitProfileFetchEligible(
-            provider.fetchEligibility,
-            selectedProfile,
-          ),
-    usageUpdatedAt: selectedProfile?.usageUpdatedAt ?? null,
-    // The provider's OWN lane, not a second call to the classifier. Re-deriving
-    // it would make this the one place the batch split disagrees with the
-    // inventory it was built from, and it would leave every test's `lane`
-    // fixture dead input - green while proving nothing about the split.
-    lane: provider.lane,
-  };
+  return profileIds.map((profileId) => {
+    const selectedProfile = provider.profiles.find(
+      (profile) => profileCommitId(profile) === profileId,
+    );
+    return {
+      provider,
+      profileId,
+      account:
+        selectedProfile === undefined || provider.profiles.length < 2
+          ? null
+          : profileAccentDotInput(selectedProfile),
+      fetchEligible:
+        selectedProfile === undefined
+          ? provider.fetchEligibility.ambient
+          : isRateLimitProfileFetchEligible(
+              provider.fetchEligibility,
+              selectedProfile,
+            ),
+      usageUpdatedAt: selectedProfile?.usageUpdatedAt ?? null,
+      // The provider's OWN lane, not a second call to the classifier.
+      // Re-deriving it would make this the one place the batch split disagrees
+      // with the inventory it was built from, and it would leave every test's
+      // `lane` fixture dead input - green while proving nothing about the
+      // split.
+      lane: provider.lane,
+    };
+  });
 }
 
 /**
@@ -414,6 +441,8 @@ function toSegments(
     );
     return {
       providerId: target.provider.providerId,
+      profileId: target.profileId,
+      account: target.account,
       ...segmentState(retained, envelope, query.isError),
       windows,
       shown,
@@ -479,7 +508,7 @@ export function useStatusBarRateLimitSegments(input: {
     .filter(
       (provider) => !rateLimits.hiddenProviders.includes(provider.providerId),
     )
-    .map((provider) => resolveTarget(provider, input.profileSelection));
+    .flatMap((provider) => resolveTargets(provider, input.profileSelection));
   const queueObserved = targets.filter(
     (target) => target.lane === "ephemeralProcess",
   );
@@ -527,7 +556,8 @@ export function useStatusBarRateLimitSegments(input: {
   // Each batch is paired with its own results by index, then the three are put
   // back into catalog order - rather than the targets being looked up in
   // whichever batch happens to hold them, which is the same join written with a
-  // fallback branch that can never run.
+  // fallback branch that can never run. The sort is stable, so one provider's
+  // accounts keep the order `resolveStatusBarProfileIds` gave them.
   const segments = sortProviderStatesByProviderOrder([
     ...toSegments(
       queueObserved,

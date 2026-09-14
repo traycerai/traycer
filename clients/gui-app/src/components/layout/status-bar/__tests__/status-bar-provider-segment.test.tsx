@@ -79,12 +79,16 @@ function segmentFixture(overrides: {
   /** The selection resolved; defaults to the tightest alone, as the store does. */
   readonly shown?: ReadonlyArray<StatusBarRateLimitWindow>;
   readonly tightest?: StatusBarRateLimitWindow | null;
+  readonly profileId?: string | null;
+  readonly account?: StatusBarProviderSegmentModel["account"];
 }): StatusBarProviderSegmentModel {
   const windows = overrides.windows ?? [];
   const tightest =
     overrides.tightest ?? (windows.length > 0 ? windows[0] : null);
   return {
     providerId: overrides.providerId ?? "codex",
+    profileId: overrides.profileId ?? null,
+    account: overrides.account ?? null,
     state: overrides.state ?? "live",
     reason: overrides.reason ?? null,
     windows,
@@ -1053,6 +1057,115 @@ describe("<StatusBarProviderSegment />", () => {
 
       expect(noTimersText).toBe(noBarsText);
       expect(noTimersText).toBe("57% 5h");
+    });
+  });
+
+  describe("account", () => {
+    const ACCOUNT = {
+      profileId: "work",
+      accentColor: "#ff0000",
+      label: "Work",
+    };
+
+    it("draws the accent dot beside the icon and names the account before the reading", () => {
+      renderSegment({
+        segment: segmentFixture({
+          profileId: "work",
+          account: ACCOUNT,
+          windows: [windowFixture({ windowKey: "codex:primary" })],
+        }),
+      });
+
+      const segment = screen.getByTestId("status-bar-provider-segment-codex");
+      expect(segment.getAttribute("data-profile-id")).toBe("work");
+      const dot = screen
+        .getByTestId("status-bar-provider-account-dot")
+        .querySelector<HTMLElement>("span[style]");
+      expect(dot?.style.backgroundColor).toBe("rgb(255, 0, 0)");
+      const name = screen.getByTestId("status-bar-provider-account");
+      expect(name.textContent).toBe("Work");
+      // Name, then the reading.
+      expect(
+        name.compareDocumentPosition(
+          screen.getByTestId("status-bar-window-codex:primary"),
+        ) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).not.toBe(0);
+    });
+
+    it("names the account on every rung that prints words, and only there", () => {
+      const named: ReadonlyArray<StatusBarUsageDetail> = [
+        "full",
+        "no-mode-word",
+        "no-bars",
+        "no-timers",
+      ];
+      for (const detail of named) {
+        renderSegment({
+          segment: segmentFixture({
+            account: ACCOUNT,
+            windows: [windowFixture({ windowKey: "codex:primary" })],
+          }),
+          detail,
+        });
+        expect(screen.getByTestId("status-bar-provider-account")).toBeTruthy();
+        expect(
+          screen.getByTestId("status-bar-provider-account-dot"),
+        ).toBeTruthy();
+        cleanup();
+      }
+      for (const detail of ["percent-only", "icon-only"] as const) {
+        renderSegment({
+          segment: segmentFixture({
+            account: ACCOUNT,
+            windows: [windowFixture({ windowKey: "codex:primary" })],
+          }),
+          detail,
+        });
+        expect(screen.queryByTestId("status-bar-provider-account")).toBeNull();
+        // The dot survives every rung: at icon-only it is the only thing
+        // telling two accounts of one provider apart.
+        expect(
+          screen.getByTestId("status-bar-provider-account-dot"),
+        ).toBeTruthy();
+        cleanup();
+      }
+    });
+
+    it("names the account over a cold track and an unavailable dash too", () => {
+      renderSegment({
+        segment: segmentFixture({ account: ACCOUNT, state: "cold" }),
+      });
+      expect(
+        screen.getByTestId("status-bar-provider-account").textContent,
+      ).toBe("Work");
+      expect(screen.getByTestId("status-bar-provider-cold-track")).toBeTruthy();
+      cleanup();
+      renderSegment({
+        segment: segmentFixture({
+          account: ACCOUNT,
+          state: "unavailable",
+          reason: "cli_not_found",
+        }),
+      });
+      expect(
+        screen.getByTestId("status-bar-provider-account").textContent,
+      ).toBe("Work");
+      expect(
+        screen.getByTestId("status-bar-provider-unavailable"),
+      ).toBeTruthy();
+    });
+
+    it("draws neither dot nor name for a segment with no account mark", () => {
+      renderSegment({
+        segment: segmentFixture({
+          profileId: "work",
+          windows: [windowFixture({ windowKey: "codex:primary" })],
+        }),
+      });
+      expect(
+        screen.queryByTestId("status-bar-provider-account-dot"),
+      ).toBeNull();
+      expect(screen.queryByTestId("status-bar-provider-account")).toBeNull();
     });
   });
 

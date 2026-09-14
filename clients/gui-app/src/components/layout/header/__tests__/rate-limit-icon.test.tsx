@@ -95,7 +95,7 @@ vi.mock("@/lib/host", () => ({
 }));
 vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
   useRateLimitProfileSelection: () => ({
-    activeChatSettings: null,
+    shownProfiles: {},
     lastProfileByHarness: {},
   }),
 }));
