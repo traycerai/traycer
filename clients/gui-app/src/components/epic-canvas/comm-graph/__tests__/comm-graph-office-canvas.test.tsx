@@ -2402,48 +2402,74 @@ const COORDINATE_FREE_METHODS: ReadonlySet<string> = new Set([
 /** How a property assignment is recorded: `set:fillStyle`, `set:font`. */
 const RECORDED_PROPERTY_PREFIX = "set:";
 
+/** Relative slack for the similarity tests: a part in a billion, not a pixel. */
+const SIMILARITY_TOLERANCE = 1e-9;
+
 /**
  * The one factor a CTM applies to a LENGTH - a radius, a `maxWidth`, a
  * glyph's advance.
  *
  * A length has no direction, so there is a single answer only under a
  * SIMILARITY: the matrix's two columns must have the same norm AND be
- * orthogonal. Equal norms alone are not enough, and the gap is not academic
- * - `transform(1, 0, 1, 0, …)` gives both columns norm 1 while collapsing
- * the plane onto a line, so every length would report unchanged while
- * nothing has any area at all. Equal-but-not-orthogonal is a shear, which
- * scales a length differently depending on which way it points, and the
- * honest reply is a throw rather than a number picked off one column.
+ * perpendicular. Anything else scales a length differently depending on
+ * which way it points, and the honest reply is a throw rather than a number
+ * picked off one column.
  *
- * A DEGENERATE similarity - both columns zero - is deliberately allowed
- * through with the answer `0`. That is not a matrix this helper cannot
- * express; it is one that paints nothing, and zero is the true length. What
- * must not happen is a CASE reading that zero as a tag it can see, which is
- * {@link tagBoxesFrom}'s refusal, not this one's.
+ * EVERY COMPARISON HERE IS RELATIVE TO THE COLUMNS' OWN SIZE. An absolute
+ * floor reads as strictness and is the opposite near zero: at a scale of
+ * 1e-5 a slack of 1e-9 is four orders of magnitude of freedom, enough for a
+ * matrix whose columns are exactly PARALLEL to pass as perpendicular. The
+ * magnitudes a CTM can take are not bounded below, so nothing absolute can
+ * be a tolerance on this shape.
  */
 function similarityScaleOf(transform: CanvasTransform, method: string): number {
   const [a, b, c, d] = transform;
-  const scaleX = Math.hypot(a, b);
-  const scaleY = Math.hypot(c, d);
-  if (Math.abs(scaleX - scaleY) > 1e-9) {
+  const firstColumn = Math.hypot(a, b);
+  const secondColumn = Math.hypot(c, d);
+  const largestColumn = Math.max(firstColumn, secondColumn);
+  // THE ALL-ZERO MATRIX, said out loud rather than left to fall out of the
+  // arithmetic below - which cannot judge it, since every test that follows
+  // measures against a magnitude this matrix is the absence of, and "zero is
+  // within a billionth of zero" would be an accident rather than a reason.
+  // It paints nothing, and zero is the true length under it: not a shape
+  // this helper cannot express. Refusing to credit that zero as something a
+  // reader can SEE is `tagBoxesFrom`'s job, and it does it by area.
+  if (largestColumn === 0) return 0;
+  if (
+    Math.abs(firstColumn - secondColumn) >
+    SIMILARITY_TOLERANCE * largestColumn
+  ) {
     throw new Error(
       `recordCallGeometry: ${method} carries a length under a CTM scaling x ` +
-        `by ${scaleX} and y by ${scaleY}; a length under a non-uniform ` +
-        "transform is not modelled",
+        `by ${firstColumn} and y by ${secondColumn}; a length under a ` +
+        "non-uniform transform is not modelled",
     );
   }
-  // Relative to the columns' own size: a dot product of two vectors of norm
-  // `scale` is on the order of `scale²`, so a fixed absolute floor would be
-  // far too strict at zoom 4 and far too slack near zero.
-  const columnDot = Math.abs(a * c + b * d);
-  if (columnDot > 1e-9 * Math.max(1, scaleX * scaleY)) {
+  // PERPENDICULAR AND NON-DEGENERATE, IN ONE NUMBER. Lagrange's identity
+  // gives det² + (c1·c2)² = ‖c1‖²‖c2‖², so |det| - the area the columns
+  // actually span - equals ‖c1‖‖c2‖ exactly when they are perpendicular, and
+  // falls away from it as they close up, reaching 0 when they are parallel
+  // and the plane has collapsed onto a line. So one comparison rejects a
+  // shear and a singular transform together, which is the right shape: a
+  // rank-one collapse is not a separate defect, it is a shear taken to its
+  // limit, and both are matrices under which a length has no one factor.
+  // Testing the dot product instead would need a second test for the
+  // collapse, and the two could disagree.
+  const spannedByPerpendicular = firstColumn * secondColumn;
+  const spanned = Math.abs(a * d - b * c);
+  if (
+    spannedByPerpendicular - spanned >
+    SIMILARITY_TOLERANCE * spannedByPerpendicular
+  ) {
     throw new Error(
-      `recordCallGeometry: ${method} carries a length under a CTM whose ` +
-        `columns are not orthogonal (a*c + b*d = ${a * c + b * d}); a length ` +
-        "under a shear is not modelled",
+      `recordCallGeometry: ${method} carries a length under a CTM that is ` +
+        `not a similarity: its columns span ${spanned} where two ` +
+        `perpendicular columns of the same norms would span ` +
+        `${spannedByPerpendicular}. A shear scales a length by which way it ` +
+        "points, and a collapse leaves it no area at all; neither is modelled",
     );
   }
-  return scaleX;
+  return firstColumn;
 }
 
 /** A call's coordinates, on screen. See {@link CALL_GEOMETRY_READERS}. */
