@@ -859,6 +859,10 @@ export const useSettingsStore = create<SettingsState>()(
           agentOfficeDefaultView: resolvePersistedAgentOfficeView(
             persisted.agentOfficeDefaultView,
           ),
+          agentOfficeDefaultViewGeneration:
+            resolvePersistedAgentOfficeGeneration(
+              persisted.agentOfficeDefaultViewGeneration,
+            ),
           agentTabSurfacing: resolvePersistedAgentTabSurfacing(persisted),
           linkOpen: resolvePersistedLinkOpen(persisted),
           tilePlacement: resolvePersistedTilePlacement(persisted),
@@ -1175,6 +1179,20 @@ function resolvePersistedAgentOfficeView(value: unknown): OfficeViewChoice {
   return (
     OFFICE_VIEW_IDS.find((id) => id === value) ?? DEFAULT_AGENT_OFFICE_VIEW
   );
+}
+
+/**
+ * The generation is a monotonic stamp a tile compares for equality to decide
+ * whether an inherited Auto outcome still holds, and the setter reads it back
+ * to increment. A blob with a non-number (a string increments as `"5" + 1 ->
+ * "51"`), a negative, or a fractional generation would never match a tile's
+ * stamp - every inherited office would remeasure on each reload - so anything
+ * that is not already a finite non-negative integer resets to the baseline 0.
+ */
+function resolvePersistedAgentOfficeGeneration(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : 0;
 }
 
 function resolvePersistedAgentTabSurfacing(

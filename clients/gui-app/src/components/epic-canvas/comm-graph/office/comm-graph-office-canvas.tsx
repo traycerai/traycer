@@ -553,6 +553,11 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     zoom: clampZoom(view.zoom),
   };
   let viewport: ScreenSize = { width: 0, height: 0 };
+  // The last box a pan was actually measured in. A hidden tile's resize
+  // callback reports 0x0, so `viewport` alone cannot say what the pan was
+  // centred against before the hide - this holds the last NONZERO size so a
+  // resized restore recentres from it, not from the 0x0 in between.
+  let lastMeasuredViewport: ScreenSize = { width: 0, height: 0 };
   let hitRegions: ReadonlyArray<OfficeHitRegion> = [];
   let envelopeRegions: ReadonlyArray<OfficeEnvelopeHitRegion> = [];
   let drawnFrame = false;
@@ -587,19 +592,23 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     getCamera: () => camera,
     getViewport: () => viewport,
     setViewport: (next) => {
-      const prev = viewport;
       viewport = next;
+      // A degenerate box (a hidden tile's resize callback reports 0x0) is not
+      // a box to centre in, and leaving `lastMeasuredViewport` untouched is
+      // what lets the resized restore below recentre from the pre-hide size
+      // rather than skipping because `prev` went to zero mid-hide.
+      if (next.width <= 0 || next.height <= 0) return;
+      const prev = lastMeasuredViewport;
+      lastMeasuredViewport = next;
       // A pan already resolved against the old box keeps its focus centred as
-      // the box resizes under it - the detail panel opening beside the floor
-      // is the resize that would otherwise strand a just-aimed agent. Skip a
-      // degenerate box (a hidden tile reads 0x0): there is nothing to centre
-      // in, and the real size restores the framing when it comes back.
+      // the box resizes under it - the detail panel opening beside the floor,
+      // or a pane returning at a new size after a hide, is the resize that
+      // would otherwise strand a just-aimed agent at its pre-resize endpoint.
       if (
         activePan !== null &&
         prev.width > 0 &&
         prev.height > 0 &&
-        next.width > 0 &&
-        next.height > 0
+        (prev.width !== next.width || prev.height !== next.height)
       ) {
         activePan = recenterActivePan(activePan, prev, next);
       }
@@ -3689,7 +3698,20 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         // the manual case needs the write - an auto-fitting office reframes
         // itself on the next line and on every reload, so persisting there
         // would just store a value auto-fit is about to recompute.
-        if (!runtime.isAutoFitEnabled()) persistCameraFromLoop();
+        //
+        // AND ONLY A MANUAL framing, not a transient one. While playback
+        // auto-pan owns the camera (the exact `isPlaying && isAutoPanEnabled`
+        // condition `requestPlaybackPan` reframes under), the live camera is a
+        // playback reframe `advanceCamera` deliberately never persists; writing
+        // it here on a shift would save that playback position as the user's
+        // framing, and a remount would restore it instead of their last manual
+        // one. Defer - a later manual action re-persists the compensated frame.
+        if (
+          !runtime.isAutoFitEnabled() &&
+          !(runtime.isPlaying() && runtime.isAutoPanEnabled())
+        ) {
+          persistCameraFromLoop();
+        }
       }
       // THE CAMERA SETTLES FIRST, and the frame is built from where it ended
       // up. A frame is culled to what the camera can see, so a fit or a pan

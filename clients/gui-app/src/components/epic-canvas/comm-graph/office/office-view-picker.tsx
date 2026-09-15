@@ -104,8 +104,10 @@ export function OfficeViewPicker(props: OfficeViewPickerProps) {
           <ChevronDown data-icon="inline-end" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
-      {/* The shadcn base pins `w` to the trigger; max-w cannot displace it. */}
-      <DropdownMenuContent align="end" className="w-[min(90vw,22rem)]">
+      {/* The shadcn base pins `w` to the trigger, so an explicit fluid `w`
+          overrides it while `max-w-*` caps it: 90vw on a narrow screen, the
+          tokenized ceiling on a wide one - fluid, no fixed rem layout width. */}
+      <DropdownMenuContent align="end" className="w-[90vw] max-w-sm">
         <DropdownMenuRadioGroup
           value={choice}
           onValueChange={(value) => {
