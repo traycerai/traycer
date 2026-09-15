@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
+    "@shadcn/lint": "0.1.0",
     "@tanstack/eslint-plugin-query": "catalog:",
     "@tanstack/eslint-plugin-router": "catalog:",
     "@types/jsdom": "^30.0.0",

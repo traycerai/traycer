@@ -1241,7 +1241,7 @@ function MarkdownFilePreview(props: {
   return (
     <section
       ref={handleRootChange}
-      className="min-size-full bg-canvas px-6 py-5"
+      className="min-h-full bg-canvas px-6 py-5"
       aria-label={`${fileName} markdown preview`}
     >
       <TraycerMarkdown

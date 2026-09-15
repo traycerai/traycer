@@ -20,6 +20,10 @@ bun run react-doctor   # manual after .ts/.tsx changes; not in pre-commit
 
 Changed-files-only: `npx -y react-doctor@latest . --verbose --diff <base> --offline --no-score`.
 
+After making changes, run `bun run lint` and fix all errors. `@shadcn/lint`
+runs there and reads `components.json` and `src/index.css`, so its errors name
+this app's real variants, sizes and tokens — the fix is in the message.
+
 **Commits:** don't manually run `compile` / `build` / `lint` / `format` before
 committing — repo-root `pre-commit` already runs the affected checks (see root
 `AGENTS.md`). Tests are CI, not the hook. Re-run checks only when diagnosing

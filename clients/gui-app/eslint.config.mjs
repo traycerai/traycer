@@ -12,6 +12,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import pluginQuery from "@tanstack/eslint-plugin-query";
 import pluginRouter from "@tanstack/eslint-plugin-router";
 import oxlint from "eslint-plugin-oxlint";
+import { plugin as shadcn } from "@shadcn/lint";
 import { traycerTypeSafetyRestrictions } from "../../eslint/traycer-type-safety-rules.mjs";
 import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-clients-import-boundary-rules.mjs";
 import {
@@ -1192,6 +1193,69 @@ export default tseslint.config(
         nestedFocus: [],
         tabNavigation: null,
       }),
+    },
+  },
+
+  // ── shadcn/lint ─────────────────────────────────────────────────────────────
+  // The design-system linter. It reads `components.json` for the `@/components/ui`
+  // alias and `src/index.css` for the theme, so every message names our real
+  // variants, sizes and tokens. Rules are turned on one at a time as the code
+  // reaches zero findings for them (`bun run lint` treats a warning as an
+  // error, so there is no "warn while we clean up" lane).
+  //
+  // Tests are excluded: a test asserting on a class string is not a shipped
+  // surface, and the rules' guidance is written for product code.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: testFileGlobs,
+    plugins: { shadcn },
+    settings: {
+      shadcn: {
+        note: "See the design rules in clients/gui-app/AGENTS.md before adding a class, a token or an exception.",
+      },
+    },
+    rules: {
+      // Every allowed name below IS a real class. THE CAUSE: the plugin reads
+      // exactly one stylesheet per project - the one `components.json` names
+      // in `tailwind.css`, here `src/index.css` - and follows only the
+      // `@import`s inside it. Every stylesheet listed below is imported by the
+      // component that uses it instead, which is a path the plugin does not
+      // walk, so the declaration is invisible to it while Tailwind compiles it
+      // fine. A future reader deciding between this list and an `@import` from
+      // `index.css` should know the import is the real fix and costs a bigger
+      // shared stylesheet; the list costs a name that no longer gets
+      // spellchecked. Nothing here is a typo waiver - a misspelling outside
+      // these namespaces still fails.
+      "shadcn/no-unknown-classes": [
+        "error",
+        {
+          allow: [
+            // Hand-written CSS in this app's own stylesheets. Each is a rule
+            // with descendant selectors, media queries or custom properties,
+            // which is what `@utility` cannot express - they are components in
+            // CSS, not utilities.
+            "auth-splash", // src/styles/auth-arrival.css
+            "brand-entrance-*", // src/styles/auth-arrival.css
+            "appearance-wallpaper-*", // src/components/home/appearance-wallpaper.css
+            "landing-appearance-surface", // src/components/home/appearance-wallpaper.css
+            "onboarding-*", // a <style> element inside onboarding-page.tsx
+
+            // Class names owned by a library, not by us.
+            "not-prose", // @tailwindcss/typography, loaded via @plugin
+            "pdfViewer", // pdf.js, styled by pdf-preview.css
+            "toaster", // sonner's own root class
+            "cn-toast", // the hook sonner's toastOptions.classNames targets
+
+            // Markers with no CSS at all: a name a test's querySelector or a
+            // sibling selector reaches for. Removing them would break the
+            // thing that reads them, and declaring an empty @utility would
+            // say less than this list does.
+            "status-ping",
+            "tc-*",
+            "traycer-md-*",
+          ],
+        },
+      ],
     },
   },
 
