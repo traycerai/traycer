@@ -1099,7 +1099,7 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
             </Button>
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               aria-label={
                 props.selection.selectedCount > 0
@@ -1109,14 +1109,13 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
               aria-haspopup="dialog"
               data-testid="epics-list-sweep-selected"
               disabled={!props.selection.canSweepSelected}
-              className="text-muted-foreground hover:text-foreground"
               onClick={props.selection.onSweepSelected}
             >
               <Paintbrush />
             </Button>
             <Button
               type="button"
-              variant="ghost"
+              variant="destructive-ghost"
               size="icon-sm"
               aria-label={
                 props.selection.selectedCount > 0
@@ -1128,7 +1127,6 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
                 props.selection.selectedCount === 0 ||
                 props.selection.isDeletePending
               }
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
               onClick={props.selection.onDeleteSelected}
             >
               <Trash2 />
@@ -1154,11 +1152,11 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
               {props.showSelection ? (
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="muted"
                   size="sm"
                   aria-label="Select history items"
                   disabled={!props.selection.canSelect}
-                  className="gap-1.5 overflow-visible text-ui-sm text-muted-foreground hover:text-foreground"
+                  className="overflow-visible"
                   onClick={props.selection.onStart}
                 >
                   <ListChecks className="size-4" />
@@ -2336,7 +2334,7 @@ function HistoryRowSweepControl(props: {
             aria-label={`Sweep worktrees for ${props.displayTitle}`}
             aria-haspopup="dialog"
             data-testid="epics-list-row-sweep"
-            className="absolute right-11 top-1/2 -translate-y-1/2 opacity-0 transition-opacity hover:bg-foreground/5 focus-visible:opacity-100 group-hover:opacity-100"
+            className="absolute right-11 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
             onClick={props.sweep.requestSweep}
           >
             <Paintbrush />
@@ -2549,7 +2547,7 @@ function HistoryTitleEditControl(props: {
         aria-label={`Edit title for ${historyItemDisplayTitle(props.item)}`}
         data-testid="epics-list-row-edit-title"
         disabled={props.isRenamePending}
-        className="pointer-events-auto size-5 opacity-0 transition-opacity hover:bg-foreground/5 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
+        className="pointer-events-auto size-5 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
         onClick={props.onStartRename}
       >
         <Pencil className="size-3.5" />
@@ -2650,12 +2648,12 @@ function HistoryRowDeleteControl(props: {
     return (
       <Button
         type="button"
-        variant="ghost"
+        variant="muted-destructive"
         size="icon-sm"
         aria-label={`Delete ${historyItemDisplayTitle(props.item)}`}
         aria-haspopup="dialog"
         data-testid="epics-list-row-delete"
-        className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
+        className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
         onClick={() => {
           props.onRequestDelete([props.item.epicId]);
         }}

@@ -305,12 +305,10 @@ describe("<RemoteFolderPickerDialog />", () => {
       target: { value: "/Users/tester/cod" },
     });
     const row = screen.getByTestId("remote-folder-picker-row");
-    expect(row.className.split(" ")).toEqual(
-      expect.arrayContaining([
-        "bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-        "hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-      ]),
-    );
+    // The selected fill is the `ghost` variant's own `aria-selected:` state, so
+    // the attribute is what this asserts on - the class it used to name was the
+    // pre-alpha spelling of the same `bg-foreground/8`.
+    expect(row.getAttribute("aria-selected")).toBe("true");
     expect(
       row.querySelector("[data-testid='folder-picker-name-hit']")?.className,
     ).toContain("group-aria-selected/button:text-foreground");

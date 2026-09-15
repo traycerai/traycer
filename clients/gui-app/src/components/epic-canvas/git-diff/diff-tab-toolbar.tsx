@@ -138,12 +138,11 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
                   : [...collapseAll.filePaths],
               })
             }
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={
               collapseAll.allCollapsed ? "Expand all" : "Collapse all"
             }
-            className="text-muted-foreground hover:text-foreground"
           >
             {collapseAll.allCollapsed ? (
               <ChevronsUpDown className="size-4" />
@@ -165,12 +164,11 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
           onClick={() =>
             props.onViewPatch({ mode: isSplit ? "unified" : "split" })
           }
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label={
             isSplit ? "Switch to unified view" : "Switch to split view"
           }
-          className="text-muted-foreground hover:text-foreground"
         >
           {isSplit ? (
             <DiffSplitIcon className="size-4" />
@@ -192,10 +190,9 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
               type="button"
               onClick={props.onRefresh}
               disabled={props.refreshing}
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               aria-label="Refresh diff"
-              className="text-muted-foreground hover:text-foreground"
             >
               <RefreshIcon refreshing={props.refreshing} />
             </Button>
@@ -213,10 +210,9 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
           >
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               aria-label="Diff settings"
-              className="text-muted-foreground hover:text-foreground"
             >
               <Settings2 className="size-4" />
             </Button>
@@ -255,7 +251,7 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
                 size="sm"
                 onClick={openFile.onClick}
                 disabled={openFile.disabled}
-                className="h-7 w-full justify-start font-normal text-foreground"
+                className="h-7 w-full justify-start font-normal"
               >
                 {openFile.pending ? (
                   <AgentSpinningDots

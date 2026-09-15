@@ -121,10 +121,10 @@ function RefreshButton(props: {
       <span className="inline-flex">
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-xs"
           aria-label={refresh.label}
-          className="-my-1 text-muted-foreground/70 hover:text-foreground"
+          className="-my-1 opacity-70"
           disabled={spinner.refreshing}
           onMouseDown={(event) => {
             event.preventDefault();

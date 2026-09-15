@@ -998,8 +998,8 @@ function SecretRowsEditor(props: {
           <Button
             type="button"
             variant="outline"
-            size="sm"
-            className="self-start text-ui-xs"
+            size="xs"
+            className="self-start h-7"
             onClick={props.onAdd}
           >
             <Plus className="size-3.5" />

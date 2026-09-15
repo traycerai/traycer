@@ -98,10 +98,10 @@ export function BrowserAnnotationCard(props: {
         {onRemove === null ? null : (
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-xs"
             aria-label="Remove annotation"
-            className="shrink-0 text-muted-foreground opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+            className="shrink-0 opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
             onClick={() => onRemove(record.annotationId)}
           >
             <X />

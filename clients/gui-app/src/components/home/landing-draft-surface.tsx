@@ -365,9 +365,8 @@ function CustomizeStartPageButton() {
         align={undefined}
       >
         <Button
-          variant="ghost"
+          variant="muted"
           size="icon"
-          className="text-muted-foreground"
           aria-label="Customize start page"
           onClick={() => {
             openSettings({ section: "appearance", resetToGeneral: false });

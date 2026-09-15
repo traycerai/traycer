@@ -91,25 +91,23 @@ function promptStashTriggerLabel(rowCount: number): string {
 }
 
 function PromptStashTriggerButton(props: {
-  readonly open: boolean;
   readonly saving: boolean;
   readonly rowCount: number;
   readonly pulseEpoch: number;
 }) {
-  const { open, saving, rowCount, pulseEpoch } = props;
+  const { saving, rowCount, pulseEpoch } = props;
   return (
     <div data-composer-utility-rail="" className="relative shrink-0">
       <PopoverTrigger asChild>
         <Button
           type="button"
-          variant="outline"
+          variant="muted-outline"
           size="xs"
           aria-label={promptStashTriggerLabel(rowCount)}
           disabled={rowCount === 0}
-          className={cn(
-            "rounded-full bg-background/95 px-2.5 text-muted-foreground shadow-sm hover:text-foreground",
-            open && "text-foreground",
-          )}
+          // Open state is the variant's own `aria-expanded:` styling, which the
+          // PopoverTrigger sets for us.
+          className="rounded-full shadow-sm"
           onPointerDown={(event) => event.preventDefault()}
         >
           {saving ? (
@@ -313,7 +311,6 @@ function PromptStashControlImpl(props: PromptStashControlProps) {
   return (
     <Popover open={open} onOpenChange={setMenuOpen}>
       <PromptStashTriggerButton
-        open={open}
         saving={saving}
         rowCount={rows.length}
         pulseEpoch={pulseEpoch}

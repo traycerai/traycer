@@ -83,13 +83,12 @@ function PrPanelActionsLive(props: {
       )}
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         onClick={refresh.trigger}
         aria-label="Refresh pull requests"
         disabled={!enabled || refresh.refreshing}
         data-testid="pr-panel-refresh"
-        className="text-muted-foreground hover:text-foreground"
       >
         <RefreshIcon refreshing={refresh.refreshing} />
       </Button>

@@ -172,6 +172,7 @@ export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
               key={def.testId}
               type="button"
               variant="secondary"
+              size="inline"
               aria-label={def.ariaLabel}
               data-testid={`terminal-key-${def.testId}`}
               className={KEY_BUTTON_CLASS}
@@ -196,15 +197,15 @@ export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
             <Button
               key={def.testId}
               type="button"
-              variant="secondary"
+              // The latched modifier reads as the primary filled key: the
+              // `default` variant IS that fill, so the state picks a variant
+              // rather than repainting `secondary`.
+              variant={latchedModifiers[def.key] ? "default" : "secondary"}
+              size="inline"
               aria-label={def.ariaLabel}
               aria-pressed={latchedModifiers[def.key]}
               data-testid={`terminal-key-${def.testId}`}
-              className={cn(
-                KEY_BUTTON_CLASS,
-                latchedModifiers[def.key] &&
-                  "bg-primary text-primary-foreground hover:bg-primary/90",
-              )}
+              className={KEY_BUTTON_CLASS}
               // Latch on pointerdown, like action keys: iOS suppresses the
               // synthesized click after a canceled touch start, so an
               // onClick-only toggle can never latch on a phone.
@@ -229,8 +230,7 @@ export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
   );
 }
 
-const KEY_BUTTON_CLASS =
-  "min-h-11 w-full rounded-md px-0 text-ui-sm font-medium";
+const KEY_BUTTON_CLASS = "min-h-11 w-full";
 
 const KEY_REPEAT_DELAY_MS = 350;
 const KEY_REPEAT_INTERVAL_MS = 60;

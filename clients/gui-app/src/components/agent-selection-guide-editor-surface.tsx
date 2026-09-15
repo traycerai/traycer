@@ -84,7 +84,7 @@ export function AgentSelectionGuideEditorSurface({
           disabled={revertDisabled}
           onClick={onRevert}
           data-testid={revertTestId}
-          className="h-7 px-2"
+          className="h-7"
         >
           Revert to default
         </Button>

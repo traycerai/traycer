@@ -137,10 +137,10 @@ export function GithubMentionFilterPopover(
           <Button
             ref={triggerRef}
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-xs"
             aria-label={isDefault ? "Filter" : "Filter (active)"}
-            className="relative -my-1 text-muted-foreground/70 hover:text-foreground"
+            className="relative -my-1 opacity-70"
             onMouseDown={(event) => {
               // The composer must not lose focus to the mousedown itself; the
               // popover takes focus on open, deliberately and afterwards.

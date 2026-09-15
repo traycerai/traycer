@@ -997,11 +997,11 @@ function WorkspaceFileSettingsMenu(props: {
         >
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="File view settings"
             data-testid="workspace-file-settings"
-            className="shrink-0 text-muted-foreground hover:text-foreground"
+            className="shrink-0"
           >
             <Settings2 className="size-4" />
           </Button>

@@ -147,7 +147,7 @@ function ScopedRateLimitIconButton({
             size="sm"
             aria-label="Usage limits"
             data-testid="rate-limit-header-button"
-            className="gap-1.5 bg-muted/30 px-2 text-muted-foreground shadow-xs hover:text-foreground"
+            className="shadow-xs"
           >
             {scopedToOwnHost ? (
               <LiveRateLimitGlyph profileSelection={profileSelection} />

@@ -616,7 +616,7 @@ function ProvidersPanelBody({
             source: "Providers",
           })}
           presentation="link"
-          className="ml-1 h-auto p-0 text-current"
+          className="ml-1"
         />
       </div>
     );

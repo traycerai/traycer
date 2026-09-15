@@ -36,12 +36,7 @@ export function EpicsSortMenu(props: EpicsSortMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="gap-1.5 text-ui-sm text-muted-foreground hover:text-foreground"
-        >
+        <Button type="button" variant="muted" size="sm">
           <ArrowDownUp className="size-4" />
           {currentLabel}
         </Button>

@@ -357,8 +357,8 @@ function CommandBlock(props: { readonly command: string }): ReactNode {
       <Button
         type="button"
         variant="ghost"
-        size="sm"
-        className="size-6 shrink-0 p-0 opacity-60 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        size="inline"
+        className="size-6 shrink-0 opacity-60 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
         aria-label={`Copy: ${props.command}`}
         onClick={() => clipboard.copy(props.command)}
       >

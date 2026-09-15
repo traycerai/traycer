@@ -1320,9 +1320,9 @@ function TerminalAgentPreLaunchToolbar(
               <span className="inline-flex">
                 <Button
                   type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 gap-1 rounded-r-none! px-2 text-ui-xs text-muted-foreground hover:text-foreground"
+                  variant="muted-outline"
+                  size="xs"
+                  className="h-7 rounded-r-none!"
                   disabled={forkDisabled}
                   onClick={() => openForkDialog("fork")}
                 >
@@ -1340,9 +1340,8 @@ function TerminalAgentPreLaunchToolbar(
               >
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="muted-outline"
                   size="icon-sm"
-                  className="text-muted-foreground hover:text-foreground"
                   disabled={forkDisabled}
                   aria-label="More fork options"
                 >
@@ -1554,9 +1553,9 @@ function TerminalAgentHeaderControls(props: {
         <PopoverTrigger asChild>
           <Button
             type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
+            variant="muted-outline"
+            size="xs"
+            className="h-7"
             data-testid="tui-agent-subagents-trigger"
           >
             <Users aria-hidden className="size-3.5" />

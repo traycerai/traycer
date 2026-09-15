@@ -1139,8 +1139,8 @@ function SweepAutoCleanupDiscoveryLine(props: {
       <Button
         type="button"
         variant="link"
-        size="xs"
-        className="h-auto p-0 align-baseline"
+        size="inline-xs"
+        className="align-baseline"
         onClick={() => {
           props.onCloseDialog();
           openWorktreeAutoCleanupSettings(navigate, props.hostId);

@@ -135,10 +135,10 @@ function DesktopZoomIndicator(props: {
             >
               <Button
                 type="button"
-                variant="ghost"
+                variant="muted"
                 size="icon-sm"
                 aria-label="Zoom out"
-                className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
+                className="size-8"
                 onClick={() => {
                   void actions.stepOut().catch(() => undefined);
                 }}
@@ -160,10 +160,10 @@ function DesktopZoomIndicator(props: {
             >
               <Button
                 type="button"
-                variant="ghost"
+                variant="muted"
                 size="icon-sm"
                 aria-label="Zoom in"
-                className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
+                className="size-8"
                 onClick={() => {
                   void actions.stepIn().catch(() => undefined);
                 }}
@@ -177,7 +177,7 @@ function DesktopZoomIndicator(props: {
             variant="outline"
             size="sm"
             className={cn(
-              "h-10 rounded-md border-border bg-popover px-4 text-popover-foreground shadow-lg hover:bg-accent hover:text-accent-foreground",
+              "h-10 border-border bg-popover px-4 text-popover-foreground shadow-lg hover:bg-accent hover:text-accent-foreground",
               "dark:border-border dark:bg-popover dark:hover:bg-accent",
             )}
             data-testid="desktop-zoom-reset-island"

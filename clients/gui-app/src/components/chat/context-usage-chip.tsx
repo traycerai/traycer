@@ -337,11 +337,11 @@ function CompactAction({ onCompact }: CompactActionProps) {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-xs"
         aria-label="Compact conversation"
         data-testid="context-usage-compact-action"
-        className="shrink-0 self-center text-muted-foreground hover:text-foreground"
+        className="shrink-0 self-center"
         onClick={onCompact}
       >
         <FoldVertical className="size-3.5" aria-hidden />
@@ -472,10 +472,9 @@ function ContextUsagePinnedStrip({
           <Button
             ref={actionRef}
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-xs"
             aria-label="Unpin context usage breakdown"
-            className="text-muted-foreground hover:text-foreground"
             onClick={(event) => {
               onUnpin(document.activeElement === event.currentTarget);
             }}

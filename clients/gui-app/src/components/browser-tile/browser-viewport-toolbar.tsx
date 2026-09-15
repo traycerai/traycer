@@ -268,11 +268,11 @@ function ExpandedViewportToolbar({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
-                variant="ghost"
+                variant="muted"
                 size="sm"
                 data-viewport-action
                 aria-label="Preview scale"
-                className="gap-1 text-muted-foreground tabular-nums"
+                className="tabular-nums"
               >
                 {Math.round(controller.previewScale * 100)}%
                 <ChevronDown className="size-3" />
@@ -356,7 +356,7 @@ function ViewportPresetMenu({
           size="sm"
           data-viewport-action
           aria-label="Viewport dimensions"
-          className="min-w-0 shrink gap-2 px-1.5 @[26rem]/viewport:w-[22ch] @[26rem]/viewport:justify-between @[26rem]/viewport:bg-foreground/5 @[26rem]/viewport:px-2"
+          className="min-w-0 shrink @[26rem]/viewport:w-[22ch] @[26rem]/viewport:justify-between @[26rem]/viewport:bg-foreground/5"
         >
           <span className="hidden truncate @[26rem]/viewport:inline">
             {controller.state.intent.mode === "fit"

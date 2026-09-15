@@ -2417,13 +2417,13 @@ function LandingTerminalHeaderToggle(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label={panelOpen ? "Collapse panel" : "Open panel"}
       data-testid={
         panelOpen ? "landing-terminal-collapse" : "landing-terminal-toggle"
       }
-      className="shrink-0 text-muted-foreground hover:text-foreground"
+      className="shrink-0"
       onClick={() => {
         setPanelOpen(props.landingPageId, !panelOpen);
       }}

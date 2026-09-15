@@ -120,11 +120,11 @@ export function GitDiffPanelActions(props: LeftPanelHeaderSlotProps) {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="More Git Diff actions"
             data-testid="git-diff-panel-more"
-            className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+            className="shrink-0"
           >
             <MoreHorizontal className="size-4" />
           </Button>
@@ -164,11 +164,11 @@ export function GitDiffPanelInlineActions(props: {
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label="More Git Diff actions"
           data-testid="git-diff-panel-more"
-          className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+          className="shrink-0"
         >
           <MoreHorizontal className="size-4" />
         </Button>

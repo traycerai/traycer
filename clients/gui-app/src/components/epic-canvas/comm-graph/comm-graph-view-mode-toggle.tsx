@@ -9,7 +9,6 @@
  */
 import { Building2, Waypoints } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 
 export type CommGraphViewMode = CommGraphTileViewState["mode"];
@@ -61,10 +60,6 @@ export function CommGraphViewModeToggle(props: CommGraphViewModeToggleProps) {
             // the pair correctly without a group label to invent.
             aria-pressed={active}
             data-testid={option.testId}
-            // An alpha of the foreground, so the active segment stays visible
-            // on every preset - `--muted` collapses into `--popover` in the
-            // dark and flat-light presets, which is exactly this surface.
-            className={cn(active && "bg-foreground/8 text-foreground")}
             onClick={() => onModeChange(option.mode)}
           >
             <option.Icon data-icon="inline-start" aria-hidden />

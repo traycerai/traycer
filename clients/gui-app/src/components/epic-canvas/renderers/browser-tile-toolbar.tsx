@@ -29,7 +29,6 @@ import {
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useOpenLink } from "@/lib/links/open-link";
-import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   DropdownMenu,
@@ -379,10 +378,10 @@ function BrowserPrivateSessionShield() {
         <PopoverTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={`Saved logins: ${copy.headline}`}
-            className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+            className="shrink-0"
           >
             <VenetianMask aria-hidden />
           </Button>
@@ -419,10 +418,10 @@ function BrowserMoreMenu(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="More browser controls"
-            className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+            className="shrink-0"
           >
             <EllipsisVertical aria-hidden />
           </Button>
@@ -571,7 +570,6 @@ function BrowserAnnotateToggle(props: {
         aria-pressed={controller.isActive}
         disabled={!controller.canStart && !controller.isActive}
         onClick={controller.toggle}
-        className={cn(controller.isActive && "bg-primary/15 text-primary")}
       >
         <SquareMousePointer aria-hidden />
       </Button>

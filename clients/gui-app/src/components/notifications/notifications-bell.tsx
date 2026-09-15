@@ -25,7 +25,6 @@ import {
   formatChordForDisplay,
 } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
-import { cn } from "@/lib/utils";
 import {
   Analytics,
   AnalyticsEvent,
@@ -211,7 +210,9 @@ export function NotificationsBell() {
             aria-label={ariaLabel}
             onPointerDown={onTriggerPointerDown}
             onKeyDown={onTriggerKeyDown}
-            className={cn("relative", open && "bg-accent")}
+            // The open surface is `ghost`'s own `aria-expanded:` styling, which
+            // the PopoverTrigger sets for us.
+            className="relative"
           >
             <Bell
               className="size-4 text-muted-foreground group-hover/button:text-foreground"

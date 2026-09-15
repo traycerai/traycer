@@ -235,8 +235,7 @@ export function AddFolderButton(props: {
     <Button
       type="button"
       size={props.iconOnly ? "icon-sm" : "sm"}
-      variant="ghost"
-      className="rounded-lg text-muted-foreground"
+      variant="muted"
       data-testid="folder-add"
       aria-label={props.iconOnly ? ADD_FOLDER_LABEL : undefined}
       disabled={buttonDisabled}

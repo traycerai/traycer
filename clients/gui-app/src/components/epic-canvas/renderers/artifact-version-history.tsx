@@ -339,9 +339,8 @@ function ArtifactVersionHistoryEntryPointContent(props: {
             align={undefined}
           >
             <Button
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
-              className="text-muted-foreground hover:text-foreground"
               aria-label="Version history"
               data-testid="artifact-version-history-entry"
               onClick={() => setOpen(true)}
@@ -624,10 +623,9 @@ function ArtifactVersionHistoryPanel(props: {
               <Button
                 type="button"
                 size="icon-xs"
-                variant="ghost"
+                variant="muted"
                 aria-label={maximized ? "Restore panel size" : "Maximize panel"}
                 data-testid="artifact-version-history-maximize"
-                className="text-muted-foreground hover:text-foreground"
                 onClick={() => setMaximized((current) => !current)}
               >
                 {maximized ? <Minimize2Icon /> : <Maximize2Icon />}
@@ -642,10 +640,9 @@ function ArtifactVersionHistoryPanel(props: {
               <Button
                 type="button"
                 size="icon-xs"
-                variant="ghost"
+                variant="muted"
                 aria-label="Close history"
                 data-testid="artifact-version-history-close"
-                className="text-muted-foreground hover:text-foreground"
                 onClick={props.onClose}
               >
                 <XIcon />

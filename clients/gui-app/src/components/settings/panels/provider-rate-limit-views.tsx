@@ -1563,7 +1563,7 @@ export function ProviderRateLimitBody(
             source: "Provider usage limits",
           })}
           presentation="link"
-          className="ml-1 h-auto p-0 text-current"
+          className="ml-1"
         />
       </div>
     );

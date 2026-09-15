@@ -284,6 +284,334 @@ const fixedPaletteFiles = [
   "src/components/onboarding/onboarding-detected-agents.tsx",
 ];
 
+// ── `shadcn/no-restyle`: the contract per design-system component ───────────
+//
+// The rule is ON for every file, with `allow: ["layout"]` as the default: a
+// call site places a component (`w-full`, `mt-4`, `absolute`, `shrink-0`) and
+// the component owns how it LOOKS. A component is then let back out of that
+// default by a contract entry below.
+//
+// `notYetTightened` is the ratchet, not a policy. Each entry allows everything
+// (`"*"` - a glob, so it covers the classes the grammar cannot categorize too,
+// which a list of category names would not), which is this rule being "not yet
+// enforced" for that family. So this list is the CHECKLIST of what is left:
+// tickets 05 and 06 delete entries from it one at a time, each deletion paired
+// with the variants and the call-site migration that make the family green.
+// When the list is empty the rollout is done.
+//
+// Patterns are regexes and the LAST matching entry wins, so a family prefix
+// (`^Dialog`) covers every part of that family and a later exact entry
+// (`^Button$`) can still speak for one component. One entry per FAMILY rather
+// than per exported name: the 176 exports of `src/components/ui` are ~40
+// families, and a 176-line list of names nobody reads is not a checklist.
+//
+// A component that is NOT listed here is already on `layout` only - it had no
+// findings when the rule went on, so there was nothing to migrate and nothing
+// to loosen.
+const notYetTightened = [
+  // tighten in ticket 05 - the inline, in-flow primitives.
+  { pattern: "^AgentSpinningDots$|^MutedAgentSpinner$", allow: ["*"] },
+  { pattern: "^Avatar", allow: ["*"] },
+  { pattern: "^Badge$", allow: ["*"] },
+  { pattern: "^ButtonGroup", allow: ["*"] },
+  { pattern: "^Checkbox$", allow: ["*"] },
+  { pattern: "^Collapsible", allow: ["*"] },
+  { pattern: "^Input", allow: ["*"] },
+  { pattern: "^Kbd", allow: ["*"] },
+  { pattern: "^Label$", allow: ["*"] },
+  { pattern: "^LeaderDigitBadge$|^LivePulse$|^PingRing$", allow: ["*"] },
+  { pattern: "^ProgressToastIcon$", allow: ["*"] },
+  { pattern: "^RadioGroup", allow: ["*"] },
+  { pattern: "^Select", allow: ["*"] },
+  { pattern: "^Separator$", allow: ["*"] },
+  { pattern: "^Shimmer$|^WorkingShimmerText$", allow: ["*"] },
+  { pattern: "^ShortcutHint$|^PrimaryActionShortcutHint$", allow: ["*"] },
+  { pattern: "^Skeleton$", allow: ["*"] },
+  { pattern: "^Slider", allow: ["*"] },
+  { pattern: "^StartTruncatedText$", allow: ["*"] },
+  { pattern: "^Switch$", allow: ["*"] },
+  { pattern: "^Textarea$", allow: ["*"] },
+  { pattern: "^TreeChevron", allow: ["*"] },
+
+  // tighten in ticket 06 - the overlay and container parts.
+  { pattern: "^Card", allow: ["*"] },
+  { pattern: "^Command", allow: ["*"] },
+  { pattern: "^ConfirmDestructiveDialog$", allow: ["*"] },
+  { pattern: "^ContextMenu", allow: ["*"] },
+  { pattern: "^Dialog", allow: ["*"] },
+  { pattern: "^Drawer", allow: ["*"] },
+  { pattern: "^DropLine$", allow: ["*"] },
+  { pattern: "^DropdownMenu", allow: ["*"] },
+  { pattern: "^HoverCard|^HoverPreviewCard$", allow: ["*"] },
+  { pattern: "^Popover", allow: ["*"] },
+  { pattern: "^Sheet", allow: ["*"] },
+  { pattern: "^Sidebar", allow: ["*"] },
+  { pattern: "^Tabs", allow: ["*"] },
+  { pattern: "^Toaster$", allow: ["*"] },
+  { pattern: "^Tooltip", allow: ["*"] },
+];
+
+// ── Button, the one family that IS enforced ─────────────────────────────────
+//
+// `layout` plus four named classes. Each is a treatment the component cannot
+// own, measured across all 310 call sites rather than assumed:
+//
+//   - `opacity-*` / `transition-opacity` — the hover-reveal pattern (~45
+//     sites). Which ancestor's hover reveals the button, and under which
+//     `group/<name>`, is a fact about the ROW, not about the button, so no
+//     variant can carry it. `opacity-*` also covers the per-site disabled
+//     weights (`disabled:opacity-30`) for the same reason.
+//   - `header-tab-close-button` — the same reveal, written in CSS because it
+//     needs `:has()` (see `index.css`). One site; allowed rather than
+//     categorized, since the grammar cannot see a hand-written class at all.
+//   - `rounded-full` — a circular icon button (12 sites: the avatar trigger,
+//     chip removes, the reaction row). It is orthogonal to both axes - every
+//     size is a rounded rect and every variant can be round - so it is a
+//     shape the caller picks, not a variant.
+//   - `text-current` — not a colour CHOICE but a refusal to make one: the
+//     control takes the colour of the sentence it sits in (the inline
+//     "Report issue" action inside an error paragraph). A variant would have
+//     to name a colour, which is the opposite of what these sites want.
+//   - `shadow-*` — elevation belongs to WHERE the button is, not to what it
+//     is: the six sites are all `absolute` / `fixed` buttons floating over
+//     content (the artifact image affordance, the scroll-to-bottom pill, the
+//     modal's corner close). The same button in flow must not carry it, which
+//     is why it is not in a variant.
+//   - `font-normal` — a Button used as a full-width LIST ROW (`w-full
+//     justify-start text-left`) carries body weight; `font-medium` is for a
+//     label on a control-shaped button. Four sites today, and the shape
+//     recurs. Nothing else about the type is a caller's to set.
+//   - `tabular-nums` — a digit-metrics hint, not a typeface choice: a button
+//     whose label is a changing NUMBER (the zoom percentage, a page counter)
+//     jitters without it. It changes no size, weight or family.
+//   - `duration-*` and `motion-reduce:*` — the reveal's companions. A timing
+//     travels with the transition it times, and a `motion-reduce:` cancel is
+//     an accessibility affordance: a lint rule must never be the reason one
+//     gets deleted. With every `transition-*` but `transition-opacity` still
+//     denied, a duration here has nothing to lengthen but the reveal.
+//   - `underline` / `underline-offset-*` — the other half of `text-current`.
+//     A control that takes the colour of the sentence around it has no colour
+//     cue left, so the underline is the only thing saying it is a control,
+//     and `link`'s hover-only underline does not say it at rest.
+//   - `rounded-l-none` / `rounded-r-none` — one end of a segmented control.
+//     The flattened edge is a fact about the GROUP, and `<ButtonGroup>` says
+//     it for direct children; a Button wrapped in a span so a disabled
+//     control keeps its tooltip is not one, and the group's `>` selector
+//     never reaches it.
+//
+// Everything else is a variant or a size in `src/components/ui/button.tsx`.
+const buttonContract = {
+  pattern: "^Button$",
+  allow: [
+    "layout",
+    "opacity-*",
+    "transition-opacity",
+    "duration-*",
+    "motion-reduce:*",
+    "header-tab-close-button",
+    "rounded-full",
+    "rounded-l-none",
+    "rounded-r-none",
+    "text-current",
+    "underline",
+    "underline-offset-*",
+    // The elevation steps only - not `shadow-none` (which would be removing a
+    // variant's own treatment) and not a coloured `shadow-<token>/<alpha>`.
+    "shadow-xs",
+    "shadow-sm",
+    "shadow-md",
+    "shadow-lg",
+    "font-normal",
+    "tabular-nums",
+  ],
+  // These REPLACE the rule's own text, so each one has to carry at least as
+  // much as the default did - the class, the component, the real variant or
+  // size list, and the file to extend - and then add what only we know: which
+  // variant means what, and that a near-miss padding is snapped to the
+  // nearest size rather than written out here.
+  message: {
+    color:
+      '"{{className}}" is not allowed on <Button>: Button owns its colour. Use a variant: {{variants}}. `muted` is the quiet toolbar/row button (muted label, foreground on hover), `destructive-ghost` reads as dangerous at rest, `muted-destructive` only on hover. `text-current` is allowed where the button must take the colour of the text around it. Add a variant in {{file}} only if the design calls for a treatment none of these provides.',
+    typography:
+      '"{{className}}" is not allowed on <Button>: the size carries the type. Pick the size whose font size you want ({{sizes}}) instead of setting `text-*` / `font-*` / `tabular-nums` here; if the label needs type the sizes do not have, it is not a Button label. See {{file}}.',
+    spacing:
+      '"{{className}}" is not allowed on <Button>: Button owns its spacing. Use a size ({{sizes}}) - `inline` / `inline-xs` are the no-box sizes for a control inside a line of text - and snap a near-miss to the closest one rather than writing padding here. For space AROUND the button use margin here, or gap on the parent. Add a size in {{file}} only if no existing size is close.',
+    shape:
+      '"{{className}}" is not allowed on <Button>: the size carries the corner radius ({{sizes}}). `rounded-full` is the one shape a caller may choose, for a circular icon button. See {{file}}.',
+    effects:
+      '"{{className}}" is not allowed on <Button>: Button owns its effects. `opacity-*` and `transition-opacity` are allowed, because only the parent row knows when a button is revealed; a shadow or a ring belongs to a variant in {{file}} ({{variants}}).',
+    motion:
+      '"{{className}}" is not allowed on <Button>: Button owns its motion, apart from `transition-opacity` for the reveal pattern. Its `transition-all` already covers colour and shape changes; animate a wrapper element if the motion is really the layout\'s. See {{file}}.',
+    // `default` is what an UNCLASSIFIED class falls back to - the schema has
+    // no `unclassified` key - and it is the only one of these the rule's own
+    // text could not have written, since it is advice about this config.
+    default:
+      '"{{className}}" is not allowed on <Button>: the grammar does not recognize it, so no rule can tell what it changes. Fix the spelling, or - if it is a hand-written class in `index.css` - allow it by name in the Button contract in eslint.config.mjs with the reason.',
+  },
+};
+
+/**
+ * The rule, with EXTRA entries added to Button's contract for one file set.
+ *
+ * Deliberately not `"shadcn/no-restyle": "off"` for those files, which is the
+ * shape ticket 03's overrides took: turning the rule off would also stop
+ * checking their spacing, their sizes and every Button added to them later, to
+ * let one class through. A widened contract keeps everything else enforced and
+ * says in the override exactly which door is open.
+ */
+function noRestyle(extraButtonAllow) {
+  return [
+    "error",
+    {
+      allow: ["layout"],
+      contracts: [
+        ...notYetTightened,
+        extraButtonAllow.length === 0
+          ? buttonContract
+          : {
+              ...buttonContract,
+              allow: [...buttonContract.allow, ...extraButtonAllow],
+            },
+      ],
+    },
+  ];
+}
+
+// ── The Buttons that are allowed out of part of the contract, per FILE ─────
+//
+// One entry per file, and `allow` names exactly which categories it opens, so
+// everything else about Button stays enforced there. Deliberately NOT
+// `"shadcn/no-restyle": "off"` the way ticket 03's overrides are shaped:
+// turning the rule off would also stop checking that file's sizes and every
+// Button added to it later, to let one class through.
+//
+// A file appears ONCE. Flat config is last-block-wins and each of these
+// becomes its own block, so a file listed twice would silently keep only the
+// second list - the hazard the note at the top of this file describes for
+// `no-restricted-imports`, in miniature.
+//
+// Each reason is a fact about the SITE, not about Button. That is the test for
+// belonging here: if the reason generalises, it should have been a variant.
+const restyleExemptions = [
+  {
+    // Not the theme's colours at all, and already exempt from `no-raw-colors`
+    // for the same reason: the sign-in hero paints on `StandaloneShell`'s
+    // fixed dark artwork (white button, near-black label, in BOTH
+    // appearances), and the theme editor paints its own chrome in fixed
+    // colours on purpose, so the chrome does not change under the cursor
+    // while you drag a slider.
+    files: [
+      "src/components/layout/header/sign-in/device-code-progress.tsx",
+      "src/components/settings/themes/theme-editor-panel.tsx",
+    ],
+    allow: ["color"],
+  },
+  {
+    // A SOLID status pip: `rounded-full bg-info text-white`, the update badge
+    // in the header. Button's four status variants are the quiet shape (the
+    // role's foreground on no fill); a solid one would be a variant per role
+    // used once each, which is the trade the ticket says not to make.
+    files: ["src/components/layout/header/app-update-button.tsx"],
+    allow: ["color"],
+  },
+  {
+    // Buttons that CANCEL a variant's own state, which no allow list can
+    // express. The sidebar header's chevron carries `aria-expanded` as a
+    // PERSISTENT panel state rather than "a menu is open right now", so the
+    // variant's `aria-expanded:bg-foreground/8` would leave it permanently
+    // lit; the rail's active treatment is a bottom indicator rather than a
+    // filled tile, and a contract test asserts that fill is absent.
+    files: [
+      "src/components/epic-canvas/sidebar/epic-sidebar-header.tsx",
+      "src/components/epic-canvas/sidebar/epic-sidebar-rail.tsx",
+    ],
+    allow: ["color"],
+  },
+  {
+    // A corner pill straddling the dialog edge and the overlay dim, so it
+    // needs an OPAQUE fill; `outline` is the near miss and carries
+    // `dark:bg-input/30`, which the dim shows through in every dark theme.
+    files: ["src/components/epic-canvas/sidebar/new-conversation-modal.tsx"],
+    allow: ["color"],
+  },
+  {
+    // A resting ghost-weight fill applied by a CONTAINER QUERY
+    // (`@[26rem]/viewport:bg-foreground/5`), so the control reads as a select
+    // field only once its toolbar is wide enough. A variant cannot be
+    // conditional on the container.
+    files: ["src/components/browser-tile/browser-viewport-toolbar.tsx"],
+    allow: ["color"],
+  },
+  {
+    // A quiet FILLED button (`bg-foreground/8 text-foreground`) and a disabled
+    // state that repaints the pill grey rather than fading the primary. The
+    // filled-quiet shape is one site, and the disabled repaint belongs to this
+    // composer's send control rather than to Button.
+    files: ["src/components/home/composer/composer-send-button.tsx"],
+    allow: ["color"],
+  },
+  {
+    // A resting fill on the pointer-coarse actions trigger, where the glyph
+    // has to read as a button before it is tapped.
+    files: ["src/components/chat/chat-message-user-body.tsx"],
+    allow: ["color"],
+  },
+  {
+    // `in-data-[slot=dialog-content]:bg-input/60`: secondary, but re-tinted
+    // when this panel is mounted inside a dialog, because the Traycer Green
+    // preset gives popovers and secondary buttons the same value. A variant
+    // cannot be conditional on the surface it lands on.
+    files: ["src/components/home/composer/terminal-launch-panel.tsx"],
+    allow: ["color"],
+  },
+  {
+    // Two `warning-ghost` buttons side by side, one of which is the confirm;
+    // the border and fill are the only thing telling them apart. A bordered
+    // status variant for one pair is the trade the ticket says not to make.
+    files: ["src/components/home/worktree/worktree-scripts-dialog.tsx"],
+    allow: ["color"],
+  },
+  {
+    // A popover-shaped ISLAND painted onto a Button: this file's sibling
+    // `desktop-zoom-level-island` is a div carrying the same border, fill,
+    // popover foreground, shadow and padding, and the reset control repeats
+    // it because it happens to hold one control. The honest fix is to wrap it
+    // in that island div, which moves the hover fill from the island to an
+    // inset rect - a restructure with a visible result, so it is its own
+    // change rather than this ticket's.
+    files: ["src/components/layout/bridges/desktop-zoom-controller.tsx"],
+    allow: ["color", "spacing"],
+  },
+  {
+    // A Button used as a ROW carries the row's padding, because the row is
+    // what has to stay clickable: shrinking the hit area to the label would
+    // be a real regression. The mobile drawer is one step up the whole ramp
+    // for the 44px touch floor (`gap-3 px-3` rows); the next-step card's
+    // `py-2 pr-10 pl-1` is its hit target and the positioning context of the
+    // copy button that floats over it, which also needs an opaque scrim so
+    // its glyph stays legible over the wrapped text underneath; and
+    // `@max-[30rem]:px-0` folds a row's stop control to an icon when its
+    // CONTAINER narrows, which no size can be conditional on.
+    files: ["src/components/layout/shell/mobile-nav-drawer.tsx"],
+    allow: ["spacing"],
+  },
+  {
+    files: ["src/components/chat/segments/next-steps-action-group.tsx"],
+    allow: ["color", "spacing"],
+  },
+  {
+    files: ["src/components/home-focus/home-focus-rows.tsx"],
+    allow: ["spacing"],
+  },
+  {
+    // The last row of a settings list whose `<li>`s are `px-5 py-2.5`, with
+    // the list's own top divider on it, so its padding, its squared corners
+    // and that divider all line up with siblings it does not own.
+    files: ["src/components/settings/browser-settings-section.tsx"],
+    allow: ["color", "shape", "spacing"],
+  },
+];
+
 // ── App-wide host reads that are RIGHT where they are, exempted per FILE. ──
 //
 // `readPath` (D12) bans the app-wide reads across the Epic canvas subtree and
@@ -1404,8 +1732,18 @@ export default tseslint.config(
         "error",
         { allow: sanctionedArbitraryValues },
       ],
+      // Button's entry comes LAST inside `noRestyle`: contracts are matched
+      // from the end, so whatever is added above it can never shadow the one
+      // family that is actually enforced.
+      "shadcn/no-restyle": noRestyle([]),
     },
   },
+  // Each `restyleExemptions` entry, as its own block. See that list for why.
+  ...restyleExemptions.map((exemption) => ({
+    files: exemption.files,
+    ignores: testFileGlobs,
+    rules: { "shadcn/no-restyle": noRestyle(exemption.allow) },
+  })),
   {
     // Vendor artwork. These are other people's marks - VS Code's blues, the
     // Claude orange, the provider logos - reproduced at their real values

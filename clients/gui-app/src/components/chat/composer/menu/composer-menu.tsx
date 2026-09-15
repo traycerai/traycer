@@ -522,9 +522,9 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
         <span className="min-w-0 truncate">{LOAD_FAILED_LABEL}</span>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="xs"
-          className="-my-1 shrink-0 text-muted-foreground/70 hover:text-foreground"
+          className="-my-1 shrink-0 opacity-70"
           onMouseDown={(event) => {
             event.preventDefault();
           }}

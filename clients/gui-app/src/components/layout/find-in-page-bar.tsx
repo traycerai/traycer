@@ -281,10 +281,7 @@ export function FindInPageBar() {
           event.preventDefault();
           setMatchCase(!matchCase);
         }}
-        className={cn(
-          "size-7 text-ui-xs font-medium",
-          matchCase && "bg-accent text-accent-foreground",
-        )}
+        className="size-7"
       >
         Aa
       </Button>

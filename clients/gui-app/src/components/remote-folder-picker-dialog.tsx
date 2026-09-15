@@ -30,7 +30,6 @@ import {
 } from "@/components/ui/popover";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -674,11 +673,9 @@ function PickerRow(props: {
         role={props.option === null ? undefined : "option"}
         id={props.option?.id}
         aria-selected={props.option?.selected}
-        className={cn(
-          "h-10 w-full justify-start gap-2 px-2 hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-          props.option?.selected === true &&
-            "bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-        )}
+        // The selected fill is `ghost`'s own `aria-selected:` state, keyed off
+        // the attribute already set above.
+        className="h-10 w-full justify-start"
         data-testid={props.testId}
         // Keep focus (and the keyboard model) on the combobox field.
         onMouseDown={(event) => {
@@ -813,11 +810,7 @@ function RemoteFolderPickerListing(props: {
             role="option"
             id={pickerOptionId(0)}
             aria-selected={props.selectedIndex === 0}
-            className={cn(
-              "h-10 w-full justify-start gap-2 px-2 hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-              props.selectedIndex === 0 &&
-                "bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-            )}
+            className="h-10 w-full justify-start"
             data-testid="remote-folder-picker-up-row"
             // Keep focus (and the keyboard model) on the combobox field.
             onMouseDown={(event) => {

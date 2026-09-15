@@ -39,7 +39,6 @@ import {
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { cn } from "@/lib/utils";
 import {
   useEpicLeftPanelStore,
   useLeftPanelSectionCollapsed,
@@ -114,11 +113,10 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
       {searchOpen ? null : (
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label="Search browsers"
           data-testid="epic-browsers-panel-search"
-          className="text-muted-foreground hover:text-foreground"
           onClick={handleSearch}
         >
           <Search className="size-4" aria-hidden />
@@ -126,11 +124,10 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
       )}
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label="Add browser"
         data-testid="epic-browsers-panel-add"
-        className="text-muted-foreground hover:text-foreground"
         disabled={isAdding}
         onClick={handleAdd}
       >
@@ -146,14 +143,11 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
           <DropdownMenuTrigger asChild>
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               aria-label={filterLabel}
               data-testid="epic-browsers-panel-filter"
-              className={cn(
-                "relative text-muted-foreground transition-colors hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground",
-                hostPin.isPinned && "bg-accent text-accent-foreground",
-              )}
+              className="relative"
             >
               <ListFilter className="size-4" aria-hidden />
               {hostPin.isPinned ? (

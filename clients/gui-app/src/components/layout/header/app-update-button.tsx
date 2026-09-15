@@ -80,12 +80,12 @@ export function AppUpdateHeaderButton() {
         <span className="inline-flex">
           <Button
             type="button"
-            variant="ghost"
+            variant="info-ghost"
             size="icon-sm"
             disabled
             aria-label={label}
             data-testid="app-update-header-button"
-            className="rounded-full text-info-foreground opacity-100 disabled:opacity-100"
+            className="rounded-full opacity-100 disabled:opacity-100"
           >
             <DownloadProgressRing progress={progress} />
           </Button>

@@ -101,11 +101,10 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
       <PopoverTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label="New terminal"
           data-testid="epic-terminals-panel-add"
-          className="text-muted-foreground hover:text-foreground"
         >
           <Plus className="size-4" />
         </Button>

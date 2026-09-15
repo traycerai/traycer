@@ -485,8 +485,8 @@ function AutoCleanupFooterRow(props: {
       <Button
         type="button"
         variant="link"
-        size="sm"
-        className="h-auto shrink-0 p-0 text-ui-xs"
+        size="inline-xs"
+        className="shrink-0"
         onClick={props.onOpenHistory}
       >
         <span>History</span>

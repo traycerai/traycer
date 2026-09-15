@@ -340,14 +340,11 @@ function ThemeImportDialogBody({
                     {popularSearches.map((entry) => (
                       <Button
                         key={entry.label}
-                        size="sm"
+                        size="xs"
                         variant="ghost"
                         aria-pressed={query === entry.query}
                         onClick={() => setQuery(entry.query)}
-                        className={cn(
-                          "h-7 rounded-full px-2.5 text-ui-xs",
-                          query === entry.query && "bg-foreground/8",
-                        )}
+                        className="h-7 rounded-full"
                       >
                         {entry.label}
                       </Button>

@@ -76,12 +76,12 @@ function EpicUsageEntryPointBody(props: {
       >
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-xs"
           aria-label="Usage"
           aria-haspopup="dialog"
           data-testid="epic-usage-entry-point"
-          className={cn("text-muted-foreground hover:text-foreground")}
+          className={cn("")}
           onClick={() => setOpen(true)}
         >
           <LineChart className="size-3.5" />
