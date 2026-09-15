@@ -74,19 +74,46 @@ export function isElementVisible(element: Element): boolean {
  * off-screen one is not. A zero-sized box (not yet laid out) is not in the
  * viewport, and in jsdom, where `getBoundingClientRect` is all zeros, the
  * answer is `false` and the observer drives the state from there.
+ *
+ * The viewport ALONE is not the test: an `IntersectionObserver` with the
+ * default root also clips through the containing block chain, so a tile
+ * scrolled out of the epic canvas - an `overflow-hidden` ancestor - is not
+ * intersecting even when its raw box still overlaps the window. Seeding `true`
+ * there is the same wasted plan/sync/bake, so the box is intersected with the
+ * viewport shrunk inward by every ancestor that clips its overflow, per axis
+ * because an ancestor may clip one and not the other.
  */
 export function isElementInViewport(element: Element): boolean {
   const rect = element.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return false;
-  const viewportWidth =
-    window.innerWidth || document.documentElement.clientWidth;
-  const viewportHeight =
-    window.innerHeight || document.documentElement.clientHeight;
+  let clipLeft = 0;
+  let clipTop = 0;
+  let clipRight = window.innerWidth || document.documentElement.clientWidth;
+  let clipBottom = window.innerHeight || document.documentElement.clientHeight;
+  for (
+    let ancestor = element.parentElement;
+    ancestor !== null;
+    ancestor = ancestor.parentElement
+  ) {
+    const style = window.getComputedStyle(ancestor);
+    const clipsX = style.overflowX !== "visible";
+    const clipsY = style.overflowY !== "visible";
+    if (!clipsX && !clipsY) continue;
+    const box = ancestor.getBoundingClientRect();
+    if (clipsX) {
+      clipLeft = Math.max(clipLeft, box.left);
+      clipRight = Math.min(clipRight, box.right);
+    }
+    if (clipsY) {
+      clipTop = Math.max(clipTop, box.top);
+      clipBottom = Math.min(clipBottom, box.bottom);
+    }
+  }
   return (
-    rect.bottom > 0 &&
-    rect.right > 0 &&
-    rect.top < viewportHeight &&
-    rect.left < viewportWidth
+    rect.bottom > clipTop &&
+    rect.right > clipLeft &&
+    rect.top < clipBottom &&
+    rect.left < clipRight
   );
 }
 

@@ -201,9 +201,17 @@ export function parseCommGraphTileViewState(
   // against has degraded away, the numbers point into a floor plan that is not
   // coming back - and keeping them would reopen the fallback view scrolled off
   // into empty space with no sign of why.
+  // A resolved Auto outcome frames the camera only while the tile is actually
+  // ON Auto - `officeView` is `"auto"`, or `null` and inheriting a default that
+  // may be Auto. Once the owner picks a concrete view, `officeAutoView` lingers
+  // as a dormant record; letting ITS unreadability degrade the camera would
+  // wipe the framing saved for the explicit view the tile now shows. The
+  // explicit `officeView` and the camera's own `officeCameraView` still degrade
+  // unconditionally, so the view the camera actually frames is still covered.
+  const usesAutoOutcome = officeView === "auto" || officeView === null;
   const stale =
     degradesFrom(value.officeView, officeView) ||
-    degradesFrom(value.officeAutoView, officeAutoView) ||
+    (usesAutoOutcome && degradesFrom(value.officeAutoView, officeAutoView)) ||
     // The most direct case of the rule above: the camera names the view it
     // frames, and that view is one this build cannot draw.
     degradesFrom(value.officeCameraView, officeCameraView);

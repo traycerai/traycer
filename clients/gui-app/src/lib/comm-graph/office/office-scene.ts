@@ -4721,8 +4721,12 @@ export class OfficeScene {
 
   /** A tile's centre, PROJECTED - never `col * OFFICE_TILE` in this class. */
   private tileCenter(tile: OfficeTilePos): OfficePoint {
-    const origin = this.point(tile.col, tile.row);
-    return { x: origin.x + OFFICE_TILE / 2, y: origin.y + OFFICE_TILE / 2 };
+    // PROJECT the mid-point, don't add `OFFICE_TILE / 2` after projecting the
+    // corner: on an affine (Campus/City) projector the two differ, and the flat
+    // offset lands the centre eight world pixels off the tile it belongs to -
+    // the same trap `footPoint` documents. Equal to the old form on the
+    // axis-aligned projectors, correct on the isometric ones.
+    return this.point(tile.col + 0.5, tile.row + 0.5);
   }
 
   private advancePaperBalls(dtMs: number): void {
@@ -6082,11 +6086,15 @@ export class OfficeScene {
     const pips: OfficeDrawable[] = [];
     for (const character of characters) {
       const status = this.statusOf(character.agentId);
-      const point = this.point(character.col, character.row);
+      // The tile's centre, PROJECTED - project `(col + 0.5, row + 0.5)` rather
+      // than the corner plus a flat `OFFICE_TILE / 2`, which on the affine
+      // Campus/City projectors shifts every pip eight world pixels off its tile
+      // and past the edge of its own hit box. See `tileCenter`.
+      const center = this.point(character.col + 0.5, character.row + 0.5);
       pips.push({
         kind: "pip",
-        x: point.x + OFFICE_TILE / 2,
-        y: point.y + OFFICE_TILE / 2,
+        x: center.x,
+        y: center.y,
         status,
         glyph: pipGlyphOf(status),
         agentId: character.agentId,
