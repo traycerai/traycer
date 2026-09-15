@@ -1921,7 +1921,12 @@ export class OfficeScene {
       if (rewound) this.dropTransientMotion();
     }
 
+    const agentSignatureBefore = this.agentSignature;
     this.adoptLayout(input.agents, settling);
+    // A NEW history source that is still behind re-arms the settle latch, so
+    // its catch-up re-plans the provisional floor it forced. Extracted so the
+    // conditions do not push `sync` over its complexity ceiling.
+    this.reArmSettleForNewHistorySource(input, firstSync, agentSignatureBefore);
     let reclaimed: ReadonlyArray<string> = NO_IDS;
     // A scrub back cannot replay the walks that led to today's claims, so it
     // does not try. A SETTLE cannot trust them: a wake claim made while the
@@ -3456,6 +3461,33 @@ export class OfficeScene {
     return (
       input.cursorMs === this.cursorMs && input.pulseKey !== this.lastPulseKey
     );
+  }
+
+  /**
+   * Re-arms the settle latch when a NEW history source (a host an agent just
+   * introduced) is behind. The fan-in adds the host with a null snapshot
+   * boundary, so `feedSettled` legitimately goes true -> false -> true; while
+   * it is false the new host's agents change the set and force a provisional
+   * plan from statuses still in flight. The latch, set by the earlier settle,
+   * would otherwise swallow the source's catch-up (`settling` never fires) and
+   * strand that provisional floor for the life of the mount - the set is
+   * unchanged by then and a status flip never re-plans. Clearing it here makes
+   * the catch-up count as a settle and re-plan. A RECONNECT re-replays the SAME
+   * agents (the signature does not move), so it does not re-arm and the settled
+   * floor it already drew is not reshuffled - the regression the latch prevents.
+   */
+  private reArmSettleForNewHistorySource(
+    input: OfficeSceneInput,
+    firstSync: boolean,
+    agentSignatureBefore: string | null,
+  ): void {
+    if (
+      !input.feedSettled &&
+      !firstSync &&
+      this.agentSignature !== agentSignatureBefore
+    ) {
+      this.feedSettled = false;
+    }
   }
 
   /**
