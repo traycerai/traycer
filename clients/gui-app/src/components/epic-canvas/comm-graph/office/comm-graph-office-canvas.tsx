@@ -2631,6 +2631,16 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const appliedDprRef = useRef<number>(1);
   const wasPlayingRef = useRef(playing);
   const autoPannedKeyRef = useRef<string | null>(null);
+  // TRUE once a playback auto-pan has actually reframed the camera and no
+  // manual gesture has reclaimed it since - i.e. the live camera is a transient
+  // playback position, not the user's framing. Set where `requestPlaybackPan`
+  // starts a pan; cleared wherever a framing is stored (`persistView`). The
+  // shift path reads it to tell "playback is enabled but DECLINED, so the live
+  // camera is still the user's framing" (persist the compensated frame) from
+  // "playback OWNS the camera" (defer) - `isPlaying && isAutoPanEnabled` alone
+  // conflates the two, because auto-pan stays enabled through every pulse it
+  // declines when the focus is already on screen.
+  const cameraFramedByPlaybackRef = useRef(false);
   const persistTimerRef = useRef<number | null>(null);
   // ONE detail surface at a time, the same rule the node graph follows:
   // opening a character replaces an open thread and vice versa, so the floor
@@ -3139,6 +3149,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   }, [runtime]);
 
   const persistView = useCallback(() => {
+    // Storing a framing means the live camera is now a kept manual (or neutral
+    // auto-fit) frame, not a transient playback reframe - so re-arm the shift
+    // path. Only manual gestures and persistOnArrival aims reach here; playback
+    // auto-pans (persistOnArrival false) never do, by design.
+    cameraFramedByPlaybackRef.current = false;
     if (persistTimerRef.current !== null) {
       window.clearTimeout(persistTimerRef.current);
     }
@@ -3488,6 +3503,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       if (key === autoPannedKeyRef.current) return;
       autoPannedKeyRef.current = key;
       if (isOnScreen(focus, runtime.getCamera(), viewport)) return;
+      // A pan starts here, so the live camera is now a playback reframe until a
+      // manual gesture reclaims it: a world-shift must defer rather than save it
+      // as the user's framing. Reaching here (focus off screen) is the only
+      // place playback actually moves the camera - the early return above is the
+      // DECLINE the shift path must still be allowed to persist under.
+      cameraFramedByPlaybackRef.current = true;
       // Playback reframes itself on every cursor step, so its landing is not a
       // camera to write back.
       runtime.requestPan({ focus, zoom: null, persistOnArrival: false });
@@ -3712,17 +3733,20 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         // itself on the next line and on every reload, so persisting there
         // would just store a value auto-fit is about to recompute.
         //
-        // AND ONLY A MANUAL framing, not a transient one. While playback
-        // auto-pan owns the camera (the exact `isPlaying && isAutoPanEnabled`
-        // condition `requestPlaybackPan` reframes under), the live camera is a
-        // playback reframe `advanceCamera` deliberately never persists; writing
-        // it here on a shift would save that playback position as the user's
-        // framing, and a remount would restore it instead of their last manual
-        // one. Defer - a later manual action re-persists the compensated frame.
-        if (
-          !runtime.isAutoFitEnabled() &&
-          !(runtime.isPlaying() && runtime.isAutoPanEnabled())
-        ) {
+        // AND ONLY A MANUAL framing, not a transient one. While a playback
+        // auto-pan actually OWNS the camera, the live camera is a reframe
+        // `advanceCamera` deliberately never persists; writing it here on a
+        // shift would save that playback position as the user's framing, and a
+        // remount would restore it instead of their last manual one. But
+        // `isPlaying && isAutoPanEnabled` is too broad: auto-pan stays enabled
+        // through every pulse where the focus is already on screen and
+        // `requestPlaybackPan` DECLINES to move, and in that regime the live
+        // camera is still exactly the user's framing - deferring there is the
+        // gap that loses the compensated frame across a Graph round trip,
+        // eviction or reload. So gate on whether playback has REALLY reframed
+        // the camera (`cameraFramedByPlaybackRef`) rather than on whether it
+        // could: defer only while a reframe owns the camera, persist otherwise.
+        if (!runtime.isAutoFitEnabled() && !cameraFramedByPlaybackRef.current) {
           persistCameraFromLoop();
         }
       }
