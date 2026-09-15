@@ -328,6 +328,51 @@ describe("isElementInViewport", () => {
       expect(isElementInViewport(element)).toBe(false);
     }
   });
+
+  it("is false for a box the window can see but an overflow-clipping ancestor cannot", () => {
+    stubViewport(1024, 768);
+    const parent = document.createElement("div");
+    // Set the LONGHANDS directly, not the `overflow` shorthand: jsdom's
+    // `getComputedStyle` does not expand `overflow: hidden` into
+    // `overflowX`/`overflowY` (both keep reading "visible"), so the shorthand
+    // would leave this ancestor un-clipping and the case vacuous.
+    parent.style.overflowX = "hidden";
+    parent.style.overflowY = "hidden";
+    document.body.appendChild(parent);
+    // The clipping ancestor's own box - the epic canvas's visible strip.
+    parent.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+    const element = document.createElement("div");
+    parent.appendChild(element);
+    // The element's RAW box overlaps the window fine, but sits entirely to
+    // the right of its clipping parent - the shape a tile scrolled out of an
+    // `overflow-hidden` epic canvas reports.
+    stubRect(element, new DOMRect(200, 0, 60, 60));
+
+    try {
+      expect(isElementInViewport(element)).toBe(false);
+    } finally {
+      parent.remove();
+    }
+  });
+
+  it("is true for the same off-parent box once the ancestor no longer clips", () => {
+    // The control: identical geometry, but the ancestor's overflow is
+    // `visible` (the default) - nothing to intersect through, so the window
+    // check alone decides, and the box is on screen.
+    stubViewport(1024, 768);
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    parent.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+    const element = document.createElement("div");
+    parent.appendChild(element);
+    stubRect(element, new DOMRect(200, 0, 60, 60));
+
+    try {
+      expect(isElementInViewport(element)).toBe(true);
+    } finally {
+      parent.remove();
+    }
+  });
 });
 
 /**

@@ -10881,6 +10881,73 @@ describe("OfficeScene lod 0", () => {
   });
 });
 
+/**
+ * `buildPips` (and `tileCenter` beside it) used to add a flat `OFFICE_TILE /
+ * 2` to the projected CORNER instead of projecting the tile's mid-point
+ * directly. The two coincide on an axis-aligned projector (Floor, Towers),
+ * which is exactly why this needs an AFFINE one - City's - to show up at
+ * all: there, `project(col, row) + {TILE/2, TILE/2}` lands eight world pixels
+ * off `project(col + 0.5, row + 0.5)`, detaching the dot from the character
+ * it names.
+ */
+describe("OfficeScene lod 0 pip centre on an affine projector", () => {
+  it("projects the overview pip at the projector's own tile centre, not the corner plus a flat offset", () => {
+    const epic = makeTestEpic("triage", 2, 1);
+    const scene = new OfficeScene(OFFICE_VIEWS.city, null);
+    const ids = new Set(epic.agents.map((person) => person.id));
+    scene.sync(sceneInput({ agents: epic.agents, visibleAgentIds: ids }));
+    // Long enough that every agent has settled into its chair - a mid-walk
+    // character's col/row is still a real tile position, but a seated one is
+    // the deterministic case this claim is about.
+    for (let step = 0; step < 100; step += 1) scene.tick(100);
+
+    const layout = layoutOf(scene);
+    const projector = OFFICE_VIEWS.city.painter.projector(layout);
+    const target = epic.agents[0].id;
+
+    // The character's own tile - read the same way
+    // `office-frame-gate.test.ts`'s `motions` helper does, since nothing
+    // public reports a character's position and this claim is about exactly
+    // that position.
+    const rawCharacters: unknown = Reflect.get(scene, "characters");
+    if (!(rawCharacters instanceof Map)) {
+      throw new Error("characters missing");
+    }
+    const character: unknown = rawCharacters.get(target);
+    if (typeof character !== "object" || character === null) {
+      throw new Error("no character for target");
+    }
+    const col: unknown = Reflect.get(character, "col");
+    const row: unknown = Reflect.get(character, "row");
+    if (typeof col !== "number" || typeof row !== "number") {
+      throw new Error("character carries no col/row");
+    }
+
+    const frame = scene.frame(0, WHOLE_WORLD);
+    const pip = frame.actors.find(
+      (drawable): drawable is Extract<OfficeDrawable, { kind: "pip" }> =>
+        drawable.kind === "pip" && drawable.agentId === target,
+    );
+    if (pip === undefined) throw new Error("no pip for target");
+
+    const correctCenter = projector.project(col + 0.5, row + 0.5);
+    const corner = projector.project(col, row);
+    const flatOffsetCenter = {
+      x: corner.x + OFFICE_TILE / 2,
+      y: corner.y + OFFICE_TILE / 2,
+    };
+    // Anti-vacuity: on City's affine projector the two formulas must
+    // actually disagree, or the assertions below would pass for either one.
+    expect(
+      Math.abs(correctCenter.x - flatOffsetCenter.x) +
+        Math.abs(correctCenter.y - flatOffsetCenter.y),
+    ).toBeGreaterThan(0);
+
+    expect(pip.x).toBeCloseTo(correctCenter.x, 6);
+    expect(pip.y).toBeCloseTo(correctCenter.y, 6);
+  });
+});
+
 // ---- Hand-built fixtures for the cubby, aliasing and audience suites --- //
 
 const HAND_BUILT_BOUNDS: OfficeTileRect = {

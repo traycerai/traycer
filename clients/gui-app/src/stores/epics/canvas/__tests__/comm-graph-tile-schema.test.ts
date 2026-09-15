@@ -644,6 +644,91 @@ describe("comm-graph tile schema", () => {
       if (parsed === null || parsed.type !== "comm-graph") return;
       expect(parsed.view.officeCamera).toBeNull();
     });
+
+    it("keeps a framed camera when a DORMANT Auto outcome is stale, and the tile is not on Auto", () => {
+      // `officeAutoView` lingers as a record even after the owner picks a
+      // concrete view - "towers" here - so its own unreadability ("skyline",
+      // an id no build ships) must not wipe the camera framed for the view
+      // the tile actually shows. Only the fields that DO describe this
+      // record's camera - `officeView` and `officeCameraView`, both
+      // readable "towers" - govern whether it survives.
+      const parsed = parseTileRef({
+        id: commGraphTileId(EPIC_ID),
+        instanceId: "inst-1",
+        type: "comm-graph",
+        name: "Agent office",
+        hostId: UNKNOWN_HOST_PLACEHOLDER,
+        epicId: EPIC_ID,
+        view: {
+          x: 0,
+          y: 0,
+          zoom: 1,
+          mode: "office",
+          officeView: "towers",
+          officeAutoView: "skyline",
+          officeCameraView: "towers",
+          officeCamera: { x: 40, y: -12, zoom: 2.5 },
+        },
+      });
+      expect(parsed?.type).toBe("comm-graph");
+      if (parsed === null || parsed.type !== "comm-graph") return;
+      expect(parsed.view.officeCamera).toEqual({ x: 40, y: -12, zoom: 2.5 });
+      expect(parsed.view.officeCameraView).toBe("towers");
+    });
+
+    it("still retires the camera when the ACTIVE Auto outcome is stale", () => {
+      // Control (a): the tile IS on Auto (`officeView: "auto"`) this time, so
+      // the dormant-outcome exception does not apply - `officeAutoView` is
+      // the camera's only source of a framed view, and its unreadability
+      // still degrades it.
+      const parsed = parseTileRef({
+        id: commGraphTileId(EPIC_ID),
+        instanceId: "inst-1",
+        type: "comm-graph",
+        name: "Agent office",
+        hostId: UNKNOWN_HOST_PLACEHOLDER,
+        epicId: EPIC_ID,
+        view: {
+          x: 0,
+          y: 0,
+          zoom: 1,
+          mode: "office",
+          officeView: "auto",
+          officeAutoView: "skyline",
+          officeCamera: { x: 40, y: -12, zoom: 2.5 },
+        },
+      });
+      expect(parsed?.type).toBe("comm-graph");
+      if (parsed === null || parsed.type !== "comm-graph") return;
+      expect(parsed.view.officeCamera).toBeNull();
+    });
+
+    it("still retires the camera when its OWN framed-view id is stale, even beside a healthy dormant outcome", () => {
+      // Control (b): `officeCameraView` - the id the camera itself names -
+      // is the one that is unreadable here, not `officeAutoView`. That term
+      // is unconditional, so the dormant-outcome gate on the OTHER term
+      // changes nothing about it.
+      const parsed = parseTileRef({
+        id: commGraphTileId(EPIC_ID),
+        instanceId: "inst-1",
+        type: "comm-graph",
+        name: "Agent office",
+        hostId: UNKNOWN_HOST_PLACEHOLDER,
+        epicId: EPIC_ID,
+        view: {
+          x: 0,
+          y: 0,
+          zoom: 1,
+          mode: "office",
+          officeView: "towers",
+          officeCameraView: "skyline",
+          officeCamera: { x: 40, y: -12, zoom: 2.5 },
+        },
+      });
+      expect(parsed?.type).toBe("comm-graph");
+      if (parsed === null || parsed.type !== "comm-graph") return;
+      expect(parsed.view.officeCamera).toBeNull();
+    });
   });
 });
 
