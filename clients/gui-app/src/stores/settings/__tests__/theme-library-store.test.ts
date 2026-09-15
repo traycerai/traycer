@@ -171,31 +171,46 @@ describe("useThemeLibraryStore", () => {
   });
 
   it("preserves corrupt storage and state when reset cannot write", () => {
+    const originalWindowStorage = window.localStorage;
     const originalGlobalStorage = globalThis.localStorage;
-    vi.stubGlobal("localStorage", window.localStorage);
-    try {
-      const saved = theme("saved", "light");
-      expect(useThemeLibraryStore.getState().saveTheme(saved)).toBe(true);
-      window.localStorage.setItem(PERSIST_KEY, "not-json");
-      const setItem = vi
-        .spyOn(window.localStorage, "setItem")
-        .mockImplementation(() => {
-          throw new DOMException("quota", "QuotaExceededError");
-        });
+    const saved = theme("saved", "light");
+    expect(useThemeLibraryStore.getState().saveTheme(saved)).toBe(true);
+    originalWindowStorage.setItem(PERSIST_KEY, "not-json");
 
-      try {
-        expect(useThemeLibraryStore.getState().resetLibrary()).toBe(false);
-        expect(useThemeLibraryStore.getState().themes).toEqual([saved]);
-        expect(useThemeLibraryStore.getState().selected).toEqual({
-          light: saved.id,
-          dark: null,
-        });
-        expect(window.localStorage.getItem(PERSIST_KEY)).toBe("not-json");
-      } finally {
-        setItem.mockRestore();
-      }
+    const storage: Storage = {
+      get length() {
+        return originalWindowStorage.length;
+      },
+      clear: originalWindowStorage.clear.bind(originalWindowStorage),
+      getItem: originalWindowStorage.getItem.bind(originalWindowStorage),
+      key: originalWindowStorage.key.bind(originalWindowStorage),
+      removeItem: originalWindowStorage.removeItem.bind(originalWindowStorage),
+      setItem: () => {
+        throw new DOMException("quota", "QuotaExceededError");
+      },
+    };
+    vi.stubGlobal("localStorage", storage);
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      writable: true,
+      value: storage,
+    });
+
+    try {
+      expect(useThemeLibraryStore.getState().resetLibrary()).toBe(false);
+      expect(useThemeLibraryStore.getState().themes).toEqual([saved]);
+      expect(useThemeLibraryStore.getState().selected).toEqual({
+        light: saved.id,
+        dark: null,
+      });
+      expect(originalWindowStorage.getItem(PERSIST_KEY)).toBe("not-json");
     } finally {
       vi.stubGlobal("localStorage", originalGlobalStorage);
+      Object.defineProperty(window, "localStorage", {
+        configurable: true,
+        writable: true,
+        value: originalWindowStorage,
+      });
     }
   });
 
