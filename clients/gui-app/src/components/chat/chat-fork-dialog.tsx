@@ -865,6 +865,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 key={modelPickerKey}
                 store={toolbarStore}
                 withServiceTier
+                withReasoning
                 tuiOnly={false}
                 lockedHarnessId={null}
                 disabled={createChat.isPending}

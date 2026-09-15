@@ -117,9 +117,10 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // does not move this number.
     expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(6);
     // The same re-mint rule on the chat line: mainline's @1.9 (Antigravity
-    // anchors and delivery placement) stays frozen as staging shipped it, and
-    // provider fallback took @1.10 above it.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(10);
+    // anchors and delivery placement) stays frozen as staging shipped it,
+    // provider fallback took @1.10 above it, and this branch's auto-mode line
+    // re-minted above THAT at @1.11 - the first chat minor it has added.
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(11);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
       2,

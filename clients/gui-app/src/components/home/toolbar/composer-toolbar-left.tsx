@@ -2,6 +2,7 @@ import { memo } from "react";
 import { ComposerAttachImageButton } from "@/components/home/toolbar/composer-attach-image-button";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
 import type { PermissionMode } from "@/components/home/data/landing-options";
+import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
 
 interface ComposerToolbarLeftProps {
   onAttachImages: (files: ReadonlyArray<File>) => void;
@@ -20,6 +21,12 @@ interface ComposerToolbarLeftProps {
    * to "this provider".
    */
   harnessLabel: string | null;
+  /** Union across the host's whole harness catalog - see `PermissionsPicker`. */
+  readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+  /** Whether a turn is running - see `PermissionsPicker`. */
+  readonly turnActive: boolean;
+  /** Which pocket the host's judge spends - see `PermissionsPicker`. */
+  readonly judgeBilling: AutoJudgeBilling | null;
   showNextTurnPermissionNote: boolean;
   settingsLocked: boolean;
 }
@@ -31,6 +38,9 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
     onPermissionChange,
     supportedPermissionModes,
     harnessLabel,
+    catalogSupportedModes,
+    turnActive,
+    judgeBilling,
     showNextTurnPermissionNote,
     settingsLocked,
   } = props;
@@ -44,6 +54,10 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
         onChange={onPermissionChange}
         supportedPermissionModes={supportedPermissionModes}
         harnessLabel={harnessLabel}
+        catalogSupportedModes={catalogSupportedModes}
+        turnActive={turnActive}
+        judgeBilling={judgeBilling}
+        closeFocus="composer"
       />
       {showNextTurnPermissionNote ? (
         <output

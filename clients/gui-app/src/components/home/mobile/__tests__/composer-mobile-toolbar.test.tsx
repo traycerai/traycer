@@ -12,6 +12,14 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
   HarnessModelPicker: () => <div data-testid="mock-model-picker" />,
 }));
+// Same reason, one layer down: the toolbar reads this host's judge selection to
+// disclose which pocket Auto mode spends, and `useHostClientForHostId` throws
+// outside a `<HostRuntimeProvider>` by design. `null` is the hook's own
+// host-cannot-answer value, so the sheet renders no meta line - which is what
+// this row looked like before the disclosure existed.
+vi.mock("@/hooks/auto-mode/use-auto-judge-billing", () => ({
+  useAutoJudgeBilling: () => null,
+}));
 
 afterEach(cleanup);
 

@@ -9,7 +9,10 @@
  *
  * - `1.9` is mainline's windowed line as the `v1.3.x` staging builds shipped
  *   it (delivery placement, Antigravity anchors), frozen;
- * - `1.10` is provider fallback, minted above it.
+ * - `1.10` is provider fallback, minted above it;
+ * - `1.11` is the `auto` permission mode, minted above that. It carries the
+ *   whole fallback surface too - what it holds back from `1.10` is the queue
+ *   and approval-card shape, pinned in `chat-subscribe.test.ts`.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -27,7 +30,8 @@ import {
 import { providerNoticeKindSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
-const LIVE_MINOR = 10;
+const FALLBACK_MINOR = 10;
+const LIVE_MINOR = 11;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -71,6 +75,10 @@ const FALLBACK_CLIENT_NEEDLES = fallbackActions.map((action) =>
   JSON.stringify(action),
 );
 const PLACEMENT_NEEDLE = '"deliveryPlacement":';
+// The approval card's transient judge stage. `reason` would be the other half,
+// but that key name is shared with unrelated frames; `reviewing` is unique to
+// the card, and the two are added and frozen together.
+const AUTO_APPROVAL_NEEDLE = '"reviewing":';
 
 const unionArmsSchema = z.object({
   oneOf: z
@@ -100,8 +108,8 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.10 (a line added later cannot drop out)", () => {
-    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  it("covers chat.subscribe@1.0 through @1.11 (a line added later cannot drop out)", () => {
+    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
 
@@ -117,7 +125,8 @@ describe("chat.subscribe line surfaces", () => {
   for (const minor of MINORS) {
     describe(`chat.subscribe@1.${minor}`, () => {
       const { contract } = chatSubscribeLine.versions[minor];
-      const carriesFallback = minor === LIVE_MINOR;
+      const carriesFallback = minor >= FALLBACK_MINOR;
+      const carriesAuto = minor === LIVE_MINOR;
       const carriesPlacement = minor >= 9;
 
       it(`server frames ${carriesFallback ? "carry" : "hold back"} every provider-fallback surface`, () => {
@@ -146,6 +155,12 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           actionAckPropertyNames(contract.serverFrameSchema).includes("token"),
         ).toBe(carriesFallback);
+      });
+
+      it(`server frames ${carriesAuto ? "carry" : "hold back"} the approval card's judge stage`, () => {
+        expect(
+          schemaText(contract.serverFrameSchema).includes(AUTO_APPROVAL_NEEDLE),
+        ).toBe(carriesAuto);
       });
     });
   }

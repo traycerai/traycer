@@ -17,7 +17,10 @@ import {
   chatSubscribeV18,
   chatSubscribeV19,
   chatSubscribeV110,
+  chatSubscribeV111,
   createImageResolutionUpdatedFrame,
+  chatApprovalStateSchema,
+  chatApprovalStateSchemaPreAuto,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   guiAgentModelCapabilitiesSchema,
@@ -2273,7 +2276,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 10 as chatSubscribeV110", () => {
+  it("registers chat.subscribe major 1 latestMinor 11 as chatSubscribeV111", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2289,12 +2292,17 @@ describe("chat.subscribe registry membership", () => {
     // full-snapshot contract above windowed `1.9` would silently un-window
     // every peer already capable of it. That is what these assertions together
     // protect - the ceiling, and the line shape at the ceiling.
-    expect(entry[1].latestMinor).toBe(10);
+    //
+    // `11` does not switch anything either: it is the auto-mode line, and
+    // what it switches is the host's willingness to SERVE an `auto` chat at
+    // all.
+    expect(entry[1].latestMinor).toBe(11);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
     expect(entry[1].versions[9].contract).toBe(chatSubscribeV19);
     expect(entry[1].versions[10].contract).toBe(chatSubscribeV110);
+    expect(entry[1].versions[11].contract).toBe(chatSubscribeV111);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2302,19 +2310,82 @@ describe("chat.subscribe registry membership", () => {
       major: 1,
       minor: 10,
     });
+    expect(chatSubscribeV111.schemaVersion).toEqual({
+      major: 1,
+      minor: 11,
+    });
   });
 
   it("keeps the FULL-SNAPSHOT schema version pinned at 1.7 while the ceiling moves", () => {
     // `chatSubscribeFullSnapshotSchemaVersion` names the newest NON-windowed
-    // line, and it must not drift upward with the registry ceiling. `1.8`,
-    // `1.9` and `1.10` are all windowed, so the last full-snapshot line is
-    // still `1.7`; moving this to `10` would hand a full-snapshot consumer a
-    // contract whose snapshot frame carries a bounded `tail` instead of a
-    // whole chat.
+    // line, and it must not drift upward with the registry ceiling. `1.8`
+    // through `1.11` are all windowed, so the last full-snapshot line is
+    // still `1.7`; moving this to the ceiling would hand a full-snapshot
+    // consumer a contract whose snapshot frame carries a bounded `tail`
+    // instead of a whole chat.
     expect(chatSubscribeFullSnapshotSchemaVersion).toEqual({
       major: 1,
       minor: 7,
     });
+  });
+
+  it("keeps the judge fields off every RELEASED chat.subscribe line", () => {
+    // `reason` / `reviewing` are additive and defaulted, which is exactly the
+    // shape that looks safe to let a released line track live and is not: a key
+    // a released host never emits leaves that line's consumers reading
+    // `undefined` from a field their types call present.
+    // `released-baseline-compat.test.ts` is the gate; this is the local,
+    // readable statement of what the gate protects, keyed to the schema
+    // objects rather than to a JSON dump.
+    expect(Object.keys(chatApprovalStateSchemaPreAuto.shape)).not.toContain(
+      "reason",
+    );
+    expect(Object.keys(chatApprovalStateSchemaPreAuto.shape)).not.toContain(
+      "reviewing",
+    );
+    expect(Object.keys(chatApprovalStateSchema.shape)).toContain("reason");
+    expect(Object.keys(chatApprovalStateSchema.shape)).toContain("reviewing");
+
+    // Absent on the wire parses as "no judge ran", never as a missing key.
+    const parsed = chatApprovalStateSchema.parse({
+      approvalId: "a1",
+      toolName: "Bash",
+      description: "run tests",
+      input: null,
+      requestedAt: 1,
+    });
+    expect(parsed.reason).toBeNull();
+    expect(parsed.reviewing).toBeNull();
+  });
+
+  it("carries a judge verdict and a transient stage on the live card", () => {
+    const parsed = chatApprovalStateSchema.parse({
+      approvalId: "a1",
+      toolName: "Bash",
+      description: "git push --force",
+      input: null,
+      requestedAt: 1,
+      reason: { rule: "Force push", text: "Rewrites published history." },
+      reviewing: "reviewing",
+    });
+    expect(parsed.reason).toEqual({
+      rule: "Force push",
+      text: "Rewrites published history.",
+    });
+    expect(parsed.reviewing).toBe("reviewing");
+
+    // The stage vocabulary is closed: an unknown stage is a bug in the emitter,
+    // not something a card should try to render.
+    expect(() =>
+      chatApprovalStateSchema.parse({
+        approvalId: "a1",
+        toolName: "Bash",
+        description: "x",
+        input: null,
+        requestedAt: 1,
+        reviewing: "thinking",
+      }),
+    ).toThrow();
   });
 
   // `cli-v1.3.0` / `host-v1.3.0` shipped `@1.8`, so it is frozen at the

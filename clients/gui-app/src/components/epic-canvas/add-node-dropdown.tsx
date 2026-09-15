@@ -428,6 +428,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             labelDisplay="responsive"
             store={toolbarStore}
             withServiceTier={false}
+            withReasoning
             tuiOnly
             lockedHarnessId={null}
             disabled={tuiAgentPending}

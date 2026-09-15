@@ -66,7 +66,39 @@ import { z } from "zod";
 // released reader will meet. Defaulted `null`, so an older record parses
 // unchanged and residual capture (§3) carries it through an older publisher
 // losslessly; the minimum reader does not change.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 4 } as const;
+//
+// 1.5 reopens `core.settings.permissionMode` from a closed enum to a checked
+// string, so a mode added after this minor does not make a published chat
+// unreadable - the same reopening `noticeKind` got in 1.3, for the same reason
+// (`open-harness.ts`). Widening a leaf from enum to string is additive for a
+// reader: every value a 1.4 record can carry still parses, and the reverse
+// direction is what the reopening exists to survive.
+// `CHAT_SYNC_1_1_READER_FLOOR` is NOT raised and a 1.5 head still stamps
+// `minReaderVersion: null`; §2/§3's `raw` re-emission and residual capture keep
+// an older reader's re-publication lossless.
+//
+// **It protects readers from 1.5 ONWARD, and `auto` is on the wrong side of
+// that line.** `host-v1.3.x` ships chat-sync 1.3, whose
+// `snapshotChatRunSettingsSchema` still inherits the closed three-value enum,
+// and `decodeChatHeadDocument` parses the whole payload at step 4 - before
+// `gateChatHeadVersion` is ever called, and before residual capture can see the
+// leaf. So a chat published in `auto` decodes `schema-rejected` on every reader
+// shipped before this minor: no data loss and no misreading, but a shared chat
+// or clone source such a reader cannot open until it updates.
+//
+// That residual window is precedented rather than new - 1.3's `noticeKind`
+// reopening left exactly the same window toward the 1.1 readers `host-v1.2.0`
+// shipped, and `harness_message` and the five `fallback_*` kinds were added
+// into it. Closing it for `auto` specifically would mean publishing a
+// pre-`auto` value in this field and carrying the real mode elsewhere, which
+// trades a fail-closed refusal for a record that misreports a
+// permission-relevant field to the readers least able to know better (and
+// clones as that value). That is a product call, not a schema one; it is
+// deliberately NOT taken here, and nothing in this file should be read as
+// claiming the exposure does not exist.
+// (Renumbered from 1.4 on the merge to main, which had taken that minor for
+// the delivery-placement field above.)
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 5 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

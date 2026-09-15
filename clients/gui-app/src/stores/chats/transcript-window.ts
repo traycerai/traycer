@@ -16,6 +16,7 @@ import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/
 import {
   assistantRowId,
   assistantRowTurnKey,
+  autoJudgeUnattendedDenialRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
   importedChatMarkerRowId,
@@ -1074,9 +1075,14 @@ export function spanChargeBytes(
 /**
  * Fold one record set's BACKABLE identities into `into` - the derived id
  * shapes every tier produces the same way: a message backs the row carrying
- * its id, an event backs its transcript row, its forked-chat-link row and its
- * imported-chat-marker row, and a stopped turn's event backs that turn's
- * assistant row.
+ * its id, an event backs its transcript row, its forked-chat-link row, its
+ * imported-chat-marker row and its unattended-auto-denial row, and a stopped
+ * turn's event backs that turn's assistant row.
+ *
+ * Every SHAPE is added for every event, unconditionally: this is the set of
+ * ids an event COULD back, not the one it does, so a row source added to the
+ * projection must be added here or the span that hydrates its event never
+ * counts the row as backed.
  *
  * Lives HERE (not in `transcript-list-rows.ts`, which imports it) because the
  * draws relation above and both tiers' backing channels consume the same fold
@@ -1093,6 +1099,7 @@ export function addRecordBackedRowIds(
     into.add(chatTranscriptEventRowId(event.eventId));
     into.add(forkedChatLinkRowId(event.eventId));
     into.add(importedChatMarkerRowId(event.eventId));
+    into.add(autoJudgeUnattendedDenialRowId(event.eventId));
     if (event.type === "turn.stopped" && event.turnId !== null) {
       into.add(assistantRowId(event.turnId));
     }

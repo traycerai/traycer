@@ -22,7 +22,7 @@ import type {
  * MCP/Plugins/Skills with it. Nothing about "does this provider take an API
  * key?" needs the host to say so anyway; `state.apiKey.supported` already does.
  */
-export type ProviderTabKey = ProviderSettingsTab | "account";
+export type ProviderTabKey = ProviderSettingsTab | "account" | "permissions";
 
 /**
  * Stable display order for the provider detail tab bar. Unsupported tabs are
@@ -40,12 +40,23 @@ export type ProviderTabKey = ProviderSettingsTab | "account";
  * belongs with the other configuration tabs. And placing it there cannot move
  * any provider's DEFAULT tab: every provider that advertises it also advertises
  * `general` and `env`, which come first.
+ *
+ * `permissions` - client-only, like `account` - sits after `env`, with the
+ * other configuration tabs: who reviews this provider's commands in Auto mode
+ * is configuration about the provider, not an inventory. It is drawn for
+ * every provider once the host supports auto mode at all, so a user looking
+ * for "permissions" finds the answer on every provider - a switch where the
+ * provider has a classifier of its own, a read-only line where it does not.
+ * After `env` rather than after `general` so it cannot become a provider's
+ * DEFAULT tab: amp and cursor advertise `env` without `general`, and a tab
+ * that every provider gets must not displace the one the provider asked for.
  */
 export const PROVIDER_TAB_ORDER: readonly ProviderTabKey[] = [
   "account",
   "usage",
   "general",
   "env",
+  "permissions",
   "modelProviders",
   "mcp",
   "plugins",
@@ -66,6 +77,15 @@ export interface ProviderTabInputs {
   readonly apiKeySupported: boolean;
   /** `nativeCapabilities.supportedTabs` as advertised by the host. */
   readonly advertised: readonly ProviderSettingsTab[];
+  /**
+   * Whether the selected host supports auto mode at all (it advertises
+   * `autoJudge.get`) - the one fact that makes a Permissions tab worth
+   * drawing. A host that predates auto mode has no judge to name, so the tab
+   * would describe a reviewer that does not exist there. Whether the tab
+   * holds a switch or a read-only line is the section's own question, read
+   * from the harness catalog (`nativeAutoJudge`) where the host says it.
+   */
+  readonly autoModeSupported: boolean;
 }
 
 /**
@@ -94,6 +114,8 @@ export interface ProviderTabInputs {
  * - `usage` is taken at the host's word. It already gates that tab on being
  *   able to populate it (managed profiles, the Traycer subscription card, or
  *   rate limits), which is the same question this side would have to re-derive.
+ * - `permissions` is client-derived from the host's auto-mode support, for
+ *   the reason on {@link ProviderTabInputs}.
  */
 export function supportedTabsFor(
   input: ProviderTabInputs,
@@ -101,14 +123,19 @@ export function supportedTabsFor(
   const advertised = new Set<ProviderTabKey>(input.advertised);
   return PROVIDER_TAB_ORDER.filter((tab) => {
     if (tab === "account") return input.apiKeySupported;
+    if (tab === "permissions") return input.autoModeSupported;
     return advertised.has(tab);
   });
 }
 
-export function providerTabInputs(state: ProviderCliState): ProviderTabInputs {
+export function providerTabInputs(
+  state: ProviderCliState,
+  autoModeSupported: boolean,
+): ProviderTabInputs {
   return {
     apiKeySupported: state.apiKey.supported,
     advertised: state.nativeCapabilities.supportedTabs,
+    autoModeSupported,
   };
 }
 

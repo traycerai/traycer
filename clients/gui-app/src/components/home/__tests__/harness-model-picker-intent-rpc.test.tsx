@@ -291,6 +291,7 @@ function harnessEntry(
     modes: ["gui", "tui"],
     requiresApiKey: false,
     supportedPermissionModes: [...ALL_PERMISSION_MODES],
+    nativeAutoJudge: false,
     availabilityPending: false,
   };
 }
@@ -418,6 +419,7 @@ function renderPickerWithFixture(
             labelDisplay="responsive"
             store={store}
             withServiceTier={false}
+            withReasoning
             tuiOnly={false}
             lockedHarnessId={null}
             disabled={false}

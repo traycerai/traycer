@@ -24,6 +24,7 @@ function harness(id: "claude" | "codex"): HarnessOption {
     modes: ["gui"],
     requiresApiKey: false,
     supportedPermissionModes: ["supervised", "full_access"],
+    nativeAutoJudge: false,
     availabilityPending: false,
   };
 }

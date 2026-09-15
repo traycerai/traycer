@@ -288,7 +288,9 @@ different answers:
   stream and a negotiated import capability; host Diagnostics' Log detail and
   both Shell cards, Terminal shell · New terminals and Host environment ·
   After restart, which a host too old for the config RPC replaces with a
-  notice; and the Overview's Installation and Danger zone cards themselves,
+  notice; Permissions' Auto mode group, which a host advertising
+  neither `autoJudge.get` nor `autoPolicy.get` has no notion of at all; and
+  the Overview's Installation and Danger zone cards themselves,
   which the page drops for an unresolved or vanished host) — not indexed. A
   shell-level context cannot decide selected-host identity or a capability
   negotiated over host RPC, and a predicate that pretended to would be a
@@ -297,8 +299,8 @@ different answers:
   every definition on it `contributesTo: "page"` — its label folds into the
   page entry's keywords beside the page's own vocabulary — so
   "uninstall", "snapshots", "import", "installation", "log level", "startup
-  flags" and "wsl" still land on the right page. The invariant that follows:
-  **no host-scoped section indexes an anchor.**
+  flags", "wsl" and "auto mode policy" still land on the right page. The
+  invariant that follows: **no host-scoped section indexes an anchor.**
 - **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
   host runtime and a successful first read of the browser bridge; host
   Notifications' two groups, which the page's scope gate conceals while the
@@ -905,12 +907,32 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   settled the current shape. Groups are ordered by frequency and risk
   (most-touched first, destructive last), not alphabetized; row internals,
   controls, and confirmation flows are unchanged from before either reorg.
-  - **Chat & composer**: Voice input (`voice-settings-section.tsx`), Quote
-    reply on text selection, Steer with Cmd/Ctrl+Enter (toggles the fixed
-    chord's mid-turn-steering semantics - stays out of Keybindings, which is
-    for rebinding). `Pin context usage breakdown` used to sit here and now
-    lives in **Layout › Chat** - it places a panel rather than changing what
-    the composer does.
+  - **Chat & composer**: **Default permission mode**, Voice input
+    (`voice-settings-section.tsx`), Quote reply on text selection, Steer with
+    Cmd/Ctrl+Enter (toggles the fixed chord's mid-turn-steering semantics -
+    stays out of Keybindings, which is for rebinding). Pin context usage
+    breakdown used to sit here and now lives in **Layout › Chat** - it places
+    a panel rather than changing what the composer does.
+    - **Default permission mode** is the only writer of
+      `settingsStore.defaultPermission`, which until this row existed was
+      initialized and never written. It renders the composer's own
+      `PermissionsPicker` with `supportedPermissionModes={null}` and
+      `harnessLabel={null}` (no harness scope, so every mode stays enabled -
+      that null case was documented on the picker for this row before the row
+      existed) and `closeFocus="trigger"`. That last prop is new and exists for
+      this caller: the picker's composer-focus return is app-global and its
+      inactive fallback can name an editor on a canvas BEHIND Settings, so
+      closing the menu here would pull focus, and the tab it lives in, out from
+      under the panel.
+      It is APPLICATION scope, not host scope, which is why it is here rather
+      than beside the Auto-mode judge it pairs with (see "Scope: the
+      organising idea"): it is one preference for this app. It is also not the
+      only input to a new chat - a composer prefers the last mode that HOST ran
+      with (`composer-run-settings-store`, bucketed per host) - so the copy
+      says "what a fresh one opens on". Session import reads the same ladder
+      (`newChatPermissionModeFor`), which is what makes this row the thing that
+      can put `auto` into an import; see `session-import-wizard.tsx`'s catalog
+      warm-up for why that no longer silently demotes on a remote host.
   - **Browser**: the in-app browser has no toggle - it is always on, and the
     group carries no master switch. What is left of the group is the
     conditional **Detected dev origins** row (terminal URLs with local hosts
@@ -2804,6 +2826,62 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     Claude/OpenCode, but BEFORE Codex's `resume` subcommand). The launch picker
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
+  - **Who reviews &lt;provider&gt;'s commands**
+    (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
+    tab. The tab is client-derived like `account` (`provider-settings-tabs.ts`:
+    never on the wire enum), sits right after Env, and is drawn for EVERY
+    provider once the selected host advertises `autoJudge.get` - a host that
+    predates auto mode has no judge to name, so it shows no tab. After Env
+    rather than after CLI & Args so it cannot become a provider's default tab:
+    amp and cursor advertise `env` without `general`, and a tab every provider
+    gets must not displace the one the provider asked for. Inside, a provider
+    whose GUI harness catalog row
+    reports `nativeAutoJudge` gets the two-option select; every other provider
+    gets a read-only line naming Traycer's judge and pointing at Settings ▸
+    Permissions - "nothing to choose" is still the answer to the question the
+    tab is named for. Nothing renders until the catalog has answered, so the
+    line never flashes at a provider about to get the select. It used to be a
+    section at the bottom of CLI & Args, drawn for Claude Code alone, where
+    nobody looking for "permissions" would open. Labelled by provider rather
+    than "Auto mode judge" because the row
+    under Permissions carries that name too and THIS is the one that wins
+    (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
+    so both rows now name whose judge they are about; the provider name is
+    interpolated, which renders "Who reviews Claude Code's commands" today and
+    does not lie if a second provider ever reports `nativeAutoJudge`. Its
+    description ends with the precedence sentence - choosing the provider's
+    classifier means chats on this provider skip Traycer's judge AND the Auto
+    mode policy entirely - because this control is where that is decided and
+    a user who has written a policy under Permissions has no other way to
+    learn it.
+    A two-option `Select` - Traycer's judge, or this
+    provider's own classifier - written through `providers.setAutoJudge` and
+    persisted as `autoJudge` in `provider-overrides.json`, beside
+    `terminalAgentArgs`, so it takes that neighbour's scoping and invalidation
+    (`providers.list` only; a judge choice cannot change availability).
+    Rendered ONLY for a provider whose `useGuiHarnessesQuery` row reports
+    `nativeAutoJudge: true` - a switch with one option is not a switch, and
+    every other provider runs Traycer's judge with nothing to choose. **Claude
+    Code is the only provider that reports it**, so it is the only select
+    drawn; the flag also stands in for a method gate, because it rides the
+    same catalog minor as the setter, so a host too old to accept the write
+    reports it `false`. Drawing the select is not the same as the provider judging: the
+    host's own store answers `traycer` for a provider nobody has switched, and
+    `resolveAutoJudgeForTurn` resolves anything that is not exactly `provider`
+    to Traycer's judge.
+    The stored value is read back through `ProviderCliState.autoJudge`, which is
+    `.optional()` on the wire rather than defaulted (a host that predates auto
+    mode omits the key, and absent must stay distinguishable at the protocol
+    boundary), so `providerAutoJudgeFor`
+    (`lib/providers/provider-auto-judge.ts`) is the one place that spells the
+    `?? "traycer"` fallback - "never chosen" and "host too old to say" landing
+    on Traycer's judge alike, the same direction every failure mode in the
+    host's own reader takes. The section also holds a local echo of a fresh pick
+    so the control does not snap back for the width of the `providers.list`
+    round-trip (nor permanently, on a host that never reports the field); the
+    echo clears itself the moment the read agrees, which is what lets another
+    window's edit through, and the row is keyed by `providerId` so switching
+    providers discards it.
   - **API-key providers (Cursor).** Cursor authenticates with an API key rather
     than a CLI login, so it renders an `ApiKeySection` (masked input +
     Save/Clear) when `state.apiKey.supported` — **as the whole body of the
@@ -3623,6 +3701,154 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     tested row, but the Test button on every OTHER row is also disabled while
     any one test is in flight (the mutation is global, not per-row) - worth
     knowing if this ever reads as a bug report.
+- `Permissions` (section id `permissions`, route `/settings/permissions`,
+  `panels/permissions-settings-panel.tsx`) Who reviews what an agent does on
+  the selected host under the `auto` permission mode. Its own page, not rows
+  on Agent selection: that page is about which agent gets CHOSEN for a task,
+  and permissions are a different question, asked at a different time (a user
+  decision, 2026-09-12, after the rows first shipped above the guide). The
+  mode's app-wide DEFAULT is not here; it is a General row (see "Scope: the
+  organising idea"). The per-provider switch between Traycer's judge and a
+  provider's own classifier is not here either - it is a fact about one
+  provider's CLI and lives on that provider's own Permissions tab under
+  Providers, which is the switch that wins.
+  One `SettingsGroup`, **Auto mode** (`auto-mode-settings-section.tsx`): the
+  judge row, the policy row and, under it, a read-only view of the rules that
+  apply before either - all host RPCs, all scoped by the sidebar picker. The
+  group and its rows are defined in `permissions-settings.definitions.ts`,
+  every one `contributesTo: "page"`, because the group is dropped whole on a
+  host that has no notion of auto mode (see § Search, "Gated on the SELECTED
+  HOST").
+  - **The section is the whole page, so it never renders nothing.** Two
+    states replace the rows with one sentence: the scope is
+    connecting/unreachable/vanished (`isHostScopeUsable` - checked so the rows
+    are not MOUNTED, since a hidden query still fires against the ambient
+    host), or the host does not advertise `autoJudge.get` / `autoPolicy.get`
+    (optional capabilities with an `unsupported` degrade - so this is every
+    host until it updates, and `useHostSupportsMethod` fails closed, hiding on
+    "not yet known" too), in which case the sentence says the host predates
+    Auto mode and asks for an update. A sentence rather than a hidden
+    `<Activity>` keeping the rows mounted: the cost is that a transient
+    same-host disconnect closes an open policy dialog and drops its draft;
+    accepted, because the judge row holds no draft and the policy dialog is an
+    explicit, explicitly-saved editing session rather than the always-open
+    editor Activity was introduced for.
+  - **Traycer's auto mode judge** reuses the composer's `HarnessModelPicker`
+    (`auto-judge-picker.tsx`) with BOTH footers off - `withServiceTier={false}`
+    and the new `withReasoning={false}` - because the stored record is
+    `(harnessId, model, profileId)` and the judge request carries no effort or
+    tier, so either footer would take a choice and silently drop it. It is
+    wired to its own `createComposerToolbarStore` rather than through
+    `useComposerToolbarStore`, deliberately: that hook records every commit
+    into `composer-harness-memory-store`, and pinning a cheap judge model
+    would then quietly become the model the next chat on that provider offers.
+    (One memory write survives from inside the picker's own `commitSelection` -
+    the last profile browsed for a provider - which is a fact about which
+    credential the user pointed at.) Backed by `autoJudge.get` / `autoJudge.set`
+    over `~/.traycer/host/config/auto-judge.json`; the read is updated in place
+    from the write's response, since the picker commits on every click.
+    `selection: null` means unset. Both responses optionally report `effective`
+    (`harnessId`, `model`, `source`) and `blocked` from the host's shared judge
+    selection rule and provider enablement read, without probing availability.
+    The row says "Using Traycer's default judge · <model>" from that effective
+    slug, using its catalog label when available and the slug otherwise. The
+    picker also seeds its selected mark from `effective` when nothing is stored;
+    it never substitutes the catalog's ordinary chat default for the host's
+    reported judge. A disabled provider gets an amber explanation and a
+    Providers action; no default model or unsupported harness asks the user to
+    pick another judge. Returning from Providers refreshes this read even when
+    cached. Hosts that omit both fields retain the existing default-judge copy.
+    These are optional additions to unreleased 1.0, matching `autoPolicy.get`'s
+    `readState` precedent. A stored `harnessId` this build has no
+    adapter for (a newer host, an older app - the protocol keeps that field a
+    checked string precisely so it decodes) is named in an amber line instead of
+    being presented as some other provider.
+  - **The self-billing warning** sits beside those amber lines, on one rule:
+    `harnessId !== "traycer"`. `traycer` is the only harness metered against
+    Traycer credits; every other one routes through that vendor's CLI on the
+    user's own credential, so no catalog field and no protocol minor are
+    needed - `autoJudgeSelfBillingWarning` (`lib/auto-mode/auto-judge-billing.ts`)
+    is the one place that decides. What VARIES is the severity: Copilot gets a
+    number, because it is the only harness whose billing unit is a fixed
+    monthly allotment of premium requests, and the sentence quotes TRAYCER'S
+    OWN call rate ("one per command reviewed, so an hour of Auto mode can use
+    60-350 of your monthly allowance") rather than GitHub's allotment - the
+    rate is a fact about our behaviour that we control and that cannot go stale
+    when GitHub reprices. Every other non-`traycer` harness gets the generic
+    line, whose "on top of your chat replies" clause is the load-bearing half:
+    the sharpest case is a user picking the SAME harness for chat and judge,
+    which is the natural thing to reach for and doubles the spend on one
+    account. It reads the STORED selection, not the presented one - the host
+    bills what it has stored, and the composer's own meta line reads the same
+    record, so the two surfaces cannot disagree about which pocket is spent.
+  - **Auto mode policy** is a summary plus a button that opens
+    `auto-policy-editor-dialog.tsx`, over `autoPolicy.get` / `autoPolicy.set`.
+    A dialog rather than an inline editor because the panel's height is already
+    spent, and a policy is a document. An empty policy prefills the four
+    headings the judge's prompt builder reads (`Environment`, `Allow`, `Soft
+deny`, `Hard deny`) and nothing else - the guidance about what belongs under
+    each is the dialog's copy, because every byte of the document is prose the
+    judge will read. Save is explicit (no debounced auto-save like the guide's):
+    the record is ACCOUNT-wide and last-write-wins, so every keystroke
+    auto-saved is a keystroke racing another device. Two subtleties:
+    `updatedAt: null` means "cannot tell" - the protocol sends it both for a
+    policy never saved AND for one the host is serving from a cache it could
+    not refresh - so the stale-edit banner fires only on two DIFFERENT non-null
+    stamps, and the summary says "Set" rather than inventing a date; and the
+    64 KiB cap is checked in UTF-8 BYTES as a courtesy pre-flight only, the
+    server being the enforcement (the authoritative constant lives in the
+    closed-source service and reaches no client contract).
+  - **The row reads `readState`, not `body`, first.** `autoPolicy.get` answers
+    `readState: "fresh" | "stale" | "unreadable"` alongside the body, because
+    `body: null` was doing two jobs: "never saved" and "the host could not
+    read it". On `unreadable` the summary says "Couldn't read your policy",
+    the button stays "Edit policy" and is DISABLED, and the editor - the only
+    route to Save - is therefore unreachable; Save is additionally disabled
+    inside the dialog for the case where the read fails while the dialog is
+    already open, with a banner saying why. The clobber this closes is narrow
+    and real: a read that fails while the WRITE path is healthy (an expired
+    lease on the GET, a 5xx from a read replica), where "Not set / Write a
+    policy" invited the user to overwrite a policy they could not see. The
+    property is `.optional()` on the wire and rode into `1.0` in place, so a
+    host that predates the resolver half sends nothing and
+    `autoPolicyReadStateFor` (`auto-policy-document.ts`) resolves that to
+    `fresh` - the behaviour this row had before the field existed - in the one
+    place the fallback is spelled.
+  - **What the judge already blocks** (`auto-policy-shipped-dialog.tsx`) is a
+    read-only view of the rules the judge applies before any policy of the
+    user's, rendered from `shippedDefaults` - the host's whole bundled
+    `auto-judge/defaults.md`, also `.optional()` on the same response. The row
+    is drawn only when that document arrives AND this build can find a tier in
+    it (`auto-policy-shipped-document.ts`), which is what keeps the view
+    invisible on a host that does not send it rather than showing a card with
+    three empty headings. The bullets are the host's document verbatim, so the
+    view can never describe rules that host is not running; only the HEADINGS
+    are replaced, because the document's own are prompt text addressed to the
+    judge and "non-overridable" over-promises to a person, who can always
+    approve the action on the card. The out-of-scope note is the one piece of
+    prose written here rather than taken from the document.
+  - **What the card says when the judge does not decide** is the other end of
+    this page, and lives in the chat rather than in Settings
+    (`chat/segments/approval-card-disclosure.ts`, rendered by
+    `composer-slot-approval-queue.tsx`). The host's `auto: …` reason is printed
+    verbatim and in mono - a screenshot of one is a diagnosis - with a human
+    sentence BESIDE it, never in its place. There are three sentences, because
+    the constants describe three situations and one sentence is false for two
+    of them: **did not run** (`auto: no judge configured`, `auto: judge
+unavailable (…)`, `auto: judge failed`) says "Traycer couldn't run the
+    judge, so it's asking you instead."; **ran without deciding** (`auto: judge
+returned no verdict`, `auto: unparseable verdict`) says "The judge reviewed
+    this but didn't reach a verdict, so it's asking you instead."; **ran out of
+    time** (`auto: judge timed out`, `auto: judge exceeded <n> min`) says "The
+    judge didn't finish in time, so it's asking you instead." The second family
+    is the one the single sentence got wrong: the judge's own reasoning about
+    the action sits directly above that line. The wire carries `{ rule, text }`
+    and no outcome, so the family is read off the STRING; an `auto: ` constant
+    this build does not know - including the four the host emits outside the
+    three families (`turn stopped`, `judge preflight timed out`, `judge tools
+unavailable`, `account policy could not be read`, all of which the first
+    sentence describes truthfully) - falls back to the "couldn't run" line.
+
 - `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers) Editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read

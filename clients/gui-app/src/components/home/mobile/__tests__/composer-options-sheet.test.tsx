@@ -26,6 +26,14 @@ function renderSheet(overrides: {
       onPermissionChange={overrides.onPermissionChange}
       supportedPermissionModes={overrides.supportedPermissionModes}
       harnessLabel="Cursor"
+      // Today's-behaviour values: no catalog to union, no turn in flight and no
+      // host whose judge this fixture could name, so every row renders exactly
+      // what it rendered before these three props existed. The branches they
+      // open are covered against the desktop picker, which shares the two pure
+      // helpers this sheet calls.
+      catalogSupportedModes={null}
+      turnActive={false}
+      judgeBilling={null}
       settingsLocked={overrides.settingsLocked}
     />,
   );
@@ -89,5 +97,26 @@ describe("ComposerOptionsSheet", () => {
         .getByRole("radio", { name: /Full access/ })
         .hasAttribute("disabled"),
     ).toBe(true);
+  });
+
+  it("renders the Auto option and disables it with the unsupported copy on a host whose row lacks it", async () => {
+    const props = {
+      ...defaults(),
+      supportedPermissionModes: [
+        "supervised",
+        "auto_accept_edits",
+        "full_access",
+      ] as ReadonlyArray<PermissionMode>,
+    };
+    renderSheet(props);
+    // Auto is the only mode this row omits, so its "Not supported by" copy
+    // is the unique text to scope through - an accessible-name query would
+    // be ambiguous, since it concatenates label + description and "Auto" is
+    // a substring of "Auto-accept edits" too.
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(auto.hasAttribute("disabled")).toBe(true);
+    expect(auto.textContent).toContain("Not supported by Cursor.");
+    await userEvent.click(auto);
+    expect(props.onPermissionChange).not.toHaveBeenCalled();
   });
 });
