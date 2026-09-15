@@ -466,8 +466,8 @@ export function registerPlatformIpc(
 
   bridge.handleInvoke(
     RunnerHostInvoke.windowSetTitleBarOverlay,
-    (event, color: unknown, symbolColor: unknown) => {
-      handleSetTitleBarOverlay(event, color, symbolColor);
+    (event, color: unknown, symbolColor: unknown, themeSource: unknown) => {
+      handleSetTitleBarOverlay(event, color, symbolColor, themeSource);
     },
   );
 

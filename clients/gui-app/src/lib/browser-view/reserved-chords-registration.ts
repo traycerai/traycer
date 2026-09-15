@@ -7,6 +7,11 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { ACTION_META, type ActionId } from "@/lib/keybindings/actions";
 import { parseModifierChord } from "@/lib/keybindings/chord";
 import { ignoreError } from "./ignore-error";
+import { DESKTOP_MENU_ITEMS } from "@/lib/windows/desktop-menu-items";
+import {
+  resolveDesktopMenuPopupBridge,
+  resolveDesktopPlatform,
+} from "@/lib/windows/desktop-capabilities";
 
 /**
  * THE guest-focused input policy. When a native browser tile has keyboard
@@ -260,7 +265,27 @@ export function registerReservedBrowserChords(
 ): void {
   const browserView = runnerHost.browserView;
   if (browserView === null) return;
+  const platform = resolveDesktopPlatform(runnerHost);
+  const menuChords: readonly BrowserViewReservedChord[] =
+    (platform === "linux" || platform === "win32") &&
+    resolveDesktopMenuPopupBridge(runnerHost) !== null
+      ? DESKTOP_MENU_ITEMS.map(({ mnemonic }) => ({
+          token: formatChord({
+            mod: false,
+            ctrl: false,
+            shift: false,
+            alt: true,
+            key: mnemonic.toLowerCase(),
+          }),
+          command: null,
+        }))
+      : [];
+  // Guest key events cannot reach the menubar's renderer listener. Reuse the
+  // existing app-forwarding path while preserving macOS/page Option shortcuts.
   void browserView
-    .setReservedChords(reservedBrowserChordsFor(bindings, surfaces))
+    .setReservedChords([
+      ...reservedBrowserChordsFor(bindings, surfaces),
+      ...menuChords,
+    ])
     .catch(ignoreError);
 }
