@@ -2646,6 +2646,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     zoom: clampZoom(view.zoom),
   });
   const persistTimerRef = useRef<number | null>(null);
+  // Which camera the pending debounced write (`persistTimerRef`) represents: the
+  // live camera (`persistView`, false) or the manual baseline
+  // (`persistManualBaselineFromLoop`, true). `takePendingView` reads it so a
+  // mode switch inside the debounce flushes the SAME framing the timer would -
+  // returning the live camera for a pending baseline write would persist a
+  // transient playback reframe instead of the user's shifted framing.
+  const pendingBaselineWriteRef = useRef(false);
   // ONE detail surface at a time, the same rule the node graph follows:
   // opening a character replaces an open thread and vice versa, so the floor
   // never has two competing explanations beside it.
@@ -3166,6 +3173,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     if (persistTimerRef.current !== null) {
       window.clearTimeout(persistTimerRef.current);
     }
+    // A live-camera write is pending now, not a baseline one.
+    pendingBaselineWriteRef.current = false;
     persistTimerRef.current = window.setTimeout(() => {
       persistTimerRef.current = null;
       onCameraChange(currentViewPatch());
@@ -3217,6 +3226,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     if (persistTimerRef.current === null) return null;
     window.clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
+    // Flush the SAME framing the pending timer would have written. A shift under
+    // a playback reframe schedules a BASELINE write, and the live camera is a
+    // transient reframe then - return the baseline, not `currentViewPatch`, or
+    // the mode switch persists the playback framing and the shifted manual one
+    // is lost. A manual persist's pending write is the live camera.
+    if (pendingBaselineWriteRef.current) {
+      const camera = manualCameraRef.current;
+      return { x: camera.x, y: camera.y, zoom: camera.zoom };
+    }
     return currentViewPatch();
   }, [currentViewPatch, runtime]);
 
@@ -3438,6 +3456,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     if (persistTimerRef.current !== null) {
       window.clearTimeout(persistTimerRef.current);
     }
+    // A baseline write is pending now: a mode-switch flush must return the
+    // baseline, not the live (possibly playback-reframed) camera.
+    pendingBaselineWriteRef.current = true;
     persistTimerRef.current = window.setTimeout(() => {
       persistTimerRef.current = null;
       const camera = manualCameraRef.current;
