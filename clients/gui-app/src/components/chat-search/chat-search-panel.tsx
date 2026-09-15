@@ -289,7 +289,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
           disabled={unsupported}
           onValueChange={(value) => {
             const option = DATE_OPTIONS.find((entry) => entry.value === value);
-            if (option !== undefined) setDatePreset(option.value);
+            if (option !== undefined) setDatePreset(option.value, Date.now());
           }}
         >
           <SelectTrigger size="sm" aria-label="Date" className="w-auto">

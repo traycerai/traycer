@@ -22,18 +22,24 @@ import { useChatSearchStore } from "@/stores/chat-search/chat-search-store";
 export function ChatSearchDialogHost() {
   const open = useChatSearchStore((state) => state.open);
   const setOpen = useChatSearchStore((state) => state.setOpen);
-  const close = useCallback(() => setOpen(false), [setOpen]);
+  // The clock is read at the gesture, not in the store, and only an OPEN uses
+  // it - see `dateAnchorMs`.
+  const changeOpen = useCallback(
+    (next: boolean) => setOpen(next, Date.now()),
+    [setOpen],
+  );
+  const close = useCallback(() => setOpen(false, Date.now()), [setOpen]);
 
   useEffect(
     () =>
       registerDynamicActionHandler("app.chat-search.open", () => {
-        useChatSearchStore.getState().toggleOpen();
+        useChatSearchStore.getState().toggleOpen(Date.now());
       }),
     [],
   );
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={changeOpen}>
       <DialogContent
         // Anchored high like the command palette, so the list grows downward
         // instead of re-centring on every page. The width stays a viewport cap:

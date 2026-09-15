@@ -23,16 +23,29 @@ export interface ChatSearchState {
   readonly roleFilter: ChatSearchRoleFilter;
   readonly datePreset: ChatSearchDatePreset;
   /**
-   * When the date preset was chosen. A preset is measured back from here
-   * rather than from each render's clock, so the request - and its cache key -
-   * stays put while the dialog is open.
+   * The instant a relative date preset is measured back from.
+   *
+   * Two rules, and both matter. It is re-read when the dialog OPENS, because
+   * the filters outlive a close: "Past day" chosen on Monday and reopened on
+   * Wednesday must mean the last day, not the last three - the label would
+   * otherwise describe a window the request does not ask for. And it is then
+   * FIXED while the dialog is open, because it is part of the request and so
+   * of its cache key: re-reading the clock per render would mint a new key
+   * mid-session and make "show more" page against a moved window.
+   *
+   * Every writer takes `now` rather than reading the clock here, so a test can
+   * advance it.
    */
   readonly dateAnchorMs: number;
-  readonly setOpen: (open: boolean) => void;
-  readonly toggleOpen: () => void;
+  /** `now` is only read on a closed -> open transition. */
+  readonly setOpen: (open: boolean, now: number) => void;
+  readonly toggleOpen: (now: number) => void;
   readonly setScope: (scope: ChatSearchScopeChoice) => void;
   readonly setRoleFilter: (roleFilter: ChatSearchRoleFilter) => void;
-  readonly setDatePreset: (datePreset: ChatSearchDatePreset) => void;
+  readonly setDatePreset: (
+    datePreset: ChatSearchDatePreset,
+    now: number,
+  ) => void;
   readonly resetForTests: () => void;
 }
 
@@ -49,12 +62,25 @@ const INITIAL = {
   "open" | "scope" | "roleFilter" | "datePreset" | "dateAnchorMs"
 >;
 
+/**
+ * The open transition, in one place: opening re-anchors the date presets,
+ * closing and a no-op write leave the anchor where it is.
+ */
+function openTransition(
+  state: ChatSearchState,
+  open: boolean,
+  now: number,
+): Partial<ChatSearchState> | ChatSearchState {
+  if (state.open === open) return state;
+  return open ? { open, dateAnchorMs: now } : { open };
+}
+
 export const useChatSearchStore = create<ChatSearchState>((set) => ({
   ...INITIAL,
-  setOpen: (open) => set((state) => (state.open === open ? state : { open })),
-  toggleOpen: () => set((state) => ({ open: !state.open })),
+  setOpen: (open, now) => set((state) => openTransition(state, open, now)),
+  toggleOpen: (now) => set((state) => openTransition(state, !state.open, now)),
   setScope: (scope) => set({ scope }),
   setRoleFilter: (roleFilter) => set({ roleFilter }),
-  setDatePreset: (datePreset) => set({ datePreset, dateAnchorMs: Date.now() }),
+  setDatePreset: (datePreset, now) => set({ datePreset, dateAnchorMs: now }),
   resetForTests: () => set(INITIAL),
 }));
