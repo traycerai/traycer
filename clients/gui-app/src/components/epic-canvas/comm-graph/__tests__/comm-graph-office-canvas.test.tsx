@@ -3357,6 +3357,81 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.getByTestId("comm-graph-office-directory")).toBeDefined();
   });
 
+  // Finding 39: the test above ("hides the directory ... and restores it once
+  // the detail closes") is the non-vacuous contrast this pair needs - a
+  // RESOLVING selection still hides the directory, so these two are not
+  // passing merely because the directory always shows.
+  it("restores the directory once a selected agent's subject scrubs off the visible floor, not through an explicit close (Finding 39)", () => {
+    // Codex: a selection outlives a playback scrub that takes its subject off
+    // the as-of floor, and the agent-detail surface renders nothing for a
+    // subject it cannot resolve - but suppression was keyed on `shownDetail`
+    // (a panel was ASKED for), not on whether one renders, so the directory
+    // stayed hidden behind a panel that was not there, with no way back: the
+    // chrome toggle flips `directoryOpen`, which that suppression never
+    // consulted.
+    const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
+    const view = render(
+      withQueryClient(officeElement(both, STATIC_OFFICE, {})),
+    );
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+    expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+    expect(screen.queryByTestId("comm-graph-office-directory")).toBeNull();
+
+    // The scrub itself: `agentIds` is the tile's own as-of visible set, and
+    // dropping the selected agent's id from it - without touching the
+    // selection or the toggle - is what a scrub past that agent looks like
+    // from the canvas's perspective.
+    view.rerender(
+      withQueryClient(officeElement(new Set([REVIEWER.id]), STATIC_OFFICE, {})),
+    );
+
+    // The panel can no longer resolve a subject that is not visible, so it
+    // renders nothing - and the directory must come back on its own, exactly
+    // as it does on an explicit close.
+    expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
+    expect(screen.getByTestId("comm-graph-office-directory")).toBeDefined();
+  });
+
+  it("restores the directory once a selected pair's edge drops out of the aggregation after a scrub (Finding 39)", () => {
+    // The pair-arm twin of the agent-arm test above: `selectedEdge` is
+    // resolved from `aggregated`, which is itself filtered by `agentIds`, so
+    // dropping either endpoint from the visible set makes the pair's edge -
+    // and therefore the thread panel - disappear the same way.
+    const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
+    const view = render(
+      withQueryClient(officeElement(both, STATIC_OFFICE, {})),
+    );
+    setIntersecting(true);
+    view.rerender(withQueryClient(officeElement(both, IN_FLIGHT, {})));
+    const rect = envelopeRect(both);
+    const surface = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
+    const point = {
+      clientX: rect.x + rect.width / 2,
+      clientY: rect.y + rect.height / 2,
+    };
+    fireEvent.pointerDown(surface, { pointerId: 1, ...point });
+    fireEvent.pointerUp(surface, { pointerId: 1, ...point });
+
+    expect(screen.getByTestId("comm-graph-thread-panel")).toBeDefined();
+    expect(screen.queryByTestId("comm-graph-office-directory")).toBeNull();
+
+    // Scrub REVIEWER off the visible floor: the pair's edge vanishes from
+    // `aggregated`, exactly as an agent node would vanish from `visibleAgents`.
+    view.rerender(
+      withQueryClient(officeElement(new Set([ORCHESTRATOR.id]), IN_FLIGHT, {})),
+    );
+
+    expect(screen.queryByTestId("comm-graph-thread-panel")).toBeNull();
+    expect(screen.getByTestId("comm-graph-office-directory")).toBeDefined();
+  });
+
   it("pans to an agent found in the directory search through scene.locate, not a pixel result", () => {
     // jsdom never runs the animation loop that would actually move the
     // camera (no 2d context), so the observable claim here is that the pan
