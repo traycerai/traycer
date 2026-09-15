@@ -20,6 +20,7 @@ import { handleSetTitleBarOverlay } from "../window-effects";
  */
 
 const setTitleBarOverlay = vi.fn();
+const setBackgroundColor = vi.fn();
 const fromWebContents = vi.fn();
 const { nativeTheme } = vi.hoisted(() => ({
   nativeTheme: {
@@ -50,12 +51,14 @@ vi.mock("../logger", () => ({
 interface FakeWindow {
   isDestroyed(): boolean;
   setTitleBarOverlay(options: unknown): void;
+  setBackgroundColor(color: string): void;
 }
 
 function fakeWindow(destroyed: boolean): FakeWindow {
   return {
     isDestroyed: () => destroyed,
     setTitleBarOverlay,
+    setBackgroundColor,
   };
 }
 
@@ -84,6 +87,7 @@ afterAll(() => {
 });
 beforeEach(() => {
   setTitleBarOverlay.mockClear();
+  setBackgroundColor.mockClear();
   fromWebContents.mockReset();
   nativeTheme.themeSource = "system";
 });
@@ -102,6 +106,7 @@ describe("handleSetTitleBarOverlay", () => {
       color: "#1e1e2e",
       symbolColor: "#cdd6f4",
     });
+    expect(setBackgroundColor).toHaveBeenCalledWith("#1e1e2e");
   });
 
   it("applies the renderer-provided colors to the sender window on Linux", () => {
@@ -114,6 +119,7 @@ describe("handleSetTitleBarOverlay", () => {
       color: "#1e1e2e",
       symbolColor: "#cdd6f4",
     });
+    expect(setBackgroundColor).toHaveBeenCalledWith("#1e1e2e");
     expect(nativeTheme.themeSource).toBe("dark");
   });
 
@@ -142,6 +148,7 @@ describe("handleSetTitleBarOverlay", () => {
     handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4", "system");
 
     expect(setTitleBarOverlay).not.toHaveBeenCalled();
+    expect(setBackgroundColor).not.toHaveBeenCalled();
   });
 
   it("ignores non-string colors", () => {
@@ -151,6 +158,7 @@ describe("handleSetTitleBarOverlay", () => {
     handleSetTitleBarOverlay(event, 123, null, "system");
 
     expect(setTitleBarOverlay).not.toHaveBeenCalled();
+    expect(setBackgroundColor).not.toHaveBeenCalled();
   });
 
   it("ignores a destroyed sender window", () => {
@@ -160,5 +168,6 @@ describe("handleSetTitleBarOverlay", () => {
     handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4", "system");
 
     expect(setTitleBarOverlay).not.toHaveBeenCalled();
+    expect(setBackgroundColor).not.toHaveBeenCalled();
   });
 });

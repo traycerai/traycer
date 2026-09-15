@@ -132,6 +132,9 @@ export function handleSetTitleBarOverlay(
   const resolved = resolveSenderWindow(event);
   if (resolved === null) return;
   resolved.window.setTitleBarOverlay({ color, symbolColor });
+  // Chromium clears to this color while the renderer reloads. Keep that
+  // fallback surface in step with the controls, including light/custom themes.
+  resolved.window.setBackgroundColor(color);
   if (
     process.platform === "linux" &&
     (themeSource === "system" ||
