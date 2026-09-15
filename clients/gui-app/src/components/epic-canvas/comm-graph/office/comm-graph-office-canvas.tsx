@@ -2431,11 +2431,20 @@ function OfficeChromeRow(props: {
   readonly modeToggle: ReactNode;
 }) {
   return (
-    <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
+    // Right-anchored, but capped to the pane and allowed to wrap. At the 240px
+    // minimum split the floor is only ~168px wide and the group plus the mode
+    // buttons no longer fit on one line; without the cap the row overflows LEFT
+    // and, under the container's `overflow-hidden`, clips the directory toggle
+    // and view picker - the very controls a person needs to escape that split.
+    // `max-w` keeps the row inside the pane and `flex-wrap` drops the mode
+    // buttons to a second line instead of clipping. The frame is
+    // `pointer-events-none` (each control re-enables its own) so the transparent
+    // gap a wrap opens up over the floor does not swallow a pan.
+    <div className="pointer-events-none absolute top-2 right-2 z-10 flex max-w-[calc(100%-1rem)] flex-wrap items-center justify-end gap-1">
       <div
         className={cn(
-          "flex items-center gap-0.5 rounded-md border border-border",
-          "bg-popover p-0.5 shadow-xs",
+          "pointer-events-auto flex items-center gap-0.5 rounded-md",
+          "border border-border bg-popover p-0.5 shadow-xs",
         )}
       >
         <Button
@@ -2453,7 +2462,7 @@ function OfficeChromeRow(props: {
         </Button>
         {props.viewPicker}
       </div>
-      {props.modeToggle}
+      <div className="pointer-events-auto">{props.modeToggle}</div>
     </div>
   );
 }
@@ -2624,6 +2633,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const hoverAnchorRef = useRef<OfficeHoverAnchor | null>(null);
   /** The box the card was last placed at, so a frame that moved nothing is free. */
   const hoverRectRef = useRef<OfficeRect | null>(null);
+  // The whereabouts the card last SHOWED. A rename can reletter the room a
+  // stationary character sits in - the box does not move but `whereabouts`
+  // changes - so the frame loop compares this too, not just the box.
+  const hoverWhereaboutsRef = useRef<string | null>(null);
   // A pan asked for outside the frame loop. Handlers and the Find adapter have
   // no frame clock, so they name the destination and the loop starts it.
   const dragRef = useRef<DragState | null>(null);
@@ -2646,13 +2659,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     zoom: clampZoom(view.zoom),
   });
   const persistTimerRef = useRef<number | null>(null);
-  // Which camera the pending debounced write (`persistTimerRef`) represents: the
-  // live camera (`persistView`, false) or the manual baseline
-  // (`persistManualBaselineFromLoop`, true). `takePendingView` reads it so a
-  // mode switch inside the debounce flushes the SAME framing the timer would -
-  // returning the live camera for a pending baseline write would persist a
-  // transient playback reframe instead of the user's shifted framing.
-  const pendingBaselineWriteRef = useRef(false);
+  // The exact patch the pending debounced write (`persistTimerRef`) will save,
+  // captured when the write is SCHEDULED - not re-read from the live camera when
+  // the timer fires. A playback pan can seize the live camera between a manual
+  // gesture and the 150 ms fire (Play clicked inside the debounce), and playback
+  // pans never persist on arrival; re-reading then would save that transient
+  // reframe over the framing the user set. `takePendingView` flushes this same
+  // captured patch, so the debounce and a mode switch agree on the value.
+  const pendingPatchRef = useRef<CommGraphTileCamera | null>(null);
   // ONE detail surface at a time, the same rule the node graph follows:
   // opening a character replaces an open thread and vice versa, so the floor
   // never has two competing explanations beside it.
@@ -3173,11 +3187,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     if (persistTimerRef.current !== null) {
       window.clearTimeout(persistTimerRef.current);
     }
-    // A live-camera write is pending now, not a baseline one.
-    pendingBaselineWriteRef.current = false;
+    // Capture the framing NOW - the gesture this call reflects (or the neutral
+    // sentinel under auto-fit) - so a playback pan that seizes the live camera
+    // before the timer fires cannot swap it for a transient reframe.
+    pendingPatchRef.current = currentViewPatch();
     persistTimerRef.current = window.setTimeout(() => {
       persistTimerRef.current = null;
-      onCameraChange(currentViewPatch());
+      if (pendingPatchRef.current !== null) {
+        onCameraChange(pendingPatchRef.current);
+      }
     }, VIEW_PERSIST_DEBOUNCE_MS);
   }, [currentViewPatch, onCameraChange, runtime]);
 
@@ -3226,17 +3244,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     if (persistTimerRef.current === null) return null;
     window.clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
-    // Flush the SAME framing the pending timer would have written. A shift under
-    // a playback reframe schedules a BASELINE write, and the live camera is a
-    // transient reframe then - return the baseline, not `currentViewPatch`, or
-    // the mode switch persists the playback framing and the shifted manual one
-    // is lost. A manual persist's pending write is the live camera.
-    if (pendingBaselineWriteRef.current) {
-      const camera = manualCameraRef.current;
-      return { x: camera.x, y: camera.y, zoom: camera.zoom };
-    }
-    return currentViewPatch();
-  }, [currentViewPatch, runtime]);
+    // Flush the SAME framing the pending timer would have written: the patch
+    // captured when the write was scheduled, never a fresh read of the live
+    // camera. Under a playback reframe the live camera is a transient the
+    // pending write never represented - the manual gesture's captured framing
+    // or the shift's captured baseline is what must survive the mode switch.
+    return pendingPatchRef.current;
+  }, [runtime]);
 
   useEffect(() => {
     onRegisterFlush(takePendingView);
@@ -3450,19 +3464,22 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // Persist the MANUAL BASELINE from inside the loop, not the live camera. On a
   // world-growing shift the live camera may be a playback reframe that must not
   // be saved, but the shifted baseline is the framing to keep. Shares the
-  // persist debounce with `persistView` (one write pending at a time), and like
-  // it reads at fire time so a burst of shifts coalesces to the last baseline.
+  // persist debounce with `persistView` (one write pending at a time); a later
+  // shift reschedules with its own newer baseline, so a burst coalesces to the
+  // last one.
   const persistManualBaselineFromLoop = useEffectEvent((): void => {
     if (persistTimerRef.current !== null) {
       window.clearTimeout(persistTimerRef.current);
     }
-    // A baseline write is pending now: a mode-switch flush must return the
-    // baseline, not the live (possibly playback-reframed) camera.
-    pendingBaselineWriteRef.current = true;
+    // Capture the shifted baseline NOW - the framing to keep - so the flush and
+    // the fire persist it, not the live (playback-reframed) camera.
+    const camera = manualCameraRef.current;
+    pendingPatchRef.current = { x: camera.x, y: camera.y, zoom: camera.zoom };
     persistTimerRef.current = window.setTimeout(() => {
       persistTimerRef.current = null;
-      const camera = manualCameraRef.current;
-      onCameraChange({ x: camera.x, y: camera.y, zoom: camera.zoom });
+      if (pendingPatchRef.current !== null) {
+        onCameraChange(pendingPatchRef.current);
+      }
     }, VIEW_PERSIST_DEBOUNCE_MS);
   });
 
@@ -3610,20 +3627,25 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       if (rect === null) {
         hoverAnchorRef.current = null;
         hoverRectRef.current = null;
+        hoverWhereaboutsRef.current = null;
         runtime.setHoveredAgentId(null);
         setHoverCard(null);
         return;
       }
-      if (sameRect(rect, hoverRectRef.current)) return;
-      // React state, so only a box that actually moved is worth a render. The
-      // "where" is re-read on those same frames: what moves a character's box
-      // is exactly what changes where it is.
+      const whereabouts = scene.whereabouts(anchor.agentId);
+      // React state, so only a frame that changed something is worth a render -
+      // but "something" is the box OR the where. A rename reletters a room under
+      // a character that never moved, so the box can match while the whereabouts
+      // label goes stale; re-render on either.
+      if (
+        sameRect(rect, hoverRectRef.current) &&
+        whereabouts === hoverWhereaboutsRef.current
+      ) {
+        return;
+      }
       hoverRectRef.current = rect;
-      setHoverCard({
-        agentId: anchor.agentId,
-        rect,
-        whereabouts: scene.whereabouts(anchor.agentId),
-      });
+      hoverWhereaboutsRef.current = whereabouts;
+      setHoverCard({ agentId: anchor.agentId, rect, whereabouts });
     };
 
     /**
@@ -4058,6 +4080,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           ? null
           : { agentId: target.agentId, screenX: screen.x, screenY: screen.y };
       hoverRectRef.current = target === null ? null : target.rect;
+      hoverWhereaboutsRef.current = target === null ? null : target.whereabouts;
       setHoverCard(target);
       // An envelope is clickable too, so it earns the same cursor even where
       // it is flying over open floor with no desk under it.
@@ -4091,6 +4114,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const clearHover = useCallback(() => {
     hoverAnchorRef.current = null;
     hoverRectRef.current = null;
+    hoverWhereaboutsRef.current = null;
     runtime.setHoveredAgentId(null);
     setHoverCard(null);
   }, [runtime]);
