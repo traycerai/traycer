@@ -2581,6 +2581,19 @@ function detailToShow(
   return measuring ? null : detail;
 }
 
+/**
+ * The directory shows only when it is open AND no detail panel is claiming
+ * width - together they would crush the floor at the 240px minimum split.
+ * Extracted so its condition does not count against the component's complexity
+ * ceiling.
+ */
+function shouldShowDirectory(
+  directoryOpen: boolean,
+  shownDetail: OfficeSelectedDetail | null,
+): boolean {
+  return directoryOpen && shownDetail === null;
+}
+
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const {
     agentIds,
@@ -4026,6 +4039,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     (event: ReactPointerEvent<HTMLElement>) => {
       const canvas = canvasRef.current;
       if (canvas === null) return;
+      // No camera gesture on the throwaway measuring mount: a drag would pan a
+      // runtime the measuring->resolved remount discards. Selection is gated in
+      // handlePointerUp; this gates the pan. (`measuring` is mount-constant.)
+      if (measuring) return;
       // Manual control is claimed when the drag actually MOVES, not here. A
       // plain click on an agent is not a statement about the camera, and
       // taking control on every press disabled auto-fit for the session.
@@ -4040,7 +4057,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       };
       canvas.setPointerCapture(event.pointerId);
     },
-    [runtime],
+    [measuring, runtime],
   );
 
   const handlePointerMove = useCallback(
@@ -4226,6 +4243,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
+    // The wheel pans and zooms the camera - a no-op on the throwaway measuring
+    // mount whose runtime the remount discards, so it is not wired up while Auto
+    // measures. (`measuring` is mount-constant.)
+    if (measuring) return;
     const onWheel = (event: WheelEvent): void => {
       event.preventDefault();
       runtime.takeManualControl();
@@ -4266,7 +4287,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     return () => {
       container.removeEventListener("wheel", onWheel);
     };
-  }, [panBy, runtime, zoomAbout]);
+  }, [measuring, panBy, runtime, zoomAbout]);
 
   // A double-click is the one gesture that reads as "closer, here" in every
   // map surface; the floor had no answer to it at all.
@@ -4277,12 +4298,16 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // element it came from does not matter.
   const handleDoubleClick = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
+      // No camera gesture on the throwaway measuring mount; the zoom would move
+      // a runtime the measuring->resolved remount discards. (`measuring` is
+      // mount-constant.)
+      if (measuring) return;
       const screen = toScreenPoint(event.clientX, event.clientY);
       if (screen === null) return;
       runtime.takeManualControl();
       zoomAbout(ZOOM_BUTTON_FACTOR, screen.x, screen.y);
     },
-    [runtime, toScreenPoint, zoomAbout],
+    [measuring, runtime, toScreenPoint, zoomAbout],
   );
 
   /**
@@ -4294,6 +4319,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
    */
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+      // No camera gesture on the throwaway measuring mount; the keys move a
+      // runtime the remount discards, so they stay with whatever owns the floor
+      // while Auto measures. (`measuring` is mount-constant.)
+      if (measuring) return;
       // Bare viewer keys only. A modified chord - Cmd/Ctrl+F, Cmd/Ctrl+Minus,
       // Cmd/Ctrl+0 - belongs to the global keybinding provider, which runs it
       // during the capture phase BEFORE this target handler; matching it here
@@ -4351,7 +4380,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // so typing anywhere over the floor still reaches whatever owns it.
       event.preventDefault();
     },
-    [fitToFloor, panBy, runtime, zoomAbout],
+    [fitToFloor, measuring, panBy, runtime, zoomAbout],
   );
 
   const visibleAgents = useMemo(
@@ -4512,8 +4541,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         is read WHILE the floor is, so it takes width rather than covering it -
         and taking width is also what makes the canvas box Auto measures the
         box the office really gets.
+
+        But it YIELDS to an open detail panel. The directory (30%) and a detail
+        (up to 50%) together leave the floor ~20% - unusable at the 240px minimum
+        split, where the canvas is overflow-hidden - so a shown detail hides the
+        directory rather than crushing the office between two panels. The open
+        state is kept, so closing the detail brings the directory back.
       */}
-      {!directoryOpen ? null : (
+      {!shouldShowDirectory(directoryOpen, shownDetail) ? null : (
         <OfficeDirectoryPanel
           partition={partition}
           visibleAgentIds={agentIds}
@@ -4630,7 +4665,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         </ul>
         <div
           className={cn(
-            "absolute bottom-2 left-2 z-10 flex flex-col items-start gap-1",
+            // pointer-events-none FRAME: the chips are read-only (their own
+            // roots already carry pointer-events-none), but a wrapper left at
+            // the default auto would still catch a pan or double-click started
+            // over the chips and never pass it to the canvas. The zoom group
+            // re-enables pointer events for itself below.
+            "pointer-events-none absolute bottom-2 left-2 z-10 flex flex-col items-start gap-1",
             // Capped against the tile: the auto chip is a sentence, and a
             // sentence has no business being wider than the office it is
             // explaining. The box is shrink-to-fit and absolutely positioned,
@@ -4654,7 +4694,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           <OfficeLodChip lod={lodBand} />
           <div
             className={cn(
-              "flex flex-col gap-0.5",
+              // The one interactive child, so it takes pointer events back from
+              // the pointer-events-none frame above.
+              "pointer-events-auto flex flex-col gap-0.5",
               "rounded-md border border-border bg-popover p-0.5 shadow-xs",
             )}
           >
@@ -4664,6 +4706,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
               variant="outline"
               aria-label="Zoom in"
               data-testid="comm-graph-office-zoom-in"
+              // Disabled while Auto measures: this mount's runtime is a throwaway
+              // the measuring->resolved remount discards, so a zoom would mutate
+              // a camera nobody keeps and silently do nothing.
+              disabled={measuring}
               onClick={handleZoomIn}
             >
               <Plus aria-hidden />
@@ -4674,6 +4720,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
               variant="outline"
               aria-label="Zoom out"
               data-testid="comm-graph-office-zoom-out"
+              disabled={measuring}
               onClick={handleZoomOut}
             >
               <Minus aria-hidden />
@@ -4684,6 +4731,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
               variant="outline"
               aria-label="Fit the office floor"
               data-testid="comm-graph-office-fit"
+              disabled={measuring}
               onClick={handleFit}
             >
               <Maximize aria-hidden />

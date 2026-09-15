@@ -657,9 +657,10 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
       setMinimapSide: makeSetter(set, "chatTurnMinimapSide"),
-      // Not `makeSetter`: a real change also bumps the generation, so a tile
-      // that was closed across the change can tell a stale Auto outcome from a
-      // current one on remount.
+      // Not `makeSetter`: a real change also rolls the generation to a fresh
+      // collision-free stamp, so a tile closed across the change can tell a
+      // stale Auto outcome from a current one on remount - even against another
+      // window that changed the default at the same time.
       setAgentOfficeDefaultView: (value) =>
         set((s) =>
           s.agentOfficeDefaultView === value
@@ -667,7 +668,7 @@ export const useSettingsStore = create<SettingsState>()(
             : {
                 agentOfficeDefaultView: value,
                 agentOfficeDefaultViewGeneration:
-                  s.agentOfficeDefaultViewGeneration + 1,
+                  nextAgentOfficeDefaultViewGeneration(),
               },
         ),
       setPointerCursors: makeSetter(set, "pointerCursors"),
@@ -1193,6 +1194,16 @@ function resolvePersistedAgentOfficeGeneration(value: unknown): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0
     ? value
     : 0;
+}
+
+function nextAgentOfficeDefaultViewGeneration(): number {
+  // A collision-free revision stamp, NOT a per-window counter. The generation
+  // is compared by EQUALITY - a tile trusts its Auto outcome only while its
+  // stamp still equals the current generation - so two windows that change the
+  // default before either sees the other's `storage` event must not land on the
+  // same next value. `+1` guarantees they collide; a random draw over the
+  // safe-integer range does not, and ordering is never read here.
+  return Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
 }
 
 function resolvePersistedAgentTabSurfacing(
