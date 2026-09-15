@@ -74,12 +74,19 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 }));
 
 // The shared tooltip pulls in the worktree/PR machinery through its OWN
-// deps, none of which this suite provides - and F6 only needs the TRIGGER
-// (the transparent hit target the double-click lands on) live in the tree,
-// not the card's contents. Passing the trigger straight through keeps that
-// element real while skipping everything downstream of it.
+// deps, none of which this suite provides - and most of this suite only
+// needs the TRIGGER (the transparent hit target a click/double-click lands
+// on) live in the tree, not the card's contents. Passing the trigger straight
+// through keeps that element real while skipping everything downstream of it.
+// Wrapped in `vi.fn` (a change to how the double is BUILT, not to what it
+// renders - every other test still gets the byte-identical trigger-only
+// output) so ONE test (Finding 31) can swap in a fuller implementation to
+// read the office's own supplement text, then restore this default.
+const AGENT_HOVER_TOOLTIP_TRIGGER_ONLY = vi.hoisted(
+  () => (props: { readonly trigger: ReactNode }) => props.trigger,
+);
 vi.mock("@/components/epic-canvas/sidebar/agent-hover-tooltip", () => ({
-  AgentHoverTooltip: (props: { readonly trigger: ReactNode }) => props.trigger,
+  AgentHoverTooltip: vi.fn(AGENT_HOVER_TOOLTIP_TRIGGER_ONLY),
 }));
 
 import {
@@ -101,6 +108,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { cloneElement, type ReactNode } from "react";
+import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OfficeAutoChip } from "@/components/epic-canvas/comm-graph/office/office-auto-chip";
 import type { OfficeAutoDecision } from "@/lib/comm-graph/office/office-auto";
@@ -645,6 +653,47 @@ function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
   const regions = scene.frame(2, WHOLE_WORLD).envelopeHitRegions;
   if (regions.length === 0) throw new Error("No envelope was in flight");
   return regions[0].rect;
+}
+
+/**
+ * `scene.whereabouts(agentId)`, from a scene independently built and synced
+ * the same way the component's own scene is - so a rename's effect on a
+ * room's lettering can be verified WITHOUT reading it back through the
+ * component's own gated hover-card update, which is exactly the behavior
+ * Finding 31 is about. Same technique as {@link envelopeRect} above.
+ */
+function sceneWhereabouts(
+  agents: ReadonlyArray<OfficeAgentInput>,
+  agentId: string,
+): string | null {
+  const scene = new OfficeScene(OFFICE_VIEWS.floor, null);
+  const statusById = new Map(
+    agents.map((agent) => [agent.id, "working" as const]),
+  );
+  const ids = new Set(agents.map((agent) => agent.id));
+  scene.sync({
+    agents,
+    visibleAgentIds: ids,
+    statusById,
+    partition: partitionOfficePopulation({
+      agents,
+      statusById,
+      previous: null,
+    }),
+    activityById: new Map(),
+    viewport: { width: 0, height: 0 },
+    pulse: null,
+    pulseKey: null,
+    stepMs: BASE_STEP_MS / 1,
+    cursorMs: null,
+    clockMs: 0,
+    openRequestsByReceiver: new Map(),
+    playing: false,
+    reducedMotion: false,
+    feedSettled: false,
+  });
+  scene.frame(1, WHOLE_WORLD);
+  return scene.whereabouts(agentId);
 }
 
 function latestFindAdapter(): TileFindAdapter {
@@ -2104,6 +2153,288 @@ describe("CommGraphOfficeCanvas", () => {
         clientY: originY + 50,
       });
     });
+  });
+
+  it("persists the framing captured when persistView was SCHEDULED, not a fire-time re-read of a playback pan that seized the camera meanwhile (Finding 30)", () => {
+    // Codex: a manual gesture schedules a 150ms debounced write and used to
+    // re-read the LIVE camera when the timer fired. Clicking Play inside that
+    // window lets a non-persistent playback auto-pan seize the live camera
+    // before the callback runs - playback pans never persist on arrival, so
+    // the old code silently saved that transient reframe instead of the
+    // manual framing the user actually set. The fix captures the patch at
+    // SCHEDULE time (`pendingPatchRef.current = currentViewPatch()`) and the
+    // timer writes that captured value, never a fresh read.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const onCameraChange = vi.fn();
+    const { step } = installCanvas();
+    const frames = vi.spyOn(OfficeScene.prototype, "frame");
+    const viewport = { width: 1040, height: 700 };
+    // Manually framed and deliberately far from the agent's real seat, so a
+    // real playback pan (not a decline) is what seizes the camera below - the
+    // same technique the F2 Finding 26 test uses.
+    const farView: CommGraphTileViewState = {
+      ...FIXED_CAMERA_VIEW,
+      x: -10000,
+      y: -10000,
+    };
+    const pulse: CommGraphPulse = {
+      kind: "agent",
+      agentId: ORCHESTRATOR.id,
+      senderAgentId: ORCHESTRATOR.id,
+    };
+    const view = render(
+      withQueryClient(
+        officeElementWithView(
+          OFFICE_VIEWS.floor,
+          new Set([ORCHESTRATOR.id]),
+          [ORCHESTRATOR],
+          { onCameraChange, view: farView },
+        ),
+      ),
+    );
+    setIntersecting(true);
+    step();
+
+    const canvas = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
+    // The manual gesture that ENDS and schedules `persistView`: press, move
+    // past CLICK_SLOP_PX, release.
+    fireEvent.pointerDown(canvas, {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 1,
+      clientX: 150,
+      clientY: 100,
+    });
+    step();
+
+    const manualFrame = cameraFromFrame(frames, viewport);
+    if (manualFrame === null) throw new Error("no frame after manual drag");
+
+    fireEvent.pointerUp(canvas, {
+      pointerId: 1,
+      clientX: 150,
+      clientY: 100,
+    });
+
+    // Play is clicked INSIDE the 150ms debounce window: a real playback pan
+    // seizes the live camera before the timer fires. Same three-frame
+    // choreography as F2's Finding 26 test - two frames before a seated
+    // character exists to resolve the pulse's focus, the pan request
+    // converts to an ACTIVE pan (and the camera actually moves) on the frame
+    // after that.
+    view.rerender(
+      withQueryClient(
+        officeElementWithView(
+          OFFICE_VIEWS.floor,
+          new Set([ORCHESTRATOR.id]),
+          [ORCHESTRATOR],
+          {
+            onCameraChange,
+            view: farView,
+            playing: true,
+            pulse,
+            pulseKey: "f30-pulse",
+          },
+        ),
+      ),
+    );
+    step();
+    step();
+    step();
+
+    const playFrame = cameraFromFrame(frames, viewport);
+    if (playFrame === null) throw new Error("no frame after playback pan");
+    // Anti-vacuity: the playback pan really did seize the live camera away
+    // from the manual framing - otherwise the assertion below would pass even
+    // reading a re-read that never happened to differ.
+    expect(playFrame.x).not.toBeCloseTo(manualFrame.x, 1);
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).toHaveBeenCalled();
+    const last = onCameraChange.mock.calls.at(-1)?.[0] as {
+      x: number;
+      y: number;
+      zoom: number;
+    };
+    // The distinguishing assertion: what got persisted is the SCHEDULE-time
+    // manual framing, not the playback reframe that owns the screen when the
+    // timer actually fires.
+    expect(last.x).toBeCloseTo(manualFrame.x, 1);
+    expect(last.y).toBeCloseTo(manualFrame.y, 1);
+    expect(last.zoom).toBeCloseTo(manualFrame.zoom);
+    expect(last.x).not.toBeCloseTo(playFrame.x, 1);
+  });
+
+  it("refreshes the open hover card's whereabouts when a rename reletters its room, without the member's box moving (Finding 31)", () => {
+    // Codex: renaming a team LEAD reletters that team's room via
+    // `withRefreshedNames` (geometry untouched, only the copied names
+    // change), so a stationary MEMBER's `scene.whereabouts()` goes stale
+    // while its screen rect stays exactly where it was. The frame loop's old
+    // early return only compared the rect, so it never re-rendered the card.
+    // The fix adds `hoverWhereaboutsRef` and re-renders when EITHER changed.
+    //
+    // This suite's shared `AgentHoverTooltip` mock renders only the trigger
+    // (see its definition above), so the office's own supplement text never
+    // reaches the DOM by default. Swapped in here for this test alone, and
+    // restored in `finally` so nothing leaks to the other 111+ tests in this
+    // file that depend on the trigger-only default.
+    vi.mocked(AgentHoverTooltip).mockImplementation((props) => (
+      <>
+        {props.trigger}
+        {props.extraContent}
+      </>
+    ));
+    try {
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const fixture = makeTestEpic("one-team", 12, 1);
+      // "one-team": everybody under ONE lead - a single cabin/room per HOST,
+      // keyed on that ROOT agent (`collectCabins`: "one cabin per root, each
+      // holding its whole subtree"). A nested team's own sub-lead does NOT
+      // get its own room - only the cabin's root does - so the root is the
+      // "team lead" whose rename reletters the room every member reads.
+      const lead = fixture.agents.find((a) => a.parentId === null);
+      if (lead === undefined) throw new Error("fixture has no root lead");
+      const member = fixture.agents.find((a) => a.parentId === lead.id);
+      if (member === undefined) {
+        throw new Error("fixture has no member under the lead");
+      }
+      const agents = fixture.agents.map(canvasAgent);
+      const ids = new Set(agents.map((a) => a.id));
+
+      const view = render(
+        withQueryClient(
+          officeElement(ids, STATIC_OFFICE, {
+            agents,
+            // A non-default view (x:1, not the neutral x:0/y:0/zoom:1
+            // sentinel) keeps auto-fit off, same as F6 - the camera stays
+            // exactly this identity-ish framing, so a hit region's rect
+            // (sprite space) can be fed straight in as a screen coordinate.
+            view: { ...OFFICE_VIEW, x: 1 },
+          }),
+        ),
+      );
+      setIntersecting(true);
+      step();
+
+      const hit = lastHitRegions(frames).find((r) => r.agentId === member.id);
+      if (hit === undefined) throw new Error("no hit region for the member");
+      const canvas = screen.getByRole("img", {
+        name: "Office view of the communication graph",
+      });
+      const x = hit.rect.x + hit.rect.width / 2 + 1;
+      const y = hit.rect.y + hit.rect.height / 2;
+      fireEvent.pointerMove(canvas, { clientX: x, clientY: y });
+
+      // The floor's own hover state (`hoverCard`) is set directly by the
+      // move above, but the SUPPLEMENT text only reaches the DOM once the
+      // shared Radix tooltip actually opens. `focus`, not a pointer hover,
+      // is this repo's established way to open one synchronously in a test
+      // (`tooltip-hit-testing.test.tsx`) - hover sits behind Radix's own
+      // open delay, focus does not.
+      const trigger = screen.getByTestId(
+        `comm-graph-office-hover-trigger-${member.id}`,
+      );
+      fireEvent.focus(trigger);
+
+      const before = screen.getByTestId(
+        "comm-graph-office-hover-where",
+      ).textContent;
+
+      // A REAL rename driven through a scene sync: only the LEAD's (the
+      // cabin root's) name changes - the member's own record, and therefore
+      // its seat, is untouched.
+      const renamedAgents = agents.map((agent) =>
+        agent.id === lead.id ? { ...agent, name: "Renamed Lead" } : agent,
+      );
+      view.rerender(
+        withQueryClient(
+          officeElement(ids, STATIC_OFFICE, {
+            agents: renamedAgents,
+            view: { ...OFFICE_VIEW, x: 1 },
+          }),
+        ),
+      );
+      step();
+
+      // Anti-vacuity (a): the member's own hit region did not move - the
+      // rename is the only thing that could have changed what the open card
+      // shows.
+      const hitAfter = lastHitRegions(frames).find(
+        (r) => r.agentId === member.id,
+      );
+      if (hitAfter === undefined) {
+        throw new Error("no hit region for the member after rename");
+      }
+      expect(hitAfter.rect).toEqual(hit.rect);
+
+      // Anti-vacuity (b): `scene.whereabouts(member)` genuinely changed - the
+      // real fact this fix's `hoverWhereaboutsRef` compare exists to notice.
+      // Read from an INDEPENDENT scene (`sceneWhereabouts`, same technique as
+      // `envelopeRect`) rather than from the component's own gated update,
+      // which is exactly the code path under test and so cannot also be the
+      // oracle for it.
+      const renamedFixtureAgents = fixture.agents.map((agent) =>
+        agent.id === lead.id ? { ...agent, name: "Renamed Lead" } : agent,
+      );
+      const sceneBefore = sceneWhereabouts(fixture.agents, member.id);
+      const sceneAfter = sceneWhereabouts(renamedFixtureAgents, member.id);
+      expect(sceneAfter).not.toBe(sceneBefore);
+
+      const after = screen.getByTestId(
+        "comm-graph-office-hover-where",
+      ).textContent;
+      expect(after).not.toBe(before);
+      expect(after).toContain("Renamed Lead");
+    } finally {
+      vi.mocked(AgentHoverTooltip).mockImplementation(
+        AGENT_HOVER_TOOLTIP_TRIGGER_ONLY,
+      );
+    }
+  });
+
+  it("caps the controls row to the pane and lets it wrap, with pointer-events-auto punched through per control (Finding 32)", () => {
+    // Codex: at the 240px minimum split the floor is only ~168px wide, and
+    // the toggle/view-picker group plus the mode-toggle buttons no longer fit
+    // on one line - without a cap the row overflowed LEFT and, under the
+    // container's overflow-hidden, clipped the directory toggle and view
+    // picker themselves. jsdom lays nothing out, so this asserts the utility
+    // classes rather than measured geometry - the established pattern for
+    // Tailwind arbitrary-value layout classes in this repo.
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          modeToggle: (
+            <button type="button" data-testid="office-mode-toggle-probe">
+              Mode
+            </button>
+          ),
+        }),
+      ),
+    );
+
+    const toggle = screen.getByTestId("comm-graph-office-directory-toggle");
+    const group = toggle.parentElement;
+    if (group === null) throw new Error("toggle has no parent group");
+    const row = group.parentElement;
+    if (row === null) throw new Error("group has no parent row");
+
+    expect(row.className).toContain("max-w-[calc(100%-1rem)]");
+    expect(row.className).toContain("flex-wrap");
+    expect(row.className).toContain("pointer-events-none");
+
+    const modeProbe = screen.getByTestId("office-mode-toggle-probe");
+    const modeWrapper = modeProbe.parentElement;
+    if (modeWrapper === null) throw new Error("mode toggle has no wrapper");
+    expect(modeWrapper.className).toContain("pointer-events-auto");
   });
 
   it("carries a glyph on its lod 0 pip for attention, failure, awaiting and archived", () => {
