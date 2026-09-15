@@ -584,16 +584,13 @@ export function ProfileEditDialog(props: {
         }}
       >
         <DialogContent
-          className="flex max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+          layout="banded"
+          className="flex max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
           showCloseButton={!switchingAccount}
         >
-          <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
-            <DialogTitle className="text-ui font-semibold leading-snug">
-              {dialogCopy.title}
-            </DialogTitle>
-            <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-              {dialogCopy.description}
-            </DialogDescription>
+          <DialogHeader className="gap-1.5">
+            <DialogTitle>{dialogCopy.title}</DialogTitle>
+            <DialogDescription>{dialogCopy.description}</DialogDescription>
           </DialogHeader>
 
           <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
@@ -655,13 +652,7 @@ export function ProfileEditDialog(props: {
             />
           </div>
 
-          <DialogFooter
-            className={
-              switchingAccount
-                ? "hidden"
-                : "mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3"
-            }
-          >
+          <DialogFooter className={switchingAccount ? "hidden" : ""}>
             <div className="flex w-full flex-wrap items-center justify-between gap-2">
               <TooltipWrapper
                 label={removeDisabledReason}

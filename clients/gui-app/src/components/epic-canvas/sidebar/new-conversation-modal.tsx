@@ -378,7 +378,7 @@ function NewConversationModalDialog(props: {
         // popovers portal into THIS node (see `DialogOverlayBoundaryContext`)
         // and an overflow container that is also their containing block - this
         // one is, it carries a transform - would clip them.
-        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
+        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
         // Same portal rule as the worktree pickers: the host switcher's list

@@ -108,15 +108,14 @@ export function ScriptsReviewDialog(props: {
   return (
     <Dialog open onOpenChange={handleOpenChange}>
       <DialogContent
-        className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(52rem,var(--safe-area-width),calc(100%-2rem))]"
+        layout="banded"
+        className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] w-full flex-col overflow-hidden sm:max-w-[min(52rem,var(--safe-area-width),calc(100%-2rem))]"
         data-testid={props.testId}
         showCloseButton={!saveBusy}
         onEscapeKeyDown={props.onEscapeKeyDown}
       >
-        <DialogHeader className="shrink-0 gap-1.5 border-b border-foreground/10 px-6 py-4 pr-12">
-          <DialogTitle className="text-lg font-semibold">
-            {props.title}
-          </DialogTitle>
+        <DialogHeader className="shrink-0 gap-1.5">
+          <DialogTitle size="lg">{props.title}</DialogTitle>
           <DialogDescription>{props.description}</DialogDescription>
         </DialogHeader>
         <fieldset
@@ -165,7 +164,7 @@ export function ScriptsReviewDialog(props: {
             </div>
           ) : null}
         </fieldset>
-        <DialogFooter className="mx-0 mb-0 shrink-0 flex-row justify-end rounded-b-xl border-t border-foreground/10 bg-foreground/3 px-6 py-3">
+        <DialogFooter className="shrink-0 flex-row justify-end">
           <Button
             type="button"
             variant="ghost"

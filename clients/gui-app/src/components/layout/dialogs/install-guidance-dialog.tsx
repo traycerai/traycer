@@ -29,8 +29,9 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,30rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="w-[min(92vw,30rem)] overflow-hidden sm:max-w-md"
         data-testid="install-guidance-dialog"
       >
         <div className="flex min-w-0 items-start gap-3 p-5">
@@ -39,12 +40,8 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
           </div>
           <div className="min-w-0 flex-1 space-y-3">
             <div className="space-y-1.5">
-              <DialogTitle className="text-ui font-semibold leading-snug">
-                Finish updating Traycer
-              </DialogTitle>
-              <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-                {guidance.summary}
-              </DialogDescription>
+              <DialogTitle>Finish updating Traycer</DialogTitle>
+              <DialogDescription>{guidance.summary}</DialogDescription>
             </div>
 
             <ol className="list-decimal space-y-1 pl-4 text-ui-sm text-foreground">

@@ -209,15 +209,14 @@ function HistoryDraftsDeleteDialog(props: {
   return (
     <Dialog open={open} onOpenChange={props.onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="flex w-[min(92vw,28rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="flex w-[min(92vw,28rem)] min-w-0 flex-col overflow-hidden sm:max-w-md"
         data-testid="history-drafts-delete-dialog"
       >
         <div className="flex min-w-0 flex-col gap-1.5 px-5 pt-5 pb-4">
-          <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-            {title}
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+          <DialogTitle className="wrap-anywhere">{title}</DialogTitle>
+          <DialogDescription className="wrap-anywhere">
             {description}
           </DialogDescription>
         </div>

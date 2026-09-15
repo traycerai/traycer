@@ -309,15 +309,14 @@ function UndoAllDialogContent(props: UndoAllDialogProps) {
       onOpenChange={props.isPending ? undefined : props.onOpenChange}
     >
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
         data-testid="undo-all-dialog"
       >
         <div className="min-w-0 space-y-3 p-5">
-          <DialogTitle className="text-ui font-semibold leading-snug">
-            Undo all changes?
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
+          <DialogTitle>Undo all changes?</DialogTitle>
+          <DialogDescription>
             This reverts every changed file to the snapshot from the first time
             it was edited by this agent.
           </DialogDescription>

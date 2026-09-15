@@ -55,10 +55,8 @@ export function SweepWorktreesReview(props: {
           <AlertTriangle className="size-4" aria-hidden />
         </div>
         <div className="min-h-0 min-w-0 flex-1 space-y-1.5">
-          <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-            Review this sweep
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+          <DialogTitle className="wrap-anywhere">Review this sweep</DialogTitle>
+          <DialogDescription className="wrap-anywhere">
             Only the consequences of your current selection are shown.
           </DialogDescription>
           {props.hostName === null ? null : (

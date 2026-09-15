@@ -89,6 +89,7 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
   return (
     <Dialog open={open} onOpenChange={state.pending ? undefined : onOpenChange}>
       <DialogContent
+        layout="banded"
         // Inline `maxWidth` instead of a Tailwind arbitrary-value class:
         // the comma inside `min(92vw, 32rem)` defeats Tailwind v4's
         // class-extractor regex, so the utility silently never reaches
@@ -98,15 +99,13 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
         // suppressed - Cancel in the footer already covers dismissal
         // (alongside Esc / overlay click) without the corner-spacing
         // mismatch that comes with the corner-anchored icon.
-        className="w-full min-w-0 gap-0 overflow-hidden p-0"
+        className="w-full min-w-0 overflow-hidden"
         style={{ maxWidth: "min(92vw, 32rem)" }}
         showCloseButton={false}
         data-testid="restore-checkpoint-dialog"
       >
-        <DialogHeader className="space-y-1 px-6 pt-6 pb-2">
-          <DialogTitle className="text-base font-semibold">
-            Undo this turn?
-          </DialogTitle>
+        <DialogHeader className="space-y-1">
+          <DialogTitle>Undo this turn?</DialogTitle>
           <DialogDescription data-testid="restore-summary">
             <RestoreSummaryCopy
               undoableCount={state.undoableCount}
@@ -151,13 +150,12 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
         </div>
 
         <DialogFooter
-          // `mx-0 mb-0` neutralizes shadcn's default `-mx-4 -mb-4` on
-          // DialogFooter - those negatives are tuned for the primitive's
-          // `p-4` content padding, but we use `p-0` here, so they leak
-          // 16px past the bottom edge and get clipped by
-          // `overflow-hidden`. Result: buttons hug the bottom edge with
-          // no breathing room.
-          className="mx-0 mb-0 gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4"
+        // `mx-0 mb-0` neutralizes shadcn's default `-mx-4 -mb-4` on
+        // DialogFooter - those negatives are tuned for the primitive's
+        // `p-4` content padding, but we use `p-0` here, so they leak
+        // 16px past the bottom edge and get clipped by
+        // `overflow-hidden`. Result: buttons hug the bottom edge with
+        // no breathing room.
         >
           <Button
             type="button"

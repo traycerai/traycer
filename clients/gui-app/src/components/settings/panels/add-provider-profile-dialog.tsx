@@ -306,7 +306,8 @@ export function AddProviderProfileDialog({
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent
-        className="flex max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+        layout="banded"
+        className="flex max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
         showCloseButton={!linking}
         onEscapeKeyDown={(event) => {
           if (dismissalLocked) event.preventDefault();
@@ -315,11 +316,11 @@ export function AddProviderProfileDialog({
           if (dismissalLocked) event.preventDefault();
         }}
       >
-        <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
-          <DialogTitle className="text-ui font-semibold leading-snug">
+        <DialogHeader className="gap-1.5">
+          <DialogTitle>
             Add new {PROVIDER_DISPLAY_NAMES[state.providerId]} profile
           </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
+          <DialogDescription>
             Name this {PROVIDER_DISPLAY_NAMES[state.providerId]} profile, choose
             its color, then link the account it should use.
           </DialogDescription>
@@ -370,7 +371,7 @@ export function AddProviderProfileDialog({
         </div>
 
         {flow.state.kind === "start" ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <DialogFooter>
             <Button
               type="button"
               size="sm"
@@ -382,7 +383,7 @@ export function AddProviderProfileDialog({
           </DialogFooter>
         ) : null}
         {naming !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <DialogFooter>
             <Button
               type="button"
               size="sm"
@@ -396,7 +397,7 @@ export function AddProviderProfileDialog({
           </DialogFooter>
         ) : null}
         {duplicateProfile !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <DialogFooter>
             <Button
               type="button"
               size="sm"

@@ -670,7 +670,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="max-h-[92vh] w-[min(94vw,48rem)] gap-3 sm:max-w-[min(94vw,48rem)]"
+        className="max-h-[92vh] w-[min(94vw,48rem)] sm:max-w-[min(94vw,48rem)]"
         // Same portal rule as the worktree pickers: the host switcher's list
         // mounts outside this dialog, so a click in it reads as an interaction
         // from outside. Dismissing on that would throw away the form someone is
@@ -837,7 +837,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             </div>
           ) : null}
         </div>
-        <DialogFooter className="py-3">
+        <DialogFooter>
           <Button
             type="button"
             variant="outline"

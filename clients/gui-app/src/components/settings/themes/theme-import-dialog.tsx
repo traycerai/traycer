@@ -272,10 +272,13 @@ function ThemeImportDialogBody({
   }
   return (
     <Dialog open onOpenChange={close}>
-      <DialogContent className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:max-w-3xl">
-        <DialogHeader className="shrink-0 border-b border-border/60 p-4 pr-10">
-          <DialogTitle className="text-ui-sm">Import themes</DialogTitle>
-          <DialogDescription className="max-w-prose pr-4">
+      <DialogContent
+        layout="banded"
+        className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] flex-col overflow-hidden sm:max-w-3xl"
+      >
+        <DialogHeader className="shrink-0">
+          <DialogTitle size="sm">Import themes</DialogTitle>
+          <DialogDescription className="max-w-prose">
             Browse community themes from the Open VSX extension registry, or
             import theme files.
           </DialogDescription>

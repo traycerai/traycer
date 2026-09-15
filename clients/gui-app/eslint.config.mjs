@@ -338,7 +338,6 @@ const notYetTightened = [
   { pattern: "^Command", allow: ["*"] },
   { pattern: "^ConfirmDestructiveDialog$", allow: ["*"] },
   { pattern: "^ContextMenu", allow: ["*"] },
-  { pattern: "^Dialog", allow: ["*"] },
   { pattern: "^Drawer", allow: ["*"] },
   { pattern: "^DropLine$", allow: ["*"] },
   { pattern: "^DropdownMenu", allow: ["*"] },
@@ -349,6 +348,108 @@ const notYetTightened = [
   { pattern: "^Tabs", allow: ["*"] },
   { pattern: "^Toaster$", allow: ["*"] },
   { pattern: "^Tooltip", allow: ["*"] },
+];
+
+// ── Dialog, tightened in ticket 06 ──────────────────────────────────────────
+//
+// The family had 377 findings, and 330 of them were one composition written
+// out by hand: a header band, a body and a footer band, assembled from `p-0
+// gap-0` on the content plus borders, padding and a fill restated on each
+// band. Fifteen dialogs did it, and they disagreed - `px-5` fourteen times and
+// `px-6` twelve, `border-border/40` nine times and `/70` four, `bg-foreground/2`
+// five and `/3` five. `<DialogContent layout="banded">` is that composition
+// with one name, and `DialogHeader` / `DialogFooter` read it off the content
+// through `group-data-[layout=banded]`.
+//
+// The other defaults the numbers moved: `DialogTitle` to `font-semibold`
+// (22 sites added it) and `leading-snug` (15 - `leading-none` is too tight for
+// a title that wraps), `DialogDescription` to `leading-relaxed` (14). Sixteen
+// titles also restated `text-ui` and thirty descriptions restated `text-ui-sm`
+// / `text-muted-foreground`, which the defaults already carried; five more
+// wrote `text-base`, which is the same 1rem. A title that genuinely wanted
+// another rank - six sites, in both directions - gets `size`.
+//
+// What each part still allows is a fact about the SITE, not about the part:
+//
+//   - every `*Content` keeps `layout`, because sizing an overlay IS the
+//     caller's job (`max-w-2xl`, and the safe-area classes that cap it
+//     against the device region). The safe-area utilities are hand-written, so
+//     the grammar cannot categorize them and they are named here.
+//   - `gap-*` and `space-y-*` on Header, Title and Footer: the rhythm between
+//     a title and its description, or between an icon and the words beside
+//     it, is a fact about what the caller put INSIDE the part. No variant can
+//     know how many children there are.
+//   - `truncate` / `text-pretty` on Title and Description: what a long string
+//     does when it runs out of room is the site's problem - a filename in a
+//     viewer's header truncates, a sentence in a body does not.
+//   - `rounded-none` and the `max-[28rem]:` pair on Footer: a dialog that
+//     goes edge to edge at the bottom of a phone gives up its corner radius
+//     and takes the home-indicator inset. That is a fact about the viewport,
+//     not about the footer.
+const dialogContracts = [
+  {
+    pattern: "^DialogContent$",
+    // No safe-area utility is named here, deliberately. The plugin cannot
+    // resolve a hand-written class, so each one it is given prints a warning
+    // on every lint run, and no DialogContent site needs one today - the
+    // primitive already caps itself against the safe region
+    // (`max-w-[min(...,var(--safe-area-width))]`, `top-safe-center-y`). A
+    // caller that genuinely needs one gets an error naming the class and adds
+    // it here with its reason, which is the ratchet working.
+    allow: ["layout"],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <DialogContent>: the dialog owns its padding. A dialog whose header and footer are bands - their own padding, edge to edge - is `layout="banded"`, which is what `p-0 gap-0` used to build by hand. See {{file}}.',
+      color:
+        '"{{className}}" is not allowed on <DialogContent>: the dialog owns its surface. `bg-popover` is the raised-surface fill every preset defines distinctly; a translucent or muted variation of it disappears in the preset darks (see the raised-surface rule in clients/gui-app/AGENTS.md). See {{file}}.',
+      shape:
+        '"{{className}}" is not allowed on <DialogContent>: the dialog owns its corners ({{variants}}). A dialog that goes edge to edge on a phone says so on its footer. See {{file}}.',
+      default:
+        '"{{className}}" is not allowed on <DialogContent>: the grammar does not recognize it. If it is a safe-area utility, add it to the DialogContent contract in eslint.config.mjs; otherwise fix the spelling.',
+    },
+  },
+  {
+    pattern: "^DialogHeader$",
+    allow: ["layout", "gap-*", "space-y-*"],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <DialogHeader>: the header owns its padding. In a banded dialog (`<DialogContent layout="banded">`) it is a band with its own; in a padded one the content\'s padding is the header\'s. `gap-*` and `space-y-*` are yours, because only you know what is inside. See {{file}}.',
+    },
+  },
+  {
+    pattern: "^DialogFooter$",
+    allow: [
+      "layout",
+      "gap-*",
+      "rounded-none",
+      "max-[28rem]:rounded-b-none",
+      "max-[28rem]:pb-safe-bottom-gutter",
+    ],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <DialogFooter>: the footer owns its band. `<DialogContent layout="banded">` gives it edge-to-edge padding; without it the footer negative-margins out of the content\'s own. `gap-*` between the buttons is yours. See {{file}}.',
+      color:
+        '"{{className}}" is not allowed on <DialogFooter>: the band\'s fill is `bg-foreground/5`, an alpha of the foreground rather than `bg-muted`, because every preset dark defines `--muted` equal to `--popover` and a muted band vanishes on the dialog. See the raised-surface rule in clients/gui-app/AGENTS.md.',
+    },
+  },
+  {
+    pattern: "^DialogTitle$",
+    allow: ["layout", "gap-*", "truncate"],
+    message: {
+      typography:
+        '"{{className}}" is not allowed on <DialogTitle>: the title owns its type. Use `size` - `sm` for a viewer\'s filename, `lg` for a full-page composer - rather than `text-*` or `font-*` here. `text-base` is the default `text-ui` under another name. See {{file}}.',
+      spacing:
+        '"{{className}}" is not allowed on <DialogTitle>: `gap-*` is allowed, for a title that lays out an icon beside its words; padding belongs to the header around it. See {{file}}.',
+    },
+  },
+  {
+    pattern: "^DialogDescription$",
+    allow: ["layout", "gap-*", "text-pretty"],
+    message: {
+      typography:
+        '"{{className}}" is not allowed on <DialogDescription>: the description owns its type - `text-ui-sm leading-relaxed text-muted-foreground`, which is what restating those three used to produce. `text-pretty` is allowed, since how a sentence breaks is about the sentence. See {{file}}.',
+    },
+  },
 ];
 
 // ── Button, the one family that IS enforced ─────────────────────────────────
@@ -466,6 +567,7 @@ function noRestyle(extraButtonAllow) {
       allow: ["layout"],
       contracts: [
         ...notYetTightened,
+        ...dialogContracts,
         extraButtonAllow.length === 0
           ? buttonContract
           : {

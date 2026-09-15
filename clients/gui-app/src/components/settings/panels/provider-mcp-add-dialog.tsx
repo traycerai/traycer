@@ -500,7 +500,8 @@ export function ProviderMcpAddDialog(props: {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="top-[15vh] flex max-h-[min(85vh,42rem)] w-[min(92vw,28rem)] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-md"
+        layout="banded"
+        className="top-[15vh] flex max-h-[min(85vh,42rem)] w-[min(92vw,28rem)] translate-y-0 flex-col overflow-hidden sm:max-w-md"
         data-testid="provider-mcp-add-dialog"
       >
         <form
@@ -518,7 +519,7 @@ export function ProviderMcpAddDialog(props: {
             void form.handleSubmit();
           }}
         >
-          <DialogHeader className="shrink-0 p-4 pb-2">
+          <DialogHeader className="shrink-0">
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>
               Config is written to this provider&apos;s{" "}

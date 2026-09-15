@@ -67,15 +67,18 @@ export function ProviderSkillComposerDialog(props: {
         if (!open && !props.pending) props.onClose();
       }}
     >
-      <DialogContent className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,44rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(92vw,44rem)]">
-        <DialogHeader className="space-y-2 border-b border-border/40 px-5 py-4 text-left">
-          <DialogTitle className="text-ui-lg">
+      <DialogContent
+        layout="banded"
+        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,44rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(92vw,44rem)]"
+      >
+        <DialogHeader className="space-y-2 text-left">
+          <DialogTitle size="lg">
             {titleForStep(
               draft.step,
               draft.inspectSession?.candidates.length ?? 0,
             )}
           </DialogTitle>
-          <DialogDescription className="text-ui-sm">
+          <DialogDescription>
             <ComposerDescription step={draft.step} />
           </DialogDescription>
         </DialogHeader>
@@ -151,7 +154,7 @@ export function ProviderSkillComposerDialog(props: {
           ) : null}
         </div>
 
-        <DialogFooter className="mx-0 mb-0 flex-col items-stretch gap-2 rounded-none border-t border-border/40 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <DialogFooter className="flex-col items-stretch rounded-none sm:flex-row sm:items-center sm:justify-between">
           <DestinationLine
             step={draft.step}
             destination={draft.destination.display}

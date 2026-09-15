@@ -208,7 +208,7 @@ export function NotificationHookEditorDialog(props: {
           </div>
         </div>
 
-        <DialogFooter className="flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <DialogFooter className="flex-col items-stretch sm:flex-row sm:items-center sm:justify-between">
           <p className="text-ui-xs text-destructive">{problem ?? ""}</p>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={props.onCancel}>

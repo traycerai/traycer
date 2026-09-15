@@ -495,8 +495,9 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   return (
     <Dialog open={taskCount > 0} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="flex max-h-[min(90dvh,42rem)] w-[min(92vw,45rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
+        className="flex max-h-[min(90dvh,42rem)] w-[min(92vw,45rem)] min-w-0 flex-col overflow-hidden sm:max-w-2xl"
         data-testid="sweep-worktrees-dialog"
       >
         {hostChoice === null ? (
@@ -1169,10 +1170,10 @@ function SweepChooseHeader(props: {
         <Paintbrush className="size-4" aria-hidden />
       </div>
       <div className="min-h-0 min-w-0 flex-1 space-y-1.5">
-        <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
+        <DialogTitle className="wrap-anywhere">
           {sweepDialogTitle(props.taskCount, props.taskTitle)}
         </DialogTitle>
-        <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+        <DialogDescription className="wrap-anywhere">
           Choose the worktrees to remove from this host. Proven-safe worktrees
           are selected for you.
         </DialogDescription>

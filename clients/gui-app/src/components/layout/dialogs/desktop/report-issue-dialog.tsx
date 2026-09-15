@@ -849,7 +849,7 @@ export function ReportIssueDialog(
           </div>
         ) : null}
 
-        <DialogFooter className="flex-wrap gap-2">
+        <DialogFooter className="flex-wrap">
           <ReportIssueDialogFooter
             screen={screen}
             deliveryResult={effectiveDeliveryResult}

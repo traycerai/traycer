@@ -468,7 +468,7 @@ function ThemeManager({
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex max-h-[min(80svh,var(--spacing-safe-svh))] flex-col gap-4 sm:max-w-xl"
+        className="flex max-h-[min(80svh,var(--spacing-safe-svh))] flex-col sm:max-w-xl"
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           if (!editing.current) onReturnFocus();

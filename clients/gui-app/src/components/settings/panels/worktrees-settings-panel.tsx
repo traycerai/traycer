@@ -2150,8 +2150,9 @@ function WorktreeBulkDeleteDialog(props: {
   return (
     <Dialog open={summary !== null} onOpenChange={props.onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,32rem)] gap-0 overflow-hidden p-0 sm:max-w-lg"
+        className="w-[min(92vw,32rem)] overflow-hidden sm:max-w-lg"
         data-testid="worktree-bulk-delete-dialog"
       >
         {summary !== null ? (
@@ -2161,10 +2162,10 @@ function WorktreeBulkDeleteDialog(props: {
                 <AlertTriangle className="size-4" aria-hidden />
               </div>
               <div className="min-w-0 flex-1 space-y-2">
-                <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
+                <DialogTitle className="wrap-anywhere">
                   {summary.title}
                 </DialogTitle>
-                <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+                <DialogDescription className="wrap-anywhere">
                   Deleting {summary.classSummary}. Traycer runs each repo's
                   teardown script, then removes the worktree.
                 </DialogDescription>

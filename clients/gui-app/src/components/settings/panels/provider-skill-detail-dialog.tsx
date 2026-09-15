@@ -108,7 +108,10 @@ export function ProviderSkillDetailDialog(props: {
         else close();
       }}
     >
-      <DialogContent className="grid h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,52rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(92vw,52rem)]">
+      <DialogContent
+        layout="banded"
+        className="grid h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,52rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(92vw,52rem)]"
+      >
         {editableContent === null ? (
           <ReadOnlySkillDetail
             skill={props.skill}
@@ -479,7 +482,7 @@ function EditableSkillDetail(props: {
           </form.Field>
         </div>
 
-        <DialogFooter className="mx-0 mb-0 flex-row items-center gap-3 rounded-none border-t border-border/40 px-5 py-3 sm:justify-between">
+        <DialogFooter className="flex-row items-center gap-3 rounded-none sm:justify-between">
           <StartTruncatedText className="block min-w-0 flex-1 font-mono text-ui-xs text-muted-foreground">
             {props.skill.path}
           </StartTruncatedText>
@@ -582,7 +585,7 @@ function EditableSkillHeader(props: {
   readonly onRequestUpdate: () => void;
 }): ReactNode {
   return (
-    <DialogHeader className="border-b border-border/40 px-5 py-4 text-left">
+    <DialogHeader className="text-left">
       <DialogTitle className="sr-only">{props.skill.name}</DialogTitle>
       <DialogDescription className="sr-only">
         {props.skill.description ?? "Skill details"}
@@ -656,8 +659,9 @@ function UnsavedSkillChangesDialog(props: {
       }}
     >
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
         data-testid="skill-unsaved-changes-dialog"
       >
         <div className="flex min-w-0 items-start gap-3 p-5">
@@ -665,10 +669,8 @@ function UnsavedSkillChangesDialog(props: {
             <AlertTriangle className="size-4" aria-hidden />
           </div>
           <div className="min-w-0 flex-1 space-y-1.5">
-            <DialogTitle className="text-ui font-semibold leading-snug">
-              Discard unsaved changes?
-            </DialogTitle>
-            <DialogDescription className="text-ui-sm leading-relaxed">
+            <DialogTitle>Discard unsaved changes?</DialogTitle>
+            <DialogDescription>
               Your edits to this skill will be lost.
             </DialogDescription>
           </div>
@@ -760,7 +762,7 @@ function ReadOnlySkillHeader(props: {
   readonly onRequestUpdate: () => void;
 }): ReactNode {
   return (
-    <DialogHeader className="border-b border-border/40 px-5 py-4 text-left">
+    <DialogHeader className="text-left">
       <DialogTitle className="sr-only">{props.skill.name}</DialogTitle>
       <DialogDescription className="sr-only">
         {props.skill.description ?? "Skill details"}
@@ -858,7 +860,7 @@ function ReadOnlySkillFooter(props: {
   readonly onRequestRemove: () => void;
 }): ReactNode {
   return (
-    <DialogFooter className="mx-0 mb-0 flex-row items-center gap-3 rounded-none border-t border-border/40 px-5 py-3 sm:justify-between">
+    <DialogFooter className="flex-row items-center gap-3 rounded-none sm:justify-between">
       <StartTruncatedText className="block min-w-0 flex-1 font-mono text-ui-xs text-muted-foreground">
         {props.path}
       </StartTruncatedText>

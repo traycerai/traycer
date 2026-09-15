@@ -56,8 +56,9 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="flex max-h-[min(90dvh,40rem)] w-[min(92vw,32rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
+        className="flex max-h-[min(90dvh,40rem)] w-[min(92vw,32rem)] min-w-0 flex-col overflow-hidden sm:max-w-lg"
         data-testid="delete-tasks-dialog"
       >
         <div className="flex min-w-0 shrink-0 items-start gap-3 px-5 pt-5 pb-4">
@@ -65,10 +66,8 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
             <AlertTriangle className="size-4" aria-hidden />
           </div>
           <div className="max-h-[min(32dvh,14rem)] min-h-0 min-w-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1">
-            <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-              {title}
-            </DialogTitle>
-            <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+            <DialogTitle className="wrap-anywhere">{title}</DialogTitle>
+            <DialogDescription className="wrap-anywhere">
               {description}
             </DialogDescription>
           </div>
