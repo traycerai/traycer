@@ -916,7 +916,7 @@ function VersionObservationList(props: {
     return (
       <div key={entry.observationId}>
         {showDay ? (
-          <p className="sticky top-0 z-[1] border-b bg-background/95 px-3 py-1.5 text-ui-xs font-medium text-muted-foreground">
+          <p className="sticky top-0 z-[1] border-b bg-background px-3 py-1.5 text-ui-xs font-medium text-muted-foreground">
             {day}
           </p>
         ) : null}
