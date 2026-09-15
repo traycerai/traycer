@@ -57,6 +57,12 @@ export interface BrowserViewEntry {
   currentTitle: string;
   status: BrowserViewStatus;
   statusReason: string | null;
+  /**
+   * Identity of the host-initiated navigation the current `loading` belongs
+   * to. Bumped by navigate / reload / back / forward, reported on every status
+   * change so the renderer can tell a new episode from a refresh of one.
+   */
+  navigationAttempt: number;
   findState: BrowserViewEntryFindState;
   certificateError: BrowserViewCertificateErrorChange | null;
   debugSession: BrowserDebugSession | null;
