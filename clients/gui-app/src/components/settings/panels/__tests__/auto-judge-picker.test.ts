@@ -285,3 +285,76 @@ describe("<AutoJudgePicker /> status", () => {
     expect(screen.queryByTestId("auto-judge-effective")).toBeNull();
   });
 });
+
+describe("<AutoJudgePicker /> Use Traycer's default", () => {
+  const selected: AutoJudgeSelection = {
+    harnessId: "claude",
+    model: "claude-sonnet",
+    profileId: null,
+  };
+
+  it("renders the button when there is a stored override, and clicking it commits exactly null - the contract's own CLEAR", () => {
+    const onCommit = vi.fn();
+    render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: selected,
+        effective: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          source: "selection",
+        },
+        blocked: null,
+        disabled: false,
+        onCommit,
+      }),
+    );
+
+    const button = screen.getByTestId("auto-judge-use-default");
+    button.click();
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith(null);
+  });
+
+  // Without this, a host already on the catalog default could offer a
+  // control that sends the state it is already in - noise the row is
+  // specifically written not to show, since it is what keeps a click here
+  // from being the trap this button exists to close.
+  it("does not render the button when selection is already null - the host is already on the catalog default", () => {
+    render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: null,
+        effective: undefined,
+        blocked: undefined,
+        disabled: false,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    expect(screen.queryByTestId("auto-judge-use-default")).toBeNull();
+  });
+
+  it("disables the button when props.disabled is true", () => {
+    render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: selected,
+        effective: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          source: "selection",
+        },
+        blocked: null,
+        disabled: true,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    const button = screen.getByTestId(
+      "auto-judge-use-default",
+    ) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+});

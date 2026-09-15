@@ -56,6 +56,7 @@ import {
 import {
   agentModeSchema,
   permissionModeSchema,
+  permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
@@ -2239,6 +2240,18 @@ const activeProfileUpdateClientFrameSchema = z.object({
 // interview pair: keeping the surrounding options in their own consts lets the
 // frozen `≤1.6` union and the live one be composed from the same pieces in the
 // same order, instead of one being a hand-maintained copy of the other.
+//
+// **This list is the PRE-`auto` tier, and every line from `1.1` through `1.10`
+// reaches the permission mode through it.** Client→host slots normally stay on
+// the live enum (see `chatRunSettingsSchemaPreReasonix`'s asymmetry note), and
+// that is still right for the harness roster here: a `1.7` peer legitimately
+// has to be able to send `reasonix`, because its own build can spell it.
+// `auto` is the case that argument does not cover. No released client can spell
+// it, so there is no honest sender to keep permissive - and unlike an unknown
+// harness id, a mode accepted on one of these lines mints durable state the
+// SAME line cannot then be served (`chatSubscribeSupportsPermissionMode`
+// refuses an `auto` chat below `1.11`). So the mode axis is pinned here and
+// only `1.11` re-widens it, in `chatSubscribeClientFrameSchemaOptions` below.
 const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
   z.object({
     kind: z.literal("send"),
@@ -2246,7 +2259,7 @@ const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
     messageId: z.string(),
     content: jsonContentSchema,
     sender: userMessageSenderSchema,
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreAuto,
     // Billing/account context the turn runs under (Personal vs a specific
     // Team). Global app-wide selection (not per-chat), stamped onto the frame
     // at send time.
@@ -2271,7 +2284,7 @@ const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
     messageId: z.string(),
     content: jsonContentSchema,
     sender: userMessageSenderSchema,
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreAuto,
     // Billing/account context the turn runs under. Global app-wide selection
     // (not per-chat), stamped onto the frame at send time.
     accountContext: accountContextSchema,
@@ -2338,7 +2351,7 @@ const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
     // toolbar differs from the running turn on a turn-start-baked setting:
     // model / reasoningEffort / serviceTier / agentMode). null = no override:
     // a silent safe_point inject that keeps the running turn's settings.
-    newSettings: chatRunSettingsSchema.nullable().default(null),
+    newSettings: chatRunSettingsSchemaPreAuto.nullable().default(null),
   }),
   z.object({
     // Abort a steer that is still `steer_requested` (the harness has not begun
@@ -2352,7 +2365,7 @@ const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
     kind: z.literal("queueSettingsUpdate"),
     ...ownerActionFrameFields,
     queueItemId: z.string(),
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreAuto,
     // Billing/account context the turn runs under. Global app-wide selection
     // (not per-chat), stamped onto the frame at send time.
     accountContext: accountContextSchema,
@@ -2360,7 +2373,7 @@ const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
   z.object({
     kind: z.literal("queueSettingsRestamp"),
     ...ownerActionFrameFields,
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreAuto,
     // Billing/account context the turn runs under. Global app-wide selection
     // (not per-chat), stamped onto the frame at send time.
     accountContext: accountContextSchema,
@@ -2369,7 +2382,7 @@ const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
   z.object({
     kind: z.literal("activePermissionModeUpdate"),
     ...ownerActionFrameFields,
-    permissionMode: permissionModeSchema,
+    permissionMode: permissionModeSchemaPreAuto,
   }),
   z.object({
     kind: z.literal("approvalDecision"),
@@ -2528,6 +2541,63 @@ const [
 const [, , , ...chatSubscribeClientFrameSchemaMiddleOptions] =
   chatSubscribeClientFrameSchemaOptionsBeforeInterview;
 
+// The middle segment again, this time by name. Four of these carry the
+// permission mode - three through the settings tuple and one directly - and
+// `1.11` re-widens exactly those four to the live enum
+// (`chatSubscribeClientFrameSchemaMiddleOptionsLive` below). Destructured from
+// the pre-auto list rather than re-declared, so the two lists can never come to
+// describe different frames.
+//
+// A mis-counted position here is silent in the SHAPE - the live list re-lists
+// the same handles in the same order, so the union's `kind` list does not move;
+// what moves is which frame got the widening. What catches it is
+// `chat-subscribe-auto-mode-lines.test.ts` asserting `1.11` accepts `auto` on
+// each of the six mode-bearing kinds BY KIND, which goes red on whichever frame
+// lost its rebind.
+const [
+  stopClientFrameSchema,
+  stopBackgroundItemClientFrameSchema,
+  stopAllBackgroundItemsClientFrameSchema,
+  resumeQueueClientFrameSchema,
+  queueEditClientFrameSchema,
+  queueCancelClientFrameSchema,
+  queueReorderClientFrameSchema,
+  queueSteerNowClientFrameSchemaPreAuto,
+  queueAbortSteerClientFrameSchema,
+  queueSettingsUpdateClientFrameSchemaPreAuto,
+  queueSettingsRestampClientFrameSchemaPreAuto,
+  activePermissionModeUpdateClientFrameSchemaPreAuto,
+  approvalDecisionClientFrameSchema,
+  fileEditApprovalDecisionClientFrameSchema,
+] = chatSubscribeClientFrameSchemaMiddleOptions;
+
+// `1.11`'s middle segment: the same fourteen frames in the same order, with the
+// four mode-bearing ones re-bound to the live enum.
+const chatSubscribeClientFrameSchemaMiddleOptionsLive = [
+  stopClientFrameSchema,
+  stopBackgroundItemClientFrameSchema,
+  stopAllBackgroundItemsClientFrameSchema,
+  resumeQueueClientFrameSchema,
+  queueEditClientFrameSchema,
+  queueCancelClientFrameSchema,
+  queueReorderClientFrameSchema,
+  queueSteerNowClientFrameSchemaPreAuto.extend({
+    newSettings: chatRunSettingsSchema.nullable().default(null),
+  }),
+  queueAbortSteerClientFrameSchema,
+  queueSettingsUpdateClientFrameSchemaPreAuto.extend({
+    settings: chatRunSettingsSchema,
+  }),
+  queueSettingsRestampClientFrameSchemaPreAuto.extend({
+    settings: chatRunSettingsSchema,
+  }),
+  activePermissionModeUpdateClientFrameSchemaPreAuto.extend({
+    permissionMode: permissionModeSchema,
+  }),
+  approvalDecisionClientFrameSchema,
+  fileEditApprovalDecisionClientFrameSchema,
+] as const;
+
 // `1.6`: the session-scoped background stop - the escalation the renderer
 // offers when a command item carries `individualStopUnavailable`. Kills the
 // chat's provider session process, ending every background item in it. Live
@@ -2626,10 +2696,39 @@ export const chatSubscribeClientFrameSchemaV17ToV19 = z.discriminatedUnion(
   chatSubscribeClientFrameSchemaV17ToV19Options,
 );
 
-// Live client frame (`chat.subscribe@1.10`) - the `1.7`-`1.9` composition
-// plus the two fallback grace-hold actions.
-const chatSubscribeClientFrameSchemaOptions = [
+// The `chat.subscribe@1.10` client frame - the `1.7`-`1.9` composition plus the
+// two fallback grace-hold actions.
+//
+// Frozen pre-`auto`, and the first time this composition has needed its own
+// name: `1.10` and `1.11` were one union until the mode axis split them. The
+// grace-hold pair is all `1.10` adds, so nothing else here differs from the
+// line below it.
+const chatSubscribeClientFrameSchemaOptionsPreAuto = [
   ...chatSubscribeClientFrameSchemaV17ToV19Options,
+  fallbackHoldForChoiceClientFrameSchema,
+  fallbackReleaseChoiceClientFrameSchema,
+] as const;
+
+// Live client frame (`chat.subscribe@1.11`) - the `1.10` composition with the
+// six mode-bearing frames re-bound to the live permission-mode enum. Same
+// frames in the same order; `1.11` is the first line whose client may say
+// `auto`.
+const chatSubscribeClientFrameSchemaOptions = [
+  chatSubscribeClientFrameSchemaV17ToV19Options[0].extend({
+    settings: chatRunSettingsSchema,
+  }),
+  deleteMessageSuffixClientFrameSchema,
+  chatSubscribeClientFrameSchemaV17ToV19Options[2].extend({
+    settings: chatRunSettingsSchema,
+  }),
+  ...chatSubscribeClientFrameSchemaMiddleOptionsLive,
+  interviewAnswerClientFrameSchema,
+  interviewErrorClientFrameSchema,
+  interviewDeliveryRetryClientFrameSchema,
+  ...chatSubscribeClientFrameSchemaOptionsAfterInterview,
+  pauseQueueClientFrameSchema,
+  activeProfileUpdateClientFrameSchema,
+  stopBackgroundSessionClientFrameSchema,
   fallbackHoldForChoiceClientFrameSchema,
   fallbackReleaseChoiceClientFrameSchema,
 ] as const;
@@ -2931,7 +3030,12 @@ const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("activePermissionModeUpdate"),
     ...ownerActionFrameFields,
-    permissionMode: permissionModeSchema,
+    // The one mode slot on this hand-frozen union that does NOT arrive through
+    // `chatRunSettingsSchemaPreReasonix`, and so the one that has to name the
+    // frozen enum itself. It read `permissionModeSchema` until `auto` widened
+    // that enum, at which point `1.0` - the most frozen line in the file -
+    // became the only one able to spell a mode invented three lines above it.
+    permissionMode: permissionModeSchemaPreAuto,
   }),
   z.object({
     kind: z.literal("approvalDecision"),
@@ -4084,6 +4188,28 @@ export type ChatSubscribeWindowedClientFrame = z.infer<
   typeof chatSubscribeWindowedClientFrameSchema
 >;
 
+/**
+ * The frozen `1.10` windowed client union - the live one before `auto`.
+ *
+ * `1.10` and `1.11` shared `chatSubscribeWindowedClientFrameSchema` until the
+ * permission mode split them, and the split is one-directional: every frame
+ * here is a strict subset of the live union above, so the resolver's
+ * re-parse-through-live normalization stays the no-op its own comment claims.
+ *
+ * Enforcement is two repos wide: the registry binds this union to `1.10`, and
+ * the host selects it for a `1.10` peer in `windowedClientFrameSchemaForVersion`
+ * (`chat-stream-resolver.ts`), the same place `1.8`/`1.9` are held to their
+ * own frozen union. A host that fell through to live there would parse a
+ * `1.10` peer against the union above and accept a mode the line's own server
+ * frames cannot represent - which is the gap that selector exists to close.
+ */
+export const chatSubscribeWindowedClientFrameSchemaPreAuto =
+  z.discriminatedUnion("kind", [
+    ...chatSubscribeClientFrameSchemaOptionsPreAuto,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ]);
+
 // The frozen `1.8`/`1.9` client union - the pre-fallback action set plus the
 // two windowed reads. Declared here rather than beside the frozen server
 // bundles above because the two read frames are `const`s declared between the
@@ -4160,8 +4286,11 @@ export const chatSubscribeV19 = defineStreamRpcContract({
 // `1.7`, exactly as its own doc says it must.
 //
 // Frozen pre-`auto` since the `auto` permission mode re-minted above it at
-// `1.11` (`chatSubscribeServerFrameSchemaV110`); the client frames are still
-// the live union, which `1.11` did not touch.
+// `1.11` - on BOTH directions. The server frames are
+// `chatSubscribeServerFrameSchemaV110`; the client frames are
+// `chatSubscribeWindowedClientFrameSchemaPreAuto`, because a settings write or
+// an `activePermissionModeUpdate` accepted here would mint a chat this very
+// line is then refused (`chatSubscribeSupportsPermissionMode`).
 //
 // What this line adds. Everything in the list below is host-gated so a lower
 // peer never observes it; the lease `token` is not, and the paragraph after
@@ -4214,7 +4343,7 @@ export const chatSubscribeV110 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 10 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV110,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreAuto,
 });
 
 /**

@@ -87,7 +87,12 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     () => catalogSupportedPermissionModes(harnesses),
     [harnesses],
   );
-  const judgeBilling = useAutoJudgeBilling(runTargetHostId);
+  // The harness this composer will RUN, which decides the disclosure alongside
+  // the host's stored judge: a provider set to its own classifier bypasses
+  // Traycer's judge entirely. Read off the same store slice the picker shows,
+  // so the row and the trigger can never name different providers.
+  const runHarnessId = useStore(store, (s) => s.selection.harnessId);
+  const judgeBilling = useAutoJudgeBilling(runTargetHostId, runHarnessId);
 
   // While dictation is active the whole bottom row becomes the recording strip
   // (Codex-style) - the model/permission/send controls return on stop.

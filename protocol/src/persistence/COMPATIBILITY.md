@@ -80,7 +80,9 @@ Note what is NOT being claimed. This is not "an enum value is additive"; it is
 "this particular subtree has no reader that can meet the new value". The
 chat-sync records, whose readers genuinely are shipped elsewhere, got the other
 treatment entirely — `permissionMode` is reopened to a checked string there
-(§5's reasoning, applied to a non-harness leaf).
+(§5's reasoning, applied to a non-harness leaf). Read §5's caveat with it: the
+reopening landed at chat-sync 1.5 and the readers in the field are on 1.3, so it
+covers the modes after `auto`, not `auto` itself.
 
 ## Frozen epic-schema guard
 
@@ -325,6 +327,24 @@ the mode as a label and nothing switches on it, and the value is authoritative
 only to the host that wrote it, which reads it back through the epic tree's
 `chatRunSettingsSchema` rather than this one. Adding a mode therefore needs
 nothing here — like adding a harness id.
+
+**A reopening protects readers from its own minor onward, and not one release
+earlier.** This one landed in 1.5; `host-v1.3.x` ships chat-sync 1.3, where the
+leaf is still the closed enum, so a chat published in `auto` decodes
+`schema-rejected` on every reader already in the field.
+`decodeChatHeadDocument` parses the whole payload before `gateChatHeadVersion`
+runs, so neither `minReaderVersion` nor residual capture can reach the value
+first — a raised minimum would not help, and §4's "set it only for a change an
+older reader cannot safely interpret" does not describe a change it cannot
+PARSE. The failure is fail-closed (a refusal, never a misreading), and the
+window is the same one 1.3's `noticeKind` reopening left toward the 1.1
+readers `host-v1.2.0` shipped, into which `harness_message` and the five
+`fallback_*` kinds were then added. Closing it for a specific value means
+publishing a legacy-safe value in the declared field and carrying the real one
+beside it — which buys an old reader a chat it can open at the price of a
+record that misreports a permission-relevant field, and clones as that value.
+That is a product decision about the reader population, not a schema one, and
+it is not taken here.
 
 `blocks[].text.providerNotice.noticeKind` is a plain non-empty string here —
 the same `z.string().min(1)` the harness ids beside it take, so `""` is not a

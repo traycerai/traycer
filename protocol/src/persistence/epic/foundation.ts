@@ -194,6 +194,22 @@ export type PermissionMode = z.infer<typeof permissionModeSchema>;
  * fails the WHOLE frame or response, not the one field: the documented
  * `authStatus` / Reasonix hazard, in the mode dimension.
  *
+ * **It is bound in the client→host direction too, which the harness rosters
+ * beside it are not.** `chat.subscribe`'s client frames (`1.0`-`1.10`) and
+ * `sessionImport.run`'s open request (`1.0`/`1.1`) name the frozen enum, so a
+ * pre-`auto` line cannot be USED to set the mode either. The framework's
+ * default for that direction is the opposite - a client→host enum addition is
+ * advisory, on the argument that an old host rejects the value per call
+ * (`framework/surface-compat.ts`) - and two things take this value out of it: no
+ * released client can spell `auto`, so nothing honest is being narrowed out,
+ * and a CURRENT host accepting it on an old line mints a durable chat that line
+ * is then refused (`chatSubscribeSupportsPermissionMode`). Other pre-`auto`
+ * request contracts whose method has no post-`auto` line yet -
+ * `epic.createChat`, `epic.updateChatRunSettings`, `epic.create`,
+ * `agent.create`, `agent.configure`, `agent.fork` - still bind the live enum,
+ * because pinning a head line would make the mode unsettable rather than
+ * version-gated. Those need a new line before they can be pinned.
+ *
  * Do NOT add modes here. Add them to `permissionModeSchema` above and gate
  * emission on the negotiated version, exactly as `guiHarnessIdSchemaPreReasonix`
  * does for the harness roster.
@@ -253,15 +269,24 @@ export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
  * a later required field added to the live tuple must not silently leak into
  * this frozen contract.
  *
- * Client→host coverage is deliberately NARROWER than server→client, and the
- * asymmetry is the point: the host is the side that must stay permissive, since
- * a `1.7` peer has to be able to send `reasonix` in a settings write. Only
- * `chatSubscribeClientFrameSchemaV10` pins this tuple - that line is frozen
- * verbatim against a shipped host and gets the enum pin with everything else.
- * `1.1`-`1.6` client frames still bind the LIVE tuple, which costs nothing
- * today: a released client's own enum cannot spell `reasonix`, so only a
- * crafted peer could send it, and the server-frame freezes above are what stop
- * such a chat from ever being served back to a line that cannot decode it.
+ * Client→host coverage on the HARNESS axis is deliberately NARROWER than
+ * server→client, and the asymmetry is the point: the host is the side that must
+ * stay permissive, since a `1.7` peer has to be able to send `reasonix` in a
+ * settings write. Only `chatSubscribeClientFrameSchemaV10` pins this tuple -
+ * that line is frozen verbatim against a shipped host and gets the enum pin
+ * with everything else. `1.1`-`1.6` client frames bind the roster live, which
+ * costs nothing today: a released client's own enum cannot spell `reasonix`, so
+ * only a crafted peer could send it, and the server-frame freezes above are
+ * what stop such a chat from ever being served back to a line that cannot
+ * decode it.
+ *
+ * The MODE axis does not inherit that asymmetry, and `chat.subscribe`'s client
+ * frames from `1.1` up bind `chatRunSettingsSchemaPreAuto` instead. The
+ * difference is what the two values mean once accepted: an unknown harness id
+ * is a label the host can refuse per call, while an accepted `auto` mints a
+ * durable chat the accepting LINE is then refused
+ * (`chatSubscribeSupportsPermissionMode`). There is also no honest sender to
+ * keep permissive - no released client can spell the value at all.
  *
  * The tuple is frozen on TWO axes now. `harnessId` is pinned to the
  * pre-Reasonix roster for the reason above; `permissionMode` is pinned to
@@ -304,6 +329,15 @@ export type ChatRunSettingsPreReasonix = z.infer<
  * queued prompts each of those lines carries. `1.11` is the first that binds
  * the live tuple. Hand-frozen field-for-field rather than `.extend()`ed, so a
  * later required field on the live tuple cannot leak onto those lines.
+ *
+ * It reaches FURTHER than the server frames that named it. The same tuple is
+ * bound by the `chat.subscribe` CLIENT frames of `1.1` through `1.10` - `send`,
+ * `editUserMessage`, `queueSteerNow`, `queueSettingsUpdate` and
+ * `queueSettingsRestamp` - so a settings write on one of those lines cannot say
+ * `auto` either. That direction is deliberately narrowed where the harness axis
+ * beside it is not; see `chatRunSettingsSchemaPreReasonix` above for why the
+ * two axes part company here. (`1.0` reaches the same place through
+ * `chatRunSettingsSchemaPreReasonix`, which pins both.)
  *
  * **The harness roster is deliberately live here, and that is a one-axis
  * freeze rather than a complete one.** Four lines share this tuple and they do

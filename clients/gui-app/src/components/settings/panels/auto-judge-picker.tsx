@@ -142,7 +142,12 @@ export function AutoJudgePicker(props: {
   readonly effective: AutoJudgeEffective | null | undefined;
   readonly blocked: AutoJudgeBlocked | null | undefined;
   readonly disabled: boolean;
-  readonly onCommit: (selection: AutoJudgeSelection) => void;
+  /**
+   * `null` is the CLEAR, not an absence of intent: `autoJudgeSetRequestSchema`
+   * reserves it for "drop the override and follow the catalog default again",
+   * and the picker below is the only thing that can send it.
+   */
+  readonly onCommit: (selection: AutoJudgeSelection | null) => void;
 }) {
   const { store, seed } = useAutoJudgeToolbarStore({
     hostId: props.hostId,
@@ -203,6 +208,32 @@ export function AutoJudgePicker(props: {
         effective={props.effective}
         blocked={blocked}
       />
+      {/* The only route back to the catalog default. Every other control here
+          commits a CONCRETE harness+model, so before this existed the first
+          pick was permanent in one direction: the record could be moved but
+          never cleared, and a user who had chosen once stopped receiving
+          Traycer's future default-model changes with no way back short of
+          editing host state by hand. `selection: null` is the contract's own
+          spelling for that (`autoJudgeSetRequestSchema`), so this sends it
+          rather than guessing today's default and pinning THAT - which would
+          be the same trap wearing a different value.
+
+          Rendered only when there is an override to clear: on a host that has
+          none, the row already reads "Using Traycer's default judge" and a
+          button that would send the state it is already in is noise. */}
+      {props.selection !== null ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-auto px-2 py-0.5 text-ui-xs text-muted-foreground"
+          data-testid="auto-judge-use-default"
+          disabled={props.disabled}
+          onClick={() => props.onCommit(null)}
+        >
+          Use Traycer&apos;s default
+        </Button>
+      ) : null}
       {selfBilling !== null ? (
         <span
           data-testid="auto-judge-self-billing"

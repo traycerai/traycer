@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import { AutoModeSettingsSection } from "@/components/settings/panels/auto-mode-settings-section";
@@ -39,8 +39,22 @@ vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
 // lazily, not a value it captures at declaration time.
 let policy: AutoPolicyGetResponse | undefined;
 
+// The row's own regression guard for the stale-edit warning: `openEditor`
+// calls `query.refetch()` (never awaited) after capturing `loadedUpdatedAt`,
+// so a test that wants to prove the warning can actually fire needs a
+// `refetch` it controls - the previous fixture had none, and any test that
+// clicked "Edit policy" against it would have thrown. Not resolving a real
+// promise here: the component does not await it, so flipping the module-level
+// `policy` binding and re-rendering is what stands in for "the refetch
+// landed", matching this suite's existing rerender-by-flipping-state style.
+const autoPolicyRefetchMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/hooks/auto-mode/use-auto-policy-query", () => ({
-  useAutoPolicyQuery: () => ({ data: policy, isError: false }),
+  useAutoPolicyQuery: () => ({
+    data: policy,
+    isError: false,
+    refetch: autoPolicyRefetchMock,
+  }),
 }));
 vi.mock("@/hooks/auto-mode/use-auto-policy-set-mutation", () => ({
   useAutoPolicySetMutation: () => ({ mutate: vi.fn(), isPending: false }),
@@ -49,6 +63,7 @@ vi.mock("@/hooks/auto-mode/use-auto-policy-set-mutation", () => ({
 beforeEach(() => {
   supportsPolicy = false;
   policy = undefined;
+  autoPolicyRefetchMock.mockReset();
 });
 
 afterEach(() => {
@@ -170,6 +185,88 @@ describe("<AutoModeSettingsSection />", () => {
       ) as HTMLButtonElement;
       expect(editButton.textContent).toBe("Write a policy");
       expect(editButton.disabled).toBe(false);
+    });
+
+    // Regression guard for `AutoPolicyRow.openEditor` calling
+    // `void refetchPolicy()`. Before that line existed, `loadedUpdatedAt`
+    // and `currentUpdatedAt` were both read off the same `data` at open, so
+    // they were equal by construction and the warning below was
+    // unreachable - a window left open while another device saved showed no
+    // warning and a save from here silently replaced that version.
+    //
+    // The `updatedAt` flip lives INSIDE the mocked `refetch`'s own
+    // implementation, deliberately - not applied unconditionally after the
+    // click. That is what makes this assertion depend on `openEditor` actually
+    // calling `refetchPolicy()`: if the line were removed, `refetch` would
+    // never run, the flip would never happen, and the rerender below would
+    // still show "A" instead of surfacing the warning. A flip applied straight
+    // in the test body, independent of the mock being invoked, would pass this
+    // assertion even with the production line deleted.
+    it("shows the stale-edit warning once a refetch behind the open editor reveals a newer updatedAt", () => {
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: "A",
+        source: "account",
+        readState: "fresh",
+      };
+      autoPolicyRefetchMock.mockImplementation(() => {
+        policy =
+          policy === undefined ? undefined : { ...policy, updatedAt: "B" };
+        return Promise.resolve();
+      });
+      const { rerender } = render(<AutoModeSettingsSection />);
+
+      // `openEditor` calls the mocked `refetchPolicy()` synchronously, which
+      // is what flips `policy` above - so the warning must not be reachable
+      // at all without this click. The component itself never awaits the
+      // refetch, so nothing else could have moved `currentUpdatedAt`; the
+      // rerender below is what observes the flip the click already made.
+      fireEvent.click(screen.getByTestId("auto-policy-edit"));
+      rerender(<AutoModeSettingsSection />);
+
+      expect(screen.getByTestId("auto-policy-stale-warning")).toBeTruthy();
+    });
+
+    // CONTROL for the case above: without it, a warning that is simply
+    // ALWAYS on after a refetch would pass the assertion above for the wrong
+    // reason.
+    it("control: shows no stale-edit warning when the refetch behind the editor returns the SAME updatedAt", () => {
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: "A",
+        source: "account",
+        readState: "fresh",
+      };
+      autoPolicyRefetchMock.mockResolvedValue(undefined);
+      const { rerender } = render(<AutoModeSettingsSection />);
+
+      fireEvent.click(screen.getByTestId("auto-policy-edit"));
+
+      // Same `policy` reference, so `updatedAt` reads "A" again - the
+      // refetch confirmed nothing moved.
+      rerender(<AutoModeSettingsSection />);
+
+      expect(screen.queryByTestId("auto-policy-stale-warning")).toBeNull();
+    });
+
+    // Direct regression guard for the line itself: without
+    // `void refetchPolicy();` in `openEditor`, this assertion is the one that
+    // catches its removal even in a fixture where the response value never
+    // changes.
+    it("calls refetch when the editor opens", () => {
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: "A",
+        source: "account",
+        readState: "fresh",
+      };
+      render(<AutoModeSettingsSection />);
+
+      expect(autoPolicyRefetchMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId("auto-policy-edit"));
+
+      expect(autoPolicyRefetchMock).toHaveBeenCalledTimes(1);
     });
   });
 });

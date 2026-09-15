@@ -47,6 +47,7 @@ import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreAntigravity,
   permissionModeSchema,
+  permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   sessionImportFailureReasonSchema,
@@ -73,6 +74,28 @@ export const sessionImportRunOpenRequestSchema = z.object({
 export type SessionImportRunOpenRequest = z.infer<
   typeof sessionImportRunOpenRequestSchema
 >;
+
+/**
+ * The open request as `1.0` and `1.1` shipped it: the same shape with the mode
+ * pinned to the enum those peers strict-decode.
+ *
+ * Hand-frozen field-for-field rather than `.extend()`-ed off the live request,
+ * on the same rule as the frozen settings tuples next door - a later required
+ * field on the live shape must not leak onto a line released without it.
+ *
+ * Client→host slots normally stay on the live enum and let an old host reject
+ * per-call (`framework/surface-compat.ts`'s advisory rule). `auto` is the case
+ * that argument does not cover, from both ends: no released client can spell
+ * the value, so there is no honest sender being narrowed out, and a CURRENT
+ * host asked to run a `1.0` import would otherwise accept it and materialize
+ * chats in a mode the wizard that asked cannot represent. `1.2` below is where
+ * the value becomes sayable, which is exactly what makes that minor a
+ * negotiable fact rather than a convention.
+ */
+export const sessionImportRunOpenRequestSchemaPreAuto = z.object({
+  selections: z.array(sessionImportSelectionSchema),
+  permissionMode: permissionModeSchemaPreAuto,
+});
 
 export const sessionImportOutcomeSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -181,20 +204,23 @@ export type SessionImportRunClientFrame = z.infer<
 export const sessionImportRunV10 = defineStreamRpcContract({
   method: "sessionImport.run",
   schemaVersion: { major: 1, minor: 0 } as const,
-  openRequestSchema: sessionImportRunOpenRequestSchema,
+  openRequestSchema: sessionImportRunOpenRequestSchemaPreAuto,
   serverFrameSchema: sessionImportRunServerFrameSchemaPreAntigravity,
   clientFrameSchema: sessionImportRunClientFrameSchema,
 });
 
 /**
  * @1.1 is the first minor whose `progress` frames may name Antigravity. The
- * open request already accepted the id (client->host slots may widen freely),
- * so this minor only widens what the host is allowed to REPORT back.
+ * open request already accepted the id (client->host slots may widen freely for
+ * a HARNESS - a released client's own roster is the gate), so this minor only
+ * widens what the host is allowed to REPORT back. Its `permissionMode` stays on
+ * the pre-`auto` enum for the reason on that schema: a mode has no such gate at
+ * the far end, since the host materializes real chats from it.
  */
 export const sessionImportRunV11 = defineStreamRpcContract({
   method: "sessionImport.run",
   schemaVersion: { major: 1, minor: 1 } as const,
-  openRequestSchema: sessionImportRunOpenRequestSchema,
+  openRequestSchema: sessionImportRunOpenRequestSchemaPreAuto,
   serverFrameSchema: sessionImportRunServerFrameSchema,
   clientFrameSchema: sessionImportRunClientFrameSchema,
 });
@@ -202,19 +228,25 @@ export const sessionImportRunV11 = defineStreamRpcContract({
 /**
  * `sessionImport.run@1.2` - the `auto` permission mode, and NOTHING ELSE.
  *
- * Every shape here is `1.1`'s, by reference. The open request's
- * `permissionMode` is a client→host slot bound to the LIVE enum, so `auto`
- * became expressible on `1.0` the moment that enum was widened - and that is
- * precisely the problem this minor solves. A client cannot detect from a shape
- * whether the host on the other end knows the value it is about to send; a
- * `1.0` host would take an `auto` import and reject it as a validation error
- * mid-wizard, after the user picked the sessions.
+ * Every shape here is `1.1`'s, by reference, EXCEPT the open request: this is
+ * the first minor whose `permissionMode` is the live enum. `1.0` and `1.1` keep
+ * `sessionImportRunOpenRequestSchemaPreAuto`.
  *
- * So the minor carries no delta and is not meant to: it is the negotiable fact
- * that the host understands the mode. A client that negotiates below `1.2` clamps a
- * sticky or imported `auto` down to `auto_accept_edits` before opening the run
- * (NOT to the safest mode - today's clamp walks to `supervised`, which would
- * silently make an import stricter than the user's own default).
+ * That split is the whole minor. A client cannot detect from a shape whether
+ * the host on the other end knows the value it is about to send; a `1.0` host
+ * would take an `auto` import and reject it as a validation error mid-wizard,
+ * after the user picked the sessions. So the minor carries no other delta and
+ * is not meant to: it is the negotiable FACT that the host understands the
+ * mode. A client that negotiates below `1.2` clamps a sticky or imported `auto`
+ * down to `auto_accept_edits` before opening the run (NOT to the safest mode -
+ * today's clamp walks to `supervised`, which would silently make an import
+ * stricter than the user's own default).
+ *
+ * The pin below is what makes that clamp an invariant instead of a convention.
+ * Left on the live enum, `auto` was expressible on `1.0` from the moment the
+ * enum widened, and a client that forgot to clamp would have been taken at its
+ * word by a CURRENT host - importing chats in a mode the wizard that asked for
+ * them cannot render - rather than refused by the line it negotiated.
  */
 export const sessionImportRunV12 = defineStreamRpcContract({
   method: "sessionImport.run",

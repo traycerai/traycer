@@ -89,7 +89,9 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
     () => catalogSupportedPermissionModes(harnesses),
     [harnesses],
   );
-  const judgeBilling = useAutoJudgeBilling(runTargetHostId);
+  // Same two inputs as the desktop toolbar - see `ComposerToolbar`.
+  const runHarnessId = useStore(store, (s) => s.selection.harnessId);
+  const judgeBilling = useAutoJudgeBilling(runTargetHostId, runHarnessId);
   // Same gate as `ComposerToolbarRight`: an empty slug is the transient
   // "catalog still loading" marker and must never reach the wire as `model: ""`.
   const modelResolved = useStore(

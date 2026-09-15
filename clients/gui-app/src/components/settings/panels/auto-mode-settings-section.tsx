@@ -125,8 +125,13 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
   // installed into the picker's store through an effect - churning its
   // identity would re-`set()` that store on every render.
   const mutateJudge = setJudge.mutate;
+  // `null` travels through untouched: it is the contract's CLEAR, and the
+  // picker's "Use Traycer's default" is what sends it. Widening this callback
+  // rather than adding a second one keeps the write on one path - the
+  // mutation's host-scoped queue orders a clear against a pick exactly as it
+  // orders two picks.
   const commit = useCallback(
-    (next: AutoJudgeSelection) => {
+    (next: AutoJudgeSelection | null) => {
       mutateJudge({ selection: next });
     },
     [mutateJudge],
@@ -183,9 +188,34 @@ function AutoPolicyRow(): ReactNode {
     () => parseShippedAutoPolicy(data?.shippedDefaults ?? ""),
     [data?.shippedDefaults],
   );
+  // Capture the baseline, THEN go and ask the server whether it still holds.
+  //
+  // Both halves are load-bearing and the refetch was the missing one. The
+  // dialog's stale warning compares `loadedUpdatedAt` against the live
+  // `currentUpdatedAt`, and both were read off the same `data` - so they were
+  // equal by construction at open and nothing could ever move them apart:
+  // `autoPolicy.get` sets `refetchOnWindowFocus: false`, the method policy
+  // table gives it no poll, and `refetchOnMount: "always"` fires when the PANEL
+  // mounts, not when the editor opens. A window left open while another device
+  // saved therefore showed no warning and the save silently replaced that
+  // version - the exact loss the warning exists to name.
+  //
+  // The refetch lands BEHIND the open dialog, which is safe by the dialog's own
+  // construction: it freezes `body` and `openedWith` in `useState` initializers
+  // at mount, so a newer body cannot overwrite what the user is typing. What
+  // moves is `currentUpdatedAt`, which is exactly the signal.
+  //
+  // Not awaited: the editor must open on the click, and the warning appearing a
+  // round trip later is the honest rendering of when the answer arrived. A save
+  // committed inside that window still races - `autoPolicy.set` is
+  // last-write-wins by design - and narrowing that gap further would mean
+  // blocking Save on an in-flight read, which trades a rare silent overwrite
+  // for a permanent delay on every save.
+  const refetchPolicy = query.refetch;
   const openEditor = (): void => {
     setViewingShipped(false);
     setEditing({ loadedUpdatedAt: data?.updatedAt ?? null });
+    void refetchPolicy();
   };
 
   return (

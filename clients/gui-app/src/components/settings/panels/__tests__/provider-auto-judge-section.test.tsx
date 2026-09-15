@@ -237,6 +237,50 @@ describe("<ProviderAutoJudgeSection />", () => {
     expect(screen.getByRole("combobox").textContent).toMatch("Traycer's judge");
   });
 
+  it("disables the Select trigger while setAutoJudge is pending, so a click cannot change the value", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+    setAutoJudgeMock.isPending = true;
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: undefined })}
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox");
+    expect(trigger.getAttribute("data-disabled")).toBe("");
+    expect(trigger.hasAttribute("disabled")).toBe(true);
+
+    // Radix refuses to open a disabled trigger, so a click cannot reach an
+    // option at all - the value must stay exactly where it started.
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("option")).toBeNull();
+    expect(trigger.textContent).toMatch("Traycer's judge");
+    expect(setAutoJudgeMutateMock).not.toHaveBeenCalled();
+  });
+
+  // Control for the case above: without it, a Select that is ALWAYS disabled
+  // (a typo, a stuck default) would pass the pending assertion for the wrong
+  // reason.
+  it("control: leaves the Select trigger enabled when setAutoJudge is not pending", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+    setAutoJudgeMock.isPending = false;
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: undefined })}
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox");
+    expect(trigger.hasAttribute("disabled")).toBe(false);
+    expect(trigger.getAttribute("data-disabled")).toBeNull();
+  });
+
   it("clears the echo without flicker once the stored value agrees with it", () => {
     guiHarnessesQueryMock.data = {
       harnesses: [harnessRow({ nativeAutoJudge: true })],

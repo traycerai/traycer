@@ -118,6 +118,19 @@ export function ProviderAutoJudgeSection({
       <div className="flex items-center gap-2">
         <Select
           value={value}
+          // The repo's pending-mutation rule (gui-app AGENTS.md): `disabled`
+          // while in flight, the label untouched, a spinner beside it. The
+          // scope below it makes two rapid picks ARRIVE in order; this is what
+          // stops the second pick from being made at all while the first is
+          // still out, and the two are not interchangeable. Without it,
+          // provider → Traycer in quick succession lets the first write's
+          // `providers.list` invalidation move `stored` to `provider` while the
+          // second is still queued in the scope - which expires the optimistic
+          // echo (it holds the value it was echoing AGAINST) and snaps the
+          // control back to the SUPERSEDED choice until the second round trip
+          // lands. A control presenting an older answer as current is the one
+          // outcome this row cannot have.
+          disabled={setAutoJudge.isPending}
           onValueChange={(next) => {
             // Radix hands back a plain string; only the two members this
             // control renders may reach the wire.
