@@ -62,6 +62,7 @@ import type { CommGraphCanvasProps } from "@/components/epic-canvas/comm-graph/c
 import {
   aggregateCommGraphEdges,
   type CommGraphAgentNode,
+  type CommGraphAggregatedEdge,
 } from "@/lib/comm-graph/comm-graph-model";
 import { useCommGraphOpenAgentById } from "@/components/epic-canvas/comm-graph/use-comm-graph-open-agent-by-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -2582,16 +2583,42 @@ function detailToShow(
 }
 
 /**
- * The directory shows only when it is open AND no detail panel is claiming
- * width - together they would crush the floor at the 240px minimum split.
- * Extracted so its condition does not count against the component's complexity
- * ceiling.
+ * The directory shows only when it is open AND no detail panel is actually on
+ * screen claiming width - together they would crush the floor at the 240px
+ * minimum split. Extracted so its condition does not count against the
+ * component's complexity ceiling.
+ *
+ * KEYED ON THE RESOLVED SUBJECT rather than on `shownDetail`, which says only
+ * that a panel was ASKED for. A selection outlives a scrub that takes its
+ * subject off the as-of floor, and BOTH panels render nothing for a subject
+ * they cannot resolve - the thread panel because `selectedEdge` is not in the
+ * aggregation, the agent surface because its own `agents.find` misses. Asking
+ * the request rather than the result therefore hid the directory behind a
+ * panel that was not there, and left no way back: the chrome toggle flips
+ * `directoryOpen`, which this suppression does not consult, so pressing it
+ * twice returns to a directory still suppressed by the stale selection. What
+ * the directory yields to is the width, so the width is what this asks about.
  */
 function shouldShowDirectory(
   directoryOpen: boolean,
-  shownDetail: OfficeSelectedDetail | null,
+  selectedAgent: CommGraphAgentNode | null,
+  selectedEdge: CommGraphAggregatedEdge | null,
 ): boolean {
-  return directoryOpen && shownDetail === null;
+  return directoryOpen && selectedAgent === null && selectedEdge === null;
+}
+
+/**
+ * The shown agent detail's subject, resolved against the VISIBLE set exactly as
+ * `CommGraphAgentDetailSurface` resolves it internally. The canvas has to know
+ * whether that panel will render anything before it decides the directory's
+ * fate, and it already resolves `selectedEdge` this way for the thread panel.
+ */
+function resolveSelectedAgent(
+  selectedAgentId: string | null,
+  visibleAgents: ReadonlyArray<CommGraphAgentNode>,
+): CommGraphAgentNode | null {
+  if (selectedAgentId === null) return null;
+  return visibleAgents.find((agent) => agent.id === selectedAgentId) ?? null;
 }
 
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
@@ -4401,6 +4428,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       ? null
       : (aggregated.find((edge) => edge.id === selectedEdgeId) ?? null);
 
+  // The agent-detail twin of `selectedEdge` above: what the surface will
+  // actually resolve, which is what decides whether the directory yields.
+  const selectedAgent = resolveSelectedAgent(selectedAgentId, visibleAgents);
+
   // Resolved against the VISIBLE set, not every agent the epic ever had: the
   // floor is drawn as of the cursor, and finding a card's subject among agents
   // that are not on it is how the card outlives the character it describes.
@@ -4542,13 +4573,19 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         and taking width is also what makes the canvas box Auto measures the
         box the office really gets.
 
-        But it YIELDS to an open detail panel. The directory (30%) and a detail
-        (up to 50%) together leave the floor ~20% - unusable at the 240px minimum
-        split, where the canvas is overflow-hidden - so a shown detail hides the
-        directory rather than crushing the office between two panels. The open
-        state is kept, so closing the detail brings the directory back.
+        But it YIELDS to a detail panel that is actually THERE. The directory
+        (30%) and a detail (up to 50%) together leave the floor ~20% - unusable
+        at the 240px minimum split, where the canvas is overflow-hidden - so a
+        rendered detail hides the directory rather than crushing the office
+        between two panels. The open state is kept, so closing the detail brings
+        the directory back. A selection whose subject is off the as-of floor
+        renders no panel and so takes no width, and yields nothing.
       */}
-      {!shouldShowDirectory(directoryOpen, shownDetail) ? null : (
+      {!shouldShowDirectory(
+        directoryOpen,
+        selectedAgent,
+        selectedEdge,
+      ) ? null : (
         <OfficeDirectoryPanel
           partition={partition}
           visibleAgentIds={agentIds}
