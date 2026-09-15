@@ -180,6 +180,24 @@ describe("DeleteAccountSettingsPanel", () => {
     expect(parsed.searchParams.has("entry.671973110")).toBe(false);
   });
 
+  it("treats a whitespace-only email as unresolved on screen and in the form", () => {
+    // The wire schema accepts whitespace-only strings; the panel trims once
+    // so the "Signed in as" line and the form prefill agree that no address
+    // resolved, rather than naming an account the form then leaves blank.
+    mocks.data = userWithEmail("   ");
+    render(<DeleteAccountSettingsPanel />);
+
+    expect(screen.queryByTestId("delete-account-signed-in-as")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("delete-account-request"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    const [url] = mocks.openLink.mock.calls[0];
+    const parsed = new URL(url);
+    expect(parsed.searchParams.has("entry.833738174")).toBe(false);
+    expect(parsed.searchParams.has("entry.671973110")).toBe(false);
+  });
+
   it("names no account before the user query has answered", () => {
     mocks.data = null;
     render(<DeleteAccountSettingsPanel />);
