@@ -258,10 +258,11 @@ describe("useAutoPolicySetMutation - client-side write ordering", () => {
   // host would serialize against each other for no reason - they are two
   // different host-side records (`auto-judge.json` vs. the cloud account
   // policy) with no ordering relationship between them.
-  it("uses a scope id distinct from the judge mutation's for the same host", () => {
-    expect(autoPolicyWriteScope("host-1").id).not.toBe(
+  it("uses a scope id distinct from the judge mutation's", () => {
+    expect(autoPolicyWriteScope().id).not.toBe(
       autoJudgeWriteScope("host-1").id,
     );
+    expect(autoPolicyWriteScope().id).not.toBe(autoJudgeWriteScope(null).id);
   });
 });
 
@@ -284,16 +285,12 @@ describe("auto-mode write scope builders - identity", () => {
     expect(autoJudgeWriteScope(null).id).toBe(autoJudgeWriteScope(null).id);
   });
 
-  it("autoPolicyWriteScope: same host -> same id, different hosts -> different ids, null host separate", () => {
-    expect(autoPolicyWriteScope("host-1").id).toBe(
-      autoPolicyWriteScope("host-1").id,
-    );
-    expect(autoPolicyWriteScope("host-1").id).not.toBe(
-      autoPolicyWriteScope("host-2").id,
-    );
-    expect(autoPolicyWriteScope(null).id).not.toBe(
-      autoPolicyWriteScope("host-1").id,
-    );
+  it("autoPolicyWriteScope: ONE id for the whole app - the policy is an account-wide record, so saves through two hosts share a queue", () => {
+    // A per-host id here would let a save still pending through host A run
+    // concurrently with a later save through host B, and the slower first
+    // request could land last and replace the newer edit.
+    expect(autoPolicyWriteScope().id).toBe(autoPolicyWriteScope().id);
+    expect(autoPolicyWriteScope().id).not.toContain("host-");
   });
 
   it("providerAutoJudgeWriteScope: differs per harnessId for the same host", () => {

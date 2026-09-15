@@ -55,7 +55,10 @@ export function useAutoPolicySetMutation(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: autoModeMutationKeys.setPolicy(),
-      scope: autoPolicyWriteScope(client.getActiveHostId() ?? null),
+      // One queue for the whole app, not one per host: the policy is one
+      // account-wide record, and a save routed through host A must still be
+      // ordered against a later save routed through host B.
+      scope: autoPolicyWriteScope(),
       onMutate: () => ({ hostId: client.getActiveHostId() ?? null }),
       onSuccess: (data, variables, ctx) => {
         if (ctx.hostId === null) return;

@@ -58,9 +58,17 @@ export function autoJudgeWriteScope(hostId: string | null): MutationScope {
   return { id: `autoJudge.set:${hostId ?? UNRESOLVED_HOST}` };
 }
 
-/** @see autoJudgeWriteScope - the account policy's own per-host queue. */
-export function autoPolicyWriteScope(hostId: string | null): MutationScope {
-  return { id: `autoPolicy.set:${hostId ?? UNRESOLVED_HOST}` };
+/**
+ * @see autoJudgeWriteScope - the account policy's queue, and deliberately
+ * ONE queue for the whole app rather than one per host: the record it writes
+ * is account-wide and last-write-wins (`autoPolicy.set`'s own contract), so
+ * two hosts are two routes to the same row, not two rows. Keyed per host, a
+ * save sent through host A that is still pending while the Settings surface
+ * switches to host B and saves again would run concurrently with it, and the
+ * slower FIRST request could arrive last and silently replace the newer edit.
+ */
+export function autoPolicyWriteScope(): MutationScope {
+  return { id: "autoPolicy.set:account" };
 }
 
 /**

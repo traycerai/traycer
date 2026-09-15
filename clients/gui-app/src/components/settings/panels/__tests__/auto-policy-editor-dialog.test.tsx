@@ -13,9 +13,9 @@ afterEach(() => {
 });
 
 describe("autoPolicyChangedSinceLoad", () => {
-  it("is false when the loaded stamp is null", () => {
+  it("is TRUE when the loaded stamp is null and the current one is real - a policy was created after this window loaded none", () => {
     expect(autoPolicyChangedSinceLoad(null, "2026-09-10T00:00:00.000Z")).toBe(
-      false,
+      true,
     );
   });
 
@@ -164,10 +164,31 @@ describe("<AutoPolicyEditorDialog />", () => {
     expect(screen.getByTestId("auto-policy-stale-warning")).toBeTruthy();
   });
 
-  it("hides the stale warning when either timestamp is null", () => {
+  it("hides the stale warning when the current timestamp is unknown", () => {
+    // A null CURRENT value is "cannot tell" - the refetch has not answered -
+    // and a warning on it would fire on every open for a round trip.
     render(
       <AutoPolicyEditorDialog
         initialBody="short"
+        loadedUpdatedAt="2026-09-10T00:00:00.000Z"
+        currentUpdatedAt={null}
+        readState="fresh"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId("auto-policy-stale-warning")).toBeNull();
+  });
+
+  it("shows the stale warning when the editor opened on no policy and another device has since created one", () => {
+    // A null LOADED value against a real current one is not "cannot tell":
+    // it is proof of a creation this window never saw, and a save would
+    // replace it.
+    render(
+      <AutoPolicyEditorDialog
+        initialBody=""
         loadedUpdatedAt={null}
         currentUpdatedAt="2026-09-10T00:05:00.000Z"
         readState="fresh"
@@ -177,7 +198,7 @@ describe("<AutoPolicyEditorDialog />", () => {
       />,
     );
 
-    expect(screen.queryByTestId("auto-policy-stale-warning")).toBeNull();
+    expect(screen.getByTestId("auto-policy-stale-warning")).toBeTruthy();
   });
 });
 
