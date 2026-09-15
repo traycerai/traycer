@@ -38,6 +38,16 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
     isPending: false,
     isError: false,
   }),
+  useTerminalWorkspaceBindings: () => ({
+    data: { rows: [ROW], folderlessCwd: "/Users/tgill" },
+    isPending: false,
+    isError: false,
+  }),
+  useTerminalWorkspaceBindingsForClient: () => ({
+    data: { rows: [ROW], folderlessCwd: "/Users/tgill" },
+    isPending: false,
+    isError: false,
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({

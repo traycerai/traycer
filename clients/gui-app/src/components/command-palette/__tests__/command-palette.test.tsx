@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -323,5 +323,41 @@ describe("runCommandItem", () => {
 
     expect(recorded).toEqual([]);
     expect(closed).toBe(1);
+  });
+
+  it("keeps the palette open for an inline workspace retry", async () => {
+    const retry = vi.fn<() => void>();
+    const item: CommandItem = {
+      id: "workspace-check:terminal:host-1:retry",
+      label: "Retry workspace check",
+      description: null,
+      keywords: ["workspace", "retry"],
+      group: "open",
+      scope: "workspaces",
+      shortcut: null,
+      actionId: null,
+      subpage: null,
+      keepOpen: true,
+      run: retry,
+    };
+    const ctx: CommandContext = {
+      pathname: "/",
+      router: noopRouter("/"),
+      activeTabId: null,
+      activeEpicId: null,
+      focusedComposerKind: null,
+      targetGroupId: "epic-1",
+    };
+    const recorded: Array<string> = [];
+    const close = vi.fn();
+
+    await runCommandItem(item, ctx, {
+      recordUse: (id) => recorded.push(id),
+      close,
+    });
+
+    expect(retry).toHaveBeenCalledOnce();
+    expect(recorded).toEqual([item.id]);
+    expect(close).not.toHaveBeenCalled();
   });
 });
