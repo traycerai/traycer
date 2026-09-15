@@ -130,7 +130,6 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
           data-find-include="true"
           data-chat-find-unit={headerFindUnitId ?? undefined}
           className={cn(
-            // muted-fill-ok: transcript segment header on bg-background
             "group/segment-card relative flex min-w-0 flex-1 items-center overflow-hidden text-left",
             headerAction === null ? "rounded-md" : "rounded-l-md",
             open ? "rounded-b-none" : null,

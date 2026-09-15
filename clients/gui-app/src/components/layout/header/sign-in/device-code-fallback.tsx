@@ -26,8 +26,7 @@ export function DeviceCodeFallback(props: {
           "group flex w-full items-center justify-between gap-3 text-left text-ui-xs font-medium",
           props.isHero
             ? "text-white/[0.72] hover:bg-white/[0.07] hover:text-white"
-            : // muted-fill-ok: hover also swings to text-foreground
-              "text-muted-foreground hover:text-foreground",
+            : "text-muted-foreground hover:text-foreground",
         )}
         data-testid="signin-device-fallback-trigger"
         variant="panel"

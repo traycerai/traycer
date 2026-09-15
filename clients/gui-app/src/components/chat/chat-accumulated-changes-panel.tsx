@@ -158,16 +158,11 @@ export function ChatAccumulatedChangesPanel(
       <Collapsible
         open={open}
         onOpenChange={setOpen}
-        className={cn(
-          // muted-fill-ok: panel on the chat dock / pinned stack bg-canvas; --canvas never equals --muted
-          props.separated ? "border-t border-border/50" : null,
-        )}
+        className={cn(props.separated ? "border-t border-border/50" : null)}
         data-testid="accumulated-changes-panel"
         variant="panel"
       >
         <div className="flex items-stretch">
-          {/* muted-fill-ok: trigger inside the canvas-surface panel above;
-              --canvas never equals --muted */}
           <CollapsibleTrigger
             className="group/acc flex min-w-0 flex-1 items-center text-left"
             variant="panel"

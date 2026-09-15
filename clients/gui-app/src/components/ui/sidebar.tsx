@@ -174,7 +174,8 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-background p-0 text-foreground [&>button]:hidden"
+          showCloseButton={false}
+          className="w-(--sidebar-width) bg-background text-foreground"
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,

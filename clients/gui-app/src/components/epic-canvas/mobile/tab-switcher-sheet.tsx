@@ -1,10 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-} from "@/components/ui/drawer";
+import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { SwitcherCategoryTabs } from "@/components/epic-canvas/mobile/switcher-category-tabs";
@@ -202,11 +197,10 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
       >
         {/* Inside the drawer content so it runs only while the sheet is open. */}
         <SwitcherPrPresenceProbe epicId={epicId} hostId={activeHostId} />
-        <DrawerHeader className="p-0">
-          {/* vaul/Radix requires a title for screen readers; the sheet's own
-              content says what it is, so it carries no visible heading. */}
-          <DrawerTitle className="sr-only">Switch tab</DrawerTitle>
-        </DrawerHeader>
+        {/* No `DrawerHeader`: vaul/Radix requires a title for screen readers,
+            but the sheet's own content says what it is, so there is no visible
+            heading for a header band to hold. */}
+        <DrawerTitle className="sr-only">Switch tab</DrawerTitle>
         <Tabs
           value={activeCategory}
           onValueChange={handleCategoryChange}

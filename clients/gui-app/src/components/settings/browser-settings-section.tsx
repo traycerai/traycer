@@ -555,7 +555,7 @@ function SavedWebsiteSessionsManager(props: {
           fallback.focus();
         }}
       >
-        <SheetHeader className="shrink-0 pe-12">
+        <SheetHeader className="shrink-0">
           <SheetTitle>Saved website sessions</SheetTitle>
           <SheetDescription>
             Search and remove website sessions without losing your place in

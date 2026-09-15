@@ -313,10 +313,8 @@ const notYetTightened = [
   { pattern: "^Card", allow: ["*"] },
   { pattern: "^ConfirmDestructiveDialog$", allow: ["*"] },
   { pattern: "^ContextMenu", allow: ["*"] },
-  { pattern: "^Drawer", allow: ["*"] },
   { pattern: "^DropLine$", allow: ["*"] },
   { pattern: "^HoverCard|^HoverPreviewCard$", allow: ["*"] },
-  { pattern: "^Sheet", allow: ["*"] },
   { pattern: "^Sidebar", allow: ["*"] },
   { pattern: "^Toaster$", allow: ["*"] },
   { pattern: "^Tooltip", allow: ["*"] },
@@ -862,6 +860,66 @@ const commandContracts = [
   },
 ];
 
+// ── Sheet and Drawer, tightened in ticket 06 ───────────────────────────────
+//
+// These two ARE the exception the Dialog contract records: they name their
+// safe-area classes, and they pay a warning per entry for it on every lint run
+// ("Contract entry "pb-safe-bottom" is not a category …", because the plugin
+// cannot resolve a hand-written class). Dialog does not, because no dialog
+// needed one and the warnings bought nothing. These do: five sheets and a
+// drawer take `pb-safe-bottom` today, the primitives deliberately leave the
+// edge they are anchored to alone so the CONTENT can pad itself, and
+// `clients/gui-app/AGENTS.md` mandates those classes. A lint rule must never be
+// the reason one gets deleted.
+//
+// `gap-*` is the caller's on the content, unlike on `PopoverContent`. The
+// difference is what the class was saying: a popover's `gap-0` came with `p-0`
+// as one composition, at nineteen sites, and is now a `layout`. A sheet's is
+// just a gap - four of the app's nine sheets hold a single scroll region and
+// set their own rhythm inside it, which is the same argument `DialogHeader`
+// makes.
+//
+// Drawer's 35 findings were almost entirely NOT call sites: 33 of them were
+// `ui/drawer.tsx` itself, reported because the rules resolve `vaul`'s
+// `Drawer.Content` back to the name `DrawerContent`. See the `ignoreImports`
+// note in the settings block below.
+// One pattern string, shared with the per-file override below. An override's
+// `pattern` is matched against a contract's pattern STRING, not against the
+// component name - so an override that spelled this `"^SheetFooter$"` would
+// find no contract to widen, fall back to the bare `layout` default, and
+// silently TIGHTEN the part it meant to open.
+const SHEET_BAND_PATTERN =
+  "^SheetHeader$|^SheetFooter$|^SheetTitle$|^SheetDescription$|^DrawerHeader$|^DrawerFooter$|^DrawerTitle$|^DrawerDescription$";
+
+const sheetContracts = [
+  {
+    pattern: "^SheetContent$|^DrawerContent$",
+    allow: ["layout", "gap-*", "pb-safe-bottom"],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <{{component}}>: the bands inside it own their padding - `{{component}}Header`, `{{component}}Footer` - and the edge it is anchored to is left bare on purpose, so the content can pad itself. `gap-*` between the bands and `pb-safe-bottom` for the home indicator are yours. See {{file}}.',
+      color:
+        '"{{className}}" is not allowed on <{{component}}>: it owns its surface. `bg-popover` is the raised-surface fill every preset defines distinctly (see the raised-surface rule in clients/gui-app/AGENTS.md). See {{file}}.',
+    },
+  },
+  {
+    pattern: SHEET_BAND_PATTERN,
+    allow: [
+      "layout",
+      "gap-*",
+      "space-y-*",
+      "truncate",
+      "text-pretty",
+      "pb-safe-bottom",
+      "pb-safe-bottom-gutter",
+    ],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <{{component}}>: the band owns its padding, and `pe-12` for the close button is read off the content rather than set here. `gap-*` between the band\'s own children, and the safe-area bottom inset, are yours. See {{file}}.',
+    },
+  },
+];
+
 // ── Button, the one family that IS enforced ─────────────────────────────────
 //
 // `layout` plus four named classes. Each is a treatment the component cannot
@@ -967,6 +1025,7 @@ const tightenedContracts = [
   ...popoverContracts,
   ...tabsContracts,
   ...commandContracts,
+  ...sheetContracts,
   ...inlinePrimitiveContracts,
   buttonContract,
 ];
@@ -1146,8 +1205,36 @@ const restyleExemptions = [
     // The last row of a settings list whose `<li>`s are `px-5 py-2.5`, with
     // the list's own top divider on it, so its padding, its squared corners
     // and that divider all line up with siblings it does not own.
+    //
+    // And the sheet's footer rule: this sheet's body is a SCROLL region, so
+    // the footer is a fixed band the content runs under and needs an edge the
+    // scrolling content stops at. A sheet whose body is short does not, which
+    // is why the rule is not the footer's default.
     files: ["src/components/settings/browser-settings-section.tsx"],
-    contracts: [{ pattern: "^Button$", allow: ["color", "shape", "spacing"] }],
+    contracts: [
+      { pattern: "^Button$", allow: ["color", "shape", "spacing"] },
+      {
+        pattern: SHEET_BAND_PATTERN,
+        allow: ["border-t", "border-border/60"],
+      },
+    ],
+  },
+  {
+    // A stand-in for the web platform's own `alert` / `confirm` / `prompt`, for
+    // a browser tile that cannot show the native ones. The dialog's MESSAGE is
+    // the body text rather than a subtitle - it is the whole reason the sheet
+    // opened - so it takes the foreground rather than the muted tone a
+    // description carries.
+    files: ["src/components/browser-tile/browser-peek-tile.tsx"],
+    contracts: [{ pattern: "^SheetDescription$", allow: ["color"] }],
+  },
+  {
+    // The mobile sidebar is the app's NAVIGATION surface reflowed into a sheet,
+    // not a raised overlay on top of one: it takes the page background so the
+    // panel inside it reads exactly as it does when docked, and `--sidebar-*`
+    // paints the rest.
+    files: ["src/components/ui/sidebar.tsx"],
+    contracts: [{ pattern: "^SheetContent$", allow: ["color"] }],
   },
 
   // ── ticket 05: the inline primitives' tail ────────────────────────────────
@@ -2532,6 +2619,18 @@ export default tseslint.config(
     settings: {
       shadcn: {
         note: "See the design rules in clients/gui-app/AGENTS.md before adding a class, a token or an exception.",
+        // `vaul` exports its drawer as `Drawer`, and the rules resolve
+        // `DrawerPrimitive.Content` back through that import to the name
+        // `DrawerContent` - which is OUR component. So `ui/drawer.tsx`, the
+        // file that DEFINES the drawer, was reported as if it were a call site
+        // restyling it: 33 findings for the fill, the shadow, the per-direction
+        // borders and every safe-area inset the wrapper exists to apply. Radix
+        // primitives do not do this (`ui/dialog.tsx` writes the same kind of
+        // thing and is clean), so the fix is to tell the rules that `vaul` is a
+        // primitive library rather than a component source. Call sites are
+        // unaffected: they import `DrawerContent` from
+        // `@/components/ui/drawer`, which is still recognized.
+        ignoreImports: ["^vaul$"],
       },
     },
     rules: {
