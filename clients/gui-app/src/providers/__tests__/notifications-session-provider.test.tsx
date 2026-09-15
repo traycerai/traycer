@@ -478,15 +478,15 @@ class MockStreamSession implements IStreamSession {
   }
 
   emitOpen(): void {
-    this.statusChangeHandler?.("open", null);
+    this.statusChangeHandler?.("open", null, null);
   }
 
   emitStatus(status: "connecting" | "open" | "closed" | "reconnecting"): void {
-    this.statusChangeHandler?.(status, null);
+    this.statusChangeHandler?.(status, null, null);
   }
 
   emitClosed(reason: StreamCloseReason): void {
-    this.statusChangeHandler?.("closed", reason);
+    this.statusChangeHandler?.("closed", reason, null);
   }
 }
 
@@ -1851,57 +1851,6 @@ describe("<NotificationsSessionProvider />", () => {
       expect(cloud.rows).toEqual({});
       expect(cloud.version).toBeNull();
       expect(cloud.connectionState).toBe("connecting");
-    });
-  });
-
-  it("keeps the dormant entitlement refusal on a stable unavailable wall", async () => {
-    const queryClient = new QueryClient();
-    const streamClient = new MockWsStreamClient();
-    hostState.id = mockLocalHostEntry.hostId;
-    streamState.client = streamClient;
-    streamState.cloudFeedSupport = "supported";
-    __setNotificationsStreamFactoryForTests(() => ({
-      applyUpdate: () => undefined,
-      close: () => undefined,
-    }));
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <NotificationsSessionProvider>
-          <div />
-        </NotificationsSessionProvider>
-      </QueryClientProvider>,
-    );
-    act(() => {
-      resetAuth("signed-in", "alice@example.com", "alice@example.com");
-    });
-    await waitFor(() => {
-      // The stream-factory override is the local-mode test harness path: it
-      // suppresses the host durable-home feed so this case can isolate the
-      // cloud entitlement wall without mixed-plane stream noise.
-      expect(streamClient.subscribedMethods).toEqual([
-        "agent.activity.subscribe",
-        "host.notifications.cloudFeed.subscribe",
-      ]);
-    });
-
-    act(() => {
-      streamClient.session.emitClosed(fatalClose("FREE_TIER_NO_CLOUD_SYNC"));
-    });
-    await waitFor(() => {
-      expect(useAuthStore.getState().subscriptionStatus).toBe("FREE");
-      expect(useCloudNotificationsStore.getState().connectionState).toBe(
-        "unavailable",
-      );
-      expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(1);
-      expect(
-        streamClient.subscribedMethods.filter(
-          (method) => method === "host.notifications.cloudFeed.subscribe",
-        ),
-      ).toHaveLength(1);
-      expect(streamClient.subscribedMethods).not.toContain(
-        "host.notifications.feed.subscribe",
-      );
     });
   });
 

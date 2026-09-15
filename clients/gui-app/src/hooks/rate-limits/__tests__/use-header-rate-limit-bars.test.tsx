@@ -88,7 +88,7 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 import { useHeaderRateLimitBars } from "@/hooks/rate-limits/use-header-rate-limit-bars";
 
 const PROFILE_SELECTION = {
-  activeChatSettings: null,
+  shownProfiles: {},
   lastProfileByHarness: {},
 };
 

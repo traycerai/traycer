@@ -29,6 +29,11 @@ import type {
   BrowserViewTileCommandEvent,
   BrowserViewTileKey,
 } from "@traycer-clients/shared/platform/browser-view";
+import {
+  hasPrimaryFocusIntent,
+  requestPrimaryFocus,
+  resetPrimaryFocusCoordinatorForTests,
+} from "@/lib/focus/primary-focus-coordinator";
 
 const state = vi.hoisted(() => ({
   visible: true,
@@ -96,8 +101,6 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
     return {
       controller: CHROME_CONTROLLER,
       navigateToUrl: state.navigateToUrl,
-      downloads: [],
-      cancelDownload: vi.fn(),
       certificateError: null,
       certificateProceeding: false,
       proceedCertificate: vi.fn(),
@@ -408,7 +411,7 @@ function liveSessions(): BrowserSessionsState {
 let stopGuestHost: (() => void) | null = null;
 
 function mountGuestForTile(): void {
-  const bridge = new FakeBrowserViewBridge();
+  const bridge = new FakeBrowserViewBridge({});
   stopGuestHost = startPersistentBrowserGuestHost(bridge, {
     pointerDown: () => {},
     focus: () => {},
@@ -442,6 +445,7 @@ describe("ElectronTabSurface", () => {
     cleanup();
     stopGuestHost?.();
     stopGuestHost = null;
+    resetPrimaryFocusCoordinatorForTests();
   });
 
   it("attaches the accepted native incarnation before enabling tile chrome", async () => {
@@ -537,8 +541,17 @@ describe("ElectronTabSurface", () => {
    * no pane to claim. So what this surface owes is the forward, and the
    * identity filter in front of it.
    */
-  it("forwards native focus for its own tile to the host", () => {
+  it("hands off primary focus before forwarding native focus for its own tile", () => {
     renderTile(createRecordingBinding());
+    requestPrimaryFocus({ kind: "composer", surfaceId: "chat-a" });
+    state.onNativeTileFocused.mockImplementationOnce(() => {
+      expect(
+        hasPrimaryFocusIntent(
+          (target) =>
+            target.kind === "composer" && target.surfaceId === "chat-a",
+        ),
+      ).toBe(false);
+    });
 
     act(() => {
       state.bridge?.emitTileFocused();
@@ -549,6 +562,7 @@ describe("ElectronTabSurface", () => {
 
   it("ignores native focus reported for a different tile", () => {
     renderTile(createRecordingBinding());
+    requestPrimaryFocus({ kind: "composer", surfaceId: "chat-a" });
 
     act(() => {
       state.bridge?.emitTileFocusedForTile({
@@ -560,6 +574,11 @@ describe("ElectronTabSurface", () => {
     });
 
     expect(state.onNativeTileFocused).not.toHaveBeenCalled();
+    expect(
+      hasPrimaryFocusIntent(
+        (target) => target.kind === "composer" && target.surfaceId === "chat-a",
+      ),
+    ).toBe(true);
   });
 
   it("detaches the native surface when the tile becomes hidden", async () => {

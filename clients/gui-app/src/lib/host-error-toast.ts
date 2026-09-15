@@ -367,11 +367,11 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
     return "This needs a newer Traycer host. Update the host to continue.";
   }
   // BEFORE the `FORBIDDEN` arm, and that ordering is the fix -
-  // `s5-status-truthfulness` instance 5. A free-tier owner's share used to
+  // `s5-status-truthfulness` instance 5. An owner's refused share used to
   // arrive as a plain 403/`FORBIDDEN` and land on that arm, so the app told a
-  // user they lacked permission on their OWN epic. It is a plan limit, not an
-  // authorization failure, and the two need different words and different
-  // next steps.
+  // user they lacked permission on their OWN epic. A share refusal is about
+  // the epic's state (still local, not yet promoted), not an authorization
+  // failure, and the two need different words and different next steps.
   const shareRefusal = epicShareRefusalFromErrorCode(error.code);
   if (shareRefusal !== null) return shareRefusalMessage(shareRefusal);
   return codeKeyedMessage(error, fallback);

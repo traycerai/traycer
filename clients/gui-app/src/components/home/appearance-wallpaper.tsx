@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import {
   ditherRows,
   ditherRowsPerChannel,
@@ -43,10 +43,17 @@ export function AppearanceWallpaper(props: {
 }) {
   const { wallpaper, url, tint } = props;
   if (wallpaper === null || url === null) return null;
+  // Subtle leaves a 20% veil at the centre, strong reaches 65%. The same knob
+  // scales the texture for dot pattern and film grain; for photo it is the
+  // only thing the slider does.
+  const scrim: CSSProperties & Record<string, string | number> = {
+    "--wallpaper-scrim": (0.2 + wallpaper.intensity * 0.45).toFixed(3),
+  };
   return (
     <div
       className="appearance-wallpaper pointer-events-none absolute inset-0 overflow-hidden"
       aria-hidden="true"
+      style={scrim}
     >
       {wallpaper.style === "dither" ? (
         <DitheredWallpaper

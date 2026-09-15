@@ -1,5 +1,5 @@
 import { useEditorOpenPathsSupportsV11 } from "@/hooks/editor/use-editor-open-paths-version";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostPathOpenAvailability } from "@/hooks/editor/use-host-path-open-availability";
 import { isMac } from "@/lib/keybindings/platform";
 import { isMobileApp } from "@/lib/mobile-app";
 
@@ -17,10 +17,7 @@ import { isMobileApp } from "@/lib/mobile-app";
  * - the host negotiated a minor that carries the literal.
  */
 export function useFinderOpenAvailability(hostId: string | null): boolean {
-  const hostEntry = useHostDirectoryEntry(hostId);
+  const hostIsLocal = useHostPathOpenAvailability(hostId);
   const targetNegotiated = useEditorOpenPathsSupportsV11(hostId);
-  const hostIsLocal =
-    hostEntry !== null &&
-    (hostEntry.kind === "local" || hostEntry.kind === "mock");
   return hostIsLocal && targetNegotiated && isMac() && !isMobileApp();
 }

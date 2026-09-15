@@ -99,7 +99,7 @@ function createHarness(): Harness {
 }
 
 function emitSnapshot(harness: Harness): void {
-  harness.callbacks().onConnectionStatus("open", null);
+  harness.callbacks().onConnectionStatus("open", null, null);
   harness.callbacks().onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,

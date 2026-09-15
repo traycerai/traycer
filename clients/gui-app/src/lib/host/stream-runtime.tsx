@@ -391,10 +391,19 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // stalled host would stay errored with no path back, and nothing would
   // fail. `notifyHostAvailabilityRecovered(hostId)` says the same thing about
   // a host the caller can actually name, which here is the host this stream
-  // is heartbeating against. The target member below carries no argument for
-  // the same reason it is now spelled `notifyRecoveredForNamedHost`: the host
-  // is captured in this closure, not read from anywhere.
-  const recoveredHostId = readiness.hostId;
+  // is heartbeating against. The target member below carries no host argument
+  // for the same reason it is now spelled `notifyRecoveredForNamedHost`: the
+  // host is captured in this closure, not read from anywhere. The kind it does
+  // carry is the transport's, passed through untouched.
+  //
+  // Taken from the same `StreamRuntimeBinding` as `wsStreamClient`, and NOT
+  // from `readiness.hostId`, for the reason the build effect states at
+  // `target.hostId` above: the render's answer and the host this client
+  // actually dialed are the same only while no swap is in flight. Reading the
+  // render's would let this stream's recovery un-strand the OTHER host's
+  // queries and leave its own stranded - the id and the client it describes
+  // have to come from one object or the pair means nothing.
+  const recoveredHostId = value?.hostId ?? null;
   useEffect(() => {
     if (
       wsStreamClient === null ||
@@ -406,8 +415,8 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     return wireAvailabilityRecovery({
       wsStreamClient,
       target: {
-        notifyRecoveredForNamedHost: () => {
-          hostClient.notifyHostAvailabilityRecovered(recoveredHostId);
+        notifyRecoveredForNamedHost: (kind) => {
+          hostClient.notifyHostAvailabilityRecovered(recoveredHostId, kind);
         },
       },
       cooldownMs: AVAILABILITY_RECOVERY_COOLDOWN_MS,

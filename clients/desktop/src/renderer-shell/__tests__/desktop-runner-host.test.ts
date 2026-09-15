@@ -572,12 +572,6 @@ function buildFakeBridge(
       stopRecording: async () => false,
       onRecordingFrame: () => ({ dispose: () => undefined }),
       onRecordingStopped: () => ({ dispose: () => undefined }),
-      getDebugSnapshot: async (input) => ({
-        ...input,
-        consoleEntries: [],
-        networkEntries: [],
-        accessibilityNodes: [],
-      }),
       startAnnotation: async () => ({ ok: true as const }),
       cancelAnnotation: async () => undefined,
       setAnnotationTargetChatLabel: async () => undefined,

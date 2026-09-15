@@ -17,7 +17,6 @@ import {
 } from "./browser-view-entry-registry";
 import type { BrowserViewFind } from "./browser-view-find";
 import type { BrowserViewPopups } from "./browser-view-popups";
-import type { BrowserViewDebugSessions } from "./debug-session-for";
 
 interface BrowserViewEntryFactoryOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
@@ -25,7 +24,6 @@ interface BrowserViewEntryFactoryOptions {
   readonly find: BrowserViewFind;
   readonly popups: BrowserViewPopups;
   readonly chords: BrowserViewChords;
-  readonly debugSessions: BrowserViewDebugSessions;
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: BrowserViewWebContents,
@@ -55,7 +53,6 @@ export class BrowserViewEntryFactory {
   private readonly find: BrowserViewFind;
   private readonly popups: BrowserViewPopups;
   private readonly chords: BrowserViewChords;
-  private readonly debugSessions: BrowserViewDebugSessions;
   private readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: BrowserViewWebContents,
@@ -81,7 +78,6 @@ export class BrowserViewEntryFactory {
     this.find = options.find;
     this.popups = options.popups;
     this.chords = options.chords;
-    this.debugSessions = options.debugSessions;
     this.observePrimaryProfileOrigin = options.observePrimaryProfileOrigin;
     this.setStatus = options.setStatus;
     this.emitStatus = options.emitStatus;
@@ -104,6 +100,7 @@ export class BrowserViewEntryFactory {
       identity,
       profile,
       emulation: null,
+      emulationLease: null,
       previewWindow: null,
       recording: null,
       webContents,
@@ -180,6 +177,8 @@ export class BrowserViewEntryFactory {
       },
       certificateError: null,
       debugSession: null,
+      seedLease: null,
+      agentCdpLease: null,
       annotationSession: null,
       devToolsWindow: null,
       rendererResetPending: false,
@@ -266,23 +265,18 @@ export class BrowserViewEntryFactory {
     entry.certificateError = null;
     this.setStatus(entry, "ready", null);
     this.refreshViewport(entry);
-    void this.debugSessions
-      .ensure(entry)
-      .enableAfterCommit()
-      .catch(() => undefined);
-    // A cross-document navigation may have taken the tile's overrides with it
-    // (Chromium scopes them to the renderer), so a tile that HAS emulation
-    // intent restates it here. A tile with none has no session to disturb, and
-    // is deliberately left alone rather than attached to.
-    void entry.emulation?.reapply().catch((error: unknown) => {
-      // The CDP session can be gone by the time this lands - a tile closed or
-      // crashed during the commit - and the override dies with it either way.
-      // Logged rather than rethrown: the navigation itself succeeded, and an
-      // unhandled rejection here would fault a path the user completed.
-      log.debug("[browser-view] emulation reapply after commit failed", {
-        ...describeLogError(error),
+    // Recovery for a tab something is driving - never an attach of its own.
+    // Emulation is restated only after the leased session is ready again, so a
+    // process-swapping navigation cannot race its commands against re-enable.
+    void entry.debugSession
+      ?.enableWhileLeased()
+      .then(() => entry.emulation?.reapply())
+      .catch((error: unknown) => {
+        if (entry.emulation === null) return;
+        log.debug("[browser-view] emulation reapply after commit failed", {
+          ...describeLogError(error),
+        });
       });
-    });
   }
 
   private handleInPageNavigation(

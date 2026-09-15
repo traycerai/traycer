@@ -306,7 +306,10 @@ describe("<RemoteFolderPickerDialog />", () => {
     });
     const row = screen.getByTestId("remote-folder-picker-row");
     expect(row.className.split(" ")).toEqual(
-      expect.arrayContaining(["bg-foreground/8", "hover:bg-foreground/8"]),
+      expect.arrayContaining([
+        "bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
+        "hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
+      ]),
     );
     expect(
       row.querySelector("[data-testid='folder-picker-name-hit']")?.className,

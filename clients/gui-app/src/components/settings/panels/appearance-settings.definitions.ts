@@ -100,8 +100,17 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     availableWhen: alwaysAvailable,
     keywords: ["background image", "backdrop", "photo"],
   },
-  // The effect rows exist only once a wallpaper is chosen, and each only for
-  // the effects it adjusts.
+  curatedWallpapers: {
+    kind: "row",
+    group: "startPage",
+    search: { anchor: "appearance-start-page-curated" },
+    label: "Traycer team curated wallpapers",
+    description: "Downloads when you apply one.",
+    availableWhen: alwaysAvailable,
+    keywords: ["gallery", "preset", "built in", "download", "art"],
+  },
+  // The effect rows exist only once a wallpaper is chosen, and Tint only for
+  // the effect it adjusts. Strength applies to all three.
   wallpaperEffect: {
     kind: "row",
     group: "startPage",
@@ -175,16 +184,6 @@ export const APPEARANCE = defineSettingsSection("appearance", {
       "Use a hand cursor over buttons, links, and other clickable controls.",
     availableWhen: alwaysAvailable,
     keywords: ["cursor", "mouse", "hand", "hover"],
-  },
-  minimapSide: {
-    kind: "row",
-    group: "interface",
-    search: { anchor: "appearance-minimap-side" },
-    label: "Minimap position",
-    description:
-      "Minimaps are compact overviews for navigating chats and artifacts. Choose where they appear, or hide them.",
-    availableWhen: alwaysAvailable,
-    keywords: ["minimap", "side", "overview", "left", "right", "hide"],
   },
   typography: {
     kind: "group",

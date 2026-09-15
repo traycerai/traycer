@@ -5,11 +5,12 @@ import type {
   ChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { PinnedStackSections } from "@/components/chat/chat-pinned-stack";
-import { hasChatPinnedStackContent } from "@/components/chat/chat-pinned-stack-utils";
+import { chatPinnedStackVisible } from "@/components/chat/chat-pinned-stack-utils";
 import { ActiveAgentsPanel } from "@/components/chat/chat-active-agents-panel";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
+import type { ChatDockSection } from "@/components/chat/chat-dock-compact-context";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
@@ -27,7 +28,18 @@ export interface ChatLowerDockProps {
   readonly activeAgents: ReadonlyArray<AgentRow>;
   readonly todo: PinnedTodoSnapshot | null;
   readonly restore: ChatRestoreContextValue;
+  /**
+   * The queue as this dock should render it. The caller may have removed the
+   * received-A2A rows from it - see `folded` - so this is not always the
+   * session's whole queue.
+   */
   readonly queue: ChatSessionState["queue"];
+  /**
+   * Sections currently standing as a chip in the composer's bottom strip
+   * instead of as a row here. Decided by the caller, which needs the same
+   * answer to size everything below the dock.
+   */
+  readonly folded: ReadonlySet<ChatDockSection>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   /**
    * This chat's running managed commands, counted by the parent because the
@@ -70,19 +82,31 @@ export interface ChatLowerDockProps {
 }
 
 export function ChatLowerDock(props: ChatLowerDockProps) {
+  // A folded section is not "not there" - it is a chip under the input, and
+  // one click brings the row back. So the visibility questions stay exactly as
+  // they were and `folded` subtracts from their answers, rather than each
+  // predicate learning about a setting.
+  const changesFolded = props.folded.has("filesChanged");
   const pinnedVisible =
     props.snapshotLoaded &&
-    hasChatPinnedStackContent(props.todo, props.restore);
+    chatPinnedStackVisible({
+      todo: props.todo,
+      restore: props.restore,
+      changesFolded,
+    });
   // User-owned and received A2A queue items both surface here (the latter
   // read-only); the panel itself decides how each row renders.
   const queueVisible = props.queue.items.length > 0;
   const agentsVisible =
-    props.activeAgents.length > 0 && props.selfAgent !== null;
-  const backgroundVisible = chatBackgroundSectionVisible({
-    backgroundItemCount: props.backgroundItems?.length ?? 0,
-    runningManagedCommandCount: props.runningManagedCommandCount,
-    heldManagedCommandCount: props.heldManagedCommandCount,
-  });
+    props.activeAgents.length > 0 &&
+    props.selfAgent !== null &&
+    !props.folded.has("activeAgents");
+  const backgroundVisible =
+    chatBackgroundSectionVisible({
+      backgroundItemCount: props.backgroundItems?.length ?? 0,
+      runningManagedCommandCount: props.runningManagedCommandCount,
+      heldManagedCommandCount: props.heldManagedCommandCount,
+    }) && !props.folded.has("background");
 
   if (!pinnedVisible && !queueVisible && !agentsVisible && !backgroundVisible) {
     return null;
@@ -103,6 +127,7 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
           <PinnedSection
             visible={pinnedVisible}
             separated={queueVisible}
+            changesFolded={changesFolded}
             dock={props}
           />
           <AgentsSection
@@ -152,6 +177,7 @@ function QueueSection(props: {
 function PinnedSection(props: {
   readonly visible: boolean;
   readonly separated: boolean;
+  readonly changesFolded: boolean;
   readonly dock: ChatLowerDockProps;
 }) {
   if (!props.visible) return null;
@@ -163,6 +189,7 @@ function PinnedSection(props: {
         restore={dock.restore}
         scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
         separated={props.separated}
+        changesFolded={props.changesFolded}
       />
     </div>
   );

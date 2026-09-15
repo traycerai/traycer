@@ -276,9 +276,10 @@ describe("GeneralSettingsPanel", () => {
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSettingsStore.setState({
       showGlobalResourceMonitor: true,
-      showNavigatorResourceStats: false,
+      navigatorResourceMetrics: [],
       pinContextUsageBreakdown: false,
       quoteReplyEnabled: true,
+      homeTabEnabled: false,
       linkOpen: {
         default: "in-app",
         markdown: "in-app",
@@ -293,9 +294,11 @@ describe("GeneralSettingsPanel", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    setMobileApp(false);
     useAuthStore.getState().setSignedOut();
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useSettingsStore.setState({ homeTabEnabled: false });
     delete (globalThis as { runnerHost?: unknown }).runnerHost;
   });
 
@@ -375,37 +378,27 @@ describe("GeneralSettingsPanel", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
-  it("renders the pinned context usage breakdown row and toggles the setting", () => {
+  // The pinned context breakdown, the two resource-visibility rows and the
+  // Home tab switch now live on Settings > Layout, beside the rest of the
+  // chrome placement controls. Their `settings-store` keys did not move, so
+  // only the rendering did - which is why this asserts on the rows and the
+  // group heading rather than on the store.
+  it("no longer renders the rows that moved to the Layout page", () => {
     renderPanel();
 
-    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
-    const toggle = screen.getByRole("switch", {
-      name: "Pin context usage breakdown",
-    });
-
-    fireEvent.click(toggle);
-
-    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
-  });
-
-  it("renders resource display rows and toggles their settings", () => {
-    renderPanel();
-
-    const globalToggle = screen.getByRole("switch", {
-      name: "Show global resources button",
-    });
-    const navigatorToggle = screen.getByRole("switch", {
-      name: "Show navigator resource stats",
-    });
-
-    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(true);
-    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(false);
-
-    fireEvent.click(globalToggle);
-    fireEvent.click(navigatorToggle);
-
-    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
-    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(true);
+    expect(
+      screen.queryByRole("switch", { name: "Pin context usage breakdown" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("switch", { name: "Show global resources button" }),
+    ).toBeNull();
+    // Queried by the control the Layout page actually renders for it - the
+    // name this ever had as a switch here was never the one the row used.
+    expect(
+      screen.queryByRole("group", { name: "Resource chips on sidebar rows" }),
+    ).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Home tab" })).toBeNull();
+    expect(screen.queryByText("Layout")).toBeNull();
   });
 
   it("renders the quote reply row and toggles the setting", () => {
@@ -618,6 +611,21 @@ describe("GeneralSettingsPanel", () => {
     expect(screen.queryByText("Setup & migration")).toBeNull();
   });
 
+  it("omits the Running agents group entirely in the installed mobile app", () => {
+    setMobileApp(true);
+
+    renderPanel();
+
+    // Its only remaining row - Prevent sleep - renders nothing there (no power
+    // bridge), and the two resource-visibility toggles that used to keep it
+    // populated now live on the Layout page. A heading over an empty card is
+    // worse than no heading.
+    expect(screen.queryByText("Running agents")).toBeNull();
+    expect(screen.queryByText("Prevent sleep while running")).toBeNull();
+    expect(screen.getByText("Chat & composer")).not.toBeNull();
+    expect(screen.getByText("Onboarding")).not.toBeNull();
+  });
+
   it("renders named sections as h2 headings outside separate bordered cards", () => {
     renderPanel();
 
@@ -703,22 +711,18 @@ describe("GeneralSettingsPanel", () => {
 
     const voice = screen.getByText("Voice input");
     const quote = screen.getByText("Quote reply on text selection");
-    const pin = screen.getByText("Pin context usage breakdown");
     const preventSleep = screen.getByText("Prevent sleep while running");
-    const globalResources = screen.getByText("Show global resources button");
     const productTour = screen.getByText("Product tour");
     const snapshots = screen.getByText("Local app state");
 
     // Chat & composer rows sit between that header and Running agents.
     expect(documentPosition(chat, voice)).toBe("before");
     expect(documentPosition(voice, quote)).toBe("before");
-    expect(documentPosition(quote, pin)).toBe("before");
-    expect(documentPosition(pin, running)).toBe("before");
+    expect(documentPosition(quote, running)).toBe("before");
 
     // Running agents rows sit between that header and Onboarding.
     expect(documentPosition(running, preventSleep)).toBe("before");
-    expect(documentPosition(preventSleep, globalResources)).toBe("before");
-    expect(documentPosition(globalResources, onboarding)).toBe("before");
+    expect(documentPosition(preventSleep, onboarding)).toBe("before");
     // Prevent sleep is not still in Chat & composer.
     expect(documentPosition(chat, preventSleep)).toBe("before");
     expect(documentPosition(preventSleep, running)).not.toBe("before");
@@ -756,6 +760,7 @@ describe("GeneralSettingsPanel", () => {
         runnerHost: null,
         featureSettings: null,
         mobileApp: false,
+        mobileFooter: false,
       };
       expect(isExperimentalGroupAvailable(context)).toBe(false);
       const { container } = render(panelTree());
@@ -777,6 +782,7 @@ describe("GeneralSettingsPanel", () => {
         runnerHost: null,
         featureSettings,
         mobileApp: false,
+        mobileFooter: false,
       };
       expect(isExperimentalGroupAvailable(context)).toBe(true);
       const { container } = render(panelTree());
@@ -790,6 +796,7 @@ describe("GeneralSettingsPanel", () => {
         runnerHost: null,
         featureSettings: null,
         mobileApp: true,
+        mobileFooter: false,
       };
       expect(isVoiceInputRowAvailable(context)).toBe(false);
       expect(isPreventSleepRowAvailable(context)).toBe(false);

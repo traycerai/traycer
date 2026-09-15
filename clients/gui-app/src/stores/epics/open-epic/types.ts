@@ -23,6 +23,10 @@ import type {
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingWorkspaceMode } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
@@ -243,6 +247,28 @@ export interface TuiAgentProjection {
   readonly terminalAgentArgs: string | null;
   readonly terminalShellCommand: string | null;
   readonly terminalShellArgs: readonly string[] | null;
+  /**
+   * Whether this agent's session is alive, asleep or over, as its BINDING host
+   * knows it - `epic.listTuiAgents@1.3`'s facet, carried through so a reaped
+   * agent reads as asleep and resumable rather than as absent.
+   *
+   * `null` is a real answer and not a gap: the serving host cannot know. A row
+   * bound to a PEER host (only the binding host observes its own session
+   * transitions), a cloud replica (the metadata projection does not carry the
+   * facet), a doc-resident entry and a row served by a host that predates the
+   * facet all read `null`, and every consumer renders them exactly as it did
+   * before this field shipped. `null` NEVER means `stopped`.
+   */
+  readonly sessionState: AgentSessionState | null;
+  /**
+   * Why the last session ended, for an agent that is `sleeping`.
+   *
+   * Display metadata only. All four reasons resume identically - branching on
+   * this to decide whether an agent can be revived would re-introduce the
+   * dead/asleep confusion one level down - so it exists so the UI can say
+   * "exited on its own" instead of only "asleep".
+   */
+  readonly lastExit: AgentSessionLastExit | null;
 }
 
 export interface TerminalAgentsSlice {

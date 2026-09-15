@@ -12,9 +12,12 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
  * modes without reaching for router hooks, which the modal — or a unit test —
  * may not have.
  *
- * The keybinding router adapter is currently the ONLY caller. The indirection
- * is what would let a panel navigate correctly from either surface, not a
- * description of panels that already do.
+ * Three callers now: the keybinding router adapter, and the two halves of the
+ * Providers <-> Fallback cross-link - the Fallback panel's profile-step hint
+ * pointing at Providers, and Providers ▸ Profiles & Limits pointing back. The
+ * panel pair is why the indirection exists: a router `Link` is wrong in a
+ * panel, because under the modal overlay it navigates the router BEHIND the
+ * overlay rather than moving the section the user is looking at.
  *
  * No-ops when the bridge has not published an API yet.
  */

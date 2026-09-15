@@ -12,7 +12,7 @@ import {
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
-  isReopenableNotificationsStreamClose,
+  isReopenableHostStreamClose,
   type HostReconnectEngine,
 } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 
@@ -365,7 +365,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
 /** Opens the distinct cloud-feed stream. It deliberately owns a fresh-session
  * retry loop: a terminal stream close is otherwise permanent in the shared
  * transport and would leave the cloud-only surface stale until app restart. */
-// eslint-disable-next-line max-params -- All five are semantically distinct: one reconnect policy, one transport, and three unrelated callbacks (auth, entitlement, snapshot) that no caller supplies together. The fifth arrived with P4.1's consolidation handing the policy IN rather than each store constructing its own; folding the callbacks into a bag would restructure this store's public surface across ten call sites for a consolidation ticket whose acceptance is "no behavior change at surfaces". Mirrors git-query-keys.ts's fileDiff.
+// eslint-disable-next-line max-params -- All four are semantically distinct: one reconnect policy, one transport, and two unrelated callbacks (auth, snapshot) that no caller supplies together. The policy arrived with P4.1's consolidation handing it IN rather than each store constructing its own; folding the callbacks into a bag would restructure this store's public surface across ten call sites for a consolidation ticket whose acceptance is "no behavior change at surfaces". Mirrors git-query-keys.ts's fileDiff.
 export function openCloudNotificationsStream(
   /**
    * THE reconnect policy for this stream's host (redesign P4.1 /
@@ -378,7 +378,6 @@ export function openCloudNotificationsStream(
   reconnectEngine: HostReconnectEngine,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
-  onEntitlementDenied: (() => void) | null,
   onSnapshot:
     | ((input: {
         readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV11>;
@@ -396,7 +395,7 @@ export function openCloudNotificationsStream(
     currentSession?.close();
     currentSession = null;
     openSession();
-  }, isReopenableNotificationsStreamClose);
+  }, isReopenableHostStreamClose);
 
   const reconnect = (): void => {
     if (disposed) return;
@@ -471,15 +470,6 @@ export function openCloudNotificationsStream(
       ) {
         onAuthError?.();
       }
-      if (
-        reason?.kind === "fatalError" &&
-        reason.details.code === "FREE_TIER_NO_CLOUD_SYNC"
-      ) {
-        // Dormant defense: today's server never emits this refusal. If a
-        // server-side entitlement gate appears later, translate it into a
-        // stable unavailable wall instead of an undefined terminal state.
-        onEntitlementDenied?.();
-      }
     });
   }
 
@@ -495,11 +485,7 @@ export function openCloudNotificationsStream(
 function cloudCloseState(
   reason: StreamCloseReason | null,
 ): CloudNotificationsConnectionState {
-  if (
-    reason?.kind === "fatalError" &&
-    (reason.details.code === "INCOMPATIBLE" ||
-      reason.details.code === "FREE_TIER_NO_CLOUD_SYNC")
-  ) {
+  if (reason?.kind === "fatalError" && reason.details.code === "INCOMPATIBLE") {
     return "unavailable";
   }
   return "reconnecting";

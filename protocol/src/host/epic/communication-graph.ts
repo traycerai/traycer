@@ -524,8 +524,8 @@ export const hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10 =
   z.discriminatedUnion("kind", [
     /**
      * Host-authoritative confirmation that this stream serves the cloud
-     * plane. The renderer never derives this verdict from subscription,
-     * entitlement, or free-tier state itself. Relay failures use
+     * plane. The renderer never derives this verdict from subscription
+     * state itself. Relay failures use
      * `connectionState`; terminal refusals close the stream with a typed code.
      */
     z.object({

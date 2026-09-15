@@ -24,10 +24,12 @@ SettingsLayout
     └── settings panel route
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
+        ├── LayoutSettingsPanel
         ├── OpeningBehaviorPanel
         ├── ProvidersSettingsPanel
         ├── NotificationsSettingsPanel
         ├── AgentsSettingsPanel
+        ├── FallbackSettingsPanel
         ├── KeybindingsSettingsPanel
         ├── ShellSettingsPanel
         ├── WorktreesSettingsPanel
@@ -42,17 +44,23 @@ which maps each `SettingsSectionId` to its panel in a `switch`. A new section
 must be added in BOTH places - the route file under `src/routes/` AND the modal
 `switch` - or the modal renders a blank pane for that section.
 
-Six other places enumerate section ids, and four of them fail loudly when one
+Five other places enumerate section ids, and four of them fail loudly when one
 is missed. `settings-modal-content.tsx`, `stores/tabs/kinds/settings.tsx`
 and `report-issue-dialog.tsx`'s `ROUTE_TEMPLATE_LABELS` are exhaustive over a
 union or over `FileRouteTypes["fullPaths"]`, so a compile error catches them.
 `lib/analytics.ts` is exhaustive only because `ANALYTICS_SETTINGS_SECTIONS` is
 built through `satisfies Record<AnalyticsSettingsSection, true>` - that
 `satisfies` is doing real work, and without it a missing id silently drops the
-navigation event. The two `SETTINGS_PATHS` sets (`stores/tabs/store.ts` and
-`stores/tabs/desktop-tabs-persistence.ts`) are hand-written string sets with no
-gate at all: a section absent from them stops being recognised as a settings
-route for persistence. `devices` was missing from both for its whole life.
+navigation event. `SETTINGS_PATHS` (`stores/tabs/settings-paths.ts`, imported by both
+`stores/tabs/store.ts` and `stores/tabs/desktop-tabs-persistence.ts`, which
+used to hold a copy each) is a hand-written string set: a section absent from
+it stops being recognised as a settings route for persistence. It cannot be
+derived from the section table, because it also accepts the retired `service`
+alias - so it is a superset, and three ids went missing before anyone noticed
+(`devices` for its whole life, then `link-phone`, then `app-notifications`).
+The gate now exists and is a test rather than the compiler:
+`stores/tabs/__tests__/settings-kind.test.ts` asserts every section id is in
+the set.
 
 ## Search
 
@@ -68,7 +76,7 @@ Six parts:
 | ------------ | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | Definitions  | `components/settings/panels/*.definitions.ts`                                                       | One collection per section: every row, group and page           |
 | Model        | `lib/settings-search/settings-definitions.ts`                                                       | `defineSettingsSection`, folding, the entry type                |
-| Assembly     | `lib/settings-search/settings-search-entries.ts`                                                    | The list of sixteen collections — nothing else                  |
+| Assembly     | `lib/settings-search/settings-search-entries.ts`                                                    | The list of seventeen collections — nothing else                |
 | Availability | `lib/settings/settings-availability.ts`                                                             | One predicate per row gate, shared with panels                  |
 | Ranking      | `lib/settings-search/settings-search.ts`                                                            | Fuse pass, field weights, kind tie-break                        |
 | Reveal       | `stores/settings/settings-search-store.ts`, `use-settings-anchor-reveal.ts` + `settings-search.css` | The pending "scroll here" handoff; finding, scrolling, flashing |
@@ -181,7 +189,7 @@ predicates; it never imports the assembled index or the search consumer.
   The ranking suite (`__tests__/settings-search.test.ts`) is the contract, not
   every query.
 
-What stays human: keywords, the sixteen `page` blocks, a region group's
+What stays human: keywords, the seventeen `page` blocks, a region group's
 `breadcrumb`, and the `contributesTo` target of a row that cannot promise its
 element.
 
@@ -211,11 +219,12 @@ near-ties toward the more specific hit, so typing "theme" lands on the ROW
 rather than the page — and it is small enough that a page still wins on its own
 name.
 
-**Anchors.** `SettingsRow` and `SettingsGroup` write their definition's
-anchor as `data-settings-anchor`; a contributor has none. The same
-`LogDetailGroup` card is the "Log detail" group on two pages, so it takes its
-page's group definition: the app's owns `app-diagnostics-log-detail`, the
-host's contributes to its page.
+**Anchors.** `SettingsRow`, `SettingsGroup` and `SettingsSubgroup` take an
+`anchor` prop and emit `data-settings-anchor`; a hand-built row writes the attribute directly (see
+`worktree-branch-prefix-section.tsx`). `LogDetailGroup` takes its anchor as a
+required `string | null` prop because the same card is the "Log detail" group
+on two different pages, and only the app's is indexed — the host page passes
+`null`.
 Anchors are unique across the whole index — the lookup is a bare attribute
 selector with no section in it.
 
@@ -229,17 +238,36 @@ this.
 different answers:
 
 - **Gated on a MODE** (the per-kind Link rows, the per-category Tile rows,
-  which render only once their parent is switched off the default) —
-  `contributesTo` the parent row (or the page); no entry of their own.
+  which render only once their parent is switched off the default; Layout's
+  header resource-monitor row, drawn only under header placement; Layout's
+  **Placement** row itself, hidden below `md` where the shell reads
+  `mobileFooter` in its place; the rows
+  inside a `SettingsSubgroup`, which its title switch hides) — not indexed;
+  the vocabulary rides on the parent row's, group's or subgroup's keywords.
+  **A VIEWPORT is a mode, not a shell**, and that is the trap: a row gated on
+  one can carry a perfectly good shell predicate and still resolve to nothing
+  in a narrow window, because no predicate can see a width. Placement was
+  anchored until it started hiding below `md`; searching it in a narrow
+  desktop window then landed on an empty page. A row whose drawing condition
+  mentions the viewport at all belongs here.
+  A subgroup IS indexed, anchored on its inset card, so a result for one of
+  its rows lands on the switch that reveals the row.
 - **Gated on DATA** ("Detected dev origins" and its Browser card, which render
   only once a terminal has printed a local URL; the start page's Wallpaper
   effect, Effect strength and Tint rows, which render only once a wallpaper is
-  chosen and each only for the effects it adjusts) — `contributesTo: "page"`.
-  No shell can promise the row, so no shell offers it. "Detected dev origins"
-  shipped as a result that navigated to General and lit nothing.
+  chosen, and Tint only for the effect it adjusts; Layout's per-provider rows,
+  which exist only for providers the watched host has reported) —
+  `contributesTo: "page"`, or the row that stands in for the set. No shell can
+  promise the row, so no shell offers it. "Detected dev origins" shipped as a
+  result that navigated to General and lit nothing.
 - **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
   desktop bridge; This phone needs `pushPermission`; Voice input and Prevent
-  sleep hide in the mobile app) — indexed, with the definition's
+  sleep hide in the mobile app, and Layout's
+  footer controls hide there until `Footer status bar` is on — the one
+  preference admitted to `SettingsAvailabilityContext`, because it decides
+  whether a surface exists, is device-local, and is subscribed to so the
+  context re-answers when it flips) — indexed, with
+  the definition's
   `availableWhen` set to the gate's **named predicate** in
   `lib/settings/settings-availability.ts`. The panel gates the row (or group)
   on that definition's own `availableWhen` — the composed predicate the entry
@@ -274,9 +302,10 @@ different answers:
 - **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
   host runtime and a successful first read of the browser bridge; host
   Notifications' two groups, which the page's scope gate conceals while the
-  host connects or is unreachable and drops for a vanished host) — not
-  entries either: they contribute to the General and host Notifications page
-  entries.
+  host connects or is unreachable and drops for a vanished host; and every
+  Fallback group, behind the same kind of scope gate and rendered only once
+  the host answers the policy read) — not entries either: they contribute to
+  the General, host Notifications and Fallback page entries.
 
 Bespoke pages are indexed at page/region level for the same reason: their
 content exists only once a host answers an RPC.
@@ -383,13 +412,58 @@ product role that build does not play. Do not reach for the viewport hook for
 these: a narrow desktop window still has a power bridge and a hardware
 keyboard, and is still the end of a pairing that shows the code.
 
+The test runs the other way too. **Layout's Sidebar PANELS list** is gated on
+the viewport and not the build, because the surface it configures - the epic
+sidebar's panel rail - is itself dropped below `md` by `epic-surface.tsx`. Ask
+which question a row's absence answers, not which list it would be shorter to
+join.
+
 - **Voice input** (`voice-settings-section.tsx`) - the build refuses dictation.
 - **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`) - the
   setting's only consumer, `PreventSleepController`, holds an OS power-save
   blocker through the desktop power bridge, and `resolveDesktopPowerBridge`
   returns null there. Extracted from `general-settings-panel.tsx` for exactly
-  this reason; the Running-agents group keeps two other rows, so it never
-  empties.
+  this reason. It is now the group's ONLY row - the two resource-visibility
+  toggles that used to keep it populated moved to Layout - so the component
+  returns the whole **Running agents** `SettingsGroup`, heading included, and
+  one gate hides both. The panel gates nothing (the `BrowserSettingsSection`
+  shape); a second gate there would stay on the build identity the day this one
+  narrows to the capability it is really about, and the empty card would return.
+- **Layout's Status bar GROUP** - the footer is not drawn in the installed
+  mobile app until **`Footer status bar`** is switched on (its header keeps the
+  usage gauge and the resource monitor either way), so until then every control
+  ABOUT THE FOOTER would configure an absent surface. This one collapses to
+  that switch plus a one-line "Off by default on phones" note rather than
+  vanishing: the rest of the page is mobile-relevant, and a page whose first
+  heading differs per build reads as a broken build. The switch is the group's
+  FIRST row in both arms - on a phone every other row in the group is
+  downstream of it, and a control that moved when it was flipped would move
+  under the finger that flipped it. Its gate is
+  `isStatusBarControlsAvailable = !mobileApp || mobileFooter`, and the
+  availability context subscribes to the store key
+  (`useSettingsAvailabilityContext`) so the whole group and the search index
+  re-answer in the same commit the switch writes. **`Placement` does NOT come
+  back with the rest** (`isStatusBarPlacementAvailable = !mobileApp`): turning
+  the strip on gives the phone every other footer control and still no second
+  surface to move the gauge to, since the mobile header keeps both regardless -
+  and below `md` `AppShell` reads `mobileFooter` in place of `placement`
+  entirely, so the segment is hidden on a narrow desktop window too. That
+  second half is why the row **contributes to the group instead of owning an
+  anchor**: its predicate is a shell and its other gate is a width, and no
+  predicate can see a width, so an anchored entry resolved to nothing in any
+  narrow window. Searching "placement" lands on the Status bar card, which
+  every shell draws. **`Show
+resource monitor in header` survives the collapse and renders beside the
+  note**, because it is
+  not a footer control - `MobileAppHeader` draws exactly that monitor, and
+  `showGlobalResourceMonitor` is device-local, so collapsing it would strand
+  the preference at its default on the one build where header width is
+  scarcest. The `app.status-bar.toggle` ACTION does collapse -
+  `desktopOnly: true` in `ACTION_META` drops its palette row
+  (`actions.source.ts`) and stops `StatusBarKeybindingBridge` registering its
+  handler - because a command that mutates a placement with no surface is worse
+  than a missing one. Both halves READ the flag; neither hard-codes the build,
+  so the next `desktopOnly` action gets the same treatment for free.
 - **The Keybindings SECTION** - chord capture is `window` `keydown` only
   (`chord-capture-core.tsx`): a tap arms the chip to "Press chord…" and nothing
   can commit it, and a binding clears only with Backspace.
@@ -404,7 +478,15 @@ keyboard, and is still the end of a pairing that shows the code.
   itself costs more than the case it serves.
 
 Each returns `null` outright rather than rendering disabled with rewritten
-copy: a control the build will never perform is worse than no control.
+copy: a control the build will never perform is worse than no control. Layout's
+Status bar group is the one entry that leaves a trace, and for a reason that
+does not generalize - it is a whole group at the TOP of a page whose other
+groups still apply, so a note names what is missing where silence would read as
+a page that failed to load. Note what that collapse is scoped to: the SURFACE,
+not the heading. The one row in the group that configures something the mobile
+app does draw stays live beside the note, because "this build cannot show the
+footer" says nothing about a header control that happened to be grouped with
+it.
 
 A whole section needs more than hiding its row, because a section id is
 addressable. `visibleSettingsSections()` (`lib/settings-sections.ts`) is the
@@ -817,8 +899,9 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - **Chat & composer**: Voice input (`voice-settings-section.tsx`), Quote
     reply on text selection, Steer with Cmd/Ctrl+Enter (toggles the fixed
     chord's mid-turn-steering semantics - stays out of Keybindings, which is
-    for rebinding), Pin context usage breakdown (global toggle for the
-    always-visible agent context-window breakdown, default off).
+    for rebinding). `Pin context usage breakdown` used to sit here and now
+    lives in **Layout › Chat** - it places a panel rather than changing what
+    the composer does.
   - **Browser**: the in-app browser has no toggle - it is always on, and the
     group carries no master switch. What is left of the group is the
     conditional **Detected dev origins** row (terminal URLs with local hosts
@@ -957,9 +1040,14 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       with a live browser stream; main owns both native destructive confirms.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
-    "Two different mobile questions"), Show global resources button, Show
-    navigator resource stats (these stay out of Appearance - they change
-    information visibility, not styling).
+    "Two different mobile questions") is the only row left. The two
+    resource-visibility toggles that used to sit beside it - the global
+    resources button and the sidebar resource chips - moved to **Layout**
+    (Status bar and Sidebar respectively), which is where WHERE-a-thing-sits
+    controls live now. Because that leaves one self-hiding row, the group
+    itself is returned by `prevent-sleep-settings-section.tsx` rather than
+    wrapped here, so the heading disappears with the row instead of drawing
+    over an empty card.
   - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
     your work and Data migration used to share this group under the name
     "Setup & migration"; both moved to the scoped host's **Overview**, because
@@ -1072,26 +1160,60 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     `useThemeRevision()` (`providers/use-theme-revision.ts`) rather than to
     the mode/preset fields, because a custom theme repaints the cascade
     without changing either.
+    The group's last row is **Background opacity** (`glassOpacity`, 30..100),
+    which the applier writes as `--glass-opacity` for the glass surfaces in
+    `styles/theme-surfaces.css`. It is the one row in this group with a search
+    anchor (`appearance-background-opacity`); the rest of the theme library has
+    no stable per-row target, so its vocabulary rides on the Appearance page
+    entry's keywords instead.
   - **Start page** (`start-page-settings-section.tsx`): the personal landing
     backdrop. Plain rows only, like every other group here - the start page
     itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose
     image..." + Remove; secondary text is the stored file name, "Custom image"
     when the image has no stored name, or "None" when no image is loaded),
-    Wallpaper effect (segmented Photo / Dot pattern / Film grain, only once
+    Traycer team curated wallpapers (the tile gallery, below), Wallpaper
+    effect (segmented Photo / Dot pattern / Film grain, only once
     a wallpaper is set), Effect strength (0..100 range input with Subtle /
-    Strong endpoints, only for dot pattern and film grain), Tint wallpaper
+    Strong endpoints, for every effect: it sets the neutral veil behind the
+    composer, and for dot pattern and film grain the texture as well), Tint wallpaper
     with theme accent color (`Switch`, dot pattern only; off dithers each RGB channel on its
     own so the image keeps its own colours), Greeting and
     Recent tasks (`showGreeting` / `showRecentHistory` switches). The style,
-    intensity, tint and the chosen file's `name` all live in the settings store
-    (`startPageWallpaper`); the bytes live only in the appearance blob store.
+    intensity, tint, the chosen file's `name` and the `curatedId` all live in
+    the settings store (`startPageWallpaper`); the bytes live only in the
+    appearance blob store.
     `lib/appearance/start-page-wallpaper.ts` owns one entry point per user
-    action (`chooseStartPageWallpaper` / `removeStartPageWallpaper`), and each
+    action (`chooseStartPageWallpaper` / `applyCuratedStartPageWallpaper` /
+    `removeStartPageWallpaper`), and each
     writes BOTH stores - that is what keeps a name from outliving the bytes it
     describes, and is why the name can be an ordinary settings field rather
     than a `File` subclass smuggled through IndexedDB. The start
     page's own `Paintbrush` button opens this panel - there is no separate
     appearance editor.
+    - **Curated wallpapers.** A small set we host, catalogued by a remote
+      manifest (`lib/appearance/curated-wallpapers.ts`) so adding one needs no
+      app release.
+      The row's control is a fluid tile grid plus a `RefreshCw` ghost icon
+      button; the manifest is a `useQuery` held at `staleTime: Infinity` and
+      refetched only by that button, and nothing about it is persisted.
+      Tiles show the manifest's thumbnails through a plain `<img>`; only an
+      apply downloads the full image, verifies its SHA-256, and stores it in
+      the same single blob slot a custom pick uses.
+      Bytes already inside the stored budget (4 MiB, 2560 px edge) are kept
+      verbatim - they were encoded for it when published - and anything over it
+      goes through `processStartPageWallpaperImage`.
+      Apply is a `useMutation` keyed by
+      `appearanceMutationKeys.applyCuratedWallpaper()`, and the spinning tile is
+      read back off that key with `useMutationState` rather than from component
+      state: the abort controller for an apply lives at module scope in
+      `start-page-wallpaper.ts`, so a download outlives the panel and a reopened
+      panel has to be able to find it again.
+      A second tile, a custom pick, or Remove aborts an apply in flight - last
+      action wins, and an aborted apply writes no settings row and reports
+      nothing.
+      `curatedId` is what rings the applied tile; an id whose entry has since
+      left the manifest simply rings nothing, and the Wallpaper row keeps
+      showing the title it was applied under.
   - **Interface**: Zoom (`DesktopZoomSettingsRow` - desktop-only, renders
     nothing without a zoom bridge; backed by
     `useRunnerZoomPercentQuery`/`SetMutation`/`ResetMutation` against host/OS
@@ -1196,6 +1318,1285 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     (`lib/desktop-installed-fonts.ts`, mirrors `desktop-log-levels.ts`) via
     `useRunnerInstalledFontsQuery` (`staleTime: Infinity`; resolves `[]` on
     shells without the bridge instead of erroring).
+- `Layout` (`panels/layout-settings-panel.tsx`, `/settings/layout`, seventh and
+  last in the Application group, leader digit 7) Where the app's own chrome
+  SITS and how much of it shows. It is a page rather than a group inside
+  Appearance because its controls answer "where does this live", not "what does
+  it look like" - and because a per-provider, per-window rate-limit list needs
+  room Appearance does not have. Group order is fixed so a control keeps its
+  place as groups arrive: **Presets** · **Status bar** · **Tabs** ·
+  **Composer** · **Chat** · **Sidebar**.
+  - **Ownership.** This page is where a layout control belongs from now on, and
+    four rows were relocated onto it from General and one from Appearance.
+    Store keys and setters are unchanged (`settings-store`), so there is no
+    migration and nothing persisted moved - only the surface did. Their
+    analytics ids are unchanged too, but they are now reported under the
+    `layout` section (`AnalyticsSettingsSection`).
+
+    | Row                             | Was                       | Now        |
+    | ------------------------------- | ------------------------- | ---------- |
+    | Show resource monitor in header | General ▸ Running agents  | Status bar |
+    | Home tab                        | General ▸ Layout          | Tabs       |
+    | Pin context breakdown           | General ▸ Chat & composer | Chat       |
+    | Minimap position                | Appearance                | Chat       |
+    | Resource chips on sidebar rows  | General ▸ Running agents  | Sidebar    |
+
+    Their search entries moved with them
+    (`lib/settings-search/settings-search-entries.ts`), each keeping its old
+    General or Appearance name as a keyword, so a query for either name lands
+    under Layout and nowhere else.
+
+    `Home tab` landed in General only because this page was on an unmerged
+    branch while the Home work was built; it has no other history there, and
+    the group it landed in there was called Layout for the same reason.
+
+  - **One file per group, mounted from the page on one line**
+    (`panels/layout/*.tsx`). A group here grows a preview, a nested list or a
+    host binding of its own, and none of that belongs in a file whose job is
+    the order the groups come in. `trackLayoutSetting`
+    (`panels/layout/track-layout-setting.ts`) is shared so a group added later
+    cannot report under a different analytics section.
+  - **Presets** (`panels/layout/presets-layout-group.tsx`, bundles in
+    `lib/layout-presets.ts`). One row: a segmented `Default · Compact ·
+Detailed`, and a `Reset to defaults` button that applies Default and is
+    disabled while the page already holds it. First on the page because it is
+    the coarsest control on it, and it writes the same store keys the groups
+    below write - so the page after a click is one a reader could have reached
+    by hand.
+    - **No new persisted field.** A preset is a COMPLETE assignment of the
+      values it covers, applied through the stores' own setters, and the
+      pressed segment is `matchLayoutPreset` over the live stores on every
+      render. So editing any row below flips the control to **Custom** at
+      once, with no "selected preset" to go stale. `Custom` is a fourth,
+      unpressable state drawn beside the segments rather than a fourth
+      segment: it is a verdict, not a choice, and an options list that grew a
+      member when you touched a switch would read as a glitch.
+    - **One object per surface, each from one store** (`statusBar`,
+      `composer` from `layout-store`; `chat`, `sidebar` from
+      `settings-store`). That shape is what lets a branch without a slice drop
+      it, and the `home` surface is what proved it: it carried Home's density
+      until that setting was removed, and it came out as three lines per bundle
+      plus its entry in the equality rather than as a field unpicked from a
+      flat bundle on every branch.
+    - **Default is read from the `DEFAULT_*` constants**, never restated, so a
+      default that changes carries the preset and the suite's "Default is the
+      defaults" assertion with it. `DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN` was
+      added to `settings-store` for the one value that had no constant.
+
+      |                     | Default              | Compact                                                              | Detailed                    |
+      | ------------------- | -------------------- | -------------------------------------------------------------------- | --------------------------- |
+      | Mode word/bar/timer | on                   | all off                                                              | all on                      |
+      | Percent mode        | Used                 | Used                                                                 | Used                        |
+      | Providers           | tightest limit       | tightest limit, none hidden                                          | tightest limit, none hidden |
+      | Resource metrics    | CPU/Memory/Processes | CPU                                                                  | all four (adds RAM share)   |
+      | Composer rows       | visible              | three docks + access compact, mic & compaction hidden, image VISIBLE | all visible                 |
+      | Reasoning           | Text                 | Bars                                                                 | Bars + text                 |
+      | Pin breakdown       | off                  | off                                                                  | on, all fields              |
+      | Context indicator   | Text                 | Ring only                                                            | Text                        |
+      | Sidebar chips       | none                 | none                                                                 | CPU/Memory/Processes        |
+
+      **Compact hides a composer button only where the verb survives without
+      it**: the dictation chord starts voice input, and the command palette
+      and `/compact` compact a conversation. Attach image has no such route -
+      paste and drag-drop both need the image already in hand and neither
+      opens a file picker - so Compact keeps that button (user ruling,
+      2026-09-12). A persisted Compact page from before that change had the
+      button hidden and now reads **Custom** until Compact is re-applied,
+      which is the honest answer: it no longer matches the bundle.
+
+    - **What a preset never touches**: `homeTabEnabled` (a feature flag), the
+      status bar's per-host visibility picks, and the picker footer's
+      `reasoningFooterControl` - none is a level of
+      DETAIL. That last one is why `LayoutPresetComposerValues` is the
+      slice's eight detail rows rather than the whole
+      `ComposerLayoutPreferences`; `Reasoning level` (the CHIP's shape) is a
+      detail row and stays in every bundle.
+      **Minimap position is not in that list**: every bundle
+      carries it and every preset writes it back to `DEFAULT_MINIMAP_SIDE`,
+      since it is a Chat-group row the match reads like any other. Moving the
+      minimap therefore reads `Custom`, and any preset puts it back.
+    - **The STRUCTURAL settings are restored by Reset only**: the status
+      bar's `placement` and its `mobileFooter` switch, the model picker
+      footer's `reasoningFooterControl`,
+      and the sidebar's panel order + per-panel visibility
+      (the last through the same two resets the Sidebar group's own buttons
+      call). Each answers "which surface hosts this" / "which control offers
+      it" / "how is the rail
+      arranged" rather than "how much detail", so NO bundle carries them -
+      `Default` included. A reader on header placement who asks for a density
+      gets that density, not the footer back, whichever of the three they
+      pick. They are absent from the match for the same reason: a Compact
+      install with the strip in the header and a reordered rail is still
+      **Compact**, and a page on default densities reads **Default** wherever
+      its strip lives. That is why `LayoutPresetStatusBarValues` is the slice's
+      two subjects rather than the whole `StatusBarLayoutPreferences`.
+    - **So the segment and the button are different gestures**, deliberately.
+      `Default` is the third density bundle (`applyLayoutPreset("default")`);
+      `Reset to defaults` is that bundle PLUS the structural settings
+      (`resetLayoutToDefaults`). The button therefore stays enabled on a page
+      already reading `Default` whose strip has been moved, whose picker
+      footer is on its list, or whose rail has been
+      rearranged - `useLayoutIsFullyDefault` is the match AND those, which
+      is a different question from the one the segment answers. Both report
+      `layout.preset.default`: one gesture's worth of intent, differing in what
+      they restore rather than in what they are about.
+    - **Slice setters.** `layout-store` grew `setStatusBarPreferences` /
+      `setComposerPreferences` and `settings-store` grew
+      `setNavigatorResourceMetrics` / `setPinnedContextBreakdownFields`,
+      because two of the values a bundle carries (`providers`,
+      `hiddenProviders`) have only toggles, and a whole-slice assignment
+      expressed as a diff would be several writes in an order that matters.
+      The list setters keep the toggles' own guarantees (canonical order, and
+      the field list never empty), so a preset cannot write a shape the rows
+      below it could not produce.
+    - Analytics: one id per preset (`layout.preset.default` / `.compact` /
+      `.detailed`), because `setting_changed` carries a fixed `source` /
+      `section` / `setting` payload. Reset reports under `.default`, which is
+      what it applies.
+  - **Status bar** (`panels/layout/status-bar-layout-group.tsx`; one
+    `SettingsGroup`, and INSIDE it a `SettingsSubgroup` per subject rather than
+    a flat row list - the bar is ONE layout slice, and its subjects nest two
+    deep). Reading down: the **preview**; `Footer status bar` (the mobile
+    opt-in, drawn in the installed app **or** below `md`); Placement (Status
+    bar / Header, the DEFAULT first - the segment renders no default hint, so
+    order is the only place the page says which one an untouched install is
+    on), drawn only in the complement of the switch above - not the installed
+    app, and not below `md`, because those are exactly the shells where
+    `AppShell` reads `mobileFooter` in place of `placement` and
+    `MobileAppHeader` keeps both controls whatever a placement says;
+    `Show resource monitor in header`,
+    drawn while placement is `header` **or the viewport is below `md`** - in
+    the other placement the group's own `Show resource monitor` governs the
+    same thing, but below `md` `AppShell` draws the strip only on the switch
+    above and `MobileAppHeader` keeps this monitor, so the row would otherwise
+    be the only control over the only monitor on screen and be missing. The
+    GROUP keys on the BUILD and the switch
+    (`isStatusBarControlsAvailable = !mobileApp || mobileFooter`), never on the
+    viewport: a temporarily narrow window must not hide the usage and resource
+    settings, which describe a strip that window still has when it is widened.
+    Ask which question a row's absence answers, not which gate is
+    nearest; **Usage limits** (subgroup, title switch =
+    `rateLimits.enabled`) holding **Display** (percentage used / remaining, the
+    used / remaining WORD after each percentage, reset timer, mini bar) and a
+    `Providers on <hostLabel>` band of one subgroup per provider (title switch =
+    visible, then one `Limits` checkbox list); and **Resource monitor**
+    (subgroup, title switch = `resources.enabled`) holding Scope (Host /
+    Desktop app) and a Metrics chip row.
+  - **The default placement is the FOOTER** (`status-bar`), for a fresh store
+    and for `Reset to defaults` alike, in every preset - the bundles carry no
+    `placement` at all, so Default and Compact both mean "footer" for a reader
+    who never chose one. The literal lives in exactly one place,
+    `DEFAULT_STATUS_BAR_LAYOUT.placement` (`stores/settings/layout-store.ts`);
+    the persistence resolver, `resetLayoutToDefaults` and
+    `useLayoutIsFullyDefault` all READ it, and nothing else may restate which
+    member it is. **There is no migration.** An explicitly persisted `"header"`
+    is a choice and survives, so a tester whose store was serialised under the
+    old header default still opens on the header until they Reset or pick
+    `Status bar`. That asymmetry is the point: the resolver falls back to the
+    constant only for a value that is absent or unreadable, which is the one
+    case where nobody has chosen. **None of it reaches a phone**, which does
+    not read `placement`: below `md` the shell asks `mobileFooter`, whose own
+    default is `false`. A default about which of two surfaces hosts the gauge
+    has nothing to say on a viewport that has only one of them.
+  - **Which of a provider's limits the strip draws is ONE checkbox list per
+    provider** (`controls/settings-checkbox-list.tsx`): `Tightest limit
+(automatic)` first, then one entry per limit the provider currently
+    reports, labelled from the window catalog (`5h`, `wk`, `Fable`). The strip
+    draws the UNION of the checked entries in catalog order - automatic is
+    whichever limit binds hardest at that moment, and a limit both name is
+    drawn once. Default is automatic alone. At least one entry stays checked:
+    the last checked entry on screen is `disabled`, because a provider that
+    draws nothing is what the provider switch above is for. Store:
+    `rateLimits.providers[providerId] = { automatic, limitKeys }`
+    (`stores/settings/layout-store.ts`); a provider with no entry is on the
+    default, so a provider connected later shows its tightest limit with no
+    visit here. The store refuses a write that would leave a selection
+    drawing nothing, whichever order the two are flipped in. This replaced
+    `Show all limits` + a deny-list chip row; the one-time migration in
+    `merge` turns an expanded provider into explicit picks of its FIXED
+    limits less the hidden ones with automatic off (a model-scoped or extra
+    window's key exists only in a snapshot, so it cannot be carried), drops
+    hidden keys for a provider that was not expanded (the default has no list
+    to remove them from), and runs only while `providers` is absent.
+    Resolution happens in `useStatusBarRateLimitSegments`, not in the
+    segment: the model carries `windows` (every live limit), `shown` (the
+    selection resolved against them, falling back to the tightest when every
+    pick has gone stale so the provider never vanishes for a renamed model)
+    and `tightest` (the tightest of `shown` - the tightest overall whenever
+    automatic is on, of the picks otherwise). Analytics:
+    `layout.statusBar.rateLimits.providerAutomatic` / `.providerLimits`.
+    **The list shows that resolution rather than re-deciding it.** The page
+    never fetches, so "no reading yet" is routine and a stored pick may name
+    no currently reported window - for a migrated `Show all limits` user, all
+    of them. `renderedSelection` therefore draws the automatic entry CHECKED
+    and held whenever nothing visible is checked, which is exactly what
+    `shownWindows` is standing in, and writes nothing: the picks return with
+    the first reading. A pick made WHILE it is standing in writes
+    `automatic: true` through with the limit, because lifting the stand-in is
+    what would otherwise leave the entry just clicked as the only checked one -
+    held, blurred, with automatic unchecking itself in the same paint. Together
+    those two mean the entry a click can reach is never the one about to be
+    held, so no click ever blurs a focused box to `<body>`.
+    The group carries `aria-describedby` to its row description
+    (`useSettingsRowDescriptionId`), since `disabled` takes the held entry out
+    of the tab order and the rule that held it is stated there.
+  - **Every entry of that list carries its limit's current figure**: after the
+    label, at the row's right edge, the strip's OWN gauge
+    (`components/layout/status-bar/status-bar-mini-bar.tsx`, imported by both
+    surfaces rather than drawn twice) and the percentage in that window's
+    severity tone with `tabular-nums`, every row reserving the same cell width
+    (`LIMIT_PERCENT_CELL_WIDTH_CLASS_NAME`) so the gauges form one straight
+    track. That width is sized by the widest READING, not by digit count: `%`
+    advances wider than a tabular digit, so a cell that fits three digits grows
+    for the one row reading `100%` and shifts its gauge out of the column. `Tightest limit (automatic)` shows
+    whichever limit binds hardest right now and NAMES it in muted text
+    (`wk 96%`), because which of several is tightest is the thing that entry is
+    for and a bare number there would be the one figure in the list with no
+    limit attached. The tightest-of comparison is
+    `lib/rate-limits/tightest-window.ts`, shared with
+    `useStatusBarRateLimitSegments`, so the entry can never name one limit
+    while the strip draws another.
+    - A figure exists only where the retained reading has a LIVE window for
+      that limit. A provider nothing has been fetched for renders the list as
+      it always did, labels alone - a control does not show sample figures -
+      and so does a window whose reset instant has passed, which the strip has
+      already dropped (`liveWindows`) and whose percentage is spent usage. The
+      row keeps its checkbox either way: a pick has to survive its window's
+      own cycle. The Settings page samples the same shared 60s clock, so a
+      window expiring while it is open loses its figure within the minute.
+    - The percentage is always `used`, whatever `Percentage` says.
+      Used / remaining is a preference about how the STRIP words a reading -
+      the preview above answers for it - while here the number is the same
+      question the gauge's fill answers, and a list whose numbers inverted
+      while their bars did not would be two readings of one fact. The reset
+      timer is absent for the same reason: this is a list of what to show, not
+      a second status bar.
+    - Both halves sit inside `SettingsCheckboxList`'s `aria-hidden` `trailing`
+      slot, so nothing drawn there can change what a box is called; the same
+      reading reaches a screen reader through the item's `announcement`, which
+      is `sr-only` text extending the name (`5h, 22% used`,
+      `Tightest limit (automatic), wk, 96% used`). Rows are full width so the
+      figures line up as one track; with no figures the labels sit exactly
+      where they did.
+  - **One mini bar per DRAWN limit**, immediately before the reading it
+    measures (`[bar] 57% used 4h 15m · [bar] 82% used wk`), filled and
+    coloured from that window's own severity - so a provider showing three
+    limits shows three independent gauges, which is what `Show mini bar`
+    promises. A single bar in front of several readings was one severity
+    colour with nothing on the row saying which limit it belonged to. The
+    SWITCH and the ladder's `bar` rung still govern them as ONE decision
+    (`showBar && parts.bar` in `status-bar-provider-segment.tsx`): a strip
+    that runs out of room drops every bar at once rather than thinning them
+    one at a time, and `percent-only` has already narrowed to the tightest
+    reading two rungs after the bars went. Each bar carries
+    `data-window-key`, since order is otherwise the only thing pairing a
+    gauge with its number, and every one stays `aria-hidden` - the accessible
+    content is the percentages and the provider tooltip, unchanged. The gauge
+    itself is `StatusBarMiniBar`
+    (`components/layout/status-bar/status-bar-mini-bar.tsx`), its own module
+    because the limit list above draws the same one.
+  - **Chat** (in `layout-settings-panel.tsx` itself). It opens with a
+    **preview** (`panels/layout/context-usage-preview.tsx`), the same
+    construction as the status bar's: an `inert` + `aria-hidden` frame and a
+    caption (`Sample figures — the real strip reads the open chat's usage.`).
+    It renders the REAL `ContextUsageChip` from one fixed module-private
+    sample (`CONTEXT_USAGE_PREVIEW_SAMPLE` - 946,956 of 1M used, 945.8k cache read,
+    1.1k cache write, 3 output, so the strip reads
+    `Context 5% left · Used 947K / 1M · Fresh 56 · …` and the destructive tone
+    is what a reader sees first), which is why every control under it is
+    answered by the component that answers it in a chat rather than by a second
+    drawing that could drift. **There is no preview-only rendering path and the
+    chip takes no preview prop.** It needs no chat: the chip's only inputs are
+    the usage it is handed and the two settings stores, so a sample usage is
+    the whole substitution - no session handle, no host client, no query, no
+    fetch. `onCompact` is a no-op rather than `null`, because the compaction
+    shortcut is part of what the strip looks like and Layout ▸ Composer can
+    remove it; `inert` is what makes that button, the popover trigger and the
+    unpin action unreachable. Inside the frame the chip is mounted in
+    `ComposerWorkspaceRow` itself rather than in a copy of its classes, since
+    the pinned strip spans that row, the inline chip is `justify-self-end`, and
+    both collapse at CONTAINER widths - reusing the row is what keeps a change
+    to those tracks arriving here too.
+    `Pin context breakdown`
+    is a `SettingsSubgroup` whose title switch is the pin
+    (`pinContextUsageBreakdown`); open, it shows one `Fields` chip row
+    (`SettingsToggleChips`, `pinnedContextBreakdownFields`) listing every row
+    the breakdown can print - `Used` · `Fresh` · `Cache read` · `Cache write` ·
+    `Output`, the keys and order of `CONTEXT_USAGE_ROW_KEYS` in
+    `chat/context-usage.ts`, so the picker can never name a row the strip
+    cannot draw. The pinned strip prints the selected fields in that order;
+    the leading `Context N% left` is not a field and always prints. The last
+    selected chip is `aria-disabled` with a `hint` saying so, and the store
+    toggle refuses to empty the list, because a strip with no figures is what
+    the switch above is for. Rehydration drops unknown ids and an empty
+    survivor set falls back to all. The popover breakdown is unaffected. A
+    selected field the current turn cannot produce simply does not print
+    (`buildContextUsageRows` omits the cache rows until a harness reports
+    cache), so a selection of `Cache read` alone draws the leading percentage
+    and no figures until the first cache hit. The strip is never blank, since
+    the percentage is not a field.
+
+    - `Context indicator` (`contextIndicatorStyle`, segmented Text / Ring /
+      Ring only, default `text`) shapes the UNPINNED chip: the sentence, a
+      gauge with the percentage inside (`size-5`) or the gauge alone
+      (`size-4`, percentage in the tooltip and the `aria-label`). The gauge is
+      the same construction as `MicProgressRing` and `DownloadProgressRing` -
+      20-unit viewBox, radius 8.5, `strokeOpacity` track, round cap,
+      `-rotate-90` on the `<svg>` - with the arc = context LEFT, and its
+      number is an HTML element centred over the SVG rather than an SVG
+      `<text>`: a user-unit `fontSize` is measured against the viewBox, and
+      the root font size IS the `uiFontSize` setting, so a "7-unit" numeral
+      renders at ~4px on the smallest setting. Two details exist for the
+      exhausted end: the arc is floored at 5% so 0% left still draws a tick
+      rather than a bare track, and the trigger's resting `opacity-70` is
+      dropped both in the gauge styles and at the destructive threshold, so
+      the chip is loudest when the window is nearly gone. The severity tone is
+      inherited from the trigger in every style, and the compaction action
+      sits beside the chip regardless.
+
+  - **Nesting is drawn, not indented.** `SettingsSubgroup`
+    (`controls/settings-subgroup.tsx`) is an inset card whose title row can host
+    the switch that owns it, because a parent switch and the rows it governs
+    have to be one object on screen or turning it off looks like the page lost
+    rows. **A parent switch off HIDES its children and writes nothing** - the
+    rows below configure something that is switched off, not something the user
+    has stopped meaning, so everything is where it was when it comes back. This
+    is also what closed the earlier complaint that the page offered ~10 controls
+    that changed nothing on screen in `header` placement: they are still
+    reachable (placement is not a switch), but the preview above them now says
+    what they are for.
+  - **A set of independent on/off choices is a chip row, not a switch per
+    choice** (`controls/settings-toggle-chips.tsx`). A switch each is right
+    while there are three of them and a sentence to say about each; it is wrong
+    for the resource metrics, whose labels are tokens and whose count is
+    fixed. The chips are real toggle buttons carrying `aria-pressed`, so Enter
+    and Space come from the element rather than from a handler. `RAM share`
+    under the Desktop-app scope is `aria-disabled` rather than `disabled` - it
+    keeps its place in the tab order, which is what makes the row's hint
+    reachable - and the scope has no total-memory denominator to divide by.
+    The chip row is the wrong shape once one entry is a sentence and the rest
+    are its alternatives - `Tightest limit (automatic)` beside `5h` reads as
+    two kinds of thing on one line - which is why a provider's limits are a
+    checkbox column instead.
+  - **Every rate-limit row that hides something is also a rung of the strip's
+    collapse ladder**, and the two meet rather than fight. A provider draws
+    its selected limits (the tightest alone by default). When the cluster runs
+    out of room it drops the mode word, then the bars, then the timers, then
+    everything but the coloured percentage - at which point it also narrows
+    to the tightest of the selection however many are checked, since several
+    bare numbers under one icon say which limits exist but not which is
+    which - then everything but the icon, and finally folds whole providers
+    into a `+N` chip - skipping any rung whose setting is already off, since
+    taking away something invisible would free no width. The percentage is
+    severity-coloured at every rung, bar or no bar.
+  - **Which ACCOUNTS a provider's segments describe is chosen in the usage
+    panel, not on this page** (`layout/header/rate-limit-popover.tsx`). Every
+    profile card - managed and ambient, Overview and detail tab alike -
+    carries a `Status bar` switch right of its enable toggle, and the strip
+    draws **one segment per checked account** for the host it is watching:
+    provider icon, the profile's inline `AccentDot`, its name on the rungs
+    that still print words, and its own limits, mini bars and countdowns
+    resolved through the provider's limit selection above. The ladder folds
+    segments, so `+N` counts accounts and its tooltip names each
+    (`Codex · Work 57%`). Store:
+    `rateLimits.shownProfiles[hostId][providerId] = [profileId | null, …]`
+    (`stores/settings/layout-store.ts`; `null` is the ambient login), keyed by
+    host because a profile id names a credential on ONE machine - the panel
+    writes the entry for `displayedHostId`, the strip and the header glyph
+    read the entry for the watch scope's host, and the background refresh
+    queue reads the app-wide host's (`useRateLimitProfileSelection(hostId)`
+    takes the host as an argument for exactly this reason). A checked id
+    whose profile has since gone is skipped at read time, never pruned; the
+    guard drops anything that is not a string-or-null list under a known
+    provider id. It lives on this page's slice but is NOT a display
+    preference: no density preset carries it (`applyLayoutPreset` carries it
+    over like `placement`), only `Reset to defaults` clears it, and Layout
+    draws no control for it because Layout is app-level and the accounts are
+    not. Analytics: `layout.statusBar.shownProfiles`, from the switch.
+    - **Nothing checked draws ONE account**, resolved by
+      `resolveStatusBarProfileIds` (`hooks/rate-limits/use-rate-limit-profile-selection.ts`):
+      the profile last picked in a composer on THAT host if the provider still
+      has it, else the provider's first profile, else ambient. The focused
+      chat's account is deliberately no longer an input - it was read for a
+      chat on ANY host, so a tile bound to another machine made the segment
+      jump to an account this host does not have and fall to ambient. The
+      card for the fallback account is highlighted (`aria-current`) with its
+      switch off and a tooltip saying it is shown by default; checked cards
+      are highlighted with the switch on. The old `Active` badge is gone with
+      the rule it described. The switch is hidden while the provider itself is
+      off the strip (`hiddenProviders`), since there is no segment for it to
+      govern.
+    - **A segment is a deep link.** Clicking one arms
+      `rate-limit-popover-store.revealProfile` (session-only, never persisted)
+      and selects the provider's tab; the card scrolls itself into view and
+      consumes the request. The click is handled on the segment and left to
+      bubble to the cluster's `PopoverTrigger`, which is what opens the panel.
+    - The header glyph has two slots and no room to name an account, so it
+      draws the FIRST of the accounts the strip would draw per provider
+      (`resolveRateLimitProfileId`); Layout's limits list reads the same one,
+      since the limit selection is per provider.
+    - The dot and the name are drawn only for a provider with two or more
+      profiles - the composer rail's rule, and for the same reason: one
+      account needs telling apart from nothing.
+  - **A limit is NAMED on the strip only when the name disambiguates**
+    (`windowLabelText`, `lib/rate-limits/status-bar-window-text.ts`). A
+    provider with ONE visible limit reads `100% used 6d` - there is nothing
+    to tell that reading apart from, so the countdown is the whole reading, and
+    the short name (`5h`, `wk`, `Weekly`, `Fable`) returns only when there is no
+    countdown to print. With TWO OR MORE visible limits every reading has a
+    sibling: a pure duration name is still replaced by the countdown, while a
+    name that carries identity (`Fable`, `Opus wk`, `Cursor models`, a named
+    Codex limit) is kept and the countdown appended, since several of those
+    share one reset instant and would otherwise print as one string. The count
+    is the provider's LIVE limits, not the ones the rung draws - a provider
+    drawing its tightest alone still has to say which of several it is.
+    Settings' checkbox list is not a caller: it lists every limit so each can
+    be checked, so a name is the point even when there is one.
+  - **Grok's period label never parses the wire token.** `periodType` is
+    `z.string().nullable()`, so `grokPeriodLabel`
+    (`lib/rate-limits/grok-period-label.ts`) names the window from its
+    `durationMinutes` when that duration NAMES a cadence - the same typed
+    source every other provider's window is named from - then from an explicit
+    table of known `USAGE_PERIOD_TYPE_*` values, then from the duration as a
+    plain count (`14d`), then from a neutral word. The table is informational;
+    an unseen value gets the neutral word rather than a substring that looks
+    like a cadence today.
+    - The cadence gate is what keeps the table alive. A calendar month is
+      28-31 days, so a duration trusted unconditionally renders a monthly
+      period as `31d` in January and `28d` in February - the word changing
+      month to month for a cadence that does not.
+      `namedCadenceForDuration` (`lib/rate-limits/window-duration-cadence.ts`)
+      owns that range and BOTH duration formatters ask it, so the strip's `mo`
+      and the page's `Monthly` are answers to one test rather than two
+      thresholds that drift. It is also why a 30-day codex window now reads
+      `Monthly` on the provider page instead of `30d`.
+    - **All three vocabularies are the caller's** - duration formatter, period
+      table and fallback word. The strip passes `1d` / `wk` / `mo` + `period`,
+      the page `Daily` / `Weekly` / `Monthly` + `Usage`. Injecting only the
+      formatter put the page's prose on the strip by the table's back door
+      (`[5h] [wk] [Weekly]`); the module owns the ORDER, never the words.
+  - **The strip's right-click menu deliberately has no per-limit items.**
+    Its provider rows are `ContextMenuCheckboxItem`s - a one-click visibility
+    toggle each - and a checkbox item cannot also host a sub-menu trigger, so
+    offering the limit selection there would either demote the visibility
+    toggle into a submenu or add a flat checkbox per limit per provider,
+    multiplying a menu's length for the rarer of the two flips. The quick
+    menu stays the visibility menu; both live one item away under `Status bar
+settings…`.
+  - **The preview is the strip, not a picture of it**
+    (`panels/layout/status-bar-preview.tsx`). It renders the same
+    `StatusBarUsageReadings` box, the same `StatusBarProviderSegment`, the same
+    `+N` chip and the same `StatusBarResourceSegment` the footer does, off the
+    same store and the same cache entries, so it cannot show a shape the strip
+    cannot produce. What it does NOT do is make a reading happen:
+    `useStatusBarRateLimitSegments` takes a required `mode`, and `passive`
+    disables every observer in all three batches - the http lane included, since
+    that is the one that would otherwise fetch - and hands back no mount
+    targets and no refresh handles at all. That last part is deliberate:
+    "renders no refresh button" would be a promise about markup, while an empty
+    `httpRefetches` is a promise about behaviour, and `refetch` on a disabled
+    query still fetches. It also mounts no popover, no resource stream and no
+    dynamic action handler. The whole frame is `inert` + `aria-hidden`: every
+    control in it is a real one that would be a dead end there, and the rows
+    below are where each is actually configured.
+  - **So the preview is honest rather than idealised.** An account with no
+    provider draws the strip's "connect a provider" line, a cold provider
+    beside a live one draws its cold track, and with no global resource stream
+    mounted (the `header` placement with the header monitor off) the resource
+    segment draws its dashes. The one exception is a cluster with NO reading
+    in it whose empty providers are COLD - the steady state under `header`
+    placement for the http-lane providers (opencode, cursor) that nothing but
+    the popover ever fetches. A cold track is an icon over an empty bar that
+    ignores every switch on the page, so a preview of nothing but cold tracks
+    previews nothing: the first two COLD providers get a fixed SAMPLE reading
+    (`57% used 4h 15m`, `82% used 2d`, built from the strip's own window shape
+    and classifier), and a `status-bar-preview-sample-note` caption says so
+    and where a live number comes from. Everything else in the cluster is
+    passed through untouched - providers past the second keep their cold
+    track, and the substitution walks the CLUSTER rather than the two
+    readings, so the provider count, the icon set, the strip order, the
+    per-provider switches and the `+N` fold's arithmetic are the ones the
+    strip would have. An `unavailable` provider is never sampled: it has
+    ANSWERED that it cannot report usage, so a percentage over it is a
+    stronger invention than the cold case and the caption's own sentence
+    would be false for it - it keeps its dash and its note, and a cluster
+    with nothing cold in it gets no sample at all. The per-provider
+    "no reading yet" lines for the SAMPLED providers are dropped while the
+    caption speaks for them (the two would otherwise contradict each other
+    under one frame), and a `Folded:` line carrying an invented number is
+    marked `(sample)`, since a fold takes that reading off the strip the
+    caption sits above. The reset instants are taken from the same 60s clock
+    the countdowns read, so the sample never ticks; the passive reader is
+    unchanged, so it never fetches; and one live or degraded reading anywhere
+    in the cluster puts the host's own readings back, cold tracks included -
+    invented numbers beside a real one would be indistinguishable from the
+    strip having fetched them. Wherever the strip is not the surface currently drawn the frame
+    is greyed rather than hidden - a preview that vanished would read as the
+    settings having no effect - and the caption says WHICH reason: `Shown when
+placement is Status bar.` in `header` placement, and `Shown at this window
+width when Footer status bar is on.` below `md`, where the placement sentence
+    would be a false promise and the switch is what actually answers. The
+    width control also STARTS at `normal` below `md` rather than `wide`,
+    because the strip forces the `compact` rung on a mobile viewport and 880 is
+    the nominal width inside that band - a phone opening the group sees the
+    rung its own footer draws.
+  - **`inert` is why the frame's own tooltips are not the explanation.** It
+    removes the subtree from hit testing, so no `TooltipWrapper` inside it can
+    open - and the states those tooltips exist for (three bare dashes, a dimmed
+    reading behind a ⚠) are exactly the ones a preview reads as broken without
+    one. A `status-bar-preview-notes` list under the frame carries them
+    instead: one line per non-live provider segment and ONE line for the
+    resource segment, both from the same builders the tooltips use
+    (`statusBarSegmentTooltip`, `statusBarResourceMetricViews`), so the caption
+    and the strip can never word one state two ways. The `+N` chip's tooltip is
+    lifted the same way, as a `Folded: <provider> <reading>, …` line built from
+    the chip's own `providerReadingText` - at the Narrow width, the one a reader
+    picks precisely to find out what folds, `+2` with no way to see which two is
+    the worst of the three. It is also why the LADDER is stepped by the preview
+    itself and handed to both halves: which providers folded is a property of
+    the measurement, and only one box can be the measured one. They are two
+    SIBLINGS
+    rather than one list, because reading the resource reason costs a
+    `useDesktopAppResourceUsage` SUBSCRIPTION and subscribing is what starts
+    the 1 Hz IPC poll - so that half is its own component mounted under `Show
+resource monitor`, never a gated result. Both dim whenever the frame does,
+    and both are absent when there is nothing to explain.
+  - **The width control names a NOMINAL width, and the frame is drawn at
+    exactly that width** - `w-[480px]` / `w-[880px]` / `w-[920px]` on the
+    `inert` frame, one per density band (`< 500` icon-only, `< 900` compact,
+    else full) - under a `max-w-full` that is the honest half of it: every
+    Settings surface caps at `max-w-5xl`, so this box is at most ~944px wide
+    however large the window is, and a frame drawn past that would push the
+    resource cluster off the right edge with nothing on screen saying so -
+    the reported bug moved one cluster over, and reproducing at 100% rather
+    than under ~1560px. Wide is **920** for the same reason: a nominal no
+    pane can draw is not a width, and 920 is still `≥ 900`, so the `full`
+    ceiling and every Display switch survive. Density comes from that nominal
+    width through `statusBarDensityForWidth`, NEVER from a measured box:
+    inside the Settings modal that box is `min(pane, 1024) − chrome`, which is
+    `compact` on any window under ~1560px, and at the `compact` ceiling the
+    ladder drops the mode word, the mini bar and the countdown whatever the
+    store says. A preview that measured itself answered "this switch does
+    nothing" to the first three Display switches a user tried - in the modal
+    only, since the promoted tab has less padding and reached `full`, so the
+    same switches worked in one Settings surface and not the other. What is
+    still MEASURED is the ladder's own `roomRef` on the usage slot inside the
+    frame, which the frame's width is what sizes, so the rungs and the `+N`
+    fold answer "does this fit the strip in front of me" exactly as they do in
+    the footer - and on a pane narrower than the nominal they answer it about
+    the narrower strip actually drawn, which is the honest reading. It
+    defaults to **Wide**, so the first thing a reader sees is every switch
+    doing something. It is component state, never persisted: a way of LOOKING
+    at the strip rather than a preference about it. The three fixed-px widths
+    are the one sanctioned exception to the fluid-sizing rule, recorded in
+    `gui-app/AGENTS.md`: the box IS a simulated viewport, and a control that
+    names a pixel width has to draw one.
+  - **The preview's ladder measures a stretching box**, the same two-box shape
+    the strip uses: the usage slot is `min-w-0 flex-1` and carries `roomRef`,
+    the readings inside stay `shrink-0` under `contentRef`, and there is no
+    separate spacer. A content-sized container would report its own content the
+    moment that content fits, which is a ladder that can only ever go down -
+    Wide → Narrow → Wide would stay collapsed until Settings was reopened. It
+    also carries an invisible `reservedRef` placeholder composed of the strip's
+    own two numbers (`pl-1` plus the refresh button's `size-5`): the ladder
+    subtracts whatever shares the room with the readings, and a preview that
+    reserved nothing would collapse ~24px later than the strip - at the one
+    width whose whole job is to say what collapses first. The real
+    `RefreshIconButton` would close the gap too, but it renders disabled for a
+    passive reader, which misrepresents a live control.
+  - **The preview is STICKY inside its group, from `md` up** (`md:sticky
+md:top-0`): positioned against the nearest scrollport - the settings
+    `overflow-y-auto` box, padding-less in both the modal and the tab, hence
+    `top-0` - and confined to its containing block, `SettingsGroup`'s card, so
+    it releases when the Status bar group scrolls past. The breakpoint is the
+    one `AppShell` mounts the strip on, and the reason is the same as the
+    caption's: below `md` this block is a dimmed `inert` picture of a surface
+    the shell does not draw, it is several hundred pixels tall once its
+    description and captions wrap, and a sticky box taller than its scrollport
+    pins its TOP - so its own last caption would be unreachable, scrolling
+    being what the pin cancels. Two things make it work: `SettingsGroup`'s card
+    is `overflow-clip` rather than
+    `overflow-hidden`, since `hidden` makes the card a scrollport and a sticky
+    child then anchors to a box that never scrolls; and `data-stuck` is written
+    onto the block from an `IntersectionObserver` over a 1px sentinel above it,
+    never from React - a scroll listener holding state would re-render the
+    whole preview per scrolled pixel. The fill and the lift are keyed on that
+    attribute AND on the same breakpoint (the sentinel reports at every width,
+    and a static block whose sentinel has scrolled out must not paint a stuck
+    fill mid-card), so the block looks like part of the card until rows are
+    actually travelling under it, and the fill is the card's own COMPOSITE
+    (`background`
+    plus a `-z-10` `card/40` pseudo) rather than one flat token - repainting a
+    pinned child opaque inside a `bg-card/40` pane is what cost the
+    model-providers tab its sticky search.
+  - **Tabs** (`panels/layout/tabs-layout-group.tsx`) - what the top-level tab
+    strip carries. One row: `Home tab`
+    (`settings-store.homeTabEnabled`, default off), the fixed Home tab and the
+    task list it draws. `Home density` was the second row and is gone, with the
+    whole `layout-store.home` slice behind it. It is a GROUP rather
+    than a row inside Status bar,
+    because a tab is not part of the footer and the two collapse differently:
+    nothing in this group keys on `isMobileApp()`, since that build has no
+    strip but does draw what the rows govern, as the first entry in the nav
+    drawer. Parking it under Status bar would have made it the one row there
+    that survives that group's collapse for a reason unrelated to the header -
+    a second exception with a different argument behind it, in the group that
+    already carries one.
+  - **Composer** (`panels/layout/composer-layout-group.tsx`, its own file - the
+    page mounts it with one line, so groups landing beside each other do not
+    contend for the panel). Seven elements, a closed list rather than a
+    registry, because the modes differ per element: three rows above the input
+    (Files changed, Active agents, Background) and four toolbar controls
+    (Attach image, Access, Microphone, Compact conversation), split by an `h3`
+    band each - "Below the input" and "Toolbar". Defaults are today's
+    behaviour, so an untouched install sees nothing new.
+  - **Two option sets, and they are not interchangeable.** `Visible / Compact`
+    for anything that carries a verb with no other home - the three dock rows
+    own Stop all / Review all / Undo all, and the Access pill reports the
+    permission the next send runs under. `Compact` is their floor: a row folds
+    to a chip at the RIGHT end of the composer's bottom strip - after the host
+    and workspace pickers, hard against the context-usage cluster, so a chip
+    coming and going never shifts those pickers - and one click opens the row
+    again; the pill folds to its icon with the name on hover. A chip always
+    draws its own icon (`Bot`, or Background's per-kind glyph - a
+    host-supervised shell is a `Terminal` whether it is running or held, never
+    a pause) and shows activity ON that icon rather than replacing it: the
+    glyph and the count turn `primary`, and the glyph shimmers (an opacity
+    sweep on the shared status clock, never a CSS `animation:`). A chip is
+    `[icon] N` at every width - it once printed the word for its state after
+    the count (`1 running`) on a container query, and that word said what the
+    icon already said, in the place the composer has least room, in a different
+    vocabulary per chip; the sentence in the tooltip and the accessible name
+    still carries it. **Nothing is drawn over the glyph.** A filled dot at its
+    corner throwing the app's ping ring was a third channel for a while; at
+    `size-3.5` the dot lands ON the icon rather than beside it, so the mark
+    meant to say "running" obscured the mark saying which section was running.
+    The tone is what carries the state under `prefers-reduced-motion`, where
+    the sweep holds still - two channels, one of them motionless, and no media
+    query in the chip's own markup.
+    A chip prints what its row's own header prints - Files changed
+    reads `3  +12 −4`, the file count then the accumulated line counts in the
+    panel's added / removed tones, with a zero side omitted and the counts
+    dropped entirely until a summary lands (`DiffLineDeltas`, shared with the
+    panel so the two can never disagree).
+    `Visible / Hidden` only for a control whose job has a second route:
+    paste and drag-drop attach images, the dictation chord starts voice input
+    (`Hidden` here is NOT `voiceInputEnabled` off), and the palette and
+    `/compact` compact a conversation. The row's own description names that
+    route, so the user can see what they keep.
+  - **Reasoning level** (`composer.reasoningIndicator`: `text`, `bars` or
+    `bars-text`, default `text`) is the one row with a third shape rather
+    than a floor: the model chip shows the thinking effort as its name, as a
+    signal-bars glyph (`pickers/reasoning-bars-glyph.tsx`), or both. The
+    picker derives the position (`reasoningStep` in
+    `harness-model-picker-presentation.ts`) from the same option list its
+    footer already lists and reads the setting itself, so the chat composer and
+    the terminal launcher - the two surfaces that mount it - cannot disagree.
+    The tooltip's Effort row spells out `High (3 of 4)` while the glyph shows,
+    and the bare name in `text`, which renders exactly today's chip.
+  - **Reasoning control** (`composer.reasoningFooterControl`: `slider` or
+    `list`, default `slider`) is the picker FOOTER's half of the same subject,
+    and the one composer row whose default is not what the app rendered
+    before it existed. The footer draws one stop per level the model
+    advertises, in the catalog's order and never sorted, with a zero-effort
+    level (`off` / `none`) as the LEFTMOST stop rather than excluded the way
+    the chip's ladder excludes it - on a slider the position is the control,
+    so "no thinking" has to be somewhere the thumb can land. The thumb is the
+    RANGE control and the only tab stop (Radix `role="slider"`: arrows step one
+    level, Home/End go to the ends, `aria-valuetext` is the level's NAME, not
+    its index); the dots are direct selection beside it - labelled buttons a
+    pointer or an assistive technology can pick by name, kept out of the tab
+    order but not out of the accessibility tree, each with a tooltip. A drag
+    that starts on a dot ends with a click on that dot, so a gesture that
+    already moved the value swallows its own trailing click rather than
+    snapping the level back to where the drag began. The selected level's
+    name renders on its own line ABOVE the track, centred - beside it, its
+    width would move the track and every stop with it each time the level
+    changed. `list` renders exactly the strip of
+    buttons the footer had before, and a model advertising a single level
+    renders that strip whatever the setting says - a slider with one stop is a
+    control that cannot be moved. The ⌥-digit chord still sets a level in
+    either mode (it lives in `usePickerLeaderScope`, not in the strip); only
+    its per-button badges are a thing the list has and the slider does not.
+  - **The slider is a thick pill, and the last stop is a state, not a
+    celebration.** The track is the `pill` size of `ui/slider.tsx` (36px,
+    `rounded-full`, `bg-foreground/8`), the fill a solid `--primary` from the
+    left edge to the thumb's centre, the stops small dots coloured for the
+    surface under them (`bg-primary-foreground/35` over the fill,
+    `bg-foreground/25` over the rest), and the thumb a 28px `--foreground`
+    disc in a `--popover` ring - `--foreground` rather than
+    `--primary-foreground` because at the lowest stop the disc sits entirely
+    on the UNFILLED track, where the default achromatic themes put
+    `--primary-foreground` within a few percent of the surface. At the
+    catalog's final level the fill becomes a gradient from `--primary` into
+    `--reasoning-max-accent` (a registered theme token - "Max reasoning
+    accent" under Controls in the theme editor, default violet - so a custom
+    theme recolours max like any other role), the pill takes a soft glow of
+    the accent, and a fixed constellation of eleven sparkles twinkles over the
+    fill. The sparkles ride the shared status clock at the pulse cadence -
+    one writer, one element, eleven custom properties per tick, no CSS
+    `animation` - and are mounted only while max is selected AND the picker
+    is presented (`visibleOpen`, pane focused, not concealed, control
+    enabled); under reduced motion they render still at a mid opacity, with
+    nothing subscribed. A picker OPENED at max looks exactly like one dragged
+    there: there is no arrival cue and no one-shot animation. The
+    slider row carries `py-2` for the glow's 14px reach, since the popover
+    clips it. The trigger chip is untouched at max, in both display modes.
+  - **The glyph's slot per bar is fixed, and the box grows sideways**
+    (`h-3.5 w-auto`, `viewBox` width = count × slot). Harnesses advertise
+    anywhere from two graded levels to seven, and dividing a fixed width by
+    the count would shave a seven-bar glyph into hairlines while a two-bar one
+    drew slabs. Bars rise from a minimum height to full so the shortest is
+    still a visible mark; a lone level is one full-height bar of the same
+    width, not a block.
+  - **A no-thinking level is OFF, not the bottom rung.** Ids in a small closed
+    set (`off`, `none`) are excluded from the ladder the glyph counts, because
+    the ids are a harness convention rather than an enum - amp advertises its
+    ladder without a `none` at all, pi ships `off` beside six graded levels.
+    So pi reads `1 of 6` at its lowest real effort, and selecting `off` lights
+    nothing: every bar empty, named `Thinking: Off`, with the level's name
+    kept beside the glyph. The same fallback covers a value that names no
+    level the model exposes (one remembered from another model, before
+    normalization catches up), and a model whose levels are ALL zero-effort
+    has no ladder at all, so its chip falls back to the name in every mode.
+  - **Expanding a chip is per tile, and is never written back.** `compact` says
+    how a chat OPENS; one glance at a folded row must not redefine that for
+    every chat, so the reveal is component state in
+    `chat-tile-lower-surfaces.tsx` and dies with the tile - and with its own
+    chip, so a section that empties and later refills comes back folded rather
+    than carrying a reveal the user asked for about different content. A
+    revealed row
+    arrives OPEN - the click asked for the panel, not for a second click - and
+    each panel reads that for itself off the strip's context
+    (`useChatDockSectionRevealed`) as the initial state of its own collapsible,
+    rather than taking a prop every component in between would have to carry.
+    The chip stays on screen while its row is showing (`aria-pressed`) because
+    it is the only way back. A chip pulses once - a CSS ring keyed off
+    `data-pulse`, cleared on `animationend` - when the thing it stands for
+    starts, which is the same instant the chip appears; it never auto-expands.
+  - **Received A2A queue rows follow the Active agents mode**, and fold into
+    the same chip with their own count. That is also why the chip exists
+    whenever those rows do, even with no sub-agent running: without it, folding
+    would put them out of reach.
+  - **The provider list reads the WATCHED host**, not the app-wide one: the
+    page re-provides `HostRuntimeContext` from the scoped binding with the same
+    `scopedToOwnHost` gate `RateLimitIconButton` uses, once for the whole group
+    so the preview and the list can never describe two machines, and an
+    unresolved pick shows a notice instead of another host's providers (and no
+    preview, which would be the ambient host's readings under the picked host's
+    caption). The band naming the host is what a reader otherwise had no way to
+    see. Every query on the page
+    is a passive observer (`PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS`) - opening
+    this page, and toggling anything on it, must never spawn a provider read;
+    a provider with nothing in the shared cache yet renders a "waiting for
+    first reading" subtitle instead.
+  - **Mobile app**: the section stays listed (Chat and Sidebar are as relevant
+    on a phone as anywhere), but the Status bar group collapses under
+    `isMobileApp() && !mobileFooter` to `Footer status bar` plus the "Off by
+    default on phones" note - the footer is not drawn there until that switch
+    is on, so until it is, every control ABOUT IT would configure an absent
+    surface. Two rows survive beside the note: the switch itself, and `Show
+resource monitor in header`, which describes `MobileAppHeader`'s own monitor
+    rather than the footer, and whose device-local key no desktop can set on
+    the phone's behalf. The monitor row carries no placement condition there,
+    since that build has no other placement - which is also why `Placement`
+    alone stays withheld once the switch is flipped on. The switch's own key
+    (`statusBar.mobileFooter`) is device-local like the rest of the slice, is
+    carried over by every preset the way `placement` is, and is restored to
+    `false` by `resetLayoutToDefaults` alone. The `app.status-bar.toggle` action does collapse: it is
+    the one `desktopOnly: true` entry in `ACTION_META`, and both the palette
+    filter and `StatusBarKeybindingBridge` READ that flag rather than testing
+    the build, so the pair follows from the field.
+  - **Sidebar** (`panels/layout/sidebar-layout-group.tsx`, its own file because
+    the group is a list rather than a stack of rows): the relocated `Resource
+chips on sidebar rows` row, then **Panels**, which draws the same
+    `left-panel-store.panelGroups` twice - as the rail, and as the detail the
+    rail has no room for.
+  - **Resource chips are a metric picker, not a switch.** The row is a
+    `SettingsToggleChips` trio (`CPU` / `Memory` / `Processes`) over
+    `settings-store.navigatorResourceMetrics`, the same control and labels the
+    Resource monitor's Metrics row uses, and the task navigator rows print
+    exactly the picked readings in that order; the default is an empty pick,
+    which draws no chip and is what the old switch's `off` was. Every reading
+    names itself on screen (`12%`, `357 MB RSS`, `3 procs`) because a pickable
+    list can stand any one of them alone - the process count takes the status
+    bar's own `procs` heading for it. The retired `showNavigatorResourceStats`
+    boolean is still read by the store's `merge` for one release (`true` → all
+    three, `false` → none) and dropped on the next write. Its analytics id is
+    `layout.sidebar.resourceMetrics` - a NEW id, so it takes the Sidebar
+    group's dotted family name rather than the bare form the relocated rows
+    keep to stay joinable with their history.
+  - **The page mirrors the rail, because the rail is what it configures.** The
+    block leads with a horizontal STRIP of rail tiles: the registry's icons
+    (`getLeftPanelDefinition`, shared with the rail) in `panelGroups` order, in
+    the rail's own tile size and tab underline
+    (`epic-canvas/sidebar/left-panel-rail-tile.ts` holds those three class
+    constants, and the rail itself renders from them so the two cannot drift).
+    A tabbed group is ONE pill of member tiles under a single underline; pills
+    and lone tiles are separated by a real gap. An unchecked panel keeps its
+    place with a dimmed icon rather than vanishing, since the strip is about
+    WHERE a panel sits and dropping those tiles would shift every icon after
+    them out of agreement with the cards. The dim mirrors the CHECKBOX, and the
+    helper line says exactly that (`Dimmed icons are unchecked below.`) - not
+    "hidden from the rail", which the next paragraph's all-false presence
+    context would make false for `pull-requests` in a PR-bearing epic, on a
+    page whose whole premise is that it pictures that rail. The strip is `aria-hidden`: it is a
+    picture of the cards below, which carry every panel's name, checkbox and
+    menu, and a second unlabelled pass over the same nine panels would only
+    lengthen the tab order.
+  - **The strip is the ONLY drag surface.** The cards below have no handles and
+    register no droppable: a stacked group drawn as a draggable card reads as
+    "attached" rather than nested, and two drag surfaces for one order would
+    each have to teach the same boundary rule in its own geometry. Below the
+    strip, one card per group: a multi-panel group opens with a `Tabbed panel`
+    header and a mini tab strip of its member titles, then hangs its rows off a
+    left connector line; a single-panel group is that one row, no header and no
+    connector to explain. A row is the registry icon and title, a visibility
+    checkbox and the row menu.
+  - **It is a SECOND VIEW, never a second source of truth.** The checkbox
+    writes the override the rail's right-click menu writes
+    (`setPanelVisibilityOverride`, and the last visible panel is locked the
+    same way), and every reordering resolves through the same pure
+    `moveLeftPanel*` helpers the rail's DnD resolves through
+    (`layout/sidebar-panel-moves.ts`, the settings-side sibling of
+    `resolveLeftPanelGroupsForDrop`) before committing with `applyPanelGroups`.
+    So the page and the rail cannot disagree, and neither can express a
+    grouping the other cannot. Changes apply live - there is no Save, and
+    `Reset panel visibility` / `Reset order` are `clearPanelVisibilityOverrides`
+    and `applyPanelGroups(DEFAULT_LEFT_PANEL_GROUPS)`, each disabled while
+    already at its default. The rail's own reset has no confirmation, so
+    neither do these.
+  - **The checkbox answers `isAutoVisible` against a page with no epic**, so
+    `pull-requests` / `comments` read as off here whatever any one epic
+    contains. Two consequences follow, both deliberate. An unconditional panel
+    clears its override when the box agrees with its rule (re-checking `Agents`
+    goes back to following it) while a presence-gated one always stores the
+    boolean - clearing there would DELETE a `false` set from the rail inside a
+    PR-bearing epic, so an off-then-on-again round trip would silently reverse
+    it, and "never show this" would be unauthorable from this page. And since
+    the rail's last-one-standing lock counts that epic's panels, an epic with
+    PRs permits hiding all eight others; the page then shows nothing checked
+    and nothing locked while the rail still has an icon. Recoverable - `Reset
+panel visibility` is enabled there - and reachable only from the rail.
+  - **What a boundary MEANS is read from where it sits**, which is the one
+    thing the page adds over the rail: a tabbed group is a pill on the strip, so
+    the boundary before a pill's first tile places the panel in a group of its
+    own (`moveLeftPanelToGroupPosition`) while a boundary between two tiles
+    inside a pill joins it there (`moveLeftPanelToPanelPosition`); dropping onto
+    a tile combines (`moveLeftPanelToGroup`), and dragging a tile out of a pill
+    un-nests it. Bands are the rail's own 30/40/30 fractions, read along the
+    strip's axis through `getLeftPanelRailDropPositionOnAxis(point, rect, "x")`;
+    the rail calls the same function, at the axis its own orientation lays its
+    slots out on, so one set of fractions serves every surface. The pointer is
+    read from the collision pass rather than the event delta for the reason
+    `queued-message-reorder-dnd.ts` documents. The row menu (Move up / Move
+    down / Group with panel above / Move out of group) is the pointer-free path
+    to the same four outcomes, composed from the same helpers, and each item is
+    disabled where it would change nothing - it is also the ONLY path for a
+    keyboard, which is why a move it makes re-aims focus at the moved panel's
+    new menu trigger and announces the new placement in a live region.
+  - **The DnD context here is LOCAL**, like the queued-message list's: it is
+    the second `DndContext` outside `root-dnd-provider.tsx`, because settings
+    rows are not canvas drop targets and must not enter the root drag store.
+  - **Narrow windows** get a "Panel layout needs the sidebar" note in place of
+    the list, and the gate is `useIsMobileViewport()`, NOT `isMobileApp()` -
+    the exception to the rule two sections above, and deliberately so.
+    `epic-surface.tsx` drops the whole sidebar column, rail included, below
+    `md`; that is a pure layout question resizing the window changes, so it is
+    the viewport hook's own case. Gating on the build instead would hide a
+    working list on a tablet running the installed app, which is wide enough to
+    draw the rail. The relocated resource-chips row is unaffected either way.
+  - **Home tab behaviour** - NOT a group on this page, and Home now owns no
+    Settings row on it at all (`Home tab` above is the switch that draws the
+    tab, not a preference about what is on it). Recorded here because this is
+    still where a reader goes looking for how the page reads
+    (`components/home-focus/`, `lib/home-focus/`).
+    - **Home is ONE reading, and it is the task list.** It offered two behind
+      an in-page `Focus | Tasks` switch: a flat page of four sections with a
+      task column, and the same activity grouped under its tasks. The flat one
+      is gone, and so are the switch, `layout-store.home.view`, its setter and
+      the `layout.home.view` analytics id. Two readings of one page is a choice
+      the reader has to make before they can read anything, and the flat one
+      lost: four sections plus a task column is more to hold than a list of
+      tasks, and every row on it had to name its task because nothing above it
+      did. The persisted `view` is READ PAST rather than migrated - one reading
+      means there is nothing for the old value to select, and the next write to
+      the slice drops the key.
+    - **Two sections, and a task is in exactly one.** `NEEDS YOU · N` leads,
+      then `RUNNING · N`. A task is in Needs you when it has an unresolved
+      prompt row OR the host's `needsYou` indicator with no row paged in yet
+      (`taskGroupNeedsYou`); everything else with a group is Running. There is
+      no flat prompt list any more, and that is the same de-duplication the
+      rest of this page is built on: a task waiting on an approval used to
+      appear twice, once as a prompt row and once as a task row, in two
+      vocabularies, with two counts that did not explain each other.
+      `selectTaskSections` partitions BEFORE the host split, never after -
+      `splitTaskGroupByHost` files a prompt under the machine it was raised on
+      and drops it from the others, so a two-host task with one prompt would
+      otherwise land in Needs you under one machine and Running under the
+      other.
+    - **Home has ONE spacing**, the comfortable one, and no setting that bends
+      it. A `Home density` segment offered `Comfortable | Compact` here, where
+      `Compact` tightened the desktop row (`p-3` → `p-2`, chip gap with it) and
+      restored every tightened utility under `pointer-coarse:` so a phone kept
+      the hit area sized for a thumb. The two read almost identically on
+      screen (user ruling, 2026-09-12: "I can hardly see any difference in
+      both. Remove it."), so the row went, and with it the whole
+      `layout-store.home` slice, the `layout.home.density` analytics id, and
+      the `data-density` attribute the rows carried. `ROW_CLASS` /
+      `CHIP_ROW_CLASS` (`home-focus-row-style.ts`) are now plain constants -
+      the same class strings Comfortable emitted. The `pointer-coarse:` touch
+      chrome rode the base class throughout and is untouched. A persisted
+      `home` slice is read past rather than migrated and the next write to any
+      layout preference drops it, exactly as the older `home.view` was.
+    - **Nesting is task → chat → the chat's own work, and stops there.** Level
+      one under a task is its CHATS - chat agents and terminal agents alike,
+      each with its own status cell. Level two is what that chat owns: the
+      prompts raised in it, the background jobs whose `chatId` is it, and the
+      browser tabs it is driving. A chat agent's id IS its chat id, which is
+      what lets all three be looked up in one map of agent ids. The third level
+      is the whole point of the change: a monitor listed BESIDE the chat
+      running it had to name its parent to make sense - `10min heartbeat · in
+Greeting and Introduction` - so the page read as a monitor name followed
+      by the conversation it was in, and the conversation's name appeared
+      twice, once as a row and once as a suffix. Under the chat, the structure
+      says it and the row is just the job.
+    - **Parentage does not take a level; work does.** An agent another listed
+      agent started stays beside it and says `via <parent>`, because the indent
+      under a chat is spoken for by that chat's own work. Anything whose owning
+      chat is not a row here hangs off the TASK at level one and keeps the
+      context that says where it lives: a job in a chat this window cannot
+      place keeps `· in <chat>`, a browser hand-off (which names a session and
+      a tab, never a conversation) keeps its tab title, an undriven tab keeps
+      neither. A child row never says `· in <task>` - the row above it already
+      did.
+    - **`selectTaskGroupBody` runs LAST, at the render site, and that is a
+      requirement rather than a convenience.** The chat set narrows twice after
+      a group is built - the cold-task rule drops every chat, and the host
+      split keeps one machine's - and every relationship in the body is a claim
+      about the rows beside it. A `via` naming a parent that is not there, or a
+      job nested under a chat that was filtered out, is worse than the flat
+      list it replaced. Pairing them after both narrowings makes that
+      impossible rather than merely fixed: there is no earlier value to go
+      stale. `FocusTaskGroup` therefore carries flat `agents` / `jobs` /
+      `browsers` / `prompts` and no parent links at all.
+    - **A cold task is one summary row.** Agent titles only exist for epics
+      mounted in this window, so a cold task contributes no chat rows and a
+      placeholder would name work nobody can open. It reads `n agents · not
+open in this window`, keeps a disclosure only for jobs and pages this
+      window can still see, and hangs those off the task. A cold task that is
+      in Needs you on the indicator alone shows the attention glyph and nests
+      no prompt - there is no row to nest.
+    - **Badges count the WHOLE subtree** (`taskGroupCounts`): `N need you`
+      (loaded prompt rows), `N active` (mid-turn agents), `N bg` (jobs at any
+      level), `N browsers`. They are read off the group's flat lists rather
+      than off the body, which is the same numbers by construction - the body
+      only redistributes rows across levels, it never adds or drops one.
+      Every badge is omitted at zero. `N bg` renders only where this window can
+      SEE the task's background - the warm-chat set the jobs come from, never
+      `mountedHere`, which is the wider "has a live Y.Doc projection here" and
+      would read `0 bg` at a task whose chats were simply never opened. `N
+browsers` is omitted at zero for a sharper reason still: that plane is
+      mounted-only, so a zero would mean "no coordinator in this window", which
+      is not a fact about the task.
+    - **Stop, per level.** The task row keeps `Stop all` (`Stop all on <host>`
+      under the host split), cascading over that task's - that host's - agent
+      ROOTS, once each. A chat row that is a real agent run carries its own
+      `Stop`, gated by `FocusAgentRow.stoppable` and routed to the agent's own
+      host. A chat that is idle and merely PARENTS its jobs (`○ background`
+      with jobs beneath) has no stop of its own: the work is those jobs, each
+      of which carries one, and a stop on the conversation would be a bigger,
+      vaguer version of the button one line down. A background-tier chat with
+      NO job row here is a different thing - a run this window has no durable
+      row for - and keeps its stop, or the page would offer no way to end it.
+      Browser rows have none in any case.
+    - **`selectTaskGroups` unions THREE sets**, and must: `model.tasks` covers
+      epics with a running agent, `model.background` covers epics with a warm
+      chat, `model.browsers` covers epics with a live page, and the three are
+      not nested. There is no Background or Browsers section to catch a row
+      whose epic is not a task row, so an intersection would drop it silently -
+      and on an account whose only activity is a dev server, or a task left
+      open at a page, the page would be blank. A durable shell in an idle chat
+      is therefore a group of its own, with `N bg` and no `N active`.
+    - **A prompt no group could carry stays in Needs you as its own row.** The
+      flat list is gone, and three things can leave a prompt unplaced: an
+      approval whose payload carried no epic id (they are optional on the
+      wire), an epic with a pending prompt and no running agent, warm chat or
+      open page to make a group out of, and the host split's own per-host
+      prompt filter. Home's tab badge counts prompts, so a prompt the page
+      cannot show is a badge reading `1` over a page showing nothing. The
+      leftovers are computed FROM the rendered slices rather than from a second
+      guess at the same rule, which is what makes that impossible instead of
+      merely unlikely; they render last, with `· in <task>` restored, since
+      nothing above them says where they are.
+    - **A section's heading counts the rows it lists at its TOP level** - task
+      groups plus any unplaced prompt rows - and the summary segment reads the
+      same number, so the two can never disagree. `NEEDS YOU · 2`, and any
+      coverage caption is a block-level `<p>` on its own line beneath it. Two
+      independent limits can bind Needs you - how far the notification feed
+      reaches (`this host only`) and how far the window-local background plane
+      does - so they get a line each rather than a separator between them.
+    - **Disclosure is one store above both sections** (`useTaskDisclosure`),
+      never row-local state, and the section split is why. Answering a task's
+      last prompt moves it from Needs you to Running, which unmounts its `<li>`
+      from one subtree and mounts a new one in the other - a React key is
+      stable within a parent, not across two - so a row the user had just
+      opened collapsed at the exact moment they acted on it. Entries are keyed
+      by epic AND host, so two machines' shares of one task open
+      independently; that key survives a section move, because prompts never
+      open a host group of their own and answering one therefore cannot change
+      which hosts a task is split across. Choices are pruned when their row
+      leaves the page, which keeps the self-pruning the row-local state gave
+      for free: a task that comes back comes back at the page's default.
+    - **The expand default is latched on the first render that HAS TASKS**, not
+      on mount. Three or fewer tasks in TOTAL expand all, otherwise everything
+      is collapsed; the reader scrolls one page, so a rule applied per section
+      would expand eight tasks whenever they happened to be four and four. The
+      latch waits for `groups.length > 0` rather than for the page to have
+      something on it, because the notification feed can answer before the
+      activity plane: a first frame holding one unplaced prompt and no tasks
+      would otherwise latch `0 <= 3` and throw twenty tasks open when they
+      landed. Both the latch and the prune are adjusted DURING render rather
+      than from an effect - the supported shape for state derived from props,
+      and idempotent, so the immediate re-run finds the latch set and nothing
+      stale left. Chat rows have no second disclosure: hiding a monitor behind
+      another click would make finding it a two-gesture job on a page whose
+      whole purpose is one glance.
+    - **No row carries a trailing `Open`**: the row body already spans the card
+      and opens the same thing, so the second control was one extra tab stop
+      per row announcing a verb the row had already offered. Stop / Stop all
+      stay.
+    - **Icon vocabulary is row-level only; section headings stay text**, which
+      is what keeps the screen-reader heading outline a list of names rather
+      than of glyphs. Agents read off `EPIC_NODE_ICONS` (chat `MessageSquare`,
+      terminal agent `Bot`) - a terminal agent is deliberately NOT `Terminal`,
+      which means "a shell" everywhere else on the page. A managed command is
+      `Terminal`; a background item uses the chat Background panel's own
+      per-kind map, shared through `lib/chat/background-kind-icon.ts` rather
+      than restated, so a sub-agent is a `Bot` in both places. Prompts keep the
+      notification tone glyphs. Colour is derived state only - there is no
+      colour setting here and no identity palette.
+    - **One row grammar, everywhere**:
+      `[kind icon] [item name] [· in <context>] … [status] [actions]`
+      (`home-focus-row-parts.tsx`). The item name is what the row IS - the
+      prompt's text, the agent's name, the job's name - in `text-foreground`;
+      everything after it is muted CONTEXT, each part truncating on its own.
+      Two names are never concatenated: the row that produced this rule read
+      `General Conversation History 10min heartbeat`, a task and a monitor with
+      a space between them and nothing saying which was which.
+    - **One status column** (`focus-row-status.ts`): a `size-2` dot in the
+      state tone, the state word, and `· <duration>` where the model has a
+      timestamp. `needs you` is warning-toned, `turn` / `running` carry a
+      primary dot, `background` / `waiting` a hollow muted one; every WORD is
+      muted except needs-you, because a column of coloured words is a column
+      nobody scans. Agents have no start time on the activity plane, so their
+      cell shows the word alone rather than an invented duration. `held` is a
+      RESERVED slot in the registry - real in the vocabulary, unreachable from
+      today's rows, because no field carries the flag and inventing one is new
+      data.
+    - **It is a column because the track is fixed**, not because each cell is
+      right-aligned (`ROW_STATUS_CELL_CLASS` / `ROW_ACTIONS_CELL_CLASS` in
+      `home-focus-row-style.ts`). Every row in a section reserves both
+      right-hand tracks whether or not it has anything to put in them - the
+      prompt row with nothing to stop still spends the width a `Stop all` takes
+      two rows below it, and so does the idle chat row with no stop of its own.
+      Without that, `Stop all` is wider than `Stop` is wider than nothing and
+      the column staircases down a section of mixed rows, which is the one
+      thing it exists not to do. Nested rows use the same tracks: a nested list
+      is indented on its LEFT only, so its right edge is the parent's - which
+      is what lets a third level exist without a third set of columns. These
+      are deliberately fixed widths against the fluid-sizing rule, on the same
+      argument as the status-bar preview's `w-[480px]` - a column track's whole
+      job is to NOT adapt to its content, and a label that outgrows one
+      truncates rather than moving the column. The cell's content is
+      LEFT-aligned inside that track, which is what freezes the dot and the
+      word: right-aligning pins only the cell's right edge, so a row carrying
+      `· 41m` pushes its word left of a row carrying none. `tabular-nums` keeps
+      a ticking duration from rewidthing itself; it was never what held the
+      word still. The status cell is a DOM sibling of the body button so it
+      stays out of that button's accessible name, but it is unpositioned and
+      therefore still under its stretched overlay - by design, since everything
+      that is not a control opens the row.
+    - **The duration hides on a narrow ROW, under Compact only.** An
+      `@container` on the section and `@max-sm:hidden` on the duration, not a
+      viewport breakpoint: a slim Home tile inside a wide window is exactly the
+      case a viewport query gets backwards, and Comfortable's contract is that
+      it never drops the duration at any width. The state word always survives.
+    - **The disclosure twisty needs `z-10`, not `relative`.** `ROW_BODY_CLASS`
+      carries `before:absolute before:inset-0` and the body button is
+      unpositioned, so that overlay's containing block is the ROW and it
+      stretches across the twisty too. Overlay and twisty would then both be
+      `z-index: auto` positioned boxes painted in TREE ORDER, and the overlay
+      belongs to the later sibling - so it paints last and swallows every click
+      on the twisty. `RowActionsCell` gets away with bare `relative` only
+      because it comes AFTER the body button. Any control placed before it
+      needs the real stacking level.
+    - **Summary line** above the sections, reading `2 need you · 4 running`.
+      Each segment is a button that scrolls to its section and moves focus onto
+      it (the sections are `tabIndex={-1}` regions with `scroll-mt-4`, so a
+      screen reader hears the heading on arrival). Zero segments are omitted;
+      all-zero is the empty state instead. Both counts come from the sections
+      the page actually mounts, so a segment can never point at a region that
+      is not there - the defect the old `background` segment had under the
+      Tasks view, where the click found no element and did nothing at all.
+    - **Sections render a list of row GROUPS** - one unlabelled group when the
+      page names a single host, and one per machine when it names several. The
+      unlabelled shape renders its `<ul>` directly under the section with no
+      wrapper, so a single-host install's DOM is unchanged by host grouping
+      existing; a labelled group brings its own box.
+    - **Host grouping is automatic and has no setting**
+      (`focus-host-groups.ts`, `use-home-host-groups.ts`). It turns on only
+      when the model's rows name MORE THAN ONE host, counted across the whole
+      page rather than per section - headings appearing in Running and not in
+      Needs you would leave the reader working out why. A row with no host
+      of its own RESOLVES to the active host before anything is counted, since
+      that is where its stop would be sent; without that, one unresolved row
+      would split a single-host page into two groups that are the same
+      machine. Every task in the model is a group now, so the host set counts
+      every task's agents - there is no presentation rule left that could hide
+      a row and leave a heading with nothing to explain it.
+    - **Ordering is active host, then registry order, then the rest by id.**
+      The active host leads because it is what the user is working on and what
+      an unnamed row resolved to; registry order follows because it is the
+      order the same machines appear in everywhere else in the app, and a
+      second ordering for this one page would make two lists of the same hosts
+      disagree. An `<h3>` carries the host's label (its id when the registry
+      has none - ugly and honest), its own count, and an `active` pill on the
+      one; the section keeps its total above them. Rows under a heading DROP
+      their origin-host pill, which would otherwise repeat the heading on every
+      line - `HomeHostGroupedContext` and its `useHomeHostGrouped` hook carry
+      that, because the answer belongs to the section and the pill is several
+      components down. The context says "a heading above this row already names
+      its machine", so the ONE group that has no heading - the unplaced-prompt
+      tail - re-provides it as `false` and keeps its chips. Reading the page's
+      grouping flag there instead left a remote orphan prompt with no host
+      attribution at all, on the one row where nothing else could supply it.
+    - **Grouping is by the ROW's own host, never by its task.** An epic is
+      cloud-homed and can be worked from several machines at once, so a task has
+      no single host to be filed under - asking for one answered `null` when its
+      agents disagreed, and `null` resolved to whichever machine the user
+      happened to be sitting at. So prompts group by origin host, agents by
+      their own `hostId`, jobs by their chat's, tabs by their session's. A task
+      worked from two machines appears once under EACH
+      (`splitTaskGroupByHost`), holding only that host's agents, jobs, pages and
+      prompts, with that host's counts; its `Stop all` reads `Stop all on
+<host>` and cascades over that host's roots only, and the label is per
+      TASK rather than per bucket - an A-only task beside an A/B one is not
+      split and must not claim to be. `FocusAgentRow.stoppable` exists for the
+      re-fold: the task's own flag is `every` over ALL agents, so a reachable
+      host's row would otherwise inherit an unreachable sibling's refusal.
+    - **A row is never dropped for having no host.** With no active host to
+      resolve against it lands in `UNKNOWN_HOST_ID`, whose group sorts last and
+      reads `Unknown host`, so a section's groups always sum to its heading. The
+      bucket is not a machine, so it never turns grouping on by itself.
+    - **A cold agent's host has a precedence, and a cloud slice is not in it.**
+      Resolved identity first; then the cloud index (`coldEpicHostIds`, from
+      `chatHostIds`); then the key of the slice that reported the agent, but
+      ONLY when that slice is `servedBy: "local"`; otherwise unattributed. The
+      restriction is the whole point: a slice's key is the host its STREAM was
+      opened against, and a cloud-served slice is that host answering for the
+      whole FLEET, so host A's slice carries host B's agents verbatim and its
+      key names the wrong machine confidently. A `local` slice is one host
+      answering about itself.
+    - **Unattributed is a state, not a `null`.** `FocusAgentRow.hostUnattributed`
+      exists because `hostId === null` has two causes: a chat this window
+      RESOLVED that records no host (a legacy chat on an epic we are already
+      talking to - the active host is where its stop goes, and where it belongs
+      on the page), versus an agent nothing could place. Only the second groups
+      under `Unknown host`; guessing it onto the active machine is the defect
+      that has appeared twice, once through a task-level host and once through
+      a cloud slice's key. **Stop stays disabled while a row is unattributed** -
+      the same rule that greys out a named host this client cannot dial, since
+      a stop aimed at a machine the model could not name is worse than one it
+      declines. What grouping guarantees is narrower: the unknown bucket does
+      not narrow a task's ROOT INPUTS the way the per-host split narrows a task
+      that spans machines, so `Stop all` there is disabled-but-complete rather
+      than enabled-but-partial.
+    - **Coverage moves under the host that earned it.** `coverage.activity` is
+      still the worst slice's verdict for the page, and
+      `coverage.degradedHostIds` is the per-host breakdown behind it. When the
+      page is grouped and EVERY degraded host has a group to carry it, the
+      notice renders under those subheadings and the page-wide banner stands
+      down - saying "some activity may be missing" over a page that names WHICH
+      host is missing is less information in a louder place. A degraded host
+      with no visible rows has no subheading, so the banner returns rather than
+      dropping the warning: that host is precisely the one whose rows are
+      missing BECAUSE its stream is degraded. Suppression is derived from the
+      LABELLED host groups the page actually renders, not from a second reading
+      of the model - `hostRowGroups` puts the notice on a subheading and
+      nowhere else, so the two can only agree if they are computed from the
+      same thing. Asking the model instead counted a prompt's origin host as
+      visible, and a degraded host present only as an unplaced prompt then
+      silenced a banner nothing had replaced: that tail has no subheading.
+      `unknown` is not a warning at all
+      - it is what a client that has never heard from the activity plane
+        reports at startup, and a notice on every cold open would train the user
+        to ignore the one that matters.
+    - **The summary line stays one glance.** Each segment's TOOLTIP carries the
+      per-host breakdown (`Laptop 2 · Remote Box 1`); the visible text never
+      names a machine. A background-only group follows the host of the chats its
+      jobs run in, and it can split across them like any other.
+    - **Browsers are their own plane, and the row is a TAB.** Sessions are
+      deliberately NOT a level: a task running two browsers over four pages is
+      four rows, each with its own title and site, because the ask this answers
+      is "even if multiple browsers are running inside some task, I should be
+      able to view and directly click to go there". A tab sits under the chat
+      driving it, or under its task when nothing here is - which is also the
+      reason a tab needs no `via` any more: placement says it, and a tab that
+      reached task level did so precisely because no row here drives it. The
+      row body routes through the browser-session deep link
+      (`routeNotificationForHost`, `{kind: "browserSession", epicId, sessionId,
+tabId}`), which focuses the parked tile where it is already open and
+      opens the task on it otherwise - the same path the bell's own browser
+      hand-off takes. It is the ONE action on this page that passes an origin
+      host, because a session is host-local for life and a match without it
+      would accept a same-id tile on another machine.
+    - **The browser plane is read, never acquired.** Home subscribes to the
+      coordinator REGISTRY (`subscribeToBrowserSessionsCoordinators` +
+      `browserSessionsCoordinatorEntries`) and never calls
+      `acquireBrowserSessionsCoordinator`: acquiring opens a `browser.sessions`
+      stream and holds it, so a page that merely LISTS browsers would open one
+      per task, on every host in the fleet, the moment the tab was opened. The
+      consequence is the caption - `Background shown for tasks open in this
+window`, recorded in the type as `coverage.browsersAreMountedOnly` -
+      and closing the last canvas that owned a coordinator takes the rows with
+      it, which is the honest reading of a window-local inventory.
+    - **Three states, from six on the wire.** `provisioning`, `ready`,
+      `navigating` and `closing` are moments in one tab's ordinary life and
+      collapse into `live`; a page flickering between them would be reporting
+      the host's bookkeeping. `dormant` and `crashed` survive because they
+      change what a reader does next. `live` is deliberately not `running`:
+      `running` means work in flight, and a page sits there until something
+      touches it. `crashed` is the only word outside `needs-you` that is
+      COLOURED, because a crashed tab is otherwise silent - no prompt, no
+      notification - and the status column is the only place it can be found.
+      The status cell's trailing slot carries `· driven by <agent>` where a
+      chat is working the page, and it stays even on a tab nested under that
+      chat: placement is navigation, `driven by` is attribution, it survives a
+      driver on another machine that placement cannot follow, and a column with
+      a hole in it stops being scannable.
+    - **A browser prompt names its tab.** A `browser.human.needed` row reads
+      `Needs you in the browser · <tab title>`, joined from the browser rows
+      this same model carries (`focusBrowserTabTitles`) so a prompt can never
+      name a page the rows below it are not showing. Absent for a prompt whose
+      task is not open here.
+    - **`in` is per context part, not "the first one".** `RowContextPart`
+      carries its own `preposition`, because the two rules coincided for a job
+      (`in <chat> · <task>`) and came apart on the browser prompt: a tab is not
+      somewhere a prompt lives, it is the page the prompt is ABOUT, while a
+      task after it still is a location. The positional rule silently produced
+      `in Checkout · Storefront`, which reads as a prompt inside a page inside
+      nothing. The one thing a part cannot answer alone is that a `null` title
+      is DROPPED, so the next location becomes the first one rendered - which
+      is how a row drops the context the page has already said above it while
+      keeping the part that no parent can say.
+    - **Host grouping applies to browsers.** A tab is filed under its session's
+      host, and a browser on a second machine turns grouping on like any other
+      row.
+    - **No Stop on a browser row**, and the actions track is reserved anyway so
+      the status column does not move. Closing a tab is a canvas action on the
+      tile itself; a cross-task page offering to close pages it cannot show
+      would be destroying state the reader cannot see.
 - `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
   / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the
@@ -1334,6 +2735,17 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       the provider rail spends on "disabled". A future signal must split those
       meanings: a muted count on the list tabs, a warning tone reserved for
       real attention.
+  - **The Fallback cross-link sits at the foot of `usage`** (Profiles & Limits),
+    which is where someone lands when a provider has stopped working for them
+    and is therefore where "can it just carry on somewhere else?" gets asked.
+    It is a POINTER, not a control: it reads no policy and prints no state, so
+    the master toggle keeps exactly one readout and the two cannot disagree
+    mid-save. Ungated - fallback answers a signed-out account and a billing
+    failure as well as a limit, so it is relevant for every provider, not only
+    the ones that report usage - and rendered outside the profile-switch inert
+    block, since it is not profile-scoped. It navigates with
+    `navigateToSettingsSection`, never a router `Link`; the Fallback panel's
+    profile-step hint is the same crossing in the other direction.
   - **Provider environment variables.** Each provider detail pane (last, below
     the CLI picker and terminal-agent args) has an _Environment variables_ card
     holding the per-provider env applied when the host spawns that harness
@@ -2184,6 +3596,668 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   hooks. This settings panel edits only the global guide. A workspace can add
   `.traycer/agent-selection-guide.md` manually; agents layer that file over the
   global guide when they work in that workspace.
+- `Fallback` (section id `fallback`, route `/settings/fallback`,
+  `panels/fallback-settings-panel.tsx` plus `panels/fallback/`) The whole
+  configuration surface for **automatic provider fallback**: what the host does
+  when a turn dies on a provider error it cannot retry (rate limit, outage,
+  billing, signed out). Backed by `providers.fallbackPolicy.get` / `.set`.
+  - **Host-scoped like Agent selection**, and for the same reason: the policy
+    lives in `provider-accounts.json`, which is machine-local, so it is one
+    policy per Traycer user **per host**. The panel mounts `HostScopeGate`,
+    re-provides `HostRuntimeContext` only at `status === "ready"`, and keys its
+    editor on `scope.hostId` so one machine's draft can never be saved to
+    another's row.
+  - **It is the one panel that names its host in the description** -
+    "Applies to your chat agents on `<host name>`" - which is a deliberate
+    exception to the no-readout rule above. The sentence is not a second copy
+    of the sidebar's label; it rules out the reading that this configures every
+    agent on the machine. The policy covers that user's **chat** agents and
+    never terminal agents, which cannot be reconfigured in place and get no
+    fallback at all. The chat surfaces link in here from another host's chat
+    (through `carryViewedHostIntoSettingsScope`), which is precisely when a
+    panel that said nothing would be editing the wrong machine.
+  - **Groups**: Fallback (the `Automatic fallback` master switch, off by
+    default, and the `Try these in order` step editor), Behavior, Equivalent
+    models, Advanced per-failure overrides, and a Danger Zone. Every policy
+    field is compared by `fallbackPolicyValuesEqual`; a field missing from that
+    function is equal to itself by omission, so an edit to it alone would
+    compare equal to `persisted` and the notice would call an unsaved change
+    stored.
+  - **The step editor is the only drag surface in Settings**, so it carries ▲▼
+    buttons as well: a pointer drag is unreachable from a keyboard and awkward
+    on touch, and this list is the feature's whole configuration. Only
+    `PointerSensor` is registered - the buttons are the keyboard and touch
+    path, and two competing keyboard gestures over one list would be worse than
+    one. `Notify me` has neither handle nor arrows.
+    **The handle is therefore hidden from assistive technology, not merely
+    silent (follow-up AX7).** dnd-kit's `attributes` put `role="button"`,
+    `tabIndex={0}`, `aria-roledescription="sortable"` and an `aria-describedby`
+    pointing at its own instructions - "press the space bar, use the arrow
+    keys" - on the handle span, and with no `KeyboardSensor` nothing implements
+    that gesture. So the handle was promising a gesture that does nothing, to
+    exactly the users who cannot use the gesture it does have. Only `listeners`
+    are spread now, which keeps the pointer drag and drops every promise, and
+    the span is `aria-hidden` with no label: it is a grip affordance for a
+    mouse. What replaces the promise is real - the `<ul>` is `aria-labelledby`
+    the "Try these in order" heading and `aria-describedby` the instruction
+    paragraph below it, whose first sentence names the Move up and Move down
+    buttons as the way to reorder. One paragraph, the visible one, rather than a
+    screen-reader copy that could drift from it. The alternative -
+    registering a working `KeyboardSensor` - was available and rejected for the
+    reason above: it would put two keyboard gestures on one list.
+  - **`Notify me` has no switch either.** It used to carry the same `Switch` as
+    every other row, beside copy saying "Always runs when nothing else worked" -
+    two statements that cannot both be true, and the one a first-time user
+    believes is the switch. They read it as a notification preference; it is
+    nothing of the kind. Turning it off suppresses no notification (exhaustion
+    ends in the same terminal consequences and the error card is always
+    published). What it changes is narrower than the line that used to sit here
+    ("whether a notify-only grace hold arms"), which is now false: a
+    non-transient failure whose plan narrows to `notify` alone **does not arm at
+    all**, so there is no countdown for the step to add or remove - the chat
+    takes the terminal path and the user gets the error card's manual steps. The
+    step still buys something for the two TRANSIENT reasons
+    (`provider_unavailable`, `provider_connection_failed`): their plan narrows
+    to `notify` alone, they arm for a short same-tuple retry series, and they
+    settle at `notify` with no countdown at any point. Remove the step from
+    their plan and nothing arms, so the retries are lost with it. Neither is a
+    choice this page can explain on a switch. So the
+    ordinary state renders a static `Always`, matching the reserved gutters the
+    row already draws in place of a handle and arrows: absence says "this cannot
+    be changed" once, where a disabled switch invites the reader to look for the
+    state that enables it. A stored ladder that OMITS the step still renders
+    honestly, with a one-way `Add this step back` link - there is deliberately
+    no path from here to turning it off, so nothing implies the
+    always-published error card is something the user switched on.
+  - **Enablement is PRESENCE in the stored `ladder`**, which cannot represent
+    where a turned-off step sat. The panel therefore holds the four-row display
+    order in its draft and persists only the enabled subset; a step turned off
+    and then reloaded loses its exact position, and the editor's own copy says
+    so. The alternative was widening the wire shape to `{ kind, enabled }[]`,
+    which would have reached the host's validation and the engine's ladder walk
+    for a presentational fact.
+    **A turned-off step goes as late as it can, which is NOT the end**: it is
+    placed immediately before the `notify` slot. `notify` is the terminal step -
+    the engine's ladder walk stops at the first one it reaches - so a row after
+    it can never run, and a disabled row is exactly the one a user is about to
+    turn back on. Appending past `notify` handed them a step that read as
+    enabled and was unreachable, with nothing on screen saying so; the wire
+    permits such a ladder (uniqueness and length are all it checks) and the host
+    stores it verbatim, so nothing downstream repaired it either.
+    **The display order also survives a save echo.** The echo carries back the
+    ladder that was just SENT, which encodes enablement as presence and so
+    cannot say where the turned-off steps sat - re-deriving from it moved them,
+    which made "turn a step off, let the save land, turn it back on" write a
+    ladder the user never arranged. `fallbackDisplayOrderFor` keeps the local
+    order whenever the incoming ladder is what that order already produces for
+    its enabled set, and derives afresh only when the incoming policy genuinely
+    reorders (a restore, or a policy written elsewhere). An externally authored
+    early `notify` still renders where it is stored.
+    **Rendering an early `notify` honestly is not the same as letting rows cross
+    it.** Holding the `notify` slot fixed stops `notify` moving and says nothing
+    about the other rows: with `[profile, notify, tier]` hydrated, the movable
+    list is `[profile, wait, tier]` around a fixed slot, so dragging `profile` to
+    the end of that list writes `[wait, tier, notify, profile]` - an enabled step
+    that ran a moment ago, now below the terminal one, from a gesture that
+    mentioned neither. The same splice can do it to a row the user never touched:
+    dragging `tier` to the top shifts an enabled `wait` down across the slot, so
+    clamping only the moved row would not close it. `moveFallbackRung` therefore
+    REFUSES a move whose two ends lie on opposite sides of the slot, and the ▲▼
+    buttons are disabled at that boundary so a refused move is never offered as
+    an active control. Neither can fire on a ladder this panel wrote, where
+    `notify` is last and every movable row is above it.
+  - **The Advanced per-failure matrix is collapsed by default and derived, not
+    written out.** Its rows are `HOST_NOTIFICATION_STOPPED_REASONS` minus
+    `EXCLUDED_FALLBACK_REASONS`, so a new failure reason gets a row the day it
+    is added rather than silently missing one. Each row has three chips
+    (`notify` has no column - it is eligible everywhere, so the column would
+    carry no information) in three states: **runs**, **off**, and
+    **impossible**, the last rendered as a non-interactive `<span>` carrying
+    its own reason inline. That third state is why the eligibility table
+    `REASON_ELIGIBLE_RUNGS` had to move into `@traycer/protocol` (it was
+    host-private): the matrix must distinguish "you turned this off" from
+    "this cannot help that failure", and a second copy GUI-side would have
+    drawn a policy the engine does not execute the first time a row moved.
+    A write from this matrix carries `notify` through explicitly and takes its
+    order from the editor's four-row display order, never from the chips on
+    screen; an override that ends up equal to the base ladder is **removed**
+    rather than stored, so a later change to the main order keeps applying to
+    that failure. The excluded reasons collapse into one read-only line -
+    exclusion is not a preference - and `Reset overrides only` clears
+    `reasonOverrides` alone, leaving the ladder and Behavior untouched.
+    **What the matrix cannot express, disclosed rather than left to be
+    discovered (RF5, D142/D146).** Turning every override chip off leaves the
+    brief retry that outages and connection failures start with, and the
+    notification at the end - but **no cancellation window**: the all-off shape
+    arms no grace hold, so there is no countdown to cancel. Settings does not
+    author the wire's per-reason `off` value, and Notify stays last. That is
+    `FALLBACK_OVERRIDES_DISCLOSURE`'s promise in substance, and the two are
+    meant to stay in step. The
+    wire schema permits both - `reasonOverrides` accepts the literal `"off"`,
+    and `fallbackLadderSchema` checks length and uniqueness only, so an early
+    `notify` is a valid stored ladder - and the panel deliberately writes
+    neither. D142 and D146 settled that (the user fixed both); the sentence
+    above is the disclosure obligation those decisions carry, and it lives in
+    the panel's own help copy as well as here.
+  - **Equivalent models** is the user's statement about which models are
+    interchangeable, and the only thing that makes the "equivalent model" step
+    possible - the host will not move a chat between a standard and a frontier
+    model on its own guess. Each row is **provider + model + optional
+    effort**, and **both Model and Effort are selects over the provider's
+    catalog**, not free text: an unrestricted input whose only hint was a
+    placeholder made the user guess a provider-specific spelling, and a typo was
+    accepted, saved as policy, and then silently dropped or unmatched at
+    resolution - so the value on screen did not mean what the fallback would
+    run. Model lists the catalog by label (the composer picker's own models)
+    and stores the SLUG; a stored value that is not a catalog slug - the
+    seeded family names (`opus`), or a retired slug - is pinned as the first
+    option and stays selected, tagged "family" once the catalog has answered.
+    The row's verdict line renders only when it adds something: a family's
+    "matches Claude Opus 5 today", or a problem. Effort offers the chosen
+    model's own `supportedReasoningEfforts` when Model names a slug and the
+    union across the harness's models when it names a family (the effort
+    applies to whichever model the family resolves to at hop time); the
+    catalogs come from `agent.gui.listModels`, read once per DISTINCT harness
+    in the draft through the same cache-only slots the model pickers use and
+    gated on availability (`fallback-catalog-options.ts`). Changing a row's
+    provider clears its model and effort, since both are one catalog's
+    vocabulary. **A default group** (`defaultTierGroupId`, one select above the
+    list, a `Default` pill on the card) is the group the step uses for a model
+    in NO group - a configuration the user makes, never seeded; "None" keeps
+    the old behaviour, where the step is skipped for an unlisted model. The
+    editor carries the marker through a rename, clears it on a delete and
+    restores it on that delete's Undo; the schema refuses a default naming no
+    group. The per-row preview cannot
+    supply this: with no failed tuple the engine's walk stops at the resolved
+    slug and never reaches effort normalisation, so it returns no effort
+    information and no warnings. A stored value outside the set keeps an option
+    of its own and stays selected, marked as not offered - the same range-render
+    rule the provider select and the timings use. When nothing answers (an older
+    host, a harness the user no longer has, a cold slot) the text input stands,
+    because a select built from nothing would take away a level the user can
+    legitimately type. The provider select offers the GUI-capable harnesses only - the
+    rung skips anything else with `harness-not-gui`, so a terminal-only vendor
+    here would be a row the user can choose and the engine will never walk - and
+    a stored id outside that set still gets an option of its own, under the same
+    range-render rule the timings use.
+    Candidate ORDER inside a group is load-bearing (the rung walks it and takes
+    the first usable target) so rows carry ▲▼; GROUP order is not (D128 routes
+    by most-specific family match, not position), so there is deliberately no
+    group reordering - a control that changed nothing would be worse than none.
+    There is deliberately **no drag surface here**: the step editor stays the
+    only one, because a candidate list is unbounded and nested inside a
+    scrolling pane, which is where drag is worst, and ▲▼ is the keyboard and
+    touch path either way.
+    Empty is a state a user can REACH, and it is not the same as never having
+    had groups: the host seeds on first read and marks the user, so the empty
+    state offers **Restore the default groups**, which calls the RESTORE op
+    rather than saving a client-built list - only the host can build the seed a
+    first read would have produced. Deleting a group or a row offers **Undo**,
+    and undo dispatches the INVERSE of that one removal into the current draft -
+    not the policy as it stood when the toast was raised. A toast outlives its
+    render, so a captured snapshot also reverted every unrelated setting changed
+    since it appeared (the maximum wait adjusted while the toast was still up),
+    and an older toast's Undo resurrected a row deleted after it. The inverse
+    carries the removed group or row WITH its identity and its index, so undo
+    brings back the same row rather than a lookalike, at the position it held -
+    position being the one thing a user cannot retype - and answers "already
+    back" or "its group is gone" by doing nothing.
+    **Removal hands the keyboard on.** Filtering out the focused button's own
+    subtree left focus on `document.body`: a keyboard user was returned to the
+    top of the page and a screen-reader user was told nothing, after a gesture
+    they made deliberately. `useRemovalFocus` takes an ordered list of selectors
+    and focuses the first that exists once the removal has rendered - the row
+    that takes the removed one's place, its neighbour if it was last, then the
+    `Add` control. Rows are addressed by their draft key, never by a group's
+    editable name. A new row's family starts
+    EMPTY (invalid until typed, so an invented default is never saved as a
+    choice) while its provider is SEEDED - a closed union with a control right
+    there is a starting point, not a fabricated answer.
+    **Candidate rows carry a client-side identity** (`fallback-tier-group-keys.ts`),
+    minted once when a row enters the draft - at hydration from the stored
+    policy, or when the user adds one - held in the draft reducer beside
+    `displayOrder`, and stripped before anything is sent. The wire shape cannot
+    supply the key: `TierCandidate` is `{harnessId, modelFamily, reasoningEffort}`
+    with no id, so a content-derived key collides the moment two rows hold the
+    same values (two fresh rows are both empty, and nothing dedupes two identical
+    fully-specified ones), and an index key makes React reuse the node at a
+    POSITION rather than follow the row - which these rows reorder. A policy that
+    arrives from somewhere other than the editor (a host echo, a revert) keeps the
+    existing identities when it is structurally the list already on screen and
+    re-seeds otherwise; mapping an unfamiliar list positionally would be index
+    keying by another name.
+    **Groups carry one too** (`draftKey`), and the argument that they did not is
+    the one this reversed. `fallbackPolicySchema` refines group ids unique, but
+    the id is the group's editable NAME: keying the card on it changed the key
+    on every keystroke of a rename, so React destroyed the focused input after
+    the first character and blur/Enter never committed the whole name - and the
+    intermediate values a rename passes through are allowed to be duplicate or
+    empty, which a key has to survive and a unique-id argument does not cover.
+    **A REVERT keeps identities where a re-seed would not.** A refused save
+    returns the draft to `persisted`, and a rejected value edit differs from
+    what is on screen BY DEFINITION - so the structural comparison above always
+    failed, every candidate row remounted, and the field the user was still
+    typing in was destroyed by the code path whose job was to put their value
+    back. `revertKeyedGroups` asks the weaker question - same number of groups,
+    each with the same number of rows - and keeps every key when the SHAPE is
+    unchanged, because both its callers (the revert, and the read-back below)
+    restore a list this editor already held identities for. A shape change (a
+    rejected removal) has no correspondence left and re-seeds. The echo path
+    still uses the strict comparison: a restore replaces the rows wholesale and
+    is not a list this editor produced.
+    **A re-seed INVALIDATES a removal's Undo, and that needs a generation
+    rather than an address (follow-up #10).** A removal toast carries the
+    inverse of its own operation, addressed by `draftKey` - and a re-seed
+    replaces every one of those keys, so afterwards the inverse holds an address
+    that names nothing, which is indistinguishable from "the row really is still
+    missing". Delete `g1` from `[g1, g2]`, let the save be REFUSED (the revert's
+    shape mismatch re-seeds every group), rename the restored group to `g3`,
+    then press the still-open toast's Undo: neither the stale `draftKey` nor the
+    id matches, `g1` is inserted, and one gesture undoes the deletion twice. The
+    id check alone got the un-renamed case only, and only because two groups
+    with one name is not a valid policy - it answers "would this produce a
+    policy the schema rejects", not "is this inverse still applicable".
+    `toKeyedGroups` - the single re-seed site, reached by hydration,
+    `reconcileKeyedGroups`' foreign list and `revertKeyedGroups`' shape change -
+    bumps a module generation, each inverse is stamped with the generation it
+    was minted AT (read before the commit that removes the row, never inside the
+    Undo callback, where it would sample the generation at Undo time and always
+    compare equal), and `applyGroupsInverse` refuses a stamp that has moved. One
+    guard for both arms: the candidate arm already failed SAFE for the same
+    underlying reason, so the guard makes its reason explicit instead of
+    incidental.
+  - **When an edit is SAVED depends on the control kind.** Switches, selects,
+    ▲▼ and buttons produce a complete value per interaction and commit
+    immediately. **Text fields (group name, model family, and the effort input
+    where no catalog levels are available) commit on BLUR or Enter**, because
+    their intermediate states are not values anyone means: "opus" passes through "o", "op", "opu", and a save per character
+    persists three model families nobody chose and spends a catalog read per
+    candidate previewing each. Local validation still runs per keystroke, so the
+    inline message under a blank family appears as it goes blank rather than
+    when the field is left. Enter does not also blur - the field is not a form.
+  - **A save's echo cannot overwrite a newer draft, and TWO saves cannot be
+    confused.** Every edit bumps a `revision`; every dispatched save gets a
+    request id minted at the call site (the reducer has not run yet, so the
+    revision the request carries is not observable from there) and the reducer
+    records the pair in `pendingSaves`. A reply names its request, so it is
+    matched to the revision IT carried: the response is applied to the draft
+    only when that revision is still current, and otherwise only records that
+    the host stored what was sent.
+    `pendingSaves` is a LIST because one slot was the defect: every control here
+    can commit while another save is in flight, so start A at revision 1 and B
+    at revision 2, and B's start overwrote A's marker - when A's reply arrived
+    the reducer compared revision 2 with revision 2, decided the echo answered
+    the draft on screen, and wrote A's older policy over B's. A third edit then
+    started from that stale value and could permanently undo B. `persistedRevision`
+    guards the other direction: replies are FIFO in practice, but nothing here
+    depends on it, and an out-of-order pair would otherwise leave the OLDER
+    value in `persisted` as what the next refusal reverts to.
+    Correlating rather than serialising is deliberate: serialising would delay
+    the second request until the first settled, which changes when a commit is
+    dispatched, and the commit-on-blur/Enter rule is pinned on that being
+    synchronous with the gesture.
+  - **A failed save says only what it knows about the host's row.** Three
+    outcomes, because "your last saved settings are back on screen and still in
+    force" is a claim about the host that most failures cannot support:
+    - **refused, reverted** - the host answered and rejected the value and
+      nothing newer is on screen. Both halves of that sentence are true.
+    - **refused, kept** - the host answered and rejected an OLDER draft while
+      the user has since changed the same page. The refusal is reported; the
+      revert is not applied, because it would throw away typing the host never
+      judged, and that edit carries itself to the host through its own commit.
+    - **unknown** - the request went out and no answer came back. The host may
+      have committed and lost the reply, so nothing may be claimed. The draft
+      stands and a **read-back** settles it.
+      The line is drawn on the transport's own error classes, not on
+      `isTransientHostRpcFailure` - which merges the first and third (and folds in
+      a host-ANSWERED fatal marked `retryable`, so it used to print "couldn't
+      reach this host" about a host that had just answered).
+      `RetryableTransportError` carries an explicit "the host never dispatched
+      this request" guarantee, so "nothing was saved" is true and the revert is
+      right; any other `HostTransportFailureError` is the ambiguous post-send
+      case. At its worst the old copy told a user automatic fallback was off while
+      the host had it on.
+      The read-back is the **only** action that installs a policy this editor did
+      not send, and it is gated twice: it must name the request that went
+      unanswered, and it replaces what is on screen only while the user has not
+      edited since - so the standing rule that a later read never yanks a control
+      out from under someone mid-edit still holds. A read-back that fails leaves
+      the notice standing with its own **Check again**. The ticket is superseded
+      only by a newer save that SUCCEEDS - a newer save's start, and its refusal,
+      both preserve it, because starting is not an answer and "B was not written"
+      says nothing about A - or by a confirmed reset **that went out after the
+      unanswered save**, which voids the question rather than answering it. Both
+      discharges are the same request-ORDER test, and the reset needs it for the
+      same reason the success does: a reset is no evidence about a write
+      dispatched later than itself, and voiding that write's ticket left the
+      uncertainty notice on screen with nothing behind its retry. A late answer
+      to a ticket that really was superseded is dropped.
+  - **The per-row "resolves to" preview is an RPC, not a computation.**
+    Resolving a family to a slug needs the live catalog, the provider's enabled
+    and runnable state, and which account would run it - none of which the
+    renderer has. `providers.fallbackPolicy.previewTierGroups` runs the engine's
+    own `enumerateTierCandidates` walk, so the editor cannot offer a target the
+    engine would skip. It renders the host's `skipLabel` rather than decoding
+    `skipReason`, so a reason a released client has never heard of still prints
+    a sentence instead of blanking the row, and `null` preview data renders no
+    verdict line at all - the honest absence on a host too old to answer.
+    The read is gated on two separate questions: the host must ADVERTISE the
+    method (it is optional rather than floor, and `useHostSupportsMethod` fails
+    closed), and the draft must be VALID - the request schema requires a
+    non-empty `modelFamily`, so the empty row "Add a model" creates on every
+    click cannot be encoded, and an ungated preview would turn ordinary editing
+    into a malformed-request error. Both gates render the same `null`. There is
+    no `placeholderData` carrying the previous answer across a key change:
+    verdicts pair to rows by `candidateIndex`, which is sound only while the
+    list they were computed for is the list on screen.
+    The "on &lt;account&gt;" clause names the **account, never its id**. The
+    wire `profileId` is a managed-profile uuid, so rendering it produced
+    "resolves to gpt-5.6-sol on 3f2a9c1e-…" - the defect D118 fixed host-side,
+    on the one surface whose job is to say what a row will do (D190). The label
+    comes from the `providers.list` read this panel already makes, and the RULE
+    is shared with the chat cards (`buildFallbackProfileLabels` /
+    `resolveFallbackProfileLabel`) rather than restated: two implementations
+    would be two ways to name one account, and two truncations of one id read
+    as two accounts. Duplicate labels get a bracketed id prefix; an id that
+    cannot be resolved degrades to its 8-character prefix rather than vanishing,
+    because a row describing an account still has to name it. `profileId: null`
+    omits the clause entirely - distinct from the chat cards, where `null` is a
+    terminal agent and is NAMED "Terminal account".
+    **A FAILED preview is not an absent one, and the editor now says which
+    (follow-up FC9).** `preview` is data-or-null and a null renders no line, so a
+    failed check looked exactly like a host that had never been asked: no
+    answer, no explanation, no way to ask again. D159 accepts the null OMISSION
+    as a fidelity rule - never guess a verdict in the client - and this is the
+    usability half on top of it, not a reversal. ONE editor-level line beside
+    "Add a group", never one per row, because the failure is one request
+    covering every row: "Couldn't check what these models resolve to." with a
+    **Try again**. It is `role="status"`, not `role="alert"` - the rows stay
+    editable and savable, and a verdict is an advisory the page works without.
+    Keyed on the query's `isError` and nothing else, which is exactly "we asked
+    and it failed": both reasons this query deliberately answers nothing leave
+    it false, since a closed gate leaves the query disabled and `pending`, and a
+    host that does not ADVERTISE the method never runs it. That last case
+    therefore still renders nothing and offers no retry, which is the stated
+    limit: that host will never answer, and a Try again for it would be a
+    control with nothing behind it. Pending wins over unavailable by the
+    `!previewPending` term in the footer's `failed` - a retry in flight is an
+    answer on its way - so this remains the single pending indicator D159 asks
+    for. The `role="status"` region is **mounted on every path, empty
+    included**, and only its TEXT swaps: a live region inserted into the tree
+    together with its content is announced unreliably, and for this row the
+    announcement IS the difference between a failed check and an absent one, so
+    a screen-reader user who is never told would be back to the two being
+    indistinguishable. That is why the exclusion is a condition rather than the
+    early return it used to be - an early return cannot keep the region
+    mounted. Stale
+    verdicts against an edited row need nothing new: the request's own groups
+    are the query key, so a changed list is a different cache entry and there is
+    no `placeholderData`.
+  - **Danger Zone** holds one action, `Reset all fallback settings`, and its
+    confirm body names its scope because every part of that scope is guessable
+    wrong: what it touches (steps, both timings, model groups, overrides - not
+    just the master switch), whose and where (one Traycer user on one host, not
+    the machine), and what it does not touch. On that last point the copy stops
+    at the true half: an armed traversal froze its ladder, grace window, max
+    wait and return-to-preferred into a snapshot, so a policy write cannot move
+    them - but the tier rung re-reads the model groups LIVE, so a reset does
+    change where an armed traversal can hop to. It says "keep the steps and
+    timings they started with" and claims nothing more.
+  - **Reset re-reads and remounts; restore writes in place.** The asymmetry is
+    the seed marker. `reset` clears it, so the default policy it returns is
+    stale the moment the next read re-seeds - writing that response into the
+    cache would show an empty model-group list while the engine resolves against
+    a full seeded set. So the panel performs its own `refetchPolicy()` after the
+    reset and remounts the editor (a `resetGeneration` in its key) onto what
+    came back, which matters because the reducer is seeded ONCE and deliberately
+    ignores later reads. `restoreTierGroups` does not clear the marker, so its
+    response IS what a later read would produce and `save-succeeded` takes it
+    directly.
+    **Confirmed reset and successful refresh are reported separately**, and the
+    panel remounts only on the second. The hook's `invalidateQueries` is
+    `refetchType: "none"` and starts no fetch, because an invalidation could not
+    have reported one anyway: `refetchQueries` swallows a failed fetch
+    (`if (!fetchOptions.throwOnError) promise = promise.catch(noop)`) and its
+    `Promise.all(...).then(noop)` resolves either way, so awaiting it from
+    `onSuccess` - which this used to do, and describe as waiting for fresh data
+    - remounted the editor onto the pre-reset cache and presented it as the
+      result of the reset. When the read fails now, the reset is NOT called
+      refused: the editor stays as it is under a panel-wide banner saying the
+      reset went through and these values are out of date, with a **Try again**
+      that re-reads and remounts on success.
+      That banner is panel state of its own, not a fourth save-notice outcome:
+      a save notice describes ONE request and is correctly cleared by the next
+      edit and the next save start, whereas this describes the HOST'S ROW, which
+      no keystroke here can change. It carries the revision as of the reset's
+      **dispatch**, because its strongest sentence is about where the values on
+      screen came from and that sentence expires the moment they change - after
+      an edit the display is the user's own draft, which a save since may well
+      have stored, so the banner keeps a weaker second sentence ("what the reset
+      left has not been read yet") rather than a false first one. Dispatch and
+      not the moment the read failed: the read is a round trip during which every
+      control except Reset and Restore stays live, so a save submitted inside
+      that window had already moved the revision, and the banner called a
+      post-reset policy the settings from before the reset. It is cleared by a read that
+      succeeds, by a save that succeeds ON THE DRAFT BEING SHOWN, and by an
+      old-revision success that is ADOPTED into the view to correct a refusal
+      rollback - but not by an old-revision success the user has typed past,
+      where the host's row still is not what is displayed. It is also not RAISED
+      by a reset's failed read that a later write has already answered for: the
+      same request-order test the ticket uses, or the page would claim staleness
+      about a policy confirmed into it a moment earlier.
+  - **The confirmation returns the keyboard, in two halves.** `ConfirmDestructiveDialog`
+    is opened by setting `open` from a button rendered outside the dialog's own
+    root - no caller renders a `DialogTrigger` - so Radix's modal content was
+    focusing a null trigger on close, and because its handler prevents the
+    default first, the FocusScope's generic "restore what was focused before"
+    was skipped too: Escape and Cancel dropped focus on `document.body`. The
+    shared dialog now captures the opener in `onOpenAutoFocus` (the one moment
+    it is still the active element - the FocusScope dispatches that after
+    reading `document.activeElement` and before moving focus in) and restores it
+    in `onCloseAutoFocus`. That is a fix for every caller of the shared dialog,
+    not just this one.
+    It cannot cover a CONFIRMED reset, because the remount above detaches the
+    Reset button before the dialog closes - so the opener is checked for
+    `isConnected` and the surface owns that case: the panel remembers that the
+    replacement was a reset and the new Danger Zone takes focus onto its Reset
+    button as it mounts, then clears the intent so a later remount for another
+    reason (a host switch) does not steal focus onto a button nobody pressed.
+    A REFUSED reset has a third path and it restores focus **only from an
+    unclaimed one** (OSS review P2 / R-OSS-2). Confirming closes the dialog and
+    starts the request in one gesture, so by the time Radix runs its deferred
+    `onCloseAutoFocus` the opener is mounted but `disabled={isPending}` - the
+    dialog takes the live-opener branch, prevents Radix's own restoration, calls
+    `.focus()` on a disabled button, and focus lands on `document.body` and
+    stays there. The Danger Zone repairs that when `isPending` falls. It used to
+    do so unconditionally, and the rest of the editor stays interactive while a
+    reset is pending, so a user who had moved to a Model family field was pulled
+    off it - and the forced blur ran `CandidateRow`'s commit-on-leave, SAVING a
+    half-typed family and replacing the reset's own refusal notice with an
+    unintended save. So the restoration is gated on `document.activeElement`
+    being `document.body` (or null), which is exactly the state it exists to
+    repair; anything else holding focus is a deliberate move and outranks a
+    deferred restoration. Checked at settle time rather than by subscribing to
+    focus changes: there is no window between the two where the answer differs.
+  - **Form RELATIONSHIPS, not just names (follow-up AX8).** Every control on
+    this page already had an accessible name; what was missing was what each
+    name belongs to, and the names are the problem - "Provider", "Model
+    family", "Effort", "Move up" repeat across every candidate row of every
+    group, so with two groups on screen the names alone cannot say which group
+    is being changed, and with two rows in one group they cannot say which row.
+    Four fixes, and the first one is why the others are small:
+    - **Named CONTAINERS rather than qualified labels.** Each group card is a
+      `role="group"` labelled `Model group <name>` (or `Unnamed model group`,
+      a state the user can reach and hold), and each candidate row is a nested
+      `role="group"` labelled `Model <n>`. Group context is announced on entry
+      and then stays out of the way, where "Model family, row 2, group fast"
+      would be read on every field - and it leaves every existing
+      accessible-name query in the tree working. `aria-label` and not
+      `aria-labelledby` pointing at the name field, because the group's name is
+      an editable INPUT and an input is not a label; computed from the current
+      value, so it follows a rename.
+    - **The master switch consumes its row's description.** `SettingsRow`
+      publishes its description id through `SettingsRowDescriptionContext`, and
+      only something rendered inside the `control` slot is below that provider -
+      which an inline `<Switch>` built one component up was not. So the
+      paragraph explaining what turning fallback off does, including the live
+      "N in progress right now" count that is the fact the decision turns on,
+      had no programmatic relationship to the control it explains. It is a
+      component now (`MasterFallbackToggle`), which is what the two Behavior
+      timings already were.
+    - **The return-to-preferred radios get a group name and per-option
+      descriptions.** That row is hand-built rather than a `SettingsRow`, which
+      is exactly why it had neither: the `radiogroup` is `aria-labelledby` the
+      "When the original provider's limit resets" heading and
+      `aria-describedby` its caveat, and the `auto` option is
+      `aria-describedby` its own consequence paragraph - the fresh session and
+      the queued messages moving back, which is the whole reason this row is
+      radios instead of a select. Options with no consequence get no
+      description rather than a dangling id.
+    - **Verdicts describe their field, and the validation error names its
+      row.** A row's preview line is the Model family field's
+      `aria-describedby` (dropped when there is no verdict, since the absence is
+      itself meaningful under D159), a blank family carries `aria-invalid`
+      because the wire schema rejects it and it blocks every commit on the page,
+      and `draftIssueMessage` now says `Model 2 in “fast” needs a family name.`
+      rather than `A model needs a family name.` Validation is whole-policy, so
+      one blank field holds the master switch too - and the one error line a
+      user gets has to say which of a dozen rows is holding it. The row is
+      identifiable visually by where the message sits; it was not identifiable
+      at all by anything read aloud. The container label and the message use the
+      same words for a row (`Model <n>`, and the group by name) so the two agree
+      about what to call it.
+  - **The failure outcomes are decided once** in
+    `fallback/fallback-policy-draft.ts` rather than per control. A **local
+    validation failure** keeps the draft in the control, shows the error and
+    **sends nothing**. A **host rejection** prints the host's reason, and
+    reverts the control to the last persisted value only when that revert is
+    supportable: not when the user has edited since (the refusal judged an
+    older draft, so reverting would throw away typing the host never saw), and
+    not while an earlier save's outcome is still unknown (the persisted value
+    may already be stale, so "still in force" would be a claim about the host
+    that nothing has established). A **lost reply** claims nothing at all: the
+    draft stands, the notice says the value may or may not have been saved, and
+    an authoritative read-back - automatic, with a "Check again" retry - is
+    what settles it. Only a successful save (dispatched after the unanswered
+    one) or that read-back discharges the uncertainty - a newer request's START
+    is not an answer at all, and its REFUSAL answers for itself alone: "B was
+    not written" says nothing about whether A was. A confirmed reset discharges
+    it too, by voiding the question rather than answering it - but only when the
+    reset went out AFTER the unanswered save, for the reason above.
+    A save FAILURE has two outcomes on the wire and the NOTICE has four, which
+    is not an accounting error: a refusal arriving while an earlier reply is
+    still missing is both a rejection and an open question, so it is its own
+    notice (`refused-unverified`) rather than borrowing the plain unknown one.
+    The difference is invisible until a later success discharges the ticket -
+    the uncertainty expires there and the refusal does not, so that notice
+    DOWNGRADES to the ordinary "the host turned this down" rather than
+    disappearing with the ticket. Discharging a ticket also takes its
+    **Check again** with it, which is gated on the ticket and not on the notice
+    beside it: a button that re-reads for a request nobody is waiting on looks
+    like recovery and does nothing.
+    Every message states which value is on screen and what is known about what
+    is in force, because "couldn't save" alone leaves the control ambiguous.
+    **Two** of those sentences claim a setting is in force, and each needs its
+    own evidence. A refusal that reverts claims the restored policy is in
+    force - true unless that policy predates an unread reset, and it stops
+    predating one as soon as any write lands after the reset, so the test is
+    whether the confirmed write outranks the reset's own request, not whether
+    the banner is up. A refusal that KEEPS the draft claims the displayed
+    values are stored, and that takes **two** independent facts. Comparing the
+    values against `persisted` establishes only SAMENESS - never
+    `revision === persistedRevision`, an ordering watermark that parts company
+    with the values on both adoption paths (a moved-on read-back stamps it
+    while keeping a draft the host never saw; a correcting rollback adopts a
+    confirmed policy without moving the revision at all). **Authority** of
+    `persisted` is the second fact and a separate condition (**D330**): after a
+    reset whose read failed, `persisted` is the PRE-reset policy and the host's
+    row is unknown, so sameness with it proves only that the display equals an
+    invalidated baseline. Two refusals with no success since land exactly
+    there. Both facts, or no in-force claim.
+    The same rule bounds what may be said about the HOST's values at all. A
+    reset that succeeded proves the host wrote something; it does not prove the
+    result differs from what is on screen - resetting an already-default policy
+    yields identical values back, and the follow-up read that would have shown
+    that is the request that failed. So the copy hedges ("may not be what this
+    host is using now") instead of asserting an inequality no client can know.
+    And a claim about DISPATCH comes from the request's own state - pending,
+    confirmed, rolled back, or uncommitted - never from "this revision differs
+    from the unanswered one", which covers all four.
+    Dispatch is a property of the displayed VALUES, and it travels with them
+    (**D339**). The revision names an EDIT, and adoption changes the values
+    without changing the revision - `adoptPolicyIntoView` replaces the draft and
+    leaves `revision` alone - so after a read-back adopts, or a correcting
+    rollback adopts, the revision still names an edit that is no longer what
+    anyone is looking at. That is why confirmation is recorded against the
+    revision the confirmed values are DISPLAYED at rather than the one the
+    request carried, and why "hasn't been sent" now needs positive evidence: a
+    display above every revision this editor has ever dispatched
+    (`lastDispatchedRevision`, stamped only where a draft is actually sent - a
+    reset dispatches DEFAULTS, not the screen). Reached by elimination instead,
+    that sentence was told to three sequences whose values the host had already
+    received, and where nothing at all is known the copy says so - "sent, but we
+    don't know what the host did with it" - rather than picking one of the two
+    verdicts it cannot support.
+    Two corollaries the eighth pass added (**D347**), both the same rule as
+    D339 applied to the SENTENCE rather than to the classification. A
+    confirmation records that the display equals the host's row; it does not
+    record who authored those values or when, so the sentence describes that
+    relation ("what's on screen is what this host has saved") and never a
+    history - a read-back can adopt the ORIGINAL policy while two saves are
+    outstanding, and "a change you made since has been saved" is then false
+    twice, since no change of theirs was stored and the controls show what was
+    always there. And an unanswered request is described as the request it
+    was: `reset` and `restore` move no revision, so their own lost replies
+    create uncertainty stamped at the display's revision, and the notice must
+    name the operation rather than borrow the draft's sentence - which is why
+    the dispatch discriminator distinguishes the two operations instead of
+    lumping them as "not a draft".
+    None of these sentences says which request was newer, deliberately: a
+    refusal can name a request older than the one that succeeded OR newer than
+    one a correcting rollback displaced, so any ordering word is wrong half the
+    time. For the same reason the uncertainty sentence names the DRAFT it is
+    about - "what's on screen" is the unanswered request's draft only while the
+    user has not typed past it.
+    A failure also leaves alone the validation error belonging to a draft it
+    never judged, so a group emptied while an older save was in flight keeps
+    its error rather than reading as accepted. That is the one case where the
+    panel's status place carries two messages at once - the validation error
+    and the host notice are statements about different things, and an early
+    return for the first used to take the second's Check again off the page
+    while its ticket was still open.
+    Validity is decided by `fallbackPolicySchema.safeParse` - the wire schema
+    itself, so the local check cannot drift from the host's - and this module
+    only turns the failing path into a sentence.
+  - **`storedPolicyUnreadable`** is surfaced, never swallowed. The host answers
+    a corrupt row with the default policy plus that flag instead of throwing,
+    so that this page still renders and a save can replace the bad row; the
+    notice says what is on screen is not what is stored.
+  - **`inFlightCount`** is rendered as a plain number in the master toggle's
+    helper with **no link**: every holding or waiting chat already shows its own
+    card with its own stop action. "Right now" is a claim about the present,
+    so the number is POLLED while the page is open:
+    `useFallbackInFlightCountQuery` reads `providers.fallbackPolicy.get` on
+    the table's fixed 5 s cadence, under its own cache entry. It used to come
+    off the policy read, which is read once, and a live run showed "1 in
+    progress right now" for minutes after the only hold had switched. That
+    entry holds the whole response, not just the number, because `set` and
+    `restoreTierGroups` update every entry under the method's scope with a
+    response-shaped updater - a bare number there would come back from the
+    first save as an object, printed on the page.
+    The policy read itself does not poll: those same two writers put their
+    responses into its entry in place, and a poll landing after one of those
+    writes would put the pre-save policy back for the next mount to seed from.
+    Nothing AMBIENT re-reads it either (`refetchOnWindowFocus` and
+    `refetchOnReconnect` are off app-wide), but that is not "nothing refetches
+    it": the host-scope sweep (`lib/host/query-invalidator.ts`) refetches every
+    active host query on availability recovery and key rotation, and `reset`
+    invalidates with `refetchType: "none"` because its own caller does the
+    read. So the policy's re-reads are the panel's own two - the read-back
+    after a save whose reply was lost, and the read after a reset - plus a
+    sweep.
+  - **No per-chat and no per-task control exists anywhere in the app**, by
+    decision. The harness/model picker and the composer gain nothing from this
+    feature; per-chat intervention is the actions on the cards themselves.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,
@@ -3491,6 +5565,229 @@ level`, `Host log level` and the host's log tails described the selected host.
 The default editor (`defaultEditor` in the settings store) has no dedicated
 panel - the Open split button on the Epic header doubles as its picker: clicking
 an editor in its dropdown sets it as the default and persists across reloads.
+
+## The fallback save-notice matrix (D353)
+
+Eight audit passes fixed this surface one cell at a time, and each fix exposed the next
+composition. That is the signature of copy derived per-case instead of from a model, so
+this section IS the model: every sentence the notice can render is derived here, and the
+code implements the derivation rather than the cases.
+
+**The composition space is 8 × 3 × 4 = 96 cells** — DISPLAY state × OPERATION reported ×
+OUTCOME. (Eight, not the six this section first claimed: the tenth pass added
+`refused-on-screen` and wrote down `unanswered`, which the classifier had all along.) But
+the notice is TWO sentences answering two independent questions, and that is why the space
+factorises:
+
+- the **REQUEST account** — what is known about the operation whose outcome is being
+  reported — depends on OPERATION × OUTCOME only: **12 derivations**;
+- the **DISPLAY account** — what is known about the values on screen — depends on DISPLAY
+  state × whether display authority is intact: **9 derivations**. Not 16: only SEVEN of the
+  eight states produce a display account at all (`unanswered` is answered by the combined
+  sentence instead), and only two carry a second account — `confirmed` under
+  `unverifiedHostRow`, `rollback` under `persistedUnverified`. Those are two DIFFERENT
+  inputs, which is why the second column below is headed by the condition rather than by a
+  single "authority" flag. Follow-up #17 was the discovery that a THIRD consumer — the
+  off-axis refusal consequences — read only one of the two; it is fixed, and both are now
+  read through `persistedUnverified || unverifiedHostRow !== null` wherever a sentence
+  claims what the host holds.
+
+**21 derivations cover all 96 cells** — of the notice's two sentences. Composing them
+per-case is what produced eight passes of whack-a-mole; a cell is now wrong only if one of
+the 21 is wrong.
+
+**Count re-stated after the follow-up wave (#16, #17). The 21 is unchanged, and what
+changed underneath it is worth writing down, because "unchanged" is the answer that hides
+things:**
+
+- **#16 did not move the count and did make three of the 12 real.** The REQUEST axis was
+  always 3 × 4, but its `refused` row held ONE string served to all three operations, so
+  three of the twelve derivations were nominal — the same sentence counted three times. They
+  are now distinct. A count over a factorisation says how many INDEPENDENT answers the
+  space needs, not how many have been written, and the gap between those two is exactly
+  where an audit finds copy that names the wrong thing.
+- **#17 did not touch the axes at all**, and that is the whole finding. The refusal
+  consequences are an OFF-AXIS sentence (the P3 table above), so widening their inputs
+  changes nothing here — which is precisely how they came to be the third consumer of
+  display authority while only the other two knew the rule. Their own derivation count went
+  from **6 to 8**: `refused-reverted` 2 → 3, `refused-kept`'s `draftConfirmed` branch 2 → 3
+  (its non-confirmed branch stays 1), `refused-unverified` 1. The two new arms are the
+  `unverifiedHostRow` case, which `persistedUnverified` does not cover because a reset whose
+  own reply was LOST never confirms anything, so `unrefreshedReset` stays null while the
+  host's row is every bit as unknown.
+
+The lesson the count carries: **being off-axis is not the same as being out of scope.** The
+P3 table lists four sentences the 21 do not govern, and each of them still reads state this
+matrix has an opinion about. #17 was the second of the four to be audited; the other two
+(the staleness banner, the validation alert) make no host claim, which is why they are
+safe — not because they are listed.
+
+**What the 21 govern, stated exactly (P3).** They govern the notice's TWO sentences — the
+request account and the display account — and nothing else. The status place renders four
+further strings, each deriving from a field this matrix has no axis for. They are LISTED
+rather than swallowed into it, because widening the axes to fit them would turn the
+factorisation into a claim about a bigger space than anything has tested:
+
+| Other sentence                                                                        | Derives from                                                                         | Why it is not on an axis                                                                                                              |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| the `unknown` arm's COMBINED sentence                                                 | `unknownCarries` and `displayDispatch` together                                      | the one place the two accounts are composed rather than concatenated, so it is a single 3 × 8 cell and not a pair of independent ones |
+| the refusal consequences (`refused-reverted` / `refused-kept` / `refused-unverified`) | `hostError.outcome` × `persistedUnverified` × `unverifiedHostRow` × `draftConfirmed` | the notice outcome is FINER than the operation axis: one wire refusal becomes three outcomes, decided by what else was outstanding    |
+| the staleness banner                                                                  | `unrefreshedReset` + `unrefreshedResetSubject`                                       | a different surface with a different owner (D327): the banner owns the reset's unread state, the notice owns display provenance       |
+| the validation alert                                                                  | `localError`                                                                         | about the draft's SHAPE, and rendered whether or not any request exists                                                               |
+
+### Axis 1 — the DISPLAY account (8 states × authority)
+
+Display authority is the right to say what the HOST holds. It is intact unless an
+operation that does not carry the display has an unanswered outcome — a `reset` or
+`restore` whose own reply was lost. Those two are the only operations that can invalidate
+it while the display still looks confirmed, because they are the only ones that do not
+move the revision: a draft save dispatched after a confirmation implies an edit, and that
+edit moves `revision` away from `confirmedViewRevision`, so its own uncertainty is
+reported by a different display state entirely.
+
+(This is deliberately more conservative than "dispatched since the confirmation", and the
+looser variant was CONSIDERED AND REJECTED — do not reintroduce it. It would need a
+`confirmedViewRequestId` to order the unanswered operation against the confirmation, and it
+is unsafe on its own terms: a reset dispatched BEFORE a later save was confirmed would keep
+its in-force claim, but a lost reply says nothing about WHEN the reset landed, and it may
+have replaced the row after that save. The ordering test answers a question the evidence
+cannot settle. The rule as written needs no ORDERING field — it does need a field, and it has one: `unverifiedHostRow` on the reducer, added in the tenth pass when the ninth's carrier (the unanswered ticket) turned out to be a slot the next failure overwrites. What was rejected is the ORDER test, not the state.)
+
+| DISPLAY state                                                                                                                                               | Authority intact                                                                                    | Alternative account, under the row's OWN condition: `confirmed` when `unverifiedHostRow` is set (an unanswered reset/restore); `refused-rollback` when `persistedUnverified` (a confirmed reset whose read failed) — two different inputs |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loaded-unchanged` — values equal `persisted`, nothing dispatched                                                                                           | "What's on screen is what was loaded; nothing has been changed since."                              | same — the sentence makes NO host claim, so nothing to invalidate                                                                                                                                                                         |
+| `edited-unsent` — `revision > lastDispatchedRevision`                                                                                                       | "What's on screen is a newer edit that hasn't been sent."                                           | same — no host claim                                                                                                                                                                                                                      |
+| `dispatched-pending`                                                                                                                                        | "Another change is being saved."                                                                    | same — no host claim                                                                                                                                                                                                                      |
+| `confirmed` — `confirmedViewRevision === revision`                                                                                                          | "What's on screen is what this host has saved."                                                     | "What's on screen was confirmed as saved on this host. A <reset\|restore> is also outstanding whose result is unknown, so what the host has now hasn't been re-read." (the operation is named; NO order is claimed in either direction)   |
+| `refused-rollback`                                                                                                                                          | "What's back on screen is your last saved settings, put back."                                      | the pre-reset account (`persistedUnverified`, D330)                                                                                                                                                                                       |
+| `sent-unknown`                                                                                                                                              | "What's on screen was sent, but we don't know what the host did with it."                           | same — the sentence already claims neither verdict                                                                                                                                                                                        |
+| `refused-on-screen` - a refusal that did NOT revert, because another outcome was unknown (NOT the `refused-kept` NOTICE outcome, which is a different axis) | "What's on screen is a change the host turned down; it's kept here so you can fix it."              | same - neither "saved" nor "put back" is claimed, so there is no host claim to invalidate                                                                                                                                                 |
+| `unanswered` - the display IS the draft whose own reply was lost                                                                                            | the COMBINED sentence, rendered by the `unknown` arm rather than by this table (see the scope note) | n/a - the operation with no answer is the display's own draft                                                                                                                                                                             |
+
+**Only `confirmed` and `refused-rollback` make host claims, so only those two have a second
+column.** That is the matrix's own answer to "which sentences need the authority rule",
+and it is why the rule is stated once rather than per cell.
+
+Read that as scoped to THIS AXIS, which is what #17 cost a pass to learn. It answers which
+DISPLAY-ACCOUNT sentences need the rule; it is not a census of which sentences in the panel
+make host claims. Two of the off-axis refusal consequences do — "still in force" and "it is
+in force" — and they were outside this table's field of view while being governed by its
+rule. When a new sentence is written anywhere in the status place, the question to ask is
+"does it say what the host holds", not "is it on an axis".
+
+**What makes `confirmed` TRUE, and the second marker it needed (OSS review P2 /
+R-OSS-1).** `confirmedViewRevision === revision` is a claim about VALUES, so it has to stop
+holding the moment `persisted` moves away from what is displayed. It did not. The
+correcting-rollback branch adopts a confirmed policy into the controls and clears
+`refusedDraft` — which was the ONLY marker saying the display was not the user's own work —
+so a SECOND, newer success saw an unmarked display, read it as an intervening edit, and
+took the moved-on arm: `persisted` advanced to that reply's policy, the controls kept the
+first one, and `confirmedViewRevision` went on certifying them. The page then rendered
+`confirmed` ("What's on screen is what this host has saved") over values the host did not
+have, with no reset, no failed read and no lost reply anywhere in the sequence — C refused,
+A succeeds, B succeeds, no user edit between them. Every one of those three overlapping
+saves is a gesture the controls permit.
+
+The fix is a second marker, `adoptedView`, beside `refusedDraft`, and one predicate over
+both — `draftIsNotUserAuthored`. The two markers mean different things (a value this
+reducer PUT BACK, a value this reducer TOOK FROM THE HOST) and the same thing for every arm
+that installs an authoritative policy: nobody typed this, so replace it. Both consumers ask
+through the one predicate, which is not tidiness — the second consumer, `reconciled`'s
+adopt gate, is reachable with an adopted display and no refusal (W succeeds after X's reply
+is lost and Y is refused at a later revision), and it had the same defect independently.
+`edited` clears both, which is what keeps a real intervening edit protected.
+
+**Reachability of `edited-unsent` (the classifier's `uncommitted`), and which operations can
+host it.** `commit` dispatches `edited` and then `save-started` in the same tick, and
+`applySaveStarted` stamps `lastDispatchedRevision` at the post-edit revision — so every
+switch, select, arrow and button leaves `revision === lastDispatchedRevision`, and its
+display is `sent-unknown` — **when the edit is VALID**. That qualifier is the tenth pass's
+correction, and both sentences the ninth pass built on it were false:
+
+- **"only a text edit reaches it" is FALSE.** `commit` dispatches `edited` and then returns
+  early when `validateFallbackPolicyDraft(next).kind === "invalid"`, BEFORE `save-started`.
+  So any control whose value is invalid reaches `edited-unsent` — and one is a plain button:
+  "Add a model" calls `onCommit` with a candidate whose `modelFamily` is `""` (deliberately,
+  so the panel never invents a family the user did not choose), which the wire schema
+  rejects. A button, not a keystroke.
+- **"restore cannot host it" is FALSE.** Only the Restore button itself takes
+  `restorePending`; "Add a group" lives outside `EmptyGroups` and stays enabled while the
+  restore's RPC is in flight. So the display can be edited while a restore is unanswered.
+  One refinement the corrected argument needs and the first version of it missed: an empty
+  group is schema-VALID (`candidates: z.array(...)` with no `.min(1)`), so "Add a group"
+  alone dispatches a save and lands on `sent-unknown`. The sequence that actually reaches
+  `edited-unsent` is Restore → Add a group → **Add a model**, whose empty family is what
+  makes the draft unsendable.
+
+So `edited-unsent` is reachable from any control that can produce an invalid draft, under
+any of the three operations, and the write path — not the control kind — is what decides
+it: **a draft is unsent exactly when `commit` returned before `save-started`, plus the
+text-field path that never calls `commit` at all.**
+
+The `loaded-unchanged` / `edited-unsent` split is controlled from BOTH sides, by different
+pins and different mutations: **M3** (`matchesPersisted ? "loaded-unchanged" : "uncommitted"`
+collapsed to `"uncommitted"`) reddens the restore pin, which holds the `loaded-unchanged`
+half; the **inverse** collapse to `"loaded-unchanged"` reddens the eighth-pass reset pin's
+closing `toContain("hasn't been sent")`, which holds the other. Both of those reach
+`uncommitted` through an INVALID draft, where a validation alert above the notice already
+says the edit was not sent; the ninth-pass pin covers the VALID-draft variant neither of
+them has, where the notice carries the claim alone.
+
+### Axis 2 — the REQUEST account (3 operations × 4 outcomes)
+
+| OUTCOME                       | `set` (draft)                                                   | `reset`                                                                  | `restore`                                                                                   |
+| ----------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| success                       | no notice — the controls carry it                               | no notice; the editor remounts on the re-read                            | no notice                                                                                   |
+| refused                       | "Couldn't save: <host reason>" + the rollback/kept split (D330) | "Couldn't reset these settings: <host reason>"                           | "Couldn't restore the default groups: <host reason>"                                        |
+| unknown (own reply lost)      | "That change may or may not have been saved."                   | "We don't know whether the reset went through - it hasn't been re-read." | "We don't know whether restoring the default groups went through - it hasn't been re-read." |
+| unknown-after-failed-read (S) | n/a — a draft save has no post-write read of its own            | the staleness banner owns it (D327/D330); the notice is not the surface  | n/a                                                                                         |
+
+**The `refused` row is the follow-up #16 fix, and it is the row that turned this
+table from a description into a promise.** It PREVIOUSLY read "Couldn't reset:
+<host reason>" / "Couldn't restore: <host reason>" while no such string existed
+anywhere in the tree — the table was describing copy nobody had written, which
+is the orphaned-prose class one level up from the code. The eighth pass
+corrected the table DOWN to what `classifyFallbackSaveFailure` actually did
+("the operation is NOT named; one classifier serves all three"), because a guess
+at a destructive action's wording is a product decision, not a state-model rule.
+Ruling (a), tenth-pass close-out: name the operation, parallel with the
+`unknown` row directly below, which had always named it correctly — so the
+inconsistency was visible inside one panel. The classifier now takes the
+operation, and the `unknown` arm's own message dropped its "so we can't tell
+whether this was saved" clause with it: that clause said the same thing as this
+table's next row, one sentence earlier and in the wrong noun for two of the
+three columns.
+
+`RetryableTransportError` (the host's own "never dispatched" guarantee) and a
+non-`HostRpcError` throw carry the operation too — "Couldn't reach this host, so
+nothing was reset", "Couldn't restore the default groups." Those are not on this
+axis because they are not host ANSWERS: the axis is what the host said, and
+those two are what the transport said.
+
+### Reachability and coverage
+
+Every cell is either pinned or carries its reason. The unreachable ones are unreachable by
+construction, not by assumption:
+
+| Cell                                                    | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `confirmed` × reset × unknown                           | **PINNED** (ninth pass, cell 1) — the composition eight passes never reached                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `loaded-unchanged` × restore × unknown                  | **PINNED** (ninth pass, cell 3)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `edited-unsent` × reset × unknown, validation preserved | **PINNED** (ninth pass, cell 2) — both alerts asserted together                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `edited-unsent` × reset × unknown, VALID draft          | **PINNED** (ninth pass, cell 4) — the reset is the operation because it is the cheapest one that reaches this display state — NOT because a restore cannot, which the row below proves it can (the ninth pass's claim here was wrong and is corrected in the reachability note above), and the draft is valid because both older `uncommitted` assertions carry a validation alert that says "not sent" beside the notice                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `edited-unsent` × restore × unknown                     | **PINNED** (tenth pass) — the cell the ninth pass argued was impossible. Restore → Add a group → Add a model while the restore is pending, then lose its reply. "Add a group" is outside `EmptyGroups` and never disabled. The middle step is NOT optional: `candidates: z.array(tierCandidateSchema)` carries no `.min(1)` (`protocol/src/host/fallback-policy.ts:44`), so an empty group is schema-VALID and adding one alone dispatches a save — it is "Add a model", whose family is deliberately blank, that makes the draft unsendable                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `refused-on-screen` × set × refused-while-unknown       | **PINNED** (tenth pass, N1) — the display state the matrix did not have. X/A/B: A lost, B refused while A is unknown, X lost                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `confirmed` × reset × unknown, ticket REPLACED since    | **PINNED** (tenth pass, N2) — R lost, then A lost. The obligation has to outlive the notice that raised it. The obligation's RECOVERY is pinned per operation and they are not the same path: a restore's success reaches `save-succeeded` and clears it there, while a reset's success never dispatches `save-succeeded` at all — `resetAll` re-reads and the panel REMOUNTS, so the reset's recovery is the fresh initial state, asserted separately                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `confirmed` × reset × unknown, reset dispatched FIRST   | **PINNED** (tenth pass, N3) — the reverse dispatch order, which is why the sentence may not claim one                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `confirmed` × set × unknown                             | **PINNED** (seventh pass, sequences 1 and 2)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `sent-unknown` × set × unknown                          | **PINNED** (seventh pass, sequence 3)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `edited-unsent` × set × unknown                         | **PINNED** (fifth pass, the invalid-C two-alert pin)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `refused-rollback` × set × refused                      | **PINNED** (D330, R10-A and the revert pins)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `dispatched-pending` × set × unknown                    | **PINNED** (sixth pass, the PENDING control)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `*` × set × success                                     | **UNPINNED, and no sentence to pin** — a success renders no notice; the controls are the report                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `confirmed`/`sent-unknown` × restore × unknown          | **UNPINNED** — the restore's request account is pinned at `loaded-unchanged`, and the display axis is pinned independently at `set`. Since the two accounts are independent by construction, the composition adds no derivation; pinning it would assert the factorisation, not test it. **The pin that WOULD refute the factorisation** is a restore composition whose DISPLAY account differs from the reset's at the same display state — `confirmed × restore × unknown` asserting a display sentence other than "…a restore is also outstanding whose result is unknown…". If that ever needs writing, the factorisation is false and this whole section is the thing to fix, not the cell                                                                                                                                                                                                                                                        |
+| `*` × reset × unknown-after-failed-read                 | **UNREACHABLE as a notice.** A confirmed reset whose read fails raises the BANNER, not the notice (D327: the banner owns the reset's unread state). The notice path requires an unanswered SAVE, and a reset that was confirmed has no unanswered outcome to report                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `loaded-unchanged` × set × refused                      | **REACHABLE; the composition is UNPINNED and the reason is that pinning it cannot fail differently.** Recorded UNREACHABLE by the ninth pass on an argument that assumed a refusal implies the refused draft is still displayed; a refusal of an OLDER draft takes the `refused-kept` arm and reverts nothing, so Enter-commit a family, type it back without committing, and let the refusal arrive. But `refused-kept` never calls `displayAccount` (see the P3 scope table), and its `draftConfirmed` branch is taken whether the display got there by a confirmed save or by typing the value back — the draft equals `persisted` either way — so the rendered text is identical to the CONFIRMED-display case, which IS pinned. The tenth pass's first pin for this row asserted a display string the path cannot produce, reddened under no recipe, and now stands under its real claim: the `refused-kept` consequence over a confirmed display |
 
 ## Current Status
 

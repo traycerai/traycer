@@ -415,17 +415,6 @@ describe("browser view session policy", () => {
     expect(electronState.defaultSession?.downloadListeners).toEqual([]);
   });
 
-  it("exports a clean desktop Chrome UA (no Electron, no product token) for the app-level fallback", async () => {
-    const mod = await import("../browser-session");
-
-    const ua = mod.guestBrowserUserAgent();
-
-    expect(ua).not.toMatch(/Electron/i);
-    expect(ua).not.toMatch(/Traycer/i);
-    expect(ua).toContain(`Chrome/${process.versions.chrome}`);
-    expect(ua).toContain("Safari/537.36");
-  });
-
   it("uses the ephemeral partition when saved logins is turned off", async () => {
     const savedLogins = await import("../storage/browser-saved-logins");
     vi.spyOn(savedLogins, "isBrowserSavedLoginsEnabled").mockReturnValue(false);

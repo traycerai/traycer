@@ -6,7 +6,10 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
 import type { BrowserSessionProfile } from "../browser-session";
-import type { BrowserDebugSession } from "../debug/browser-debug-session";
+import type {
+  BrowserDebugLease,
+  BrowserDebugSession,
+} from "../debug/browser-debug-session";
 import type { BrowserPageEmulation } from "../emulation/browser-page-emulation";
 import type { BrowserPreviewWindowHandle } from "./browser-preview-window";
 import type { BrowserPageRecording } from "../recording/browser-page-recording";
@@ -87,6 +90,23 @@ export interface BrowserViewEntry {
    * exactly as it gets a fresh registration id.
    */
   emulation: BrowserPageEmulation | null;
+  /** Held while this tile has non-default emulation intent to reapply. */
+  emulationLease: BrowserDebugLease | null;
+  /**
+   * Held while the storage seed script is installed - from provisioning until
+   * `navigateAccepted` removes it. A tab with nothing to seed never takes one,
+   * and so never attaches a debugger at birth. A tab that was provisioned but
+   * never accepted a navigation keeps this lease, and with it the attached
+   * debugger, until the entry closes - bounded by the entry's lifetime, since
+   * `destroyEntry` disposes the session and every lease with it.
+   */
+  seedLease: BrowserDebugLease | null;
+  /**
+   * Taken by the first agent CDP dispatch and held for the rest of this tab
+   * incarnation. Nothing on the wire says when an agent is done with a tab, and
+   * the frame routes a command sequence resolves must stay valid across it.
+   */
+  agentCdpLease: BrowserDebugLease | null;
   annotationSession: BrowserAnnotationSession | null;
   devToolsWindow: BrowserViewDevToolsWindow | null;
   /** The always-on-top window on this tile's page, while one is open. */

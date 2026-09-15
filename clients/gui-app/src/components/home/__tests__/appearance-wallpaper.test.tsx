@@ -93,6 +93,7 @@ describe("AppearanceWallpaper", () => {
           intensity: 0.6,
           tintWithAccent: false,
           name: "wallpaper.png",
+          curatedId: null,
         }}
         url="blob:wallpaper"
         tint={null}

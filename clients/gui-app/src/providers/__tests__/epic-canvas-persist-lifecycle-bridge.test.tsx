@@ -5,6 +5,16 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { epicCanvasKey } from "@/lib/persist";
 
+const markBrowserCanvasHydrated = vi.hoisted(() => vi.fn());
+const browserCanvasHydrated = vi.hoisted(() => ({ value: false }));
+vi.mock("@/lib/tab-sync/browser-canvas-hydration", () => ({
+  markBrowserCanvasHydrated: () => {
+    browserCanvasHydrated.value = true;
+    markBrowserCanvasHydrated();
+  },
+  isBrowserCanvasHydrated: () => browserCanvasHydrated.value,
+}));
+
 interface PersistedEpicCanvasState {
   readonly tabsById: Readonly<
     Record<
@@ -92,6 +102,8 @@ function persistedEpicTab(
 describe("<EpicCanvasPersistLifecycleBridge />", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    browserCanvasHydrated.value = false;
+    markBrowserCanvasHydrated.mockClear();
     resetAuth("signed-out", null);
     resetEpicCanvasStore();
   });
@@ -260,5 +272,41 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
 
     clearStorageSpy.mockRestore();
     setOptionsSpy.mockRestore();
+  });
+
+  it("marks browser canvas hydration complete when sign-out reset throws", async () => {
+    render(
+      <EpicCanvasPersistLifecycleBridge>
+        <div />
+      </EpicCanvasPersistLifecycleBridge>,
+    );
+    await waitFor(() => {
+      expect(markBrowserCanvasHydrated).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      resetAuth("signed-in", ALICE_EMAIL);
+    });
+    await waitFor(() => {
+      expect(useEpicCanvasStore.persist.getOptions().name).toBe(
+        epicCanvasKey(ALICE_ID),
+      );
+    });
+
+    markBrowserCanvasHydrated.mockClear();
+    const clearStorageSpy = vi
+      .spyOn(useEpicCanvasStore.persist, "clearStorage")
+      .mockImplementationOnce(() => {
+        throw new Error("canvas reset failed");
+      });
+
+    act(() => {
+      resetAuth("signed-out", null);
+    });
+
+    await waitFor(() => {
+      expect(markBrowserCanvasHydrated).toHaveBeenCalledTimes(1);
+    });
+    clearStorageSpy.mockRestore();
   });
 });

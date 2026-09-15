@@ -937,6 +937,10 @@ export const baseThemeColors: Record<
     border: "oklch(0.922 0 0)",
     input: "oklch(0.922 0 0)",
     ring: "oklch(0.708 0 0)",
+    // The far end of the reasoning slider's max gradient and the colour of
+    // its glow: a hue the rest of the control is NOT, sitting mid-lightness
+    // so it reads whichever end of the gradient `--primary` lands on.
+    "reasoning-max-accent": "oklch(0.62 0.19 295)",
     "chart-1": "oklch(0.87 0 0)",
     "chart-2": "oklch(0.556 0 0)",
     "chart-3": "oklch(0.439 0 0)",
@@ -987,6 +991,7 @@ export const baseThemeColors: Record<
     border: "oklch(1 0 0 / 10%)",
     input: "oklch(1 0 0 / 15%)",
     ring: "oklch(0.556 0 0)",
+    "reasoning-max-accent": "oklch(0.62 0.19 295)",
     "chart-1": "oklch(0.87 0 0)",
     "chart-2": "oklch(0.556 0 0)",
     "chart-3": "oklch(0.439 0 0)",

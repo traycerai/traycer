@@ -2,6 +2,9 @@ import { useCallback } from "react";
 import { AlertTriangle } from "lucide-react";
 import { ENV_CREDENTIAL_AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { AgentFailure } from "@traycer/protocol/persistence/epic/content-blocks";
+import { FallbackNoticeSettingsLink } from "@/components/chat/fallback/fallback-notice-attribution";
+import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -56,6 +59,40 @@ interface ErrorSegmentProps {
   /** Harness that ran the turn, so a provider-scoped remedy can deep-link to
    *  the right provider. `null` on legacy rows with no turn metadata. */
   harnessId: GuiHarnessId | null;
+  /**
+   * The host's typed description of why the turn died, or `null` on a row from
+   * before the payload existed (or one no turn produced).
+   *
+   * What it decides here is which remedy the row offers. A signed-out failure
+   * gets the fallback policy link and nothing more - the re-auth banner is the
+   * path back, and a second "retry" beside it would send the same request to
+   * the same dead account.
+   */
+  failure: AgentFailure | null;
+  /**
+   * The host turn this row belongs to, or `null` where the row has no turn
+   * identity. The manual-rung affordances render only on the row whose turn id
+   * matches the one the host named, so a transcript holding three failed
+   * attempts offers them once rather than three times.
+   */
+  turnId: string | null;
+}
+
+/**
+ * The one remedy an `auth` failure's row offers.
+ *
+ * Deliberately a LINK and not an action. The chat is signed out of the account
+ * this turn ran on: a retry would fail identically, and a switch would be the
+ * fallback policy's decision to make rather than a button's. What the row can
+ * usefully say is where the policy that governs the next failure lives - the
+ * composer's re-auth banner owns the actual way back in.
+ */
+function FallbackAuthSettingsAction() {
+  return (
+    <div className="mt-1 flex">
+      <FallbackNoticeSettingsLink />
+    </div>
+  );
 }
 
 // Static error row. Auth errors (`code: "auth"`) render here like any other
@@ -67,6 +104,8 @@ export function ErrorSegment({
   message,
   recoverable,
   harnessId,
+  failure,
+  turnId,
 }: ErrorSegmentProps) {
   // Built at CLICK time, never at render. This row is durable transcript: it
   // mounts whenever the chat is opened, which is one or more commits BEFORE
@@ -125,6 +164,10 @@ export function ErrorSegment({
           {code === ENV_CREDENTIAL_AUTH_ERROR_CODE ? (
             <EnvCredentialSettingsAction harnessId={harnessId} />
           ) : null}
+          {failure?.reason === "auth" ? <FallbackAuthSettingsAction /> : null}
+          {turnId === null ? null : (
+            <FallbackManualRungActions turnId={turnId} />
+          )}
         </div>
         <ReportIssueAction
           context={buildReportContext}

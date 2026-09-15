@@ -23,7 +23,7 @@ import {
   type HostNotificationPresenceFrame,
 } from "@/lib/notifications/notification-presence";
 import {
-  isReopenableNotificationsStreamClose,
+  isReopenableHostStreamClose,
   type HostReconnectEngine,
 } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { compareFeedIdAscending } from "@/lib/notifications/notification-lifecycle";
@@ -519,7 +519,7 @@ export function openHostNotificationsStream(
     currentSession?.close();
     currentSession = null;
     openSession();
-  }, isReopenableNotificationsStreamClose);
+  }, isReopenableHostStreamClose);
 
   // Presence has two consumers with deliberately independent gates:
   //  - `onPresenceChanged` (local): drives entity read-consumption over the

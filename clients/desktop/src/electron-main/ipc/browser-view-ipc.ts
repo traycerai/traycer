@@ -924,17 +924,6 @@ export function registerBrowserViewIpc(
       ),
   );
 
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewGetDebugSnapshot,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      return manager.getDebugSnapshot(
-        windowId,
-        browserViewIpcPayload.tileKey.parse(payload),
-      );
-    },
-  );
-
   // "Clear cookies for this site" (spec §6.5). The manager derives the site
   // from the tile's own current URL; the jars are the shared `primary` ones,
   // which are the only jars a tile menu may reach. A tile with no site to name

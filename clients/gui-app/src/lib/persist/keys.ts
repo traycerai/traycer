@@ -235,14 +235,19 @@ export const PERSIST_STORES = [
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
 
-  // ── Scoped non-zustand key families (1) ──────────────────────────────────
+  // ── Scoped non-zustand key families (2) ──────────────────────────────────
   {
     camelName: "appLocalNotificationCompletionReceipt",
     leaf: "app-local-notification-completion-receipt",
     kind: "scoped",
   },
+  {
+    camelName: "landingDraftRetirement",
+    leaf: "landing-draft-retirement",
+    kind: "scoped",
+  },
 
-  // ── Static zustand stores (30) ───────────────────────────────────────────
+  // ── Static zustand stores (33) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -306,6 +311,15 @@ export const PERSIST_STORES = [
     leaf: "resource-monitor",
     kind: "static",
   },
+  // Every preference about the app's own chrome — where a surface lives and
+  // what it renders — one slice per surface (`layout-store.ts`). Device-local
+  // display preferences, same tier as theme and font size, so machine-local
+  // rather than identity-scoped.
+  { camelName: "layout", leaf: "layout", kind: "static" },
+  // The one host every usage/resource surface READS
+  // (`watch-host-store.ts`). Machine-local for the same reason the two picks
+  // it replaces were: it names a machine to watch, not an account.
+  { camelName: "watchHost", leaf: "watch-host", kind: "static" },
   { camelName: "tabs", leaf: "tabs", kind: "static" },
   {
     camelName: "workspaceFolders",
@@ -429,3 +443,6 @@ if (catalogLeaves.size !== PERSIST_STORES.length) {
     "persist registry: two PERSIST_STORES entries share a leaf — leaves must be unique",
   );
 }
+
+export const tabRecoveryKey = (identity: string, windowId: string): string =>
+  scopedPersistKey("tab-recovery", scopeBucket(identity), windowId);

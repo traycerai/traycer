@@ -6,7 +6,6 @@ import type {
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
   BrowserViewCertificateTrust,
-  BrowserViewDebugSnapshot,
   BrowserViewDownloadCancel,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
@@ -69,7 +68,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     (change: BrowserViewSnapshotInvalidatedChange) => void
   >();
 
-  constructor(input?: { readonly saveLogins?: boolean }) {
+  constructor(input: { readonly saveLogins?: boolean } | undefined) {
     this.saveLoginsValue = input?.saveLogins ?? true;
   }
 
@@ -178,17 +177,6 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
       byteLength: 0,
       sha256: "",
       capturedAt: 0,
-    });
-  }
-
-  getDebugSnapshot(
-    input: BrowserViewTileKey,
-  ): Promise<BrowserViewDebugSnapshot> {
-    return Promise.resolve({
-      ...input,
-      consoleEntries: [],
-      networkEntries: [],
-      accessibilityNodes: [],
     });
   }
 

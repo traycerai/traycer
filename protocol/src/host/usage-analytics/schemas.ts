@@ -251,15 +251,13 @@ export type HostUsageSummaryRequestV10 = z.infer<
 /**
  * `@2.0`: ask for the LOCAL reader explicitly.
  *
- * `servedBy` on the response says which reader answered, and the host has
- * always chosen - from the account's cloud-sync entitlement, which it learns
- * by making the cloud call. That is the problem for a session holding no
- * cloud verdict: the only way to reach the local reader on `@1.0` is to make
- * a cloud request first and be refused in the one specific way
- * (`FREE_TIER_NO_CLOUD_SYNC`) that licenses the fallback. Every other refusal
- * - including the expired bearer an unverified session has - is a retriable
- * 503, so that cohort gets no usage panel at all while sitting on facts its
- * own host recorded locally.
+ * `servedBy` on the response says which reader answered, and on `@1.0` the
+ * host always chose by making the cloud call: the cloud plane is the only
+ * plane a cloud-authorized session gets, and no refusal licenses a fallback
+ * to the local reader. That is the problem for a session holding no cloud
+ * verdict: every refusal it meets - including the expired bearer an
+ * unverified session has - is a retriable 503, so that cohort gets no usage
+ * panel at all while sitting on facts its own host recorded locally.
  *
  * `local-only` says "do not make the cloud call"; the local reader answers and
  * the response is stamped `servedBy: "local"`, a value the released line

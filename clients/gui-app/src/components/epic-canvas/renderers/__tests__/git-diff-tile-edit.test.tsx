@@ -22,6 +22,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { FileContents } from "@pierre/diffs";
 import type { EditorOptions } from "@pierre/diffs/edit";
 import type { GitChangedFile, GitStage } from "@traycer/protocol/host";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { DiffClickToEditAdapter } from "@/components/diff/use-diff-click-to-edit";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
@@ -80,6 +81,10 @@ const preloadState = vi.hoisted(() => ({
 
 const editorOpenState = vi.hoisted(() => ({ mutate: vi.fn() }));
 
+const hostState = vi.hoisted(() => ({
+  entry: null as HostDirectoryEntry | null,
+}));
+
 // The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
 // to, so `git.subscribeStatus` cannot ride the window's effective host while
 // carrying the tile's host id as a param. `null` is that hook's FOLLOWING
@@ -89,12 +94,8 @@ const editorOpenState = vi.hoisted(() => ({ mutate: vi.fn() }));
 // `use-surface-host-stream-binding.test.tsx`.
 // The hook returns the value to PROVIDE: the ambient binding while following
 // (this suite's), the pin's own once built, null while pending. Following here.
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
+  useHostDirectoryEntry: () => hostState.entry,
 }));
 
 vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
@@ -380,6 +381,14 @@ describe("<GitDiffTile /> editing", () => {
     state.nextDraftContent = "const value = 2;\n";
     state.nextDraftCaret = 16;
     state.sizeBytes = 17;
+    hostState.entry = {
+      hostId: "host-A",
+      label: "Host A",
+      kind: "local",
+      websocketUrl: "ws://127.0.0.1:1234",
+      version: "1.2.0",
+      transportDialability: "dialable",
+    };
     diffSurfaceState.mountCount = 0;
     diffSurfaceState.unmountCount = 0;
     diffSurfaceState.editableNewFiles.length = 0;

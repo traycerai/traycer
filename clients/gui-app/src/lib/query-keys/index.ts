@@ -38,11 +38,13 @@ export {
   browserQueryKeys,
 } from "@/lib/query-keys/browser-mutation-keys";
 export { resourcesMutationKeys } from "@/lib/query-keys/resources-mutation-keys";
+export { chatFallbackMutationKeys } from "@/lib/query-keys/chat-fallback-mutation-keys";
 export { managedCommandMutationKeys } from "@/lib/query-keys/managed-command-mutation-keys";
 export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
+export { fallbackPolicyWriteScope } from "@/lib/query-keys/providers-fallback-policy-scope";
 export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {
   CLASSIC_PROVIDERS_LIST_PARAMS,
@@ -63,6 +65,8 @@ export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 export { draftsMutationKeys } from "@/lib/query-keys/drafts-mutation-keys";
+export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
+export { appearanceMutationKeys } from "@/lib/query-keys/appearance-mutation-keys";
 
 export const queryKeys = {
   hostBase: hostQueryKeys.base,

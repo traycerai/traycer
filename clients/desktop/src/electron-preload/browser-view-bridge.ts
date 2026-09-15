@@ -9,7 +9,6 @@ import type {
   BrowserViewCapturePageResult,
   BrowserViewSaveCaptureResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewDebugSnapshot,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
   BrowserViewOpenTileRequest,
@@ -125,11 +124,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         subscribe(RunnerHostEvent.browserViewRecordingFrame, listener),
       onRecordingStopped: (listener) =>
         subscribe(RunnerHostEvent.browserViewRecordingStopped, listener),
-      getDebugSnapshot: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewGetDebugSnapshot,
-          input,
-        ) as Promise<BrowserViewDebugSnapshot>,
       startAnnotation: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewStartAnnotation,

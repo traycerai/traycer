@@ -46,9 +46,9 @@ import { useEditorAvailability } from "@/hooks/editor/use-editor-availability-qu
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
 import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
 import { useFinderOpenAvailability } from "@/hooks/editor/use-finder-open-availability";
+import { useHostPathOpenAvailability } from "@/hooks/editor/use-host-path-open-availability";
 import { useOfferableEditors } from "@/hooks/editor/use-offerable-editors";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -144,7 +144,7 @@ function FileTreeRowContextMenuContent(
   props: FileTreeRowContextMenuContentProps,
 ) {
   const { row, hostId, workspacePath } = props;
-  const hostEntry = useHostDirectoryEntry(hostId);
+  const canOpenHostPaths = useHostPathOpenAvailability(hostId);
   const finderAvailable = useFinderOpenAvailability(hostId);
   const availability = useEditorAvailability();
   const offerableEditors = useOfferableEditors(hostId);
@@ -169,12 +169,6 @@ function FileTreeRowContextMenuContent(
     onError: reportCopyFailure,
   });
 
-  // An editor launches through a URL-scheme handler registered on the host's
-  // own machine, so the open items are local-host-only for the same reason the
-  // workspace header's are (see `OpenInEditorButton`).
-  const hostIsLocal =
-    hostEntry !== null &&
-    (hostEntry.kind === "local" || hostEntry.kind === "mock");
   // A row menu has no primary half and does not record a default, so no stored
   // target is consulted - it simply lists what this host and machine can open
   // the row with, Finder last.
@@ -184,7 +178,7 @@ function FileTreeRowContextMenuContent(
     finderAvailable,
     defaultTarget: null,
   });
-  const openTargets = hostIsLocal ? targets : [];
+  const openTargets = canOpenHostPaths ? targets : [];
 
   const absolutePath = resolveAbsolutePath(workspacePath, row.treePath);
   // The tree path already IS the workspace-relative path; a directory row only
@@ -201,7 +195,7 @@ function FileTreeRowContextMenuContent(
   const opening = mutation.isPending || openFeedbackActive;
 
   const openPath = (editorId: OpenPathsTarget) => {
-    if (opening) return;
+    if (!canOpenHostPaths || opening) return;
     triggerOpenFeedback();
     // A directory handed to an editor opens as a folder there, which is the
     // right outcome for both row kinds.

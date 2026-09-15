@@ -7,6 +7,7 @@ import type {
   ChatSessionAnchor,
   ContentBlock,
   Message,
+  ProviderNoticeKind,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
@@ -615,17 +616,25 @@ describe("useRenderedMessages", () => {
     };
 
     const driver = renderRenderedMessages(initial);
-    const firstSegment = driver.result.current[0]?.segments[0];
-    expect(firstSegment.kind).toBe("plan");
-    if (firstSegment.kind !== "plan") throw new Error("expected plan segment");
+    // `.at(0)` rather than `[0]` throughout this file: with
+    // `noUncheckedIndexedAccess` off, an indexed read is typed non-optional, so
+    // a `=== undefined` guard is a no-overlap condition `no-unnecessary-condition`
+    // rejects - while the value really can be absent at runtime, and `.kind` then
+    // throws a TypeError over the intended diagnostic. `.at()` returns the honest
+    // `| undefined`, which makes the guard both necessary and legal.
+    const firstSegment = driver.result.current.at(0)?.segments.at(0);
+    if (firstSegment === undefined || firstSegment.kind !== "plan") {
+      throw new Error("expected plan segment");
+    }
     expect(firstSegment.contentIdentity).toBe("hash-1");
     expect(firstSegment.markdownPreview).toContain("First plan");
 
     driver.set(updated);
 
-    const secondSegment = driver.result.current[0]?.segments[0];
-    expect(secondSegment.kind).toBe("plan");
-    if (secondSegment.kind !== "plan") throw new Error("expected plan segment");
+    const secondSegment = driver.result.current.at(0)?.segments.at(0);
+    if (secondSegment === undefined || secondSegment.kind !== "plan") {
+      throw new Error("expected plan segment");
+    }
     expect(secondSegment.planId).toBe("plan-1");
     expect(secondSegment.contentIdentity).toBe("hash-2");
     expect(secondSegment.markdownPreview).toContain("Second plan");
@@ -1450,21 +1459,79 @@ describe("useRenderedMessages", () => {
     });
 
     const driver = renderRenderedMessages(input);
-    const firstSegment = driver.result.current[0]?.segments[0];
-    expect(firstSegment.kind).toBe("provider_notice");
-    if (firstSegment.kind !== "provider_notice") {
+    const firstSegment = driver.result.current.at(0)?.segments.at(0);
+    if (firstSegment === undefined || firstSegment.kind !== "provider_notice") {
       throw new Error("expected a provider_notice segment");
     }
     expect(firstSegment.title).toBe("Model changed");
 
     driver.patch({ messages: [after] });
 
-    const secondSegment = driver.result.current[0]?.segments[0];
-    expect(secondSegment.kind).toBe("provider_notice");
-    if (secondSegment.kind !== "provider_notice") {
+    const secondSegment = driver.result.current.at(0)?.segments.at(0);
+    if (
+      secondSegment === undefined ||
+      secondSegment.kind !== "provider_notice"
+    ) {
       throw new Error("expected a provider_notice segment");
     }
     expect(secondSegment.title).toBe("Model re-verified");
+  });
+
+  it("invalidates the cached provider_notice segment when only its noticeKind changes", () => {
+    // The kind is NOT a block identity: `provider_notice.upsert` replaces the
+    // whole `providerNotice` object for an existing `blockId`, so a repeat
+    // upsert can land a different kind on the same block. Everything else the
+    // turn signature hashes is pinned equal here - same `text` (so the
+    // ordinary length signature is blind), same `timestamp`, same `status`,
+    // same tone/title/message/details - which is the only shape that can
+    // reach the stale-cache path: two upserts inside one millisecond.
+    //
+    // Falsification: drop `notice.noticeKind` from `textBlockContentVersion`
+    // and the second read returns the CACHED segment, so this reads
+    // "fallback_applied" while the block says "fallback_wait_resumed".
+    const providerNoticeBlock = (noticeKind: ProviderNoticeKind) => ({
+      type: "text" as const,
+      blockId: "text-1",
+      text: "Notice.",
+      status: "completed" as const,
+      timestamp: 2001,
+      providerNotice: {
+        harnessId: "codex" as const,
+        noticeKind,
+        tone: "info" as const,
+        title: "Fallback",
+        message: null,
+        details: [],
+        metadata: null,
+      },
+    });
+    const before: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [providerNoticeBlock("fallback_applied")],
+    };
+    const after: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [providerNoticeBlock("fallback_wait_resumed")],
+    };
+    const input = renderedMessagesInput({ messages: [before] });
+
+    const driver = renderRenderedMessages(input);
+    const firstSegment = driver.result.current.at(0)?.segments.at(0);
+    if (firstSegment === undefined || firstSegment.kind !== "provider_notice") {
+      throw new Error("expected a provider_notice segment");
+    }
+    expect(firstSegment.noticeKind).toBe("fallback_applied");
+
+    driver.patch({ messages: [after] });
+
+    const secondSegment = driver.result.current.at(0)?.segments.at(0);
+    if (
+      secondSegment === undefined ||
+      secondSegment.kind !== "provider_notice"
+    ) {
+      throw new Error("expected a provider_notice segment");
+    }
+    expect(secondSegment.noticeKind).toBe("fallback_wait_resumed");
   });
 
   it("uses host-supplied blocksVersion to invalidate assistant turn cache", () => {
@@ -3908,6 +3975,7 @@ describe("useRenderedMessages head/tail partition", () => {
       message: "Claude is signed out. Reconnect your account to continue.",
       recoverable: true,
       code,
+      failure: null,
     };
   }
 
@@ -4249,6 +4317,7 @@ describe("useRenderedMessages turn.stopped", () => {
       message: "The provider stream ended unexpectedly.",
       recoverable: true,
       code: "PROVIDER_STREAM_ERROR",
+      failure: null,
     };
   }
 

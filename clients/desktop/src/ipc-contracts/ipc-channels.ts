@@ -353,7 +353,6 @@ export const RunnerHostInvoke = {
   browserViewRevealCapture: "runnerHost:browserView:revealCapture",
   browserViewStartRecording: "runnerHost:browserView:startRecording",
   browserViewStopRecording: "runnerHost:browserView:stopRecording",
-  browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
   // Clear cookies for one site (keychain refactor ticket 07): the user's
   // tile-menu action, which reports the emptied slice to the host. There is no
   // receiving half - universal-sign-in ticket 08 retired the host-driven

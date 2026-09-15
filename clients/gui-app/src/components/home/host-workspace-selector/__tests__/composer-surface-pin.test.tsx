@@ -161,7 +161,7 @@ function renderComposerPicker(
         readonly hostId: string;
         readonly hostClient: null;
       },
-  draftId: string | null = null,
+  draftId: string | null,
 ): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -217,7 +217,7 @@ afterEach(cleanup);
 
 describe("composer host picker writes a surface pin", () => {
   it("pins the picked host instead of moving the app-wide selection", () => {
-    renderComposerPicker({ kind: "active" });
+    renderComposerPicker({ kind: "active" }, null);
 
     pickBuildHost();
 
@@ -380,7 +380,7 @@ describe("composer host picker writes a surface pin", () => {
   });
 
   it("keys the pin per WINDOW, so both composer instances agree", () => {
-    renderComposerPicker({ kind: "active" });
+    renderComposerPicker({ kind: "active" }, null);
     pickBuildHost();
 
     // ONE key for this window, whichever composer instance wrote it: a
@@ -394,7 +394,7 @@ describe("composer host picker writes a surface pin", () => {
   });
 
   it("follows the effective host until a pick, then holds the pin through a failover", () => {
-    renderComposerPicker({ kind: "active" });
+    renderComposerPicker({ kind: "active" }, null);
     expect(chipLabel()).toBe("Home Mac");
 
     pickBuildHost();
@@ -403,17 +403,17 @@ describe("composer host picker writes a surface pin", () => {
     // Derivation moves the effective host; a PINNED surface keeps its own (D6).
     cleanup();
     mocks.effectiveHostId.current = "host-home";
-    renderComposerPicker({ kind: "active" });
+    renderComposerPicker({ kind: "active" }, null);
     expect(chipLabel()).toBe("Build Box");
   });
 
   it("re-points a FOLLOWING chip when the effective host moves", () => {
-    renderComposerPicker({ kind: "active" });
+    renderComposerPicker({ kind: "active" }, null);
     expect(chipLabel()).toBe("Home Mac");
 
     cleanup();
     mocks.effectiveHostId.current = "host-build";
-    renderComposerPicker({ kind: "active" });
+    renderComposerPicker({ kind: "active" }, null);
 
     expect(chipLabel()).toBe("Build Box");
     expect(pinnedHostId()).toBeUndefined();
@@ -423,7 +423,7 @@ describe("composer host picker writes a surface pin", () => {
     useSurfaceHostSelectionStore
       .getState()
       .setSelection(COMPOSER_KEY, "host-retired");
-    renderComposerPicker({ kind: "active" });
+    renderComposerPicker({ kind: "active" }, null);
 
     // "Local" is the pre-directory default for a FOLLOWING surface. The
     // shared picker keeps identity and status separate, then combines both in
@@ -435,11 +435,14 @@ describe("composer host picker writes a surface pin", () => {
   });
 
   it("writes nothing from the FIXED arm (§55: fork dialogs are inert)", () => {
-    renderComposerPicker({
-      kind: "fixed",
-      hostId: "host-home",
-      hostClient: null,
-    });
+    renderComposerPicker(
+      {
+        kind: "fixed",
+        hostId: "host-home",
+        hostClient: null,
+      },
+      null,
+    );
 
     const trigger = screen.getByRole("button", { name: /^Host:/ });
     fireEvent.click(trigger);

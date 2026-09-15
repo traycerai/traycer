@@ -34,6 +34,7 @@ function setWallpaper(
       intensity,
       tintWithAccent,
       name: "wallpaper.png",
+      curatedId: null,
     },
   });
 }

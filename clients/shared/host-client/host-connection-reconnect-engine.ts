@@ -167,20 +167,6 @@ export function isReopenableHostStreamClose(
 }
 
 /**
- * The cloud notifications feed alone has an entitlement refusal that a
- * transport retry cannot solve. Agent activity has no such tier branch.
- */
-export function isReopenableNotificationsStreamClose(
-  reason: StreamCloseReason | null,
-): boolean {
-  return (
-    isReopenableHostStreamClose(reason) &&
-    reason?.kind === "fatalError" &&
-    reason.details.code !== "FREE_TIER_NO_CLOUD_SYNC"
-  );
-}
-
-/**
  * One stream's reopen schedule. Independent of its siblings on purpose: these
  * are different logical streams over one host, and folding them onto a shared
  * timer would let a notifications refusal pace an agent-activity recovery.

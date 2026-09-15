@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/host-notifications";
-import { formatHostNotificationPresentation } from "@traycer/protocol/host/notifications/presentation";
+import {
+  formatHostNotificationPresentation,
+  FALLBACK_REASON_LABELS,
+  FALLBACK_RUNG_LABELS,
+  fallbackReasonLabel,
+  fallbackRungLabel,
+} from "@traycer/protocol/host/notifications/presentation";
+import { HOST_NOTIFICATION_STOPPED_REASONS } from "@traycer/protocol/host/notifications/payloads";
+import { FALLBACK_RUNG_KINDS } from "@traycer/protocol/host/fallback-policy";
 
 const BASE = {
   id: "notification-1",
@@ -427,5 +435,292 @@ describe("formatHostNotificationPresentation", () => {
       title: "Private task title",
       body: "Private chat title • Failed",
     });
+  });
+});
+
+// ─── FALLBACK_REASON_LABELS / fallbackReasonLabel totality (ticket 01) ────
+describe("FALLBACK_REASON_LABELS", () => {
+  it("is total over HOST_NOTIFICATION_STOPPED_REASONS - every reason has a non-empty label", () => {
+    for (const reason of HOST_NOTIFICATION_STOPPED_REASONS) {
+      const label = FALLBACK_REASON_LABELS[reason];
+      expect(typeof label).toBe("string");
+      expect(label.length).toBeGreaterThan(0);
+    }
+    // Same set, no extras and no gaps - `Record<HostNotificationStoppedReason,
+    // string>` already guarantees no gaps at compile time; this also catches
+    // a stray key that no longer names a live reason.
+    expect(Object.keys(FALLBACK_REASON_LABELS).sort()).toEqual(
+      [...HOST_NOTIFICATION_STOPPED_REASONS].sort(),
+    );
+  });
+
+  it("fallbackReasonLabel indexes the same map for every persisted AgentFailureReason", () => {
+    for (const reason of HOST_NOTIFICATION_STOPPED_REASONS) {
+      expect(fallbackReasonLabel(reason)).toBe(FALLBACK_REASON_LABELS[reason]);
+    }
+  });
+});
+
+// ─── FALLBACK_RUNG_LABELS / fallbackRungLabel ────────────────────────────
+//
+// The `Step` row of the fallback-applied notice used to render the step id
+// itself (`Rung: tier`). Nothing caught it because nothing pinned that row's
+// copy at all - so these assert the RULE that was violated, not the strings,
+// and would fail the same way for a fifth step pasted in as its own id.
+describe("FALLBACK_RUNG_LABELS", () => {
+  const RUNG_KEYS = [...FALLBACK_RUNG_KINDS, "manual"] as const;
+
+  it("is total over the ladder steps plus `manual`, with no gaps or strays", () => {
+    expect(Object.keys(FALLBACK_RUNG_LABELS).sort()).toEqual(
+      [...RUNG_KEYS].sort(),
+    );
+  });
+
+  it("never renders a step id as its own label", () => {
+    for (const rung of RUNG_KEYS) {
+      const label = fallbackRungLabel(rung);
+      expect(label.length).toBeGreaterThan(0);
+      // The exact defect: the value equal to the key.
+      expect(label).not.toBe(rung);
+      // And its signature. Every id in this vocabulary is snake_case or a
+      // bare lowercase word, so a label that is all-lowercase-with-no-space
+      // is an id that got pasted in, whatever it is named.
+      expect(label).toMatch(/[A-Z\s]/);
+      expect(label).not.toContain("_");
+    }
+  });
+
+  it("never uses the engine words the ux-surfaces vocabulary forbids", () => {
+    for (const rung of RUNG_KEYS) {
+      expect(fallbackRungLabel(rung).toLowerCase()).not.toMatch(
+        /\b(rung|ladder)\b/,
+      );
+    }
+  });
+});
+
+// ─── agentStoppedFailureStatus byte-identity pin (ticket 01) ──────────────
+//
+// `agentStoppedFailureStatus` is private; reached only through
+// `formatHostNotificationPresentation`'s `body` for a `chat` payload with
+// `outcome: "errored"`. This pins its EXACT output for every reason in
+// `HOST_NOTIFICATION_STOPPED_REASONS`, with and without provider attribution
+// where the source varies by it, so a future edit to the new
+// `FALLBACK_REASON_LABELS` map (a NOUN PHRASE, deliberately a second map) can
+// never be mistaken for touching this one (SENTENCE-shaped, provider-aware,
+// "must not change").
+function erroredChatEntry(
+  reason: string,
+  providerId: string | undefined,
+): HostNotificationEntry {
+  return {
+    ...BASE,
+    kind: "agent.stopped",
+    severity: "failure",
+    outcome: "errored",
+    payload: {
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      agentName: "Long refactor",
+      taskTitle: "Notification reliability",
+      outcome: "errored",
+      reason,
+      ...(providerId === undefined ? {} : { providerId }),
+    },
+  };
+}
+
+describe("agentStoppedFailureStatus byte-identity pins", () => {
+  it("auth", () => {
+    expect(
+      formatHostNotificationPresentation(erroredChatEntry("auth", undefined))
+        .body,
+    ).toBe("Long refactor • Provider is signed out. Reconnect to continue.");
+    expect(
+      formatHostNotificationPresentation(erroredChatEntry("auth", "codex"))
+        .body,
+    ).toBe("Long refactor • Codex is signed out. Reconnect to continue.");
+    // Reasonix's auth sentence names the real fix (no account to reconnect).
+    expect(
+      formatHostNotificationPresentation(erroredChatEntry("auth", "reasonix"))
+        .body,
+    ).toBe(
+      "Long refactor • Reasonix has no usable API key configured. Run reasonix setup to continue.",
+    );
+  });
+
+  it("rate_limit", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("rate_limit", undefined),
+      ).body,
+    ).toBe("Long refactor • Rate limit reached");
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("rate_limit", "codex"),
+      ).body,
+    ).toBe("Long refactor • Codex rate limit reached");
+  });
+
+  it("billing", () => {
+    expect(
+      formatHostNotificationPresentation(erroredChatEntry("billing", undefined))
+        .body,
+    ).toBe("Long refactor • Provider billing issue");
+    expect(
+      formatHostNotificationPresentation(erroredChatEntry("billing", "codex"))
+        .body,
+    ).toBe("Long refactor • Codex billing issue");
+  });
+
+  it("model_unavailable - no provider variant", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("model_unavailable", undefined),
+      ).body,
+    ).toBe("Long refactor • Model unavailable");
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("model_unavailable", "codex"),
+      ).body,
+    ).toBe("Long refactor • Model unavailable");
+  });
+
+  it("provider_unavailable", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("provider_unavailable", undefined),
+      ).body,
+    ).toBe("Long refactor • Provider is temporarily unavailable");
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("provider_unavailable", "codex"),
+      ).body,
+    ).toBe("Long refactor • Codex is temporarily unavailable");
+  });
+
+  it("provider_connection_failed", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("provider_connection_failed", undefined),
+      ).body,
+    ).toBe("Long refactor • Provider connection failed");
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("provider_connection_failed", "codex"),
+      ).body,
+    ).toBe("Long refactor • Connection to Codex failed");
+  });
+
+  it("context_exhausted - provider-neutral even with a known provider", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("context_exhausted", undefined),
+      ).body,
+    ).toBe("Long refactor • Context limit reached");
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("context_exhausted", "codex"),
+      ).body,
+    ).toBe("Long refactor • Context limit reached");
+  });
+
+  it("request_rejected", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("request_rejected", undefined),
+      ).body,
+    ).toBe("Long refactor • Provider rejected the request");
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("request_rejected", "codex"),
+      ).body,
+    ).toBe("Long refactor • Codex rejected the request");
+  });
+
+  it("turn_start_timeout - no provider variant", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("turn_start_timeout", undefined),
+      ).body,
+    ).toBe("Long refactor • Provider did not start in time");
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("turn_start_timeout", "codex"),
+      ).body,
+    ).toBe("Long refactor • Provider did not start in time");
+  });
+
+  it("missing_terminal_event - no provider variant", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("missing_terminal_event", undefined),
+      ).body,
+    ).toBe("Long refactor • Provider stopped responding");
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("missing_terminal_event", "codex"),
+      ).body,
+    ).toBe("Long refactor • Provider stopped responding");
+  });
+
+  it("background_work_failed - no provider variant", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("background_work_failed", undefined),
+      ).body,
+    ).toBe("Long refactor • Background work stopped");
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("background_work_failed", "codex"),
+      ).body,
+    ).toBe("Long refactor • Background work stopped");
+  });
+
+  it("session_budget - no provider variant", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("session_budget", undefined),
+      ).body,
+    ).toBe("Long refactor • Session limit reached");
+    // Provider-neutral BY DESIGN, like `context_exhausted` above: the limit is
+    // a property of the conversation, not of the account or the vendor, and
+    // naming the provider would re-suggest the account-level reading that made
+    // this a `rate_limit` in the first place.
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("session_budget", "codex"),
+      ).body,
+    ).toBe("Long refactor • Session limit reached");
+  });
+
+  it("an unknown/null reason falls through to the generic 'Failed'", () => {
+    expect(
+      formatHostNotificationPresentation(
+        erroredChatEntry("something_new_and_unrecognized", undefined),
+      ).body,
+    ).toBe("Long refactor • Failed");
+  });
+
+  it("every HOST_NOTIFICATION_STOPPED_REASONS member is covered by name above", () => {
+    // Belt-and-suspenders against a reason added to the taxonomy without a
+    // matching pin here - the individual `it`s above are what actually pin
+    // the copy, but this fails loudly if the enum grows unnoticed.
+    const pinned = new Set([
+      "auth",
+      "rate_limit",
+      "billing",
+      "model_unavailable",
+      "provider_unavailable",
+      "provider_connection_failed",
+      "context_exhausted",
+      "request_rejected",
+      "turn_start_timeout",
+      "missing_terminal_event",
+      "background_work_failed",
+      "session_budget",
+    ]);
+    expect(new Set(HOST_NOTIFICATION_STOPPED_REASONS)).toEqual(pinned);
   });
 });

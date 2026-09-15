@@ -535,66 +535,6 @@ export type LoginImportResult =
    */
   | { readonly status: "cancelled" };
 
-export type BrowserViewConsoleLevel =
-  | "log"
-  | "info"
-  | "warning"
-  | "error"
-  | "debug"
-  | "trace";
-
-export interface BrowserViewConsoleEntry {
-  readonly id: string;
-  readonly timestamp: number;
-  readonly source: string;
-  readonly level: BrowserViewConsoleLevel;
-  readonly text: string;
-  readonly url: string | null;
-  readonly lineNumber: number | null;
-  readonly columnNumber: number | null;
-}
-
-export type BrowserViewNetworkStatus = "pending" | "finished" | "failed";
-
-export interface BrowserViewNetworkEntry {
-  readonly id: string;
-  readonly requestId: string;
-  readonly url: string;
-  readonly method: string;
-  readonly status: BrowserViewNetworkStatus;
-  readonly statusCode: number | null;
-  readonly statusText: string | null;
-  readonly mimeType: string | null;
-  readonly startedAt: number;
-  readonly completedAt: number | null;
-  readonly durationMs: number | null;
-  readonly failureText: string | null;
-}
-
-export interface BrowserViewDebugSnapshotData {
-  readonly consoleEntries: readonly BrowserViewConsoleEntry[];
-  readonly networkEntries: readonly BrowserViewNetworkEntry[];
-  /**
-   * The page's interactive shape - roles and accessible names, no values - so a
-   * caller reading this snapshot can tell what is on the page and what it is
-   * called without a second round trip. Empty when the tree could not be read
-   * (a detached debugger, a page mid-navigation), which is a normal outcome
-   * rather than a failure of the whole snapshot.
-   */
-  readonly accessibilityNodes: readonly BrowserViewAccessibilityNode[];
-}
-
-/** One row of {@link BrowserViewDebugSnapshotData.accessibilityNodes}. */
-export interface BrowserViewAccessibilityNode {
-  readonly role: string;
-  readonly name: string;
-  readonly interactive: boolean;
-  readonly depth: number;
-}
-
-export interface BrowserViewDebugSnapshot
-  extends BrowserViewTileKey, BrowserViewDebugSnapshotData {}
-
 export interface BrowserViewCapturePageResult extends BrowserViewTileKey {
   readonly mediaType: string;
   readonly base64: string;
@@ -897,9 +837,6 @@ export interface BrowserViewBridge {
   onRecordingStopped(listener: (change: BrowserViewRecordingStopped) => void): {
     dispose: () => void;
   };
-  getDebugSnapshot(
-    input: BrowserViewTileKey,
-  ): Promise<BrowserViewDebugSnapshot>;
   startAnnotation(
     input: BrowserAnnotationStartInput,
   ): Promise<BrowserAnnotationStartResult>;

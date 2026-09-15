@@ -151,7 +151,7 @@ class ControlledSession implements IStreamSession {
   }
 
   emitClosed(reason: StreamCloseReason): void {
-    this.statusChangeHandler?.("closed", reason);
+    this.statusChangeHandler?.("closed", reason, null);
   }
 
   emitServerFrame(envelope: StreamFrameEnvelope): void {
@@ -502,7 +502,6 @@ describe("cloud notifications store", () => {
       client,
       null,
       null,
-      null,
     );
 
     expect(client.subscribedMethods).toEqual([
@@ -530,7 +529,6 @@ describe("cloud notifications store", () => {
       client,
       null,
       null,
-      null,
     );
 
     client.sessions[0].emitClosed(fatalClose("INCOMPATIBLE"));
@@ -543,35 +541,11 @@ describe("cloud notifications store", () => {
     close();
   });
 
-  it("reports a terminal entitlement denial to the session owner", () => {
-    vi.useFakeTimers();
-    const client = new ControlledWsStreamClient();
-    const onEntitlementDenied = vi.fn();
-    const close = openCloudNotificationsStream(
-      reconnectEngine,
-      client,
-      null,
-      onEntitlementDenied,
-      null,
-    );
-
-    client.sessions[0].emitClosed(fatalClose("FREE_TIER_NO_CLOUD_SYNC"));
-
-    expect(onEntitlementDenied).toHaveBeenCalledTimes(1);
-    expect(useCloudNotificationsStore.getState().connectionState).toBe(
-      "unavailable",
-    );
-    vi.advanceTimersByTime(2 * HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
-    expect(client.sessions).toHaveLength(1);
-    close();
-  });
-
   it("parses authoritative frames and remains unavailable before its first snapshot", () => {
     const client = new ControlledWsStreamClient();
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
-      null,
       null,
       null,
     );
@@ -621,7 +595,6 @@ describe("cloud notifications store", () => {
       reconnectEngine,
       client,
       null,
-      null,
       onSnapshot,
     );
     const row = cloudRow("entry-a", 4, "host-a");
@@ -645,7 +618,6 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
-      null,
       null,
       onSnapshot,
     );
@@ -684,7 +656,6 @@ describe("cloud notifications store", () => {
       oldClient,
       null,
       null,
-      null,
     );
     const oldSession = oldClient.sessions[0];
 
@@ -693,7 +664,6 @@ describe("cloud notifications store", () => {
     const closeReplacement = openCloudNotificationsStream(
       reconnectEngine,
       replacementClient,
-      null,
       null,
       null,
     );

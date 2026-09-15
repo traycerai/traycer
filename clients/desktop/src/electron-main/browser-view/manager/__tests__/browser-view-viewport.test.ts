@@ -77,6 +77,8 @@ function createEntry(webContents: BrowserViewWebContents): BrowserViewEntry {
     },
     certificateError: null,
     debugSession: null,
+    seedLease: null,
+    agentCdpLease: null,
     annotationSession: null,
     devToolsWindow: null,
     rendererResetPending: false,
@@ -85,6 +87,7 @@ function createEntry(webContents: BrowserViewWebContents): BrowserViewEntry {
     currentFaviconUrl: null,
     declaredFaviconUrl: null,
     emulation: null,
+    emulationLease: null,
     previewWindow: null,
     recording: null,
     closePromise: null,
@@ -109,6 +112,42 @@ function viewportInput(): BrowserViewElectronViewport {
   };
 }
 
+function createAcknowledgingViewport(
+  entries: BrowserViewEntryRegistry<BrowserViewEntry>,
+  annotations: BrowserViewAnnotationHost,
+  order: string[],
+): BrowserViewViewport {
+  let viewport: BrowserViewViewport;
+  viewport = new BrowserViewViewport(
+    entries,
+    annotations,
+    (windowId, channel, payload) => {
+      if (channel !== RunnerHostEvent.browserViewGuestViewportRequested)
+        return true;
+      if (
+        typeof payload !== "object" ||
+        payload === null ||
+        !("requestId" in payload) ||
+        typeof payload.requestId !== "string" ||
+        !("registrationId" in payload) ||
+        typeof payload.registrationId !== "string" ||
+        !("revision" in payload) ||
+        typeof payload.revision !== "number"
+      )
+        return false;
+      order.push("presentation");
+      viewport.reportPresentation(windowId, {
+        requestId: payload.requestId,
+        registrationId: payload.registrationId,
+        revision: payload.revision,
+        applied: true,
+      });
+      return true;
+    },
+  );
+  return viewport;
+}
+
 describe("BrowserViewViewport", () => {
   it("preserves the first geometry script error instead of masking it in rollback", async () => {
     const entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
@@ -120,12 +159,7 @@ describe("BrowserViewViewport", () => {
       debugSessions,
       send: () => false,
     });
-    const viewport = new BrowserViewViewport(
-      entries,
-      annotations,
-      debugSessions,
-      () => false,
-    );
+    const viewport = new BrowserViewViewport(entries, annotations, () => false);
     const entry = createEntry(new RejectingWebContents());
     entries.register(entry);
 
@@ -151,36 +185,10 @@ describe("BrowserViewViewport", () => {
     };
     const webContents = new ReadbackWebContents(readback);
     const order: string[] = [];
-    let viewport: BrowserViewViewport;
-    viewport = new BrowserViewViewport(
-      entries,
-      annotations,
-      debugSessions,
-      (windowId, channel, payload) => {
-        if (channel !== RunnerHostEvent.browserViewGuestViewportRequested)
-          return true;
-        if (
-          typeof payload !== "object" ||
-          payload === null ||
-          !("requestId" in payload) ||
-          typeof payload.requestId !== "string" ||
-          !("registrationId" in payload) ||
-          typeof payload.registrationId !== "string" ||
-          !("revision" in payload) ||
-          typeof payload.revision !== "number"
-        )
-          return false;
-        order.push("presentation");
-        viewport.reportPresentation(windowId, {
-          requestId: payload.requestId,
-          registrationId: payload.registrationId,
-          revision: payload.revision,
-          applied: true,
-        });
-        return true;
-      },
-    );
+    const viewport = createAcknowledgingViewport(entries, annotations, order);
     const entry = createEntry(webContents);
+    // Only a tab something holds a debugger lease on has an override to clear.
+    await debugSessions.ensure(entry).acquire().ready();
     const input = {
       ...viewportInput(),
       intent: { mode: "fixed", width: 412, height: 732 },
@@ -203,5 +211,35 @@ describe("BrowserViewViewport", () => {
         (command) => command.method === "Emulation.setDeviceMetricsOverride",
       ),
     ).toBe(false);
+  });
+
+  it("fits a tab with no debugger lease without attaching one", async () => {
+    const entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
+    const annotations = new BrowserViewAnnotationHost({
+      entries,
+      debugSessions: new BrowserViewDebugSessions({
+        onDetached: () => undefined,
+      }),
+      send: () => false,
+    });
+    const readback: BrowserViewportGeometry = {
+      width: 800,
+      height: 600,
+      dpr: 1,
+    };
+    const webContents = new ReadbackWebContents(readback);
+    const viewport = createAcknowledgingViewport(entries, annotations, []);
+    const entry = createEntry(webContents);
+    entries.register(entry);
+
+    await expect(
+      viewport.apply(entry, {
+        ...viewportInput(),
+        intent: { mode: "fit" },
+        geometry: readback,
+      }),
+    ).resolves.toEqual(readback);
+    expect(webContents.debugger.attached).toBe(false);
+    expect(webContents.debugger.commands).toEqual([]);
   });
 });

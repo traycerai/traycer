@@ -12,9 +12,15 @@ import {
 
 export const APPEARANCE_INPUT_MAX_BYTES = 20 * 1024 * 1024;
 const APPEARANCE_INPUT_MAX_PIXELS = 50_000_000;
-const APPEARANCE_WALLPAPER_MAX_EDGE = 2560;
+export const APPEARANCE_WALLPAPER_MAX_EDGE = 2560;
 /** The start-page wallpaper never leaves this machine, so it can be generous. */
-const MAX_START_PAGE_WALLPAPER_BYTES = 4 * 1024 * 1024;
+export const MAX_START_PAGE_WALLPAPER_BYTES = 4 * 1024 * 1024;
+/** Header-parsed, so reading them never decodes a bitmap. */
+export interface AppearanceImageDimensions {
+  readonly width: number;
+  readonly height: number;
+}
+
 export interface ProcessedAppearanceImage {
   readonly blob: Blob;
   readonly width: number;
@@ -125,7 +131,14 @@ export async function yieldImageWork(signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
 }
 
-export async function validateAppearanceImage(blob: Blob): Promise<void> {
+/**
+ * Returns the dimensions it validated, so a caller deciding whether bytes can
+ * be stored verbatim (`applyCuratedStartPageWallpaper`) reads the header once
+ * rather than parsing the whole blob a second time.
+ */
+export async function validateAppearanceImage(
+  blob: Blob,
+): Promise<AppearanceImageDimensions> {
   if (blob.size === 0 || blob.size > APPEARANCE_INPUT_MAX_BYTES) {
     throw new Error("Choose an image no larger than 20 MiB.");
   }
@@ -142,7 +155,7 @@ export async function validateAppearanceImage(blob: Blob): Promise<void> {
   // allocates anything, so a decompression-bomb image is rejected without
   // ever being decoded.
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  let dimensions: { readonly width: number; readonly height: number };
+  let dimensions: AppearanceImageDimensions;
   try {
     // The signature sniff above only reads the first 12 bytes: a truncated
     // or otherwise corrupt file can still pass it, and `imageSize` throws
@@ -155,12 +168,10 @@ export async function validateAppearanceImage(blob: Blob): Promise<void> {
     );
   }
   validateDimensions(dimensions);
+  return dimensions;
 }
 
-function validateDimensions(image: {
-  readonly width: number;
-  readonly height: number;
-}): void {
+function validateDimensions(image: AppearanceImageDimensions): void {
   if (
     !Number.isSafeInteger(image.width) ||
     !Number.isSafeInteger(image.height) ||

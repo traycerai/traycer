@@ -26,6 +26,7 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
+  --reasoning-max-accent: oklch(0.62 0.19 295);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -83,6 +84,7 @@
     --border: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 10%));
     --input: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 15%));
     --ring: light-dark(oklch(0.708 0 0), oklch(0.556 0 0));
+    --reasoning-max-accent: oklch(0.62 0.19 295);
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);

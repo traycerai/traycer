@@ -77,7 +77,9 @@ describe("live chat completion acknowledgements", () => {
     startTurn(rendererB.callbacks(), "turn-1");
 
     vi.setSystemTime(10);
-    rendererB.callbacks().onConnectionStatus("closed", fatalCloseReason());
+    rendererB
+      .callbacks()
+      .onConnectionStatus("closed", fatalCloseReason(), null);
     expect(rendererB.handle.store.getState().activeTurn).toBeNull();
     expect(
       rendererB.notifications.getState().byId[FAILURE_ID].readAt,
@@ -90,7 +92,9 @@ describe("live chat completion acknowledgements", () => {
     rendererB.handle.store.getState().retry();
     startTurn(rendererB.callbacks(), "turn-1");
     vi.setSystemTime(30);
-    rendererB.callbacks().onConnectionStatus("closed", fatalCloseReason());
+    rendererB
+      .callbacks()
+      .onConnectionStatus("closed", fatalCloseReason(), null);
     expect(
       rendererB.notifications.getState().byId[FAILURE_ID].readAt,
     ).toBeNull();

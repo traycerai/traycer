@@ -71,7 +71,7 @@ describe("fetchableAccumulatedChanges", () => {
 
   // An ASCII-authored PDF is capturable (it IS text), so its row carries a
   // digest and every other rule here would let it through - downloading a
-  // whole document whose section renders `PDF_FILE_DIFF_COPY` no matter what
+  // whole document whose section renders `documentFileDiffCopy` no matter what
   // the bytes say, and letting one discarded fetch fail the entire bundle.
   it("does not ask for a PDF, whose section never reads the bytes", () => {
     expect(
@@ -80,6 +80,20 @@ describe("fetchableAccumulatedChanges", () => {
         [
           row({ filePath: "/a.ts", digest: "d-a" }),
           row({ filePath: "/docs/report.pdf", digest: "d-pdf" }),
+        ],
+      ),
+    ).toEqual([{ filePath: "/a.ts", digest: "d-a" }]);
+  });
+
+  // The gate is the document union, not the PDF extension - a Word document
+  // renders from its row alone just the same.
+  it("does not ask for a Word document, whose section never reads the bytes", () => {
+    expect(
+      fetchableAccumulatedChanges(
+        ["/a.ts", "/docs/brief.docx"],
+        [
+          row({ filePath: "/a.ts", digest: "d-a" }),
+          row({ filePath: "/docs/brief.docx", digest: "d-docx" }),
         ],
       ),
     ).toEqual([{ filePath: "/a.ts", digest: "d-a" }]);
@@ -97,6 +111,18 @@ describe("contentlessAccumulatedChangePaths", () => {
         ],
       ),
     ).toEqual(["/docs/report.pdf"]);
+  });
+
+  it("names the Word document rows the bundle still has to render", () => {
+    expect(
+      contentlessAccumulatedChangePaths(
+        ["/a.ts", "/docs/brief.docx"],
+        [
+          row({ filePath: "/a.ts", digest: "d-a" }),
+          row({ filePath: "/docs/brief.docx", digest: "d-docx" }),
+        ],
+      ),
+    ).toEqual(["/docs/brief.docx"]);
   });
 
   it("does not name a PDF that has left the accumulated set", () => {
@@ -331,6 +357,29 @@ describe("mergeCumulativeDiffs", () => {
 
     expect(result.resolved).toEqual([
       { filePath: "/docs/report.pdf", beforeContent: null, afterContent: null },
+      { filePath: "/a.ts", beforeContent: "x\n", afterContent: "y\n" },
+    ]);
+    expect(result.isLoading).toBe(false);
+  });
+
+  it("keeps a Word document's section with null contents, in the tile's order", () => {
+    const result = mergeCumulativeDiffs({
+      filePaths: ["/docs/brief.docx", "/a.ts"],
+      inline: [],
+      fetchable,
+      contentless: ["/docs/brief.docx"],
+      fetches: [
+        {
+          isLoading: false,
+          isError: false,
+          data: { stale: false, beforeContent: "x\n", afterContent: "y\n" },
+        },
+      ],
+      undeliveredPaths: 0,
+    });
+
+    expect(result.resolved).toEqual([
+      { filePath: "/docs/brief.docx", beforeContent: null, afterContent: null },
       { filePath: "/a.ts", beforeContent: "x\n", afterContent: "y\n" },
     ]);
     expect(result.isLoading).toBe(false);

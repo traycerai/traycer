@@ -12,7 +12,7 @@ import {
 import type { ConflictResult } from "@/lib/keybindings/conflicts";
 
 const NO_MODIFIER_MESSAGE =
-  "Global shortcuts need at least one modifier key (⌘, Ctrl, Shift, or Alt).";
+  "Global shortcuts need at least one modifier key, such as Ctrl or Shift.";
 
 /**
  * Result of validating a just-captured chord: the conflict message to show,

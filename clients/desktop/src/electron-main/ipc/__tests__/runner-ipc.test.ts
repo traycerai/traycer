@@ -808,7 +808,6 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.browserViewCancelAnnotation,
           RunnerHostInvoke.browserViewSetAnnotationTargetChatLabel,
           RunnerHostInvoke.browserViewAnnotationAttachResult,
-          RunnerHostInvoke.browserViewGetDebugSnapshot,
           // Keychain refactor tickets 07 and 08: the tile-menu clear-site and
           // the whole-jar forget. The host-driven eviction of one site went with
           // the `primaryProfileEvict` frame (universal-sign-in ticket 08).

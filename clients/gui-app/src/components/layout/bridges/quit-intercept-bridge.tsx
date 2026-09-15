@@ -1,3 +1,4 @@
+import { flushTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Dialog,
@@ -168,6 +169,7 @@ export function QuitInterceptBridge(): null | React.ReactElement {
       void Promise.allSettled([
         flushActiveDesktopPerWindowProjection(),
         drainDesktopTabsPersistence(),
+        flushTabRecoveryHistory(),
         fileEditRuntimeRegistry.flushRecovery(),
       ])
         .then(reply)

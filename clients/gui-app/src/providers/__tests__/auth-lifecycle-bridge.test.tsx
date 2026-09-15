@@ -7,6 +7,7 @@ import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import {
@@ -135,6 +136,13 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // travel between the cases below and the assertions would stop meaning
     // anything.
     useSettingsHostScopeStore.getState().setScopedHostId(null);
+    // This one PERSISTS, so it needs both halves and in this order: the store
+    // first, then the storage the persist middleware just rewrote. Two cases
+    // below set it and rely on the bridge's own transition to clear it - a
+    // case that fails or exits before that transition would otherwise hand the
+    // next one a pick, and the sign-out assertions would pass on a leak.
+    useWatchHostStore.setState({ scopedHostId: null });
+    window.localStorage.clear();
     useAddHostDialogStore.getState().closeDialog();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useProvidersFocusStore.getState().clearFocusTab();
@@ -273,6 +281,41 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+  });
+
+  it("drops the shared watch-host pick on user-switch", () => {
+    // Same account-owned rule as the Settings scope, and this one PERSISTS -
+    // left standing it survives the restart into the next sign-in and opens
+    // both watching surfaces on a host the new account has never seen.
+    useWatchHostStore.getState().setScopedHostId("host-owned-by-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useWatchHostStore.getState().scopedHostId).toBeNull();
+  });
+
+  it("drops the shared watch-host pick on sign-out", () => {
+    useWatchHostStore.getState().setScopedHostId("host-owned-by-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-out", null, null);
+    });
+
+    expect(useWatchHostStore.getState().scopedHostId).toBeNull();
   });
 
   it("closes the Add-host dialog and drops its fleet snapshot on user-switch", () => {

@@ -91,6 +91,7 @@ const BROWSER_SCOPED_CHORDS: readonly BrowserViewReservedChord[] = [
  */
 const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
   "app.palette.open",
+  "tab.reopen",
   "epic.close",
   "tab.next",
   "tab.prev",

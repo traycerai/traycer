@@ -1,3 +1,7 @@
+import {
+  pruneRecoveryTiles,
+  withoutTabRecovery,
+} from "@/lib/tab-recovery/history";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useNavigate,
@@ -540,7 +544,6 @@ export function useEpicRouteSynchronization(
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (!recordSweepRuns) return;
-    if (canvas.root === null) return;
     const liveIds = new Set(records.map((record) => record.id));
     const hasLiveRecord = (id: string) => liveIds.has(id);
     // VIEWER-OWNED rows only, matching `usePublishedChatFallbackRef`'s own
@@ -555,6 +558,32 @@ export function useEpicRouteSynchronization(
         .map((chat) => chat.identity.chatId),
     );
     const isCloudKnown = (id: string) => cloudKnownIds.has(id);
+    const recordContext = {
+      hasLiveRecord,
+      isCloudKnown,
+      recordListAuthorizesChatAbsence: chatAbsenceAuthoritative,
+    };
+    const pendingClosedInstances = new Set(
+      Object.values(useEpicCanvasStore.getState().closedTilePayloadsByTabId)
+        .flatMap((payloads) => Object.entries(payloads ?? {}))
+        .flatMap(([instanceId, payload]) =>
+          payload?.pendingCreate ? [instanceId] : [],
+        ),
+    );
+    // Apply the same authoritative verdict to older closed instances too.
+    // Once the task session is released, missing records are no longer proof
+    // of deletion, so recovery must forget them while that proof is available.
+    pruneRecoveryTiles(
+      (tile, ownerEpicId) =>
+        ownerEpicId === epicId &&
+        !pendingClosedInstances.has(tile.instanceId) &&
+        !isTileRefRecordLive(
+          tile,
+          pendingCreateArtifactIds,
+          recordContext,
+          activeHostId,
+        ),
+    );
     for (const pane of collectPanes(canvas.root)) {
       for (const instanceId of pane.tabInstanceIds) {
         const tab = canvas.tilesByInstanceId[instanceId];
@@ -563,17 +592,15 @@ export function useEpicRouteSynchronization(
           isTileRefRecordLive(
             tab,
             pendingCreateArtifactIds,
-            {
-              hasLiveRecord,
-              isCloudKnown,
-              recordListAuthorizesChatAbsence: chatAbsenceAuthoritative,
-            },
+            recordContext,
             activeHostId,
           )
         ) {
           continue;
         }
-        closeCanvasTab(tabId, pane.id, tab.instanceId);
+        withoutTabRecovery(() =>
+          closeCanvasTab(tabId, pane.id, tab.instanceId),
+        );
       }
     }
   }, [

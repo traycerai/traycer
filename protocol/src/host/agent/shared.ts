@@ -6,6 +6,10 @@ import {
   type AgentMode,
 } from "@traycer/protocol/common/schemas";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import {
+  agentSessionLastExitSchema,
+  agentSessionStateSchema,
+} from "@traycer/protocol/host/agent-session-state";
 import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
@@ -866,8 +870,53 @@ export const agentRunConfigSchema = z.object({
 });
 export type AgentRunConfig = z.infer<typeof agentRunConfigSchema>;
 
-export const agentSummarySchema = releasedAgentSummarySchema.extend({
+/**
+ * The `agent.list@9.0` row: the released base plus `runConfig`.
+ *
+ * Suffixed because `@9.1` moved the head off it, and NOT because it is an id
+ * freeze - it deliberately still extends the LIVE `releasedAgentSummarySchema`,
+ * so a new harness id reaches a `@9.0` caller exactly as it did before. Major 9
+ * is one line: both minors are served by the same host and a caller on either
+ * must see the same vendors. The suffixed copies ABOVE this one are the other
+ * kind - each pins a harness enum a released major shipped - so do not read
+ * this as one of them and do not freeze its enum.
+ */
+export const agentSummarySchemaV90 = releasedAgentSummarySchema.extend({
   runConfig: agentRunConfigSchema.nullable().default(null),
+});
+export type AgentSummaryV90 = z.infer<typeof agentSummarySchemaV90>;
+
+// ── `agent.list@9.1`: is a silent peer asleep, or over? ────────────────────
+//
+// `active` answers whether an agent is executing RIGHT NOW, and nothing on
+// this row answered what a `false` means. An orchestrator enumerating its
+// peers saw the same row for an agent between turns, an agent whose session
+// was idle-reaped, and an agent that was archived - so a reaped peer read as
+// dead and stopped being addressed, which is the misreading
+// `agent-session-state.ts` exists to fix. A reaped agent resumes on the next
+// message; the caller just had no way to know that.
+//
+// THE CANONICAL NAME STAYS ON THE HEAD, which is the rule
+// `head-names-canonical-alias.test.ts` enforces: writing the new row under a
+// suffix would leave `agentSummarySchema` exported, structurally plausible and
+// backing nothing, while every import site still read like the live line.
+//
+// Two plain added keys, so a `@9.0` caller's schema strips them and the eight
+// major-9 downgrade bridges keep working unchanged - each reparses through a
+// frozen summary that drops the pair on the way out.
+export const agentSummarySchema = agentSummarySchemaV90.extend({
+  /**
+   * The agent's session as its BINDING host knows it, or `null` when this
+   * host cannot know - a cross-host row, a GUI chat (which has no PTY session
+   * to be asleep), or a record written before the facet existed.
+   */
+  sessionState: agentSessionStateSchema.nullable(),
+  /**
+   * Why the last session ended, for a `sleeping` agent. Display metadata: all
+   * four reasons resume identically, so a caller must never branch on it to
+   * decide whether the agent can be addressed.
+   */
+  lastExit: agentSessionLastExitSchema.nullable(),
 });
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
 
@@ -1021,6 +1070,16 @@ export const listAgentsResponseSchemaV80 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV80),
 });
 export type ListAgentsResponseV80 = z.infer<typeof listAgentsResponseSchemaV80>;
+
+/**
+ * The `agent.list@9.0` response, frozen off the canonical one the head now
+ * carries. See {@link agentSummarySchemaV90}: the suffix marks the MINOR that
+ * moved past it, not a pinned harness enum.
+ */
+export const listAgentsResponseSchemaV90 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV90),
+});
+export type ListAgentsResponseV90 = z.infer<typeof listAgentsResponseSchemaV90>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

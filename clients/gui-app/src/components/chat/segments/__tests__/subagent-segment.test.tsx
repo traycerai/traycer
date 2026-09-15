@@ -933,6 +933,7 @@ describe("<SubagentSegment /> promoted feed", () => {
             id: "notice-1",
             kind: "provider_notice",
             status: "completed",
+            noticeKind: "model_rerouted",
             tone: "warning",
             title: "Model changed",
             message: "Codex switched from gpt-5 to gpt-5-safe.",

@@ -142,7 +142,9 @@ function scopeFrom(
   };
 }
 
-function makeRunnerHost(hostManagement?: IHostManagement): IRunnerHost {
+function makeRunnerHost(
+  hostManagement: IHostManagement | undefined,
+): IRunnerHost {
   return new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
@@ -159,7 +161,7 @@ function makeRunnerHost(hostManagement?: IHostManagement): IRunnerHost {
   });
 }
 
-function renderPanel(hostManagement?: IHostManagement): void {
+function renderPanel(hostManagement: IHostManagement | undefined): void {
   render(
     <QueryClientProvider
       client={
@@ -184,7 +186,7 @@ function renderPanelPersistent(): { rerender: () => void } {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  const runnerHost = makeRunnerHost();
+  const runnerHost = makeRunnerHost(undefined);
   // A fresh element on every call, not a captured/reused one: React bails out
   // of re-rendering a subtree entirely when the SAME element reference is
   // passed to `rerender` twice (`current.memoizedProps === pendingProps`), so
@@ -299,7 +301,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     await waitFor(async () => {
       expect(await editNameDisabled()).toBe(true);
@@ -348,7 +350,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
       hostBindingMock.current = { hostClient: fixture.client };
       scopeOverrides.current = scopeFrom("host-a", fixture);
-      renderPanel();
+      renderPanel(undefined);
 
       // Let the initial read settle before asserting the negative — otherwise
       // a false "not disabled" could just mean the query has not resolved yet.
@@ -373,7 +375,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     await waitFor(async () => {
       expect(await editNameDisabled()).toBe(true);
@@ -412,7 +414,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     // Healthy read: the released behaviour, gate HOLDS (same as (d)).
     await waitFor(async () => {
@@ -449,7 +451,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     // The first, healthy read: active, gate HOLDS. Restart is refused, so it
     // cannot yet be opened — proving the eventual open below is caused by the
@@ -842,7 +844,7 @@ describe("HostOverviewPanel — the WIRE leg's freshness is its own read's insta
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
       hostBindingMock.current = { hostClient: fixture.client };
       scopeOverrides.current = scopeFrom("host-a", fixture);
-      renderPanel();
+      renderPanel(undefined);
 
       // Baseline: the attempt is live and holds the gate.
       await waitFor(() => {

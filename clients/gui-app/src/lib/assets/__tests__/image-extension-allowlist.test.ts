@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DOCUMENT_ASSET_LABELS,
+  documentAssetKindOf,
+  isDocumentAssetPath,
   isImageAssetPath,
-  isPdfAssetPath,
   isPreviewableAssetPath,
   isSvgAssetPath,
 } from "../image-extension-allowlist";
@@ -30,18 +32,46 @@ describe("image extension allowlist", () => {
     expect(isSvgAssetPath("icons/mark")).toBe(false);
   });
 
-  it("routes PDF paths separately from images", () => {
-    expect(isPdfAssetPath("docs/report.pdf")).toBe(true);
-    expect(isPdfAssetPath("docs/report.PDF")).toBe(true);
-    // PDFs are NOT images - the two route to different renderers.
+  // Documents are NOT images - each format routes to its OWN renderer.
+  it("routes documents separately from images", () => {
     expect(isImageAssetPath("docs/report.pdf")).toBe(false);
-    expect(isPdfAssetPath("docs/report.pdf.txt")).toBe(false);
-    expect(isPdfAssetPath("docs/report")).toBe(false);
+    expect(isImageAssetPath("docs/brief.docx")).toBe(false);
   });
 
-  it("treats the previewable union as images plus PDF", () => {
+  // Legacy `.doc` is the binary OLE format docx-preview cannot read - the
+  // single-c extension must stay on the plain binary path.
+  it("does not treat legacy .doc as a document", () => {
+    expect(documentAssetKindOf("docs/legacy.doc")).toBeNull();
+    expect(isDocumentAssetPath("docs/legacy.doc")).toBe(false);
+    expect(isPreviewableAssetPath("docs/legacy.doc")).toBe(false);
+  });
+
+  it("names which viewer a path routes to, case-insensitively", () => {
+    expect(documentAssetKindOf("docs/report.pdf")).toBe("pdf");
+    expect(documentAssetKindOf("docs/report.PDF")).toBe("pdf");
+    expect(documentAssetKindOf("docs/brief.docx")).toBe("docx");
+    expect(documentAssetKindOf("docs/brief.DocX")).toBe("docx");
+    expect(documentAssetKindOf("docs/report.pdf.txt")).toBeNull();
+    expect(documentAssetKindOf("images/logo.png")).toBeNull();
+    expect(documentAssetKindOf("no-extension")).toBeNull();
+  });
+
+  it("unions both document formats behind the no-text-diff predicate", () => {
+    expect(isDocumentAssetPath("docs/report.pdf")).toBe(true);
+    expect(isDocumentAssetPath("docs/brief.docx")).toBe(true);
+    expect(isDocumentAssetPath("images/logo.png")).toBe(false);
+    expect(isDocumentAssetPath("README.md")).toBe(false);
+  });
+
+  it("labels each document format the way user-facing copy names it", () => {
+    expect(DOCUMENT_ASSET_LABELS.pdf).toBe("PDF");
+    expect(DOCUMENT_ASSET_LABELS.docx).toBe("Word document");
+  });
+
+  it("treats the previewable union as images plus every document format", () => {
     expect(isPreviewableAssetPath("images/logo.png")).toBe(true);
     expect(isPreviewableAssetPath("docs/report.pdf")).toBe(true);
+    expect(isPreviewableAssetPath("docs/brief.docx")).toBe(true);
     expect(isPreviewableAssetPath("README.md")).toBe(false);
   });
 });

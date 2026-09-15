@@ -13,7 +13,7 @@ import {
   type KeyboardEventHandler,
   type Ref,
 } from "react";
-import type { Editor } from "@tiptap/core";
+import { isAndroid, isiOS, isSafari, type Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { Selection, type Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -434,8 +434,21 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     return registerComposerFocus(
       composerSurfaceId,
       {
-        focus: () => {
-          editor.commands.focus();
+        focus: (isCurrent) => {
+          if (editor.view.hasFocus()) return;
+          // Preserve Tiptap's synchronous keyboard/Safari handling, but own
+          // the deferred focus: its command queues an uncancellable frame
+          // that could steal focus after another surface has taken ownership.
+          if (isiOS() || isAndroid()) {
+            editor.view.dom.focus();
+          } else if (isSafari()) {
+            editor.view.dom.focus({ preventScroll: true });
+          }
+          window.requestAnimationFrame(() => {
+            if (editor.isDestroyed || !isCurrent()) return;
+            editor.view.focus();
+            editor.commands.scrollIntoView();
+          });
         },
         containsActiveElement: (activeElement) =>
           activeElement === editor.view.dom ||

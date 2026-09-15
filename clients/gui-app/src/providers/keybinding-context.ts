@@ -38,6 +38,7 @@ import {
 // range `model.profile.byDigit` actually dispatches - one shared limit, no
 // duplicated magic number to drift out of sync.
 export const SINGLE_DIGIT_LEADER_INDEX_LIMIT = 10;
+export const PICKER_REASONING_LEADER_INDEX_LIMIT = 9;
 const CANVAS_TAB_LEADER_INDEX_LIMIT = 9;
 
 /**
@@ -183,16 +184,21 @@ export function usePickerProviderLeaderForIndex(index: number): "mod" | null {
 }
 
 /**
- * Sub-leader badge for the model picker's reasoning footer. Lights up only while
- * the picker scope owns `alt` (picker open AND reasoning actionable).
+ * Sub-leader badge for the model picker's reasoning footer. Callers also gate
+ * disabled levels. Zero is reserved for Fast, leaving levels 1–9.
  */
 export function usePickerReasoningLeaderForIndex(index: number): "alt" | null {
   return useLeaderModifierForScope(
     LEADER_SCOPE_MODEL_PICKER,
     "alt",
     index,
-    SINGLE_DIGIT_LEADER_INDEX_LIMIT,
+    PICKER_REASONING_LEADER_INDEX_LIMIT,
   );
+}
+
+/** Fast's zero badge shares the model settings modifier, even without levels. */
+export function usePickerFastModeLeader(): "alt" | null {
+  return useLeaderModifierForScope(LEADER_SCOPE_MODEL_PICKER, "alt", 0, null);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type {
@@ -194,6 +195,8 @@ function agent(id: string, title: string): TuiAgentProjection {
     terminalAgentArgs: null,
     terminalShellCommand: null,
     terminalShellArgs: null,
+    sessionState: null,
+    lastExit: null,
   };
 }
 function artifact(args: {
@@ -479,6 +482,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
 import { useBrowserOpenerItems } from "@/lib/commands/sources/open/browser-subpage";
+import { PaletteQueryProvider } from "@/lib/commands/palette-query-context";
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
 import {
   DEFAULT_BROWSER_TILE_URL,
@@ -538,6 +542,17 @@ function renderBrowserItems(
 ): ReadonlyArray<CommandItem> {
   browserItemsMock.current = items;
   return renderHook(() => useBrowserOpenerItems(CTX)).result.current;
+}
+
+function renderBrowserItemsWithQuery(
+  items: ReadonlyArray<BrowserSessionInfo>,
+  query: string,
+): ReadonlyArray<CommandItem> {
+  browserItemsMock.current = items;
+  return renderHook(() => useBrowserOpenerItems(CTX), {
+    wrapper: ({ children }) =>
+      createElement(PaletteQueryProvider, { value: query }, children),
+  }).result.current;
 }
 
 function runById(items: ReadonlyArray<CommandItem>, id: string): void {
@@ -1190,6 +1205,59 @@ describe("Browser opener sub-page", () => {
       tabId: "tab-new",
       viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
     });
+  });
+
+  it("offers to open a pasted http(s) URL as a new tab, keyed by the URL", async () => {
+    spies.openBrowserTab.mockResolvedValueOnce({
+      sessionId: "session-url",
+      tabId: "tab-url",
+    });
+    const items = renderBrowserItemsWithQuery(
+      [],
+      "  https://example.com/docs?q=1  ",
+    );
+    expect(items.map((item) => item.id)).toEqual([
+      "open:browser:host",
+      "open:browser:new",
+      "open:browser:url",
+      "open:browser:empty",
+    ]);
+    expect(items[2]).toMatchObject({
+      label: "Open https://example.com/docs?q=1",
+      statusBadge: "New tab",
+    });
+    // The typed text is a keyword so cmdk keeps the row while the query IS
+    // the URL (and the root deep view surfaces it without drilling in).
+    expect(items[2].keywords).toContain("https://example.com/docs?q=1");
+
+    act(() => runById(items, "open:browser:url"));
+
+    expect(spies.openBrowserTab).toHaveBeenCalledWith(
+      null,
+      "https://example.com/docs?q=1",
+    );
+    await waitFor(() => {
+      expect(spies.openTileIntoTargetGroup).toHaveBeenCalledOnce();
+    });
+    expect(lastTileOpen().ref).toMatchObject({
+      type: "browser-session",
+      hostId: "default-host",
+      sessionId: "session-url",
+      tabId: "tab-url",
+    });
+  });
+
+  it("does not grow a URL row for a query without an explicit http(s) scheme", () => {
+    for (const query of [
+      "",
+      "example.com",
+      "foo.ts",
+      "localhost:3000",
+      "ftp://x",
+    ]) {
+      const items = renderBrowserItemsWithQuery([], query);
+      expect(items.map((item) => item.id)).not.toContain("open:browser:url");
+    }
   });
 });
 

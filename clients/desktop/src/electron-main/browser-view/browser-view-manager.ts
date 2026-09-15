@@ -11,8 +11,7 @@ import type {
   BrowserViewCapturePageResult,
   BrowserViewSaveCaptureResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewDebugSnapshot,
-  BrowserViewDebugSnapshotData,
+  BrowserViewColorSchemePreference,
   BrowserViewDetachSurface,
   BrowserViewNativeTabStatusChange,
   BrowserViewStatus,
@@ -33,7 +32,10 @@ import {
 } from "./manager/browser-preview-window";
 import { BrowserPageRecording } from "./recording/browser-page-recording";
 import { partitionForProfile } from "./browser-session";
-import { BrowserPageEmulation } from "./emulation/browser-page-emulation";
+import {
+  BrowserPageEmulation,
+  type BrowserEmulationDeviceProfile,
+} from "./emulation/browser-page-emulation";
 import {
   isAllowedGuestNavigationUrl,
   isAllowedHostInitiatedNavigationUrl,
@@ -237,7 +239,6 @@ export class BrowserViewManager {
     this.viewport = new BrowserViewViewport(
       this.entries,
       this.annotations,
-      this.debugSessions,
       options.send,
     );
     this.find = new BrowserViewFind({
@@ -261,9 +262,7 @@ export class BrowserViewManager {
         void this.closeEntry(entry);
       },
     });
-    this.pip = new BrowserViewPipCapture({
-      debugSessions: this.debugSessions,
-    });
+    this.pip = new BrowserViewPipCapture();
     this.popups = new BrowserViewPopups({
       createPopupWindowOptions: options.createPopupWindowOptions,
       createPopupWindow: options.createPopupWindow,
@@ -276,7 +275,6 @@ export class BrowserViewManager {
       find: this.find,
       popups: this.popups,
       chords: this.chords,
-      debugSessions: this.debugSessions,
       observePrimaryProfileOrigin: options.observePrimaryProfileOrigin,
       setStatus: (entry, status, reason) => {
         this.setStatus(entry, status, reason);
@@ -498,15 +496,15 @@ export class BrowserViewManager {
         await this.trySetEntryZoom(entry, action.factor);
         return true;
       case "setColorSchemePreference":
-        await this.emulationFor(entry).setColorScheme(action.preference);
+        await this.setEntryColorScheme(entry, action.preference);
         return true;
       case "setDeviceProfile":
-        await this.emulationFor(entry).setDeviceProfile(action.profile);
+        await this.setEntryDeviceProfile(entry, action.profile);
         return true;
       case "setAudioMuted":
         return this.setEntryAudioMuted(entry, action.muted);
       case "clearCache":
-        return await this.emulationFor(entry).clearCache();
+        return await this.clearEntryCache(entry);
       case "togglePreviewWindow":
         return this.toggleEntryPreviewWindow(entry);
     }
@@ -721,20 +719,6 @@ export class BrowserViewManager {
     return registrableDomainForUrl(entry.currentUrl);
   }
 
-  async getDebugSnapshot(
-    windowId: string,
-    input: BrowserViewTileKey,
-  ): Promise<BrowserViewDebugSnapshot> {
-    const entry = this.entries.getTile(windowId, input);
-    if (entry === undefined) {
-      return { ...input, ...EMPTY_DEBUG_SNAPSHOT_DATA };
-    }
-    return {
-      ...toTileKey(requireSurface(entry)),
-      ...(await this.readDebugSnapshot(entry)),
-    };
-  }
-
   async dispatchElectronTabCdp(
     input: BrowserViewElectronTabCdpDispatch,
   ): Promise<BrowserCdpResult> {
@@ -771,7 +755,12 @@ export class BrowserViewManager {
       };
     }
     const debugSession = this.debugSessions.ensure(entry);
-    await debugSession.enableAfterCommit().catch(() => undefined);
+    // The first agent command attaches this tab's debugger for the rest of its
+    // incarnation. There is no "agent is done with the tab" signal on the wire,
+    // and a detach between two commands of one sequence would invalidate the
+    // frame routes that sequence resolved.
+    entry.agentCdpLease ??= debugSession.acquire();
+    await entry.agentCdpLease.ready().catch(() => undefined);
     return debugSession.dispatch(input.target, input.command);
   }
 
@@ -1041,11 +1030,59 @@ export class BrowserViewManager {
    */
   private emulationFor(entry: BrowserViewEntry): BrowserPageEmulation {
     if (entry.emulation !== null) return entry.emulation;
-    const emulation = new BrowserPageEmulation((method, params) =>
-      this.debugSessions.ensure(entry).sendCommand(method, params, undefined),
-    );
+    const debugSession = this.debugSessions.ensure(entry);
+    const lease = debugSession.acquire();
+    entry.emulationLease = lease;
+    const emulation = new BrowserPageEmulation(async (method, params) => {
+      await lease.ready();
+      return debugSession.sendCommand(method, params, undefined);
+    });
     entry.emulation = emulation;
     return emulation;
+  }
+
+  private async setEntryColorScheme(
+    entry: BrowserViewEntry,
+    preference: BrowserViewColorSchemePreference,
+  ): Promise<void> {
+    const emulation = this.emulationFor(entry);
+    await emulation.setColorScheme(preference);
+    this.releaseDefaultEmulation(entry, emulation);
+  }
+
+  private async setEntryDeviceProfile(
+    entry: BrowserViewEntry,
+    profile: BrowserEmulationDeviceProfile | null,
+  ): Promise<void> {
+    const emulation = this.emulationFor(entry);
+    await emulation.setDeviceProfile(profile);
+    this.releaseDefaultEmulation(entry, emulation);
+  }
+
+  private releaseDefaultEmulation(
+    entry: BrowserViewEntry,
+    emulation: BrowserPageEmulation,
+  ): void {
+    const state = emulation.snapshot();
+    if (state.colorScheme !== "system" || state.deviceProfile !== null) return;
+    if (entry.emulation !== emulation) return;
+    entry.emulation = null;
+    entry.emulationLease?.release();
+    entry.emulationLease = null;
+  }
+
+  private async clearEntryCache(entry: BrowserViewEntry): Promise<boolean> {
+    const debugSession = this.debugSessions.ensure(entry);
+    const lease = debugSession.acquire();
+    const emulation = new BrowserPageEmulation(async (method, params) => {
+      await lease.ready();
+      return debugSession.sendCommand(method, params, undefined);
+    });
+    try {
+      return await emulation.clearCache();
+    } finally {
+      lease.release();
+    }
   }
 
   private moveEntryInHistory(
@@ -1174,8 +1211,9 @@ export class BrowserViewManager {
    * A tile's CDP debugger can detach for reasons outside our control - the
    * target being destroyed, a renderer crash, or an explicit
    * `Debugger.detach`. BrowserDebugSession synchronously drops its ready
-   * state; the next native ensure or CDP dispatch reattaches and enables
-   * domains before using the existing incarnation.
+   * state; a native ensure re-enables the domains only while a lease is still
+   * out, and the next CDP dispatch takes one and reattaches. A tab nobody is
+   * driving stays a plain Chromium tab.
    *
    * Verified 2026-07-28, live: opening DevTools does NOT trigger this path
    * on Electron 42.7.1/Chromium 148 - `webContents.debugger.attach()` and
@@ -1194,14 +1232,6 @@ export class BrowserViewManager {
     });
     this.annotations.end(entry, "crash");
     if (this.pip.isCapturing(entry)) this.pip.stop();
-  }
-
-  private async readDebugSnapshot(
-    entry: BrowserViewEntry,
-  ): Promise<BrowserViewDebugSnapshotData> {
-    return (
-      (await entry.debugSession?.snapshot()) ?? EMPTY_DEBUG_SNAPSHOT_DATA
-    );
   }
 
   private setStatus(
@@ -1356,6 +1386,11 @@ export class BrowserViewManager {
     // pinned above everything with no way to reach it but its own close button.
     entry.previewWindow?.close();
     entry.previewWindow = null;
+    // Disposing the session ends every lease this guest handed out; the fields
+    // go with it so nothing can release into the next incarnation's session.
+    entry.emulationLease = null;
+    entry.seedLease = null;
+    entry.agentCdpLease = null;
     entry.debugSession?.dispose();
     entry.debugSession = null;
     this.releaseRendererGuest(
@@ -1452,13 +1487,6 @@ function isHttpBrowserUrl(url: string): boolean {
  * exactly what someone is trying to read.
  */
 const BROWSER_RECORDING_FRAME_QUALITY = 88;
-
-/** What a tile with no debug session has to report. */
-const EMPTY_DEBUG_SNAPSHOT_DATA: BrowserViewDebugSnapshotData = {
-  consoleEntries: [],
-  networkEntries: [],
-  accessibilityNodes: [],
-};
 
 /**
  * Whether an address is worth opening a second window on.

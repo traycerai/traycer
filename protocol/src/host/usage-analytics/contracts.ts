@@ -42,12 +42,12 @@ export const hostUsageSummaryV10 = defineRpcContract({
  * compat-safe within a line, and no amount of host-side gating makes it so,
  * because the rejection happens in the OLD peer's parser.
  *
- * What the selector buys: `servedBy` says which reader answered, and the host
- * has always chosen - by making the cloud call and reading the refusal. For a
- * session holding no cloud verdict the only route to the local reader is a
- * `FREE_TIER_NO_CLOUD_SYNC` 403; every other refusal, including the expired
- * bearer that cohort has, is a retriable 503. So it gets no usage panel while
- * sitting on facts its own host recorded locally.
+ * What the selector buys: `servedBy` says which reader answered, and on
+ * `@1.0` the host always chose by making the cloud call. The cloud plane is
+ * the only plane a cloud-authorized session gets, so no refusal routes to the
+ * local reader; for a session holding no cloud verdict every refusal,
+ * including the expired bearer that cohort has, is a retriable 503. So it
+ * gets no usage panel while sitting on facts its own host recorded locally.
  *
  * Only the CLIENT can tell "my verdict was withdrawn" from "my credential
  * blipped", which is why this is a request field rather than a host-side

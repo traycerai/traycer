@@ -25,7 +25,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   TuiAgentRecordSummaryV11,
-  TuiAgentRecordSummaryV12,
+  TuiAgentRecordSummaryV13,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 import { createTuiAgentRecordTable } from "../runtime/tui-agent-record-table";
 
@@ -37,7 +37,7 @@ const SECOND_OWNER = "user-second";
 /** Mirrors `tui-agent-records-merge.test.ts`'s `row()` fixture. */
 function row(
   overrides: Partial<TuiAgentRecordSummaryV11>,
-): Extract<TuiAgentRecordSummaryV12, { origin: "registry" | "doc" }> {
+): Extract<TuiAgentRecordSummaryV13, { origin: "registry" | "doc" }> {
   const base: TuiAgentRecordSummaryV11 = {
     tuiAgentId: SHARED_ID,
     ownerUserId: FIRST_OWNER,
@@ -64,9 +64,13 @@ function row(
     docResident: false,
     ...overrides,
   };
+  // `@1.3`'s session facet, which the `@1.1` base this is built from has no
+  // field for. `null` - "this host cannot say" - because every case here is
+  // about the MERGE; a case about the facet stamps it onto the result.
+  const wire = { ...base, sessionState: null, lastExit: null };
   return base.docResident
-    ? { ...base, origin: "doc" as const }
-    : { ...base, origin: "registry" as const };
+    ? { ...wire, origin: "doc" as const }
+    : { ...wire, origin: "registry" as const };
 }
 
 describe("terminal-agent rows are keyed by owner, not by id alone", () => {
