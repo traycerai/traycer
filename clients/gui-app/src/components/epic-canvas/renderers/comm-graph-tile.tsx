@@ -376,10 +376,28 @@ export function CommGraphTile(props: CommGraphTileProps) {
     (state) => state.agentOfficeDefaultViewGeneration,
   );
   const choice: OfficeViewChoice = node.view.officeView ?? settingsDefaultView;
+  // An Auto OUTCOME is TRUSTED - safe to render, and safe for the effect below
+  // to skip re-measuring - unless it is a STALE INHERITED one. A tile that
+  // explicitly picked Auto (`officeView !== null`) does not follow the global
+  // default, so its outcome is always trusted; a tile INHERITING the default
+  // (`officeView === null`) trusts its outcome only while the stamped
+  // generation still matches the current default. The same predicate gates
+  // both sites so they cannot drift: withhold at render AND re-measure in the
+  // effect, or neither.
+  const officeAutoOutcomeTrusted =
+    node.view.officeView !== null ||
+    node.view.officeAutoGeneration === settingsDefaultGeneration;
+  // A trusted Auto outcome, or `null` when it is stale and must be re-measured.
+  const trustedAutoView: OfficeViewId | null = officeAutoOutcomeTrusted
+    ? node.view.officeAutoView
+    : null;
   // `null` means "Auto has not answered yet", which is the one state where
-  // this tile does not know what it is drawing.
+  // this tile does not know what it is drawing. A stale inherited outcome
+  // resolves to `null` too: rendering the old view would flash the wrong office
+  // (and pay its planning cost) in the window before the effect re-measures, so
+  // the measuring surface is withheld until a fresh outcome is stamped.
   const resolvedViewId: OfficeViewId | null =
-    choice === "auto" ? node.view.officeAutoView : choice;
+    choice === "auto" ? trustedAutoView : choice;
 
   // The live half of the evidence below: a `null` record cannot carry a
   // default change this tile is watching happen, so the tile remembers it.
@@ -703,22 +721,16 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // as does no outcome at all. A quiet remount or restart matches and re-reads
     // the saved outcome instead.
     if (choice !== "auto") return;
-    // The default GENERATION only governs a tile that INHERITS the default
-    // (`officeView === null`) - that is the tile whose Auto outcome was measured
-    // against the default's shape, so a default round-trip it was closed for
-    // must re-measure it (Finding D68). A tile that EXPLICITLY picked Auto
-    // (`officeView === "auto"`) does not follow the global default at all, so an
-    // unrelated Appearance-default change bumping the generation must not
-    // re-decide it: the write below keeps the camera only for a Floor outcome,
-    // so re-running a Towers/Building outcome would discard a manually framed
-    // camera it re-selects unchanged. Its non-null outcome therefore stands
-    // regardless of generation; an explicit re-pick of Auto re-measures through
-    // the pick path, which nulls the outcome rather than leaning on this gate.
-    const inheritsDefault = node.view.officeView === null;
-    const generationCurrent =
-      !inheritsDefault ||
-      node.view.officeAutoGeneration === settingsDefaultGeneration;
-    if (node.view.officeAutoView !== null && generationCurrent) {
+    // A non-null outcome that is still TRUSTED is re-read, not re-decided - the
+    // same `officeAutoOutcomeTrusted` predicate the render resolution uses, so
+    // the two never drift. An INHERITING tile whose stamp no longer matches the
+    // current default re-measures (the default round-trip it was closed for,
+    // Finding D68); an EXPLICIT Auto pick does not follow the default, so its
+    // outcome stands regardless of generation (re-deciding it would clear a
+    // manually framed Towers/Building camera the write only keeps for Floor) -
+    // an explicit re-pick re-measures through the pick path, which nulls the
+    // outcome rather than leaning on this gate.
+    if (node.view.officeAutoView !== null && officeAutoOutcomeTrusted) {
       return;
     }
     if (!measureReady) return;
@@ -774,6 +786,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     measureReady,
     node.id,
     node.view,
+    officeAutoOutcomeTrusted,
     releaseWitness,
     settingsDefaultGeneration,
     updateView,
