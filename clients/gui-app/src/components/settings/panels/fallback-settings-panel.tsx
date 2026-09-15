@@ -856,13 +856,13 @@ function FallbackPolicyEditor(props: {
             the long-form reasoning. Four panes is inside what a rail holds. */}
         <TabsList
           variant="line"
-          className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
+          className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start"
         >
           {FALLBACK_TABS.map((tab) => (
             <TabsTrigger
               key={tab.key}
               value={tab.key}
-              className="flex-none px-3"
+              className="flex-none"
               data-testid={`settings-fallback-tab-${tab.key}`}
             >
               {tab.label}

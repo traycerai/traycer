@@ -306,13 +306,13 @@ function ThemeImportDialogBody({
             <TabsList
               variant="line"
               aria-label="Theme import source"
-              className="w-full justify-start gap-5 border-b border-border/60 pb-2"
+              className="w-full justify-start gap-5"
             >
-              <TabsTrigger value="browse" className="flex-none px-0">
+              <TabsTrigger value="browse" className="flex-none">
                 <Search aria-hidden />
                 Browse themes
               </TabsTrigger>
-              <TabsTrigger value="files" className="flex-none px-0">
+              <TabsTrigger value="files" className="flex-none">
                 <FileUp aria-hidden />
                 Import files
               </TabsTrigger>

@@ -144,7 +144,7 @@ export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
             // rule overrides the geometry - hangs 5px below the trigger and
             // reopens the spill; pinning it flush is the same "nothing exceeds
             // the list" rule as the height above.
-            className="min-h-[44px] flex-none gap-1.5 data-[state=active]:bg-transparent dark:data-[state=active]:bg-transparent group-data-[orientation=horizontal]/tabs:after:bottom-0 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-0 before:h-0.5 before:rounded-full before:bg-foreground before:opacity-0 before:transition-opacity data-[state=active]:before:opacity-100"
+            className="min-h-[44px] flex-none data-[state=active]:bg-transparent dark:data-[state=active]:bg-transparent group-data-[orientation=horizontal]/tabs:after:bottom-0 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-0 before:h-0.5 before:rounded-full before:bg-foreground before:opacity-0 before:transition-opacity data-[state=active]:before:opacity-100"
             data-testid={`mobile-switcher-tab-${definition.id}`}
           >
             <Icon className="size-4" />

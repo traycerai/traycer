@@ -259,19 +259,14 @@ function AddHostDialogBody(): ReactNode {
           <Tabs defaultValue="npm" className="gap-1.5">
             <TabsList
               variant="line"
+              size="sm"
               aria-label="Install method"
-              className="justify-start border-b border-border group-data-[orientation=horizontal]/tabs:h-7"
+              className="justify-start"
             >
-              <TabsTrigger
-                value="npm"
-                className="flex-none px-2.5 py-0 text-ui-xs"
-              >
+              <TabsTrigger value="npm" className="flex-none">
                 npm
               </TabsTrigger>
-              <TabsTrigger
-                value="homebrew"
-                className="flex-none px-2.5 py-0 text-ui-xs"
-              >
+              <TabsTrigger value="homebrew" className="flex-none">
                 Homebrew
               </TabsTrigger>
             </TabsList>

@@ -319,7 +319,6 @@ const notYetTightened = [
   { pattern: "^HoverCard|^HoverPreviewCard$", allow: ["*"] },
   { pattern: "^Sheet", allow: ["*"] },
   { pattern: "^Sidebar", allow: ["*"] },
-  { pattern: "^Tabs", allow: ["*"] },
   { pattern: "^Toaster$", allow: ["*"] },
   { pattern: "^Tooltip", allow: ["*"] },
 ];
@@ -758,6 +757,67 @@ const popoverContracts = [
   },
 ];
 
+// ── Tabs, tightened in ticket 06 ───────────────────────────────────────────
+//
+// The family already had the two styles it needed - a filled track
+// (`variant="default"`) and a strip of underlined tabs (`variant="line"`) -
+// and every `line` list in the app then drew the RULE it sits on by hand.
+// Four of them, disagreeing: `border-border/60` three times and `border-border`
+// once, `pb-1.5` twice and `pb-2` once, with `rounded-none` and `px-0` restated
+// on top of what the variant already implies. The rule is the variant's now.
+//
+// The other half was a compact strip: five triggers across three surfaces
+// wrote `text-ui-xs`, two of them with `px-2.5 py-0` beside it. That is a
+// `size` on the LIST - read by the triggers through `group-data-[size=sm]` -
+// so a tab bar cannot be half one size and half the other.
+//
+// `Tabs` and `TabsContent` allow `spacing` outright, for the reason ticket 05
+// gives `CollapsibleContent`: they are pure containers with no box of their
+// own, and the inset that lines a pane up with the surface it opens inside - a
+// settings panel's gutter, a dialog's - is that surface's fact. There is
+// nothing there for a contract to protect.
+const tabsContracts = [
+  {
+    pattern: "^Tabs$|^TabsContent$",
+    // `opacity-*` and its transition, exactly as on Button: a pane that is
+    // INERT while a mutation runs fades, and whether a pane is inert is a fact
+    // about the surface driving it, not about tabs.
+    allow: [
+      "layout",
+      "spacing",
+      "opacity-*",
+      "transition-opacity",
+      "duration-*",
+    ],
+  },
+  {
+    // How far apart the tabs sit depends on how many there are and how long
+    // their labels run, which is the caller's.
+    pattern: "^TabsList$",
+    allow: ["layout", "gap-*"],
+    message: {
+      color:
+        '"{{className}}" is not allowed on <TabsList>: the list owns its surface. `variant="default"` is the filled track, `variant="line"` the strip above a rule - the rule included. See {{file}}.',
+      shape:
+        '"{{className}}" is not allowed on <TabsList>: the variant owns the corners. `line` is already square, because a strip above a rule has no track to round. See {{file}}.',
+      spacing:
+        '"{{className}}" is not allowed on <TabsList>: the variant owns the strip\'s own padding and `size` its height ({{sizes}}). `gap-*` between the tabs is yours. See {{file}}.',
+    },
+  },
+  {
+    pattern: "^TabsTrigger$",
+    allow: ["layout"],
+    message: {
+      typography:
+        '"{{className}}" is not allowed on <TabsTrigger>: the LIST carries the type, through `size` - `sm` is the compact strip. Setting it per trigger is how a tab bar ends up half one size and half the other. See {{file}}.',
+      spacing:
+        "\"{{className}}\" is not allowed on <TabsTrigger>: the list's `size` carries the tab's padding, and `gap-*` on the list carries the space between tabs. See {{file}}.",
+      color:
+        '"{{className}}" is not allowed on <TabsTrigger>: the list\'s `variant` carries the active treatment - a fill on `default`, an underline on `line`. See {{file}}.',
+    },
+  },
+];
+
 // ── Button, the one family that IS enforced ─────────────────────────────────
 //
 // `layout` plus four named classes. Each is a treatment the component cannot
@@ -861,6 +921,7 @@ const tightenedContracts = [
   ...dialogContracts,
   ...dropdownMenuContracts,
   ...popoverContracts,
+  ...tabsContracts,
   ...inlinePrimitiveContracts,
   buttonContract,
 ];
@@ -1200,12 +1261,24 @@ const restyleExemptions = [
     // A script editor: a code well that fills its row, with its own gutter and
     // a focus ring drawn INSIDE the box because the box is flush with the
     // dialog's edge.
+    //
+    // And the FRAME around it: one box per OS, with the tab strip as that
+    // box's header. The frame, its fill and the header's rule belong to the
+    // panel being drawn rather than to the tabs, which is why they are on the
+    // root and the list rather than reachable by a variant;
+    // `focus-within:border-ring` lights the whole frame when the editor inside
+    // it takes focus.
     files: ["src/components/workspaces/repo-scripts-fields.tsx"],
     contracts: [
       {
         pattern: "^Textarea$",
         allow: ["color", "spacing", "effects", "focus-visible:ring-inset"],
       },
+      {
+        pattern: "^Tabs$|^TabsContent$",
+        allow: ["color", "shape", "focus-within:border-ring"],
+      },
+      { pattern: "^TabsList$", allow: ["color", "shape", "spacing"] },
     ],
   },
   {
@@ -1223,6 +1296,24 @@ const restyleExemptions = [
       {
         pattern: "^Button$",
         allow: ["spacing", "aria-disabled:hover:bg-transparent"],
+      },
+    ],
+  },
+  {
+    // The mobile tab switcher's strip, whose indicator cannot be the
+    // primitive's. The mobile shell's coarse-pointer hit-slop stylesheet
+    // claims every trigger's single `::after`, so on touch that pseudo is the
+    // (transparent) slop rather than the underline - the trigger draws its own
+    // `::before` one and cancels the default fill in the primitive's exact
+    // spelling so `cn()` drops it rather than out-specifying it. The file says
+    // all of this at the call site, at length. `no-scrollbar` is a hand-written
+    // class in `index.css` for a strip that scrolls horizontally.
+    files: ["src/components/epic-canvas/mobile/switcher-category-tabs.tsx"],
+    contracts: [
+      { pattern: "^TabsList$", allow: ["no-scrollbar", "spacing"] },
+      {
+        pattern: "^TabsTrigger$",
+        allow: ["color", "effects", "motion", "shape"],
       },
     ],
   },

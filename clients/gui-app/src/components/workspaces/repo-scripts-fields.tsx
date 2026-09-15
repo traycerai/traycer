@@ -85,15 +85,12 @@ function ScriptField(props: {
         className="gap-0 overflow-hidden rounded-lg border border-foreground/15 bg-foreground/3 focus-within:border-ring"
       >
         <TabsList
+          size="sm"
           aria-label={`${label} platform`}
           className="w-full justify-start rounded-none border-b border-foreground/10 bg-foreground/5 p-1 group-data-[orientation=horizontal]/tabs:h-auto"
         >
           {OS_TABS.map((tab) => (
-            <TabsTrigger
-              key={tab.key}
-              value={tab.key}
-              className="min-h-8 px-2 text-ui-xs"
-            >
+            <TabsTrigger key={tab.key} value={tab.key} className="min-h-8">
               <span>{tab.label}</span>
               {tab.key !== "default" && form[tab.key].trim().length > 0 ? (
                 <span

@@ -1445,14 +1445,10 @@ function ServerToolsPanel(props: {
       }}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <TabsList className="h-auto">
-          <TabsTrigger value="tools" className="text-ui-xs">
-            Tools ({server.tools.length})
-          </TabsTrigger>
+        <TabsList size="sm" className="h-auto">
+          <TabsTrigger value="tools">Tools ({server.tools.length})</TabsTrigger>
           {capabilities.instructionsSource !== "none" ? (
-            <TabsTrigger value="instructions" className="text-ui-xs">
-              Instructions
-            </TabsTrigger>
+            <TabsTrigger value="instructions">Instructions</TabsTrigger>
           ) : null}
         </TabsList>
         {!toolsReadOnly && server.tools.length > 0 ? (

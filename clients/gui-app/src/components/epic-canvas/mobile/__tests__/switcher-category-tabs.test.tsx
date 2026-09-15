@@ -142,7 +142,12 @@ describe("<SwitcherCategoryTabs />", () => {
     const imposedOffset = baseline.find(
       (token) =>
         modifierOf(token).includes("after:") &&
-        utilityOf(token).startsWith("bottom-"),
+        // The offset is a NEGATIVE utility (`-bottom-1.25`), and it has been
+        // spelled as a positive arbitrary one (`bottom-[-5px]`) before. Match
+        // either, or this positive control goes quietly dead the next time the
+        // primitive changes its mind about which spelling to use - which is
+        // the exact failure the rest of this file exists to catch.
+        /^-?bottom-/.test(utilityOf(token)),
     );
     expect(imposedOffset).toBeDefined();
     if (imposedOffset === undefined) return;
