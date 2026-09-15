@@ -8,6 +8,8 @@ import type {
 import {
   chatSearchDateRange,
   chatSearchGroupKey,
+  chatSearchTaskTitleIndex,
+  type ChatSearchTitledTask,
   highlightSegments,
   mergeChatSearchExpansionPages,
   mergeChatSearchPages,
@@ -345,5 +347,27 @@ describe("chatSearchDateRange", () => {
       from: anchorMs - 7 * 24 * 60 * 60 * 1000,
       to: null,
     });
+  });
+});
+
+describe("chatSearchTaskTitleIndex", () => {
+  function task(epic: {
+    readonly id: string;
+    readonly title: string;
+    readonly initialUserPrompt: string;
+  }): ChatSearchTitledTask {
+    return { epic: { light: { ...epic } } };
+  }
+
+  it("indexes each listed epic's display title by id and skips epic-less rows", () => {
+    const index = chatSearchTaskTitleIndex([
+      task({ id: "e1", title: "First task", initialUserPrompt: "" }),
+      { epic: null },
+      task({ id: "e2", title: "", initialUserPrompt: "" }),
+    ]);
+
+    expect(index.get("e1")).toBe("First task");
+    expect(index.get("e2")).toBe("Untitled task");
+    expect(index.size).toBe(2);
   });
 });

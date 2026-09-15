@@ -36,6 +36,7 @@ import {
   useChatSearchResults,
   type ChatSearchBaseRequest,
 } from "@/hooks/chats/use-chat-search-query";
+import { useChatSearchTaskTitles } from "@/hooks/chats/use-chat-search-task-titles";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import {
   CHAT_SEARCH_BODY_MIN_QUERY_CHARS,
@@ -87,6 +88,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
   const client = useHostClient();
   const methodSupport = useHostMethodSupport(hostId, "chat.search");
   const activeEpicId = useActiveEpicId();
+  const taskTitles = useChatSearchTaskTitles();
   const scope = useChatSearchStore((state) => state.scope);
   const roleFilter = useChatSearchStore((state) => state.roleFilter);
   const datePreset = useChatSearchStore((state) => state.datePreset);
@@ -329,6 +331,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
               onShowMoreChats={showMoreChats}
               onShowMoreMessages={showMoreMessages}
               renderExpansion={renderExpansion}
+              taskTitles={taskTitles}
             />
           </ChatSearchNavProvider>
         ) : null}

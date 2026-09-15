@@ -18,6 +18,7 @@ import type {
   ChatSearchRange,
   ChatSearchResponse,
 } from "@traycer/protocol/host/chat-search/schemas";
+import { epicDisplayTitle } from "@/lib/display-title";
 import type { ChatSearchDatePreset } from "@/stores/chat-search/chat-search-store";
 
 /** Title-section rows per page. */
@@ -231,4 +232,32 @@ export function chatSearchTierLabel(hit: {
     case "card":
       return "action";
   }
+}
+
+/** The part of a task-list row (`TaskLight`) a task name is read from. */
+export interface ChatSearchTitledTask {
+  readonly epic?: {
+    readonly light: {
+      readonly id: string;
+      readonly title: string;
+      readonly initialUserPrompt: string;
+    } | null;
+  } | null;
+}
+
+/**
+ * Task names by epic id from the account's task list, for results whose task
+ * this window has not opened. A row with no epic contributes nothing; a listed
+ * epic with an empty title gets the same derived name the task list shows.
+ */
+export function chatSearchTaskTitleIndex(
+  tasks: ReadonlyArray<ChatSearchTitledTask>,
+): ReadonlyMap<string, string> {
+  const titles = new Map<string, string>();
+  for (const task of tasks) {
+    const light = task.epic?.light;
+    if (light === undefined || light === null) continue;
+    titles.set(light.id, epicDisplayTitle(light));
+  }
+  return titles;
 }

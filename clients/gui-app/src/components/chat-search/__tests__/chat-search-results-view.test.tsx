@@ -14,7 +14,19 @@ import {
 } from "@/components/chat-search/chat-search-results-view";
 import type { ChatSearchMergedResults } from "@/lib/chat-search/chat-search-results";
 
-afterEach(cleanup);
+const registeredTitles = vi.hoisted(() => new Map<string, string>());
+
+// The live registered title of a task open in this window. Faked at the
+// selector: registering a real open-epic handle means booting an epic store.
+vi.mock("@/lib/epic-selectors", () => ({
+  useRegisteredEpicTitle: (epicId: string | null) =>
+    epicId === null ? null : (registeredTitles.get(epicId) ?? null),
+}));
+
+afterEach(() => {
+  cleanup();
+  registeredTitles.clear();
+});
 
 function chatMatch(input: {
   readonly chatId: string;
@@ -105,6 +117,7 @@ function renderView(
       onShowMoreChats={onShowMoreChats}
       onShowMoreMessages={onShowMoreMessages}
       renderExpansion={renderExpansion}
+      taskTitles={new Map()}
       {...overrides}
     />,
   );
@@ -339,5 +352,51 @@ describe("ChatSearchResultsView: indexing notice", () => {
       }),
     });
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("ChatSearchResultsView: task names", () => {
+  it("names a result's task from the task list when the task is not open in this window", () => {
+    renderView({
+      results: results({
+        chatMatches: [
+          { ...chatMatch({ chatId: "c1" }), epicId: "epic-closed" },
+        ],
+        messageMatches: [
+          { ...messageMatch({ chatId: "c2" }), epicId: "epic-closed" },
+        ],
+      }),
+      taskTitles: new Map([["epic-closed", "Closed task title"]]),
+    });
+
+    expect(screen.getAllByText("Closed task title")).toHaveLength(2);
+  });
+
+  it("prefers the registered title of a task open in this window over the task list", () => {
+    registeredTitles.set("epic-open", "Live open title");
+    renderView({
+      results: results({
+        chatMatches: [{ ...chatMatch({ chatId: "c1" }), epicId: "epic-open" }],
+      }),
+      taskTitles: new Map([["epic-open", "Stale listed title"]]),
+    });
+
+    expect(screen.getByText("Live open title")).toBeTruthy();
+    expect(screen.queryByText("Stale listed title")).toBeNull();
+  });
+
+  it("renders no task name when neither source has the task", () => {
+    renderView({
+      results: results({
+        chatMatches: [
+          { ...chatMatch({ chatId: "c1" }), epicId: "epic-unknown" },
+        ],
+      }),
+      taskTitles: new Map([["epic-other", "Other task"]]),
+    });
+
+    expect(screen.queryByText("Other task")).toBeNull();
+    const row = screen.getByRole("button", { name: /title-c1/ });
+    expect(row.textContent).not.toContain("epic-unknown");
   });
 });

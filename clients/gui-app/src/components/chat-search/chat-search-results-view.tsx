@@ -52,6 +52,12 @@ export interface ChatSearchResultsViewProps {
   readonly onShowMoreChats: (cursor: string) => void;
   readonly onShowMoreMessages: (cursor: string) => void;
   readonly renderExpansion: (target: ChatSearchExpansionTarget) => ReactNode;
+  /**
+   * Task names by epic id from a source that covers tasks this window has not
+   * opened (the account's task list). A task open in this window uses its live
+   * registered title instead.
+   */
+  readonly taskTitles: ReadonlyMap<string, string>;
 }
 
 export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
@@ -63,6 +69,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
     onShowMoreMessages,
     renderExpansion,
     results,
+    taskTitles,
   } = props;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -111,6 +118,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
                   onOpen={onOpen}
                   onToggleExpanded={() => toggleExpanded(key)}
                   renderExpansion={renderExpansion}
+                  taskTitle={taskTitles.get(match.epicId) ?? null}
                 />
               );
             })}
@@ -149,6 +157,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
                   onOpen={onOpen}
                   onToggleExpanded={() => toggleExpanded(key)}
                   renderExpansion={renderExpansion}
+                  taskTitle={taskTitles.get(match.epicId) ?? null}
                 />
               );
             })}
@@ -191,11 +200,20 @@ interface RowProps<Match> {
   readonly onOpen: (target: ChatSearchOpenTarget) => void;
   readonly onToggleExpanded: () => void;
   readonly renderExpansion: (target: ChatSearchExpansionTarget) => ReactNode;
+  /** The task list's name for this result's task, when it has one. */
+  readonly taskTitle: string | null;
 }
 
 function ChatMatchRow(props: RowProps<ChatSearchChatMatch>) {
   const navProps = useChatSearchNavProps();
-  const { expanded, match, onOpen, onToggleExpanded, renderExpansion } = props;
+  const {
+    expanded,
+    match,
+    onOpen,
+    onToggleExpanded,
+    renderExpansion,
+    taskTitle,
+  } = props;
   const title = displayChatTitle(match.title);
   return (
     <li className="flex flex-col">
@@ -218,7 +236,7 @@ function ChatMatchRow(props: RowProps<ChatSearchChatMatch>) {
           />
         </span>
         <RowMeta>
-          <TaskLabel epicId={match.epicId} />
+          <TaskLabel epicId={match.epicId} listedTitle={taskTitle} />
           <ChatSearchResultTime at={match.updatedAt} />
           {match.lifecycleState === "archived" ? <span>archived</span> : null}
         </RowMeta>
@@ -239,7 +257,14 @@ function ChatMatchRow(props: RowProps<ChatSearchChatMatch>) {
 
 function MessageMatchRow(props: RowProps<ChatSearchMessageMatch>) {
   const navProps = useChatSearchNavProps();
-  const { expanded, match, onOpen, onToggleExpanded, renderExpansion } = props;
+  const {
+    expanded,
+    match,
+    onOpen,
+    onToggleExpanded,
+    renderExpansion,
+    taskTitle,
+  } = props;
   const best = match.best;
   return (
     <li className="flex flex-col">
@@ -265,7 +290,7 @@ function MessageMatchRow(props: RowProps<ChatSearchMessageMatch>) {
           />
         </span>
         <RowMeta>
-          <TaskLabel epicId={match.epicId} />
+          <TaskLabel epicId={match.epicId} listedTitle={taskTitle} />
           <span>{chatSearchTierLabel(best)}</span>
           <ChatSearchResultTime at={best.createdAt} />
           <span>{formatMatchCount(match.matchCount)}</span>
@@ -347,9 +372,16 @@ export function ChatSearchResultTime(props: { readonly at: number }) {
   return <span>{useRelativeTimestamp(props.at)}</span>;
 }
 
-/** A chat's task, when that task is open in this window; nothing otherwise. */
-function TaskLabel(props: { readonly epicId: string }) {
-  const title = useRegisteredEpicTitle(props.epicId);
+/**
+ * A result's task name: the live registered title while the task is open in
+ * this window, else the account task list's title, else nothing.
+ */
+function TaskLabel(props: {
+  readonly epicId: string;
+  readonly listedTitle: string | null;
+}) {
+  const registered = useRegisteredEpicTitle(props.epicId);
+  const title = registered ?? props.listedTitle;
   if (title === null || title.length === 0) return null;
   return <span className="max-w-full truncate">{title}</span>;
 }
