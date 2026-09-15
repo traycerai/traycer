@@ -1593,7 +1593,11 @@ describe("CommGraphOfficeCanvas", () => {
       vi.advanceTimersByTime(150);
     });
 
-    expect(onCameraChange).toHaveBeenCalledWith({ x: 88, y: 50, zoom: 6 });
+    // cc5570123: F re-enables auto-fit exactly as the Fit button does, so the
+    // debounced persist now writes the NEUTRAL camera (the auto-fit
+    // sentinel), not the fitted `{x: 88, y: 50, zoom: 6}` this pinned before
+    // that fix - see "fixup 10" below for the direct coverage of why.
+    expect(onCameraChange).toHaveBeenCalledWith({ x: 0, y: 0, zoom: 1 });
   });
 
   /**
@@ -1767,6 +1771,51 @@ describe("CommGraphOfficeCanvas", () => {
 
       expect(onCameraChange).not.toHaveBeenCalled();
     });
+
+    it("persists the NEUTRAL camera for the Fit, not the fitted one, so a reload re-arms auto-fit instead of pinning this one-off framing", () => {
+      // Codex 4011531741: pressing Fit re-enables auto-fit but the persist
+      // used to write the FITTED camera. The loop then refits in place on a
+      // later resize without ever persisting again (the case above), so that
+      // frozen fitted camera reads back after a reload as a user framing -
+      // auto-fit gets disabled and the office reopens cropped. Persisting the
+      // neutral camera instead is what `createOfficeRuntime` reads as
+      // "nobody framed this, fit yourself".
+      const { step } = installCanvas();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const onCameraChange = vi.fn();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      render(
+        withQueryClient(
+          officeElement(
+            new Set([ORCHESTRATOR.id, REVIEWER.id]),
+            STATIC_OFFICE,
+            { onCameraChange },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      setCanvasSize(FIT_VIEWPORT);
+      step();
+
+      fireEvent.click(screen.getByTestId("comm-graph-office-zoom-in"));
+      step();
+
+      fireEvent.click(screen.getByTestId("comm-graph-office-fit"));
+      step();
+
+      // Anti-vacuity: the camera actually drawn after Fit is a real, non-
+      // neutral framing - this is not a fixture that happens to already sit
+      // at (0, 0) zoom 1.
+      const fitted = cameraFromFrame(frames, FIT_VIEWPORT);
+      if (fitted === null) throw new Error("no frame drawn after Fit");
+      expect(fitted.zoom).not.toBeCloseTo(1);
+
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(onCameraChange).toHaveBeenCalledTimes(1);
+      expect(onCameraChange).toHaveBeenCalledWith({ x: 0, y: 0, zoom: 1 });
+    });
   });
 
   it("returns to 1x on 0, from the centre of the tile", () => {
@@ -1859,7 +1908,9 @@ describe("CommGraphOfficeCanvas", () => {
       vi.advanceTimersByTime(150);
     });
 
-    expect(onCameraChange).toHaveBeenCalledWith({ x: 88, y: 50, zoom: 6 });
+    // cc5570123: same reasoning as the "fits the whole floor..." case above -
+    // F re-arms auto-fit, so the persist writes the neutral sentinel now.
+    expect(onCameraChange).toHaveBeenCalledWith({ x: 0, y: 0, zoom: 1 });
   });
 
   it("cancels a pending camera persist on unmount, leaving no stale write behind", () => {

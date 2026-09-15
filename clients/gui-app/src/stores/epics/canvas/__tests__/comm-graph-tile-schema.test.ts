@@ -1088,4 +1088,68 @@ describe("updateCommGraphTileOfficeCamera", () => {
     if (nextRef === undefined || nextRef.type !== "comm-graph") return;
     expect(nextRef.view.officeCameraView).toBe("building");
   });
+
+  it("collapses a neutral camera to officeCamera: null, the armed auto-fit sentinel", () => {
+    // The canvas re-arms auto-fit by persisting the NEUTRAL camera (its
+    // `onCameraChange` patch has no vocabulary for `null`) - this reducer is
+    // where that neutral patch becomes the one canonical armed value every
+    // other office read already checks for.
+    const state = stateWithChoice();
+    const next = updateCommGraphTileOfficeCamera(
+      state,
+      commGraphTileId(EPIC_ID),
+      { x: 0, y: 0, zoom: 1 },
+      "floor",
+    );
+    const ref = Object.values(next.tilesByInstanceId)[0];
+    expect(ref?.type).toBe("comm-graph");
+    if (ref === undefined || ref.type !== "comm-graph") return;
+    expect(ref.view.officeCamera).toBeNull();
+    expect(ref.view.officeCameraView).toBe("floor");
+  });
+
+  it("still stores a non-neutral camera as-is", () => {
+    const state = stateWithChoice();
+    const next = updateCommGraphTileOfficeCamera(
+      state,
+      commGraphTileId(EPIC_ID),
+      { x: 5, y: 6, zoom: 2 },
+      "floor",
+    );
+    const ref = Object.values(next.tilesByInstanceId)[0];
+    expect(ref?.type).toBe("comm-graph");
+    if (ref === undefined || ref.type !== "comm-graph") return;
+    expect(ref.view.officeCamera).toEqual({ x: 5, y: 6, zoom: 2 });
+    expect(ref.view.officeCameraView).toBe("floor");
+  });
+
+  it("is a no-op when a tile already armed (officeCamera: null) is written with the neutral camera again", () => {
+    // Proves the normalize happens BEFORE the sameOfficeCamera dedup compare:
+    // a naive compare of the raw {0,0,1} patch against a stored `null` would
+    // never match and would produce a needless new ref every persist tick
+    // while auto-fit stays on.
+    const state = stateWithChoice();
+    const ref = Object.values(state.tilesByInstanceId)[0];
+    if (ref === undefined || ref.type !== "comm-graph") {
+      throw new Error("expected a comm-graph tile");
+    }
+    const armed: EpicCanvasState = {
+      ...state,
+      tilesByInstanceId: {
+        ...state.tilesByInstanceId,
+        [ref.instanceId]: {
+          ...ref,
+          view: { ...ref.view, officeCamera: null, officeCameraView: "floor" },
+        },
+      },
+    };
+    expect(
+      updateCommGraphTileOfficeCamera(
+        armed,
+        commGraphTileId(EPIC_ID),
+        { x: 0, y: 0, zoom: 1 },
+        "floor",
+      ),
+    ).toBe(armed);
+  });
 });
