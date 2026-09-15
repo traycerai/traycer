@@ -59,7 +59,7 @@ export function AgentSelectionGuideEditorSurface({
         aria-disabled={disabled}
         className={cn(
           "relative flex min-h-0 flex-col overflow-hidden rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow]",
-          "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+          "focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
           disabled && "cursor-not-allowed opacity-50",
           editorClassName,
         )}

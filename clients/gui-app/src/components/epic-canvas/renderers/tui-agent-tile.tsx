@@ -1380,7 +1380,7 @@ function TerminalAgentPreLaunchToolbar(
                     above) never reach keyboard/AT users - a static second
                     line needs no focus/hover to be perceivable. */}
                   {continueUnderProfileDisabledReason !== undefined ? (
-                    <span className="text-left text-[11px] leading-tight text-muted-foreground">
+                    <span className="text-left text-overline leading-tight text-muted-foreground">
                       {continueUnderProfileDisabledReason}
                     </span>
                   ) : null}

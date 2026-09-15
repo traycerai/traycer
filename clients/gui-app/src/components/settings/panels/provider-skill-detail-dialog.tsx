@@ -459,7 +459,7 @@ function EditableSkillDetail(props: {
                   <div
                     ref={bodyEditor}
                     className={cn(
-                      "col-start-1 row-start-1 min-h-0 overflow-hidden rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+                      "col-start-1 row-start-1 min-h-0 overflow-hidden rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
                       editing ? null : "invisible pointer-events-none",
                     )}
                   >

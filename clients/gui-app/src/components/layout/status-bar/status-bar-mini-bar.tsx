@@ -35,12 +35,12 @@ export function StatusBarMiniBar(props: {
       aria-hidden
       data-testid="status-bar-provider-mini-bar"
       data-window-key={props.windowKey}
-      className="relative h-1 w-8 shrink-0 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+      className="relative h-1 w-8 shrink-0 overflow-hidden rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40"
     >
       <span
         data-testid="status-bar-provider-mini-bar-fill"
         className={cn(
-          "absolute inset-y-0 left-0 rounded-[2px]",
+          "absolute inset-y-0 left-0 rounded-xs",
           rateLimitWindowSeverityBarClassName(props.severity),
         )}
         style={{ width: `${rateLimitWindowFillPercent(props.usedPercent)}%` }}

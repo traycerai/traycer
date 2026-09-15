@@ -643,7 +643,7 @@ function ManagedCommandOutputTileBody(props: {
             <div
               aria-hidden
               data-testid="managed-command-output-scrim"
-              className="pointer-events-none absolute inset-x-0 top-0 z-[5] h-13 bg-linear-to-b from-canvas/95 via-canvas/75 via-45% to-canvas/0"
+              className="pointer-events-none absolute inset-x-0 top-0 z-5 h-13 bg-linear-to-b from-canvas/95 via-canvas/75 via-45% to-canvas/0"
             />
             <ManagedCommandOutputControls
               command={command}

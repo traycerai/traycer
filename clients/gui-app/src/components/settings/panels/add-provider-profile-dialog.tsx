@@ -897,7 +897,7 @@ export function AddProfileIdentityStep({
             </button>
           ) : null}
           {tier !== null && tier.length > 0 ? (
-            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+            <Badge variant="outline" className="h-5 px-1.5 text-micro">
               {tier}
             </Badge>
           ) : null}

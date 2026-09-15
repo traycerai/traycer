@@ -483,7 +483,7 @@ function UnsupportedBranchNaming(props: {
       <div className="flex items-center gap-2.5">
         <span
           aria-hidden
-          className="mt-px size-3.5 shrink-0 rounded-full border-[4px] border-primary"
+          className="mt-px size-3.5 shrink-0 rounded-full border-4 border-primary"
         />
         <div className="min-w-0">
           <span className="block text-ui-sm font-medium text-foreground">
@@ -770,7 +770,7 @@ function SavedBranchNaming(props: {
       >
         <span
           aria-hidden
-          className="mt-1 size-3.5 shrink-0 rounded-full border-[4px] border-primary"
+          className="mt-1 size-3.5 shrink-0 rounded-full border-4 border-primary"
         />
         <div className="min-w-0">
           <span className="block text-ui-sm font-medium text-foreground">

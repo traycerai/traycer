@@ -176,6 +176,114 @@ const testFileGlobs = [
   "**/*.{test,spec}.{ts,tsx}",
 ];
 
+// ── The bracket forms `shadcn/no-arbitrary-values` sanctions ────────────────
+//
+// Four families, and everything outside them is a value that belongs on the
+// theme's scale - where the rule's own message already names the class that
+// carries it.
+const sanctionedArbitraryValues = [
+  // 1. The value IS a custom property, or is computed from one, so the theme
+  // is still where it comes from: `bg-[var(--term-ansi-red)]` is the terminal
+  // palette, `color-mix(… var(--foreground) …)` is a tint of a token, and
+  // `env()` reads a value only the OS knows (the window-controls-overlay
+  // inset - safe-area insets stay in `index.css`, per AGENTS.md).
+  "*-[var(--*)]",
+  "*-[color-mix(*)]",
+  "*-[env(*)]",
+
+  // 2. Fluid sizing, which AGENTS.md requires of layout surfaces: a computed
+  // value, or a unit relative to the viewport, the container or the element's
+  // own text. A fixed step off the spacing scale is what these exist not to be.
+  "*-[min(*)]",
+  "*-[max(*)]",
+  "*-[calc(*)]",
+  "*-[clamp(*)]",
+  "*-[*%]",
+  "*-[*vw]",
+  "*-[*vh]",
+  "*-[*dvw]",
+  "*-[*dvh]",
+  "*-[*svw]",
+  "*-[*svh]",
+  "*-[*lvh]",
+  "*-[*ch]",
+  "*-[*lh]",
+  "*-[*em]",
+
+  // 3. An arbitrary PROPERTY - `[container-type:inline-size]`,
+  // `[mask-image:…]`, `[-webkit-app-region:no-drag]`,
+  // `[--shimmer-text-color:…]`. Tailwind has no utility for these at all, so
+  // there is no scale to be off. The second entry is the same thing under a
+  // variant (`data-[x=y]:[mask-image:…]`): an entry containing a `:` is
+  // matched against the whole token, variants included.
+  //
+  // Deliberately not narrowed to a list of properties, and the cost is stated
+  // rather than overlooked: `[padding:13px]` passes here while `p-[13px]` does
+  // not. Enumerating the properties Tailwind has no utility for would be a
+  // list that goes stale every Tailwind release, and the escape is rare enough
+  // (95 sites) that a reviewer sees each one. Narrow this if it ever becomes
+  // the way an off-scale value gets in.
+  "[*:*]",
+  "*:[*:*]",
+
+  // 4. Utilities whose bracket holds a property value rather than a point on a
+  // scale: a track list, a flex shorthand, a timing function, a gradient, a
+  // multi-layer shadow. There is no scale for the theme to offer.
+  "transition-[*]",
+  "will-change-[*]",
+  "ease-[*]",
+  "grid-cols-[*]",
+  "grid-rows-[*]",
+  "col-[*]",
+  "row-[*]",
+  "flex-[*]",
+  "aspect-[*]",
+  "content-[*]",
+  "bg-size-[*]",
+  "shadow-[*]",
+  "drop-shadow-[*]",
+  "bg-[linear-gradient(*)]",
+  "bg-[radial-gradient(*)]",
+  "bg-[conic-gradient(*)]",
+
+  // 5. Two values the 4px spacing scale cannot express and the design does not
+  // want rounded: the half-pixel hairline the tab chrome and the header rule
+  // draw (`h-px` is visibly thinner, `h-0.5` visibly thicker), and the
+  // half-pixel gap between the rate-limit gauge's bars.
+  "*-[1.5px]",
+  "*-[2.5px]",
+
+  // 6. Unitless line-height ratios on the composer's inline chips, whose font
+  // size is itself `em`-relative. A length here would pin the leading while
+  // the text keeps scaling; the theme's `--text-*` line heights are lengths,
+  // so there is no ratio to reach for.
+  "leading-[1.1]",
+  "leading-[1.2]",
+];
+
+// Files whose colors are deliberately NOT the theme's, so the arbitrary-value
+// rule's "use a token" advice does not apply to them. Everything else about
+// the rule still holds here - only `#rrggbb` is added to what they may write.
+const fixedPaletteFiles = [
+  // The theme editor and its inspector paint their own chrome in fixed colors
+  // ON PURPOSE: they are the surface you edit the theme from, so chrome that
+  // followed the draft would change under the cursor while you drag a slider.
+  "src/components/settings/themes/theme-editor-panel.tsx",
+  "src/components/settings/themes/theme-inspector.tsx",
+
+  // Vendor brand marks. The fill IS the logo; a theme token would be wrong.
+  "src/components/icons/editor-icons.tsx",
+
+  // The tour's diorama: a fixed dark scene rendered inside `StandaloneShell`,
+  // including a simulated macOS window's traffic lights. It does not follow
+  // the app theme because it is a picture OF an app, not the app.
+  "src/components/onboarding/onboarding-page.tsx",
+  "src/components/onboarding/onboarding-diorama.tsx",
+  "src/components/onboarding/onboarding-host-picker.tsx",
+  "src/components/onboarding/onboarding-login-import-stage.tsx",
+  "src/components/onboarding/onboarding-detected-agents.tsx",
+];
+
 // ── App-wide host reads that are RIGHT where they are, exempted per FILE. ──
 //
 // `readPath` (D12) bans the app-wide reads across the Epic canvas subtree and
@@ -1288,6 +1396,10 @@ export default tseslint.config(
           ],
         },
       ],
+      "shadcn/no-arbitrary-values": [
+        "error",
+        { allow: sanctionedArbitraryValues },
+      ],
     },
   },
   {
@@ -1325,6 +1437,29 @@ export default tseslint.config(
     ],
     rules: {
       "shadcn/no-raw-colors": "off",
+    },
+  },
+  {
+    files: fixedPaletteFiles,
+    rules: {
+      "shadcn/no-arbitrary-values": [
+        "error",
+        { allow: [...sanctionedArbitraryValues, "*-[#*]"] },
+      ],
+    },
+  },
+  {
+    // The mobile switcher's tab triggers need a REAL 44px, not a rem-based
+    // one: that surface's root font is 15px, so `min-h-11` measures 41.25px
+    // and the 44px hit-slop `::after` in `mobile-shell-touch-targets.css`
+    // spills out of the list's exact fit. The file says so at the call site
+    // and a test asserts the literal.
+    files: ["src/components/epic-canvas/mobile/switcher-category-tabs.tsx"],
+    rules: {
+      "shadcn/no-arbitrary-values": [
+        "error",
+        { allow: [...sanctionedArbitraryValues, "min-h-[44px]"] },
+      ],
     },
   },
 

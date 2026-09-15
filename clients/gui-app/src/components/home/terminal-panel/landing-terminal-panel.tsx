@@ -2381,7 +2381,7 @@ function LandingTerminalPanelToggle(props: {
       // while the panel is open (1px panel border + an icon-sm button
       // centered in the h-9 header row, inset by the header's px-2), so
       // toggling the panel never moves the control under the pointer.
-      className="absolute top-[5px] right-2 z-10"
+      className="absolute top-1.25 right-2 z-10"
       onClick={props.onOpenPanel}
     >
       <PanelRightOpen className="size-4" />

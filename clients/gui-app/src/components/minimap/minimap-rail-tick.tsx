@@ -37,7 +37,7 @@ export function MinimapRailTick({
       className={cn(
         "pointer-events-none absolute -translate-y-1/2 rounded-full transition-[background-color,height,opacity] duration-150",
         side === "left" ? "left-0" : "right-0",
-        active ? "h-[3px] bg-foreground/90" : "h-0.5 bg-muted-foreground/35",
+        active ? "h-0.75 bg-foreground/90" : "h-0.5 bg-muted-foreground/35",
         emphasized ? "w-5" : "w-4",
         open ? "opacity-0" : "opacity-100",
       )}

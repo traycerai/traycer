@@ -162,7 +162,7 @@ export function ViewMenuBadge(props: { readonly filterCount: number }) {
   return (
     <span
       aria-hidden
-      className="pointer-events-none absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-0.5 text-[9px] leading-none font-semibold text-background ring-1 ring-background"
+      className="pointer-events-none absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-0.5 text-micro leading-none font-semibold text-background ring-1 ring-background"
     >
       {props.filterCount > 9 ? "9+" : String(props.filterCount)}
     </span>

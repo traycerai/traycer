@@ -316,7 +316,7 @@ function ImageGenerationMedia(props: {
         ) : null}
       </AnimatePresence>
       {props.props.resolution ? (
-        <span className="pointer-events-none absolute left-2 top-2 z-10 whitespace-nowrap rounded-full bg-background/75 px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground @max-[8rem]:left-1 @max-[8rem]:top-1 @max-[8rem]:px-1.5">
+        <span className="pointer-events-none absolute left-2 top-2 z-10 whitespace-nowrap rounded-full bg-background/75 px-2 py-0.5 font-mono text-micro tabular-nums text-muted-foreground @max-[8rem]:left-1 @max-[8rem]:top-1 @max-[8rem]:px-1.5">
           {props.props.resolution}
         </span>
       ) : null}

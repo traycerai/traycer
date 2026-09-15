@@ -493,7 +493,7 @@ function ProfileSelectionControl(props: {
         activeProfileId={context.activeProfileId}
       />
       {visibleDisabledReason !== null ? (
-        <span className="pl-[22px] text-left text-[11px] leading-tight text-muted-foreground">
+        <span className="pl-5.5 text-left text-overline leading-tight text-muted-foreground">
           {visibleDisabledReason}
         </span>
       ) : null}
@@ -742,7 +742,7 @@ function TerminalProfileBadge() {
   return (
     <Badge
       variant="outline"
-      className="h-5 shrink-0 px-1.5 text-[10px] text-muted-foreground"
+      className="h-5 shrink-0 px-1.5 text-micro text-muted-foreground"
     >
       Terminal
     </Badge>

@@ -206,19 +206,19 @@ function RateLimitGlyph({
               <span
                 key={key}
                 data-testid="rate-limit-bar-track"
-                className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+                className="relative h-1 w-4 overflow-hidden rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40"
               />
             ))
           : bars.map((bar) => (
               <span
                 key={`${bar.providerId}-${bar.windowLabel}`}
                 data-testid="rate-limit-bar-track"
-                className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+                className="relative h-1 w-4 overflow-hidden rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40"
               >
                 <span
                   data-testid="rate-limit-bar-fill"
                   className={cn(
-                    "absolute inset-y-0 left-0 rounded-[2px]",
+                    "absolute inset-y-0 left-0 rounded-xs",
                     rateLimitWindowSeverityBarClassName(bar.severity),
                   )}
                   style={{
