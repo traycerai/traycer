@@ -14,6 +14,7 @@
  * the same persisted view state, so callers compose these rather than
  * re-declaring them.
  */
+import type { CSSProperties } from "react";
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
@@ -405,7 +406,7 @@ function ArtifactTypeDetail(props: {
     const TypeIcon = EPIC_NODE_ICONS[kind];
     const iconStyle =
       artifactIconColorMode === "byType"
-        ? { color: artifactIconColors[kind] }
+        ? ({ "--swatch": artifactIconColors[kind] } as CSSProperties)
         : undefined;
     return (
       <DropdownMenuCheckboxItem
@@ -417,6 +418,7 @@ function ArtifactTypeDetail(props: {
         <TypeIcon
           className={cn(
             "size-3.5",
+            artifactIconColorMode === "byType" && "text-[var(--swatch)]",
             artifactIconColorMode === "none" && "text-muted-foreground",
           )}
           style={iconStyle}

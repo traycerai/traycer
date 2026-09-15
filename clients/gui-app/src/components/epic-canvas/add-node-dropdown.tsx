@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import {
   useCallback,
   useEffect,
@@ -177,7 +178,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
   const terminalAgentIconColor = artifactIconColors["terminal-agent"];
   const terminalAgentIconStyle =
     artifactIconColorMode === "byType"
-      ? { color: terminalAgentIconColor }
+      ? ({ "--swatch": terminalAgentIconColor } as CSSProperties)
       : undefined;
 
   return (
@@ -197,7 +198,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
           const iconColor = artifactIconColors[type];
           const iconStyle =
             artifactIconColorMode === "byType"
-              ? { color: iconColor }
+              ? ({ "--swatch": iconColor } as CSSProperties)
               : undefined;
           return (
             <DropdownMenuItem
@@ -211,6 +212,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
               <OptionIcon
                 className={cn(
                   "size-3.5",
+                  artifactIconColorMode === "byType" && "text-[var(--swatch)]",
                   artifactIconColorMode === "none" && "text-muted-foreground",
                 )}
                 style={iconStyle}
@@ -228,6 +230,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
               <TerminalAgentIcon
                 className={cn(
                   "size-3.5",
+                  artifactIconColorMode === "byType" && "text-[var(--swatch)]",
                   artifactIconColorMode === "none" && "text-muted-foreground",
                 )}
                 style={terminalAgentIconStyle}

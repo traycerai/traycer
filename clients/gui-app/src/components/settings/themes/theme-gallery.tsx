@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { lazy, Suspense, useId, useRef, useState } from "react";
 import {
@@ -427,8 +428,8 @@ function PaletteSwatch({
       {paletteTokens.map((token) => (
         <span
           key={token}
-          className="size-3.5 rounded-full border border-foreground/15"
-          style={{ background: colors[token] }}
+          className="size-3.5 rounded-full border border-foreground/15 bg-[var(--swatch)]"
+          style={{ "--swatch": colors[token] } as CSSProperties}
         />
       ))}
     </span>

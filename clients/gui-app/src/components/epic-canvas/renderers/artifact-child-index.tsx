@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useCallback, type MouseEvent } from "react";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -142,7 +143,9 @@ function ChildIndexRow(props: {
 
   const Icon = EPIC_NODE_ICONS[type];
   const iconStyle =
-    iconColorMode === "byType" ? { color: iconColors[type] } : undefined;
+    iconColorMode === "byType"
+      ? ({ "--swatch": iconColors[type] } as CSSProperties)
+      : undefined;
 
   return (
     <button
@@ -159,7 +162,13 @@ function ChildIndexRow(props: {
         isDragging && "cursor-grabbing opacity-60",
       )}
     >
-      <Icon className="size-4 shrink-0" style={iconStyle} />
+      <Icon
+        className={cn(
+          "size-4 shrink-0",
+          iconColorMode === "byType" && "text-[var(--swatch)]",
+        )}
+        style={iconStyle}
+      />
       <span className="min-w-0 flex-1 truncate">{title}</span>
       <ArtifactStatusDot type={type} status={treeNode.status} />
     </button>

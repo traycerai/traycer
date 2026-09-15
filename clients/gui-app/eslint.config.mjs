@@ -1400,10 +1400,179 @@ export default tseslint.config(
           ],
         },
       ],
+      "shadcn/no-inline-styles": [
+        "error",
+        {
+          // THE LINE: a property is allowed when its VALUE is produced at
+          // runtime by something a stylesheet cannot see - a rect measured off
+          // the DOM, a drag, a resize, the animation clock, a tree's depth, a
+          // media file's intrinsic ratio - or when CSS classes cannot express
+          // it at all. Everything a designer would CHOOSE stays denied: color,
+          // background, typography, border, radius, and spacing on the scale.
+          // That is the half this rule exists to catch.
+          //
+          // The cost of drawing it per PROPERTY rather than per value is that
+          // a hardcoded `paddingLeft: 24` now passes where `padding: 24` does
+          // not. The rule has no way to say "only when dynamic", and the
+          // alternative - rewriting 21 tree-indent sites into a custom
+          // property that a class then reads - moves the same number into the
+          // same element's style attribute under a different name.
+          //
+          // NOT listed, deliberately: `--*`. The rule already lets a custom
+          // property through - the only thing it checks on one is that the
+          // value is not a hardcoded color - so allowing `--*` would not
+          // permit anything new, it would only switch that color check off.
+          // Setting a dynamic value through a custom property and reading it
+          // from a class stays the sanctioned escape hatch, and it stays
+          // guarded.
+          allow: [
+            // Measured or dragged geometry.
+            "width",
+            "height",
+            "minWidth",
+            "maxWidth",
+            "maxHeight",
+            "left",
+            "top",
+            "right",
+            "bottom",
+            "inset",
+            "transform",
+            "anchorName",
+            "positionAnchor",
+            // `x` / `y` are framer-motion's names for the same transform, set
+            // from a `MotionValue` a gesture drives. `transform` above is the
+            // static spelling of exactly this.
+            "x",
+            "y",
+            // Split-pane and sidebar sizes, written back from a resize drag.
+            "flexGrow",
+            "flexBasis",
+            "flexShrink",
+            // Tree-row indent: `depth * INDENT_PX`, unbounded in depth.
+            "paddingLeft",
+            "paddingInlineStart",
+            // The soft-keyboard inset the mobile shell measures.
+            "paddingBottom",
+            // An image or video's intrinsic ratio, known only once it loads.
+            "aspectRatio",
+            // `lib/animation/status-animation-clock.ts` writes these frame by
+            // frame, and `index.css` says at length why they must NOT be CSS
+            // animations: Blink recalculates style for every running CSS
+            // animation once per display frame, which against this stylesheet
+            // cost ~2.5 MB/s of renderer heap per always-on indicator.
+            "opacity",
+            "animation",
+            "transitionDuration",
+            "strokeDasharray",
+            // Properties with no class at all. `WebkitAppRegion` is the
+            // Electron title-bar drag region; `colorScheme` is what the theme
+            // editor's preview swatch flips to render a sample in the other
+            // appearance; `containerType` and `imageRendering` have no
+            // utility in our Tailwind build.
+            "WebkitAppRegion",
+            "colorScheme",
+            "containerType",
+            "imageRendering",
+            "mixBlendMode",
+            "filter",
+            "backgroundImage",
+            "backgroundPosition",
+            // A font PREVIEW: the family and size are what the row is showing,
+            // picked from the system font list or the terminal settings.
+            "fontFamily",
+            "fontSize",
+            // dnd-kit hands a sortable its own transform and transition; the
+            // pair arrives together and the transform half is already allowed.
+            "transition",
+            // The reasoning slider's travel, `((2 * position) / last - 1)rem`.
+            "marginInlineEnd",
+          ],
+        },
+      ],
       "shadcn/no-arbitrary-values": [
         "error",
         { allow: sanctionedArbitraryValues },
       ],
+    },
+  },
+  {
+    // `no-inline-styles` off, for surfaces whose colour is the CONTENT rather
+    // than a style choice, or whose palette is not the theme's:
+    //
+    //   - the theme editor and the theme inspector RENDER a theme. The sample
+    //     card's literals and the `--background` / `--primary` / … it sets
+    //     inline are the thing being previewed; a token there would preview
+    //     the current theme instead of the one under the cursor.
+    //   - the onboarding diorama is artwork on `StandaloneShell`'s fixed dark
+    //     backdrop (see the full-bleed note in AGENTS.md), with its own node
+    //     palette that is deliberately not the app's tokens.
+    //   - the terminal output tile's find decorations are drawn in the
+    //     TERMINAL's palette: the two literals are `--term-ansi-yellow` and
+    //     `--term-ansi-bright-yellow` verbatim. Those ANSI roles are written
+    //     by the theme applier for xterm and are deliberately not registered
+    //     as `--color-*`, so no Tailwind class can name them.
+    //   - the QR tile's ink is a scanner-contrast requirement, and the same
+    //     literal has to reach the SVG `fill` beside it.
+    files: [
+      "src/components/settings/themes/theme-editor-panel.tsx",
+      "src/components/settings/themes/theme-inspector.tsx",
+      "src/components/onboarding/onboarding-diorama.tsx",
+      "src/components/epic-canvas/renderers/managed-command-output-tile.tsx",
+      "src/components/settings/panels/link-phone-qr-tile.tsx",
+    ],
+    rules: {
+      "shadcn/no-inline-styles": "off",
+    },
+  },
+  {
+    // The onboarding page's one `<style>` element and its backdrop image.
+    // The element carries the diorama's keyframes, which are written against
+    // its own `--onboarding-*` custom properties and have no utility form.
+    files: ["src/components/onboarding/onboarding-page.tsx"],
+    rules: {
+      "shadcn/no-inline-styles": "off",
+    },
+  },
+  {
+    // Geometry a SHARED HELPER builds: `frameStyle(paintedSize, origin)`,
+    // `containBox(frameSize)`, `gitTreeStyle(...)`, `pipRootBox(geometry)`,
+    // `surfaceStyle(placement)`, dnd-kit's `sortable.style`, a measured
+    // `rect`. Every property inside is one the allow list above already
+    // permits - the rule simply cannot follow a function call, the same
+    // single-file limit that keeps `require-static-classes` off (ticket 09).
+    // Inlining these helpers at 34 call sites to satisfy it would be a worse
+    // codebase, so the rule is off where the helper is used and stays on
+    // everywhere else in those files' directories.
+    files: [
+      "src/components/browser-tile/browser-viewport-frame.tsx",
+      "src/components/chat/chat-progress-icon.tsx",
+      "src/components/chat/context-usage-chip.tsx",
+      "src/components/chat/queued-message-surface.tsx",
+      "src/components/chat/segments/image-generation/image-generation.tsx",
+      "src/components/epic-canvas/dnd/pane-drop-zone.tsx",
+      "src/components/epic-canvas/git-diff/file-tree.tsx",
+      "src/components/epic-canvas/git-diff/selected-repo-changes.tsx",
+      "src/components/epic-canvas/image-preview/image-diff-view.tsx",
+      "src/components/epic-canvas/pip/agent-browser-pip.tsx",
+      "src/components/epic-canvas/renderers/agent-cursor-overlay.tsx",
+      "src/components/epic-canvas/sidebar/epic-sidebar-artifact-tree.tsx",
+      "src/components/epic-canvas/sidebar/epic-sidebar-chat-tree.tsx",
+      "src/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row.tsx",
+      "src/components/epic-canvas/sidebar/epic-sidebar-file-tree.tsx",
+      "src/components/home/pickers/harness-model-picker-footers.tsx",
+      "src/components/home/terminal-panel/landing-terminal-panel.tsx",
+      "src/components/layout/header/app-header.tsx",
+      "src/components/layout/top-level-tab-host.tsx",
+      "src/components/notifications/notification-indicator-icon.tsx",
+      "src/components/notifications/notifications-popover.tsx",
+      "src/components/resources/resource-monitor-popover.tsx",
+      "src/components/settings/panels/appearance-settings-panel.tsx",
+      "src/components/ui/shimmer.tsx",
+      "src/components/ui/start-truncated-text.tsx",
+    ],
+    rules: {
+      "shadcn/no-inline-styles": "off",
     },
   },
   {

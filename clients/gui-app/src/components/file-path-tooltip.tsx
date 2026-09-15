@@ -47,11 +47,7 @@ export function FilePathTooltip(props: FilePathTooltipProps) {
       <TooltipContent
         side={props.side}
         align="start"
-        className="max-w-md px-2 py-1 font-mono"
-        style={{
-          fontSize: "var(--text-code-xs)",
-          overflowWrap: "anywhere",
-        }}
+        className="max-w-md px-2 py-1 font-mono text-code-xs wrap-anywhere"
       >
         {props.content}
       </TooltipContent>

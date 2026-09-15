@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useRef, useState } from "react";
 import { ChevronsUpDown } from "lucide-react";
 import {
@@ -145,9 +146,14 @@ function PresetSwatch(props: PresetSwatchProps) {
     <span
       aria-hidden="true"
       className={cn(
-        "inline-flex size-6 shrink-0 items-center justify-center rounded-md font-semibold text-ui-xs ring-1 ring-foreground/10 ring-inset",
+        "inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--swatch)] font-semibold text-ui-xs text-[var(--swatch-fg)] ring-1 ring-foreground/10 ring-inset",
       )}
-      style={{ backgroundColor: preset.swatch, color: preset.accent }}
+      style={
+        {
+          "--swatch": preset.swatch,
+          "--swatch-fg": preset.accent,
+        } as CSSProperties
+      }
     >
       Aa
     </span>

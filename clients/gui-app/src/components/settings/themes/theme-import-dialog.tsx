@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { z } from "zod";
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
@@ -689,14 +690,20 @@ function ThemeImportPreview({
               className="flex size-8 shrink-0 overflow-hidden rounded-md border border-foreground/10"
             >
               <span
-                className="w-2/3"
-                style={{
-                  background: theme.colors.background ?? "var(--background)",
-                }}
+                className="w-2/3 bg-[var(--swatch)]"
+                style={
+                  {
+                    "--swatch": theme.colors.background ?? "var(--background)",
+                  } as CSSProperties
+                }
               />
               <span
-                className="flex-1"
-                style={{ background: theme.colors.primary ?? "var(--primary)" }}
+                className="flex-1 bg-[var(--swatch)]"
+                style={
+                  {
+                    "--swatch": theme.colors.primary ?? "var(--primary)",
+                  } as CSSProperties
+                }
               />
             </span>
             <span className="min-w-0 flex-1 break-words">{theme.name}</span>

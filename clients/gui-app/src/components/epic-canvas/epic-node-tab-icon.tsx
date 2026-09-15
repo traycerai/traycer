@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
@@ -266,11 +267,15 @@ export function StaticEpicNodeIcon(props: {
   const Icon = EPIC_NODE_ICONS[props.type];
   const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
   const color = useSettingsStore((s) => s.artifactIconColors[props.type]);
-  const style = colorMode === "byType" ? { color } : undefined;
+  const style =
+    colorMode === "byType"
+      ? ({ "--swatch": color } as CSSProperties)
+      : undefined;
   return (
     <Icon
       className={cn(
         props.className,
+        colorMode === "byType" && "text-[var(--swatch)]",
         colorMode === "none" && "text-muted-foreground",
       )}
       style={style}

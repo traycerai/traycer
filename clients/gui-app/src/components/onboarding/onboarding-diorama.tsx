@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { m, useReducedMotion } from "motion/react";
 import {
@@ -1495,15 +1496,15 @@ function ThemeDock() {
         <span
           key={label}
           className={cn(
-            "relative size-6 overflow-hidden rounded-full border transition-transform duration-200",
+            "relative size-6 overflow-hidden rounded-full border bg-[var(--swatch)] transition-transform duration-200",
             index === 0 ? "scale-110 border-foreground" : "border-border",
           )}
-          style={{ backgroundColor: bg }}
+          style={{ "--swatch": bg } as CSSProperties}
         >
           <span
             aria-hidden="true"
-            className="absolute inset-x-0 bottom-0 h-1/3"
-            style={{ backgroundColor: accent }}
+            className="absolute inset-x-0 bottom-0 h-1/3 bg-[var(--swatch)]"
+            style={{ "--swatch": accent } as CSSProperties}
           />
         </span>
       ))}

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useId, useRef } from "react";
 import { Check, Group, Palette, Pipette } from "lucide-react";
 import {
@@ -48,10 +49,10 @@ export function TabColorPicker(props: {
             aria-pressed={props.menu ? undefined : selectedColor === value}
             onClick={() => props.onChange(value)}
             className={cn(
-              "flex size-6 items-center justify-center rounded-full ring-offset-2 ring-offset-popover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "flex size-6 items-center justify-center rounded-full bg-[var(--swatch)] text-black ring-offset-2 ring-offset-popover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               selectedColor === value && "ring-2",
             )}
-            style={{ backgroundColor: value, color: "#202124" }}
+            style={{ "--swatch": value } as CSSProperties}
           >
             {selectedColor === value ? (
               <Check className="size-3.5" aria-hidden />
@@ -78,14 +79,16 @@ export function TabColorPicker(props: {
       >
         <label
           htmlFor={customColorId}
-          className="relative flex size-6 shrink-0 items-center justify-center rounded-full focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-popover"
+          className={cn(
+            "relative flex size-6 shrink-0 items-center justify-center rounded-full focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-popover",
+            customColor
+              ? "bg-[var(--swatch)]"
+              : "bg-[conic-gradient(#e5484d,#f5b000,#46a758,#0090ff,#7c6cf0,#e5484d)]",
+          )}
           style={
             customColor
-              ? { backgroundColor: selectedColor }
-              : {
-                  backgroundImage:
-                    "conic-gradient(#e5484d, #f5b000, #46a758, #0090ff, #7c6cf0, #e5484d)",
-                }
+              ? ({ "--swatch": selectedColor } as CSSProperties)
+              : undefined
           }
         >
           <Pipette className="size-3 text-white drop-shadow-sm" aria-hidden />
@@ -190,8 +193,8 @@ export function TabAppearanceMenu(props: { readonly tab: HeaderTab }) {
               onSelect={() => actions.setTabGroup(props.tab, id)}
             >
               <span
-                className="size-3 rounded-full"
-                style={{ backgroundColor: entry.color }}
+                className="size-3 rounded-full bg-[var(--swatch)]"
+                style={{ "--swatch": entry.color } as CSSProperties}
               />
               {entry.name || "Unnamed group"}
               {id === groupId ? <Check className="ml-auto" /> : null}

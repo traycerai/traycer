@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { computeInitials } from "@/lib/auth/compute-initials";
 import { resolveProfileAccentColor } from "@/lib/providers/profile-accent-color";
@@ -23,8 +24,8 @@ export function ProfileAvatarBadge(props: ProfileAvatarBadgeProps) {
   return (
     <Avatar size={size} className={className}>
       <AvatarFallback
-        style={{ backgroundColor: color }}
-        className="font-semibold text-neutral-950"
+        style={{ "--swatch": color } as CSSProperties}
+        className="bg-[var(--swatch)] font-semibold text-neutral-950"
       >
         {initials}
       </AvatarFallback>

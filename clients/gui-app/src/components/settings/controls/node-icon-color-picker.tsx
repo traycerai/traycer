@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -50,7 +51,10 @@ export function EpicNodeIconColorPicker(props: ArtifactIconColorPickerProps) {
                   className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border/60 bg-background/50 px-2 py-1.5"
                 >
                   <span className="flex min-w-0 items-center gap-2">
-                    <Icon className="size-4 shrink-0" style={{ color }} />
+                    <Icon
+                      className="size-4 shrink-0 text-[var(--swatch)]"
+                      style={{ "--swatch": color } as CSSProperties}
+                    />
                     <span className="truncate text-ui-xs text-foreground">
                       {label}
                     </span>
