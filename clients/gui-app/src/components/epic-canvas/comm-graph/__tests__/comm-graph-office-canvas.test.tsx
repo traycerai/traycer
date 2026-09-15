@@ -817,6 +817,51 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.getAllByText("Reviewer").length).toBeGreaterThan(0);
   });
 
+  it("disables the sr-only accessible agent control while Auto is still measuring (Finding 23)", () => {
+    // Codex: the sr-only accessible agent buttons called setSelectedAgentId
+    // directly, bypassing the measuring guards on the directory/Find/floor
+    // handlers (Finding 22) - a keyboard or screen-reader activation staged a
+    // selection the measuring->resolved remount then discarded, so the button
+    // silently did nothing. `disabled={measuring}` is the observable fix: a
+    // disabled button cannot be activated at all, sr-only or not.
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          measuring: true,
+        }),
+      ),
+    );
+
+    expect(
+      screen.getByTestId<HTMLButtonElement>(
+        `comm-graph-office-agent-${ORCHESTRATOR.id}`,
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it("enables the sr-only accessible agent control once Auto has resolved, contrasting the case above (Finding 23)", () => {
+    // Non-vacuous contrast: the same control, `measuring: false` - it is not
+    // disabled, and activating it still selects the agent, proving the gate
+    // above is about the measuring mount and not the control having stopped
+    // working altogether.
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          measuring: false,
+        }),
+      ),
+    );
+
+    const button = screen.getByTestId<HTMLButtonElement>(
+      `comm-graph-office-agent-${ORCHESTRATOR.id}`,
+    );
+    expect(button.disabled).toBe(false);
+
+    fireEvent.click(button);
+
+    expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+  });
+
   it("closes the detail panel when its agent drops out of the as-of visible set", () => {
     const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
     const view = render(
