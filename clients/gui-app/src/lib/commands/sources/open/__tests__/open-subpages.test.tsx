@@ -31,6 +31,7 @@ const spies = vi.hoisted(() => ({
   toast: vi.fn(),
   openBrowserTab: vi.fn(),
   retryBrowserSessions: vi.fn(),
+  retryTerminalBindings: vi.fn(),
   setBrowserPinSelection: vi.fn(),
   retryBrowserHosts: vi.fn(),
 }));
@@ -82,6 +83,7 @@ type TerminalBindingsFixture = {
     };
     isPending: boolean;
     isError: boolean;
+    refetch: () => Promise<unknown>;
   };
   remote: {
     data: {
@@ -100,6 +102,7 @@ const terminalBindingsMock = vi.hoisted<TerminalBindingsFixture>(() => ({
     },
     isPending: false,
     isError: false,
+    refetch: spies.retryTerminalBindings,
   },
   remote: {
     data: {
@@ -125,6 +128,7 @@ const terminalBindingsMock = vi.hoisted<TerminalBindingsFixture>(() => ({
     },
     isPending: false,
     isError: false,
+    refetch: spies.retryTerminalBindings,
   },
 }));
 const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
@@ -335,6 +339,13 @@ vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => terminalBindingsMock.active,
   useWorktreeListBindingsForEpicForClient: (args: {
+    readonly client: { readonly mockHostId: string } | null;
+  }) =>
+    args.client?.mockHostId === "terminal-host"
+      ? terminalBindingsMock.remote
+      : terminalBindingsMock.active,
+  useTerminalWorkspaceBindings: () => terminalBindingsMock.active,
+  useTerminalWorkspaceBindingsForClient: (args: {
     readonly client: { readonly mockHostId: string } | null;
   }) =>
     args.client?.mockHostId === "terminal-host"
@@ -884,7 +895,15 @@ describe("Terminals opener sub-page", () => {
     const remoteWorkspaces = renderItems(remoteHost.subpage.useItems);
     expect(remoteWorkspaces.map((item) => item.label)).toEqual([
       "Couldn't load workspaces",
+      "Retry workspace check",
     ]);
+    const retry = remoteWorkspaces.find(
+      (item) => item.label === "Retry workspace check",
+    );
+    if (retry === undefined) throw new Error("expected workspace retry item");
+    void retry.run(CTX);
+    expect(spies.retryTerminalBindings).toHaveBeenCalledOnce();
+    expect(retry.keepOpen).toBe(true);
   });
 
   it("does not offer the folderless fallback when another host owns a workspace", () => {

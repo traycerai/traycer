@@ -25,8 +25,8 @@ import {
 } from "@/lib/host/transport-key";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import {
-  useWorktreeListBindingsForEpic,
-  useWorktreeListBindingsForEpicForClient,
+  useTerminalWorkspaceBindings,
+  useTerminalWorkspaceBindingsForClient,
 } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useHostBinding,
@@ -235,7 +235,7 @@ function terminalWorkspaceStatusHint(
     label: isLoading ? "Loading workspaces…" : "Couldn't load workspaces",
     description: isLoading
       ? "Fetching workspaces for this host"
-      : "Try again after the host reconnects",
+      : "Retry the workspace availability check",
     statusBadge: isLoading ? "Loading" : "Unavailable",
     disabled: true,
     keywords: ["workspace", status],
@@ -253,6 +253,7 @@ interface TerminalWorkspaceQueryState {
   readonly folderlessCwd: string | null | undefined;
   readonly isPending: boolean;
   readonly isError: boolean;
+  readonly retry: () => void;
 }
 
 function terminalWorkspaceQueryItems(
@@ -262,7 +263,19 @@ function terminalWorkspaceQueryItems(
   hostClient: HostClient<HostRpcRegistry>,
 ): ReadonlyArray<CommandItem> {
   if (query.isPending) return [terminalWorkspaceStatusHint(hostId, "loading")];
-  if (query.isError) return [terminalWorkspaceStatusHint(hostId, "error")];
+  if (query.isError)
+    return [
+      terminalWorkspaceStatusHint(hostId, "error"),
+      {
+        ...openerActionLeaf({
+          id: `open:terminals:new:host:${hostId}:retry`,
+          label: "Retry workspace check",
+          keywords: ["workspace", "terminal", "retry"],
+          run: query.retry,
+        }),
+        keepOpen: true,
+      },
+    ];
   return terminalWorkspaceLeaves(
     ctx,
     hostId,
@@ -280,11 +293,12 @@ function useHostTerminalWorkspaceItems(
 ): ReadonlyArray<CommandItem> {
   const hostClient = useHostClient();
   const client = useHostClientForHostId(hostId);
-  const bindings = useWorktreeListBindingsForEpicForClient({
+  const bindings = useTerminalWorkspaceBindingsForClient({
     client,
     epicId: ctx.activeEpicId ?? "",
     enabled: ctx.activeEpicId !== null,
   });
+  const retryBindings = bindings.refetch;
   return useMemo(
     () =>
       terminalWorkspaceQueryItems(
@@ -295,6 +309,9 @@ function useHostTerminalWorkspaceItems(
           folderlessCwd: bindings.data?.folderlessCwd,
           isPending: bindings.isPending,
           isError: bindings.isError,
+          retry: () => {
+            void retryBindings();
+          },
         },
         hostClient,
       ),
@@ -302,6 +319,7 @@ function useHostTerminalWorkspaceItems(
       bindings.data,
       bindings.isError,
       bindings.isPending,
+      retryBindings,
       ctx,
       hostClient,
       hostId,
@@ -325,7 +343,7 @@ function useNewTerminalWorkspaceItems(
 ): ReadonlyArray<CommandItem> {
   const activeHostId = useAddressableHostId();
   const hostClient = useHostClient();
-  const bindings = useWorktreeListBindingsForEpic({
+  const bindings = useTerminalWorkspaceBindings({
     epicId: ctx.activeEpicId ?? "",
     enabled: ctx.activeEpicId !== null,
   });
@@ -346,6 +364,7 @@ function useNewTerminalWorkspaceItems(
       [directory.data],
     ),
   );
+  const retryBindings = bindings.refetch;
   return useMemo(() => {
     const localLeaves =
       activeHostId === null
@@ -358,6 +377,9 @@ function useNewTerminalWorkspaceItems(
               folderlessCwd: bindings.data?.folderlessCwd,
               isPending: bindings.isPending,
               isError: bindings.isError,
+              retry: () => {
+                void retryBindings();
+              },
             },
             hostClient,
           );
@@ -388,6 +410,7 @@ function useNewTerminalWorkspaceItems(
     bindings.data,
     bindings.isError,
     bindings.isPending,
+    retryBindings,
     ctx,
     directory.data,
     hasReadySessionFor,

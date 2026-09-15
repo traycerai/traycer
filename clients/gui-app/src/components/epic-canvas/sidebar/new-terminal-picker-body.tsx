@@ -24,7 +24,7 @@ import {
   useSurfaceHostClient,
   useSurfaceHostPin,
 } from "@/hooks/host/use-surface-host-pin";
-import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useTerminalWorkspaceBindingsForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
@@ -51,7 +51,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     useState<WorktreeBindingSelectorRowV12 | null>(null);
   const pin = useSurfaceHostPin(surfaceKey);
   const client = useSurfaceHostClient(pin.resolvedHostId);
-  const bindingsQuery = useWorktreeListBindingsForEpicForClient({
+  const bindingsQuery = useTerminalWorkspaceBindingsForClient({
     client,
     epicId,
     enabled: pin.resolvedHostId !== null,
@@ -80,17 +80,23 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
   // disabled.
   const folderlessCwd = bindingsQuery.data?.folderlessCwd ?? null;
   const folderlessCwdFailed = hasLoadedNoRows && folderlessCwd === null;
-  const launchTarget = useMemo(
-    () =>
-      selectedRow === null
-        ? resolveFolderlessTerminalTarget(
-            hasLoadedNoRows,
-            pin.resolvedHostId,
-            folderlessCwd,
-          )
-        : { hostId: selectedRow.hostId, cwd: selectedRow.runningDir },
-    [folderlessCwd, hasLoadedNoRows, pin.resolvedHostId, selectedRow],
-  );
+  const launchTarget = useMemo(() => {
+    if (bindingsQuery.isError) return null;
+    if (selectedRow !== null) {
+      return { hostId: selectedRow.hostId, cwd: selectedRow.runningDir };
+    }
+    return resolveFolderlessTerminalTarget(
+      hasLoadedNoRows,
+      pin.resolvedHostId,
+      folderlessCwd,
+    );
+  }, [
+    bindingsQuery.isError,
+    folderlessCwd,
+    hasLoadedNoRows,
+    pin.resolvedHostId,
+    selectedRow,
+  ]);
 
   // A double-click on Launch fires the handler twice before React can flush
   // the state update that unmounts this body, so each click would mint a
@@ -160,7 +166,21 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-border/60 bg-muted/20 px-2.5 py-2.5">
         <div className="min-w-0 text-xs text-muted-foreground">
-          {folderlessCwdStatus}
+          {bindingsQuery.isError ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={bindingsQuery.isFetching}
+              onClick={() => {
+                void bindingsQuery.refetch();
+              }}
+            >
+              {bindingsQuery.isFetching ? "Retrying…" : "Retry"}
+            </Button>
+          ) : (
+            folderlessCwdStatus
+          )}
         </div>
         <Button
           type="button"

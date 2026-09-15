@@ -1469,6 +1469,22 @@ export type WorktreeListBindingsForEpicRequest = z.infer<
   typeof worktreeListBindingsForEpicRequestSchema
 >;
 
+/**
+ * v1.3 lets terminal launchers request directory availability without Git.
+ * Omitted purpose preserves Git selector behavior. Directory reads return
+ * only verified presence: errors/timeouts fail the request and can be retried.
+ * Their present rows have no disabled reason and leave Git facts pending;
+ * missing directories are definitive missing rows. Git consumers must keep
+ * using the default purpose.
+ */
+export const worktreeListBindingsForEpicRequestSchemaV13 =
+  worktreeListBindingsForEpicRequestSchema.extend({
+    purpose: z.enum(["git", "directory"]).optional(),
+  });
+export type WorktreeListBindingsForEpicRequestV13 = z.infer<
+  typeof worktreeListBindingsForEpicRequestSchemaV13
+>;
+
 export const worktreeBindingSelectorDisabledReasonSchema = z.enum([
   "setup_pending",
   "setup_running",

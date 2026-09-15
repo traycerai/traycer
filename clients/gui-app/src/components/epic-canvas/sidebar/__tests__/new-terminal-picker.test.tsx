@@ -37,6 +37,7 @@ import { modLabel } from "@/lib/keybindings/platform";
 
 const selectById = vi.fn();
 const refreshDirectory = vi.fn(() => Promise.resolve([]));
+const retryBindings = vi.fn(() => Promise.resolve());
 
 interface BindingsQueryStub {
   readonly data:
@@ -47,6 +48,7 @@ interface BindingsQueryStub {
     | undefined;
   readonly isPending: boolean;
   readonly isError: boolean;
+  readonly refetch?: () => Promise<unknown>;
 }
 
 const bindingsQuery = vi.hoisted(() => ({
@@ -56,6 +58,8 @@ const bindingsQuery = vi.hoisted(() => ({
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => bindingsQuery.current,
   useWorktreeListBindingsForEpicForClient: () => bindingsQuery.current,
+  useTerminalWorkspaceBindings: () => bindingsQuery.current,
+  useTerminalWorkspaceBindingsForClient: () => bindingsQuery.current,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -88,6 +92,7 @@ function stubLoadedBindings(): void {
     },
     isPending: false,
     isError: false,
+    refetch: retryBindings,
   };
 }
 
@@ -213,6 +218,7 @@ describe("<NewTerminalPicker />", () => {
     usePanelHeaderMenuStore.setState({ openBySurfaceKey: {} });
     selectById.mockClear();
     refreshDirectory.mockClear();
+    retryBindings.mockClear();
     useSurfaceHostSelectionStore.getState().resetForTests();
     stubLoadedBindings();
   });
@@ -259,6 +265,27 @@ describe("<NewTerminalPicker />", () => {
     expect(
       screen.getByRole("option", { name: /feature-x/i }).dataset.checked,
     ).toBeUndefined();
+  });
+
+  it("gates Launch and offers a manual Retry after directory availability fails", () => {
+    const loadedBindings = bindingsQuery.current;
+    if (loadedBindings === null) throw new Error("expected loaded bindings");
+    bindingsQuery.current = {
+      data: loadedBindings.data,
+      isPending: false,
+      isError: true,
+      refetch: retryBindings,
+    };
+    openPicker();
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry).toBeDefined();
+    expect(screen.getByRole("button", { name: "Launch" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    fireEvent.click(retry);
+    expect(retryBindings).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the open picker when its panel header remounts", () => {
