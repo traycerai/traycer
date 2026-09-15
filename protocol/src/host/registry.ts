@@ -414,6 +414,7 @@ import {
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
+import { chatSearchV10 } from "@traycer/protocol/host/chat-search/contracts";
 import {
   draftsClaimV10,
   draftsDeleteV10,
@@ -5640,6 +5641,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: chatLocateRowV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Full-text search over this host's chats. Off-floor: a host without the
+  // search index does not advertise it, and the client hides search.
+  "chat.search": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatSearchV10, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },

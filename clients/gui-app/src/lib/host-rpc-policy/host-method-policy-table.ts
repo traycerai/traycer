@@ -587,6 +587,9 @@ export const HOST_METHOD_POLL_TABLE = {
   // supersedes an older one - and never polled: the answer is a position in a
   // transcript the live subscription is already reporting changes to.
   "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
+  // Search as you type: a newer query supersedes an older one, and never
+  // polled - the caller asks again when the query changes.
+  "chat.search": { ...LATEST_SCHEDULING, poll: null },
   // The external fallback actions. All `fifo`, and none polled.
   //
   // `fifo` because each carries the traversal revision it expects, so two rapid
