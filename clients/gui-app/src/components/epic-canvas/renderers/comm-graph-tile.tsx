@@ -25,7 +25,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { DEFAULT_COMM_GRAPH_VIEW } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import {
+  DEFAULT_COMM_GRAPH_VIEW,
+  isNeutralCamera,
+} from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import type {
   CommGraphTileCamera,
   CommGraphTileRef,
@@ -535,16 +538,38 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // the next office mount reads it and resets at render, above.
     if (node.view.mode !== "office") return;
     if (node.view.officeView !== null) return;
+    // THE DEFAULT ENTERED AUTO. `officeAutoView` still holds the OUTCOME of the
+    // last Auto run this tile followed, and the epic or the tile's box may have
+    // changed shape since - so leaving it in place lets the Auto effect's
+    // `officeAutoView !== null` guard skip measurement and reopen on a stale
+    // Floor/Towers pick. Clear the dormant outcome so this selection goes back
+    // through measurement, exactly as an explicit Auto pick does; nothing
+    // frames a view until Auto answers.
+    if (settingsDefaultView === "auto") {
+      if (
+        node.view.officeAutoView === null &&
+        node.view.officeCamera === null &&
+        node.view.officeCameraView === null
+      ) {
+        return;
+      }
+      updateView(viewTabId, node.id, {
+        ...node.view,
+        officeCamera: null,
+        officeAutoView: null,
+        officeCameraView: null,
+      });
+      releaseWitness();
+      return;
+    }
+    // The default moved to a CONCRETE view: that view is what resolves now, and
+    // the camera is retired only when the resolved view actually changed.
     const before = previous === "auto" ? node.view.officeAutoView : previous;
-    const after =
-      settingsDefaultView === "auto"
-        ? node.view.officeAutoView
-        : settingsDefaultView;
-    if (before === after) return;
+    if (before === settingsDefaultView) return;
     updateView(viewTabId, node.id, {
       ...node.view,
       officeCamera: null,
-      officeCameraView: after,
+      officeCameraView: settingsDefaultView,
     });
     releaseWitness();
   }, [
@@ -769,6 +794,21 @@ export function CommGraphTile(props: CommGraphTileProps) {
     ],
   );
 
+  // The office canvas registers a way to TAKE its pending, debounced framing
+  // here (see `onRegisterFlush` on the canvas); `null` whenever the office is
+  // not mounted or has nothing pending. A ref, not state: it is read only from
+  // an event handler, and holding it in state would re-render on every
+  // register.
+  const officeFlushRef = useRef<(() => CommGraphTileCamera | null) | null>(
+    null,
+  );
+  const registerOfficeFlush = useCallback(
+    (take: (() => CommGraphTileCamera | null) | null) => {
+      officeFlushRef.current = take;
+    },
+    [],
+  );
+
   const handleModeChange = useCallback(
     (mode: CommGraphTileViewState["mode"]) => {
       // Pressing the mode you are already in is not a mode change.
@@ -784,9 +824,36 @@ export function CommGraphTile(props: CommGraphTileProps) {
       // the graph's, `officeCamera` the office's - so there is nothing left
       // for a switch to protect, and the reset only destroyed the framing the
       // person was going to come back to (the live re-run's N10).
-      updateView(viewTabId, node.id, { ...node.view, mode });
+      //
+      // FLUSH the office's pending framing INTO this same write. A drag, wheel
+      // or Fit within the 150ms persist debounce is still pending when leaving
+      // the office unmounts its canvas, and that unmount cancels the timer -
+      // right for a view pick (a pan on the old view must not land on the new
+      // one), but here it would lose the framing the promise above says a
+      // switch keeps. Folding it in - rather than letting the canvas write it
+      // separately - is what stops this stale `node.view` from clobbering it a
+      // beat later. Neutral collapses to the `null` armed camera, exactly as
+      // the office camera reducer does.
+      // Only when leaving a RESOLVED office: a gesture on the blank measuring
+      // surface frames no view (the same reason `handleOfficeCameraChange`
+      // ignores a write while `resolvedViewId` is null), and the canvas's own
+      // unmount cleanup still cancels the timer either way.
+      const pending =
+        mode === "graph" && resolvedViewId !== null
+          ? (officeFlushRef.current?.() ?? null)
+          : null;
+      updateView(viewTabId, node.id, {
+        ...node.view,
+        ...(pending === null
+          ? {}
+          : {
+              officeCamera: isNeutralCamera(pending) ? null : pending,
+              officeCameraView: resolvedViewId,
+            }),
+        mode,
+      });
     },
-    [node.id, node.view, updateView, viewTabId],
+    [node.id, node.view, resolvedViewId, updateView, viewTabId],
   );
 
   if (agents.length === 0) {
@@ -855,6 +922,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
             officeView={OFFICE_VIEWS[resolvedViewId ?? MEASURING_VIEW_ID]}
             ready={resolvedViewId !== null && drawReady}
             onAutoProbe={handleAutoProbe}
+            onRegisterFlush={registerOfficeFlush}
             viewPicker={
               <OfficeViewPicker
                 choice={choice}

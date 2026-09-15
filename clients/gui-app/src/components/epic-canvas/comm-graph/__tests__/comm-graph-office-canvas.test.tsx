@@ -380,6 +380,7 @@ function officeElement(
       // canvas, not about Auto still deciding what to hand it.
       ready
       onAutoProbe={vi.fn()}
+      onRegisterFlush={vi.fn()}
       viewPicker={null}
       autoChip={null}
       onCameraChange={vi.fn()}
@@ -3599,6 +3600,7 @@ function officeElementWithView(
       // the renderer puts things, not about Auto still deciding.
       ready
       onAutoProbe={vi.fn()}
+      onRegisterFlush={vi.fn()}
       viewPicker={null}
       autoChip={null}
       onCameraChange={vi.fn()}

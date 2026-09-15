@@ -64,7 +64,10 @@ import {
 } from "@/lib/comm-graph/comm-graph-model";
 import { useCommGraphOpenAgentById } from "@/components/epic-canvas/comm-graph/use-comm-graph-open-agent-by-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
+import type {
+  CommGraphTileCamera,
+  CommGraphTileViewState,
+} from "@/stores/epics/canvas/types";
 import {
   DEFAULT_COMM_GRAPH_VIEW,
   isDefaultCommGraphView,
@@ -2464,6 +2467,24 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    */
   /** The current measurement, or `null` when this canvas no longer has one. */
   readonly onAutoProbe: (probe: OfficeAutoProbe | null) => void;
+  /**
+   * Hands the tile a way to TAKE this canvas's pending, debounced office
+   * framing before it is switched away from.
+   *
+   * The camera persist is debounced (a drag or wheel does not write on every
+   * frame), so a framing made within that window is still pending when a mode
+   * switch unmounts this canvas - and the unmount cancels the timer, which is
+   * the right thing for the VIEW-PICK remount (a pan on the old view must not
+   * land on the new one) but wrong for a mode switch, which D68 promises keeps
+   * each renderer's camera. So the tile calls the registered function before a
+   * mode change: it clears the pending timer and returns the patch that would
+   * have been persisted, or `null` when nothing is pending, and the tile folds
+   * that into the same write that flips the mode. Registered as `null` on
+   * unmount.
+   */
+  readonly onRegisterFlush: (
+    take: (() => CommGraphTileCamera | null) | null,
+  ) => void;
 }
 
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
@@ -2486,6 +2507,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     onJumpToSender,
     onOpenAgent,
     onCameraChange,
+    onRegisterFlush,
     playing,
     pulse,
     pulseKey,
@@ -2986,42 +3008,62 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     wasPlayingRef.current = playing;
   }, [playing, runtime]);
 
+  // A PATCH of the three camera fields, as the store should hold them RIGHT
+  // NOW. This canvas is mounted under the resolved view's key and knows nothing
+  // about which view that is, so it must not be the thing that writes one back.
+  //
+  // WHILE AUTO-FIT IS ON, the NEUTRAL camera is the patch, not the fitted one.
+  // The framing the loop paints tracks the floor and the viewport, and an
+  // auto-fit loop refits IN PLACE without ever persisting - it hands the camera
+  // to the store only once a person takes manual control (`persistCameraFromLoop`,
+  // gated on auto-fit being off). Writing the live fitted numbers would freeze
+  // THIS refit as a user framing: a later pane/directory resize or floor growth
+  // moves the loop's camera with no persist, and after an eviction or reload
+  // `createOfficeRuntime` would read the frozen pre-resize numbers, take them
+  // for a user framing, disable auto-fit, and restore a stale frame that can
+  // crop the office. The neutral camera is the "fit yourself" sentinel every
+  // renderer already reads (`isDefaultCommGraphView`), so persisting it re-arms
+  // auto-fit on the next load instead - the reducer collapses it to the `null`
+  // armed camera.
+  const currentViewPatch = useCallback((): CommGraphTileCamera => {
+    if (runtime.isAutoFitEnabled()) {
+      return {
+        x: DEFAULT_COMM_GRAPH_VIEW.x,
+        y: DEFAULT_COMM_GRAPH_VIEW.y,
+        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+      };
+    }
+    const camera = runtime.getCamera();
+    return { x: camera.x, y: camera.y, zoom: camera.zoom };
+  }, [runtime]);
+
   const persistView = useCallback(() => {
     if (persistTimerRef.current !== null) {
       window.clearTimeout(persistTimerRef.current);
     }
     persistTimerRef.current = window.setTimeout(() => {
       persistTimerRef.current = null;
-      // A PATCH of the three camera fields. This canvas is mounted under the
-      // resolved view's key and knows nothing about which view that is, so it
-      // must not be the thing that writes one back.
-      //
-      // WHILE AUTO-FIT IS ON, the NEUTRAL camera is persisted, not the fitted
-      // one. The framing the loop paints tracks the floor and the viewport, and
-      // an auto-fit loop refits IN PLACE without ever persisting - it hands the
-      // camera to the store only once a person takes manual control
-      // (`persistCameraFromLoop`, gated on auto-fit being off). Writing the live
-      // fitted numbers here would freeze THIS refit as a user framing: a later
-      // pane/directory resize or floor growth moves the loop's camera with no
-      // persist, and after an eviction or reload `createOfficeRuntime` would
-      // read the frozen pre-resize numbers, take them for a user framing,
-      // disable auto-fit, and restore a stale frame that can crop the office.
-      // The neutral camera is the "fit yourself" sentinel every renderer already
-      // reads (`isDefaultCommGraphView`), so persisting it re-arms auto-fit on
-      // the next load instead - the reducer collapses it to the `null` armed
-      // camera.
-      if (runtime.isAutoFitEnabled()) {
-        onCameraChange({
-          x: DEFAULT_COMM_GRAPH_VIEW.x,
-          y: DEFAULT_COMM_GRAPH_VIEW.y,
-          zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
-        });
-        return;
-      }
-      const camera = runtime.getCamera();
-      onCameraChange({ x: camera.x, y: camera.y, zoom: camera.zoom });
+      onCameraChange(currentViewPatch());
     }, VIEW_PERSIST_DEBOUNCE_MS);
-  }, [onCameraChange, runtime]);
+  }, [currentViewPatch, onCameraChange]);
+
+  // Take whatever a pending persist would have written, clearing the timer so
+  // the debounced fire does not also run. `null` when nothing is pending - the
+  // store already holds the latest framing then. The tile calls this on a mode
+  // switch and folds the result into the same write, so the office framing a
+  // person just made survives the switch instead of being dropped with the
+  // unmounted canvas; see `onRegisterFlush`.
+  const takePendingView = useCallback((): CommGraphTileCamera | null => {
+    if (persistTimerRef.current === null) return null;
+    window.clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = null;
+    return currentViewPatch();
+  }, [currentViewPatch]);
+
+  useEffect(() => {
+    onRegisterFlush(takePendingView);
+    return () => onRegisterFlush(null);
+  }, [onRegisterFlush, takePendingView]);
 
   useEffect(
     () => () => {
