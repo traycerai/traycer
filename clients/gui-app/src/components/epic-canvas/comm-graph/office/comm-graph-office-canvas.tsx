@@ -2648,9 +2648,19 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     shownDetail?.kind === "agent" ? shownDetail.agentId : null;
   const selectedEdgeId =
     shownDetail?.kind === "pair" ? shownDetail.edgeId : null;
-  const setSelectedAgentId = useCallback((agentId: string | null) => {
-    setSelectedDetail(agentId === null ? null : { kind: "agent", agentId });
-  }, []);
+  const setSelectedAgentId = useCallback(
+    (agentId: string | null) => {
+      // Selecting an agent while Auto is still measuring stages a detail the
+      // measuring->resolved remount discards, so the activation silently does
+      // nothing. Every agent-selection route funnels through here - the floor
+      // click, the directory, Find and the sr-only agent list - so gating the
+      // choke point covers them all rather than each caller. Clearing (null)
+      // stays allowed so closePanel and deselect keep working while measuring.
+      if (agentId !== null && measuring) return;
+      setSelectedDetail(agentId === null ? null : { kind: "agent", agentId });
+    },
+    [measuring],
+  );
   // What the pointer is over, in container-relative screen pixels. State
   // rather than a ref because the card is React, and it only moves when the
   // hover target changes - not every frame.
@@ -4490,6 +4500,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
                 type="button"
                 data-testid={`comm-graph-office-agent-${agent.id}`}
                 aria-label={`Open ${agent.name}`}
+                // Disabled while Auto measures so assistive tech hears the seat
+                // is not selectable yet, rather than activating a button whose
+                // selection the measuring->resolved remount would discard. The
+                // setSelectedAgentId guard is the backstop for every route.
+                disabled={measuring}
                 onClick={() => setSelectedAgentId(agent.id)}
               >
                 {agent.name}
