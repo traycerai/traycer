@@ -91,8 +91,8 @@ export function rowAddControlRevealClass(addChildIsPending: boolean): string {
 
 export const STATUS_DOT_CLASSES: Record<number, string> = {
   0: "bg-muted-foreground",
-  1: "bg-amber-500",
-  2: "bg-emerald-500",
+  1: "bg-warning",
+  2: "bg-success",
 };
 
 export const STATUS_LABELS: Record<number, string> = {

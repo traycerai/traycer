@@ -694,8 +694,10 @@ describe("<TabStrip />", () => {
     render(<TabChrome isActive color="#12ab34" />);
 
     const center = screen.getByTestId("tab-chrome-center");
-    expect(center.style.backgroundColor).toBe("var(--color-background)");
-    expect(center.style.borderTopColor).toBe("rgb(18, 171, 52)");
+    expect(center.style.getPropertyValue("--swatch")).toBe(
+      "var(--color-background)",
+    );
+    expect(center.style.getPropertyValue("--swatch-border")).toBe("#12ab34");
   });
 
   it("keeps the project color on an inactive tab", () => {
@@ -705,21 +707,25 @@ describe("<TabStrip />", () => {
 
     expect(
       container.querySelector("span[style]")?.getAttribute("style"),
-    ).toContain("background-color: rgb(18, 171, 52);");
+    ).toContain("--swatch: #12ab34;");
   });
 
   it("uses the manual color for a focused split member and retains the primary fallback", () => {
     const { rerender, container } = render(
       <SplitMemberChrome focused color="#12ab34" />,
     );
-    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
-      "rgb(18, 171, 52)",
-    );
+    expect(
+      screen
+        .getByTestId("tab-chrome-center")
+        .style.getPropertyValue("--swatch-border"),
+    ).toBe("#12ab34");
 
     rerender(<SplitMemberChrome focused color={null} />);
-    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
-      "var(--color-primary)",
-    );
+    expect(
+      screen
+        .getByTestId("tab-chrome-center")
+        .style.getPropertyValue("--swatch-border"),
+    ).toBe("var(--color-primary)");
 
     rerender(<SplitMemberChrome focused={false} color="#12ab34" />);
     expect(screen.queryByTestId("tab-chrome-center")).toBeNull();
@@ -736,7 +742,7 @@ describe("<TabStrip />", () => {
       side: "left",
       leftColor: "#f97316",
       rightColor: null,
-      expectedLeft: "rgb(249, 115, 22)",
+      expectedLeft: "#f97316",
       expectedRight: "var(--color-primary)",
     },
     {
@@ -744,7 +750,7 @@ describe("<TabStrip />", () => {
       leftColor: null,
       rightColor: "#f97316",
       expectedLeft: "var(--color-primary)",
-      expectedRight: "rgb(249, 115, 22)",
+      expectedRight: "#f97316",
     },
   ])(
     "keeps the $side split member underline color independent",
@@ -761,17 +767,20 @@ describe("<TabStrip />", () => {
         />,
       );
 
+      // The group underline takes `text-primary` as a class now, so only the
+      // two members carry a per-side value.
       expect(
-        screen.getByTestId("split-tab-group-underline-split-colors").style
-          .color,
-      ).toBe("var(--color-primary)");
+        screen.getByTestId("split-tab-group-underline-split-colors").className,
+      ).toContain("text-primary");
       expect(
-        screen.getByTestId("split-tab-group-underline-left-split-colors").style
-          .color,
+        screen
+          .getByTestId("split-tab-group-underline-left-split-colors")
+          .style.getPropertyValue("--swatch"),
       ).toBe(expectedLeft);
       expect(
-        screen.getByTestId("split-tab-group-underline-right-split-colors").style
-          .color,
+        screen
+          .getByTestId("split-tab-group-underline-right-split-colors")
+          .style.getPropertyValue("--swatch"),
       ).toBe(expectedRight);
     },
   );
@@ -1168,7 +1177,9 @@ describe("<TabStrip />", () => {
     expect(leftUnderline.className).not.toContain("bg-current");
     expect(rightUnderline.className).toContain("bg-current");
     expect(
-      within(leftTab).getByTestId("tab-chrome-center").style.borderTopColor,
+      within(leftTab)
+        .getByTestId("tab-chrome-center")
+        .style.getPropertyValue("--swatch-border"),
     ).toBe("var(--color-primary)");
     expect(within(rightTab).queryByTestId("tab-chrome-center")).toBeNull();
     expect(screen.queryByTestId("split-member-focus-accent")).toBeNull();
@@ -1205,7 +1216,9 @@ describe("<TabStrip />", () => {
     expect(rightTab.className).toContain("px-5");
     expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();
     expect(
-      within(rightTab).getByTestId("tab-chrome-center").style.borderTopColor,
+      within(rightTab)
+        .getByTestId("tab-chrome-center")
+        .style.getPropertyValue("--swatch-border"),
     ).toBe("var(--color-primary)");
 
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
