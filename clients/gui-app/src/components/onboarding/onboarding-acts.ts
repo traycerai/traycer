@@ -1,5 +1,3 @@
-import { isMobileApp } from "@/lib/mobile-app";
-
 /**
  * The acts the desktop tour can play - and the only ids the desktop diorama
  * can draw, which is why it is a type of its own rather than the whole act
@@ -151,11 +149,13 @@ export const ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
 ];
 
 /**
- * The phone tour, five acts. Acts 1 and 2 replace the desktop lessons that
- * teach chrome a phone does not have (tab strip, drag-to-split canvas) with
- * the two things a phone user must actually find: the drawer and the switcher
- * sheet. Desktop's closing flow act (Cmd+K, the theme picker) has no phone
- * counterpart at all - the tour ends on delegation instead.
+ * The phone tour, five acts, played under the phone-width chrome only (a
+ * tablet running the installed app at desktop width plays the desktop tour).
+ * Acts 1 and 2 replace the desktop lessons that teach chrome a phone does not
+ * have (tab strip, drag-to-split canvas) with the two things a phone user must
+ * actually find: the drawer and the switcher sheet. Desktop's closing flow
+ * act (Cmd+K, the theme picker) has no phone counterpart at all - the tour
+ * ends on delegation instead.
  *
  * No session-import act here: its stage is the live desktop-sized wizard
  * reading the host's own disk, and the phone tour's fixed six-act arc was
@@ -186,10 +186,19 @@ const MOBILE_ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
 ];
 
 /**
- * What this shell can do, of the things the desktop tour has an act for.
- * Each false drops one act; see {@link onboardingActsFor}.
+ * What this shell can do, of the things the desktop tour has an act for, and
+ * which chrome it is showing. Each false capability drops one act; the layout
+ * picks the tour; see {@link onboardingActsFor}.
  */
 export interface OnboardingTourCapabilities {
+  /**
+   * The window is below the app's phone breakpoint (`useIsMobileViewport`),
+   * so the shell around the tour is the hamburger drawer and the switcher
+   * sheet. A LAYOUT read, deliberately not `isMobileApp()`: an iPad runs the
+   * installed app at desktop width, with the tab strip and the canvas, and a
+   * tour that taught it the drawer would be teaching chrome it never shows.
+   */
+  readonly phoneLayout: boolean;
   /** The bound host advertises `sessionImport.scan`. */
   readonly sessionImportAvailable: boolean;
   /** A desktop with a browser bridge and saved logins on. */
@@ -197,7 +206,7 @@ export interface OnboardingTourCapabilities {
 }
 
 // Precomputed per capability pair on first use, so the accessor hands back a
-// stable reference per (platform, capabilities) rather than filtering into a
+// stable reference per (layout, capabilities) rather than filtering into a
 // fresh array on every call - memoised consumers would re-render otherwise.
 const DESKTOP_TOURS = new Map<string, ReadonlyArray<OnboardingAct>>();
 
@@ -223,12 +232,16 @@ function desktopTourFor(
 }
 
 /**
- * The tour this shell will actually walk. Two facts pick it, and both are
- * resolved per CALL rather than into a module constant:
+ * The tour this shell will actually walk. Two facts pick it:
  *
- * Platform - `setMobileApp()` runs in the Capacitor entry's `bootstrap()`,
- * which is after this module has already been evaluated as part of gui-app's
- * static graph, so a constant would pin the desktop list on a phone.
+ * Layout - the phone tour plays under the phone chrome and nowhere else. The
+ * app itself switches between the hamburger header and the tab strip on the
+ * same breakpoint (`AppHeader`), so the tour reads the same signal and the
+ * two can never disagree: a phone gets the drawer and switcher acts, and an
+ * iPad - the installed app at desktop width - gets the desktop acts that
+ * describe the tab strip and canvas it is actually looking at. Stable on both
+ * by construction: the iPhone build is portrait-locked below the breakpoint,
+ * and an iPad's shorter side clears it in every orientation.
  *
  * Capability - session import is optional: an older or remote host never
  * advertises `sessionImport.scan`, and Settings and the task-list prompt
@@ -249,6 +262,6 @@ function desktopTourFor(
 export function onboardingActsFor(
   capabilities: OnboardingTourCapabilities,
 ): ReadonlyArray<OnboardingAct> {
-  if (isMobileApp()) return MOBILE_ONBOARDING_ACTS;
+  if (capabilities.phoneLayout) return MOBILE_ONBOARDING_ACTS;
   return desktopTourFor(capabilities);
 }
