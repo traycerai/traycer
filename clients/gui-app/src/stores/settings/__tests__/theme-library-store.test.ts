@@ -171,25 +171,31 @@ describe("useThemeLibraryStore", () => {
   });
 
   it("preserves corrupt storage and state when reset cannot write", () => {
-    const saved = theme("saved", "light");
-    expect(useThemeLibraryStore.getState().saveTheme(saved)).toBe(true);
-    window.localStorage.setItem(PERSIST_KEY, "not-json");
-    const setItem = vi
-      .spyOn(window.localStorage, "setItem")
-      .mockImplementation(() => {
-        throw new DOMException("quota", "QuotaExceededError");
-      });
-
+    const originalGlobalStorage = globalThis.localStorage;
+    vi.stubGlobal("localStorage", window.localStorage);
     try {
-      expect(useThemeLibraryStore.getState().resetLibrary()).toBe(false);
-      expect(useThemeLibraryStore.getState().themes).toEqual([saved]);
-      expect(useThemeLibraryStore.getState().selected).toEqual({
-        light: saved.id,
-        dark: null,
-      });
-      expect(window.localStorage.getItem(PERSIST_KEY)).toBe("not-json");
+      const saved = theme("saved", "light");
+      expect(useThemeLibraryStore.getState().saveTheme(saved)).toBe(true);
+      window.localStorage.setItem(PERSIST_KEY, "not-json");
+      const setItem = vi
+        .spyOn(window.localStorage, "setItem")
+        .mockImplementation(() => {
+          throw new DOMException("quota", "QuotaExceededError");
+        });
+
+      try {
+        expect(useThemeLibraryStore.getState().resetLibrary()).toBe(false);
+        expect(useThemeLibraryStore.getState().themes).toEqual([saved]);
+        expect(useThemeLibraryStore.getState().selected).toEqual({
+          light: saved.id,
+          dark: null,
+        });
+        expect(window.localStorage.getItem(PERSIST_KEY)).toBe("not-json");
+      } finally {
+        setItem.mockRestore();
+      }
     } finally {
-      setItem.mockRestore();
+      vi.stubGlobal("localStorage", originalGlobalStorage);
     }
   });
 
