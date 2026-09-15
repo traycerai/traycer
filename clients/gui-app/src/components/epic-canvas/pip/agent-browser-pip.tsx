@@ -350,7 +350,7 @@ function AgentBrowserPipSurface(props: {
       data-pip-host-id={snapshot.target?.hostId ?? ""}
       data-pip-health={snapshot.streamHealth}
       className={cn(
-        "fixed z-40 overflow-hidden rounded-lg border border-border/80 bg-popover/95 shadow-xl backdrop-blur-sm",
+        "fixed z-40 overflow-hidden rounded-lg border border-border/80 bg-popover/95 shadow-xl",
         !displayed && "invisible pointer-events-none",
       )}
       style={rootStyle}

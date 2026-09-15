@@ -13,7 +13,6 @@ function resetThemeLibrary(): void {
     version: 2,
     themes: [],
     selected: { light: null, dark: null },
-    glassOpacity: 100,
     promptFontFamily: null,
     promptFontSize: 14,
     fontLigatures: true,

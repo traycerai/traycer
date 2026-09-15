@@ -28,7 +28,12 @@ function resetStore(): void {
     version: 2,
     themes: [],
     selected: { light: null, dark: null },
-    glassOpacity: 100,
+    promptFontFamily: null,
+    promptFontSize: 14,
+    fontLigatures: true,
+    panelAnimations: true,
+    panelAnimationDuration: 100,
+    contrast: 100,
     draft: null,
     error: null,
   });
@@ -102,6 +107,49 @@ describe("useThemeLibraryStore", () => {
     );
   });
 
+  it("preserves saved themes and preferences when retired glass storage is rewritten", () => {
+    const saved = theme("saved-theme", "dark");
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        version: 2,
+        themes: [saved],
+        selected: { light: null, dark: saved.id },
+        glassOpacity: 30,
+        promptFontFamily: "Prompt fixture",
+        promptFontSize: 18,
+        fontLigatures: false,
+        panelAnimations: false,
+        panelAnimationDuration: 250,
+        contrast: 110,
+      }),
+    );
+
+    expect(
+      useThemeLibraryStore
+        .getState()
+        .setAppearancePreference({ contrast: 120 }),
+    ).toBe(true);
+
+    expect(useThemeLibraryStore.getState()).toMatchObject({
+      themes: [saved],
+      selected: { light: null, dark: saved.id },
+      promptFontFamily: "Prompt fixture",
+      promptFontSize: 18,
+      fontLigatures: false,
+      panelAnimations: false,
+      panelAnimationDuration: 250,
+      contrast: 120,
+    });
+    const rewritten = JSON.parse(
+      window.localStorage.getItem(PERSIST_KEY) ?? "null",
+    ) as Record<string, unknown>;
+    expect(rewritten).not.toHaveProperty("glassOpacity");
+    expect(rewritten.themes).toEqual([saved]);
+    expect(rewritten.promptFontFamily).toBe("Prompt fixture");
+    expect(rewritten.panelAnimationDuration).toBe(250);
+  });
+
   it("blocks writes until corrupt storage is explicitly reset", () => {
     const saved = theme("saved", "light");
     expect(useThemeLibraryStore.getState().saveTheme(saved)).toBe(true);
@@ -127,7 +175,7 @@ describe("useThemeLibraryStore", () => {
     expect(useThemeLibraryStore.getState().saveTheme(saved)).toBe(true);
     window.localStorage.setItem(PERSIST_KEY, "not-json");
     const setItem = vi
-      .spyOn(Storage.prototype, "setItem")
+      .spyOn(window.localStorage, "setItem")
       .mockImplementation(() => {
         throw new DOMException("quota", "QuotaExceededError");
       });
@@ -351,7 +399,11 @@ describe("useThemeLibraryStore", () => {
     // "durable state written directly to localStorage" tests above - both
     // triggers the v1 -> v2 migration and asserts its result through
     // `readLibrary()`'s one seam.
-    expect(useThemeLibraryStore.getState().setGlassOpacity(100)).toBe(true);
+    expect(
+      useThemeLibraryStore
+        .getState()
+        .setAppearancePreference({ contrast: 100 }),
+    ).toBe(true);
 
     const themes = useThemeLibraryStore.getState().themes;
     const repaired = themes.find(

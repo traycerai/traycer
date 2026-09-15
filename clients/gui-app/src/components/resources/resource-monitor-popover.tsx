@@ -206,9 +206,8 @@ const CPU_COL = "w-14 text-right";
 const MEM_COL = "w-20 text-right";
 // The current root section pins to the top of the scroll region and swaps to the
 // next section as it scrolls into view (a single sticky header, not a stack).
-// Match the glass surface while blurring scrolled rows beneath the header.
 const STICKY_SECTION_HEADER =
-  "sticky top-0 z-20 border-b border-border/50 glass-inset";
+  "sticky top-0 z-20 border-b border-border/50 bg-popover";
 /**
  * Trailing gutter every row reserves for its kill affordance. Section headers
  * (which have no action) reserve the same width as an empty spacer, so the
@@ -865,7 +864,7 @@ function ResourceMonitorContent(props: {
       collisionPadding={12}
       role="dialog"
       aria-label="Resources"
-      className="glass-with-insets w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
+      className="w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
       onOpenAutoFocus={(event) => event.preventDefault()}
       // Keep the panel open when focus moves elsewhere (switching tabs, a task
       // finishing load and autofocusing its content, a terminal grabbing
@@ -2465,7 +2464,7 @@ function ConfirmableRowAction(props: {
         <span className={ROW_ACTION_SLOT} />
         <span
           {...{ [RESOURCE_CONFIRMATION_ATTRIBUTE]: "" }}
-          className="absolute inset-y-0 right-2 z-30 my-auto flex h-7 items-center gap-0.5 rounded-md border border-border/60 glass-inset px-1 shadow-sm"
+          className="absolute inset-y-0 right-2 z-30 my-auto flex h-7 items-center gap-0.5 rounded-md border border-border/60 bg-popover px-1 shadow-sm"
         >
           <Button
             ref={confirmRef}
@@ -2951,7 +2950,7 @@ function OwnerTreeRow(props: {
         className={cn(
           "group relative flex items-center pr-3.5 transition-colors hover:bg-foreground/5",
           selected && "bg-foreground/5",
-          visibleExpanded && "sticky z-10 glass-inset",
+          visibleExpanded && "sticky z-10 bg-popover",
         )}
         style={{
           paddingLeft: `${props.depth}rem`,
@@ -3333,7 +3332,7 @@ function ProcessTreeRow(props: {
         className={cn(
           "group relative flex items-center pr-3.5",
           selected && "bg-foreground/5",
-          expanded && "sticky z-10 glass-inset",
+          expanded && "sticky z-10 bg-popover",
         )}
         style={expanded ? { top: props.stickyTop } : undefined}
       >

@@ -1160,12 +1160,11 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     `useThemeRevision()` (`providers/use-theme-revision.ts`) rather than to
     the mode/preset fields, because a custom theme repaints the cascade
     without changing either.
-    The group's last row is **Background opacity** (`glassOpacity`, 30..100),
-    which the applier writes as `--glass-opacity` for the glass surfaces in
-    `styles/theme-surfaces.css`. It is the one row in this group with a search
-    anchor (`appearance-background-opacity`); the rest of the theme library has
-    no stable per-row target, so its vocabulary rides on the Appearance page
-    entry's keywords instead.
+    Shared menu, dialog and composer surfaces use solid theme fills.
+    Background opacity and backdrop blur were retired after reproduced
+    renderer flickering; old saved opacity values are ignored when the theme
+    library is read. Theme mode and the light/dark selectors retain their
+    settings search anchors.
   - **Start page** (`start-page-settings-section.tsx`): the personal landing
     backdrop. Plain rows only, like every other group here - the start page
     itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose

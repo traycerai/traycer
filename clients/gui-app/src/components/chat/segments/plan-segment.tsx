@@ -411,7 +411,7 @@ function PlanModalView(
             {modalBody}
           </TraycerMarkdown>
         </div>
-        <DialogFooter className="sticky bottom-0 mx-0 mb-0 flex-col gap-2 rounded-none border-t border-border/40 bg-popover/95 px-5 py-3 backdrop-blur supports-backdrop-filter:bg-popover/80 sm:flex-row sm:items-center sm:justify-between">
+        <DialogFooter className="sticky bottom-0 mx-0 mb-0 flex-col gap-2 rounded-none border-t border-border/40 bg-popover/95 px-5 py-3 supports-backdrop-filter:bg-popover/80 sm:flex-row sm:items-center sm:justify-between">
           <PlanCopyButton markdown={modalMarkdown} />
           {props.actionsVisible ? (
             <PlanImplementButton

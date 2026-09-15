@@ -1896,10 +1896,7 @@ function WorktreeDeleteForegroundSurface(props: {
   // nothing doubles up.
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center pt-safe-top-gutter pr-safe-right-gutter pb-safe-bottom-gutter pl-safe-left-gutter">
-      <div
-        aria-hidden
-        className="absolute inset-0 bg-background/80 backdrop-blur-sm"
-      />
+      <div aria-hidden className="absolute inset-0 bg-background/80" />
       <div className="relative z-10 max-h-[min(80vh,40rem)] w-[min(92vw,32rem)] overflow-y-auto rounded-lg border border-border/60 bg-card shadow-lg">
         <WorktreeDeleteProgressModal
           target={confirmed}
