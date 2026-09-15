@@ -85,3 +85,12 @@ paths = [
   '''^clients/desktop/src/electron-main/browser-sessions/__tests__/browser-sessions-owner\.test\.ts$''',
 ]
 regexes = ['''^(?:d3JhcHBlZEtleQ==|cmF3S2V5)$''']
+
+[[allowlists]]
+description = "The cross-account handoff test's literal chat-session scope key, r6f1-signout. This identifies a test registry subscription and is never an authentication credential. Full-history scans also inspect the in-flight branch containing this fixture; require both its exact path and value."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/providers/__tests__/auth-lifecycle-bridge-r6f1-cross-account-handoff\.test\.tsx$''',
+]
+regexes = ['''^r6f1-signout$''']
