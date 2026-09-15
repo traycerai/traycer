@@ -235,6 +235,11 @@ function HomeFocusTaskGroupRow(props: {
  * The attention glyph, or the neutral task glyph. Noninteractive in both cases
  * - it reports that something in this task is waiting, and the prompt rows
  * under it are where that something is answered.
+ *
+ * `Layers` stays muted while the agent rows below it take Settings ▸
+ * Appearance's per-type colours: a task is not an `EpicNodeKind`, so it has no
+ * colour of its own there, and the History list and the composer's epic
+ * mention draw the same muted `Layers` for the same reason.
  */
 function TaskGroupGlyph(props: { readonly group: FocusTaskGroup }): ReactNode {
   const { group } = props;
@@ -254,11 +259,9 @@ const BADGE_CLASS =
  * subtree rather than over the level immediately under it.
  *
  * A cold task keeps its own sentence instead of the `N active` badge, and that
- * sentence is the ONE place `not open in this window` is said. It could equally
- * have moved onto the cold chat rows now that a cold task has them; it stays
- * here because the row is COLLAPSED by default, and a caveat that only appears
- * after a click is a caveat the reader never meets. Said once either way -
- * repeating it on every child would be the concatenation this design removes.
+ * sentence is the ONE place `not open in this window` is said. A cold task has
+ * no chat rows to say it on (`selectTaskGroupBody`), so the sentence is the
+ * row's whole account of its agents: how many, and whether any is `running`.
  *
  * Everything else gets badges: needs-you counts LOADED prompt rows and is
  * omitted at zero, so it never claims a number the rows below it cannot show;
