@@ -1,16 +1,32 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
+import { useStore } from "zustand";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import { guiHarnessOptionSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type {
   AutoJudgeEffective,
   AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
-import { autoJudgeSeed } from "@/components/settings/panels/auto-judge-selection";
+import {
+  autoJudgeSeed,
+  autoJudgeSeedKeyForAttempt,
+} from "@/components/settings/panels/auto-judge-selection";
 import { AutoJudgePicker } from "@/components/settings/panels/auto-judge-picker";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 
 const mockedOpenSettings = vi.hoisted(() => vi.fn());
+/**
+ * The most recent props the mocked `HarnessModelPicker` was rendered with -
+ * captured so tests can both assert on what the row passes through
+ * (`disabled`) and reach into the real toolbar store it was handed (the
+ * rollback test below drives `setSelection` on it directly, standing in for
+ * the user's own pick).
+ */
+let latestHarnessModelPickerProps: {
+  readonly store: ComposerToolbarStore;
+  readonly disabled: boolean;
+} | null = null;
 const mockedHarnesses = [
   {
     id: "claude",
@@ -35,10 +51,50 @@ const mockedModels = [
     supportedServiceTiers: [],
     metadata: {},
   },
+  // A second catalog-recognized model, at index 1 so `findDefaultModel`
+  // (`models.at(0)`) still resolves the first entry - existing tests that
+  // expect "claude-sonnet" everywhere are unaffected. Exists only for the
+  // rollback test below, which needs a "diverged" pick the store's own
+  // availability-reroute WON'T correct back to the default: an unrecognized
+  // slug gets rerouted to the catalog default once it's loaded
+  // (`resolveModelSlug`), which would make that test pass even with the
+  // rollback logic disabled.
+  {
+    harnessId: "claude",
+    slug: "claude-haiku",
+    label: "Claude Haiku",
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    metadata: {},
+  },
 ];
 
+// Renders enough of the real trigger to observe from a test: the current
+// `disabled` prop (JOB 1), and - reactively, via `useStore` - the store's
+// live selection (JOB 2b's rollback case needs to see the picker present the
+// CACHED record after a resetNonce bump, not just at first render).
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
-  HarnessModelPicker: () => null,
+  HarnessModelPicker: (props: {
+    readonly store: ComposerToolbarStore;
+    readonly disabled: boolean;
+  }) => {
+    latestHarnessModelPickerProps = props;
+    const selection = useStore(props.store, (s) => s.selection);
+    return createElement(
+      "button",
+      {
+        type: "button",
+        "data-testid": "mocked-harness-model-picker",
+        disabled: props.disabled,
+      },
+      `${selection.harnessId}:${selection.modelSlug}`,
+    );
+  },
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -62,6 +118,7 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 afterEach(() => {
   cleanup();
   mockedOpenSettings.mockClear();
+  latestHarnessModelPickerProps = null;
 });
 
 function harness(overrides: Partial<GuiHarnessOption>): GuiHarnessOption {
@@ -229,6 +286,8 @@ describe("<AutoJudgePicker /> status", () => {
         },
         blocked: null,
         disabled: false,
+        saving: false,
+        resetNonce: 0,
         onCommit: vi.fn(),
       }),
     );
@@ -246,6 +305,8 @@ describe("<AutoJudgePicker /> status", () => {
         effective: undefined,
         blocked: undefined,
         disabled: false,
+        saving: false,
+        resetNonce: 0,
         onCommit: vi.fn(),
       }),
     );
@@ -266,6 +327,8 @@ describe("<AutoJudgePicker /> status", () => {
         },
         blocked: { reason: "provider-disabled" },
         disabled: false,
+        saving: false,
+        resetNonce: 0,
         onCommit: vi.fn(),
       }),
     );
@@ -306,6 +369,8 @@ describe("<AutoJudgePicker /> Use Traycer's default", () => {
         },
         blocked: null,
         disabled: false,
+        saving: false,
+        resetNonce: 0,
         onCommit,
       }),
     );
@@ -329,6 +394,8 @@ describe("<AutoJudgePicker /> Use Traycer's default", () => {
         effective: undefined,
         blocked: undefined,
         disabled: false,
+        saving: false,
+        resetNonce: 0,
         onCommit: vi.fn(),
       }),
     );
@@ -348,6 +415,8 @@ describe("<AutoJudgePicker /> Use Traycer's default", () => {
         },
         blocked: null,
         disabled: true,
+        saving: false,
+        resetNonce: 0,
         onCommit: vi.fn(),
       }),
     );
@@ -356,5 +425,235 @@ describe("<AutoJudgePicker /> Use Traycer's default", () => {
       "auto-judge-use-default",
     ) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
+  });
+});
+
+describe("autoJudgeSeedKeyForAttempt", () => {
+  // Nonce 0 is what keeps the store's INITIAL `seedKey` (built from
+  // `autoJudgeSeed(...).seedKey` at store creation, before any failure
+  // exists) matching the key the layout effect applies on first render - a
+  // widened key here would make the very first render re-seed itself.
+  it("returns the seed key unchanged for nonce 0", () => {
+    const seedKey = "claude\u0000claude-sonnet\u0000";
+
+    expect(autoJudgeSeedKeyForAttempt(seedKey, 0)).toBe(seedKey);
+  });
+
+  // Two refusals in a row must each roll the picker back, so nonce 1 and
+  // nonce 2 have to differ from each other as well as from the base key -
+  // not just "any nonce widens the key once".
+  it("produces a distinct key for nonce 1 and nonce 2, both different from the base key", () => {
+    const seedKey = "claude\u0000claude-sonnet\u0000";
+    const attempt1 = autoJudgeSeedKeyForAttempt(seedKey, 1);
+    const attempt2 = autoJudgeSeedKeyForAttempt(seedKey, 2);
+
+    expect(attempt1).not.toBe(seedKey);
+    expect(attempt2).not.toBe(seedKey);
+    expect(attempt1).not.toBe(attempt2);
+  });
+});
+
+describe("<AutoJudgePicker /> saving spinner", () => {
+  const selected: AutoJudgeSelection = {
+    harnessId: "claude",
+    model: "claude-sonnet",
+    profileId: null,
+  };
+
+  // `MutedAgentSpinner` carries neither a `data-testid` (it always passes
+  // `testId: undefined`) nor a distinguishing `aria-*` attribute, so - as
+  // `harness-model-picker.test.tsx`'s `triggerShowsLoadingSpinner` already
+  // established for the same component - its dots-preset span is identified
+  // by `.tabular-nums`, the one class unique to that span.
+  it("renders the spinner beside the trigger while a write is pending", () => {
+    const { container } = render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: selected,
+        effective: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          source: "selection",
+        },
+        blocked: null,
+        disabled: true,
+        saving: true,
+        resetNonce: 0,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    expect(container.querySelector(".tabular-nums")).not.toBeNull();
+  });
+
+  // The control: without it, the assertion above could be trivially true
+  // because the trigger row always renders something matching - this proves
+  // the spinner tracks `saving` rather than being unconditionally present.
+  it("renders no spinner when no write is pending", () => {
+    const { container } = render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: selected,
+        effective: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          source: "selection",
+        },
+        blocked: null,
+        disabled: false,
+        saving: false,
+        resetNonce: 0,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    expect(container.querySelector(".tabular-nums")).toBeNull();
+  });
+});
+
+describe("<AutoJudgePicker /> disabled reaches the trigger", () => {
+  const selected: AutoJudgeSelection = {
+    harnessId: "claude",
+    model: "claude-sonnet",
+    profileId: null,
+  };
+
+  // The mutation scope already serializes the REQUESTS; this is the row's
+  // other half - locking the control itself so a second pick can't queue
+  // behind the first and later get its selection silently overwritten when
+  // the first write's success reseeds the picker. Asserted on the mocked
+  // `HarnessModelPicker`'s own `disabled` prop, not a DOM side effect of it,
+  // since the mock renders `null` from the real component.
+  it("passes disabled: true through to HarnessModelPicker while a write is pending", () => {
+    render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: selected,
+        effective: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          source: "selection",
+        },
+        blocked: null,
+        disabled: true,
+        saving: true,
+        resetNonce: 0,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    const trigger = screen.getByTestId(
+      "mocked-harness-model-picker",
+    ) as HTMLButtonElement;
+    expect(trigger.disabled).toBe(true);
+  });
+
+  // Control: the same assertion with `disabled: false`, so a suite that
+  // always saw `disabled: true` (a picker that ignores the prop and hardcodes
+  // it) could not pass both.
+  it("passes disabled: false through to HarnessModelPicker at rest", () => {
+    render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: selected,
+        effective: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          source: "selection",
+        },
+        blocked: null,
+        disabled: false,
+        saving: false,
+        resetNonce: 0,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    const trigger = screen.getByTestId(
+      "mocked-harness-model-picker",
+    ) as HTMLButtonElement;
+    expect(trigger.disabled).toBe(false);
+  });
+});
+
+describe("<AutoJudgePicker /> rollback on refused write", () => {
+  const cached: AutoJudgeSelection = {
+    harnessId: "claude",
+    model: "claude-sonnet",
+    profileId: null,
+  };
+  const effective: AutoJudgeEffective = {
+    harnessId: "claude",
+    model: "claude-sonnet",
+    source: "selection",
+  };
+
+  function renderPicker(resetNonce: number) {
+    return render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: cached,
+        effective,
+        blocked: null,
+        disabled: false,
+        saving: false,
+        resetNonce,
+        onCommit: vi.fn(),
+      }),
+    );
+  }
+
+  // The behavioural case JOB 2 exists for. `applySeed` early-returns on a
+  // matching seed key, which is exactly what strands the picker after a
+  // refused write: the cache never moved, so without the nonce the seed key
+  // wouldn't move either and the user's (rejected) pick would sit there
+  // presented as current. Bumping `resetNonce` on refusal must force the
+  // cached record back onto the trigger.
+  //
+  // FALSIFICATION: change `autoJudgeSeedKeyForAttempt` to `return seedKey;`
+  // (ignoring the nonce) - this test goes red, because the bumped-nonce
+  // re-render then hits the exact same early return and the diverged pick
+  // stays on screen. Verified by hand; see the report back to the assigning
+  // agent for the red output.
+  it("re-applies the cached selection once resetNonce bumps, discarding a diverged in-flight pick", () => {
+    const { rerender } = renderPicker(0);
+
+    expect(screen.getByTestId("mocked-harness-model-picker").textContent).toBe(
+      "claude:claude-sonnet",
+    );
+
+    // Stand in for the user's own pick, made through the real
+    // `HarnessModelPicker` while a write for it is in flight and gets
+    // refused - the store adopts it immediately, same as the real trigger's
+    // commit path.
+    act(() => {
+      latestHarnessModelPickerProps?.store.getState().setSelection({
+        harnessId: "claude",
+        modelSlug: "claude-haiku",
+        profileId: null,
+      });
+    });
+    expect(screen.getByTestId("mocked-harness-model-picker").textContent).toBe(
+      "claude:claude-haiku",
+    );
+
+    // The row bumps `resetNonce` on refusal (`setRefusedWrites`); `selection`
+    // itself is unchanged, since the cache never moved.
+    rerender(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: cached,
+        effective,
+        blocked: null,
+        disabled: false,
+        saving: false,
+        resetNonce: 1,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    expect(screen.getByTestId("mocked-harness-model-picker").textContent).toBe(
+      "claude:claude-sonnet",
+    );
   });
 });

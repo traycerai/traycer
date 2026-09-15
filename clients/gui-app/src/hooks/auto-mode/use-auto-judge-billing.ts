@@ -83,6 +83,10 @@ export function useAutoJudgeBilling(
   );
   const selection = query.data?.selection ?? null;
   const judgeHarnessId = selection === null ? null : selection.harnessId;
+  // The host's own verdict that it CANNOT run the judge it has stored
+  // (`provider-disabled`, `no-default`, `unsupported-harness`). Optional on the
+  // wire, so an older host answers `undefined` and reads as "not blocked".
+  const blocked = query.data?.blocked ?? null;
   const loaded = query.data !== undefined;
   return useMemo(
     () =>
@@ -91,8 +95,9 @@ export function useAutoJudgeBilling(
             judgeHarnessId,
             runHarnessId: harnessId,
             isProviderNative,
+            blocked,
           })
         : null,
-    [loaded, judgeHarnessId, harnessId, isProviderNative],
+    [loaded, judgeHarnessId, harnessId, isProviderNative, blocked],
   );
 }

@@ -217,6 +217,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeHarnessId: "traycer",
         runHarnessId: "claude",
         isProviderNative: true,
+        blocked: null,
       }),
     ).toEqual({
       kind: "provider-native",
@@ -231,6 +232,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeHarnessId: "copilot",
         runHarnessId: "claude",
         isProviderNative: true,
+        blocked: null,
       }),
     ).toEqual({
       kind: "provider-native",
@@ -245,6 +247,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeHarnessId: "claude",
         runHarnessId: "codex",
         isProviderNative: false,
+        blocked: null,
       }),
     ).toEqual(autoJudgeBillingFor("claude"));
   });
@@ -259,5 +262,84 @@ describe("autoJudgeSelfBillingWarning (provider-native)", () => {
         harnessLabel: "Claude Code",
       }),
     ).toBeNull();
+  });
+});
+
+describe("autoJudgeBillingForRun (blocked)", () => {
+  const BLOCKED_REASONS = [
+    "provider-disabled",
+    "no-default",
+    "unsupported-harness",
+  ] as const;
+
+  // A REAL, non-traycer `judgeHarnessId` on every case - the defect this
+  // guards against was a stored provider selection getting billed to that
+  // provider's account even though the host had already said it cannot run
+  // that judge. With `judgeHarnessId: "traycer"` the fall-through case and
+  // the blocked case would look identical, so the choice of fixture matters.
+  it.each(BLOCKED_REASONS)(
+    "resolves to blocked for reason '%s' - a stored provider judge must not be billed once the host reports it cannot run",
+    (reason) => {
+      expect(
+        autoJudgeBillingForRun({
+          judgeHarnessId: "claude",
+          runHarnessId: "codex",
+          isProviderNative: false,
+          blocked: { reason },
+        }),
+      ).toEqual({ kind: "blocked" });
+    },
+  );
+
+  // Wire-compat: an older host that predates the `blocked` field omits it
+  // rather than sending `null`, and `autoJudgeBillingForRun` must treat the
+  // two identically so an old host's disclosure doesn't regress to "blocked"
+  // by default.
+  it("treats blocked: undefined exactly like blocked: null", () => {
+    const input = {
+      judgeHarnessId: "claude",
+      runHarnessId: "codex",
+      isProviderNative: false,
+    };
+    const withNull = autoJudgeBillingForRun({ ...input, blocked: null });
+    const withUndefined = autoJudgeBillingForRun({
+      ...input,
+      blocked: undefined,
+    });
+
+    expect(withUndefined).toEqual(withNull);
+    expect(withUndefined).toEqual(autoJudgeBillingFor("claude"));
+  });
+
+  // Precedence: provider-native wins over a blocker on Traycer's judge. That
+  // provider's own classifier decides inside the agent turn regardless of
+  // what Traycer's judge can or can't run, so a blocker here describes a call
+  // that was never going to happen - reporting "blocked" would tell the user
+  // nothing reviews their commands when the provider itself does, for free.
+  it("resolves to provider-native, not blocked, when the run is provider-native and the host also reports a blocker", () => {
+    expect(
+      autoJudgeBillingForRun({
+        judgeHarnessId: "traycer",
+        runHarnessId: "claude",
+        isProviderNative: true,
+        blocked: { reason: "no-default" },
+      }),
+    ).toEqual({
+      kind: "provider-native",
+      harnessId: "claude",
+      harnessLabel: "Claude Code",
+    });
+  });
+});
+
+describe("autoJudgeMetaLine / autoJudgeSelfBillingWarning (blocked)", () => {
+  it("autoJudgeMetaLine tells the user no judge will run for the blocked kind", () => {
+    expect(autoJudgeMetaLine({ kind: "blocked" })).toBe(
+      "No judge can run on this machine, so Auto mode will ask you.",
+    );
+  });
+
+  it("autoJudgeSelfBillingWarning returns null for the blocked kind - nothing is spent when nothing runs", () => {
+    expect(autoJudgeSelfBillingWarning({ kind: "blocked" })).toBeNull();
   });
 });

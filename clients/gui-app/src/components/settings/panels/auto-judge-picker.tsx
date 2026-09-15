@@ -15,10 +15,12 @@ import type {
 } from "@traycer/protocol/host/auto-mode/contracts";
 import { resolveModelBySlug } from "@traycer/protocol/host/agent/gui/model-slug-resolution";
 import { Button } from "@/components/ui/button";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import {
   autoJudgeSeed,
+  autoJudgeSeedKeyForAttempt,
   autoJudgeSelectionFrom,
   type AutoJudgeSeed,
 } from "@/components/settings/panels/auto-judge-selection";
@@ -59,9 +61,10 @@ function useAutoJudgeToolbarStore(input: {
   readonly hostId: string | null;
   readonly selection: AutoJudgeSelection | null;
   readonly effective: AutoJudgeEffective | null | undefined;
+  readonly resetNonce: number;
   readonly onCommit: (selection: AutoJudgeSelection) => void;
 }): { readonly store: ComposerToolbarStore; readonly seed: AutoJudgeSeed } {
-  const { hostId, selection, effective, onCommit } = input;
+  const { hostId, selection, effective, resetNonce, onCommit } = input;
   const hostClient = useHostClientForHostId(hostId);
   const harnessesQuery = useGuiHarnessesQueryForClient(hostClient, {
     enabled: true,
@@ -101,9 +104,18 @@ function useAutoJudgeToolbarStore(input: {
   // (the stored selection landing, the catalog resolving its harness) must be
   // in the store before paint, so the trigger never shows one frame of the
   // default under a host that has a selection.
+  //
+  // The key carries `resetNonce`, which is what makes a ROLLBACK possible at
+  // all. After a refused write the store holds the user's pick and the cache
+  // still holds the record the host actually has - so the seed derived from
+  // that record is unchanged, and re-applying it would hit `applySeed`'s
+  // matching-key early return and do nothing. Bumping the nonce makes it a
+  // different seed, and the same values then land. `applySeed` never emits, so
+  // the rollback cannot re-enter `onCommit` and start a write loop.
+  const appliedSeedKey = autoJudgeSeedKeyForAttempt(seed.seedKey, resetNonce);
   useLayoutEffect(() => {
-    store.getState().applySeed(seed.seedKey, seed.values);
-  }, [store, seed.seedKey, seed.values]);
+    store.getState().applySeed(appliedSeedKey, seed.values);
+  }, [store, appliedSeedKey, seed.values]);
 
   const harnessId = useStore(store, (s) => s.selection.harnessId);
   const modelsQuery = useGuiHarnessModelsQueryForClient(
@@ -142,6 +154,13 @@ export function AutoJudgePicker(props: {
   readonly effective: AutoJudgeEffective | null | undefined;
   readonly blocked: AutoJudgeBlocked | null | undefined;
   readonly disabled: boolean;
+  /** A write is in flight: draws the inline spinner beside the trigger. */
+  readonly saving: boolean;
+  /**
+   * Bumped by the row on every REFUSED write, to roll the picker back onto the
+   * record the host actually holds. See `autoJudgeSeedKeyForAttempt`.
+   */
+  readonly resetNonce: number;
   /**
    * `null` is the CLEAR, not an absence of intent: `autoJudgeSetRequestSchema`
    * reserves it for "drop the override and follow the catalog default again",
@@ -153,6 +172,7 @@ export function AutoJudgePicker(props: {
     hostId: props.hostId,
     selection: props.selection,
     effective: props.effective,
+    resetNonce: props.resetNonce,
     onCommit: props.onCommit,
   });
   const blocked = props.blocked ?? null;
@@ -183,25 +203,32 @@ export function AutoJudgePicker(props: {
       className="flex min-w-0 flex-col items-end gap-1"
       data-testid="auto-judge-picker"
     >
-      <HarnessModelPicker
-        store={store}
-        withServiceTier={false}
-        withReasoning={false}
-        tuiOnly={false}
-        lockedHarnessId={null}
-        disabled={props.disabled}
-        // Not the composer's toggle target: the `composer.model-picker.toggle`
-        // shortcut and the palette's "Change model…" belong to whatever chat
-        // is open behind Settings, and must not land here.
-        registerActivation={false}
-        createProfileHostId={props.hostId}
-        runTargetHostId={props.hostId}
-        // No terminal to open a provider's setup session into from Settings;
-        // the panel shows the steps without the button.
-        terminalLoginSurface={null}
-        labelDisplay="responsive"
-        profileAdmission={null}
-      />
+      {/* The trigger and its pending spinner share a row, which is the repo's
+          pending-mutation shape: `disabled` while in flight, the label
+          untouched, an inline spinner beside it. The row owns `disabled`
+          because it owns the mutation; this component only draws it. */}
+      <div className="flex min-w-0 items-center gap-2">
+        <HarnessModelPicker
+          store={store}
+          withServiceTier={false}
+          withReasoning={false}
+          tuiOnly={false}
+          lockedHarnessId={null}
+          disabled={props.disabled}
+          // Not the composer's toggle target: the `composer.model-picker.toggle`
+          // shortcut and the palette's "Change model…" belong to whatever chat
+          // is open behind Settings, and must not land here.
+          registerActivation={false}
+          createProfileHostId={props.hostId}
+          runTargetHostId={props.hostId}
+          // No terminal to open a provider's setup session into from Settings;
+          // the panel shows the steps without the button.
+          terminalLoginSurface={null}
+          labelDisplay="responsive"
+          profileAdmission={null}
+        />
+        {props.saving ? <MutedAgentSpinner /> : null}
+      </div>
       <AutoJudgeStatus
         store={store}
         selection={props.selection}

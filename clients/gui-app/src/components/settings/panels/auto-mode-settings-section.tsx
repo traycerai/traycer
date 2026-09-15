@@ -125,14 +125,38 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
   // installed into the picker's store through an effect - churning its
   // identity would re-`set()` that store on every render.
   const mutateJudge = setJudge.mutate;
+  // How many writes this row has had REFUSED. Not a count anyone reads - it is
+  // a nonce the picker folds into its seed key so a rejected write rolls the
+  // control back onto the record the host actually holds.
+  //
+  // It has to be a counter rather than a boolean, because two refusals in a row
+  // must each roll back: a boolean would already be `true` on the second and
+  // change no seed key. `setState` from `useState` is identity-stable, so
+  // `commit` keeps its `[mutateJudge]` dependency and the store's setter guard
+  // still holds.
+  const [refusedWrites, setRefusedWrites] = useState(0);
   // `null` travels through untouched: it is the contract's CLEAR, and the
   // picker's "Use Traycer's default" is what sends it. Widening this callback
   // rather than adding a second one keeps the write on one path - the
   // mutation's host-scoped queue orders a clear against a pick exactly as it
   // orders two picks.
+  //
+  // The rollback is a per-`mutate` callback rather than the hook's own
+  // `onError`, and that is the point: the hook toasts (a fact about the
+  // request) while THIS surface owns the control that has to be put back. A
+  // hook-level rollback would also have to know about a picker it does not
+  // render.
   const commit = useCallback(
     (next: AutoJudgeSelection | null) => {
-      mutateJudge({ selection: next });
+      mutateJudge(
+        { selection: next },
+        // The store adopted `next` the moment the user clicked - that is what
+        // drove this callback. A refusal leaves the host on the previous
+        // record and the cache unchanged, so without this the picker would go
+        // on presenting a judge that was never saved until the surface
+        // remounted or another write happened to succeed.
+        { onError: () => setRefusedWrites((count) => count + 1) },
+      );
     },
     [mutateJudge],
   );
@@ -151,10 +175,17 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
           selection={selection}
           effective={query.data?.effective}
           blocked={query.data?.blocked}
-          // Disabled while the record is still loading so a click cannot
-          // commit against - and overwrite - a selection this window has not
-          // seen yet.
-          disabled={query.data === undefined}
+          // Two reasons, and they are different failures. Still LOADING: a
+          // click would commit against - and overwrite - a selection this
+          // window has not seen yet. Still SAVING: the write's scope
+          // serializes the requests but nothing stops a second pick, and A's
+          // success reseeds the picker to A while B is still queued, so the
+          // control would present the superseded judge as current. The repo's
+          // pending rule asks for exactly this pair - disabled, label
+          // untouched, inline spinner.
+          disabled={query.data === undefined || setJudge.isPending}
+          saving={setJudge.isPending}
+          resetNonce={refusedWrites}
           onCommit={commit}
         />
       }

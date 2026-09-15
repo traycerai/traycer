@@ -231,4 +231,27 @@ describe("useAutoJudgeBilling", () => {
       harnessLabel: "Claude Code",
     });
   });
+
+  // JOB 3, end-to-end: `autoJudge.get` reports both a stored selection AND a
+  // blocker on it. The hook must fold that into `{ kind: "blocked" }` rather
+  // than billing the stored (but unrunnable) provider selection - the same
+  // precedence `autoJudgeBillingForRun` encodes, exercised through the real
+  // read path this composer surface actually uses.
+  it("resolves to blocked when autoJudge.get reports a selection together with a blocker", () => {
+    autoJudgeGetData = {
+      selection: {
+        harnessId: "claude",
+        model: "claude-sonnet",
+        profileId: null,
+      },
+      blocked: { reason: "provider-disabled" },
+    };
+    providersListData = { providers: [] };
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+    );
+
+    expect(result.current).toEqual({ kind: "blocked" });
+  });
 });

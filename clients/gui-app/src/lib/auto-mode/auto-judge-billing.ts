@@ -13,6 +13,7 @@
  */
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
+import type { AutoJudgeBlocked } from "@traycer/protocol/host/auto-mode/contracts";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import {
   ORDERED_PROVIDERS,
@@ -29,13 +30,26 @@ import { providerAutoJudgeFor } from "@/lib/providers/provider-auto-judge";
 const TRAYCER_JUDGE_HARNESS_ID = "traycer";
 const COPILOT_JUDGE_HARNESS_ID = "copilot";
 
-export type AutoJudgeBilling =
+/**
+ * What a stored judge SELECTION can be billed as, and the whole of it.
+ *
+ * Named separately from {@link AutoJudgeBilling} because {@link
+ * autoJudgeBillingFor} can only ever produce these two - it reads a harness id
+ * and nothing else - while the RUN-level union below adds two kinds that depend
+ * on facts that function never sees. Callers narrowing on "not traycer, so it
+ * has a label" are correct against this type and were silently broken by each
+ * widening of the union; saying so here is what keeps them correct.
+ */
+export type AutoJudgeSelectionBilling =
   | { readonly kind: "traycer" }
   | {
       readonly kind: "provider";
       readonly harnessId: string;
       readonly harnessLabel: string;
-    }
+    };
+
+export type AutoJudgeBilling =
+  | AutoJudgeSelectionBilling
   /**
    * The run's OWN provider reviews its own commands, and Traycer's judge never
    * runs at all.
@@ -52,9 +66,22 @@ export type AutoJudgeBilling =
       readonly kind: "provider-native";
       readonly harnessId: string;
       readonly harnessLabel: string;
-    };
+    }
+  /**
+   * The host reported a `blocked` reason, so NO judge runs and nothing is
+   * charged to anyone.
+   *
+   * It carries no harness, on purpose: the stored selection is still there and
+   * still readable, but it names a judge that will not be called, and a label
+   * on this row would invite the reader to believe otherwise. The Settings
+   * surface already explains WHICH blocker and how to clear it
+   * (`AutoJudgeBlockedStatus`); the composer's one line only has to stop
+   * claiming a pocket.
+   */
+  | { readonly kind: "blocked" };
 
-const TRAYCER_BILLING: AutoJudgeBilling = { kind: "traycer" };
+const TRAYCER_BILLING: AutoJudgeSelectionBilling = { kind: "traycer" };
+const BLOCKED_BILLING: AutoJudgeBilling = { kind: "blocked" };
 
 /**
  * The billing shape of the host's stored judge selection. `null` - the record
@@ -64,7 +91,7 @@ const TRAYCER_BILLING: AutoJudgeBilling = { kind: "traycer" };
  */
 export function autoJudgeBillingFor(
   harnessId: string | null,
-): AutoJudgeBilling {
+): AutoJudgeSelectionBilling {
   if (harnessId === null || harnessId === TRAYCER_JUDGE_HARNESS_ID) {
     return TRAYCER_BILLING;
   }
@@ -95,16 +122,32 @@ export function autoJudgeBillingForRun(input: {
   readonly judgeHarnessId: string | null;
   readonly runHarnessId: string | null;
   readonly isProviderNative: boolean;
+  /**
+   * The host's `autoJudge.get` blocker, if it reported one. `undefined` is an
+   * older host that has no such field, and reads the same as `null`.
+   */
+  readonly blocked: AutoJudgeBlocked | null | undefined;
 }): AutoJudgeBilling {
-  const { judgeHarnessId, runHarnessId, isProviderNative } = input;
-  if (!isProviderNative || runHarnessId === null) {
-    return autoJudgeBillingFor(judgeHarnessId);
+  const { judgeHarnessId, runHarnessId, isProviderNative, blocked } = input;
+  // Precedence, and the order is the whole content of this function.
+  //
+  // Provider-native FIRST: that provider's classifier decides inside the agent
+  // and Traycer's judge is bypassed, so a blocker on Traycer's judge describes
+  // a call that was not going to happen either way. Reporting "blocked" there
+  // would tell a user nothing reviews their commands when something does.
+  if (isProviderNative && runHarnessId !== null) {
+    return {
+      kind: "provider-native",
+      harnessId: runHarnessId,
+      harnessLabel: judgeHarnessLabel(runHarnessId),
+    };
   }
-  return {
-    kind: "provider-native",
-    harnessId: runHarnessId,
-    harnessLabel: judgeHarnessLabel(runHarnessId),
-  };
+  // Then the blocker. The stored selection is still readable and still names a
+  // harness - which is exactly why it must not be billed: the host has already
+  // said it cannot run that judge, so every command escalates to the human and
+  // no pocket is touched.
+  if (blocked !== null && blocked !== undefined) return BLOCKED_BILLING;
+  return autoJudgeBillingFor(judgeHarnessId);
 }
 
 /**
@@ -148,6 +191,13 @@ function judgeHarnessLabel(harnessId: string): string {
  */
 export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
   if (billing.kind === "traycer") return "Uses your Traycer credits.";
+  // Says what HAPPENS, not what is spent: "no judge" reads as a missing
+  // setting, while a user about to turn Auto on needs to know the mode will
+  // behave as if every command escalated. Same verb the approval card uses
+  // when a judge could not run ("so it's asking you instead").
+  if (billing.kind === "blocked") {
+    return "No judge can run on this machine, so Auto mode will ask you.";
+  }
   if (billing.kind === "provider-native") {
     return `Reviewed by ${billing.harnessLabel}'s own classifier — no extra cost.`;
   }
@@ -170,6 +220,8 @@ export function autoJudgeSelfBillingWarning(
   // from Settings, whose picker builds its billing from the stored selection
   // alone - the branch exists so the union stays exhaustive if that changes.
   if (billing.kind === "provider-native") return null;
+  // Nothing is spent when nothing runs.
+  if (billing.kind === "blocked") return null;
   if (billing.harnessId === COPILOT_JUDGE_HARNESS_ID) {
     return "Judge calls are Copilot premium requests — one per command reviewed, so an hour of Auto mode can use 60–350 of your monthly allowance.";
   }

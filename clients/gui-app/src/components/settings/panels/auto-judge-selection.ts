@@ -133,6 +133,29 @@ export function autoJudgeSeed(
 }
 
 /**
+ * The key `applySeed` is actually handed: the stored record's own key, plus a
+ * counter the caller bumps to force a RE-seed of a record that did not change.
+ *
+ * `applySeed` early-returns on a matching key, by design - it is the guard that
+ * stops a re-render from clobbering an in-progress edit. That guard is also
+ * what strands the picker after a REFUSED write: the user's pick lives in the
+ * store's `values`, the authoritative record in the cache never moved, so the
+ * seed key never moves either and nothing puts the picker back. Rolling back is
+ * therefore not "apply the cached seed again" - that is a no-op - it is "make
+ * this a different seed", which is what the nonce does.
+ *
+ * `0` returns the base key unchanged so the store's initial `seedKey` (created
+ * from `autoJudgeSeed(...).seedKey` before any failure exists) matches, and the
+ * first successful render seeds nothing twice.
+ */
+export function autoJudgeSeedKeyForAttempt(
+  seedKey: string,
+  resetNonce: number,
+): string {
+  return resetNonce === 0 ? seedKey : `${seedKey}|reset:${resetNonce}`;
+}
+
+/**
  * The judge selection a settings emit carries. `ChatRunSettings` is the shape
  * the toolbar store speaks; only three of its fields are a fact about the
  * judge.
