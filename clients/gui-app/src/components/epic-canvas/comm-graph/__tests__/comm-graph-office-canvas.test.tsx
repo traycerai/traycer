@@ -1377,6 +1377,150 @@ describe("CommGraphOfficeCanvas", () => {
       // store a value auto-fit is about to recompute over.
       expect(onCameraChange).not.toHaveBeenCalled();
     });
+
+    it("scales a shifted ACTIVE PAN's endpoint by that endpoint's OWN zoom, not the live camera zoom (Finding 8)", () => {
+      // Codex: a pan interpolates fromZoom -> toZoom, so a world-growing
+      // replan's shift is `shift * fromZoom` screen pixels at the origin and
+      // `shift * toZoom` at the destination - scaling BOTH endpoints by the
+      // live camera zoom (itself somewhere mid-interpolation) leaves the
+      // destination off, and a `persistOnArrival` pan then SAVES that wrong
+      // framing. This drives a real Find pan whose destination zooms OUT
+      // (fromZoom 8 -> toZoom capped at MAX_FIT_ZOOM 6) and lands the same
+      // real growth-triggered shift this describe block already proves,
+      // mid-pan, then reads the pan's destination back through the flush the
+      // tile calls on mode switch/unmount (`onRegisterFlush`) - the same
+      // reader Round 8's Finding 3 test used, since `takePendingView`
+      // answers an in-flight persistOnArrival pan's DESTINATION exactly.
+
+      // Phase 1: calibrate the shift in WORLD units from a camera that is
+      // NOT mid-pan, so `camera.x -= shift.x * camera.zoom` is the only thing
+      // moving it - the same technique the sibling test above relies on,
+      // read out this time rather than left implicit.
+      const calibrateShift = (): { readonly x: number; readonly y: number } => {
+        const { step } = installCanvas();
+        const frames = vi.spyOn(OfficeScene.prototype, "frame");
+        const calibration = render(
+          withQueryClient(
+            officeElementWithView(
+              SHIFT_VIEW,
+              new Set(["shift-a"]),
+              [SHIFT_AGENT_A],
+              {},
+            ),
+          ),
+        );
+        setIntersecting(true);
+        step();
+        const before = cameraFromFrame(frames, SHIFT_VIEWPORT);
+        if (before === null) throw new Error("no calibration frame before");
+        calibration.rerender(
+          withQueryClient(
+            officeElementWithView(
+              SHIFT_VIEW,
+              new Set(["shift-a", "shift-b"]),
+              [SHIFT_AGENT_A, SHIFT_AGENT_B],
+              {},
+            ),
+          ),
+        );
+        step();
+        const after = cameraFromFrame(frames, SHIFT_VIEWPORT);
+        if (after === null) throw new Error("no calibration frame after");
+        cleanup();
+        // FIXED_CAMERA_VIEW's zoom is 1 throughout calibration (no pan, no
+        // auto-fit), so the raw delta already IS the world-unit shift.
+        return { x: before.x - after.x, y: before.y - after.y };
+      };
+      const shiftWorld = calibrateShift();
+
+      // Phase 2: the real case - a Find pan in flight, zooming OUT from a
+      // starting zoom (8) above MAX_FIT_ZOOM (6), when the same growth lands.
+      const { step } = installCanvas();
+      const registered: {
+        current: (() => CommGraphTileCamera | null) | null;
+      } = { current: null };
+      const captureFlush = (
+        take: (() => CommGraphTileCamera | null) | null,
+      ): void => {
+        registered.current = take;
+      };
+      const view = render(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a"]),
+            [SHIFT_AGENT_A],
+            {
+              // Non-neutral and explicitly zoomed in past the fit cap, so
+              // auto-fit stays off and Find's `Math.min(fitted.zoom,
+              // camera.zoom)` picks the CAPPED fitted.zoom (6), not this
+              // starting zoom - guaranteeing fromZoom (8) !== toZoom (6).
+              view: { ...FIXED_CAMERA_VIEW, zoom: 8 },
+              onRegisterFlush: captureFlush,
+            },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      step();
+
+      act(() => {
+        void latestFindAdapter().search({
+          requestId: 1,
+          query: "Shift A",
+          matchCase: false,
+        });
+      });
+      // ONE frame: takes the pending request into an ACTIVE pan, `startedAt`
+      // = this frame's timestamp - in flight, progress 0, nowhere near
+      // arrived (same one-step idiom Round 8's Finding 3 test relies on).
+      step();
+
+      if (registered.current === null) {
+        throw new Error("flush was never registered");
+      }
+      const beforeGrowth = registered.current();
+      if (beforeGrowth === null) {
+        throw new Error("flush returned null before growth - no active pan");
+      }
+      // Anti-vacuity: the pan really does zoom OUT, or the fix and the old
+      // bug would be indistinguishable at this endpoint.
+      expect(beforeGrowth.zoom).toBeLessThan(8);
+
+      // The growth-triggered resync, landing WHILE the pan above is still
+      // mid-flight (progress 0.4 after this next frame - AUTO_PAN_MS is 250).
+      view.rerender(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a", "shift-b"]),
+            [SHIFT_AGENT_A, SHIFT_AGENT_B],
+            {
+              view: { ...FIXED_CAMERA_VIEW, zoom: 8 },
+              onRegisterFlush: captureFlush,
+            },
+          ),
+        ),
+      );
+      step();
+
+      const afterGrowth = registered.current();
+      if (afterGrowth === null) {
+        throw new Error("flush returned null after growth - pan dropped");
+      }
+
+      // The destination's OWN zoom (toZoom) is what the shift must scale by -
+      // unaffected by the shift itself, so it stays exactly what Find picked.
+      expect(afterGrowth.zoom).toBeCloseTo(beforeGrowth.zoom, 6);
+      expect(afterGrowth.x).toBeCloseTo(
+        beforeGrowth.x - shiftWorld.x * beforeGrowth.zoom,
+        1,
+      );
+      expect(afterGrowth.y).toBeCloseTo(
+        beforeGrowth.y - shiftWorld.y * beforeGrowth.zoom,
+        1,
+      );
+    });
   });
 
   it("carries a glyph on its lod 0 pip for attention, failure, awaiting and archived", () => {
@@ -2011,6 +2155,53 @@ describe("CommGraphOfficeCanvas", () => {
 
     expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
     expect(screen.getAllByText("Orchestrator").length).toBeGreaterThan(0);
+  });
+
+  it("withholds the transient agent detail panel while Auto is still measuring, so it never shrinks the measured box (Finding 7)", () => {
+    // Codex: the detail panel takes width from the office flex row and is
+    // local state that resets when the resolved view remounts this canvas -
+    // so opening one while Auto is still measuring would shrink the box Auto
+    // measures, then vanish, leaving the office wider than the width its
+    // view was decided against. `measuring: true` is exactly the signal the
+    // tile hands over for its own no-resolved-view-yet state.
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          measuring: true,
+        }),
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+
+    // The directory's own selection still highlights (it is the persistent
+    // panel, measured either way) - only the TRANSIENT detail is withheld.
+    expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
+  });
+
+  it("shows the transient agent detail panel once Auto has resolved a view", () => {
+    // Contrast case: the same selection, `measuring: false` - the detail
+    // panel is free to take its width once the office has a view to keep it
+    // against.
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          measuring: false,
+        }),
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+
+    expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
   });
 
   it("pans to an agent found in the directory search through scene.locate, not a pixel result", () => {
