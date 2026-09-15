@@ -340,11 +340,12 @@ function ThemePicker({
         </button>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         ref={contentRef}
         align="end"
         collisionBoundary={dialogContainer ?? undefined}
         onOpenAutoFocus={onOpenAutoFocus}
-        className="w-[min(85vw,var(--container-sm))] max-h-(--radix-popover-content-available-height) overflow-hidden p-0"
+        className="w-[min(85vw,var(--container-sm))] max-h-(--radix-popover-content-available-height) overflow-hidden"
       >
         <Command
           label={`Search ${appearance} themes`}

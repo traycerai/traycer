@@ -1007,14 +1007,18 @@ function WorkspaceFileSettingsMenu(props: {
           </Button>
         </TooltipWrapper>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[min(80vw,15rem)] gap-0 p-1">
-        <Label variant="row" className="cursor-pointer justify-between">
-          <span>Word wrap</span>
-          <Switch
-            checked={props.wordWrap}
-            onCheckedChange={props.onWordWrapChange}
-          />
-        </Label>
+      <PopoverContent layout="bare" align="end" className="w-[min(80vw,15rem)]">
+        {/* The gutter belongs to the LIST, not to the plate: the row paints its
+            own hover and would otherwise run into the plate's corner. */}
+        <div className="p-1">
+          <Label variant="row" className="cursor-pointer justify-between">
+            <span>Word wrap</span>
+            <Switch
+              checked={props.wordWrap}
+              onCheckedChange={props.onWordWrapChange}
+            />
+          </Label>
+        </div>
       </PopoverContent>
     </Popover>
   );

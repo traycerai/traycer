@@ -158,9 +158,10 @@ export function GithubMentionFilterPopover(
         </PopoverTrigger>
       </TooltipWrapper>
       <PopoverContent
+        layout="bare"
         align="end"
         side="bottom"
-        className="w-[min(90vw,14rem)] gap-0 p-0"
+        className="w-[min(90vw,14rem)]"
         onOpenAutoFocus={undefined}
         onInteractOutside={(event) => {
           // An outside interaction moves focus where the user POINTED, and

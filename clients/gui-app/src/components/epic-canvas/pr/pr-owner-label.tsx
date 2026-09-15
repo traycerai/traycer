@@ -287,6 +287,7 @@ function PrOwnerOverflow(props: {
         </Badge>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         align="start"
         side="bottom"
         collisionPadding={8}
@@ -314,7 +315,7 @@ function PrOwnerOverflow(props: {
         //
         // `overflow-hidden` is what makes the height cap bite - without it the
         // list paints straight past the popover's box.
-        className="max-h-[min(var(--radix-popover-content-available-height,100vh),60vh)] w-max max-w-[min(80vw,var(--radix-popover-content-available-width,100vw),28rem)] gap-0 overflow-hidden p-0"
+        className="max-h-[min(var(--radix-popover-content-available-height,100vh),60vh)] w-max max-w-[min(80vw,var(--radix-popover-content-available-width,100vw),28rem)] overflow-hidden"
       >
         <p className="shrink-0 border-b px-3 py-2 text-ui-xs text-muted-foreground">
           {`${nouns.capitalized} this PR came from`}

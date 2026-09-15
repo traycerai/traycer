@@ -106,7 +106,8 @@ export function GitDiffRepoSwitcher(
         role="dialog"
         aria-label="Git workspace selector"
         align="start"
-        className={cn("w-[min(90vw,30rem)] gap-0 p-0", props.contentClassName)}
+        layout="bare"
+        className={cn("w-[min(90vw,30rem)]", props.contentClassName)}
         data-testid={props.contentTestId}
         // The host picker's list is a nested Radix popover: it portals OUTSIDE
         // this content, so every click in it arrives here as an interaction

@@ -118,8 +118,9 @@ export function WorktreeBranchPickerContent(
       collisionPadding={8}
       role="dialog"
       aria-label={listboxLabel}
+      layout="panel"
       className={cn(
-        "h-[min(var(--radix-popover-content-available-height),22rem)] w-[min(90vw,26rem)] min-w-(--radix-popover-trigger-width) gap-0 overflow-hidden rounded-xl p-0 data-[side=bottom]:rounded-t-none data-[side=top]:rounded-b-none",
+        "h-[min(var(--radix-popover-content-available-height),22rem)] w-[min(90vw,26rem)] min-w-(--radix-popover-trigger-width) data-[side=bottom]:rounded-t-none data-[side=top]:rounded-b-none",
         contentClassName,
       )}
       ref={contentRef}

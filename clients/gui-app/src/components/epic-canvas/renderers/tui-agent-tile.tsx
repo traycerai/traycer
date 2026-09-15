@@ -1568,7 +1568,11 @@ function TerminalAgentHeaderControls(props: {
             <ChevronDown aria-hidden className="size-3" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-[min(90vw,22rem)] p-0">
+        <PopoverContent
+          layout="bare"
+          align="end"
+          className="w-[min(90vw,22rem)]"
+        >
           <AgentStopList
             epicId={props.epicId}
             viewTabId={props.viewTabId}

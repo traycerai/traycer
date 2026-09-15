@@ -94,11 +94,12 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
         </button>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         align="end"
         container={dialogContainer ?? undefined}
         collisionBoundary={dialogContainer ?? undefined}
         collisionPadding={8}
-        className="w-[min(85vw,17rem)] overflow-hidden p-0"
+        className="w-[min(85vw,17rem)] overflow-hidden"
         ref={contentRef}
         onOpenAutoFocus={coarseOpenAutoFocus}
       >

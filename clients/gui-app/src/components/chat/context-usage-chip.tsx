@@ -200,7 +200,7 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
           side="top"
           sideOffset={6}
           aria-label="Context usage breakdown"
-          className="w-[min(90vw,18rem)] gap-2.5 p-2.5"
+          className="w-[min(90vw,18rem)]"
           onOpenAutoFocus={(event) => {
             if (preserveFocusOnOpenRef.current) {
               event.preventDefault();

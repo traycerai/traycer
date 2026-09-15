@@ -386,12 +386,13 @@ export function WorkspaceFolderSummaryControl(props: {
     >
       {popoverTrigger}
       <PopoverContent
+        layout="bare"
         ref={contentRef}
         side={props.popoverSide}
         align="start"
         collisionPadding={12}
         container={dialogBoundaryEl ?? undefined}
-        className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-hidden p-0"
+        className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] overflow-hidden"
         data-testid={props.popoverTestId}
         onOpenAutoFocus={(event) => event.preventDefault()}
         onInteractOutside={(event) =>

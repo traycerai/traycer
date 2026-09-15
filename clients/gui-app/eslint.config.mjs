@@ -317,7 +317,6 @@ const notYetTightened = [
   { pattern: "^Drawer", allow: ["*"] },
   { pattern: "^DropLine$", allow: ["*"] },
   { pattern: "^HoverCard|^HoverPreviewCard$", allow: ["*"] },
-  { pattern: "^Popover", allow: ["*"] },
   { pattern: "^Sheet", allow: ["*"] },
   { pattern: "^Sidebar", allow: ["*"] },
   { pattern: "^Tabs", allow: ["*"] },
@@ -714,6 +713,51 @@ const dropdownMenuContracts = [
   },
 ];
 
+// ── Popover, tightened in ticket 06 ────────────────────────────────────────
+//
+// The same story as Dialog's, one surface down: 34 of the family's 83 findings
+// were `p-0` (19) and `gap-0` (15) - a popover whose CONTENT draws its own
+// edges, said by cancelling the popover's - and the four largest panels added
+// `rounded-xl overflow-hidden` on top of that. Three more sites restated
+// `p-2.5` / `gap-2.5`, which is what the default already sets. So the box is a
+// `layout` prop with three values (`padded`, `bare`, `panel`; see
+// `ui/popover.tsx`) and the contract allows none of it.
+//
+// `gap-*` is deliberately NOT allowed here, unlike on `DialogHeader`:
+// `PopoverContent` IS the flex column, so `gap-0` is how "the content draws its
+// own rhythm" was being said, and allowing the category would leave 15 sites
+// writing the layout by hand beside the prop that names it.
+//
+// The two `PopoverTrigger` findings were both a BUTTON drawn by hand - a border,
+// a fill, a hover, a focus ring and a transition, on a Radix trigger that
+// renders a bare `<button>`. They are `asChild` + `<Button>` now, which is the
+// shadcn idiom and puts them under Button's contract instead of needing one
+// here.
+const popoverContracts = [
+  {
+    pattern: "^PopoverContent$",
+    // The docking pair is a fact about the SITE: the worktree branch picker
+    // opens flush against the field it belongs to, so the edge the two meet on
+    // gives up its radius. Which edge depends on which way the popover flipped,
+    // which is why it is written as a `data-[side=*]` pair rather than chosen.
+    allow: [
+      "layout",
+      "data-[side=bottom]:rounded-t-none",
+      "data-[side=top]:rounded-b-none",
+    ],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <PopoverContent>: the popover owns its box. Use `layout` - `padded` (the default) when the popover IS the surface, `bare` when the content draws its own edges, `panel` for a wide surface with its own header and footer bands. See {{file}}.',
+      shape:
+        '"{{className}}" is not allowed on <PopoverContent>: the popover owns its corners. `layout="panel"` is the larger radius, for a plate big enough that `rounded-lg` reads as a sharp corner. See {{file}}.',
+      color:
+        '"{{className}}" is not allowed on <PopoverContent>: the popover owns its surface. `bg-popover` is the raised-surface fill every preset defines distinctly, and a muted or translucent variation of it disappears in the preset darks (see the raised-surface rule in clients/gui-app/AGENTS.md). See {{file}}.',
+      typography:
+        '"{{className}}" is not allowed on <PopoverContent>: the popover sets `text-ui-sm` for everything inside it. A denser block inside a popover sets its own type on the block, not on the plate around it. See {{file}}.',
+    },
+  },
+];
+
 // ── Button, the one family that IS enforced ─────────────────────────────────
 //
 // `layout` plus four named classes. Each is a treatment the component cannot
@@ -816,6 +860,7 @@ const buttonContract = {
 const tightenedContracts = [
   ...dialogContracts,
   ...dropdownMenuContracts,
+  ...popoverContracts,
   ...inlinePrimitiveContracts,
   buttonContract,
 ];
@@ -1160,6 +1205,24 @@ const restyleExemptions = [
       {
         pattern: "^Textarea$",
         allow: ["color", "spacing", "effects", "focus-visible:ring-inset"],
+      },
+    ],
+  },
+  {
+    // A Button used as a full-width settings ROW, the same argument as the
+    // mobile nav drawer's: the row is what has to stay clickable, so its
+    // padding belongs on the clickable element rather than on a wrapper. The
+    // named colour is the other half of a SOFT-disabled control - it stays
+    // focusable (`aria-disabled`, not `disabled`) so a screen reader can reach
+    // it and hear why, and a control that looks unavailable must not light up
+    // under the pointer. Its four surface presentations - rail, panel header,
+    // field, inline - come from a record in the file, which is the class-site
+    // blind spot ticket 09 owns rather than a door opened here.
+    files: ["src/components/settings/host-scope/host-switcher.tsx"],
+    contracts: [
+      {
+        pattern: "^Button$",
+        allow: ["spacing", "aria-disabled:hover:bg-transparent"],
       },
     ],
   },

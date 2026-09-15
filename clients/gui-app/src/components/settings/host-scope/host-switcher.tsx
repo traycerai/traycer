@@ -13,6 +13,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
@@ -364,7 +365,7 @@ export function HostSwitcher(props: {
         // 20rem is a FLOOR for the narrow case (the rail, whose trigger is far
         // too narrow to read host names in), not a size.
         className={cn(
-          "w-[min(90vw,20rem)] min-w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-content-available-width)] p-0",
+          "w-[min(90vw,20rem)] min-w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-content-available-width)]",
           surface.list,
         )}
         data-testid="settings-host-switcher-list"
@@ -472,53 +473,56 @@ function HostSwitcherTrigger(props: {
     props.disabled && props.keepFocusableWhenDisabled === true;
 
   return (
-    <PopoverTrigger
-      // The DESTINATION belongs in the accessible name, not just the role.
-      // A bare "Host" would tell a screen-reader user what the control is
-      // for while withholding the one thing it displays.
-      // Named for what choosing DOES here. "Settings host" is the viewing
-      // scope; a `bind` surface is choosing the host the window runs on, and
-      // a screen reader that hears "Settings host" in the composer is being
-      // told about a different control than the one it is on.
-      aria-label={hostSwitcherLabel(props.intent, selected, triggerStatus)}
-      aria-disabled={keepFocusableWhenDisabled ? true : undefined}
-      disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
-      onClick={
-        keepFocusableWhenDisabled
-          ? (event) => event.preventDefault()
-          : undefined
-      }
-      data-testid="settings-host-switcher"
-      className={cn(
-        "group/host-switcher flex w-full items-center gap-3 px-3 py-2 text-start transition-colors",
-        "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-        "disabled:pointer-events-none disabled:opacity-60",
-        "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
-        props.surface.trigger,
-      )}
-    >
-      {/* Healthy is the default and stays silent. Only an exception status
-          earns space in this compact trigger. */}
-      <span
+    <PopoverTrigger asChild>
+      <Button
+        type="button"
+        variant="ghost"
+        // The DESTINATION belongs in the accessible name, not just the role.
+        // A bare "Host" would tell a screen-reader user what the control is
+        // for while withholding the one thing it displays.
+        // Named for what choosing DOES here. "Settings host" is the viewing
+        // scope; a `bind` surface is choosing the host the window runs on, and
+        // a screen reader that hears "Settings host" in the composer is being
+        // told about a different control than the one it is on.
+        aria-label={hostSwitcherLabel(props.intent, selected, triggerStatus)}
+        aria-disabled={keepFocusableWhenDisabled ? true : undefined}
+        disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
+        onClick={
+          keepFocusableWhenDisabled
+            ? (event: React.MouseEvent<HTMLButtonElement>) =>
+                event.preventDefault()
+            : undefined
+        }
+        data-testid="settings-host-switcher"
         className={cn(
-          "min-w-0 flex-1 truncate text-ui-sm font-medium",
-          selected === null || props.surfaceKind === "inline"
-            ? "text-muted-foreground"
-            : "text-foreground",
-          !props.disabled && "group-hover/host-switcher:text-foreground",
+          "group/host-switcher h-auto w-full justify-start gap-3 px-3 py-2 text-start",
+          "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
+          props.surface.trigger,
         )}
       >
-        {selected === null ? "Select a host" : selected.name}
-      </span>
-      {triggerStatus === null ? null : (
+        {/* Healthy is the default and stays silent. Only an exception status
+          earns space in this compact trigger. */}
         <span
-          className="shrink-0 text-ui-xs text-muted-foreground"
-          data-testid="settings-host-switcher-status"
+          className={cn(
+            "min-w-0 flex-1 truncate text-ui-sm font-medium",
+            selected === null || props.surfaceKind === "inline"
+              ? "text-muted-foreground"
+              : "text-foreground",
+            !props.disabled && "group-hover/host-switcher:text-foreground",
+          )}
         >
-          {triggerStatus}
+          {selected === null ? "Select a host" : selected.name}
         </span>
-      )}
-      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        {triggerStatus === null ? null : (
+          <span
+            className="shrink-0 text-ui-xs text-muted-foreground"
+            data-testid="settings-host-switcher-status"
+          >
+            {triggerStatus}
+          </span>
+        )}
+        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+      </Button>
     </PopoverTrigger>
   );
 }

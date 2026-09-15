@@ -128,7 +128,7 @@ export function AddImageToArtifactButton(props: {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="w-[min(85vw,20rem)] p-2"
+        className="w-[min(85vw,20rem)]"
         onClick={stopImageClick}
       >
         <p className="px-2 pb-2 text-ui-sm font-medium">Add to artifact</p>

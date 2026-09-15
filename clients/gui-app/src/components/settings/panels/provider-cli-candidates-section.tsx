@@ -1072,6 +1072,7 @@ function VersionMenuTrigger({
         </button>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         align="end"
         container={dialogContainer ?? undefined}
         collisionBoundary={dialogContainer ?? undefined}
@@ -1085,7 +1086,7 @@ function VersionMenuTrigger({
         // auto-download footer stay put. This cap is now the outer of two -
         // the list carries its own, tighter one - and remains the binding
         // constraint only when the banners and a long notice are all present.
-        className="flex max-h-[min(70vh,32rem)] w-[min(90vw,26rem)] flex-col overflow-hidden p-0"
+        className="flex max-h-[min(70vh,32rem)] w-[min(90vw,26rem)] flex-col overflow-hidden"
       >
         {data.kind === "unavailable" ? (
           <div className="px-4 py-3" data-testid="version-manager-unavailable">

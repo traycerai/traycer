@@ -861,7 +861,8 @@ function ResourceMonitorContent(props: {
       collisionPadding={12}
       role="dialog"
       aria-label="Resources"
-      className="w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
+      layout="panel"
+      className="w-[min(92vw,34rem)]"
       onOpenAutoFocus={(event) => event.preventDefault()}
       // Keep the panel open when focus moves elsewhere (switching tabs, a task
       // finishing load and autofocusing its content, a terminal grabbing

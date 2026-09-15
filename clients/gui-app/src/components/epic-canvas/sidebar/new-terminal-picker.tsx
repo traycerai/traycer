@@ -110,8 +110,9 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
         </Button>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         align="start"
-        className="w-[min(90vw,28rem)] gap-0 p-0"
+        className="w-[min(90vw,28rem)]"
         data-testid="new-terminal-picker-popover"
         // The host picker's list is a nested Radix popover: it portals OUTSIDE
         // this content, so every click in it arrives here as an interaction

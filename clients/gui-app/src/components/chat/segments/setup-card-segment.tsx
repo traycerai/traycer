@@ -368,7 +368,7 @@ export function SetupCardSegment(props: {
           align="end"
           side="bottom"
           data-testid="setup-card"
-          className="w-[min(90vw,36rem)] p-3"
+          className="w-[min(90vw,36rem)]"
         >
           {workspaceDetail}
         </PopoverContent>

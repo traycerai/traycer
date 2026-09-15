@@ -881,12 +881,8 @@ function ManagedCommandOutputDetails(props: {
           </Button>
         </PopoverTrigger>
       </TooltipWrapper>
-      <PopoverContent
-        align="end"
-        side="bottom"
-        className="w-[min(90vw,26rem)] p-3 text-ui-xs"
-      >
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+      <PopoverContent align="end" side="bottom" className="w-[min(90vw,26rem)]">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-ui-xs">
           <DetailRow label="Command">
             {/* Wrapping, not truncated: a shell command is the one value here
                 worth reading in full, and it is the reason someone opened this.

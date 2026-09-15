@@ -78,7 +78,7 @@ export function TabGroupChip(props: {
           </button>
         </TooltipWrapper>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-fit max-w-xs space-y-3 p-3">
+      <PopoverContent align="start" className="w-fit max-w-xs">
         <Input
           aria-label="Group name"
           placeholder="Name this group"

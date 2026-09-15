@@ -259,8 +259,9 @@ export function NotificationsBell() {
         </PopoverTrigger>
       </TooltipWrapper>
       <PopoverContent
+        layout="bare"
         align="end"
-        className="w-auto overflow-hidden p-0"
+        className="w-auto overflow-hidden"
         onOpenAutoFocus={lifecycle.onContentOpenAutoFocus}
         onEscapeKeyDown={lifecycle.onContentEscapeKeyDown}
         onCloseAutoFocus={lifecycle.onContentCloseAutoFocus}

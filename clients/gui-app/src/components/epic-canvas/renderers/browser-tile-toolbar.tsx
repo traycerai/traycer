@@ -394,9 +394,7 @@ function BrowserPrivateSessionShield() {
       <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
         <PopoverHeader>
           <PopoverTitle>{copy.headline}</PopoverTitle>
-          <PopoverDescription className="text-ui-xs">
-            {copy.detail}
-          </PopoverDescription>
+          <PopoverDescription>{copy.detail}</PopoverDescription>
         </PopoverHeader>
       </PopoverContent>
     </Popover>

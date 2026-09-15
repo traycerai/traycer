@@ -208,7 +208,7 @@ export function FallbackDestinationMenu({
         // title had 84px for 151px of text and rendered as "Codex · gpt-…",
         // clipping the one thing the row exists to tell you. Sized to the clamp
         // itself so the surface actually takes the width it is allowed.
-        className="flex w-[min(90vw,26rem)] flex-col gap-2 p-2 text-ui-sm"
+        className="w-[min(90vw,26rem)]"
       >
         {header === null ? null : (
           <div id={headerId} className="px-1 text-ui-xs text-muted-foreground">
