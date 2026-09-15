@@ -9,11 +9,11 @@ import { cn } from "@/lib/utils";
 interface FastModeFooterButtonProps {
   readonly config: ServiceTierFooterConfig;
   readonly upgrade: ServiceTierOption;
-  readonly alignWithSlider: boolean;
+  readonly inlineShortcut: boolean;
 }
 
 export function FastModeFooterButton(props: FastModeFooterButtonProps) {
-  const { config, upgrade, alignWithSlider } = props;
+  const { config, upgrade, inlineShortcut } = props;
   const leader = usePickerFastModeLeader();
   const active = config.value === upgrade.id;
 
@@ -25,31 +25,38 @@ export function FastModeFooterButton(props: FastModeFooterButtonProps) {
       className={cn(
         "relative flex min-w-0 max-w-[min(34vw,8rem)] items-center gap-1.5 rounded-md px-2 py-1 text-ui-xs text-muted-foreground transition-colors aria-[pressed=false]:hover:bg-accent/30 aria-[pressed=false]:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
         active && "bg-accent/70 text-foreground",
-        alignWithSlider && "mb-2",
       )}
       onClick={() => toggleServiceTier(config)}
     >
-      <Zap
-        className={cn(
-          "size-3.5 shrink-0",
-          active && "fill-current text-amber-500",
-        )}
-        strokeWidth={2}
-      />
-      <span
-        className={cn(
-          "inline-flex min-w-0 items-center",
-          !alignWithSlider && "relative",
-        )}
-      >
+      <span className="relative size-3.5 shrink-0">
+        <Zap
+          className={cn(
+            "size-full",
+            active && "fill-current text-amber-500",
+            inlineShortcut && leader !== null && "invisible",
+          )}
+          strokeWidth={2}
+        />
+        {inlineShortcut ? (
+          <PickerLeaderBadge
+            show={leader !== null}
+            index={9}
+            hintAction="to toggle"
+            hintTarget={`${upgrade.label} mode`}
+            testId="model-fast-mode-digit-0"
+            placement="center"
+          />
+        ) : null}
+      </span>
+      <span className="relative inline-flex min-w-0 items-center">
         <span className="truncate">{upgrade.label}</span>
         <PickerLeaderBadge
-          show={leader !== null}
+          show={!inlineShortcut && leader !== null}
           index={9}
           hintAction="to toggle"
           hintTarget={`${upgrade.label} mode`}
           testId="model-fast-mode-digit-0"
-          placement={alignWithSlider ? "above" : "trailing"}
+          placement="trailing"
         />
       </span>
     </button>
