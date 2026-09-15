@@ -3766,6 +3766,21 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         camera.y -= shift.y * camera.zoom;
         shiftPendingPan(runtime, shift);
         shiftActivePan(runtime, shift);
+        // A drag in flight is the same hazard as a pan: the next pointer-move
+        // recomputes `camera.x` as `drag.cameraX + dx` from an origin captured
+        // in the OLD world, so without shifting that stored origin the move
+        // undoes the compensation above - the floor jumps mid-drag and the
+        // release persists the wrong framing. Same offset as the live camera; a
+        // drag only pans, so its zoom is the live one. (cameraX/cameraY are
+        // readonly, so replace the record rather than mutate it.)
+        const drag = dragRef.current;
+        if (drag !== null) {
+          dragRef.current = {
+            ...drag,
+            cameraX: drag.cameraX - shift.x * camera.zoom,
+            cameraY: drag.cameraY - shift.y * camera.zoom,
+          };
+        }
         // The manual baseline slid with the world too, and by its OWN zoom, not
         // the live camera's (playback may have zoomed the live one away). Keep
         // it in the current world so what a reload restores stays put.
