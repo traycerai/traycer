@@ -19,7 +19,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { cn } from "@/lib/utils";
 import {
   describeOverviewDegrade,
   type OverviewDegradeReason,
@@ -300,10 +299,8 @@ function HostOverviewMenuAction(props: {
       }}
       data-testid={props.testId}
       data-degraded={degrade ?? undefined}
-      className={cn(
-        "flex-col items-start gap-0.5 py-1.5",
-        degraded && "text-muted-foreground",
-      )}
+      className="flex-col items-start gap-0.5"
+      variant={degraded ? "muted" : "default"}
     >
       <span className="flex items-center gap-2">
         {/* The spinner takes the icon's place rather than sitting beside it, so

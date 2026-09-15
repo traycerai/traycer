@@ -40,7 +40,6 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
 import { limitedFamilyQualifier } from "@/lib/rate-limits/rate-limit-copy";
-import { cn } from "@/lib/utils";
 import {
   initialPreviewProfileId,
   type ProfileRateLimitDestination,
@@ -621,7 +620,7 @@ function ProfileRateLimitMenuRow({
       })}
       aria-disabled={!row.selectable}
       aria-keyshortcuts={usageEntry?.fetchEligible ? "R" : undefined}
-      className={cn("gap-2 py-1.5 pr-1.5", !row.selectable && "opacity-60")}
+      className="gap-2"
       onFocus={(event) => onFocusPreview(row.profile, event.currentTarget)}
       onPointerMove={(event) => onPreview(row.profile, event.currentTarget)}
       onSelect={(event) => {

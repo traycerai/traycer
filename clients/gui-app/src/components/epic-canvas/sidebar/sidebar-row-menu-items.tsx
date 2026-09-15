@@ -200,7 +200,6 @@ export function SidebarDropdownMenuItems(props: {
         <DropdownMenuItem
           disabled={state.disabled}
           {...(state.aria ?? {})}
-          className={cn(state.softDisabled && "opacity-50")}
           variant={entry.variant}
           data-testid={entry.testIds.dropdown}
           onSelect={state.onSelect}

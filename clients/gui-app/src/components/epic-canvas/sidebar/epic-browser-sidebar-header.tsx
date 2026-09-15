@@ -169,13 +169,11 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
           className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto"
           data-testid="epic-browsers-panel-filter-menu"
         >
-          <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
-            Filters
-          </DropdownMenuLabel>
+          <DropdownMenuLabel className="mt-1">Filters</DropdownMenuLabel>
           <DropdownMenuSub open={hostMenuOpen} onOpenChange={setHostMenuOpen}>
             <DropdownMenuSubTrigger
               aria-label={`Host, ${hostSummary}`}
-              className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
+              className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
               onClick={() => setHostMenuOpen(true)}
             >
               <span className="min-w-0 truncate">Host</span>

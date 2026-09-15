@@ -79,9 +79,7 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
       className="p-2.5"
       data-testid="worktree-folder-list"
     >
-      <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
-        Workspaces
-      </DropdownMenuLabel>
+      <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
       <FilePathRevealProvider>
         <Command className="rounded-none bg-transparent p-0">
           <CommandInput

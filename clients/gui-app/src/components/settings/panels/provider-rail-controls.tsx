@@ -144,9 +144,7 @@ function ProviderRailFilterMenu(props: {
         </DropdownMenuTrigger>
       </TooltipWrapper>
       <DropdownMenuContent align="start" className="min-w-40">
-        <DropdownMenuLabel className="text-overline uppercase tracking-wide">
-          Show
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Show</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={props.status}
           onValueChange={(next) => {

@@ -449,9 +449,7 @@ function BrowserMoreMenu(props: {
         )}
         {capabilities.devtools ? (
           <>
-            <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
-              Developer
-            </DropdownMenuLabel>
+            <DropdownMenuLabel className="mt-1">Developer</DropdownMenuLabel>
             <DropdownMenuItem
               aria-label="Open browser DevTools"
               disabled={controller.disabled}
@@ -513,7 +511,8 @@ function BrowserZoomControls(props: { readonly controller: TileController }) {
       </DropdownMenuItem>
       <DropdownMenuItem
         aria-label="Reset zoom"
-        className="size-7 shrink-0 justify-center p-0 text-muted-foreground"
+        variant="muted"
+        className="size-7 shrink-0 justify-center p-0"
         disabled={disabled}
         onSelect={(event) => {
           event.preventDefault();
@@ -588,7 +587,7 @@ function BrowserSiteInfoMenu(props: { readonly url: string }) {
     <DropdownMenuSub open={open} onOpenChange={setOpen}>
       <DropdownMenuSubTrigger
         aria-label={`Site information. ${originTitle}. ${originDetail}`}
-        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
+        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
         onClick={() => setOpen(true)}
       >
         <span className="min-w-0 truncate">Site information</span>
@@ -599,7 +598,8 @@ function BrowserSiteInfoMenu(props: { readonly url: string }) {
       <DropdownMenuSubContent
         sideOffset={8}
         alignOffset={-4}
-        className="w-[min(80vw,18rem)] min-w-0 space-y-3 p-3 text-ui-sm"
+        layout="panel"
+        className="w-[min(80vw,18rem)] min-w-0 space-y-3"
       >
         <BrowserSiteInfoRow title={originTitle} detail={originDetail} />
       </DropdownMenuSubContent>

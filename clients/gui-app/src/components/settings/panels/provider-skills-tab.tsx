@@ -664,9 +664,7 @@ function SkillSourceFilterMenu({
         align="end"
         className="w-[min(10rem,calc(100vw-2rem))]"
       >
-        <DropdownMenuLabel className="text-overline uppercase tracking-wide">
-          Show
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Show</DropdownMenuLabel>
         {present.map((source) => (
           <DropdownMenuCheckboxItem
             key={source}

@@ -198,7 +198,7 @@ function ViewDetailEntry<TDetail extends string>(props: {
   return (
     <DropdownMenuSub open={subOpen} onOpenChange={setSubOpen}>
       <DropdownMenuSubTrigger
-        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
+        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
         onClick={() => setSubOpen(true)}
       >
         <span className="min-w-0 truncate">{props.label}</span>
@@ -225,7 +225,6 @@ function DrillInHeader(props: {
   return (
     <>
       <DropdownMenuItem
-        className="font-medium"
         onSelect={(event) => {
           event.preventDefault();
           props.onBack();
@@ -350,9 +349,7 @@ export function ChatFilterMenu(props: {
                 <ChatDetailContent detail="show" {...detailProps} />
               </ViewDetailEntry>
             ) : null}
-            <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
-              Filters
-            </DropdownMenuLabel>
+            <DropdownMenuLabel className="mt-1">Filters</DropdownMenuLabel>
             <ViewDetailEntry
               detail="interface"
               drillIn={menu.drillIn}
@@ -491,9 +488,7 @@ export function ArtifactFilterMenu(props: {
             >
               <ArtifactDetailContent detail="ordering" {...detailProps} />
             </ViewDetailEntry>
-            <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
-              Filters
-            </DropdownMenuLabel>
+            <DropdownMenuLabel className="mt-1">Filters</DropdownMenuLabel>
             <ViewDetailEntry
               detail="status"
               drillIn={menu.drillIn}

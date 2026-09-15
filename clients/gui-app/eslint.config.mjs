@@ -340,7 +340,6 @@ const notYetTightened = [
   { pattern: "^ContextMenu", allow: ["*"] },
   { pattern: "^Drawer", allow: ["*"] },
   { pattern: "^DropLine$", allow: ["*"] },
-  { pattern: "^DropdownMenu", allow: ["*"] },
   { pattern: "^HoverCard|^HoverPreviewCard$", allow: ["*"] },
   { pattern: "^Popover", allow: ["*"] },
   { pattern: "^Sheet", allow: ["*"] },
@@ -452,6 +451,63 @@ const dialogContracts = [
   },
 ];
 
+// ── DropdownMenu, tightened in ticket 06 ────────────────────────────────────
+//
+// Only the parts that allow MORE than `layout` need an entry: the rule's
+// default is already `allow: ["layout"]`, so deleting `^DropdownMenu` from
+// `notYetTightened` is what enforces Content, Label, Trigger, Separator and
+// Shortcut. The entries below exist for the two things a menu part cannot own
+// and for the messages that name the real fix.
+//
+// 63 of the family's 133 findings were on **Label**, and they were one
+// section-heading treatment restated fourteen times - `uppercase` ×14,
+// `text-overline` ×11, `tracking-wide` ×11, `text-muted-foreground/70` ×6 -
+// with three sites reaching for `text-ui-xs font-medium` instead and three
+// dropping the tracking. The default carries it now (see `ui/dropdown-menu.tsx`)
+// and every one of those overrides is gone; the remaining nine labels, which
+// had no class at all, were already the same kind of heading and now look like
+// one.
+//
+// Three more defaults moved on the same evidence: a `muted` item variant for
+// the quiet row (3 sites wrote `text-muted-foreground`), `aria-disabled:` beside
+// the primitive's `data-disabled:` dimming (2 sites wrote `opacity-50` / `-60`
+// on a SOFT-disabled row, which Radix leaves undimmed because it is not really
+// disabled), and a checked tint on the radio and checkbox rows (a chosen row
+// said so with a check glyph alone, which two sites had hand-filled - one with
+// `bg-accent/70`, the fill AGENTS.md rules out inside a popover).
+const dropdownMenuContracts = [
+  {
+    // Every tappable ROW. `gap-*` is the caller's for the same reason it is on
+    // `DialogHeader`: the rhythm between an icon, a label and a trailing
+    // timestamp is a fact about what the caller put inside the row, and no
+    // variant can know how many children there are. Padding is not - the rows
+    // of one menu have to line up with each other and with the label above
+    // them.
+    pattern:
+      "^DropdownMenu(Item|CheckboxItem|RadioItem|SubTrigger|Group|RadioGroup)$",
+    allow: ["layout", "gap-*", "space-y-*"],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <{{component}}>: the menu owns its row rhythm - every row in every menu is `px-1.5 py-1`, and a roomier one pulls its own menu out of step with the rest of the app. `gap-*` between a row\'s own children is yours. See {{file}}.',
+      color:
+        '"{{className}}" is not allowed on <{{component}}>: use `variant` - `muted` for a quiet row, `destructive` for one that destroys something. A row that is the CURRENT choice is a `DropdownMenuRadioItem`, which tints itself. A hand-written `bg-accent/*` fill is also the one AGENTS.md rules out on a raised surface. See {{file}}.',
+      effects:
+        '"{{className}}" is not allowed on <{{component}}>: a dimmed row is a disabled row. Radix dims `disabled` items itself, and a SOFT-disabled row (`aria-disabled`, so it stays focusable and can explain itself) is dimmed by the primitive too - do not write the opacity here. See {{file}}.',
+    },
+  },
+  {
+    // A submenu holding a form or a paragraph rather than rows takes
+    // `layout="panel"`, which is what `p-2 gap-3` and `p-3 space-y-3` were
+    // building by hand at the two sites that needed it.
+    pattern: "^DropdownMenuSubContent$",
+    allow: ["layout", "gap-*", "space-y-*"],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <DropdownMenuSubContent>: a submenu of ROWS is `layout="menu"` (the default) and one holding a form or a paragraph is `layout="panel"`. `gap-*` and `space-y-*` between the panel\'s children are yours. See {{file}}.',
+    },
+  },
+];
+
 // ── Button, the one family that IS enforced ─────────────────────────────────
 //
 // `layout` plus four named classes. Each is a treatment the component cannot
@@ -551,8 +607,19 @@ const buttonContract = {
   },
 };
 
+const allContracts = [
+  ...notYetTightened,
+  ...dialogContracts,
+  ...dropdownMenuContracts,
+  buttonContract,
+];
+
 /**
- * The rule, with EXTRA entries added to Button's contract for one file set.
+ * The rule, with EXTRA entries added to one or more contracts for one file set.
+ *
+ * `extraAllow` is keyed by the contract's own `pattern` string, so an override
+ * widens exactly one component and leaves the other ~40 alone:
+ * `{ "^Button$": ["color"] }`.
  *
  * Deliberately not `"shadcn/no-restyle": "off"` for those files, which is the
  * shape ticket 03's overrides took: turning the rule off would also stop
@@ -560,40 +627,40 @@ const buttonContract = {
  * let one class through. A widened contract keeps everything else enforced and
  * says in the override exactly which door is open.
  */
-function noRestyle(extraButtonAllow) {
+function noRestyle(extraAllow) {
   return [
     "error",
     {
       allow: ["layout"],
-      contracts: [
-        ...notYetTightened,
-        ...dialogContracts,
-        extraButtonAllow.length === 0
-          ? buttonContract
+      contracts: allContracts.map((contract) =>
+        extraAllow[contract.pattern] === undefined
+          ? contract
           : {
-              ...buttonContract,
-              allow: [...buttonContract.allow, ...extraButtonAllow],
+              ...contract,
+              allow: [...contract.allow, ...extraAllow[contract.pattern]],
             },
-      ],
+      ),
     },
   ];
 }
 
-// ── The Buttons that are allowed out of part of the contract, per FILE ─────
+// ── The call sites allowed out of part of a contract, per FILE ─────────────
 //
-// One entry per file, and `allow` names exactly which categories it opens, so
-// everything else about Button stays enforced there. Deliberately NOT
+// One entry per file. `allow` is keyed by the CONTRACT it widens and names
+// exactly what that one opens, so everything else about that component - and
+// every other component in the file - stays enforced. Deliberately NOT
 // `"shadcn/no-restyle": "off"` the way ticket 03's overrides are shaped:
 // turning the rule off would also stop checking that file's sizes and every
-// Button added to it later, to let one class through.
+// component added to it later, to let one class through.
 //
 // A file appears ONCE. Flat config is last-block-wins and each of these
 // becomes its own block, so a file listed twice would silently keep only the
 // second list - the hazard the note at the top of this file describes for
 // `no-restricted-imports`, in miniature.
 //
-// Each reason is a fact about the SITE, not about Button. That is the test for
-// belonging here: if the reason generalises, it should have been a variant.
+// Each reason is a fact about the SITE, not about the component. That is the
+// test for belonging here: if the reason generalises, it should have been a
+// variant.
 const restyleExemptions = [
   {
     // Not the theme's colours at all, and already exempt from `no-raw-colors`
@@ -606,7 +673,7 @@ const restyleExemptions = [
       "src/components/layout/header/sign-in/device-code-progress.tsx",
       "src/components/settings/themes/theme-editor-panel.tsx",
     ],
-    allow: ["color"],
+    allow: { "^Button$": ["color"] },
   },
   {
     // A SOLID status pip: `rounded-full bg-info text-white`, the update badge
@@ -614,7 +681,7 @@ const restyleExemptions = [
     // role's foreground on no fill); a solid one would be a variant per role
     // used once each, which is the trade the ticket says not to make.
     files: ["src/components/layout/header/app-update-button.tsx"],
-    allow: ["color"],
+    allow: { "^Button$": ["color"] },
   },
   {
     // Buttons that CANCEL a variant's own state, which no allow list can
@@ -627,14 +694,14 @@ const restyleExemptions = [
       "src/components/epic-canvas/sidebar/epic-sidebar-header.tsx",
       "src/components/epic-canvas/sidebar/epic-sidebar-rail.tsx",
     ],
-    allow: ["color"],
+    allow: { "^Button$": ["color"] },
   },
   {
     // A corner pill straddling the dialog edge and the overlay dim, so it
     // needs an OPAQUE fill; `outline` is the near miss and carries
     // `dark:bg-input/30`, which the dim shows through in every dark theme.
     files: ["src/components/epic-canvas/sidebar/new-conversation-modal.tsx"],
-    allow: ["color"],
+    allow: { "^Button$": ["color"] },
   },
   {
     // A resting ghost-weight fill applied by a CONTAINER QUERY
@@ -642,7 +709,7 @@ const restyleExemptions = [
     // field only once its toolbar is wide enough. A variant cannot be
     // conditional on the container.
     files: ["src/components/browser-tile/browser-viewport-toolbar.tsx"],
-    allow: ["color"],
+    allow: { "^Button$": ["color"] },
   },
   {
     // A quiet FILLED button (`bg-foreground/8 text-foreground`) and a disabled
@@ -650,13 +717,13 @@ const restyleExemptions = [
     // filled-quiet shape is one site, and the disabled repaint belongs to this
     // composer's send control rather than to Button.
     files: ["src/components/home/composer/composer-send-button.tsx"],
-    allow: ["color"],
+    allow: { "^Button$": ["color"] },
   },
   {
     // A resting fill on the pointer-coarse actions trigger, where the glyph
     // has to read as a button before it is tapped.
     files: ["src/components/chat/chat-message-user-body.tsx"],
-    allow: ["color"],
+    allow: { "^Button$": ["color"] },
   },
   {
     // `in-data-[slot=dialog-content]:bg-input/60`: secondary, but re-tinted
@@ -664,14 +731,14 @@ const restyleExemptions = [
     // preset gives popovers and secondary buttons the same value. A variant
     // cannot be conditional on the surface it lands on.
     files: ["src/components/home/composer/terminal-launch-panel.tsx"],
-    allow: ["color"],
+    allow: { "^Button$": ["color"] },
   },
   {
     // Two `warning-ghost` buttons side by side, one of which is the confirm;
     // the border and fill are the only thing telling them apart. A bordered
     // status variant for one pair is the trade the ticket says not to make.
     files: ["src/components/home/worktree/worktree-scripts-dialog.tsx"],
-    allow: ["color"],
+    allow: { "^Button$": ["color"] },
   },
   {
     // A popover-shaped ISLAND painted onto a Button: this file's sibling
@@ -682,7 +749,7 @@ const restyleExemptions = [
     // inset rect - a restructure with a visible result, so it is its own
     // change rather than this ticket's.
     files: ["src/components/layout/bridges/desktop-zoom-controller.tsx"],
-    allow: ["color", "spacing"],
+    allow: { "^Button$": ["color", "spacing"] },
   },
   {
     // A Button used as a ROW carries the row's padding, because the row is
@@ -695,22 +762,36 @@ const restyleExemptions = [
     // `@max-[30rem]:px-0` folds a row's stop control to an icon when its
     // CONTAINER narrows, which no size can be conditional on.
     files: ["src/components/layout/shell/mobile-nav-drawer.tsx"],
-    allow: ["spacing"],
+    allow: { "^Button$": ["spacing"] },
   },
   {
     files: ["src/components/chat/segments/next-steps-action-group.tsx"],
-    allow: ["color", "spacing"],
+    allow: { "^Button$": ["color", "spacing"] },
   },
   {
     files: ["src/components/home-focus/home-focus-rows.tsx"],
-    allow: ["spacing"],
+    allow: { "^Button$": ["spacing"] },
   },
   {
     // The last row of a settings list whose `<li>`s are `px-5 py-2.5`, with
     // the list's own top divider on it, so its padding, its squared corners
     // and that divider all line up with siblings it does not own.
     files: ["src/components/settings/browser-settings-section.tsx"],
-    allow: ["color", "shape", "spacing"],
+    allow: { "^Button$": ["color", "shape", "spacing"] },
+  },
+  {
+    // The browser tile's ZOOM BAND: a bordered strip inside the menu holding a
+    // label and three square steppers, which is not a list of rows and does not
+    // want the row rhythm. The steppers stay `DropdownMenuItem`s because that is
+    // what puts them in the menu's arrow-key ring - a `<button>` inside the menu
+    // would be unreachable from the keyboard - so the band's own chrome has to
+    // live on the group and its buttons' box on the items. Named classes rather
+    // than categories, so everything else in this file stays enforced.
+    files: ["src/components/epic-canvas/renderers/browser-tile-toolbar.tsx"],
+    allow: {
+      "^DropdownMenu(Item|CheckboxItem|RadioItem|SubTrigger|Group|RadioGroup)$":
+        ["border", "border-border", "border-y", "p-0", "px-2", "py-2"],
+    },
   },
 ];
 
@@ -1927,7 +2008,7 @@ export default tseslint.config(
       // Button's entry comes LAST inside `noRestyle`: contracts are matched
       // from the end, so whatever is added above it can never shadow the one
       // family that is actually enforced.
-      "shadcn/no-restyle": noRestyle([]),
+      "shadcn/no-restyle": noRestyle({}),
     },
   },
   // Each `restyleExemptions` entry, as its own block. See that list for why.

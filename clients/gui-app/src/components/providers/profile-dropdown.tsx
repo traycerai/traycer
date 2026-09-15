@@ -254,7 +254,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
         align="start"
         sideOffset={4}
         container={contentContainer}
-        className="min-w-[var(--radix-dropdown-menu-trigger-width)] rounded-lg p-1"
+        className="min-w-[var(--radix-dropdown-menu-trigger-width)]"
         onCloseAutoFocus={(event) => {
           if (onCloseAutoFocus === null) return;
           event.preventDefault();
@@ -462,7 +462,7 @@ function ProfileSelectionControl(props: {
       aria-keyshortcuts={state.usageEntry?.fetchEligible ? "R" : undefined}
       aria-current={state.selected ? "true" : undefined}
       className={cn(
-        "min-w-0 flex-1 pr-1.5",
+        "min-w-0 flex-1",
         visibleDisabledReason !== null && "flex-col items-start gap-0.5",
       )}
       onFocus={(event) =>

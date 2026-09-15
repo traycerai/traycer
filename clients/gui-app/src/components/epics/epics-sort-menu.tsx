@@ -42,9 +42,7 @@ export function EpicsSortMenu(props: EpicsSortMenuProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
-        <DropdownMenuLabel className="px-2 py-1 text-overline uppercase text-muted-foreground/70">
-          Sort by
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Sort by</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuRadioGroup
           value={value}

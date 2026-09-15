@@ -3212,13 +3212,13 @@ function WorktreeRowActions(props: {
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
-          className="w-max min-w-32 max-w-[min(80vw,14rem)] p-1.5"
+          className="w-max min-w-32 max-w-[min(80vw,14rem)]"
           data-testid="worktree-row-actions-menu"
         >
           <DropdownMenuItem
             data-testid="worktree-row-copy-path"
             onSelect={props.onCopyPath}
-            className="gap-2 px-2 py-2"
+            className="gap-2"
           >
             <Copy className="size-3.5" aria-hidden />
             Copy path
@@ -3227,7 +3227,7 @@ function WorktreeRowActions(props: {
             data-testid="worktree-row-manage-scripts"
             aria-haspopup="dialog"
             onSelect={props.onManageScripts}
-            className="items-start gap-2 whitespace-normal px-2 py-2 text-left leading-snug"
+            className="items-start gap-2 whitespace-normal text-left"
           >
             <FileSliders className="size-3.5" aria-hidden />
             {props.scriptsLabel}
@@ -3248,7 +3248,7 @@ function WorktreeRowActions(props: {
                 aria-label={deleteLabel}
                 disabled={deleteDisabled}
                 onSelect={props.onDelete}
-                className="gap-2 px-2 py-2"
+                className="gap-2"
               >
                 <Trash2 className="size-3.5" aria-hidden />
                 Delete worktree

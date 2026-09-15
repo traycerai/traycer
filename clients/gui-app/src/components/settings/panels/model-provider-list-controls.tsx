@@ -94,9 +94,7 @@ function ModelProviderFilterMenu(props: {
         </DropdownMenuTrigger>
       </TooltipWrapper>
       <DropdownMenuContent align="end" className="min-w-44">
-        <DropdownMenuLabel className="text-overline tracking-wide uppercase">
-          Sign-in method
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Sign-in method</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={props.filter}
           onValueChange={(next) => {

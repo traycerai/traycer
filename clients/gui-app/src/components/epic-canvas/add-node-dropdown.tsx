@@ -239,7 +239,8 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
               ref={terminalAgentSubRef}
-              className="flex w-[min(92vw,32rem)] flex-col gap-3 p-2"
+              layout="panel"
+              className="flex w-[min(92vw,32rem)] flex-col gap-3"
               data-testid={`${menuTestId}-terminal-agent-sub`}
               // The host Select + folder picker open portaled overlays; treat
               // clicks inside them (stacked above this submenu) as inside it so
@@ -423,9 +424,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         data-testid="terminal-agent-harness-section"
         className="flex min-w-0 flex-col gap-2"
       >
-        <DropdownMenuLabel className="px-1 pb-0.5 pt-0 text-overline uppercase text-muted-foreground/70">
-          Harness
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Harness</DropdownMenuLabel>
         <div className="flex min-w-0 items-center gap-2 px-1">
           <HarnessModelPicker
             labelDisplay="responsive"
@@ -454,9 +453,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         data-testid="terminal-agent-args-section"
         className="flex min-w-0 flex-col gap-2"
       >
-        <DropdownMenuLabel className="px-1 pb-0.5 pt-0 text-overline uppercase text-muted-foreground/70">
-          Additional arguments
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Additional arguments</DropdownMenuLabel>
         <Input
           aria-label="Terminal interface CLI arguments"
           className="h-8 min-w-0 font-mono text-ui-xs"

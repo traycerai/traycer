@@ -104,11 +104,7 @@ function SwitcherViewMenuShell(props: {
  * together with nothing saying which axis each one is.
  */
 function SwitcherFacetLabel(props: { readonly children: ReactNode }) {
-  return (
-    <DropdownMenuLabel className="text-overline uppercase tracking-wide">
-      {props.children}
-    </DropdownMenuLabel>
-  );
+  return <DropdownMenuLabel>{props.children}</DropdownMenuLabel>;
 }
 
 /**
