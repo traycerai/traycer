@@ -265,6 +265,43 @@ function seedEmptyDoc(doc: Y.Doc): void {
 }
 
 /**
+ * Every agent predates `Chat.hostId` / `TuiAgent.hostId` - a fully legacy
+ * epic, never attributed to any host, unlike `seedDoc`'s mix. `useCommGraphAgents`
+ * excludes a null `hostId` from `hostIds`, so this fixture drives that set to
+ * empty while still populating real, drawable agents (Finding 38).
+ */
+function seedAllHostlessDoc(doc: Y.Doc): void {
+  const epic = doc.getMap("epic");
+  const chats = new Y.Map<unknown>();
+
+  const chat = new Y.Map<unknown>();
+  chat.set("id", CHAT_ID);
+  chat.set("title", "Orchestrator");
+  chat.set("parentId", null);
+  chat.set("createdAt", 1);
+  chat.set("updatedAt", 1);
+  chat.set("messages", new Y.Array<unknown>());
+  chats.set(CHAT_ID, chat);
+
+  const tuiAgents = new Y.Map<unknown>();
+  const tui = new Y.Map<unknown>();
+  tui.set("id", TUI_ID);
+  tui.set("harnessId", "claude");
+  tui.set("harnessSessionId", "session-1");
+  tui.set("agentMode", "regular");
+  tui.set("title", "Reviewer");
+  tui.set("parentId", CHAT_ID);
+  tui.set("createdAt", 3);
+  tui.set("updatedAt", 3);
+  tuiAgents.set(TUI_ID, tui);
+
+  epic.set("title", "Epic");
+  epic.set("artifacts", new Y.Map<unknown>());
+  epic.set("tuiAgents", tuiAgents);
+  epic.set("chats", chats);
+}
+
+/**
  * Every case below asserts on React Flow nodes, so the tile is opened in the
  * NODE-GRAPH mode explicitly. The tile's own default is the office floor, which
  * draws to a canvas and mounts no nodes at all.
@@ -1065,6 +1102,49 @@ describe("CommGraphTile", () => {
       // tile - comfortably now, at 0.791x against a 0.7 threshold, which it
       // was not when that box was 1040x700. See `OFFICE_CANVAS`.
       expect(storedView()?.officeAutoView).toBe("floor");
+    });
+
+    // Finding 38: a hostless epic (every agent predates `hostId`) has no
+    // feed to catch up from at all - `useCommGraphAgents` reports an empty
+    // `hostIds`, so the subscription's `hosts.length > 0 && ...every(...)`
+    // gate can never flip true. Without `isFeedSettled` treating an empty
+    // host set as already settled, Auto would sit on "measuring..." forever.
+    // The contrast this needs - a HOST-attributed epic that has not caught
+    // up must still withhold measurement - is already proven above by "does
+    // not run while the snapshot is a partial one": that fixture has hosts,
+    // so it takes the `snapshot.initialHistoryCaughtUp` branch of
+    // `isFeedSettled`, not the `hostIds.length === 0` one this test covers.
+    it("measures a hostless epic without ever seeing a catch-up signal (Finding 38)", async () => {
+      harness.teardown();
+      harness.install(seedAllHostlessDoc, "owner");
+      const decideSpy = vi.spyOn(officeAutoModule, "decideOfficeView");
+
+      await renderOfficeTile();
+      await waitFor(() => {
+        expect(screen.getByTestId("comm-graph-office-canvas")).toBeDefined();
+      });
+
+      // A fully legacy epic subscribes to zero hosts - there is nothing to
+      // wait for here, unlike the two-host default fixture.
+      expect(Array.from(openedByHost.keys())).toEqual([]);
+
+      setIntersecting(true);
+      setOfficeCanvasSize(OFFICE_CANVAS);
+
+      // No `onSnapshot` call for any host - none exist to call it for - yet
+      // Auto must still measure and write a real outcome.
+      await waitFor(() => {
+        expect(storedView()?.officeAutoView).not.toBeNull();
+      });
+      expect(decideSpy).toHaveBeenCalled();
+      expect(storedView()?.officeAutoView).toBe("floor");
+
+      // The catching-up chip reads the same settled signal Auto's gate
+      // does, so a hostless feed - which has nothing to send - must not
+      // leave it stuck showing "catching up".
+      expect(
+        screen.queryByTestId("comm-graph-office-catching-up-chip"),
+      ).toBeNull();
     });
 
     it("keeps the saved camera when Auto's first outcome is Floor", async () => {
