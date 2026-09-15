@@ -3132,6 +3132,11 @@ describe("CommGraphTile", () => {
         ...DEFAULT_COMM_GRAPH_VIEW,
         officeView: "auto",
         officeAutoView: "building",
+        // Matches the Settings store's default generation (0, untouched by
+        // this test) - a stamp from a build that predates this field would
+        // parse to `null` and no longer match, which is exactly the
+        // re-measure this case means to rule OUT.
+        officeAutoGeneration: 0,
       });
       setIntersecting(true);
       setOfficeCanvasSize(OFFICE_CANVAS);
@@ -3144,6 +3149,66 @@ describe("CommGraphTile", () => {
       expect(
         screen.getByTestId("comm-graph-office-auto-chip").textContent,
       ).toBe("Auto · Building · measured earlier");
+    });
+
+    it("re-measures a restored outcome once the Settings default has round-tripped since it was measured, even on a quiet remount", async () => {
+      // Codex: a FOLLOWING tile (officeView: null) LRU-evicted while the
+      // Settings default left Auto and returned keeps its stale
+      // `officeAutoView` outcome, because only a MOUNTED tile witnesses the
+      // transition and re-picks Auto - an evicted tile sees none of it. The
+      // generation is what catches this: it bumps on every real default
+      // change, so a remount whose stamped generation no longer matches the
+      // current one re-measures instead of trusting a pick made against an
+      // epic that may have changed shape in the meantime.
+      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      const persisted: CommGraphTileViewState = {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeAutoView: "floor",
+        officeAutoGeneration: 0,
+      };
+
+      // First mount: generation matches (0 === 0) - no re-measure, exactly
+      // the sibling case above. Establishes the seed is a real "trusted"
+      // outcome, not one that was already going to redecide regardless.
+      await renderSeededOffice(persisted);
+      setIntersecting(true);
+      setOfficeCanvasSize(OFFICE_CANVAS);
+      caughtUp();
+      expect(decide).not.toHaveBeenCalled();
+      expect(storedView()?.officeAutoView).toBe("floor");
+
+      // The tile closes (LRU eviction) - simulated by tearing the render
+      // down without writing anything back, so `persisted` is exactly what
+      // is still on disk. While it is closed, the default round-trips
+      // through a concrete view and back to Auto - the generation this
+      // outcome was stamped under (0) is now stale (2).
+      cleanup();
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+      );
+      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+        2,
+      );
+
+      // The tile reopens - a fresh mount reading exactly the same persisted
+      // record (the generation mismatch is the ONLY thing that changed).
+      decide.mockClear();
+      await renderSeededOffice(persisted);
+      setIntersecting(true);
+      setOfficeCanvasSize(OFFICE_CANVAS);
+      caughtUp();
+
+      // Real Auto measurement, same fixture/box every other case in this
+      // file relies on for a Floor outcome.
+      await waitFor(() => {
+        expect(decide).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(storedView()?.officeAutoGeneration).toBe(2);
+      });
+      expect(storedView()?.officeAutoView).toBe("floor");
     });
   });
 

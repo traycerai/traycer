@@ -258,6 +258,33 @@ describe("comm-graph tile schema", () => {
     expect(parsed.view.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
   });
 
+  it("stamps a MIGRATED camera's framed view as Floor, so a Settings default that has since moved on can neutralise it", () => {
+    // Codex: a pre-split record's shared x/y/zoom were always the OFFICE's
+    // and only ever addressed the Floor (the only office that existed then).
+    // Leaving `officeCameraView` null on migration read as "nobody framed
+    // this" and let the numbers ride through unchallenged under whatever
+    // view a newly-defaulted Settings choice (Towers, Building, ...)
+    // resolves to now - Floor-space coordinates read as that view's own,
+    // opening the tile off-screen. Stamping "floor" is what lets the
+    // record-mismatch effect do its job the moment the current view
+    // disagrees.
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      // No `officeCamera`, no `officeCameraView` - a genuinely pre-split
+      // record, the shape `migrates` alone gates on.
+      view: { x: 12, y: -8, zoom: 1.5, mode: "office" },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeCamera).toEqual({ x: 12, y: -8, zoom: 1.5 });
+    expect(parsed.view.officeCameraView).toBe("floor");
+  });
+
   it("opens a NEWLY CREATED tile on the office floor", () => {
     // The new-tile default and the parse fallback deliberately disagree: the
     // floor is the better first look, but only for a tile that has no history
@@ -452,10 +479,21 @@ describe("comm-graph tile schema", () => {
       expect(parsed).toEqual(ref);
     });
 
-    it("migrates a pre-D68 office-mode record's camera into officeCamera, keeping officeCameraView", () => {
+    it("migrates a pre-D68 office-mode record's camera into officeCamera, stamped Floor regardless of a stray officeCameraView", () => {
       // Absent `officeCamera`, `office` mode, a non-neutral camera - those
       // numbers were the office's under the old one-camera model, and D68
       // hands them to the field that now owns them.
+      //
+      // Codex (Finding 2): `officeCameraView: "building"` here is a shape no
+      // real persisted record can carry - every writer sets `officeCamera`
+      // and `officeCameraView` together in the same write (see the two
+      // `updateCommGraphTileOfficeCamera*` call sites), and `officeCameraView`
+      // did not exist before `officeCamera` did, so a genuinely pre-split
+      // record has neither. `migrates` gates purely on `officeCamera` being
+      // absent, and now unconditionally stamps a migrated camera "floor" -
+      // the one view its coordinates could have addressed under the old
+      // one-camera model - rather than trusting a stray stamp that could not
+      // have been written by this application.
       const parsed = parseTileRef({
         id: commGraphTileId(EPIC_ID),
         instanceId: "inst-1",
@@ -474,7 +512,7 @@ describe("comm-graph tile schema", () => {
       expect(parsed?.type).toBe("comm-graph");
       if (parsed === null || parsed.type !== "comm-graph") return;
       expect(parsed.view.officeCamera).toEqual({ x: 40, y: -12, zoom: 2.5 });
-      expect(parsed.view.officeCameraView).toBe("building");
+      expect(parsed.view.officeCameraView).toBe("floor");
       expect(parsed.view.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
       expect(parsed.view.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
       expect(parsed.view.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
@@ -924,6 +962,9 @@ describe("updateCommGraphTileCamera", () => {
       mode: "graph",
       officeView: "towers",
       officeAutoView: "building",
+      // The generation field, another one this action does not know about -
+      // null since the fixture never measured Auto.
+      officeAutoGeneration: null,
       // D68: nor the office's own camera, a field this action does not even
       // know about - null here since the fixture never framed the office.
       officeCamera: null,
@@ -1032,6 +1073,7 @@ describe("updateCommGraphTileOfficeCamera", () => {
       mode: "office",
       officeView: "towers",
       officeAutoView: "building",
+      officeAutoGeneration: null,
     });
   });
 
