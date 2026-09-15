@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  createAgentRequestSchemaV30,
+  createAgentRequestSchemaV31,
   createAgentResponseSchema,
   type CreateAgentWorkspace,
 } from "@traycer/protocol/host/agent/shared";
@@ -62,7 +62,7 @@ export function buildAgentCreateCommand(opts: {
     // Validate the full request locally so a bad --surface / --harness
     // fails fast with a clear E_INVALID_ARGUMENT (listing the allowed harness
     // values) instead of round-tripping or leaking a raw ZodError stack.
-    const request = parseUserInput(createAgentRequestSchemaV30, {
+    const request = parseUserInput(createAgentRequestSchemaV31, {
       senderAgentId,
       epicId,
       name: opts.name,
@@ -81,6 +81,8 @@ export function buildAgentCreateCommand(opts: {
         workspaceEntries: opts.workspaceEntries,
       }),
       profileSelection: parseCreateProfileSelection(opts.profile),
+      // The CLI grants no capability; a grant is an A2A-tool decision.
+      crossTaskChatSearch: null,
     });
     const result = await toAgentCliError(callHostRpc("agent.create", request));
     const { agentId, warnings } = parseCanonicalHostResponse(
