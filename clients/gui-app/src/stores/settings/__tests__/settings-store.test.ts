@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PERMISSION } from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
@@ -287,6 +287,54 @@ describe("useSettingsStore", () => {
       );
     },
   );
+
+  it("rolls the agent office default view generation to a collision-free random stamp on a real change, not a per-window +1 counter (Finding 37)", () => {
+    // Codex: the generation is compared by EQUALITY and rehydrates across
+    // windows via storage events, so a per-window `+1` counter let two
+    // windows land on the SAME next value for two DIFFERENT changes. The
+    // fix rolls to `Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)`
+    // instead - stubbed here to a fixed draw so the new generation is an
+    // exact, deterministic number to assert on rather than merely "some
+    // number that isn't G+1".
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.25);
+    try {
+      useSettingsStore.setState({
+        agentOfficeDefaultView: "auto",
+        agentOfficeDefaultViewGeneration: 5,
+      });
+
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+
+      const generation =
+        useSettingsStore.getState().agentOfficeDefaultViewGeneration;
+      expect(generation).toBe(Math.floor(0.25 * Number.MAX_SAFE_INTEGER));
+      // The distinguishing assertion: not the old `+1` counter's answer.
+      expect(generation).not.toBe(6);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it("does not roll the agent office default view generation when the value does not actually change (Finding 37)", () => {
+    // The setter's own no-op guard (`s.agentOfficeDefaultView === value ? s
+    // : {...}`) - setting the SAME value is not a "real change" and must not
+    // burn a fresh stamp, collision-free or not.
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.9);
+    try {
+      useSettingsStore.setState({
+        agentOfficeDefaultView: "towers",
+        agentOfficeDefaultViewGeneration: 42,
+      });
+
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+
+      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+        42,
+      );
+    } finally {
+      random.mockRestore();
+    }
+  });
 
   it("updates the global artifact icon color mode", () => {
     useSettingsStore.getState().setArtifactIconColorMode("none");

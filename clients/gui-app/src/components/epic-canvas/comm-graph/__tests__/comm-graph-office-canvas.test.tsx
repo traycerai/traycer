@@ -2440,6 +2440,34 @@ describe("CommGraphOfficeCanvas", () => {
     expect(modeWrapper.className).toContain("pointer-events-auto");
   });
 
+  it("lets a pointer gesture pass through the informational chips to the canvas beneath them (Finding 36)", () => {
+    // Codex: the bottom-left overlay (auto/catch-up/LOD chips + zoom group)
+    // kept the default pointer-events on its wrapper, so a pan or
+    // double-click started over the read-only chips hit the wrapper instead
+    // of the canvas underneath. The frame is now pointer-events-none with the
+    // zoom-button group re-enabling its own - same pattern as the toolbar
+    // (Findings 32/33), asserted the same way: jsdom lays nothing out, so
+    // this reads the utility classes on the real rendered tree.
+    render(
+      withQueryClient(
+        officeElement(
+          new Set([ORCHESTRATOR.id, REVIEWER.id]),
+          STATIC_OFFICE,
+          {},
+        ),
+      ),
+    );
+
+    const zoomIn = screen.getByTestId("comm-graph-office-zoom-in");
+    const zoomGroup = zoomIn.parentElement;
+    if (zoomGroup === null) throw new Error("zoom-in has no parent group");
+    const wrapper = zoomGroup.parentElement;
+    if (wrapper === null) throw new Error("zoom group has no parent wrapper");
+
+    expect(zoomGroup.className).toContain("pointer-events-auto");
+    expect(wrapper.className).toContain("pointer-events-none");
+  });
+
   it("carries a glyph on its lod 0 pip for attention, failure, awaiting and archived", () => {
     // jsdom draws nothing, so this reads the same answer the canvas's own
     // scene would give at overview zoom, the way `envelopeRect` already does
@@ -3192,6 +3220,141 @@ describe("CommGraphOfficeCanvas", () => {
     );
 
     expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+  });
+
+  it("disables the camera controls (zoom in/out, fit) while Auto is still measuring (Finding 34)", () => {
+    // Codex: the zoom/Fit buttons mutate this mount's runtime, which the
+    // measuring->resolved remount discards - so each silently did nothing on
+    // a blank canvas. `disabled={measuring}` is the observable fix.
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          measuring: true,
+        }),
+      ),
+    );
+
+    expect(
+      screen.getByTestId<HTMLButtonElement>("comm-graph-office-zoom-in")
+        .disabled,
+    ).toBe(true);
+    expect(
+      screen.getByTestId<HTMLButtonElement>("comm-graph-office-zoom-out")
+        .disabled,
+    ).toBe(true);
+    expect(
+      screen.getByTestId<HTMLButtonElement>("comm-graph-office-fit").disabled,
+    ).toBe(true);
+  });
+
+  it("enables the camera controls once Auto has resolved, contrasting the case above (Finding 34)", () => {
+    // Non-vacuous contrast: the same three buttons, `measuring: false` - not
+    // disabled, proving the gate above is about the measuring mount and not
+    // the controls having stopped working altogether.
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          measuring: false,
+        }),
+      ),
+    );
+
+    expect(
+      screen.getByTestId<HTMLButtonElement>("comm-graph-office-zoom-in")
+        .disabled,
+    ).toBe(false);
+    expect(
+      screen.getByTestId<HTMLButtonElement>("comm-graph-office-zoom-out")
+        .disabled,
+    ).toBe(false);
+    expect(
+      screen.getByTestId<HTMLButtonElement>("comm-graph-office-fit").disabled,
+    ).toBe(false);
+  });
+
+  it("does not pan on a wheel gesture while Auto is still measuring (Finding 34)", () => {
+    // Codex: the wheel effect wired a listener onto this mount's own runtime,
+    // which the measuring->resolved remount discards - so a scroll over the
+    // blank canvas silently panned a camera nobody keeps. The effect now
+    // returns before wiring the listener at all while measuring, so the same
+    // gesture the sibling "pans on a plain wheel" test drives must produce NO
+    // persisted camera change, not merely a differently-timed one.
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          onCameraChange,
+          measuring: true,
+        }),
+      ),
+    );
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+
+    fireEvent.wheel(surface, { deltaX: 40, deltaY: 25 });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).not.toHaveBeenCalled();
+  });
+
+  it("DOES pan on the same wheel gesture once Auto has resolved, contrasting the case above (Finding 34)", () => {
+    // Non-vacuous contrast: the exact same wheel event and debounce,
+    // `measuring: false` - the pan goes through and persists with the SAME
+    // numbers the sibling "pans on a plain wheel" test pins, proving the
+    // withholding above is about the measuring mount and not the wheel
+    // handler having stopped working altogether.
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          onCameraChange,
+          measuring: false,
+        }),
+      ),
+    );
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+
+    fireEvent.wheel(surface, { deltaX: 40, deltaY: 25 });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).toHaveBeenCalledWith({ x: -40, y: -25, zoom: 1 });
+  });
+
+  it("hides the directory while a detail panel is shown, and restores it once the detail closes (Finding 35)", () => {
+    // Codex: the directory (30%) and a detail panel (up to 50%) together left
+    // the floor ~20% - unusable at the 240px minimum split under
+    // overflow-hidden - so a shown detail now hides the directory rather than
+    // crushing the office between two panels. The open state is kept, so
+    // closing the detail brings the directory back without a second click on
+    // the toggle.
+    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
+
+    expect(screen.getByTestId("comm-graph-office-directory")).toBeDefined();
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+
+    expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+    // The distinguishing assertion: the directory is UNMOUNTED, not merely
+    // covered - the old behavior kept it present alongside the detail panel.
+    expect(screen.queryByTestId("comm-graph-office-directory")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close details" }));
+
+    expect(screen.queryByTestId("comm-graph-agent-panel")).toBeNull();
+    // Restored on its own - `directoryOpen` was never touched by opening or
+    // closing the detail, only READ differently while one is shown.
+    expect(screen.getByTestId("comm-graph-office-directory")).toBeDefined();
   });
 
   it("pans to an agent found in the directory search through scene.locate, not a pixel result", () => {
