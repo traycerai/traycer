@@ -107,7 +107,7 @@ function PromptStashTriggerButton(props: {
           aria-label={promptStashTriggerLabel(rowCount)}
           disabled={rowCount === 0}
           className={cn(
-            "rounded-full bg-background/95 px-2.5 text-muted-foreground shadow-sm backdrop-blur-sm hover:text-foreground",
+            "rounded-full bg-background/95 px-2.5 text-muted-foreground shadow-sm hover:text-foreground",
             open && "text-foreground",
           )}
           onPointerDown={(event) => event.preventDefault()}
