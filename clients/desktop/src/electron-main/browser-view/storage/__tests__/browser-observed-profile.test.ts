@@ -1082,6 +1082,107 @@ describe("observed sign-in ownership rule", () => {
   });
 });
 
+describe("observed sign-in compare-before-set (ticket 03)", () => {
+  /**
+   * `mergeObservedProfileCookies` (`browser-storage-state.ts`) now compares a
+   * survivor against its live jar counterpart before writing it, so an
+   * unchanged echo of a cookie this desktop already contributed produces no
+   * `cookies.set` call and no `cookie-changed` event - only the count that
+   * gates seeded origins.
+   */
+  it("skips cookies.set for a survivor identical to its jar counterpart, and still counts it as applied", async () => {
+    const harness = new ObservedApplyHarness();
+    const original = observedCookie({
+      name: "sid",
+      domain: "example.com",
+      expires: futureSeconds(),
+    });
+    await harness.applyFrame([original]);
+    const setSpy = vi.spyOn(harness.jar, "set");
+
+    const result = await harness.applyFrame([original]);
+
+    expect(result.outcome).toBe("applied");
+    expect(result.appliedCookies).toBe(1);
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it("sets exactly the survivor whose value differs, leaving an identical sibling untouched", async () => {
+    const harness = new ObservedApplyHarness();
+    const unchanged = observedCookie({
+      name: "csrf",
+      domain: "example.com",
+      expires: futureSeconds(),
+    });
+    const original = observedCookie({
+      name: "sid",
+      domain: "example.com",
+      expires: futureSeconds(),
+    });
+    await harness.applyFrame([unchanged, original]);
+    const setSpy = vi.spyOn(harness.jar, "set");
+    const rotated = { ...original, value: "rotated" };
+
+    const result = await harness.applyFrame([unchanged, rotated]);
+
+    expect(result.appliedCookies).toBe(2);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    expect(harness.jar.find("sid")?.value).toBe("rotated");
+    expect(harness.jar.find("csrf")?.value).toBe("csrf-value");
+  });
+
+  it("re-reads the live jar on every apply, so a value that changes and then reverts is written both times", async () => {
+    const harness = new ObservedApplyHarness();
+    const original = observedCookie({
+      name: "sid",
+      domain: "example.com",
+      expires: futureSeconds(),
+    });
+    await harness.applyFrame([original]);
+    const setSpy = vi.spyOn(harness.jar, "set");
+
+    const rotated = { ...original, value: "rotated" };
+    const changedResult = await harness.applyFrame([rotated]);
+    expect(changedResult.appliedCookies).toBe(1);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+
+    // A stale, first-seen comparison would keep comparing against the
+    // ORIGINAL value forever and never see this as a change either.
+    const revertedResult = await harness.applyFrame([original]);
+    expect(revertedResult.appliedCookies).toBe(1);
+    expect(setSpy).toHaveBeenCalledTimes(2);
+    expect(harness.jar.find("sid")?.value).toBe("sid-value");
+  });
+
+  it("refuses an identical value for a desktop-owned key rather than treating the match as satisfied", async () => {
+    // The comparison only ever runs on what SURVIVES ownership - a desktop-
+    // owned name is refused before the applier ever asks whether its value
+    // matches, so an attacker cannot use an unchanged-looking echo to slip
+    // past `owned-by-desktop`.
+    const harness = new ObservedApplyHarness();
+    harness.jar.seed(
+      seededCookie({
+        name: "sid",
+        value: "sid-value",
+        domain: "example.com",
+      }),
+    );
+    const setSpy = vi.spyOn(harness.jar, "set");
+
+    const result = await harness.applyFrame([
+      observedCookie({
+        name: "sid",
+        domain: "example.com",
+        expires: futureSeconds(),
+      }),
+    ]);
+
+    expect(result.ownedByDesktopCookies).toBe(1);
+    expect(result.appliedCookies).toBe(0);
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("observed rejection trace sampling", () => {
   const REFUSED: BrowserObservedProfileResult = {
     domain: "example.com",

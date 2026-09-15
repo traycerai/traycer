@@ -7,7 +7,7 @@ import {
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
 import { log, sanitizeLogFields } from "../../app/logger";
 import {
-  browserJarCookieKeys,
+  browserJarCookies,
   cookieKeyId,
   mergeObservedProfileCookies,
   type BrowserObservedCookieMergeResult,
@@ -395,13 +395,17 @@ export async function applyBrowserObservedProfile(
       return dropped(scope, "ledger-unacked");
     }
     const target = dependencies.getTargetJar();
+    // Read inside the serialized section for both ownership and comparison.
+    const jarCookies = await browserJarCookies(scope, target.session);
     const classified = classifyObservedCookies({
       scope,
       cookies: observed.cookies,
       now: dependencies.now(),
-      // Read inside the serialized section, so what the jar holds cannot
-      // change between the ownership test and the merge that test authorises.
-      jarKeys: await browserJarCookieKeys(scope, target.session),
+      jarKeys: jarCookies.map(({ domain, name, path }) => ({
+        domain,
+        name,
+        path,
+      })),
       isHeadlessOriginKey: dependencies.isHeadlessOriginKey,
     });
     let merged: BrowserObservedCookieMergeResult = { applied: 0, refused: [] };
@@ -418,6 +422,7 @@ export async function applyBrowserObservedProfile(
       merged = await mergeObservedProfileCookies(
         classified.survivors,
         target.session,
+        jarCookies,
       );
       // Still inside the serialized section: the claim was taken over what
       // this applier was ABOUT to write, and a cookie the jar refused makes

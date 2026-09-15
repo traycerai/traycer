@@ -513,7 +513,11 @@ export interface BrowserObservedCookieMergeResult {
 export async function mergeObservedProfileCookies(
   cookies: readonly ProtocolStorageCookie[],
   browserSession: BrowserStorageSession,
+  jarCookies: readonly ProtocolStorageCookie[],
 ): Promise<BrowserObservedCookieMergeResult> {
+  const currentCookies = new Map(
+    jarCookies.map((cookie) => [cookieKeyId(cookie), cookie]),
+  );
   let applied = 0;
   const refused: BrowserCookieKey[] = [];
   for (const cookie of cookies) {
@@ -534,7 +538,20 @@ export async function mergeObservedProfileCookies(
         refused.push(key);
         continue;
       }
-      await setStorageCookie(parsed, browserSession);
+      const keyId = cookieKeyId(parsed);
+      const current = currentCookies.get(keyId);
+      if (
+        current === undefined ||
+        current.value !== parsed.value ||
+        (current.expires < 0 ? -1 : current.expires) !==
+          (parsed.expires < 0 ? -1 : parsed.expires) ||
+        current.httpOnly !== parsed.httpOnly ||
+        current.secure !== parsed.secure ||
+        current.sameSite !== parsed.sameSite
+      ) {
+        await setStorageCookie(parsed, browserSession);
+        currentCookies.set(keyId, parsed);
+      }
       applied += 1;
     } catch {
       refused.push(key);
@@ -581,7 +598,7 @@ function canonicalKeyDomain(domain: string): string {
 }
 
 /**
- * The keys one registrable scope holds in this jar right now, subdomains
+ * The cookies one registrable scope holds in this jar right now, subdomains
  * included - Chromium's own `cookies.get` domain filter is subdomain-inclusive,
  * which is what makes this the whole scope the ownership rule reasons over.
  *
@@ -596,23 +613,11 @@ function canonicalKeyDomain(domain: string): string {
  * either. Case and IDN forms are no longer in that set: `readCookieDomain`
  * normalises them the way Chromium's own jar does.
  */
-export async function browserJarCookieKeys(
+export async function browserJarCookies(
   domain: string,
   browserSession: BrowserStorageSession,
-): Promise<readonly BrowserCookieKey[]> {
-  // PROJECTED, not just narrowed by the return type: `browserStorageCookies`
-  // answers whole cookies, and TypeScript accepts the wider object for the
-  // three-field key type - so `value`, `expires`, `httpOnly`, `secure` and
-  // `sameSite` would reach every caller at runtime while the signature says
-  // "keys". This function exists so the ownership rule can ask what the jar
-  // HOLDS without reading what it holds.
-  return browserStorageCookies(
-    await browserSession.cookies.get({ domain }),
-  ).map((cookie) => ({
-    domain: cookie.domain,
-    name: cookie.name,
-    path: cookie.path,
-  }));
+): Promise<readonly ProtocolStorageCookie[]> {
+  return browserStorageCookies(await browserSession.cookies.get({ domain }));
 }
 
 /**
