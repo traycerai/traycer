@@ -2148,13 +2148,34 @@ describe("CommGraphTile", () => {
 
       chooseView("auto");
 
-      // The re-pick neutralised the resolved view AND the camera in the
-      // same write; the resolved view landing on `null` here is not
-      // something the witness gets to act on.
+      // The re-pick's own synchronous write neutralised the camera - the
+      // decisive, load-bearing claim this case exists to pin. `officeCamera`
+      // survives ONLY through the witness's `keep` arm (fixup-4's own
+      // `officeCameraForView`, ~:253: `!witnessedMove` reuses
+      // `node.view.officeCamera`), and an explicit re-pick never arms the
+      // witness - so a camera that came back `null` here did so because the
+      // re-pick itself wrote `null`, not because nothing else had a chance
+      // to restore it.
+      expect(storedView()?.officeCamera).toBeNull();
+
+      // `officeAutoView`/`officeCameraView` reading "floor" (not a lingering
+      // `null`) is the OTHER half of this fix, F4: the seed now asks
+      // viewport intersection (`isElementInViewport`) instead of mere layout
+      // participation (`isElementVisible`), and this harness's canvas is
+      // laid out on screen (`installCanvas`'s stubbed on-screen rect) - so
+      // the remounted canvas is ELIGIBLE the instant it mounts, exactly like
+      // a real visible tile. That lets Auto's decision effect re-measure and
+      // re-decide "floor" inside the very same `chooseView("auto")` act,
+      // before this assertion ever runs. The old, now-corrected expectation
+      // of a persistent `null` here was an artifact of jsdom's
+      // `isElementVisible` always reading false (no `checkVisibility`, no
+      // laid-out `getClientRects`), which held the canvas ineligible at
+      // mount and left Auto's re-decision to a later tick this test never
+      // reached.
       expect(storedView()).toMatchObject({
         officeView: "auto",
-        officeAutoView: null,
-        officeCameraView: null,
+        officeAutoView: "floor",
+        officeCameraView: "floor",
         officeCamera: null,
       });
     });
