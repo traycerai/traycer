@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isElementInViewport,
   isElementVisible,
@@ -329,13 +329,22 @@ describe("isElementInViewport", () => {
     }
   });
 
-  it("is false for a box the window can see but an overflow-clipping ancestor cannot", () => {
+  it("is true for a box the window can see even when an overflow-clipping ancestor cannot (Finding 11)", () => {
+    // The seed is now CONSERVATIVE: it checks the window viewport alone and
+    // does not scan the ancestor chain for a clipping `overflow`, so this
+    // case reads `true` even though a tile scrolled out of an
+    // `overflow-hidden` epic canvas is not really on screen - the
+    // IntersectionObserver is the authority on that and tears the eligible
+    // state back down a beat later. Same geometry as before D68, flipped
+    // expectation.
     stubViewport(1024, 768);
     const parent = document.createElement("div");
     // Set the LONGHANDS directly, not the `overflow` shorthand: jsdom's
     // `getComputedStyle` does not expand `overflow: hidden` into
     // `overflowX`/`overflowY` (both keep reading "visible"), so the shorthand
-    // would leave this ancestor un-clipping and the case vacuous.
+    // would leave this ancestor un-clipping and the case vacuous - kept even
+    // though the seed no longer reads it, so a regression that brings the
+    // scan back is caught by the SAME fixture this test already builds.
     parent.style.overflowX = "hidden";
     parent.style.overflowY = "hidden";
     document.body.appendChild(parent);
@@ -349,27 +358,33 @@ describe("isElementInViewport", () => {
     stubRect(element, new DOMRect(200, 0, 60, 60));
 
     try {
-      expect(isElementInViewport(element)).toBe(false);
+      expect(isElementInViewport(element)).toBe(true);
     } finally {
       parent.remove();
     }
   });
 
-  it("is true for the same off-parent box once the ancestor no longer clips", () => {
-    // The control: identical geometry, but the ancestor's overflow is
-    // `visible` (the default) - nothing to intersect through, so the window
-    // check alone decides, and the box is on screen.
+  it("never reads ancestor overflow via getComputedStyle (Finding 11)", () => {
+    // The removed call site (clients/gui-app/AGENTS.md prohibits it here):
+    // `getComputedStyle` per ancestor to derive clipping. This is the guard
+    // for its removal - same clipping-ancestor fixture as above, but the
+    // claim is about what the seed does NOT do, not what it answers.
     stubViewport(1024, 768);
     const parent = document.createElement("div");
+    parent.style.overflowX = "hidden";
+    parent.style.overflowY = "hidden";
     document.body.appendChild(parent);
     parent.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
     const element = document.createElement("div");
     parent.appendChild(element);
     stubRect(element, new DOMRect(200, 0, 60, 60));
+    const getComputedStyleSpy = vi.spyOn(window, "getComputedStyle");
 
     try {
       expect(isElementInViewport(element)).toBe(true);
+      expect(getComputedStyleSpy).not.toHaveBeenCalled();
     } finally {
+      getComputedStyleSpy.mockRestore();
       parent.remove();
     }
   });

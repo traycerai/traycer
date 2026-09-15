@@ -2371,6 +2371,74 @@ describe("CommGraphOfficeCanvas", () => {
     expect(flushed.zoom).toBeCloseTo(expected.zoom, 6);
   });
 
+  it("re-centers an in-flight pan's destination when the viewport resizes under it (Finding 9)", () => {
+    // Codex: a directory or Find pick opens the transient detail panel AND
+    // requests a pan in the same handler, but the panel steals width from
+    // the flex row a frame later - so the pan resolves against the wider
+    // pre-panel box and the frozen destination centres the agent where the
+    // narrowed floor no longer reaches. `recenterActivePan` shifts the
+    // in-flight pan's destination by half the size delta on `setViewport`,
+    // keeping the same focus centred in the new box. Read back through the
+    // same `onRegisterFlush` flush Round 8's Finding 3 test uses, since it
+    // answers an in-flight `persistOnArrival` pan's destination directly.
+    const { step } = installCanvas();
+    const registered: {
+      current: (() => CommGraphTileCamera | null) | null;
+    } = { current: null };
+    const captureFlush = (
+      take: (() => CommGraphTileCamera | null) | null,
+    ): void => {
+      registered.current = take;
+    };
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          // Non-neutral: auto-fit stays off, so nothing but the pan and the
+          // resize below ever touches the camera.
+          view: { ...OFFICE_VIEW, x: 1 },
+          onRegisterFlush: captureFlush,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+    // ONE frame: the pan is now active, progress 0 - in flight, nowhere near
+    // arrived, exactly the window the detail panel's own resize lands in.
+    step();
+
+    if (registered.current === null) {
+      throw new Error("flush was never registered");
+    }
+    const beforeResize = registered.current();
+    if (beforeResize === null) {
+      throw new Error("flush returned null before resize - no active pan");
+    }
+
+    // The detail panel opening: installCanvas's stubbed box narrows from
+    // 1040 to 800 (height unchanged), the shape a side panel taking width
+    // from the flex row reports.
+    setCanvasSize({ width: 800, height: 700 });
+
+    const afterResize = registered.current();
+    if (afterResize === null) {
+      throw new Error("flush returned null after resize - pan dropped");
+    }
+
+    // Anti-vacuity: a real width change, or the shift below is trivially 0
+    // regardless of whether the fix runs.
+    expect(800).not.toBe(1040);
+    expect(afterResize.x).toBeCloseTo(beforeResize.x + (800 - 1040) / 2, 6);
+    // Height did not change, so the y endpoint is untouched.
+    expect(afterResize.y).toBeCloseTo(beforeResize.y, 6);
+    expect(afterResize.zoom).toBeCloseTo(beforeResize.zoom, 6);
+  });
+
   it("filters the directory to the visible set, dropping a host section with nothing left in it", () => {
     // The partition seats every agent the epic ever had, but the floor only
     // draws the as-of-cursor set - so a host whose only VISIBLE agent has not

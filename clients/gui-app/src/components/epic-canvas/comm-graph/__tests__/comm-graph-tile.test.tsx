@@ -3314,6 +3314,66 @@ describe("CommGraphTile", () => {
     });
   });
 
+  it("withholds the stale Auto DECISION from the chip and picker once the office starts measuring again, not just the canvas (Finding 10)", async () => {
+    // Codex: `autoDecision` is local state that outlives the persisted
+    // outcome it was measured for. When a live default round-trip makes the
+    // stamped generation stale, `resolvedViewId` goes null at render (Finding
+    // 6) a beat before the new canvas reports a probe and the effect
+    // re-measures - `autoDecision` still holds the OLD decision across that
+    // gap, and `node.view.officeAutoView` (the chip's `restoredView` prop)
+    // is untouched by a live generation bump too, so the chip's fallback to
+    // "measured earlier" is what proves the DETAILED decision (the agent
+    // count text) was withheld, not merely that the view name still shows.
+    const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
+    useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+
+    await renderOfficeTile();
+    await waitFor(() => {
+      expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]);
+    });
+    setIntersecting(true);
+    setOfficeCanvasSize(OFFICE_CANVAS);
+    caughtUp();
+    await waitFor(() => {
+      expect(storedView()?.officeAutoView).not.toBeNull();
+    });
+    const measuredGeneration = storedView()?.officeAutoGeneration;
+    // Sanity: the FIRST measurement really does show the numeric decision -
+    // otherwise the assertion below would pass even if nothing ever showed
+    // decision detail at all.
+    expect(
+      screen.getByTestId("comm-graph-office-auto-chip").textContent,
+    ).toContain("measured at");
+
+    // The default round-trips twice more while the tile stays mounted,
+    // leaving the stamped generation stale relative to the current one - the
+    // same move Finding 6's test drives, but this time with a REAL decision
+    // already in local state rather than a seeded persisted one.
+    decide.mockClear();
+    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("towers"));
+    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+    expect(
+      useSettingsStore.getState().agentOfficeDefaultViewGeneration,
+    ).not.toBe(measuredGeneration);
+
+    // No fresh signals for the new (measuring) canvas key yet, so nothing has
+    // re-measured - this is exactly the gap where the OLD `autoDecision`
+    // would otherwise still be showing. The default round-trip also clears
+    // the PERSISTED outcome outright (a separate, already-fixed effect), so
+    // `restoredView` is null too by now - the chip's fallback all the way to
+    // "measuring…" is what proves the local `autoDecision` state (which that
+    // clear never touches) was withheld, not merely that the persisted
+    // record was.
+    expect(decide).not.toHaveBeenCalled();
+    expect(storedView()?.officeAutoView).toBeNull();
+    const withheldText = screen.getByTestId(
+      "comm-graph-office-auto-chip",
+    ).textContent;
+    expect(withheldText).not.toContain("measured at");
+    expect(withheldText).toBe("Auto · measuring…");
+  });
+
   describe("readiness classification (F3, revised by fixup 8/H1)", () => {
     it("plans a restored Building before replay is ready (fixup 8 draws it), and still classifies its cold arrival as hot once replay confirms it awaiting", async () => {
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
