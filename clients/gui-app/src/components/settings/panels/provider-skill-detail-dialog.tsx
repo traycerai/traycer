@@ -392,9 +392,10 @@ function EditableSkillDetail(props: {
                             : undefined
                         }
                         className={cn(
-                          "col-start-1 row-start-1 max-h-24 min-h-16 resize-none text-ui-sm leading-relaxed",
+                          "col-start-1 row-start-1 max-h-24 min-h-16 resize-none leading-relaxed",
                           editing ? null : "invisible pointer-events-none",
                         )}
+                        size="sm"
                       />
                     </div>
                     {editing && help !== null ? (
@@ -589,8 +590,10 @@ function EditableSkillHeader(props: {
       </DialogDescription>
       <div className="grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] items-start gap-x-4 gap-y-3 pe-7">
         <Label
-          className="pt-1.5 text-ui-xs font-medium text-muted-foreground"
+          className="pt-1.5"
           htmlFor="skill-detail-name"
+          size="xs"
+          variant="muted"
         >
           Name
         </Label>
@@ -602,8 +605,10 @@ function EditableSkillHeader(props: {
         </div>
 
         <Label
-          className="pt-1 text-ui-xs font-medium text-muted-foreground"
+          className="pt-1"
           htmlFor="skill-detail-description"
+          size="xs"
+          variant="muted"
         >
           When to use
         </Label>

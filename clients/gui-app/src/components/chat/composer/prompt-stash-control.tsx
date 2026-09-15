@@ -434,7 +434,7 @@ function PromptStashEntryRowView(props: {
               >
                 <span>Insert</span>
                 <ShortcutHint>
-                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-micro">
+                  <Kbd className="h-4 min-w-4" variant="mono" size="xs">
                     ↵
                   </Kbd>
                 </ShortcutHint>
@@ -452,7 +452,7 @@ function PromptStashEntryRowView(props: {
               >
                 <span>Delete</span>
                 <ShortcutHint>
-                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-micro">
+                  <Kbd className="h-4 min-w-4" variant="mono" size="xs">
                     D
                   </Kbd>
                 </ShortcutHint>
@@ -587,7 +587,7 @@ function PromptStashUnavailableRowView(props: {
               >
                 <span>Delete</span>
                 <ShortcutHint>
-                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-micro">
+                  <Kbd className="h-4 min-w-4" variant="mono" size="xs">
                     D
                   </Kbd>
                 </ShortcutHint>

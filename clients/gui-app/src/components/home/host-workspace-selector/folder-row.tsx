@@ -110,9 +110,10 @@ export function FolderRow(props: {
             aria-label="Loading folder metadata"
           >
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId={undefined}
               variant="dots"
+              tone="muted"
             />
             <span className="sr-only">Loading folder metadata</span>
           </span>
@@ -399,7 +400,7 @@ function RemoveFolderButton(props: {
     >
       {item.removePending ? (
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={undefined}
           variant="dots"
         />

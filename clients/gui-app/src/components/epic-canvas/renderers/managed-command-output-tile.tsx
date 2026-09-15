@@ -693,9 +693,10 @@ function ManagedCommandOutputTileBody(props: {
           {loadingOlder ? (
             <div className="flex justify-center py-1">
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId="managed-command-output-loading-older"
                 variant={undefined}
+                tone="muted"
               />
             </div>
           ) : null}

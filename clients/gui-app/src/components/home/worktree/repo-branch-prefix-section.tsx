@@ -560,7 +560,7 @@ function InheritedBranchNaming(props: {
       <RadioGroup
         value="global"
         aria-label="Branch prefix source"
-        className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+        className="grid grid-cols-1 sm:grid-cols-2"
         onValueChange={(next) => {
           if (next === "override") props.onChooseOverride();
         }}
@@ -636,7 +636,7 @@ function EditingBranchNaming(props: {
         <RadioGroup
           value="override"
           aria-label="Branch prefix source"
-          className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+          className="grid grid-cols-1 sm:grid-cols-2"
           onValueChange={(next) => {
             if (next === "global") props.onCancel();
           }}
@@ -658,10 +658,7 @@ function EditingBranchNaming(props: {
         </RadioGroup>
       )}
       <div className="flex flex-col gap-1.5">
-        <Label
-          htmlFor={`${props.uid}-prefix-input`}
-          className="text-ui-xs text-muted-foreground"
-        >
+        <Label htmlFor={`${props.uid}-prefix-input`} size="xs" variant="muted">
           Prefix
         </Label>
         <Input
@@ -673,11 +670,11 @@ function EditingBranchNaming(props: {
             props.draftError !== null ? `${props.uid}-prefix-error` : undefined
           }
           placeholder="traycer/"
-          className="font-mono"
           onChange={(event) => props.onDraftChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") props.onApply();
           }}
+          font="mono"
         />
         {props.draftError !== null ? (
           <p
@@ -722,7 +719,7 @@ function EditingBranchNaming(props: {
         >
           {props.isPending ? (
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId="repo-branch-prefix-apply-spinner"
               variant={undefined}
             />

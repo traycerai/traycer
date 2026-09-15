@@ -2547,7 +2547,7 @@ function WorktreeTierPill(props: {
       >
         <Badge
           variant="outline"
-          className="gap-1 font-medium border-dashed border-border bg-foreground/5 text-foreground"
+          className="border-dashed border-border bg-foreground/5 text-foreground"
           data-testid="worktree-tier-pill"
           data-tier="pending"
         >
@@ -2578,7 +2578,7 @@ function WorktreeTierPill(props: {
       >
         <Badge
           variant="outline"
-          className="gap-1 font-medium border-dashed border-warning/40 bg-warning/5 text-warning-foreground"
+          className="border-dashed border-warning/40 bg-warning/5 text-warning-foreground"
           data-testid="worktree-tier-pill"
           data-tier="unknown"
         >
@@ -2618,7 +2618,7 @@ function WorktreeTierPill(props: {
     >
       <Badge
         variant="outline"
-        className={cn("gap-1 font-medium", style.className)}
+        className={cn(style.className)}
         data-testid="worktree-tier-pill"
         data-tier={props.tier}
         data-status={unavailable ? "unavailable" : "ready"}
@@ -2843,11 +2843,7 @@ function WorktreePrChip(props: {
 }): ReactNode {
   const style = WORKTREE_PR_PILL_STYLE[props.chip.prState];
   return (
-    <Badge
-      asChild
-      variant="outline"
-      className={cn("gap-1 font-medium", style.className)}
-    >
+    <Badge asChild variant="outline" className={cn(style.className)}>
       <WorktreePrAnchor
         href={props.chip.prUrl}
         ariaLabel={props.chip.ariaLabel}
@@ -2900,8 +2896,8 @@ function WorktreeMutedPrChip(props: {
       align="center"
     >
       <Badge
-        variant="outline"
-        className="gap-1 border-border/40 bg-foreground/3 font-medium text-muted-foreground"
+        variant="muted"
+        className="border-border/40 bg-foreground/3"
         data-testid="worktree-pr-chip"
         data-pr-state="unmerged"
       >
@@ -2983,7 +2979,7 @@ function WorktreeTaskAssociation(props: {
           <Badge
             asChild
             variant="outline"
-            className="max-w-[min(60vw,16rem)] cursor-pointer font-normal hover:bg-foreground/5 hover:text-muted-foreground"
+            className="max-w-[min(60vw,16rem)] cursor-pointer hover:bg-foreground/5 hover:text-muted-foreground"
           >
             <TooltipWrapper
               label={item.title}
@@ -3471,7 +3467,7 @@ function worktreeSearchHaystack(
   return [
     entry.repoLabel,
     entry.branch ?? "",
-    gitUnreadableOf(entry) ? "unreadable" : "",
+    gitUnreadableOf(entry) ? "unreadable" : null,
     entry.worktreePath,
     ...titles,
   ]

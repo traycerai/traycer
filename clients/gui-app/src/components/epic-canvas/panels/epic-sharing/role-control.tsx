@@ -59,9 +59,10 @@ export function RoleDropdown(props: RoleDropdownProps) {
           </span>
           {isPending ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId={`${testId}-spinner`}
               variant={undefined}
+              tone="muted"
             />
           ) : (
             <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />

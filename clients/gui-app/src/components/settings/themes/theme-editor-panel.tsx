@@ -130,13 +130,14 @@ function ColorField({
         aria-invalid={invalid}
         aria-describedby={invalid ? errorId : undefined}
         value={text}
-        className="h-7 min-w-0 border-white/10 bg-transparent font-mono text-xs"
+        className="h-7 min-w-0 border-white/10 bg-transparent text-xs"
         onChange={(event) => {
           const value = event.target.value;
           const normalized = normalizeThemeColor(value);
           setInput({ rendered: normalized ?? color, text: value });
           if (normalized) onChange(token, value);
         }}
+        font="mono"
       />
       {invalid ? (
         <p

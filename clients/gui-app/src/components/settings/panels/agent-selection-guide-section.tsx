@@ -427,9 +427,10 @@ function SaveStatus(props: {
     return (
       <span className="inline-flex items-center gap-1.5 text-ui-xs text-muted-foreground">
         <AgentSpinningDots
-          className="text-muted-foreground"
+          className={undefined}
           testId="agents-selection-guide-saving-spinner"
           variant={undefined}
+          tone="muted"
         />
         Saving…
       </span>

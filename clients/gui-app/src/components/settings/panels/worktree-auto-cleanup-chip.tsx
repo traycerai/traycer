@@ -383,9 +383,10 @@ function AutoCleanupPopoverPanel(props: {
         <div className="flex shrink-0 items-center gap-2">
           {busy ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId="worktree-auto-cleanup-saving"
               variant={undefined}
+              tone="muted"
             />
           ) : null}
           <Switch
@@ -665,7 +666,7 @@ function AutoCleanupThresholdEditor(props: {
           aria-invalid={error !== null}
           aria-describedby={error !== null ? errorId : undefined}
           disabled={busy}
-          className="h-8 w-[min(30vw,4.5rem)] text-ui-sm"
+          className="h-8 w-[min(30vw,4.5rem)]"
           onChange={(event) => {
             setDraft(event.target.value);
             setHasLocalEdit(true);
@@ -675,6 +676,7 @@ function AutoCleanupThresholdEditor(props: {
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
           }}
+          size="sm"
         />
         <span className="text-ui-xs text-muted-foreground">days</span>
       </div>

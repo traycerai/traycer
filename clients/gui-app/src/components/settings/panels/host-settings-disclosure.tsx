@@ -19,7 +19,7 @@ export function HostSettingsDisclosure(props: DisclosureProps) {
       defaultOpen={defaultOpen}
       className="border-b border-border/40 last:border-b-0"
     >
-      <CollapsibleTrigger className="group flex w-full items-center justify-between gap-3 px-5 py-3 text-left text-ui-sm font-medium text-foreground transition-colors hover:bg-foreground/4">
+      <CollapsibleTrigger className="group flex w-full items-center justify-between gap-3 px-5 py-3 text-left text-ui-sm font-medium text-foreground hover:bg-foreground/4">
         <span>{label}</span>
         <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
       </CollapsibleTrigger>

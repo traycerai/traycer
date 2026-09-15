@@ -258,9 +258,10 @@ export function BrowserHostFilterChoices(props: {
       {options.isLoading ? (
         <DropdownMenuItem disabled>
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId={undefined}
             variant={undefined}
+            tone="muted"
           />
           {options.hosts.length === 0
             ? "Loading hosts…"

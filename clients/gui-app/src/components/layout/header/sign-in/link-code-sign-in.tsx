@@ -216,7 +216,9 @@ export function LinkCodeSignIn(props: {
         autoCorrect="off"
         spellCheck={false}
         data-testid="link-code-signin-input"
-        className="flex-1 font-mono text-ui-sm"
+        className="flex-1"
+        font="mono"
+        size="sm"
       />
       <Button
         type="submit"

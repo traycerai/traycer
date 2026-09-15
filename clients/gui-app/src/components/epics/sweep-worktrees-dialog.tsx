@@ -1209,13 +1209,16 @@ function SweepWorktreesRefreshFooter(props: {
       >
         {props.refreshing ? (
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId="sweep-worktrees-refresh-spinner"
             variant={undefined}
+            tone="muted"
           />
         ) : null}
         Refresh
-        <Kbd className="ml-0.5 font-mono">R</Kbd>
+        <Kbd className="ml-0.5" variant="mono">
+          R
+        </Kbd>
       </Button>
     </div>
   );
@@ -1374,8 +1377,9 @@ function SweepRowList(props: {
       <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
         <AgentSpinningDots
           variant="dots"
-          className="text-muted-foreground"
+          className={undefined}
           testId="sweep-worktrees-fleet-pending-spinner"
+          tone="muted"
         />
         <span data-testid="sweep-worktrees-fleet-pending">
           Checking which hosts are available…
@@ -1408,8 +1412,9 @@ function SweepRowList(props: {
       <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
         <AgentSpinningDots
           variant="dots"
-          className="text-muted-foreground"
+          className={undefined}
           testId={undefined}
+          tone="muted"
         />
         Checking worktrees…
       </div>

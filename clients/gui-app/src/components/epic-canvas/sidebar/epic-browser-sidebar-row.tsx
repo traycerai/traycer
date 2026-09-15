@@ -236,9 +236,10 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
         >
           {isClosing ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId={undefined}
               variant={undefined}
+              tone="muted"
             />
           ) : (
             <X className="size-3.5" aria-hidden />

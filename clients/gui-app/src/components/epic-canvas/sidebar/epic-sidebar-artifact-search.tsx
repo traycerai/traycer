@@ -490,9 +490,10 @@ function ArtifactSearchResultsRegion(props: ArtifactSearchResultsRegionProps) {
         data-testid="epic-artifact-search-loading"
       >
         <AgentSpinningDots
-          className="text-muted-foreground"
+          className={undefined}
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
       </div>
     );

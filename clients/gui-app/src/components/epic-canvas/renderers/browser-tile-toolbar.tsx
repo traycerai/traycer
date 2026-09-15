@@ -140,9 +140,10 @@ export function BrowserTileToolbarCompact(props: {
       {props.loading && !props.controller.capabilities.reload ? (
         <span role="status" aria-label="Page loading" className="shrink-0">
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId="browser-tile-toolbar-compact-loading"
             variant={undefined}
+            tone="muted"
           />
         </span>
       ) : null}
@@ -194,9 +195,10 @@ function BrowserTileToolbarNav(props: {
         >
           {props.loading ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId="browser-reload-loading"
               variant={undefined}
+              tone="muted"
             />
           ) : (
             <RotateCw />
@@ -249,7 +251,8 @@ function BrowserTileToolbarAddress(props: {
           }}
           onFocus={() => onAddressFocusChange(true)}
           onBlur={() => onAddressFocusChange(false)}
-          className="h-full truncate px-2 font-mono text-ui-sm"
+          font="mono"
+          className="h-full truncate px-2"
           spellCheck={false}
         />
         {canOpenExternally ? (
@@ -275,7 +278,8 @@ function BrowserOpenExternalButton(props: { readonly url: string }) {
         type="button"
         size="icon-xs"
         aria-label="Open in default browser"
-        className="pointer-events-none text-muted-foreground opacity-0 transition-[color,opacity] duration-150 group-hover/address:pointer-events-auto group-hover/address:opacity-100 group-focus-within/address:pointer-events-auto group-focus-within/address:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
+        variant="muted"
+        className="pointer-events-none opacity-0 transition-[color,opacity] duration-150 group-hover/address:pointer-events-auto group-hover/address:opacity-100 group-focus-within/address:pointer-events-auto group-focus-within/address:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
         onClick={() => {
           void openLink(props.url, "app", null);
         }}

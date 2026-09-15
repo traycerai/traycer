@@ -459,7 +459,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         </DropdownMenuLabel>
         <Input
           aria-label="Terminal interface CLI arguments"
-          className="h-8 min-w-0 font-mono text-ui-xs"
+          className="h-8 min-w-0"
           placeholder="Additional arguments (optional)"
           value={argsDraft}
           disabled={tuiAgentPending}
@@ -472,6 +472,8 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             event.preventDefault();
             start();
           }}
+          font="mono"
+          size="xs"
         />
       </section>
       {/* Host list + Folders section (file-tree-style), staged here and read
@@ -495,7 +497,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         >
           {tuiAgentPending ? (
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId={undefined}
               variant={undefined}
             />

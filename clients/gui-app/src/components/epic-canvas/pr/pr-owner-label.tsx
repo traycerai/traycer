@@ -272,8 +272,8 @@ function PrOwnerOverflow(props: {
       <PopoverTrigger asChild>
         <Badge
           asChild
-          variant="outline"
-          className="cursor-pointer font-normal text-muted-foreground hover:bg-foreground/8 hover:text-foreground"
+          variant="muted"
+          className="cursor-pointer hover:bg-foreground/8 hover:text-foreground"
         >
           <button
             type="button"
@@ -443,8 +443,8 @@ function PrOwnerBadge(props: {
   return (
     <Badge
       asChild
-      variant="outline"
-      className="max-w-[min(60vw,16rem)] cursor-pointer font-normal text-muted-foreground hover:bg-foreground/8 hover:text-foreground"
+      variant="muted"
+      className="max-w-[min(60vw,16rem)] cursor-pointer hover:bg-foreground/8 hover:text-foreground"
     >
       <TooltipWrapper
         label={label}

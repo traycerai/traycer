@@ -459,7 +459,7 @@ function EmptyRecentAddFolderContent(props: {
     <>
       {props.pending ? (
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={undefined}
           variant="dots"
         />
@@ -571,14 +571,17 @@ function WorkspaceRefreshFooter(props: {
         >
           {props.refreshing ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId="workspace-folders-refresh-spinner"
               variant={undefined}
+              tone="muted"
             />
           ) : null}
           Refresh
           <ShortcutHint>
-            <Kbd className="ml-0.5 font-mono">R</Kbd>
+            <Kbd className="ml-0.5" variant="mono">
+              R
+            </Kbd>
           </ShortcutHint>
         </Button>
       </div>

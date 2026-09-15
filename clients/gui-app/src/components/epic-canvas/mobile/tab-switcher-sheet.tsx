@@ -332,9 +332,10 @@ function SwitcherEmbedFallback() {
   return (
     <div className="flex min-h-24 flex-1 items-center justify-center p-6">
       <AgentSpinningDots
-        className="size-4 text-muted-foreground"
+        className="size-4"
         testId="switcher-embed-loading"
         variant="dots2"
+        tone="muted"
       />
     </div>
   );

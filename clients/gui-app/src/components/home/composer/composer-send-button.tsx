@@ -177,7 +177,7 @@ function sendButtonIcon(attachmentPending: boolean): ReactNode {
   if (attachmentPending) {
     return (
       <AgentSpinningDots
-        className="text-current"
+        className={undefined}
         testId="composer-attachment-pending"
         variant={undefined}
       />

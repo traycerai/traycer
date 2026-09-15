@@ -1296,34 +1296,22 @@ function ServerRowBadges(props: {
   return (
     <>
       {shadowed ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           shadowed by project
         </Badge>
       ) : null}
       {server.statusSource === "probe" ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal text-muted-foreground"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           connectivity check
         </Badge>
       ) : null}
       {server.configOnly ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           config only
         </Badge>
       ) : null}
       {server.stdioDegraded ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           stdio degraded
         </Badge>
       ) : null}

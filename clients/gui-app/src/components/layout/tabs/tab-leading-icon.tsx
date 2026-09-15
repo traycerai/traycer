@@ -26,9 +26,10 @@ export function TabLeadingIcon(props: {
   if (props.titleGenerationPending) {
     defaultIcon = (
       <AgentSpinningDots
-        className="size-3.5 text-muted-foreground"
+        className="size-3.5"
         testId={`header-tab-title-generating-${props.tabId}`}
         variant="dots2"
+        tone="muted"
       />
     );
   } else if (props.icon !== null && iconCharacters.length === 0) {

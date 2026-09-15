@@ -219,8 +219,9 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
           data-activity-row-trigger=""
           data-find-include="true"
           data-chat-find-unit={headerFindUnitId ?? undefined}
+          variant="quiet"
           className={cn(
-            "group/row-trigger flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm transition-colors",
+            "group/row-trigger flex min-w-0 flex-1 items-center text-left text-ui-sm",
             // Hover stays on the trigger so the action slot beside it keeps its
             // own hover, and it paints over the wrapper's opaque background.
             stickyHeader && open

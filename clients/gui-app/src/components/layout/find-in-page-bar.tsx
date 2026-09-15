@@ -234,7 +234,8 @@ export function FindInPageBar() {
         autoComplete="off"
         autoCorrect="off"
         spellCheck={false}
-        className="h-7 w-48 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+        className="h-7 w-48 px-1"
+        variant="bare"
       />
       {matchLabel === null ? null : (
         <span

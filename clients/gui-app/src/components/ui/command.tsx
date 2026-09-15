@@ -36,7 +36,10 @@ function CommandInput({
 }) {
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
-      <InputGroup className="h-8! rounded-lg border-[color-mix(in_srgb,var(--input)_30%,var(--popover))] bg-[color-mix(in_srgb,var(--input)_30%,var(--popover))]! shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+      <InputGroup
+        variant="search"
+        className="h-8! border-[color-mix(in_srgb,var(--input)_30%,var(--popover))] bg-[color-mix(in_srgb,var(--input)_30%,var(--popover))]!"
+      >
         <CommandPrimitive.Input
           data-slot="command-input"
           className={cn(
@@ -172,7 +175,10 @@ function CommandShortcut({
         {/* Repeated on the keycap because the span above only sets an INHERITED
             color, and `Kbd` paints its own `text-muted-foreground` directly on
             the element, which beats it. */}
-        <Kbd className="font-mono tabular-nums group-data-[selected=true]/command-item:text-foreground">
+        <Kbd
+          className="tabular-nums group-data-[selected=true]/command-item:text-foreground"
+          variant="mono"
+        >
           {children}
         </Kbd>
       </span>

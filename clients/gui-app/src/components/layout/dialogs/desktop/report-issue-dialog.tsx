@@ -1102,10 +1102,7 @@ function CaptureScreenBody({
             }}
             disabled={isPending}
             aria-invalid={showGateError}
-            className={cn(
-              "min-h-20 resize-none",
-              showGateError && "border-destructive",
-            )}
+            className="min-h-20 resize-none"
           />
           <IntentFieldHint
             showGateError={showGateError}
@@ -1806,7 +1803,8 @@ function ConsentPanel(props: {
       <div className="flex items-center justify-between gap-2">
         <Label
           htmlFor="report-issue-diagnostics-toggle"
-          className="text-ui-xs font-normal"
+          size="xs"
+          variant="option"
         >
           Diagnostics (crash context, versions, provider info)
         </Label>
@@ -1840,7 +1838,9 @@ function ConsentLogToggleRow(props: {
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-ui-xs font-normal">{props.label}</Label>
+        <Label size="xs" variant="option">
+          {props.label}
+        </Label>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -1887,7 +1887,9 @@ function ConsentBrowserDiagnosticsRow(props: {
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-ui-xs font-normal">Browser diagnostics</Label>
+        <Label size="xs" variant="option">
+          Browser diagnostics
+        </Label>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -2246,7 +2248,6 @@ function Field({
       <Label
         htmlFor={htmlFor}
         className={cn(
-          "text-ui-sm",
           required && "after:ml-0.5 after:text-destructive after:content-['*']",
         )}
       >

@@ -515,8 +515,9 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
             {isFetchingNextPage ? (
               <AgentSpinningDots
                 variant="dots"
-                className="text-muted-foreground"
+                className={undefined}
                 testId={undefined}
+                tone="muted"
               />
             ) : null}
             Show more

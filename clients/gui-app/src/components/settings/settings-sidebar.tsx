@@ -275,7 +275,7 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
             modifier={badgeModifier}
             ariaLabel={leaderHint(digit, "to open", section.label)}
             testId={`settings-section-digit-${digit}`}
-            className="text-muted-foreground"
+            className={undefined}
           />
         )}
       </AnimatePresence>

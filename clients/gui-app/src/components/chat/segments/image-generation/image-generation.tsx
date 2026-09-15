@@ -73,7 +73,7 @@ function DitherMark(props: {
   if (props.status !== "generating") return null;
   return (
     <AgentSpinningDots
-      className="text-current"
+      className={undefined}
       testId={undefined}
       variant={props.reduce ? "static" : undefined}
     />
@@ -354,7 +354,8 @@ function ImageGenerationDetails(props: {
         <Collapsible
           open={expanded}
           onOpenChange={setExpanded}
-          className="w-full min-w-0 overflow-hidden rounded-md border border-border/60 bg-muted/20"
+          className="w-full min-w-0 overflow-hidden"
+          variant="card"
         >
           <CollapsibleTrigger asChild>
             <button

@@ -120,9 +120,10 @@ export function LandingTerminalDirectoryPicker(
               className="flex items-center gap-2 px-2 py-1 text-ui-xs text-muted-foreground"
             >
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId={undefined}
                 variant={undefined}
+                tone="muted"
               />
               Opening terminal…
             </div>
@@ -145,7 +146,7 @@ export function LandingTerminalDirectoryPicker(
                         {workspaceFolderName(workspacePath)}
                       </span>
                       {workspacePath === props.primaryWorkspacePath ? (
-                        <Badge variant="outline" className="h-4 px-1">
+                        <Badge variant="outline" className="h-4">
                           Primary
                         </Badge>
                       ) : null}

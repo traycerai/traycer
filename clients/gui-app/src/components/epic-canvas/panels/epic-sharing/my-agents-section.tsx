@@ -87,7 +87,8 @@ function MyAgentsSharingSectionBody(props: {
         <div className="flex min-w-0 items-center gap-1.5">
           <Label
             htmlFor="epic-sharing-my-agents-switch"
-            className="truncate text-ui-sm font-normal text-muted-foreground"
+            className="truncate"
+            variant="muted"
           >
             Share my agents
           </Label>

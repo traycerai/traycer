@@ -1725,7 +1725,7 @@ function ResourceSearchInput(props: {
         aria-label="Search resources"
         autoComplete="off"
         spellCheck={false}
-        className="text-ui-sm [&::-webkit-search-cancel-button]:hidden"
+        className="[&::-webkit-search-cancel-button]:hidden"
       />
       {props.value.length > 0 ? (
         <InputGroupAddon align="inline-end">

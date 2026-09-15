@@ -231,7 +231,7 @@ function MemoryDiagnosticsGroup(): ReactNode {
             >
               {captureMutation.isPending ? (
                 <AgentSpinningDots
-                  className="text-current"
+                  className={undefined}
                   testId={undefined}
                   variant={undefined}
                 />
@@ -360,7 +360,7 @@ function JsHeapReadout(): ReactNode {
         >
           {measureMutation.isPending ? (
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId={undefined}
               variant={undefined}
             />

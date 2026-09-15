@@ -580,7 +580,9 @@ function ProfileShortcut(props: {
     <DropdownMenuShortcut
       data-testid={`model-profile-digit-${props.shortcutHint.digit}`}
     >
-      <Kbd className="font-mono tabular-nums">{props.shortcutHint.label}</Kbd>
+      <Kbd className="tabular-nums" variant="mono">
+        {props.shortcutHint.label}
+      </Kbd>
     </DropdownMenuShortcut>
   );
 }
@@ -740,10 +742,7 @@ function admissionTooltipRow(
  *  closed trigger and the open rows. */
 function TerminalProfileBadge() {
   return (
-    <Badge
-      variant="outline"
-      className="h-5 shrink-0 px-1.5 text-micro text-muted-foreground"
-    >
+    <Badge variant="muted" className="h-5 shrink-0" size="xs">
       Terminal
     </Badge>
   );

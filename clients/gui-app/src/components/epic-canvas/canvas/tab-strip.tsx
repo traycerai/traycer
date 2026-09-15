@@ -1345,9 +1345,10 @@ export function TabIcon(props: {
   const defaultIcon =
     props.tab.type === "chat" && props.titleGenerationPending ? (
       <AgentSpinningDots
-        className="size-3.5 text-muted-foreground"
+        className="size-3.5"
         testId={`tab-title-generating-${props.tab.instanceId}`}
         variant="dots2"
+        tone="muted"
       />
     ) : undefined;
   return (

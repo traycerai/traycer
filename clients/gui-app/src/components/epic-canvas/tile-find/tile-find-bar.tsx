@@ -219,7 +219,8 @@ export function TileFindBar(props: TileFindBarProps) {
         autoComplete="off"
         autoCorrect="off"
         spellCheck={false}
-        className="h-7 w-[min(42vw,14rem)] min-w-[8rem] border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+        className="h-7 w-[min(42vw,14rem)] min-w-[8rem] px-1"
+        variant="bare"
       />
       {!replaceEnabled ? statusLabel : null}
       <Button
@@ -352,7 +353,8 @@ function TileFindReplaceRow(props: {
         autoComplete="off"
         autoCorrect="off"
         spellCheck={false}
-        className="h-7 min-w-0 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+        className="h-7 min-w-0 flex-1 px-1"
+        variant="bare"
       />
       <Button
         type="button"

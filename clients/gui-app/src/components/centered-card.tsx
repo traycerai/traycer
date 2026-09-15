@@ -132,7 +132,8 @@ export function HostBootHeadline(props: {
         <AgentSpinningDots
           testId={props.spinnerTestId ?? undefined}
           variant={props.spinnerVariant}
-          className="text-ui text-muted-foreground"
+          className={undefined}
+          tone="muted"
         />
       )}
       <p

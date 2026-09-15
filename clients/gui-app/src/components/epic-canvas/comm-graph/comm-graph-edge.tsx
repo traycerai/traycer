@@ -192,7 +192,8 @@ export const CommGraphEdgeView = memo(function CommGraphEdgeView(
                 reply" reads as the same class of fact in both places. */}
             <Badge
               variant="outline"
-              className="h-4 rounded-sm border-primary/25 bg-card px-1 py-0 text-micro font-medium text-primary shadow-sm"
+              className="h-4 border-primary/25 bg-card text-primary shadow-sm"
+              size="xs"
             >
               awaiting reply
             </Badge>

@@ -317,7 +317,7 @@ function SidebarInput({
     <Input
       data-slot="sidebar-input"
       data-sidebar="input"
-      className={cn("h-8 w-full bg-background shadow-none", className)}
+      className={cn("h-8 w-full bg-background", className)}
       {...props}
     />
   );
@@ -353,7 +353,7 @@ function SidebarSeparator({
     <Separator
       data-slot="sidebar-separator"
       data-sidebar="separator"
-      className={cn("mx-2 w-auto bg-border", className)}
+      className={cn("mx-2 w-auto", className)}
       {...props}
     />
   );

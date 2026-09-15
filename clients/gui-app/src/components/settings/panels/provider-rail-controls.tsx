@@ -68,7 +68,6 @@ export function ProviderRailControls(props: {
           aria-label="Search providers"
           autoComplete="off"
           spellCheck={false}
-          className="text-ui-sm"
           data-testid="provider-rail-search-input"
         />
         {view.query.length > 0 ? (

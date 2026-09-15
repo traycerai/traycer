@@ -322,9 +322,10 @@ function CollaboratorRow(props: {
             >
               {isRevokePending ? (
                 <AgentSpinningDots
-                  className="text-muted-foreground"
+                  className={undefined}
                   testId="collaborator-revoke-spinner"
                   variant={undefined}
+                  tone="muted"
                 />
               ) : (
                 <Trash2 className="size-3.5" />
@@ -406,9 +407,10 @@ function TeamAccessRow(props: {
             >
               {isRevokePending ? (
                 <AgentSpinningDots
-                  className="text-muted-foreground"
+                  className={undefined}
                   testId="team-revoke-spinner"
                   variant={undefined}
+                  tone="muted"
                 />
               ) : (
                 <Trash2 className="size-3.5" />

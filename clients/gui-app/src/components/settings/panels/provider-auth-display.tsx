@@ -19,10 +19,7 @@ export function ProviderAuthBadge({
   if (auth.badgeText === null) return null;
 
   return (
-    <Badge
-      variant="outline"
-      className="h-4 max-w-full rounded-sm border-border/60 bg-muted/20 px-1.5 text-micro font-normal leading-none text-muted-foreground"
-    >
+    <Badge variant="muted" className="h-4 max-w-full" size="xs">
       <span className="truncate">{auth.badgeText}</span>
     </Badge>
   );

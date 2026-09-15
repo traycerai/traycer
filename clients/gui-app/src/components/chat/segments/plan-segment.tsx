@@ -365,9 +365,10 @@ function PlanModalView(
           {props.isFetching ? (
             <div className="mb-3 flex items-center gap-2 rounded-md border border-border/40 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground">
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId="plan-fetch-spinner"
                 variant="dots"
+                tone="muted"
               />
               Loading full plan
             </div>

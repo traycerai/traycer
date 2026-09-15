@@ -949,7 +949,8 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
             <AgentSpinningDots
               testId="epics-list-search-spinner"
               variant="orbit"
-              className="text-muted-foreground"
+              className={undefined}
+              tone="muted"
             />
           ) : (
             <Search />
@@ -1614,7 +1615,8 @@ function HistoryOpenBadge(props: {
     <Badge
       variant="secondary"
       data-testid={`task-history-open-${props.epicId}`}
-      className="h-4 px-1 text-overline"
+      className="h-4"
+      size="sm"
     >
       Open
     </Badge>

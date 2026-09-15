@@ -178,10 +178,7 @@ function AuthLineRow(props: {
   return (
     <div className="flex min-w-0 shrink-0 items-center gap-1.5 border-b px-3 py-1.5 text-ui-xs text-muted-foreground">
       {props.badgeText === null ? null : (
-        <Badge
-          variant="outline"
-          className="h-4 max-w-full rounded-sm border-border/60 bg-muted/20 px-1.5 text-micro font-normal leading-none text-muted-foreground"
-        >
+        <Badge variant="muted" className="h-4 max-w-full" size="xs">
           <span className="truncate">{props.badgeText}</span>
         </Badge>
       )}
