@@ -1960,6 +1960,150 @@ describe("CommGraphOfficeCanvas", () => {
         1,
       );
     });
+
+    it("rebases an in-flight drag's origin when a growth shift lands mid-drag (Finding 29)", () => {
+      // Codex: the shift path compensated the live camera, the manual
+      // baseline and any pan in flight - but not a DRAG in flight. A drag's
+      // stored origin (`dragRef.current.cameraX/cameraY`) is what the NEXT
+      // pointer-move recomputes the camera from
+      // (`camera.x = drag.cameraX + dx`), so leaving it in the old world
+      // undoes the compensation the moment the pointer moves again: the
+      // floor jumps back by the shift on the very next move.
+      //
+      // Same calibration technique as Finding 26/28's tests, reused here to
+      // learn the exact shift in world units before asserting against it.
+      const calibrateShift = (): { readonly x: number; readonly y: number } => {
+        const { step: calibrateStep } = installCanvas();
+        const calibrationFrames = vi.spyOn(OfficeScene.prototype, "frame");
+        const calibration = render(
+          withQueryClient(
+            officeElementWithView(
+              SHIFT_VIEW,
+              new Set(["shift-a"]),
+              [SHIFT_AGENT_A],
+              {},
+            ),
+          ),
+        );
+        setIntersecting(true);
+        calibrateStep();
+        const before = cameraFromFrame(calibrationFrames, SHIFT_VIEWPORT);
+        if (before === null) throw new Error("no calibration frame before");
+        calibration.rerender(
+          withQueryClient(
+            officeElementWithView(
+              SHIFT_VIEW,
+              new Set(["shift-a", "shift-b"]),
+              [SHIFT_AGENT_A, SHIFT_AGENT_B],
+              {},
+            ),
+          ),
+        );
+        calibrateStep();
+        const after = cameraFromFrame(calibrationFrames, SHIFT_VIEWPORT);
+        if (after === null) throw new Error("no calibration frame after");
+        cleanup();
+        return { x: before.x - after.x, y: before.y - after.y };
+      };
+      const shiftWorld = calibrateShift();
+
+      // The OUTER installCanvas, AFTER calibration - see Finding 26's test
+      // for why the ordering matters.
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const view = render(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a"]),
+            [SHIFT_AGENT_A],
+            {},
+          ),
+        ),
+      );
+      setIntersecting(true);
+      step();
+
+      const canvas = screen.getByRole("img", {
+        name: "Office view of the communication graph",
+      });
+
+      // A manual drag: press, then move past CLICK_SLOP_PX so it counts as a
+      // pan rather than a click (`handlePointerMove` asserts `moved`). The
+      // shift is a pure ROW translation ({col: 0, row: 4}, per the sibling
+      // test above), so the drag moves in Y - the axis the shift actually
+      // touches.
+      const originX = 100;
+      const originY = 100;
+      fireEvent.pointerDown(canvas, {
+        pointerId: 1,
+        clientX: originX,
+        clientY: originY,
+      });
+      fireEvent.pointerMove(canvas, {
+        pointerId: 1,
+        clientX: originX,
+        clientY: originY + 50,
+      });
+      step();
+
+      const afterFirstMove = cameraFromFrame(frames, SHIFT_VIEWPORT);
+      if (afterFirstMove === null) throw new Error("no frame after first move");
+
+      // Growth lands WHILE the drag is still in flight (pointer still down,
+      // no pointerUp yet).
+      view.rerender(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a", "shift-b"]),
+            [SHIFT_AGENT_A, SHIFT_AGENT_B],
+            {},
+          ),
+        ),
+      );
+      step();
+
+      // The SAME target point as the first move - dx/dy from the drag's
+      // origin are unchanged, so what changes the resulting camera is only
+      // whether `dragRef.current.cameraX/cameraY` was rebased by the shift.
+      fireEvent.pointerMove(canvas, {
+        pointerId: 1,
+        clientX: originX,
+        clientY: originY + 50,
+      });
+      step();
+
+      const afterSecondMove = cameraFromFrame(frames, SHIFT_VIEWPORT);
+      if (afterSecondMove === null) {
+        throw new Error("no frame after second move");
+      }
+
+      // Anti-vacuity: the shift really did move something - otherwise the
+      // compensation assertion below would pass even for a shift that never
+      // happened.
+      expect(shiftWorld.y).not.toBeCloseTo(0, 1);
+
+      // The distinguishing assertion: the second move lands on the
+      // shift-COMPENSATED camera, not the value the first move already
+      // reached (which the uncompensated origin would silently reproduce,
+      // undoing the shift the growth step just applied).
+      expect(afterSecondMove.y).not.toBeCloseTo(afterFirstMove.y, 1);
+      expect(afterSecondMove.y).toBeCloseTo(
+        afterFirstMove.y - shiftWorld.y * afterFirstMove.zoom,
+        1,
+      );
+      expect(afterSecondMove.x).toBeCloseTo(
+        afterFirstMove.x - shiftWorld.x * afterFirstMove.zoom,
+        1,
+      );
+
+      fireEvent.pointerUp(canvas, {
+        pointerId: 1,
+        clientX: originX,
+        clientY: originY + 50,
+      });
+    });
   });
 
   it("carries a glyph on its lod 0 pip for attention, failure, awaiting and archived", () => {
