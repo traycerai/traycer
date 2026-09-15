@@ -331,7 +331,7 @@ function ArtifactVersionHistoryEntryPointContent(props: {
   if (!open) {
     return (
       <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center">
-        <span className="pointer-events-auto flex shrink-0 items-center rounded-md border border-border/60 bg-canvas/80 px-0.5 shadow-sm">
+        <span className="pointer-events-auto flex shrink-0 items-center rounded-md border border-border/60 bg-canvas px-0.5 shadow-sm">
           <TooltipWrapper
             label="Version history"
             side="bottom"
