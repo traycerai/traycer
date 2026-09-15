@@ -10,9 +10,10 @@
  *
  * Closing the WS does NOT abort the run - the opposite of `migration.run`,
  * whose loop watches its connection-scoped `RequestContext`. Import is a
- * background bring-over the user is explicitly told to walk away from (it runs
- * while the onboarding tour continues), so a closed tab, a reload, or a
- * quit-and-restart must not leave half a submission behind. Re-subscribing
+ * background bring-over the user is explicitly told to walk away from
+ * whatever surface started it (a closed dialog, a reload, a quit), so a
+ * closed tab, a reload, or a quit-and-restart must not leave half a
+ * submission behind. Re-subscribing
  * ATTACHES to the run already in flight: the host replays `started` and every
  * `progress` frame it has produced so far, then continues live. A subscribe
  * that arrives while a run is active therefore ignores its own `selections` -

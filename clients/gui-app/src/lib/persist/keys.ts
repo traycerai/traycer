@@ -248,7 +248,10 @@ export const PERSIST_STORES = [
   },
 
   // ── Static zustand stores (33) ───────────────────────────────────────────
-  { camelName: "onboarding", leaf: "onboarding", kind: "static" },
+  // The deleted first-run tour persisted `completedAt` under leaf
+  // `onboarding`; the flow store migrates that key once at load
+  // (`migrateLegacyOnboardingKey`) and the leaf is retired — never reuse it.
+  { camelName: "onboardingFlow", leaf: "onboarding-flow", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
   // Enumerated under the `interview-drafts` leaf, but persisted as one key per
@@ -365,8 +368,9 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   // Which feature announcements this install has shown, keyed by feature id
-  // (`feature-announcements-store.ts`). Machine-local like onboarding: it is
-  // a fact about what this install has said, not about who is signed in.
+  // (`feature-announcements-store.ts`). Machine-local like the onboarding
+  // flow: it is a fact about what this install has said, not about who is
+  // signed in.
   {
     camelName: "featureAnnouncements",
     leaf: "feature-announcements",

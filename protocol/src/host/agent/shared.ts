@@ -708,7 +708,7 @@ export type AgentSelectionGuideResponse = z.infer<
   typeof agentSelectionGuideResponseSchema
 >;
 
-// Settings/onboarding surface for the global guide file (~/.traycer/...).
+// Settings surface for the global guide file (~/.traycer/...).
 // Distinct from `agent.selectionGuide`, which serves the guide to an agent.
 // These are default-host scoped and carry no epic. Provider choices are
 // already host state, so the host computes the generated default from its

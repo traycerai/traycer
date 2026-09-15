@@ -1,19 +1,19 @@
 /**
- * The wizard is one component on two surfaces: the onboarding act, where it
- * fills a mini-app window on the tour's stage, and a Settings dialog.
+ * The wizard is one component on two surfaces: the welcome modal's sessions
+ * page and a Settings dialog.
  *
- * Both grounds are the user's own theme - the tour's window renders the real
- * app the same way the diorama beside it does - so there is one colour bundle
- * rather than one per surface. The surface is still carried, because COPY
- * differs by it: "they're in your task list" is a lie during the
- * tour, where the task list is several acts away.
+ * Both grounds are the user's own theme, so there is one colour bundle rather
+ * than one per surface, and the copy no longer differs by surface either -
+ * both sit over the real app, where the task list is a click away. The
+ * surface is still carried: it names where the wizard was met, for analytics
+ * and for the next surface whose copy does differ.
  *
  * The colours deliberately avoid `bg-muted` fills: on a raised surface
  * `--muted` collapses into the surface in every preset theme's dark variant
  * (see gui-app AGENTS.md), so tints are alphas of the foreground, which cannot
  * collapse.
  */
-export type SessionImportSurface = "onboarding" | "dialog";
+export type SessionImportSurface = "welcome-modal" | "dialog";
 
 export interface SessionImportTone {
   /** The ground this bundle was built for; drives copy, not colour. */

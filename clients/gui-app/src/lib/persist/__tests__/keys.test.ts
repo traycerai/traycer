@@ -34,8 +34,10 @@ import {
 
 describe("persist key builders — output-preserving against current source", () => {
   it("emits the current localStorage key for each static store", () => {
-    // Source: src/stores/onboarding/onboarding-store.ts
-    expect(persistKey("onboarding")).toBe("traycer-gui-app:onboarding");
+    // Source: src/stores/onboarding/onboarding-flow-store.ts
+    expect(persistKey("onboarding-flow")).toBe(
+      "traycer-gui-app:onboarding-flow",
+    );
     // Source: src/stores/command-palette/command-palette-store.ts
     expect(persistKey("command-palette")).toBe(
       "traycer-gui-app:command-palette",

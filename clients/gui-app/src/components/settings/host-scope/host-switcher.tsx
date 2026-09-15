@@ -209,10 +209,10 @@ export function HostSwitcher(props: {
   readonly onSelect: (hostId: string) => void;
   /** How this list ends — see `HostSwitcherAction`. */
   /**
-   * `null` for a surface with nowhere to send host management - the onboarding
-   * tour renders outside the app shell, so the Settings overlay it would open
-   * has no surface to appear on, and a row that does nothing is worse than no
-   * row. The empty-list branch then states the fact and offers no verb.
+   * `null` for a surface with nowhere to send host management - one rendered
+   * outside the app shell, where the Settings overlay it would open has no
+   * surface to appear on, and a row that does nothing is worse than no row.
+   * The empty-list branch then states the fact and offers no verb.
    */
   readonly action: HostSwitcherAction | null;
   /** Where this picker sits — see `HostSwitcherSurface`. */

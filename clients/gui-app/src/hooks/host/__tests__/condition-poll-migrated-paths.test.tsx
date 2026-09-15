@@ -15,12 +15,9 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   NOTIFICATION_INDICATOR_ERROR_POLL_LANE,
-  ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE,
   SPEECH_MODEL_DOWNLOADING_POLL_LANE,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createAppQueryClient } from "@/lib/query-client";
-import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
-import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 const hostClientMock = vi.hoisted(() => ({
@@ -68,7 +65,6 @@ function isRefetchInterval(
 }
 
 function createPathFixture(handlers: {
-  readonly "agent.selectionGuide.getGlobalOnboardingDraft"?: () => unknown;
   readonly "speech.getModelStatus"?: () => unknown;
   readonly "host.notifications.indicatorState"?: () => unknown;
 }) {
@@ -115,60 +111,6 @@ describe("migrated condition paths", () => {
     hostClientMock.current = null;
     cleanup();
     vi.useRealTimers();
-  });
-
-  it("onboarding draft polls the unsettled providers lane on the real timer", async () => {
-    vi.setSystemTime(0);
-    const fetchTimes: number[] = [];
-    const fixture = createPathFixture({
-      "agent.selectionGuide.getGlobalOnboardingDraft": () => {
-        fetchTimes.push(Date.now());
-        return {
-          content: null,
-          generatedDefaultContent: "default",
-          providersSettled: false,
-        };
-      },
-    });
-
-    renderHook(() => useAgentSelectionGuideGlobalOnboardingDraftQuery(), {
-      wrapper: fixture.Wrapper,
-    });
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-
-    const query = queryForMethod(
-      fixture.queryClient,
-      "agent.selectionGuide.getGlobalOnboardingDraft",
-    );
-    const branded = getConditionPollEpisodeCoordinator(
-      fixture.queryClient,
-    ).refetchIntervalFor("agent.selectionGuide.getGlobalOnboardingDraft");
-    expect(query.options.meta).toMatchObject({
-      hostRpcMethod: "agent.selectionGuide.getGlobalOnboardingDraft",
-    });
-    expect(query.options.retry).toBe(false);
-    expect(refetchIntervalFor(query)).toBe(branded);
-    expect(appliedDelay(query)).toBe(
-      ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE.initialDelayMs,
-    );
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(750);
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_500);
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000);
-    });
-
-    const deltas = fetchTimes
-      .slice(1)
-      .map((time, index) => time - fetchTimes[index]);
-    expect(deltas).toEqual([750, 1_500, 3_000]);
   });
 
   it("speech model status polls while downloading and stops when ready", async () => {

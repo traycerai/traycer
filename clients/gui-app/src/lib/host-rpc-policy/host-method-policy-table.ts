@@ -814,7 +814,7 @@ export const HOST_METHOD_POLL_TABLE = {
       },
     ),
   },
-  // Saving the global guide changes shared onboarding configuration.
+  // Saving the global guide changes shared configuration.
   "agent.selectionGuide.setGlobal": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

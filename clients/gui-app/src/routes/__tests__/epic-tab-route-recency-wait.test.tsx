@@ -10,7 +10,6 @@ import { QueryClient } from "@tanstack/react-query";
 import { routeTree } from "@/routeTree.gen";
 import { RECENCY_HOME_ANSWER_WAIT_MS } from "@/routes/epic-tab-route-components";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
@@ -145,10 +144,6 @@ vi.mock("@/hooks/migration/use-phase-migrate-to-epic-mutation", () => ({
   }),
 }));
 
-vi.mock("@/components/onboarding/onboarding-page", () => ({
-  OnboardingPage: () => <div data-testid="onboarding-page-stub" />,
-}));
-
 vi.mock("@/providers/epic-session-provider", () => ({
   EpicSessionProvider: (props: {
     readonly children: ReactNode;
@@ -256,7 +251,6 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     sessionHostStore.set(null);
     recordViewedHostIds.length = 0;
     recordViewed.mockReset();
-    useOnboardingStore.setState({ completedAt: 1_700_000_000_000 });
     seedOpenEpicTab();
   });
 
@@ -269,7 +263,6 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     );
     useAuthStore.getState().setSignedOut();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    useOnboardingStore.setState({ completedAt: null });
   });
 
   it("fires once with isLocalHome:true when a local-homed session appears before the bound", async () => {

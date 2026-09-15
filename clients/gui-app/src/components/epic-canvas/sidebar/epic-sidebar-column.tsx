@@ -88,6 +88,7 @@ function EpicSidebarColumnBody(props: EpicSidebarColumnProps): ReactNode {
       <div
         data-epic-sidebar-panel
         data-testid="epic-sidebar-column"
+        data-tour="epic-sidebar-column"
         data-epic-id={epicId}
         data-collapsed={mainCollapsed ? "true" : "false"}
         data-session-ready={sessionReady ? "true" : "false"}

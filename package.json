@@ -201,6 +201,7 @@
     "radix-ui": "1.6.6",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-joyride": "^3.2.0",
     "react-markdown": "^10.1.0",
     "react-remove-scroll": "^2.7.2",
     "react-virtuoso": "^4.18.12",

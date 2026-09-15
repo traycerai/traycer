@@ -23,6 +23,7 @@ SettingsLayout
 └── Outlet
     └── settings panel route
         ├── GeneralSettingsPanel
+        ├── OnboardingSettingsPanel
         ├── AppearanceSettingsPanel
         ├── LayoutSettingsPanel
         ├── OpeningBehaviorPanel
@@ -40,9 +41,10 @@ SettingsLayout
 ```
 
 Settings is also presented as a **modal** via `settings-modal-content.tsx`,
-which maps each `SettingsSectionId` to its panel in a `switch`. A new section
-must be added in BOTH places - the route file under `src/routes/` AND the modal
-`switch` - or the modal renders a blank pane for that section.
+which maps each `SettingsSectionId` to its panel in the `SETTINGS_PANELS`
+table (a `Record` under `satisfies`, so a missing id is a compile error). A
+new section must be added in BOTH places - the route file under `src/routes/`
+AND that table.
 
 Five other places enumerate section ids, and four of them fail loudly when one
 is missed. `settings-modal-content.tsx`, `stores/tabs/kinds/settings.tsx`
@@ -467,6 +469,9 @@ resource monitor in header` survives the collapse and renders beside the
 - **The Keybindings SECTION** - chord capture is `window` `keydown` only
   (`chord-capture-core.tsx`): a tap arms the chip to "Press chord…" and nothing
   can commit it, and a binding clears only with Backspace.
+- **The Onboarding SECTION** - every tour and lesson on it teaches the desktop
+  shell (task tabs, split panes, terminal agents, browser login import), so
+  the page would list only things this build cannot do.
 - **The Link mobile app SECTION** - the one entry here that is a PRODUCT call
   rather than a capability limit, and the distinction is worth keeping. The
   panel DISPLAYS a QR and a one-time code for another device to read, and in
@@ -498,7 +503,8 @@ the offered list: the sidebar, the palette's settings sub-page
 which indexes positionally and must walk the same list the sidebar badges).
 Three more can arrive holding an id and each resolves it: the route (each
 omitted section's own `beforeLoad` redirects to `/settings/general` with
-`replace` - `settings.keybindings.tsx`, `settings.link-phone.tsx`), the modal
+`replace` - `settings.keybindings.tsx`, `settings.link-phone.tsx`,
+`settings.onboarding.tsx`), the modal
 (falls back to General for any section the build does not offer, since its
 section is persisted across launches), and the palette's `help:keybindings`
 row, which is dropped rather than left as the one entry point that routes
@@ -638,7 +644,7 @@ Supporting pieces, all viewport-agnostic where possible:
 Settings is grouped by WHAT A SETTING BELONGS TO, and the grouping is
 load-bearing rather than cosmetic.
 
-- **Application** - General, Appearance, Keybindings, Diagnostics.
+- **Application** - General, Onboarding, Appearance, Keybindings, Diagnostics.
 - **Account** - Sessions, Usage.
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Everything under it - Overview, Providers, Worktrees, Notifications, Agent
@@ -886,7 +892,7 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
 ## Sections
 
 - `General` App behavior, agent activity, and local data controls, divided
-  into four named groups via `settings-group.tsx`: a small, quiet `<h2>`
+  into named groups via `settings-group.tsx`: a small, quiet `<h2>`
   label sits OUTSIDE its own bordered card, so orientation (the label) and
   action (the card's rows) read as different things - a group label never
   looks like another setting row. This replaced an earlier row-shaped
@@ -970,10 +976,9 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       pane; "quit the browser fully" for a locked database); nothing retries
       on its own, because a retry after a denied Keychain prompt is a second
       prompt. The steps themselves are the headless `ImportLoginsFlow`
-      (`import-logins-flow.tsx`), which the dialog wraps and the tour's
-      login-import act renders on its stage; the surface supplies the
-      FRAME (header / title / description / footer) because the dialog's
-      are Radix parts that throw outside a `Dialog`. The dialog reads
+      (`import-logins-flow.tsx`), which the dialog wraps; the surface
+      supplies the FRAME (header / title / description / footer) because the
+      dialog's are Radix parts that throw outside a `Dialog`. The dialog reads
       "an import is in flight" off the mutation cache (`useIsMutating` on
       `browserMutationKeys.importLogins()`), since the mutation is the
       flow's. The row also opens on a ONE-SHOT INTENT
@@ -983,19 +988,17 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       app-update toast) arms `openImportLogins` and navigates to General,
       the row derives `open` from its own state OR the intent, and closing
       - or mounting with saving off, when the row would refuse - consumes
-        it. The toast shows once per install, for a user who has already
-        finished onboarding (a fresh user meets the feature as a tour act
-        instead); either surface consumes the `login-import` id in the
-        persisted `feature-announcements` store, so exactly one of them ever
-        shows. The toast CLAIMS the id rather than consuming it (`claim`
-        re-reads localStorage before writing, synchronously), because the
-        store is per renderer and two windows restored together would each
-        hydrate it empty; the tour consumes it on the act's mount AND on the
-        tour's finish unconditionally (the availability read is still pending
-        on an immediate Skip, and an act the list held can be dropped again),
-        so leaving the tour never resurrects the toast. The toast also holds
-        until the system-tab modal API is published, since its action
-        navigates through it and would otherwise no-op on a cold launch.
+        it. The toast is the only announcement surface for browser login
+        import and shows once per install: it consumes the `login-import` id
+        in the persisted `feature-announcements` store. It CLAIMS the id
+        rather than consuming it (`claim` re-reads localStorage before
+        writing, synchronously), because the store is per renderer and two
+        windows restored together would each hydrate it empty. The toast
+        also holds until the system-tab modal API is published, since its
+        action navigates through it and would otherwise no-op on a cold
+        launch. (The first-run tour that used to meet a fresh user with this
+        feature as an act is gone; the welcome modal and Settings ▸
+        Onboarding that replace it re-gate this toast in a later ticket.)
     - **Saved website sessions** reads `browser.savedLoginSites` from the
       surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains,
       never values. Settings shows the count and first three sites in
@@ -1048,14 +1051,13 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     itself is returned by `prevent-sleep-settings-section.tsx` rather than
     wrapped here, so the heading disappears with the row instead of drawing
     over an empty card.
-  - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
-    your work and Data migration used to share this group under the name
-    "Setup & migration"; both moved to the scoped host's **Overview**, because
-    each acts on ONE machine's local data and General is app-wide - the rows
-    could only ever speak for whichever host the window happened to point at,
-    while naming none. The tour stays because it is genuinely window-level:
-    replaying it re-runs this app's onboarding, which no host owns. The group
-    is named for its subject rather than for its single row.
+  - There is no **Onboarding** group any more. It held one row, "Replay
+    tour", and that moved to its own **Onboarding** page (below), which lists
+    every tour and lesson with its progress instead of one replay button. The
+    General panel no longer reads any onboarding store. (Import your work and
+    Data migration had left this group earlier, for the scoped host's
+    **Overview**: each acts on ONE machine's local data and General is
+    app-wide.)
   - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
 "danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
     only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
@@ -1070,8 +1072,55 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     distinct restrained-red card/label tone is unchanged from before the
     reorg, just carried by the shared group component instead of bespoke
     markup.
+- `Onboarding` (`panels/onboarding-settings-panel.tsx`,
+  `/settings/onboarding`, second in the Application group, directly after
+  General) The desktop learning page. Registered across every seam - section
+  table, route, modal table, `SETTINGS_PATHS`, analytics section allowlist,
+  report-issue label. **Omitted in the mobile app** (see "Two different
+  mobile questions"): every lesson teaches the desktop shell, so the route
+  redirects to General and the panel itself renders no lesson surface where
+  the section is not offered, for the retained-`SettingsSurface` path that
+  mounts a panel from a remembered route without going through the loader.
+  Three groups, all copy in `onboarding-settings.definitions.ts`:
+  - **Your progress** (anchor `onboarding-progress`): a summary READ from the
+    onboarding flow store (`stores/onboarding/onboarding-flow-store.ts`) -
+    done / 5 tours with a meter, the four tour statuses counted separately
+    (`bypassed` is never done), the welcome modal's state and the chain's,
+    and an existing-user note for an install that finished the old tour
+    (`legacyCompleted`) - plus the **Welcome** row (`onboarding-welcome`)
+    whose action is the store's `showWelcomeModalAgain()`. The page is
+    never a second authority over the flow: it writes through the store's
+    fixed actions only, and it plays nothing - the tour host watches the
+    store and takes the screen. Both writes first close an OPEN Settings
+    overlay through the published `SystemTabModalApi` (a tour under a modal
+    dialog would wait forever), so both actions hold until that API is
+    published rather than let the close silently no-op; a Settings tab
+    stays open.
+  - **Guided tours**: five `LessonCard`s (`panels/onboarding/lesson-card.tsx`
+    - a `SettingsRow` inside an anchored container, so a card with a demo
+      beneath it is one search target), one per `TourId`, each showing the
+      tour's status beside its title and a Start / Replay / Restart button
+      that calls `replayTour(tourId)` - a `single`-scope chain that ends after
+      that one tour.
+  - **More to explore**: the two salvaged demos (`Split screen`, `Task tabs
+& navigation`), which expand `panels/onboarding/lesson-diorama.tsx`
+    inline - at most one open at a time, so at most one demo's timers run,
+    with `aria-expanded` / `aria-controls` on the toggle; **Agent selection
+    guide**, whose action is `navigateToSettingsSection("agents")` (the
+    Agents page owns the editor, its host scope and autosave); and **Browser
+    login import**, which mounts the existing `ImportLoginsDialog` on an
+    enabled click and is otherwise disabled with the reason (no bridge,
+    saving off, saving unreadable) so its search target stays honest.
+    Nothing scans on page render.
+  - Anchors are `onboarding-lesson-<LessonId>` on the card containers, all
+    gated on the build (`isOnboardingLessonsAvailable`), so the mobile shell
+    promises none and the desktop shell every one; the search fixture
+    registry mounts both. `onboarding_lesson_opened { lesson }` is emitted
+    once per action taken - a replay, a demo opened, the editor or the import
+    opened - never on render, on a demo's tick, on collapse, on a disabled
+    click or on reopening the welcome modal.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
-  `/settings/opening-behavior`, third in the Application group) Where a click
+  `/settings/opening-behavior`, fourth in the Application group) Where a click
   LANDS. TWO `SettingsGroup`s - Links and Tile placement - each one enum
   select per store field, written through the store's single patch setters -
   no local state, no disabled states. Store keys are unchanged from the
@@ -1318,8 +1367,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     (`lib/desktop-installed-fonts.ts`, mirrors `desktop-log-levels.ts`) via
     `useRunnerInstalledFontsQuery` (`staleTime: Infinity`; resolves `[]` on
     shells without the bridge instead of erroring).
-- `Layout` (`panels/layout-settings-panel.tsx`, `/settings/layout`, seventh and
-  last in the Application group, leader digit 7) Where the app's own chrome
+- `Layout` (`panels/layout-settings-panel.tsx`, `/settings/layout`, eighth and
+  last in the Application group, leader digit 8 since Onboarding took the
+  second slot) Where the app's own chrome
   SITS and how much of it shows. It is a page rather than a group inside
   Appearance because its controls answer "where does this live", not "what does
   it look like" - and because a per-provider, per-window rate-limit list needs
@@ -5476,7 +5526,9 @@ level`, `Host log level` and the host's log tails described the selected host.
   digit-less tail. Adding Application -> Diagnostics later pushed **Agent
   selection** out too, which runs against the rule that support surfaces are the
   ones to lose digits - it is forced by position, since an Application entry
-  lands in the first four whatever it is. See that file's own note). All reading
+  lands in the first four whatever it is. Onboarding taking the second
+  Application slot then pushed Usage itself past the limit, for the same
+  positional reason. See that file's own note). All reading
   `host.usage.summary` through `UsageSummaryPanel`
   (`components/usage-analytics/`), placement-agnostic. `host.usage.summary`
   is an OPTIONAL RPC (`degrade: { kind: "unsupported" }` in the protocol

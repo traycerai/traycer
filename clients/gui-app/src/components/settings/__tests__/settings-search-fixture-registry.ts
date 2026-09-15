@@ -187,6 +187,22 @@ export const SETTINGS_SEARCH_FIXTURES = [
       },
     ],
   },
+  // Onboarding's one gate is the build: the mobile app omits the section,
+  // so a panel mounted there renders no lesson at all. Every lesson card
+  // exists on desktop whatever the bridges - the login-import card is
+  // disabled with an explanation rather than absent - so one host-less
+  // desktop shell turns every anchor on and the mobile shell turns every
+  // one off.
+  {
+    section: "onboarding",
+    shells: [
+      { name: "a desktop with every bridge absent", context: NO_BRIDGES },
+      {
+        name: "the installed mobile app",
+        context: { ...NO_BRIDGES, mobileApp: true },
+      },
+    ],
+  },
 ] as const satisfies ReadonlyArray<SettingsSearchFixture>;
 
 /** The sections the executor must know how to mount. */

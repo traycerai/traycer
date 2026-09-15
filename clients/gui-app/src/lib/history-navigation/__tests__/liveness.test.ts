@@ -76,7 +76,6 @@ describe("isHistoryEntryDead — conservative liveness", () => {
   it("keeps routes no store can prove dead", () => {
     for (const href of [
       "/",
-      "/onboarding",
       "/draft/new",
       "/epics",
       "/settings",

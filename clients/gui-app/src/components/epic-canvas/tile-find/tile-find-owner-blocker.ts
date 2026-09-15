@@ -22,12 +22,7 @@ import type { TileFindOwnerBlocker } from "@/stores/tile-find/types";
  * Adding a route that renders its own full-screen body? Add it here too.
  */
 function routeOwnsViewport(pathname: string): boolean {
-  return (
-    pathname === "/onboarding" ||
-    pathname.startsWith("/onboarding/") ||
-    pathname === "/settings" ||
-    pathname.startsWith("/settings/")
-  );
+  return pathname === "/settings" || pathname.startsWith("/settings/");
 }
 
 export function resolveTileFindOwnerBlocker(args: {

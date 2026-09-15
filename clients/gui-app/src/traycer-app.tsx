@@ -280,11 +280,11 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                 <ChatRecordsStreamMount />
                                 <LandingDraftMirrorMount />
                               </HostScopeReady>
-                              {/* Above the shell split on purpose: the onboarding tour
-                                  renders through `StandaloneShell`, not `AppShell`, so a
-                                  mount inside the app shell left the tour's Import button
-                                  with no run handle to call. This is the lowest node both
-                                  shells share that still has the host stream. */}
+                              {/* Above the shell split on purpose: the Settings dialog and
+                                  the announcement dialog import under `AppShell`, while
+                                  sign-in renders under `StandaloneShell`. This is the lowest
+                                  node both shells share that still has the host stream, so
+                                  no surface's Import button can find no run handle. */}
                               <SessionImportRunController />
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>

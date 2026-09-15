@@ -23,7 +23,6 @@ export const PROVIDER_INVALIDATIONS: ReadonlyArray<
   "agent.gui.listHarnesses",
   "agent.tui.listHarnesses",
   "agent.selectionGuide.getGlobal",
-  "agent.selectionGuide.getGlobalOnboardingDraft",
 ];
 
 /**

@@ -43,7 +43,7 @@ function newChatPermissionModeFor(hostId: string): PermissionMode {
  * Owns the `sessionImport.run` subscriptions for the whole app - ONE PER HOST.
  *
  * App-level rather than wizard-level on purpose: the user is invited to close
- * the wizard and carry on with the tour while the import runs, and a stream
+ * the wizard and carry on with the app while the import runs, and a stream
  * owned by that wizard would detach the moment they did - leaving the Settings
  * entry and the reopened wizard with nothing to show but a stale snapshot.
  * Here it stays attached for the life of the window, and the store it feeds is

@@ -130,6 +130,7 @@ describe("analytics", () => {
       "host",
       "keybindings",
       "notifications",
+      "onboarding",
       "providers",
       "shell",
       "usage",
@@ -137,7 +138,7 @@ describe("analytics", () => {
     ];
     // `source` alongside `section`, matching what the sidebars actually emit -
     // the sanitizer requires every expected key to be present, so omitting it
-    // would reject all twelve and prove nothing.
+    // would reject every one of them and prove nothing.
     const rejected = sections.filter(
       (section) =>
         sanitizeAnalyticsProperties(AnalyticsEvent.SettingsOpened, {
@@ -163,9 +164,17 @@ describe("analytics", () => {
     const { AnalyticsEvent, sanitizeAnalyticsProperties } =
       await import("@/lib/analytics");
 
+    // `reason` is scoped per event: the chain's "completed" is not a host
+    // setup reason, and the host's "launch" is not a chain ending.
     expect(
-      sanitizeAnalyticsProperties(AnalyticsEvent.OnboardingStarted, {
-        mode: "chat",
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostSetupStarted, {
+        reason: "completed",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.OnboardingChainEnded, {
+        reason: "launch",
+        branch: "sessions",
       }),
     ).toBeNull();
     expect(
@@ -176,6 +185,47 @@ describe("analytics", () => {
     expect(
       sanitizeAnalyticsProperties(AnalyticsEvent.ArtifactCreated, {
         kind: "shell",
+      }),
+    ).toBeNull();
+  });
+
+  it("validates onboarding tour steps against the catalogue as one flat set", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.OnboardingTourStep, {
+        tour: "add-folder",
+        step: "add-folder",
+        action: "auto",
+      }),
+    ).toEqual({ tour: "add-folder", step: "add-folder", action: "auto" });
+    // A step id from another tour passes: `step` is checked against every
+    // tour's steps, not against the `tour` beside it. Per-tour pairing is
+    // not enforced - the accepted cost of the exact-value pattern - so this
+    // pins what IS enforced: an id no tour has is rejected.
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.OnboardingTourStep, {
+        tour: "add-folder",
+        step: "not-a-step",
+        action: "auto",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.OnboardingLessonOpened, {
+        lesson: "login-import",
+      }),
+    ).toEqual({ lesson: "login-import" });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.OnboardingModalContinued, {
+        page: "2",
+        enabled_provider_count: 3,
+        session_count: 0,
+      }),
+    ).toEqual({ page: "2", enabled_provider_count: 3, session_count: 0 });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.OnboardingModalShown, {
+        page: 1,
       }),
     ).toBeNull();
   });

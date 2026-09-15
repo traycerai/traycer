@@ -743,10 +743,40 @@
   --app-background: var(--background);
 
   --radius: 0.375rem;
+
+  /* The spotlight tour's dim (react-joyride's overlay fill). Same reasoning
+     as the press scrim above: a neutral darkening that only flips with the
+     polarity, never hue-matched, and plain rgba rather than a color-mix off
+     `--foreground` (which would read as a white wash on every dark preset).
+     No blur: the dim is a fill on an SVG path, and the cutout must stay
+     crisp. */
+  --onboarding-tour-overlay: #00000073;
 }
 
 :root.dark {
   --press-scrim: #ffffff1a;
+  --onboarding-tour-overlay: #000000a6;
+}
+
+/* react-joyride hardcodes `transition: opacity 0.2s` on the spotlight's
+   cover path as an inline style; `styles.overlay` / `styles.floater` cannot
+   reach it. Scoped to Joyride's own portal so nothing else in the app moves
+   or stops moving because of the tour. */
+@media (prefers-reduced-motion: reduce) {
+  #react-joyride-portal .react-joyride__spotlight path {
+    transition: none !important;
+  }
+}
+
+/* The dim is a hint, never a click shield (onboarding decision 7: an
+   outside click is a no-op for the TOUR, not for the app). react-joyride
+   paints the dim as an SVG path with an inline `pointer-events: auto` so its
+   `overlayClickAction` can fire; with that action off the path would only
+   swallow every click outside the cutout - Start, the address bar, the chat
+   textarea. `styles.overlay` reaches the wrapper div (already `none`), not
+   the path, so this is the one place that can let clicks through. */
+#react-joyride-portal .react-joyride__spotlight path {
+  pointer-events: none !important;
 }
 
 /*

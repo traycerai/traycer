@@ -38,7 +38,7 @@ export function getActiveTileOwner(): ActiveTileOwner | null {
  * document scope. Under an open overlay there is no owner, but the canvas is
  * still in the document, so letting Chromium's document-wide select-all run
  * would sweep up the hidden tiles - the same defect as #592 wearing an overlay.
- * With no tiles registered (signed out, onboarding, an empty window) nothing of
+ * With no tiles registered (signed out, an empty window) nothing of
  * ours is behind the overlay and the native default is the correct behavior.
  */
 export function isCanvasCoveredByBlocker(): boolean {

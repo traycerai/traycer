@@ -416,37 +416,6 @@ describe("the one sanctioned full-bleed surface", () => {
     expect(marked[0]).toContain("routes/root-route-components.tsx");
   });
 
-  it("restores EVERY reservation the full-bleed shell escapes on the onboarding content layer", () => {
-    // The inverse of every other surface in the app: onboarding sits inside
-    // the full-bleed exception, so the backdrop it renders is meant to run
-    // under the status bar and the grid holding the Skip control is not.
-    //
-    // All three, not just the top. `fixed` escapes `#root` wholesale, so an
-    // exception that restores one reservation reads as handled while leaving
-    // the other two open - and the landscape ones fail on a device nobody
-    // checks first.
-    const source = stripComments(findSource("onboarding/onboarding-page.tsx"));
-    // Matched as "the same class list carries all of them", order-independent:
-    // the Tailwind class sorter owns the order and would otherwise decide
-    // whether this passes.
-    const contentLayer = (source.match(/"[^"\n]*"/g) ?? []).find((literal) =>
-      literal.includes("--onboarding-shell-rows"),
-    );
-    expect(contentLayer, "onboarding content grid class list").toBeDefined();
-    // Four, not three: the bottom is not one of the reservations the shell
-    // escapes, but this surface's last row centres a line box in a band only
-    // a little taller than the home indicator, so the surface opts in.
-    for (const token of [
-      "pt-safe-top",
-      "pr-safe-right",
-      "pb-safe-bottom",
-      "pl-safe-left",
-    ]) {
-      expect(contentLayer).toContain(token);
-    }
-    expect(source).not.toMatch(/env\(safe-area-inset/);
-  });
-
   it("restores them on the sign-in content layers too, where gutters already exist to compose with", () => {
     // Sign-in states each edge as `max(gutter, inset)` rather than as a bare
     // token, because its gutters are part of the composition.

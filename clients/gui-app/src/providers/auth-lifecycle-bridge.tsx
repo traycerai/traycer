@@ -4,6 +4,7 @@ import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { disposeAllTerminalSessions } from "@/lib/registries/terminal-session-registry";
 import { disposeAllOpenEpicSessions } from "@/lib/registries/epic-session-registry";
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
+import { useLandingReceiptsStore } from "@/stores/onboarding/landing-receipts-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
@@ -55,6 +56,10 @@ export function EpicSessionLifecycleBridge(
       // tabs are reconciled normally instead of being protected by the prior
       // identity's create markers.
       clearSessionCreatedEpics();
+      // Onboarding create receipts name epics/tabs/hosts of the outgoing
+      // identity; a create still in flight must not land one for the next.
+      // Bumps the store's generation, so a late emit is dropped.
+      useLandingReceiptsStore.getState().reset();
       // Settings' viewing scope is a host id, and host ids belong to an
       // ACCOUNT. Left standing across a switch it names the previous account's
       // machine, which the new account's lists will never contain — so Settings

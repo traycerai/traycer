@@ -17,7 +17,6 @@ import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remo
 import { TraycerApp, hostRpcRegistry } from "../index";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
@@ -69,7 +68,6 @@ describe("<TraycerApp /> mobile cardinality behavior", () => {
     window.history.replaceState({}, "", "/");
     useAppDialogStore.setState({ activeDialog: null });
     useAuthStore.getState().setSignedOut();
-    useOnboardingStore.setState({ completedAt: 1 });
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
     __resetTabNavigationControllerForTesting();

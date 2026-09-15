@@ -2,8 +2,8 @@ import { useId } from "react";
 import gradientBg from "@/assets/brand/gradient-bg.jpg";
 
 /**
- * Shared cinematic photo backdrop for the signed-out surfaces (auth landing
- * and first-launch onboarding). Two stacked copies of the brand gradient
+ * Cinematic photo backdrop for the signed-out surface (auth landing). Two
+ * stacked copies of the brand gradient
  * photo - a dimmed full-bleed base plus a brighter masked bloom rising from
  * the bottom - under a black contrast wash.
  */

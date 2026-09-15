@@ -75,6 +75,28 @@ describe("useFeatureAnnouncementsStore", () => {
     expect("future-feature" in consumed).toBe(false);
   });
 
+  it("merge keeps the onboarding-completion receipt", async () => {
+    // The completion toast's once-per-install receipt, claimed by the tour
+    // host; a build that dropped it from the union would re-toast every
+    // install on upgrade.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { consumed: { "onboarding-completion": 5 } },
+        version: 1,
+      }),
+    );
+
+    await useFeatureAnnouncementsStore.persist.rehydrate();
+
+    expect(
+      isFeatureAnnouncementConsumed(
+        useFeatureAnnouncementsStore.getState().consumed,
+        "onboarding-completion",
+      ),
+    ).toBe(true);
+  });
+
   it("merge drops a non-finite timestamp", async () => {
     window.localStorage.setItem(
       PERSIST_KEY,

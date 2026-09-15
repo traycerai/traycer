@@ -125,12 +125,8 @@ export function SessionImportProgress(props: {
               : `Imported ${counts.imported} ${counts.imported === 1 ? "session" : "sessions"}`}
           </p>
           {counts.imported > 0 ? (
-            // Mid-tour there is no task list to point at yet - it is behind
-            // the act the user has not finished.
             <p className={cn("text-ui-xs", tone.muted)}>
-              {tone.surface === "onboarding"
-                ? "They'll be in your task list when you finish the tour."
-                : "They're in your task list."}
+              They&apos;re in your task list.
             </p>
           ) : null}
           {counts.skippedAlreadyImported > 0 ? (

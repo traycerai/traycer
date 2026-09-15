@@ -239,6 +239,11 @@ const appChromeAppWideReadExemptions = [
   // null means follow the app-wide default (which may be remote) so auto-open
   // can match the picker's create-profile gate.
   "src/components/providers/provider-profile-add-flow-host.tsx",
+  // The first-run welcome modal's provider roster. App-wide chrome mounted
+  // by `OnboardingFlowHost` inside `AppShell`, outside every tab: it follows
+  // the effective/default host the same way the landing composer does, and
+  // the host it lists is the one the user is about to work on. Not a tile.
+  "src/components/onboarding/welcome/use-welcome-roster.ts",
 ];
 
 // Hook directories whose every RPC now takes the caller's client, because

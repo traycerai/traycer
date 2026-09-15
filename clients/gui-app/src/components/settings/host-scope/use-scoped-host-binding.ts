@@ -20,33 +20,25 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  *     `useTabHostClient()` and its host `useTabHostId()`. It has no `HostScope`
  *     to hand this hook, so it structurally cannot use it.
  *
- * ELEVEN surfaces re-provide `HostRuntimeContext` in total. The count is one
- * formula — NINE through this hook, plus the two exceptions above — stated
+ * TEN surfaces re-provide `HostRuntimeContext` in total. The count is one
+ * formula — EIGHT through this hook, plus the two exceptions above — stated
  * once here so a surface added later moves both halves of it rather than
- * leaving a headline and a list disagreeing about how many there are. The nine:
+ * leaving a headline and a list disagreeing about how many there are. The eight:
  *
  *   `rate-limit-icon`, `shell`, `diagnostics`, `providers`, `host`,
  *   `app-status-bar` (the bottom strip, re-providing for the host it watches),
  *   `layout` (around its WHOLE Status bar group: the live preview at the top of
  *   it and the per-provider toggles below describe one machine, and resolving
- *   the watch pick twice is how they would come to describe two), the
- *   onboarding TOUR, and the session-import DIALOG.
+ *   the watch pick twice is how they would come to describe two), and the
+ *   session-import DIALOG.
  *
  * Anything reading `useHostClient()` / `useAddressableHostId()` beneath any of
- * the eleven gets that surface's host.
+ * the ten gets that surface's host.
  *
- * The tour (`onboarding-page.tsx`) is the first of them outside a
- * Settings-shaped surface: its two host-dependent acts read one machine -
- * the session scan lists what is on it, the agent guide is stored on it - so
- * a person with several hosts can run the tour once and still import into,
- * and write a guide for, whichever machine they name. It re-provides BOTH
- * contexts for that reason, and it is safe for the positional reason below:
- * the tour has no composer, and so no path to the microphone.
- *
- * The session-import DIALOG (`session-import-dialog.tsx`) joined for the same
- * reason as the tour's import act: it carries its own host picker,
- * and the scan it shows and the run it starts belong to the machine that
- * picker names. It also re-provides BOTH contexts, and contains no composer.
+ * The session-import DIALOG (`session-import-dialog.tsx`) is here because it
+ * carries its own host picker, and the scan it shows and the run it starts
+ * belong to the machine that picker names. It re-provides BOTH contexts, and
+ * contains no composer.
  *
  * ⚠ A RE-PROVIDER MUST NOT WRAP A SURFACE CONTAINING THE MIC PATH.
  * `useDictationAvailability` reads `useHostClient()` and is app-wide BY DESIGN

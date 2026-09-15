@@ -1219,8 +1219,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // and an unverified session has no basis for it: the cloud list was never
   // asked, so a task whose agents all live on other devices looks identical to
   // an empty one. Going silent instead would be the other failure - this panel
-  // is where a user starts their first agent, and the onboarding line is the
-  // only thing telling them how.
+  // is where a user starts their first agent, and the empty-state line is
+  // the only thing telling them how.
   const showCloudUncheckedEmptyState =
     filterVisibleIds === null &&
     allRootIds.length === 0 &&

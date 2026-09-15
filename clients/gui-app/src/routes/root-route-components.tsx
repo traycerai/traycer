@@ -21,24 +21,14 @@ import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-naviga
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
-import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
 import { AuthLandingPage } from "@/components/auth/auth-landing-page";
 import {
   useShellLocalPlaneAdmission,
   type ShellAdmissionRefusal,
 } from "@/hooks/auth/use-shell-local-plane-admission";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
 export function RootComponent() {
-  const authStatus = useAuthStore((state) => state.status);
-  const onboardingCompletedAt = useOnboardingStore(
-    (state) => state.completedAt,
-  );
-  const isOnboardingRoute = useRouterState({
-    select: (state) => state.location.pathname === "/onboarding",
-  });
   // The ONE routing-aware computation the window narrator consumes, so the
   // modal itself stays router-free (and mountable in host-lifecycle trees that
   // have no router). Same prefix the readiness gate bypasses on: `/settings`
@@ -48,22 +38,14 @@ export function RootComponent() {
     select: (state) =>
       state.location.pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
   });
-  // A signed-in user who hasn't finished onboarding sees the tour on any route.
-  // Deliberately `signed-in` and not `admitsLocalPlane`: the tour walks through
-  // account-backed setup, so an unverified session has no business starting it
-  // (and a user with no stored credentials at all is `signed-out`, never
-  // `unverified`, so nobody loses their first-run tour to this).
-  const showOnboarding =
-    authStatus === "signed-in" && onboardingCompletedAt === null;
-  // Sign-in and the tour render bare, without the app shell. This is the
-  // structural half of renderer admission - `RootLandingPage` decides what the
-  // route BODY renders, this decides whether the shell exists around it at all
-  // - so it reads the SAME predicate, which admits `unverified` for the same
-  // reason and refuses it on a shell with no local host (see
+  // Sign-in renders bare, without the app shell. This is the structural half
+  // of renderer admission - `RootLandingPage` decides what the route BODY
+  // renders, this decides whether the shell exists around it at all - so it
+  // reads the SAME predicate, which admits `unverified` for the same reason
+  // and refuses it on a shell with no local host (see
   // `admitsLocalPlaneOnShell`).
   const admission = useShellLocalPlaneAdmission();
-  const isStandalone =
-    !admission.admitted || showOnboarding || isOnboardingRoute;
+  const isStandalone = !admission.admitted;
 
   return (
     <>
@@ -133,7 +115,6 @@ export function RootComponent() {
           <ProviderProfileAddFlowHost />
         </HostScopeReady>
         <RootSurface
-          showOnboarding={showOnboarding}
           isStandalone={isStandalone}
           admissionRefusal={admission.refusal}
         />
@@ -151,7 +132,6 @@ export function RootComponent() {
 }
 
 function RootSurface(props: {
-  readonly showOnboarding: boolean;
   readonly isStandalone: boolean;
   /**
    * Set when the SHELL turned away a session the status would have admitted -
@@ -186,31 +166,25 @@ function RootSurface(props: {
       </AppShell>
     );
   }
-  // Sign-in and the onboarding tour render without AppShell, so they lose the
-  // frameless Windows title bar the app header provides. Give them the same
-  // full-width band - menu strip, drag region, native window controls in one
-  // strip - instead of floating a chip over the artwork.
+  // Sign-in renders without AppShell, so it loses the frameless Windows title
+  // bar the app header provides. Give it the same full-width band - menu
+  // strip, drag region, native window controls in one strip - instead of
+  // floating a chip over the artwork.
   return (
     <StandaloneShell>
-      <StandaloneBody
-        showOnboarding={props.showOnboarding}
-        admissionRefusal={props.admissionRefusal}
-      />
+      <StandaloneBody admissionRefusal={props.admissionRefusal} />
     </StandaloneShell>
   );
 }
 
 /**
- * Which of the three standalone bodies this is, in precedence order: the tour
- * (a `signed-in` user, so no refusal can coexist with it), a shell refusal,
- * and otherwise the route's own body - which for a signed-out user is
- * `RootLandingPage` and its `AuthLandingPage`.
+ * Which of the two standalone bodies this is, in precedence order: a shell
+ * refusal, and otherwise the route's own body - which for a signed-out user
+ * is `RootLandingPage` and its `AuthLandingPage`.
  */
 function StandaloneBody(props: {
-  readonly showOnboarding: boolean;
   readonly admissionRefusal: ShellAdmissionRefusal | null;
 }) {
-  if (props.showOnboarding) return <OnboardingPage replay={false} />;
   if (props.admissionRefusal !== null) {
     return <AuthLandingPage refusal={props.admissionRefusal} />;
   }
@@ -227,8 +201,8 @@ const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
 // content keeps the full height.
 //
 // `fixed inset-0` is the app's ONE sanctioned full-bleed surface, and the only
-// thing that opts out of `#root`'s safe-area reservation. Sign-in and the tour
-// are edge-to-edge artwork, and artwork stopping below the status bar reads as
+// thing that opts out of `#root`'s safe-area reservation. Sign-in is
+// edge-to-edge artwork, and artwork stopping below the status bar reads as
 // a mismatched band rather than as respect for the bar. Taking the viewport
 // directly is what reaches it: `fixed` resolves against the viewport and not
 // against `#root`'s padding box, so there is no reservation to cancel and no

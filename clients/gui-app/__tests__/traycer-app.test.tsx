@@ -22,7 +22,6 @@ import {
 } from "../index";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { queryClient } from "@/lib/query-client";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -157,7 +156,6 @@ describe("<TraycerApp />", () => {
     window.history.replaceState({}, "", "/");
     useAppDialogStore.setState({ activeDialog: null });
     useAuthStore.getState().setSignedOut();
-    useOnboardingStore.setState({ completedAt: 1 });
     restoreFetch = installAuthValidationFetch();
   });
 

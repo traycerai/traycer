@@ -9,9 +9,9 @@ export type ScopedHostReadiness = "ready" | "connecting" | "unavailable";
 
 /**
  * The gate every stream-backed surface with its own host picker applies before
- * rendering live content - the onboarding tour's two host-dependent acts and
- * the session-import dialog share it, because each re-derivation of these
- * three rules has eventually got one of them wrong.
+ * rendering live content - the session-import dialog applies it, and every
+ * surface that joins it shares it, because each re-derivation of these three
+ * rules has eventually got one of them wrong.
  *
  * Gated on there being a PICK, not on the status alone: with no pick the
  * surface reads the host it has always read, and an `unreachable` blip on it

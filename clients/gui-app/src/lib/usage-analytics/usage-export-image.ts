@@ -131,8 +131,8 @@ function buildHeader(heading: string, subheading: string | null): HTMLElement {
 }
 
 /**
- * The same lockup the onboarding wordmark renders - mark + lowercase
- * "traycer" in the heading face - with the site opposite it.
+ * The brand lockup - mark + lowercase "traycer" in the heading face - with
+ * the site opposite it.
  */
 function buildBrandingFooter(): HTMLElement {
   const footer = document.createElement("div");

@@ -76,6 +76,36 @@ export const ORDERED_PROVIDERS: ExhaustiveOrderedProviders =
   }));
 
 /**
+ * The six tiles the welcome modal shows at full size, in display order
+ * (onboarding decisions 22, 26). A subset of `PROVIDER_ID_ORDER` by
+ * construction - `satisfies` over `ProviderId` keeps each entry a real
+ * provider, and `welcomeMinorProviders` is defined as the complement, so a
+ * harness can never fall out of both lists.
+ */
+export const WELCOME_MAJOR_PROVIDER_IDS = [
+  "claude-code",
+  "codex",
+  "cursor",
+  "grok",
+  "opencode",
+  "traycer",
+] as const satisfies ReadonlyArray<ProviderId>;
+
+export type WelcomeMajorProviderId =
+  (typeof WELCOME_MAJOR_PROVIDER_IDS)[number];
+
+const WELCOME_MAJOR_PROVIDER_ID_SET: ReadonlySet<ProviderId> = new Set(
+  WELCOME_MAJOR_PROVIDER_IDS,
+);
+
+/** Everything else, in `ORDERED_PROVIDERS` order: the "+N more" disclosure. */
+export function welcomeMinorProviders(): ReadonlyArray<OrderedProvider> {
+  return ORDERED_PROVIDERS.filter(
+    (provider) => !WELCOME_MAJOR_PROVIDER_ID_SET.has(provider.providerId),
+  );
+}
+
+/**
  * `ORDERED_PROVIDERS` split into two groups - effectively enabled first, the
  * rest after - each keeping its `ORDERED_PROVIDERS` relative order.
  *

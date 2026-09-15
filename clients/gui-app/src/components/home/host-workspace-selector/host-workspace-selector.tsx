@@ -1290,6 +1290,10 @@ function HomeWorkspaceSummaryControl(props: {
     <div
       className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
       data-testid="home-workspace-summary-control"
+      // The add-folder lesson's fallback anchor: once a folder is bound the
+      // bare Add button is gone (it lives inside the workspace popover),
+      // and the lesson points at the summary that opens it instead.
+      data-tour="landing-workspace-summary"
     >
       {props.hostSlot === null ? null : (
         <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">

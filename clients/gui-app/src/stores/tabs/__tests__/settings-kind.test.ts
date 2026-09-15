@@ -32,6 +32,14 @@ describe("settings tab kind - host section", () => {
     expect(settingsSectionFromPath("/settings/agents")).toBe("agents");
   });
 
+  it("settingsSectionFromPath maps /settings/onboarding to the onboarding section", () => {
+    expect(settingsSectionFromPath("/settings/onboarding")).toBe("onboarding");
+  });
+
+  it("settingsSectionPath builds /settings/onboarding for the onboarding section", () => {
+    expect(settingsSectionPath("onboarding")).toBe("/settings/onboarding");
+  });
+
   it("settingsSectionFromPath maps /settings/devices to the devices section", () => {
     expect(settingsSectionFromPath("/settings/devices")).toBe("devices");
   });

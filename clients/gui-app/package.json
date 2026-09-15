@@ -99,6 +99,7 @@
     "radix-ui": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "react-joyride": "catalog:",
     "react-markdown": "catalog:",
     "react-remove-scroll": "catalog:",
     "react-virtuoso": "catalog:",

@@ -36,7 +36,6 @@ describe("resolveTileFindOwnerBlocker", () => {
 
   it("blocks routes that paint their own body over the tab host", () => {
     for (const pathname of [
-      "/onboarding",
       "/settings",
       "/settings/general",
       "/settings/keybindings",

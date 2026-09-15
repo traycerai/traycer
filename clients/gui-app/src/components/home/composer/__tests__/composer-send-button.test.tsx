@@ -67,6 +67,10 @@ describe("ComposerSendButton mid-turn", () => {
     });
     expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
     expect(screen.queryByTestId("chat-stop-button")).toBeNull();
+    // The onboarding tour anchors the Send branch, never Stop.
+    expect(
+      screen.getByRole("button", { name: "Send" }).getAttribute("data-tour"),
+    ).toBe("landing-send");
   });
 
   it("desktop morphs Send into Stop while a turn runs", () => {
@@ -79,6 +83,7 @@ describe("ComposerSendButton mid-turn", () => {
     expect(screen.getByRole("button", { name: "Stop" })).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Queue" })).toBeNull();
+    expect(document.querySelector('[data-tour="landing-send"]')).toBeNull();
   });
 
   it("phone keeps a Queue button beside Stop while a turn runs", () => {

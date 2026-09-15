@@ -6,6 +6,7 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { OnboardingSettingsPanel } from "@/components/settings/panels/onboarding-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
@@ -81,6 +82,7 @@ export function SettingsModalContent(
  */
 const SETTINGS_PANELS = {
   general: GeneralSettingsPanel,
+  onboarding: OnboardingSettingsPanel,
   appearance: AppearanceSettingsPanel,
   layout: LayoutSettingsPanel,
   "opening-behavior": OpeningBehaviorPanel,

@@ -24,6 +24,7 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLandingReceiptsStore } from "@/stores/onboarding/landing-receipts-store";
 import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
@@ -191,6 +192,13 @@ interface FinalizeLandingSubmissionInput {
    * could answer with a host the user was never shown.
    */
   readonly hostId: string;
+  /**
+   * Onboarding receipt generation captured at `startSubmission`, BEFORE the
+   * restored-image preparation can await. A reset that lands in that gap
+   * (replay, chain end, sign-out) must leave this attempt receipt-less
+   * rather than let it announce and emit under the new generation.
+   */
+  readonly receiptGeneration: number;
 }
 
 /**
@@ -489,6 +497,22 @@ export function useLandingComposerActions(
       // that holds the local-first warm slot - any other host cold-opens into
       // a cloud NOT_FOUND until the create host's background connect lands.
       markEpicCreatedThisSession(epicId, activeHostId);
+      // Onboarding receipt correlation (contract 5): announce the exact
+      // draft/host this attempt is about right before the create goes out
+      // (every early return above has been passed), so the tour can decide
+      // relevance now and match the eventual receipt by these ids. Every
+      // exit of the continuation below that is not the foreground acceptance
+      // retires the attempt so a waiting lesson stops waiting.
+      const receipts = useLandingReceiptsStore.getState();
+      const { receiptGeneration } = input;
+      if (receiptGeneration === receipts.generation) {
+        receipts.announce({
+          kind: "prompt-accepted",
+          attemptId: attempt.id,
+          draftId: attempt.draftId,
+          hostId: activeHostId,
+        });
+      }
 
       void createLandingEpic({
         epicId,
@@ -513,6 +537,7 @@ export function useLandingComposerActions(
         .then((response) => {
           const settlement = draftRuntimeRegistry.settlement(attempt);
           if (settlement.kind === "retired") {
+            receipts.retire(attempt.id);
             discardRetiredLandingEpic({ epicId, chatId });
             draftRuntimeRegistry.complete(attempt);
             return;
@@ -535,6 +560,7 @@ export function useLandingComposerActions(
           // makes resubmitting work. `useEpicCreateForClient.onSuccess` owns
           // the user-facing message.
           if (response.refusal !== undefined) {
+            receipts.retire(attempt.id);
             settleUnlandedLandingEpic({
               epicId,
               chatId,
@@ -566,7 +592,11 @@ export function useLandingComposerActions(
               );
           }
           if (settlement.kind === "current") {
-            placeCreatedDraftEpic({
+            // `false` is a create the host ACCEPTED that did not become the
+            // foreground epic (no draft tab to replace, or the draft lost
+            // the focused route meanwhile): no receipt, and the onboarding
+            // attempt is retired so a waiting lesson stops waiting.
+            const activated = placeCreatedDraftEpic({
               draftId: attempt.draftId,
               epicId,
               tabId,
@@ -574,6 +604,22 @@ export function useLandingComposerActions(
               editor,
               placement: attempt.placement,
               activate: () => {
+                // The host accepted this exact attempt and the draft is
+                // becoming the epic in the foreground: that is the only
+                // "prompt accepted" the tour may complete on. Refused,
+                // retired and background settlements never reach here. Ids
+                // are the ones captured at dispatch, never re-read.
+                receipts.emit(
+                  {
+                    kind: "prompt-accepted",
+                    attemptId: attempt.id,
+                    draftId: attempt.draftId,
+                    epicId,
+                    tabId,
+                    hostId: activeHostId,
+                  },
+                  receiptGeneration,
+                );
                 // The create continuation can settle after the user opens
                 // Settings / History. Keep the normal underlying transition
                 // from draft to Epic, but carry that foreground overlay onto
@@ -589,7 +635,11 @@ export function useLandingComposerActions(
                 );
               },
             });
+            if (!activated) receipts.retire(attempt.id);
           } else {
+            // A background settlement is a created epic the tour cannot
+            // complete on (contract 5): retire the attempt.
+            receipts.retire(attempt.id);
             // Content changed after send: keep that later edit. A close
             // during create used to be the same branch because close
             // destroyed the row; now close retains, so `"closed"` must
@@ -603,6 +653,7 @@ export function useLandingComposerActions(
           draftRuntimeRegistry.complete(attempt);
         })
         .catch(() => {
+          receipts.retire(attempt.id);
           // A retired attempt takes the same exit as the success path above:
           // the id-scoped leftovers still have to go, but `markFailed` must
           // not - it would re-insert a handoff entry keyed to an identity the
@@ -666,6 +717,8 @@ export function useLandingComposerActions(
         captureSubmissionPlacement(draftId),
       );
       if (attempt === null) return;
+      // See `FinalizeLandingSubmissionInput.receiptGeneration`.
+      const receiptGeneration = useLandingReceiptsStore.getState().generation;
       const exactArgs = { ...args, draftId };
 
       // The live editor content is hash-only (landing pastes hashes, never
@@ -684,6 +737,7 @@ export function useLandingComposerActions(
           workspaceContext,
           attempt,
           hostId,
+          receiptGeneration,
         });
         return;
       }
@@ -696,6 +750,7 @@ export function useLandingComposerActions(
           workspaceContext,
           attempt,
           hostId,
+          receiptGeneration,
         });
         return;
       }
@@ -742,6 +797,7 @@ export function useLandingComposerActions(
             workspaceContext,
             attempt,
             hostId,
+            receiptGeneration,
           });
         })
         .catch(() => {
@@ -783,6 +839,19 @@ export function useLandingComposerActions(
       const epicId = uuidv4();
       const now = Date.now();
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
+      // Onboarding receipt correlation (contract 5). A terminal launch has no
+      // `DraftSubmissionAttempt`, so it mints its own attempt id here, before
+      // the optimistic navigation below, and captures the nullable draft plus
+      // the concrete host now - the receipt at the end reuses exactly these.
+      const receiptAttemptId = uuidv4();
+      const receiptDraftId = workspaceContext.draftId;
+      const receipts = useLandingReceiptsStore.getState();
+      const receiptGeneration = receipts.announce({
+        kind: "tui-accepted",
+        attemptId: receiptAttemptId,
+        draftId: receiptDraftId,
+        hostId,
+      });
       // The identity this create belongs to, captured synchronously. The
       // create's continuation outlives this component, and the completion
       // re-anchor below is an INSERT into account-scoped memory - see its own
@@ -872,6 +941,7 @@ export function useLandingComposerActions(
             // existence reconciler prune the orphan tab. `useEpicCreateForClient.onSuccess`
             // owns the user-facing message and the repair offer.
             if (response.refusal !== undefined) {
+              receipts.retire(receiptAttemptId);
               unmarkEpicCreatedThisSession(epicId);
               return;
             }
@@ -916,6 +986,27 @@ export function useLandingComposerActions(
               workspaceMode: workspaceContext.workspaceMode,
               terminalAgentArgs,
               profileId,
+            }).then((tuiAgentId) => {
+              // Chained INSIDE the fulfilled arm, so a refusal (which returns
+              // above) and an `epic.create` rejection (the arm below) can
+              // never reach it; a rejected tui-agent create skips it too. The
+              // hook resolves with the id only after the create RPC AND the
+              // bounded projection wait, which is the "tui accepted" fact.
+              if (typeof tuiAgentId !== "string") {
+                receipts.retire(receiptAttemptId);
+                return;
+              }
+              receipts.emit(
+                {
+                  kind: "tui-accepted",
+                  attemptId: receiptAttemptId,
+                  draftId: receiptDraftId,
+                  epicId,
+                  tabId,
+                  hostId,
+                },
+                receiptGeneration,
+              );
             });
           },
           // Only `epic.create` rejection reaches this arm (a later tui-agent
@@ -924,10 +1015,15 @@ export function useLandingComposerActions(
           // A downstream tui-agent failure leaves the marker in place - the epic
           // exists, so it must stay protected until `epic.listTasks` reflects it.
           () => {
+            receipts.retire(receiptAttemptId);
             unmarkEpicCreatedThisSession(epicId);
           },
         )
-        .catch(() => undefined);
+        .catch(() => {
+          // A rejected tui-agent create: the epic exists, the receipt does
+          // not, and the tour must not keep waiting on this attempt.
+          receipts.retire(receiptAttemptId);
+        });
     },
     [createLandingEpic, navigate, terminalAgentCreateFn],
   );
@@ -1063,7 +1159,7 @@ function placeCreatedDraftEpic(input: {
   readonly editor: ComposerPromptEditorHandle;
   readonly placement: DraftSubmissionPlacement;
   readonly activate: () => void;
-}): void {
+}): boolean {
   const ownsIntentFocus = placementOwnedFocusedRoute(input.placement);
   const stillFocusedOwner = draftOwnsFocusedRoute(input.draftId);
   const replaced = tabCommandCoordinator.replaceDraftWithEpic({
@@ -1082,12 +1178,13 @@ function placeCreatedDraftEpic(input: {
       .getState()
       .openEpicTabInBackground(input.epicId, input.epicTitle);
     toast.info("Epic created in the background.");
-    return;
+    return false;
   }
 
   input.editor.clear();
-  if (!ownsIntentFocus || !stillFocusedOwner) return;
+  if (!ownsIntentFocus || !stillFocusedOwner) return false;
   input.activate();
+  return true;
 }
 
 function placeCreatedEpicInBackground(epicId: string, epicTitle: string): void {

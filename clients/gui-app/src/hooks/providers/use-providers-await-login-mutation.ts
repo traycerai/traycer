@@ -197,8 +197,8 @@ export function useProvidersAwaitLoginForClient(args: {
         //
         // Note what the refetch will NOT do: enable the provider. Signing in
         // never changes enablement - the row comes back with the same sticky
-        // `enabled` it had. Onboarding, the one screen where a sign-in is
-        // meant to enable, sends that toggle itself.
+        // `enabled` it had. A screen where a sign-in is meant to enable
+        // sends that toggle itself.
         await queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
         });

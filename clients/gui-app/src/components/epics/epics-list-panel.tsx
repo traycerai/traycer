@@ -1206,7 +1206,6 @@ function describeDeleteTitle(
 }
 
 interface HistoryListBodyProps extends EpicsListBodyProps {
-  readonly variant: EpicsListPanelVariant;
   /**
    * The DESKTOP scroll container's ref, and only it. Arrow traversal reads
    * every `[data-history-row-target]` under this node, so it has to be the
@@ -1302,6 +1301,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         completeness={props.completeness}
         cloudPagePending={props.cloudPagePending}
         onRowKeyDown={props.onRowKeyDown}
+        variant={props.variant}
       />
     </div>
   );
@@ -1352,10 +1352,13 @@ interface EpicsListBodyProps {
   readonly cloudPagePending: boolean;
   /** Anchors the arrow-key traversal: DOM order inside it is row order. */
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
+  /** Which surface hosts the list; only `embedded` carries the tour anchor. */
+  readonly variant: EpicsListPanelVariant;
 }
 
 function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   const {
+    variant,
     error,
     isPending,
     isFetching,
@@ -1480,7 +1483,13 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
         </section>
       ) : null}
       {ordinaryItems.length > 0 ? (
-        <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
+        <ul
+          className="flex flex-col gap-2"
+          data-testid="epics-list-rows"
+          // Tour anchor for the landing "history" lesson: the EMBEDDED home
+          // list only, so the `/epics` page and the picker never present it.
+          data-tour={variant === "embedded" ? "landing-history" : undefined}
+        >
           {ordinaryItems.map((item) => (
             <EpicsListRow
               key={item.id}
@@ -2042,6 +2051,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   return (
     <li
       data-testid="epics-list-row"
+      data-epic-id={item.epicId}
       data-pinned={item.isPinned}
       className="group/list-row flex items-stretch gap-1.5"
     >

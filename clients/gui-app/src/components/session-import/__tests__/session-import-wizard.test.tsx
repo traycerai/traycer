@@ -167,10 +167,10 @@ import {
 } from "@/stores/session-import/session-import-run-store";
 
 /**
- * Stands in for the two real callers (`SessionImportDialog`,
- * `OnboardingPage`): both start their own `useSessionImportScan` and hand the
- * handle down as a prop, gated on the run store being idle exactly like the
- * dialog does. Routing through this keeps every test's scan-client mock
+ * Stands in for the real callers (`SessionImportDialog`, and the welcome
+ * modal's sessions page to come): each starts its own `useSessionImportScan`
+ * and hands the handle down as a prop, gated on the run store being idle
+ * exactly like the dialog does. Routing through this keeps every test's scan-client mock
  * (`scanClient.callbacks`) working unchanged - only the wizard's own prop
  * shape moved.
  */
@@ -183,7 +183,7 @@ function TestWizard(props: {
     (state) =>
       sessionImportRunFor(state, streamBinding.hostId).status === "idle",
   );
-  const scan = useSessionImportScan(runIdle);
+  const scan = useSessionImportScan(runIdle, null);
   return (
     <SessionImportWizard
       {...props}
@@ -935,7 +935,7 @@ describe("<SessionImportWizard />", () => {
     ]);
   });
 
-  it("keeps a populated onboarding scan blocked while the status check is pending", () => {
+  it("keeps a populated welcome-modal scan blocked while the status check is pending", () => {
     sessionImportCheckStatusMock.data = undefined;
     sessionImportCheckStatusMock.isPending = true;
     sessionImportCheckStatusMock.isFetching = true;
@@ -944,7 +944,7 @@ describe("<SessionImportWizard />", () => {
     const onImportStarted = vi.fn();
     render(
       <TestWizard
-        surface="onboarding"
+        surface="welcome-modal"
         onImportStarted={onImportStarted}
         secondaryAction={null}
       />,
@@ -1356,11 +1356,11 @@ describe("<SessionImportWizard />", () => {
     );
   });
 
-  it("on the onboarding surface, renders its own Import button that starts the run and notifies the caller", () => {
+  it("on the welcome-modal surface, renders its own Import button that starts the run and notifies the caller", () => {
     const onImportStarted = vi.fn();
     render(
       <TestWizard
-        surface="onboarding"
+        surface="welcome-modal"
         onImportStarted={onImportStarted}
         secondaryAction={null}
       />,
@@ -1376,8 +1376,8 @@ describe("<SessionImportWizard />", () => {
       );
     });
 
-    // Both surfaces submit through the wizard's own button now - the tour used
-    // to submit through its Continue instead, which imported the default
+    // Both surfaces submit through the wizard's own button - never through a
+    // surrounding surface's Continue, which would import the default
     // selection without an explicit ask.
     expect(
       screen.getByTestId("session-import-selection-count").textContent,

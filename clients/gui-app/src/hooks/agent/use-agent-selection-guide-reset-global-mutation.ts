@@ -1,7 +1,6 @@
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
   AgentSelectionGuideGlobalGetResponse,
-  AgentSelectionGuideGlobalOnboardingDraftGetResponse,
   AgentSelectionGuideGlobalResetRequest,
   AgentSelectionGuideGlobalResetResponse,
 } from "@traycer/protocol/host/agent/shared";
@@ -44,18 +43,6 @@ export function useAgentSelectionGuideResetGlobalMutation(): UseMutationResult<
             ),
           },
           data,
-        );
-        queryClient.setQueriesData<AgentSelectionGuideGlobalOnboardingDraftGetResponse>(
-          {
-            queryKey: hostQueryKeys.methodScope(
-              ctx.hostId,
-              "agent.selectionGuide.getGlobalOnboardingDraft",
-            ),
-          },
-          {
-            ...data,
-            providersSettled: true,
-          },
         );
       },
       onError: (error) =>

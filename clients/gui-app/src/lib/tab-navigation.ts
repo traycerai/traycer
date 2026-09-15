@@ -397,7 +397,7 @@ function isHistoryPath(pathname: string): boolean {
 }
 
 function isLandingPath(pathname: string): boolean {
-  return pathname === "/" || pathname === "/onboarding";
+  return pathname === "/";
 }
 
 export function settingsSectionFromPath(

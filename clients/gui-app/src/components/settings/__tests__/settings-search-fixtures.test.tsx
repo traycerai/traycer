@@ -14,6 +14,7 @@ import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
+import { OnboardingSettingsPanel } from "@/components/settings/panels/onboarding-settings-panel";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { setMobileApp } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
@@ -67,6 +68,7 @@ const MOUNTS: {
   "opening-behavior": <OpeningBehaviorPanel />,
   "app-notifications": <AppNotificationsSettingsPanel />,
   "app-diagnostics": <AppDiagnosticsSettingsPanel />,
+  onboarding: <OnboardingSettingsPanel />,
 };
 
 const executed = new Set<string>();

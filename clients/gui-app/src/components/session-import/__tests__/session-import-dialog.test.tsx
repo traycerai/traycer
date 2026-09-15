@@ -26,8 +26,8 @@ import type { SessionImportScanHandle } from "@/components/session-import/use-se
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 
 /**
- * The wizard is stubbed exactly as `onboarding-page.test.tsx` and
- * `session-import-wizard.test.tsx` do it: this suite is about which surface
+ * The wizard is stubbed exactly as `session-import-wizard.test.tsx` does
+ * it: this suite is about which surface
  * (wizard vs. notice) the dialog chooses and what it hands `useSessionImportScan`,
  * not about the wizard's own row/selection behaviour (covered by
  * `session-import-wizard.test.tsx`).
@@ -49,17 +49,24 @@ vi.mock("@/components/session-import/session-import-wizard", () => ({
  */
 const scanTrackerMock = vi.hoisted(() => {
   const calls: boolean[] = [];
+  const providers: Array<ReadonlyArray<string> | null> = [];
   return {
     calls,
+    providers,
     reset(): void {
       calls.length = 0;
+      providers.length = 0;
     },
   };
 });
 
 vi.mock("@/components/session-import/use-session-import-scan", () => ({
-  useSessionImportScan: (active: boolean) => {
+  useSessionImportScan: (
+    active: boolean,
+    providers: ReadonlyArray<string> | null,
+  ) => {
     scanTrackerMock.calls.push(active);
+    scanTrackerMock.providers.push(providers);
     return {
       state: { kind: "scan-stub" },
       dispatch: () => undefined,
@@ -84,7 +91,7 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
 /**
  * The scope the dialog sees, over the selection the dialog itself owns — so a
  * pick made through the real `HostSwitcher` really does re-point the dialog,
- * the same shape `onboarding-page.test.tsx`'s `tourScope` uses.
+ * the same shape `session-import-wizard.test.tsx`'s scope fixture uses.
  */
 const hostsMock = vi.hoisted(() => ({
   hosts: [{ hostId: "host-a", connectable: true }] as ReadonlyArray<{
@@ -279,6 +286,9 @@ describe("<SessionImportDialog />", () => {
     expect(screen.queryByTestId("session-import-host-picker-row")).toBeNull();
     expect(screen.getByTestId("session-import-wizard-stub")).not.toBeNull();
     expect(lastScanCall()).toBe(true);
+    // The dialog scans every harness the host can read; its pills narrow the
+    // list, never the request.
+    expect(scanTrackerMock.providers.at(-1)).toBeNull();
   });
 
   it("starts the fixed scope on initialHostId when it names a host other than the active one", () => {

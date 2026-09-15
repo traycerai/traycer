@@ -115,6 +115,9 @@ function SendButton(props: SendButtonProps) {
           aria-disabled={hintActive || undefined}
           aria-label={label}
           aria-keyshortcuts="Meta+Enter Control+Enter"
+          // Tour anchor: the Send branch only, never Stop. Surface-scoped
+          // resolvers pick the landing composer's instance.
+          data-tour="landing-send"
           className={cn(
             BUTTON_CLASS_NAME,
             "bg-primary text-primary-foreground hover:bg-primary/90",

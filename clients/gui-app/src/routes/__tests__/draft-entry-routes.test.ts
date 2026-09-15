@@ -3,7 +3,6 @@ import { isRedirect } from "@tanstack/react-router";
 import { Route as IndexRoute } from "@/routes/index";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useTabsStore } from "@/stores/tabs/store";
 
 const draftRouteMocks = vi.hoisted(() => ({
@@ -41,12 +40,9 @@ describe("draft entry routes", () => {
       stripOrder: [],
       systemTabs: { history: null, settings: null },
     });
-    // Default to "tour completed" so signed-in cases exercise the app path;
-    // the first-launch case overrides this explicitly.
-    useOnboardingStore.setState({ completedAt: 1 });
   });
 
-  it("/ redirects signed-in users (tour done, no restored tabs) to the committed draft creation route", () => {
+  it("/ redirects signed-in users with no restored tabs to the committed draft creation route", () => {
     const thrown = invokeIndexBeforeLoad("signed-in");
     expect(thrown).not.toBeNull();
     expect(isRedirect(thrown)).toBe(true);
@@ -73,21 +69,7 @@ describe("draft entry routes", () => {
     expect(invokeIndexBeforeLoad("signed-in")).toBeNull();
   });
 
-  it("/ sends a signed-in user with no restored tabs to /draft/new (onboarding is gated in RootComponent)", () => {
-    useOnboardingStore.setState({ completedAt: null });
-
-    const thrown = invokeIndexBeforeLoad("signed-in");
-    expect(thrown).not.toBeNull();
-    expect(isRedirect(thrown)).toBe(true);
-    const response = thrown as Response & {
-      options: { to: string; replace: boolean };
-    };
-    expect(response.options.to).toBe("/draft/new");
-    expect(response.options.replace).toBe(true);
-  });
-
   it("/ keeps signed-out users on the auth landing surface", () => {
-    useOnboardingStore.setState({ completedAt: null });
     expect(invokeIndexBeforeLoad("signed-out")).toBeNull();
   });
 

@@ -95,7 +95,12 @@ function SessionImportDialogBody(props: {
   // the scan back for a second visit), and never runs through the pick gap
   // above - a scan through it would list the wrong machine's sessions.
   const runIdle = useSessionImportRun(streamHostId).status === "idle";
-  const scan = useSessionImportScan(runIdle && hostReady && scanSupported);
+  // Every harness the host can read: the dialog's provider pills are how a
+  // user narrows this scan, not the request.
+  const scan = useSessionImportScan(
+    runIdle && hostReady && scanSupported,
+    null,
+  );
   return (
     <Dialog
       open

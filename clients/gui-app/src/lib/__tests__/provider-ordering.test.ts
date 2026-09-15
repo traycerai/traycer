@@ -10,6 +10,8 @@ import {
   orderProvidersByEnablement,
   providerCliIdForHarness,
   providerIdToGuiHarnessId,
+  WELCOME_MAJOR_PROVIDER_IDS,
+  welcomeMinorProviders,
 } from "@/lib/provider-ordering";
 
 // Read from the protocol schema rather than hand-copying the harness id
@@ -114,5 +116,33 @@ describe("orderProvidersByEnablement", () => {
   it("with everything enabled, the whole list is the enabled group in ORDERED_PROVIDERS order", () => {
     const result = orderProvidersByEnablement(() => true);
     expect(result).toEqual(ORDERED_PROVIDERS);
+  });
+});
+
+describe("WELCOME_MAJOR_PROVIDER_IDS / welcomeMinorProviders", () => {
+  it("names six providers that are all in ORDERED_PROVIDERS", () => {
+    const ordered = new Set(
+      ORDERED_PROVIDERS.map((provider) => provider.providerId),
+    );
+    expect(WELCOME_MAJOR_PROVIDER_IDS).toHaveLength(6);
+    for (const providerId of WELCOME_MAJOR_PROVIDER_IDS) {
+      expect(ordered.has(providerId)).toBe(true);
+    }
+  });
+
+  it("partitions the catalogue: majors + minors is every provider exactly once, minors in catalogue order", () => {
+    const minors = welcomeMinorProviders();
+    expect(minors.length + WELCOME_MAJOR_PROVIDER_IDS.length).toBe(
+      ORDERED_PROVIDERS.length,
+    );
+    const majorSet = new Set<ProviderId>(WELCOME_MAJOR_PROVIDER_IDS);
+    for (const minor of minors) {
+      expect(majorSet.has(minor.providerId)).toBe(false);
+    }
+    expect(minors.map((provider) => provider.providerId)).toEqual(
+      ORDERED_PROVIDERS.map((provider) => provider.providerId).filter(
+        (providerId) => !majorSet.has(providerId),
+      ),
+    );
   });
 });

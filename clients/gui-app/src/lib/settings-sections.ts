@@ -5,6 +5,7 @@ import {
   Bot,
   Boxes,
   GitBranch,
+  GraduationCap,
   Keyboard,
   LineChart,
   Palette,
@@ -22,6 +23,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
   | "general"
+  | "onboarding"
   | "appearance"
   | "layout"
   | "opening-behavior"
@@ -123,13 +125,15 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now eighteen. The whole
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now nineteen. The whole
  * host group - Overview, Providers, Worktrees, the host's Notifications, Agent
- * selection, Fallback, Shell and Diagnostics - is the eleventh through
- * eighteenth and goes without. Overview is the newest to lose one, to Layout
- * taking the seventh Application slot. Fallback was added into the digit-less
- * tail and so moved no existing shortcut - it sits between Agent selection and
- * Shell, both already there.
+ * selection, Fallback, Shell and Diagnostics - is the twelfth through
+ * nineteenth and goes without, and so does Usage, the newest to lose one:
+ * Onboarding took the second Application slot, so every digit after it moved
+ * one along and Usage (the eleventh) fell off the end. Before that it was
+ * Overview, to Layout taking what was then the seventh Application slot.
+ * Fallback was added into the digit-less tail and so moved no existing
+ * shortcut - it sits between Agent selection and Shell, both already there.
  *
  * Worktrees is the one that lost a digit to the app-scoped Sounds
  * entry below. That follows from keeping Application entries together at the
@@ -155,6 +159,15 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "general",
     label: "General",
     icon: SettingsIcon,
+    group: "app",
+  },
+  // The learning page - tour progress, replays and the desktop lessons.
+  // Directly after General so it is the second thing a new user sees in the
+  // rail; it is app-wide, not per host, so it sits in this group.
+  {
+    id: "onboarding",
+    label: "Onboarding",
+    icon: GraduationCap,
     group: "app",
   },
   {
@@ -325,10 +338,15 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
  *   says "On your desktop, open Settings → Link mobile app"). A phone could
  *   physically show the code to a second phone, so this is a product decision
  *   about which end of the pairing each build is, not an inability.
+ * - **Onboarding - the lessons are desktop lessons.** Every tour and demo on
+ *   that page teaches the desktop shell: task tabs, split panes, terminal
+ *   agents, browser login import. None of it exists on the phone, so the page
+ *   would be a list of things this build cannot do.
  */
 const MOBILE_APP_OMITTED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
   "keybindings",
   "link-phone",
+  "onboarding",
 ]);
 
 /**

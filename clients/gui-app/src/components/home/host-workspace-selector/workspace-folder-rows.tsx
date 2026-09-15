@@ -238,6 +238,7 @@ export function AddFolderButton(props: {
       variant="ghost"
       className="rounded-lg text-muted-foreground"
       data-testid="folder-add"
+      data-tour="landing-folder-add"
       aria-label={props.iconOnly ? ADD_FOLDER_LABEL : undefined}
       disabled={buttonDisabled}
       onClick={() => {

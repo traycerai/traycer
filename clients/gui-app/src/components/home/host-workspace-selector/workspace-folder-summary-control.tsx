@@ -302,6 +302,7 @@ export function WorkspaceFolderSummaryControl(props: {
     <button
       type="button"
       data-testid="folder-add"
+      data-tour="landing-folder-add"
       aria-label={iconOnly ? ADD_FOLDER_LABEL : undefined}
       disabled={emptyRecentDisabled}
       className="inline-flex w-fit items-center gap-2 rounded-md px-1.5 py-1 text-ui-sm text-muted-foreground outline-none transition-[background-color,color] hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"

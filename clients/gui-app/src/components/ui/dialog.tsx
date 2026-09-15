@@ -5,12 +5,29 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  ModalRootPresenceContext,
+  PresentedModalRegistration,
+  useModalRootPresence,
+} from "@/components/ui/modal-presence";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 
 function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+  // Publishes the resolved modal flag and open state to the content's
+  // presence registration (see `modal-presence.ts`); the primitive still owns
+  // the open state, this only observes it.
+  const { presence, onOpenChange } = useModalRootPresence(props);
+  return (
+    <ModalRootPresenceContext.Provider value={presence}>
+      <DialogPrimitive.Root
+        data-slot="dialog"
+        {...props}
+        onOpenChange={onOpenChange}
+      />
+    </ModalRootPresenceContext.Provider>
+  );
 }
 
 function DialogTrigger({
@@ -53,6 +70,7 @@ function DialogContent({
   children,
   showCloseButton = true,
   onCloseAutoFocus,
+  forceMount,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
@@ -96,8 +114,13 @@ function DialogContent({
           className,
         )}
         onCloseAutoFocus={handleCloseAutoFocus}
+        forceMount={forceMount}
         {...props}
       >
+        {/* Beneath the primitive Content: mounted exactly while Radix presents
+            it (exit animation included), so a closed force-mounted content is
+            the only case the registration has to reason about itself. */}
+        <PresentedModalRegistration forceMount={forceMount === true} />
         {children}
         {showCloseButton ? (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>

@@ -1,10 +1,13 @@
 /**
- * Two sections are not offered in the installed mobile app, for two different
- * reasons: Keybindings because chord capture reads `keydown` on `window` and a
- * touch shell can never commit one, and Link mobile app because the panel is the
- * DISPLAY end of a pairing whose scanner end is the mobile app itself.
+ * Three sections are not offered in the installed mobile app, for three
+ * different reasons: Keybindings because chord capture reads `keydown` on
+ * `window` and a touch shell can never commit one, Link mobile app because
+ * the panel is the DISPLAY end of a pairing whose scanner end is the mobile
+ * app itself, and Onboarding because every lesson teaches the desktop shell -
+ * task tabs, split panes, terminal agents, browser login import - none of
+ * which exists on the phone.
  *
- * The table itself keeps both, because ids resolve routes, remembered tab
+ * The table itself keeps all three, because ids resolve routes, remembered tab
  * paths and titles; only the OFFERED list drops them.
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,6 +30,7 @@ describe("visibleSettingsSections", () => {
     expect(visibleSettingsSections()).toBe(SETTINGS_SECTIONS);
     expect(isSettingsSectionVisible("keybindings")).toBe(true);
     expect(isSettingsSectionVisible("link-phone")).toBe(true);
+    expect(isSettingsSectionVisible("onboarding")).toBe(true);
   });
 
   it("omits keybindings in the installed mobile app", () => {
@@ -43,19 +47,28 @@ describe("visibleSettingsSections", () => {
     expect(isSettingsSectionVisible("link-phone")).toBe(false);
   });
 
+  it("omits onboarding in the installed mobile app", () => {
+    setMobileApp(true);
+    const ids = visibleSettingsSections().map((section) => section.id);
+    expect(ids).not.toContain("onboarding");
+    expect(isSettingsSectionVisible("onboarding")).toBe(false);
+  });
+
   it("drops nothing else in the installed mobile app", () => {
     setMobileApp(true);
     const ids = visibleSettingsSections().map((section) => section.id);
     const expected = SETTINGS_SECTIONS.map((section) => section.id).filter(
-      (id) => id !== "keybindings" && id !== "link-phone",
+      (id) =>
+        id !== "keybindings" && id !== "link-phone" && id !== "onboarding",
     );
     expect(ids).toEqual(expected);
   });
 
-  it("keeps both sections in the resolver table so their ids still resolve", () => {
+  it("keeps all three sections in the resolver table so their ids still resolve", () => {
     setMobileApp(true);
     const ids = SETTINGS_SECTIONS.map((section) => section.id);
     expect(ids).toContain("keybindings");
     expect(ids).toContain("link-phone");
+    expect(ids).toContain("onboarding");
   });
 });

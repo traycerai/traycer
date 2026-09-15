@@ -78,7 +78,7 @@ Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
     `drawer.tsx` already do this per side, so their callers need nothing.
   - A full-screen dim is not a surface and stays edge to edge.
   - **The one sanctioned full-bleed surface** is `StandaloneShell`
-    (`routes/root-route-components.tsx`) — sign-in and the tour. It is `fixed
+    (`routes/root-route-components.tsx`) — sign-in. It is `fixed
 inset-0` and marked `data-full-bleed-surface`, so it takes the viewport
     instead of sitting inside `#root`'s reservation, and its edge-to-edge
     artwork reaches the status bar. The exception covers the BACKGROUND only:
@@ -231,7 +231,7 @@ it resolved exactly what `useHostClient()` resolves.)
 SCOPED one, not the app-wide one. A binding re-provided by a host-scoped panel
 names its host (`HostRuntimeBinding.hostId`), and every consumer below it —
 `useHostClient()`, `useAddressableHostId()`, the wrappers above — resolves to
-that host. Eleven surfaces re-provide — nine through `useScopedHostBinding`,
+that host. Ten surfaces re-provide — eight through `useScopedHostBinding`,
 plus the two governed exceptions it lists. Resolve a binding through
 `lib/host/binding-host-client.ts` and never inline
 `hostClient.createRequesterForHostId(...)` beside a separately-read host id:

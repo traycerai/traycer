@@ -268,6 +268,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
             aria-orientation={orientation}
             data-epic-sidebar-rail
             data-testid="epic-sidebar-rail"
+            data-tour="epic-sidebar-rail"
             data-orientation={orientation}
             className={cn(
               "relative flex items-center gap-1 bg-background",

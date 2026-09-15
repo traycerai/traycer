@@ -32,6 +32,18 @@ import {
  * projection of that state, not a copy of it.
  */
 
+/**
+ * The harnesses the host has a session reader for - exactly the three
+ * `session-import-readers.ts` builds. A caller that narrows a scan to the
+ * providers a user has enabled intersects with this first, since asking the
+ * host to scan a harness it cannot read is an empty answer at best.
+ */
+export const SESSION_IMPORT_HARNESSES: ReadonlyArray<GuiHarnessId> = [
+  "claude",
+  "codex",
+  "opencode",
+];
+
 /** `(harness, nativeSessionId)` is the import's identity everywhere. */
 export function sessionImportSelectionKey(
   harness: GuiHarnessId,
@@ -1071,6 +1083,34 @@ export function groupSessionImportFailures(
       label: sessionImportFailureLabel(reason),
       entries,
     }));
+}
+
+/**
+ * How many repos the submission actually brings over.
+ *
+ * Every other number on the event describes the import, so this one has to as
+ * well. `state.groups.length` counts the SCAN instead - folders the user
+ * cleared outright, and folders that only ever held unreadable or
+ * already-imported rows - which would read as "imported 3 sessions across 40
+ * repos". The selections are the source of truth rather than `state.selected`,
+ * so this cannot drift from whatever the submission decided to send.
+ */
+export function submittedGroupCount(
+  groups: ReadonlyArray<SessionImportGroup>,
+  selections: ReadonlyArray<SessionImportSelection>,
+): number {
+  const submitted = new Set(
+    selections.map((selection) =>
+      sessionImportSelectionKey(selection.harness, selection.nativeSessionId),
+    ),
+  );
+  return groups.filter((group) =>
+    group.sessions.some((candidate) =>
+      submitted.has(
+        sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
+      ),
+    ),
+  ).length;
 }
 
 /**

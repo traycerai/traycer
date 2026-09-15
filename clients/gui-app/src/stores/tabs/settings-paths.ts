@@ -34,6 +34,7 @@ export const SETTINGS_PATHS = new Set([
   "layout",
   "link-phone",
   "notifications",
+  "onboarding",
   "opening-behavior",
   "providers",
   "service",

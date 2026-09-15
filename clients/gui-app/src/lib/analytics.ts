@@ -1,5 +1,13 @@
 import posthog, { type CaptureResult, type PostHogConfig } from "posthog-js";
 import { isMobileApp } from "@/lib/mobile-app";
+import {
+  LESSON_IDS,
+  TOUR_IDS,
+  TOUR_STEP_IDS,
+  type LessonId,
+  type OnboardingBranch,
+  type TourId,
+} from "@/stores/onboarding/onboarding-tour-catalog";
 
 export type AnalyticsSource =
   | "direct_ui"
@@ -97,6 +105,7 @@ export type AnalyticsSettingsSection =
   | "layout"
   | "link-phone"
   | "notifications"
+  | "onboarding"
   | "opening-behavior"
   | "providers"
   | "shell"
@@ -218,23 +227,8 @@ export type AnalyticsSessionAgeBucket =
  * 4 GB old-space ceiling with room to still report before an OOM. */
 export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 
-/** Every act id either tour can show, desktop and mobile alike. Mirrors
- * `OnboardingActId` - a step the union does not carry is dropped by the
- * allowed-values pinning below. */
-export type AnalyticsOnboardingStep =
-  | "agent-guide"
-  | "command-theme"
-  | "login-import"
-  | "mobile-switcher"
-  | "mobile-tasks"
-  | "navigation"
-  | "providers"
-  | "session-import"
-  | "task-context"
-  | "task-tabs";
-
-/** Which surface opened the import wizard - onboarding act or Settings. */
-export type AnalyticsSessionImportSurface = "dialog" | "onboarding";
+/** Which surface opened the import wizard - the welcome modal or Settings. */
+export type AnalyticsSessionImportSurface = "dialog" | "welcome-modal";
 
 export type AnalyticsProviderOperation =
   | "api_key"
@@ -355,28 +349,6 @@ export type AnalyticsSetting =
   | "voiceInputEnabled"
   | "voiceLanguage";
 
-export type AnalyticsTheme =
-  | "mode:dark"
-  | "mode:light"
-  | "mode:system"
-  | "preset:amoled"
-  | "preset:ayu"
-  | "preset:blue"
-  | "preset:catppuccin"
-  | "preset:dracula"
-  | "preset:everforest"
-  | "preset:github"
-  | "preset:green"
-  | "preset:gruvbox"
-  | "preset:neutral"
-  | "preset:nord"
-  | "preset:orange"
-  | "preset:pink"
-  | "preset:rose"
-  | "preset:tokyo-night"
-  | "preset:traycer-green"
-  | "preset:violet";
-
 export enum AnalyticsEvent {
   AppOpened = "app_opened",
   SignInStarted = "sign_in_started",
@@ -394,11 +366,12 @@ export enum AnalyticsEvent {
   HostUpdateSucceeded = "host_update_succeeded",
   HostUpdateFailed = "host_update_failed",
   HostUpdateSnoozed = "host_update_snoozed",
-  OnboardingStarted = "onboarding_started",
-  OnboardingNavigated = "onboarding_navigated",
-  OnboardingCompleted = "onboarding_completed",
-  OnboardingSkipped = "onboarding_skipped",
-  OnboardingThemeChanged = "onboarding_theme_changed",
+  OnboardingModalShown = "onboarding_modal_shown",
+  OnboardingModalContinued = "onboarding_modal_continued",
+  OnboardingModalSkipped = "onboarding_modal_skipped",
+  OnboardingTourStep = "onboarding_tour_step",
+  OnboardingChainEnded = "onboarding_chain_ended",
+  OnboardingLessonOpened = "onboarding_lesson_opened",
   SessionImportStarted = "session_import_started",
   AgentGuideSaved = "agent_guide_saved",
   ProviderProfileLinkStarted = "provider_profile_link_started",
@@ -633,21 +606,37 @@ export interface AnalyticsEventProperties {
     readonly blocker: AnalyticsBlocker;
   };
   readonly [AnalyticsEvent.HostUpdateSnoozed]: SourceProperties;
-  readonly [AnalyticsEvent.OnboardingStarted]: {
-    readonly mode: "first_run" | "replay";
+  /**
+   * The onboarding funnel. The three modal events are the welcome modal's
+   * (shown once per open, continued per page, skipped from either page);
+   * `OnboardingTourStep` and `OnboardingChainEnded` are the tour host's, one
+   * per step the user leaves and one when the chain of tours ends;
+   * `OnboardingLessonOpened` is Settings ▸ Onboarding's, once per lesson
+   * action taken. `page` is a string enum on purpose: `COUNT_PROPERTY_KEYS`
+   * is for tallies, and a page index is not one.
+   */
+  readonly [AnalyticsEvent.OnboardingModalShown]: {
+    readonly page: "1" | "2";
   };
-  readonly [AnalyticsEvent.OnboardingNavigated]: {
-    readonly direction: "back" | "continue";
-    readonly step: AnalyticsOnboardingStep;
+  readonly [AnalyticsEvent.OnboardingModalContinued]: {
+    readonly page: "1" | "2";
+    readonly enabled_provider_count: number;
+    readonly session_count: number;
   };
-  readonly [AnalyticsEvent.OnboardingCompleted]: {
-    readonly last_step: AnalyticsOnboardingStep;
+  readonly [AnalyticsEvent.OnboardingModalSkipped]: {
+    readonly page: "1" | "2";
   };
-  readonly [AnalyticsEvent.OnboardingSkipped]: {
-    readonly last_step: AnalyticsOnboardingStep;
+  readonly [AnalyticsEvent.OnboardingTourStep]: {
+    readonly tour: TourId;
+    readonly step: string;
+    readonly action: "next" | "auto" | "skip" | "pause";
   };
-  readonly [AnalyticsEvent.OnboardingThemeChanged]: {
-    readonly theme: AnalyticsTheme;
+  readonly [AnalyticsEvent.OnboardingChainEnded]: {
+    readonly reason: "completed" | "skipped";
+    readonly branch: OnboardingBranch;
+  };
+  readonly [AnalyticsEvent.OnboardingLessonOpened]: {
+    readonly lesson: LessonId;
   };
   /**
    * A user submitted the session-import wizard. The counts are what the
@@ -1188,6 +1177,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     layout: true,
     "link-phone": true,
     notifications: true,
+    onboarding: true,
     "opening-behavior": true,
     providers: true,
     shell: true,
@@ -1286,39 +1276,21 @@ const ANALYTICS_SETTINGS = new Set<string>(
   } satisfies Record<AnalyticsSetting, true>),
 );
 
-const ANALYTICS_THEMES = new Set<string>([
-  "mode:dark",
-  "mode:light",
-  "mode:system",
-  "preset:amoled",
-  "preset:ayu",
-  "preset:blue",
-  "preset:catppuccin",
-  "preset:dracula",
-  "preset:everforest",
-  "preset:github",
-  "preset:green",
-  "preset:gruvbox",
-  "preset:neutral",
-  "preset:nord",
-  "preset:orange",
-  "preset:pink",
-  "preset:rose",
-  "preset:tokyo-night",
-  "preset:traycer-green",
-  "preset:violet",
-]);
-
-const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
-  "agent-guide",
-  "command-theme",
-  "mobile-switcher",
-  "mobile-tasks",
-  "navigation",
-  "providers",
-  "session-import",
-  "task-context",
-  "task-tabs",
+/**
+ * Built from the tour catalogue rather than written out, so a tour, step or
+ * lesson added there is accepted here without a second edit - and one that
+ * is not in the catalogue is dropped. Step ids are one flat set: the
+ * validator checks `step` against every tour's steps, not against the
+ * `tour` beside it, which is the accepted cost of the exact-value pattern.
+ */
+const ANALYTICS_TOUR_IDS: ReadonlySet<string> = new Set(TOUR_IDS);
+const ANALYTICS_TOUR_STEP_IDS: ReadonlySet<string> = new Set(
+  TOUR_IDS.flatMap((tour) => TOUR_STEP_IDS[tour]),
+);
+const ANALYTICS_LESSON_IDS: ReadonlySet<string> = new Set(LESSON_IDS);
+const ANALYTICS_ONBOARDING_MODAL_PAGES: ReadonlySet<string> = new Set([
+  "1",
+  "2",
 ]);
 
 const ANALYTICS_TARGETS = new Set<string>([
@@ -1464,19 +1436,27 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ],
     ["blocker"],
   ),
+  ...eventKeyEntries([AnalyticsEvent.TaskCreated], ["mode"]),
   ...eventKeyEntries(
-    [AnalyticsEvent.OnboardingStarted, AnalyticsEvent.TaskCreated],
-    ["mode"],
+    [
+      AnalyticsEvent.OnboardingModalShown,
+      AnalyticsEvent.OnboardingModalSkipped,
+    ],
+    ["page"],
   ),
   ...eventKeyEntries(
-    [AnalyticsEvent.OnboardingNavigated],
-    ["direction", "step"],
+    [AnalyticsEvent.OnboardingModalContinued],
+    ["page", "enabled_provider_count", "session_count"],
   ),
   ...eventKeyEntries(
-    [AnalyticsEvent.OnboardingCompleted, AnalyticsEvent.OnboardingSkipped],
-    ["last_step"],
+    [AnalyticsEvent.OnboardingTourStep],
+    ["tour", "step", "action"],
   ),
-  ...eventKeyEntries([AnalyticsEvent.OnboardingThemeChanged], ["theme"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.OnboardingChainEnded],
+    ["reason", "branch"],
+  ),
+  ...eventKeyEntries([AnalyticsEvent.OnboardingLessonOpened], ["lesson"]),
   ...eventKeyEntries(
     [AnalyticsEvent.SessionImportStarted],
     ["surface", "session_count", "group_count"],
@@ -1765,7 +1745,6 @@ const EXACT_PROPERTY_VALUES: {
   harness: ANALYTICS_HARNESSES,
   host_kind: new Set(["local", "remote"]),
   launch_reason: new Set(["normal", "update_restart"]),
-  last_step: ANALYTICS_ONBOARDING_STEPS,
   permission: new Set(["denied", "granted", "unavailable"]),
   pressure_tier: ANALYTICS_RESOURCE_PRESSURE_TIERS,
   provider: ANALYTICS_PROVIDERS,
@@ -1774,9 +1753,7 @@ const EXACT_PROPERTY_VALUES: {
   session_age_bucket: ANALYTICS_SESSION_AGE_BUCKETS,
   setting: ANALYTICS_SETTINGS,
   source: ANALYTICS_SOURCES,
-  step: ANALYTICS_ONBOARDING_STEPS,
   surface: new Set(["chat", "draft"]),
-  theme: ANALYTICS_THEMES,
   to: ANALYTICS_HARNESSES,
   unread_bucket: ANALYTICS_COUNT_BUCKETS,
   workspace_kind: new Set(["local", "unknown", "worktree"]),
@@ -1797,9 +1774,43 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     ANALYTICS_EXACT_COUNT_BUCKETS,
   ),
   ...eventValueEntries(
-    [AnalyticsEvent.OnboardingStarted],
-    "mode",
-    new Set(["first_run", "replay"]),
+    [
+      AnalyticsEvent.OnboardingModalShown,
+      AnalyticsEvent.OnboardingModalContinued,
+      AnalyticsEvent.OnboardingModalSkipped,
+    ],
+    "page",
+    ANALYTICS_ONBOARDING_MODAL_PAGES,
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.OnboardingTourStep],
+    "tour",
+    ANALYTICS_TOUR_IDS,
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.OnboardingTourStep],
+    "step",
+    ANALYTICS_TOUR_STEP_IDS,
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.OnboardingTourStep],
+    "action",
+    new Set(["auto", "next", "pause", "skip"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.OnboardingChainEnded],
+    "reason",
+    new Set(["completed", "skipped"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.OnboardingChainEnded],
+    "branch",
+    new Set(["no-sessions", "sessions"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.OnboardingLessonOpened],
+    "lesson",
+    ANALYTICS_LESSON_IDS,
   ),
   ...eventValueEntries(
     [
@@ -1834,11 +1845,6 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     [AnalyticsEvent.TabCloseBlocked],
     "decision",
     new Set(["cancel", "discard"]),
-  ),
-  ...eventValueEntries(
-    [AnalyticsEvent.OnboardingNavigated],
-    "direction",
-    new Set(["back", "continue"]),
   ),
   ...eventValueEntries(
     [AnalyticsEvent.HistoryNavigationUsed],
@@ -1881,7 +1887,7 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
     [AnalyticsEvent.SessionImportStarted],
     "surface",
-    new Set(["dialog", "onboarding"]),
+    new Set(["dialog", "welcome-modal"]),
   ),
   ...eventValueEntries(
     [
@@ -2012,6 +2018,7 @@ const COUNT_PROPERTY_KEYS = new Set<string>([
   "answer_count",
   "artifact_count",
   "attachment_count",
+  "enabled_provider_count",
   "failed_count",
   "file_count",
   "group_count",

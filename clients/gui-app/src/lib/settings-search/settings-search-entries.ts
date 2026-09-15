@@ -19,6 +19,7 @@ import { KEYBINDINGS } from "@/components/settings/panels/keybindings-settings.d
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { LINK_PHONE } from "@/components/settings/panels/link-phone.definitions";
 import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
+import { ONBOARDING } from "@/components/settings/panels/onboarding-settings.definitions";
 import { OPENING_BEHAVIOR } from "@/components/settings/panels/opening-behavior.definitions";
 import { PROVIDERS } from "@/components/settings/panels/providers-settings.definitions";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
@@ -34,6 +35,7 @@ import {
 export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollection> =
   [
     GENERAL,
+    ONBOARDING,
     APPEARANCE,
     OPENING_BEHAVIOR,
     APP_NOTIFICATIONS,

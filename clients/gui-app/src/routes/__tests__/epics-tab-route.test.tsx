@@ -10,7 +10,6 @@ import { QueryClient } from "@tanstack/react-query";
 import { routeTree } from "@/routeTree.gen";
 import type { AuthStatus } from "@/stores/auth/auth-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
@@ -29,7 +28,7 @@ vi.mock("@/components/layout/app-shell", () => ({
   ),
 }));
 
-// The standalone sign-in / onboarding surfaces render the Windows menu strip
+// The standalone sign-in surface renders the Windows menu strip
 // in a title-bar band, and the strip routes its popup through a TanStack
 // mutation. This routing test wraps RootComponent in only a router queryClient
 // (no QueryClientProvider), so stub the module like AppShell above.
@@ -84,10 +83,6 @@ vi.mock("@/hooks/migration/use-phase-migrate-to-epic-mutation", () => ({
     isPending: true,
     mutate: () => undefined,
   }),
-}));
-
-vi.mock("@/components/onboarding/onboarding-page", () => ({
-  OnboardingPage: () => <div data-testid="onboarding-page-stub" />,
 }));
 
 vi.mock("@/providers/epic-session-provider", () => ({
@@ -169,15 +164,12 @@ describe("/epics/$epicId/$tabId route", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     recordViewed.mockReset();
     seedSignedInAuth();
-    // Past the one-time tour, so RootComponent's global onboarding gate is inert.
-    useOnboardingStore.setState({ completedAt: 1_700_000_000_000 });
   });
 
   afterEach(() => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    useOnboardingStore.setState({ completedAt: null });
   });
 
   it("adapts an existing tab route without creating another tab body", async () => {
@@ -223,28 +215,6 @@ describe("/epics/$epicId/$tabId route", () => {
       focusArtifactId: "artifact-1",
       focusThreadId: "thread-1",
     });
-  });
-
-  it("shows the onboarding tour (not the epic) for an un-onboarded user on a deep route", async () => {
-    // The tour renders over whatever route resolved, with no navigation, so a
-    // user who boots into a deep route (e.g. a restored epic) still sees it.
-    seedOpenEpicTab();
-    useOnboardingStore.setState({ completedAt: null });
-
-    const router = renderAt(`/epics/${EPIC_ID}/${TAB_ID}`);
-
-    await screen.findByTestId("onboarding-page-stub");
-    expect(screen.queryByTestId("epic-route-session-body")).toBeNull();
-    expect(router.state.location.pathname).toBe(`/epics/${EPIC_ID}/${TAB_ID}`);
-  });
-
-  it("renders replay onboarding outside the app shell without clearing completion", async () => {
-    const router = renderAt("/onboarding?replay=true");
-
-    await screen.findByTestId("onboarding-page-stub");
-    expect(screen.queryByTestId("app-shell")).toBeNull();
-    expect(router.state.location.pathname).toBe("/onboarding");
-    expect(useOnboardingStore.getState().completedAt).toBe(1_700_000_000_000);
   });
 });
 

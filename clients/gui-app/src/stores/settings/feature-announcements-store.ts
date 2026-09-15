@@ -6,22 +6,36 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
  * Features this install has been told about, once each.
  *
  * Keyed by FEATURE, not by app version: the surface that announces a feature
- * is the first one to show it - a toast for a user who has already finished
- * onboarding, the tour act for one who has not - and either consumes the id,
- * so exactly one of them ever appears per install and skipping the tour act
- * does not resurrect the toast. A version-keyed "what's new" would need a
- * version compare against `snapshot.currentVersion`, which is empty without a
- * desktop bridge; a feature id needs nothing. A future announcement is one
- * more member of the union.
+ * is the first one to show it, and it consumes the id, so exactly one of
+ * them ever appears per install. The surfaces today:
+ *
+ * - the two release toasts (`login-import`, `session-import`), each shown
+ *   once to a user the onboarding flow has finished with;
+ * - the welcome modal's sessions page, which consumes `session-import` on
+ *   mount exactly as the Settings wizard does - meeting the wizard anywhere
+ *   IS the announcement, so the toast never follows it;
+ * - the onboarding chain's completion toast, whose receipt is
+ *   `onboarding-completion`: the tour host `claim`s it when the chain
+ *   finishes or is skipped, so the toast fires once per install however
+ *   many times a tour is replayed.
+ *
+ * A version-keyed "what's new" would need a version compare against
+ * `snapshot.currentVersion`, which is empty without a desktop bridge; a
+ * feature id needs nothing. A future announcement is one more member of the
+ * union.
  *
  * The timestamp is when the id was consumed, kept for support reports rather
  * than read by any surface.
  */
-export type FeatureAnnouncementId = "login-import" | "session-import";
+export type FeatureAnnouncementId =
+  | "login-import"
+  | "session-import"
+  | "onboarding-completion";
 
 const FEATURE_ANNOUNCEMENT_IDS: ReadonlyArray<FeatureAnnouncementId> = [
   "login-import",
   "session-import",
+  "onboarding-completion",
 ];
 
 type ConsumedAnnouncements = Readonly<

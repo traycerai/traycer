@@ -18,7 +18,7 @@ const HOST = "host-a";
 /**
  * The two things the progress view has to get right about WHOSE run it is
  * showing and WHERE the tasks will appear - both invisible to the wizard
- * tests, which never see an attached run or the onboarding ground. Also
+ * tests, which never see an attached run or the welcome-modal ground. Also
  * covers the complete-run summary's failure grouping, which lives here rather
  * than in the model suite because the toggle is DOM behaviour.
  */
@@ -118,7 +118,7 @@ describe("SessionImportProgress", () => {
     ).toBeNull();
   });
 
-  it("points the tour at the end of onboarding and the dialog at the task list", () => {
+  it("points both surfaces at the task list", () => {
     useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
@@ -130,15 +130,13 @@ describe("SessionImportProgress", () => {
 
     render(
       <SessionImportProgress
-        tone={sessionImportTone("onboarding")}
+        tone={sessionImportTone("welcome-modal")}
         hostId={HOST}
       />,
     );
-    expect(
-      screen.getByText(
-        "They'll be in your task list when you finish the tour.",
-      ),
-    ).toBeTruthy();
+    // The welcome modal sits over the real app, so its copy no longer
+    // defers the task list to the end of a tour.
+    expect(screen.getByText("They're in your task list.")).toBeTruthy();
 
     cleanup();
     render(

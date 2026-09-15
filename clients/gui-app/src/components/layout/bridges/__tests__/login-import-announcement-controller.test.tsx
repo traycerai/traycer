@@ -17,8 +17,11 @@ import {
   type SurfaceReadiness,
 } from "@/components/layout/host-readiness-controller-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
+import {
+  INITIAL_FLOW,
+  useOnboardingFlowStore,
+} from "@/stores/onboarding/onboarding-flow-store";
+import { useOnboardingPresenceStore } from "@/stores/onboarding/onboarding-presence-store";
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -116,8 +119,12 @@ function renderWithReadiness(
 
 function resetStores(): void {
   useAuthStore.setState({ status: "signed-in" });
-  useOnboardingStore.setState({ completedAt: Date.now(), step: 0 });
-  useOnboardingTourOpenStore.getState().setOpen(false);
+  useOnboardingFlowStore.setState({
+    ...INITIAL_FLOW,
+    modal: "done",
+    chain: "completed",
+  });
+  useOnboardingPresenceStore.setState({ modalOpen: false, tourBusy: false });
   useBrowserFocusStore.setState({ openImportLogins: false });
   useFeatureAnnouncementsStore.setState({ consumed: {} });
   window.localStorage.clear();
@@ -185,31 +192,102 @@ describe("<LoginImportAnnouncementController />", () => {
     expect(toastMock).not.toHaveBeenCalled();
   });
 
-  it("does not show before onboarding is complete", () => {
-    useOnboardingStore.setState({ completedAt: null, step: 0 });
-    render(<LoginImportAnnouncementController />);
-
-    expect(toastMock).not.toHaveBeenCalled();
-  });
-
-  it("holds while the tour is open, then shows when it closes", () => {
-    useOnboardingTourOpenStore.getState().setOpen(true);
-    render(<LoginImportAnnouncementController />);
-
-    expect(toastMock).not.toHaveBeenCalled();
-
-    act(() => {
-      useOnboardingTourOpenStore.getState().setOpen(false);
-    });
-
-    expect(toastMock).toHaveBeenCalledTimes(1);
-  });
-
   it("does not show when signed out", () => {
     useAuthStore.setState({ status: "signed-out" });
     render(<LoginImportAnnouncementController />);
 
     expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("holds while the welcome modal is still pending", () => {
+    act(() => {
+      useOnboardingFlowStore.setState({ modal: "pending", chain: "pending" });
+    });
+    render(<LoginImportAnnouncementController />);
+
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeUndefined();
+  });
+
+  it("holds while the tour chain is paused, then shows once it completes", () => {
+    act(() => {
+      useOnboardingFlowStore.setState({
+        chain: "paused",
+        activeTourId: "add-folder",
+        tours: {
+          ...INITIAL_FLOW.tours,
+          "add-folder": {
+            status: "active",
+            stepId: "add-folder",
+            completedAt: null,
+          },
+        },
+      });
+    });
+    render(<LoginImportAnnouncementController />);
+
+    expect(toastMock).not.toHaveBeenCalled();
+
+    act(() => {
+      useOnboardingFlowStore.getState().completeChain();
+    });
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toEqual(expect.any(Number));
+  });
+
+  it("shows for a legacy-migrated user", () => {
+    act(() => {
+      useOnboardingFlowStore.setState({
+        legacyCompleted: true,
+        modal: "done",
+        chain: "skipped",
+        chainScope: "single",
+      });
+    });
+    render(<LoginImportAnnouncementController />);
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds while the flow has the screen, and takes an up toast down when it does", () => {
+    render(<LoginImportAnnouncementController />);
+    expect(toastMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useOnboardingPresenceStore.getState().setTourBusy(true);
+    });
+    expect(toastMock.dismiss).toHaveBeenCalledWith(
+      "traycer-login-import-announcement",
+    );
+
+    act(() => {
+      useOnboardingPresenceStore.getState().setTourBusy(false);
+    });
+    // Already claimed - a released hold does not re-show it.
+    expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the toast while the welcome modal is open, then shows once it closes", () => {
+    act(() => {
+      useOnboardingPresenceStore.getState().setModalOpen(true);
+    });
+    render(<LoginImportAnnouncementController />);
+
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeUndefined();
+
+    act(() => {
+      useOnboardingPresenceStore.getState().setModalOpen(false);
+    });
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
   });
 
   it("holds behind the window narrator, then shows on release", async () => {
@@ -299,19 +377,6 @@ describe("<LoginImportAnnouncementController />", () => {
     expect(toastMock).not.toHaveBeenCalled();
   });
 
-  it("dismisses the toast once the tour opens after it showed", () => {
-    render(<LoginImportAnnouncementController />);
-    expect(toastMock).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      useOnboardingTourOpenStore.getState().setOpen(true);
-    });
-
-    expect(toastMock.dismiss).toHaveBeenCalledWith(
-      "traycer-login-import-announcement",
-    );
-  });
-
   it("dismisses the toast once availability flips to false after it showed", () => {
     const { rerender } = render(<LoginImportAnnouncementController />);
     expect(toastMock).toHaveBeenCalledTimes(1);
@@ -333,13 +398,13 @@ describe("<LoginImportAnnouncementController />", () => {
 
     // The narrator gate is transient - a toast under its dialog is inert
     // rather than wrong, and comes back live when the dialog goes. It must
-    // not take the toast down the way saving-off, sign-out and the tour do.
+    // not take the toast down the way saving-off and sign-out do.
     harness.rerenderReadiness(LOADING_HOST_READINESS);
 
     expect(toastMock.dismiss).not.toHaveBeenCalled();
   });
 
-  it("does not dismiss on the tour opening when THIS controller never showed the toast", () => {
+  it("does not dismiss on sign-out when THIS controller never showed the toast", () => {
     // Already consumed - by another window, or a prior mount - so this
     // controller's own shown-tracking never flips true.
     useFeatureAnnouncementsStore.setState({
@@ -349,7 +414,7 @@ describe("<LoginImportAnnouncementController />", () => {
     expect(toastMock).not.toHaveBeenCalled();
 
     act(() => {
-      useOnboardingTourOpenStore.getState().setOpen(true);
+      useAuthStore.setState({ status: "signed-out" });
     });
 
     expect(toastMock.dismiss).not.toHaveBeenCalled();

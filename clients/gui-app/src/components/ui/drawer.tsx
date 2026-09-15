@@ -2,11 +2,30 @@ import * as React from "react";
 import { Drawer as DrawerPrimitive } from "vaul";
 
 import { cn } from "@/lib/utils";
+import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import {
+  ModalRootPresenceContext,
+  PresentedModalRegistration,
+  useModalRootPresence,
+} from "@/components/ui/modal-presence";
 
 function Drawer({
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Root>) {
-  return <DrawerPrimitive.Root data-slot="drawer" {...props} />;
+  // Same presence publication as `dialog.tsx` (see `modal-presence.ts`).
+  // vaul reports drag-dismissal through `onOpenChange` too, so the observed
+  // open state follows a swipe-to-close without any drawer behaviour change.
+  const { presence, onOpenChange } = useModalRootPresence(props);
+  return (
+    <ModalRootPresenceContext.Provider value={presence}>
+      <DrawerPrimitive.Root
+        data-slot="drawer"
+        {...props}
+        onOpenChange={onOpenChange}
+      />
+    </ModalRootPresenceContext.Provider>
+  );
 }
 
 function DrawerTrigger({
@@ -54,14 +73,24 @@ function DrawerContent({
   ref,
   className,
   children,
+  forceMount,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Content>) {
+  // Same un-present rules as `dialog.tsx` / `sheet.tsx`: a background split
+  // pane or a concealed region drops the portal (overlay included) while the
+  // root keeps its open state and vaul's drag/dismiss wiring is untouched.
+  const { paneFocused, handleCloseAutoFocus } =
+    usePaneAwareContentGuard(onCloseAutoFocus);
+  const concealed = usePortalConcealed();
+  if (!paneFocused || concealed) return null;
   return (
     <DrawerPortal data-slot="drawer-portal">
       <DrawerOverlay />
       <DrawerPrimitive.Content
         ref={ref}
         data-slot="drawer-content"
+        onCloseAutoFocus={handleCloseAutoFocus}
         className={cn(
           "group/drawer-content fixed z-50 flex h-auto flex-col bg-popover bg-clip-padding text-popover-foreground shadow-lg",
           "data-[vaul-drawer-direction=top]:inset-x-0 data-[vaul-drawer-direction=top]:top-0 data-[vaul-drawer-direction=top]:mb-24 data-[vaul-drawer-direction=top]:rounded-b-lg data-[vaul-drawer-direction=top]:border-b",
@@ -83,8 +112,10 @@ function DrawerContent({
           "data-[vaul-drawer-direction=left]:mt-safe-top data-[vaul-drawer-direction=left]:ml-safe-left data-[vaul-drawer-direction=left]:max-w-safe-dvw data-[vaul-drawer-direction=right]:mt-safe-top data-[vaul-drawer-direction=right]:mr-safe-right data-[vaul-drawer-direction=right]:max-w-safe-dvw",
           className,
         )}
+        forceMount={forceMount}
         {...props}
       >
+        <PresentedModalRegistration forceMount={forceMount === true} />
         <div className="mx-auto mt-3 hidden h-1.5 w-12 shrink-0 rounded-full bg-border group-data-[vaul-drawer-direction=bottom]/drawer-content:block" />
         {children}
       </DrawerPrimitive.Content>

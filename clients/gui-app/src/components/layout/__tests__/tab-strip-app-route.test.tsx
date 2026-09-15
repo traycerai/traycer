@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { routeTree } from "@/routeTree.gen";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
@@ -239,8 +238,6 @@ function resetStores(): void {
     { userId: "user-1", username: "User One" },
     [],
   );
-  // Past the one-time tour, so RootComponent's onboarding render gate is inert.
-  useOnboardingStore.setState({ completedAt: 1_700_000_000_000 });
 }
 
 function renderAppAt(initialPath: string) {

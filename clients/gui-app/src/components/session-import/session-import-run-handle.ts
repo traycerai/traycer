@@ -68,8 +68,9 @@ export function startSessionImportRun(
   const handle = ref.current;
   if (handle === null) {
     // The controller is mounted app-wide, so a missing handle means the surface
-    // that asked renders outside it - the shape of the bug where onboarding's
-    // Import button did nothing at all. Nothing here can recover the click, so
+    // that asked renders outside it - the shape of the bug where a surface
+    // rendered outside `AppShell` had an Import button that did nothing at
+    // all. Nothing here can recover the click, so
     // the least this can do is not swallow it silently.
     appLogger.error(
       "[session-import] import requested with no run controller mounted",

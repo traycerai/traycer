@@ -682,7 +682,9 @@ describe("leader digit dispatch (global scope)", () => {
     const { router, calls } = buildRouter("/settings/general");
     expect(fireDigit(router, 2, "alt")).toBe(true);
     expect(calls[0].kind).toBe("section");
-    expect(calls[0].sectionId).toBe("appearance");
+    // Onboarding sits directly after General, so digit 2 (index 1) now
+    // resolves there instead of to Appearance.
+    expect(calls[0].sectionId).toBe("onboarding");
   });
 
   it("settings section digit no-ops when [Settings | empty] is focused on empty", () => {

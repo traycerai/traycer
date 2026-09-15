@@ -4,10 +4,6 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import { History, Search } from "lucide-react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
-import type {
-  SessionImportGroup,
-  SessionImportSelection,
-} from "@traycer/protocol/host/session-import/candidate";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { SessionImportImportedSupport } from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -30,8 +26,8 @@ import {
   harnessDisplayName,
   selectionStateFor,
   sessionImportScanWindowLabel,
-  sessionImportSelectionKey,
   SESSION_IMPORT_SCAN_WINDOW_OPTIONS,
+  submittedGroupCount,
   type SessionImportProviderView,
   type SessionImportScanWindow,
   type SessionImportWizardState,
@@ -68,18 +64,17 @@ export interface SessionImportSecondaryAction {
 }
 
 /**
- * The one import surface, used by the onboarding act and the Settings dialog
- * alike (spec D3). It hands the user's selection to the app-wide run
- * controller rather than owning the run itself - which is what lets it be
- * closed mid-import.
+ * The one import surface, used by the welcome modal's sessions page and the
+ * Settings dialog alike (spec D3). It hands the user's selection to the
+ * app-wide run controller rather than owning the run itself - which is what
+ * lets it be closed mid-import.
  *
  * The scan is the caller's (`useSessionImportScan`), because the two surfaces
- * start it at different moments: the dialog when it opens, the tour when it
- * begins - several acts before this wizard is on screen (D13, revised).
+ * may start it at different moments: the dialog when it opens, the welcome
+ * modal when it opens - before this wizard is on screen (D13, revised).
  *
- * Both surfaces submit through the wizard's own Import button. The tour used
- * to submit through its Continue instead, which imported the default selection
- * without an explicit ask; an import now starts only when Import is pressed.
+ * Both surfaces submit through the wizard's own Import button; an import
+ * starts only when Import is pressed, never from a default selection.
  */
 export function SessionImportWizard(props: {
   readonly surface: SessionImportSurface;
@@ -106,7 +101,7 @@ export function SessionImportWizard(props: {
   // The controller only probes the app's host on its own. A wizard on any
   // other host checks through Query first and attaches without selections.
   // Submission stays disabled until an idle answer arrives, including when
-  // the onboarding scan was populated before this wizard mounted.
+  // the welcome modal's scan was populated before this wizard mounted.
   useEffect(() => {
     if (!runIdle || !statusQuery.isSuccess || statusQuery.isFetching) return;
     if (activeRun !== null) attachSessionImportRun(streamBinding, activeRun);
@@ -117,13 +112,12 @@ export function SessionImportWizard(props: {
     statusQuery.isSuccess,
     streamBinding,
   ]);
-  // Meeting the wizard on any surface - the tour act, the Settings dialog,
-  // the release toast's own dialog - is the announcement: the id is consumed
-  // on mount so the toast never follows for a user who has already opened
-  // the feature, whether or not they imported anything. Only reaching the
-  // wizard counts; skipping the tour before its act does not, so a skipper
-  // still gets the toast (unlike `login-import`, which the tour's finish
-  // consumes unconditionally).
+  // Meeting the wizard on any surface - the welcome modal's sessions page,
+  // the Settings dialog, the release toast's own dialog - is the
+  // announcement: the id is consumed on mount so the toast never follows for
+  // a user who has already opened the feature, whether or not they imported
+  // anything. Only reaching the wizard counts; dismissing the welcome modal
+  // before its sessions page does not, so a skipper still gets the toast.
   const consumeAnnouncement = useFeatureAnnouncementsStore(
     (state) => state.consume,
   );
@@ -533,9 +527,10 @@ const SCOPE_PILL_SHAPE = "h-6 gap-1.5 rounded-full border px-2.5 text-ui-xs";
 /**
  * How far back the scan looks. Picking a value IS the scan: the hook watches
  * this half of the state and starts a fresh, host-bounded scan for it - there
- * is deliberately no separate "rescan" button to pair with it.
+ * is deliberately no separate "rescan" button to pair with it. Exported for
+ * the welcome modal's sessions page, whose footer carries the same picker.
  */
-function ScanWindowSelect(props: {
+export function ScanWindowSelect(props: {
   readonly tone: SessionImportTone;
   readonly scanWindow: SessionImportScanWindow;
   readonly onChange: (window: SessionImportScanWindow) => void;
@@ -677,37 +672,9 @@ function ProviderPill(props: {
   );
 }
 
-/**
- * How many repos the submission actually brings over.
- *
- * Every other number on the event describes the import, so this one has to as
- * well. `state.groups.length` counts the SCAN instead - folders the user
- * cleared outright, and folders that only ever held unreadable or
- * already-imported rows - which would read as "imported 3 sessions across 40
- * repos". The selections are the source of truth rather than `state.selected`,
- * so this cannot drift from whatever the submission decided to send.
- */
 function pillCountLabel(count: number, pending: boolean): string | null {
   if (count > 0) return count.toLocaleString();
   return pending ? null : "0";
-}
-
-function submittedGroupCount(
-  groups: ReadonlyArray<SessionImportGroup>,
-  selections: ReadonlyArray<SessionImportSelection>,
-): number {
-  const submitted = new Set(
-    selections.map((selection) =>
-      sessionImportSelectionKey(selection.harness, selection.nativeSessionId),
-    ),
-  );
-  return groups.filter((group) =>
-    group.sessions.some((candidate) =>
-      submitted.has(
-        sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
-      ),
-    ),
-  ).length;
 }
 
 function emptyMessage(
