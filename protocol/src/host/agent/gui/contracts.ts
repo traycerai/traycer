@@ -554,19 +554,22 @@ export const agentGuiListHarnessesUpgradeV71ToV80 = defineUpgradePath<
 });
 
 /**
- * `agent.gui.listHarnesses@8.1` - the `auto` permission mode and the
+ * `agent.gui.listHarnesses@9.1` - the `auto` permission mode and the
  * `nativeAutoJudge` row field.
  *
  * A MINOR rather than a major, for the reason 7.1 was: both changes are
  * additive to the row, and `versioned-rpc.ts` rejects a major bump that carries
  * no breaking change. It is the one minor in this method's history that has to
  * declare `responseGrowthProjectionGated` in the registry, because
- * `supportedPermissionModes` GROWS a response enum over 8.0 and a within-major
+ * `supportedPermissionModes` GROWS a response enum over 9.0 and a within-major
  * re-parse rejects an unknown member instead of stripping it. That annotation
  * is a reviewed claim about the EMITTER: the host must filter `auto` out of
- * what it serves any peer below 8.1 (ticket 02's resolver work), and the
+ * what it serves any peer below 9.1 (ticket 02's resolver work), and the
  * annotation is load-bearing - the validator refuses it if the growth is ever
  * removed.
+ *
+ * (Built as `8.1` and renumbered on the merge to main, which had meanwhile
+ * opened major 9 for Antigravity. The comments below carry the new number.)
  */
 export const agentGuiListHarnessesV91 = defineRpcContract({
   method: "agent.gui.listHarnesses",
@@ -582,7 +585,7 @@ export const agentGuiListHarnessesUpgradeV90ToV91 = defineUpgradePath<
   from: { major: 9, minor: 0 },
   to: { major: 9, minor: 1 },
   upgradeRequest: (request) => request,
-  // A pre-`auto` mode array is already a valid 8.1 array, so only the new key
+  // A pre-`auto` mode array is already a valid 9.1 array, so only the new key
   // needs filling. `false` is the pre-feature reading, not a guess: a host that
   // predates 9.1 has no native-judge concept at all, so no row it returns has
   // one. Filled explicitly rather than left to the schema default - an upgrade
@@ -596,7 +599,7 @@ export const agentGuiListHarnessesUpgradeV90ToV91 = defineUpgradePath<
 });
 
 /**
- * Strip everything 8.1 added from one catalog row, for the cross-major
+ * Strip everything 9.1 added from one catalog row, for the cross-major
  * downgrade bridges below.
  *
  * The two additions degrade differently and only one of them degrades on its

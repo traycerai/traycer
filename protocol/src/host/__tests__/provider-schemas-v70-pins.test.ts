@@ -175,8 +175,8 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     // 7.0 and 8.0 now, and neither may drift back onto live just because the
     // line immediately above it went away or was itself frozen in turn.
     //
-    // The FIFTH flip opened `8.1` to publish the per-provider `autoJudge`, so
-    // 8.0 is frozen too and the head is no longer minor 0. That is why the head
+    // The FIFTH flip opened `9.1` to publish the per-provider `autoJudge`, so
+    // 9.0 is frozen too and the head is no longer minor 0. That is why the head
     // is now read through `latestMinor` instead of a hard-coded `versions[0]`:
     // the assertion is about the HEAD naming live, and spelling the head as a
     // literal made this test fail on a bookkeeping detail every single time the
@@ -208,7 +208,7 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     expect(Object.keys(hostRpcRegistry["providers.list"][7].versions)).toEqual([
       "0",
     ]);
-    // Major 8 is newly frozen behind the same shape - exactly one minor, same
+    // Major 8 is frozen behind the same shape - exactly one minor, same
     // reasoning, so a future 8.1 has to come here and say why too.
     expect(hostRpcRegistry["providers.list"][8].latestMinor).toBe(0);
     expect(Object.keys(hostRpcRegistry["providers.list"][8].versions)).toEqual([

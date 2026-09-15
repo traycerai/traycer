@@ -308,6 +308,21 @@ function ApprovalWaitLine(props: { readonly requestedAt: number }) {
  * Its own leaf for the same reason as the wait line, and for one more: the
  * per-second tick lives only while a judge is actually running, because this
  * component is mounted only then.
+ *
+ * **What is inside a live region here is a deliberate, narrow choice.**
+ * `role="status"` is implicitly `aria-atomic`, so a status region re-announces
+ * its WHOLE subtree on every change to any part of it - and from 15 s up this
+ * row changes once a second, forever. A region wrapping the column would
+ * therefore read the stage label and the cap sentence aloud on every tick,
+ * which is the one thing a waiting user does not need repeated.
+ *
+ * So the regions are the two things worth announcing exactly when they change:
+ * the stage label (the judge moved from `checking` to the next stage) and the
+ * cap notice (it appeared). The elapsed counter is left OUT of both - out of
+ * the live tree, not out of the a11y tree, so a screen-reader user can still
+ * navigate to it and read the seconds on demand. The spinner is outside too:
+ * it is `aria-hidden`, but it also rewrites its own text every 80 ms, and a
+ * live region has no reason to sit on top of that.
  */
 function JudgeReviewingLine(props: {
   readonly stage: NonNullable<ChatApprovalState["reviewing"]>;
@@ -319,7 +334,6 @@ function JudgeReviewingLine(props: {
     <div
       className="flex min-w-0 flex-col gap-1"
       data-testid="approval-reviewing"
-      role="status"
     >
       <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
         <AgentSpinningDots
@@ -327,7 +341,9 @@ function JudgeReviewingLine(props: {
           testId={undefined}
           variant={undefined}
         />
-        {JUDGE_REVIEWING_LABEL[props.stage]}
+        <span role="status" data-testid="approval-reviewing-stage">
+          {JUDGE_REVIEWING_LABEL[props.stage]}
+        </span>
         {disclosure.elapsedLabel !== null ? (
           <>
             <span aria-hidden className="text-muted-foreground/40">
@@ -343,6 +359,7 @@ function JudgeReviewingLine(props: {
         <p
           className="m-0 text-ui-xs text-muted-foreground"
           data-testid="approval-reviewing-cap"
+          role="status"
         >
           {disclosure.capNotice}
         </p>

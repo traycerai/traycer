@@ -661,9 +661,10 @@ export const chatRunSettingsHarnessIdSchemaV10 = guiHarnessIdSchema.extract([
  *
  * `permissionMode` is pinned for the same half-freeze reason the id is: a v1.0
  * caller decodes this response against a three-mode enum, so an `auto` chat
- * read on that line would fail the whole response rather than one field. The
- * head line (2.0, below) binds the live tuple and is the only one that may
- * spell `auto`.
+ * read on that line would fail the whole response rather than one field. 2.0
+ * below is RELEASED and carries the identical pin for the identical reason;
+ * major 3 (the head) binds the live tuple and is the only line that may spell
+ * `auto`.
  */
 export const chatRunSettingsSchemaV10 = z.object({
   harnessId: chatRunSettingsHarnessIdSchemaV10,

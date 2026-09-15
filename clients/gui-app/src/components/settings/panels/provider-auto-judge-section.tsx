@@ -49,7 +49,11 @@ export function ProviderAutoJudgeSection({
     enabled: true,
     subscribed: true,
   });
-  const setAutoJudge = useProvidersSetAutoJudge();
+  // Resolved before the mutation rather than inside `onValueChange`, because
+  // the write's `MutationScope` is keyed by it and a scope is fixed for the
+  // life of the observer. It is a pure projection of the prop either way.
+  const harnessId = providerIdToGuiHarnessId(providerId);
+  const setAutoJudge = useProvidersSetAutoJudge(harnessId);
   const stored = providerAutoJudgeFor(state);
   // The choice this window just made, held until the host's own echo of it
   // comes back through `providers.list` (the mutation invalidates that read, so
@@ -69,7 +73,6 @@ export function ProviderAutoJudgeSection({
   } | null>(null);
   const value = echo !== null && echo.against === stored ? echo.chosen : stored;
 
-  const harnessId = providerIdToGuiHarnessId(providerId);
   const harnesses = harnessesQuery.data?.harnesses;
   if (harnesses === undefined) return null;
   const hasNativeJudge = harnesses.some(

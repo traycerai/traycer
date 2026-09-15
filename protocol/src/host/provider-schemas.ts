@@ -1790,7 +1790,7 @@ export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
  * A 9.0 peer needs no bridge to reach it: `autoJudge` is a new KEY, and a
  * within-major re-parse through this shape strips an unknown key rather than
  * rejecting it (unlike a new ENUM MEMBER, which is what forced
- * `responseGrowthProjectionGated` on `agent.gui.listHarnesses@8.1`). The
+ * `responseGrowthProjectionGated` on `agent.gui.listHarnesses@9.1`). The
  * cross-major bridges get it free for the same reason: every one of them
  * re-parses through a frozen `providerCliStateSchemaV*`.
  */

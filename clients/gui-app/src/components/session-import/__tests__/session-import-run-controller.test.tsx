@@ -128,7 +128,12 @@ import {
 import { hostQueryKeys, sessionImportQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
+import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const SELECTION: SessionImportSelection = {
   harness: "claude",
@@ -277,6 +282,11 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useSessionImportRunStore.setState({ runs: new Map() });
+  // `negotiated-manifest-registry` is MODULE-LEVEL state shared across every
+  // test in the process, not something `vi.mock` resets between cases - a
+  // manifest recorded by one "auto permission-mode gate" case would otherwise
+  // leak into the next one keyed by the same host id.
+  resetNegotiatedManifests();
 });
 
 describe("<SessionImportRunController />", () => {
@@ -1031,6 +1041,219 @@ describe("<SessionImportRunController />", () => {
       });
 
       expect(requireInstance(1).permissionMode).toBe("full_access");
+    });
+
+    // `handshakeProvesPreAutoCatalog` is a VETO consulted before the cached
+    // `agent.gui.listHarnesses` row: the cache is keyed by hostId ALONE, so it
+    // survives a host restarting on an older build under the same id. Without
+    // the veto, a stale cached row that still advertises `auto` from before
+    // the restart would send `auto` to a host that now rejects it as a
+    // validation error.
+    describe("the pre-auto-catalog handshake veto", () => {
+      it("demotes a cached-auto row when the last handshake proves the host is below the auto catalog line", () => {
+        streamBinding.current = createStreamBinding("host-auto-stale-restart");
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        const response: ListGuiHarnessesResponse = {
+          harnesses: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              enabled: true,
+              available: true,
+              error: null,
+              modes: ["gui", "tui"],
+              requiresApiKey: false,
+              supportedPermissionModes: [
+                "supervised",
+                "auto_accept_edits",
+                "auto",
+                "full_access",
+              ],
+              nativeAutoJudge: false,
+              availabilityPending: false,
+            },
+          ],
+        };
+        queryDataHarness.value = response;
+        // The line itself is restated as a concrete older version (8.0)
+        // rather than derived from `agentGuiListHarnessesV91.schemaVersion`,
+        // so this case does not silently keep passing if that contract is
+        // ever renumbered without anyone noticing the test still exercises
+        // "below the line".
+        recordNegotiatedHostManifest("host-auto-stale-restart", {
+          "agent.gui.listHarnesses": { major: 8, minor: 0 },
+        });
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        // FALSIFICATION: delete the `handshakeProvesPreAutoCatalog` call from
+        // `hostUnderstandsAutoPermissionMode` and this goes green with
+        // 'auto' - the stale cached row alone would be enough to pass the
+        // gate.
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+      });
+
+      it("still sends auto for a cached-auto row when the handshake is at the auto catalog line", () => {
+        streamBinding.current = createStreamBinding("host-auto-at-line");
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        const response: ListGuiHarnessesResponse = {
+          harnesses: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              enabled: true,
+              available: true,
+              error: null,
+              modes: ["gui", "tui"],
+              requiresApiKey: false,
+              supportedPermissionModes: [
+                "supervised",
+                "auto_accept_edits",
+                "auto",
+                "full_access",
+              ],
+              nativeAutoJudge: false,
+              availabilityPending: false,
+            },
+          ],
+        };
+        queryDataHarness.value = response;
+        recordNegotiatedHostManifest("host-auto-at-line", {
+          "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+        });
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        expect(requireInstance(1).permissionMode).toBe("auto");
+      });
+
+      it("still sends auto for a cached-auto row when no handshake was ever recorded for this host", () => {
+        streamBinding.current = createStreamBinding("host-auto-no-handshake");
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        const response: ListGuiHarnessesResponse = {
+          harnesses: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              enabled: true,
+              available: true,
+              error: null,
+              modes: ["gui", "tui"],
+              requiresApiKey: false,
+              supportedPermissionModes: [
+                "supervised",
+                "auto_accept_edits",
+                "auto",
+                "full_access",
+              ],
+              nativeAutoJudge: false,
+              availabilityPending: false,
+            },
+          ],
+        };
+        queryDataHarness.value = response;
+        // Deliberately no `recordNegotiatedHostManifest` call: the veto is a
+        // veto and never a proof, so "not yet known" must leave the cached
+        // row's answer standing rather than blocking on it.
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        expect(requireInstance(1).permissionMode).toBe("auto");
+      });
+
+      // Deliberately the mirror of `negotiatedVersionMeetsRequirement`'s own
+      // fail-closed-on-higher-major rule: a HIGHER major is never proof of
+      // being below the line, so the veto stays silent and the cached row's
+      // 'auto' survives. Failing closed here would demote every import the
+      // instant a host shipped `agent.gui.listHarnesses@10.0`.
+      it("still sends auto for a cached-auto row when the handshake is on a higher major", () => {
+        streamBinding.current = createStreamBinding("host-auto-higher-major");
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        const response: ListGuiHarnessesResponse = {
+          harnesses: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              enabled: true,
+              available: true,
+              error: null,
+              modes: ["gui", "tui"],
+              requiresApiKey: false,
+              supportedPermissionModes: [
+                "supervised",
+                "auto_accept_edits",
+                "auto",
+                "full_access",
+              ],
+              nativeAutoJudge: false,
+              availabilityPending: false,
+            },
+          ],
+        };
+        queryDataHarness.value = response;
+        recordNegotiatedHostManifest("host-auto-higher-major", {
+          "agent.gui.listHarnesses": {
+            major: agentGuiListHarnessesV91.schemaVersion.major + 1,
+            minor: 0,
+          },
+        });
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        expect(requireInstance(1).permissionMode).toBe("auto");
+      });
     });
   });
 });

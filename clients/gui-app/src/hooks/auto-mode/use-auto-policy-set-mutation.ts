@@ -7,7 +7,11 @@ import type {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { autoModeMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import {
+  autoModeMutationKeys,
+  autoPolicyWriteScope,
+  hostQueryKeys,
+} from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
 type SetAutoPolicyContext = {
@@ -18,9 +22,13 @@ type SetAutoPolicyContext = {
  * Saves the account's auto-mode policy through the surface's host.
  *
  * Last-write-wins on the server, so the ORDER these reach the host is the
- * client's job - the method policy table puts `autoPolicy.set` in `fifo` for
- * that reason, and this hook must never be given a "skip if one is in flight"
- * guard, which would drop the newest text.
+ * client's job, and `autoPolicyWriteScope` is the thing that does it. `fifo` in
+ * the method policy table is NOT: the coordinator's queue key carries the
+ * params, so two saves carrying two different bodies sit in two queues and
+ * race - what `fifo` buys is that an identical repeat lands rather than being
+ * coalesced. This hook must also never be given a "skip if one is in flight"
+ * guard, which would drop the newest text; the scope HOLDS the newer save until
+ * the older one settles rather than dropping it.
  *
  * The read cache is written from the response rather than invalidated: the
  * body is the one just sent and `updatedAt` is the server's new stamp, so the
@@ -47,6 +55,7 @@ export function useAutoPolicySetMutation(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: autoModeMutationKeys.setPolicy(),
+      scope: autoPolicyWriteScope(client.getActiveHostId() ?? null),
       onMutate: () => ({ hostId: client.getActiveHostId() ?? null }),
       onSuccess: (data, variables, ctx) => {
         if (ctx.hostId === null) return;

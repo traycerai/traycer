@@ -1069,7 +1069,7 @@ describe("post-v6.0 Hugging Face/Reasonix/Antigravity non-breaking downgrade bri
 
 /**
  * The `auto` permission mode and the `nativeAutoJudge` row field ride
- * `agent.gui.listHarnesses@9.1`. Everything below 8.1 has to lose both, and the
+ * `agent.gui.listHarnesses@9.1`. Everything below 9.1 has to lose both, and the
  * two lose them by different mechanisms - which is the whole reason this has
  * its own suite rather than an extra assertion on the Reasonix one.
  */
@@ -1146,7 +1146,7 @@ describe("agent.gui.listHarnesses@9.1 auto-mode downgrades", () => {
   });
 
   it("upgrades a 9.0 row by filling nativeAutoJudge false", () => {
-    // A host that predates 8.1 has no native-judge concept, so `false` is the
+    // A host that predates 9.1 has no native-judge concept, so `false` is the
     // pre-feature reading rather than a guess.
     const v90Response = listGuiHarnessesResponseSchemaV90.parse({
       harnesses: [harnessOption("claude")],

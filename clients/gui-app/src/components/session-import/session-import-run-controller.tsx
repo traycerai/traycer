@@ -2,9 +2,11 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/schemas";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
+import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   SessionImportRunClient,
   type SessionImportRunCallbacks,
@@ -106,6 +108,18 @@ function importPermissionModeFor(input: {
  * demotion costs them the judge on one they can re-run. The minor is compared
  * against the exported contract, never a literal, so a rebase that renumbers
  * it moves this with it.
+ *
+ * The cache's weakness is that it is keyed by `hostId` ALONE
+ * (`hostQueryKeys.method`), so a response captured from one host PROCESS is
+ * still served after that id has been taken over by another - a host restarted
+ * on an older build is the realistic one. A cached `auto` would then start an
+ * import the host on the other end rejects as a validation error, with no
+ * fallback anywhere on this path. So a third fact is consulted BEFORE the
+ * cache, and it can only veto: {@link handshakeProvesPreAutoCatalog}. It reads
+ * the negotiated manifest, which is a property of the CONNECTION rather than of
+ * a query key - every unary RPC to a host re-records it - so a host that came
+ * back older has already overwritten the entry by the time the wizard's own
+ * catalog query lands.
  */
 function hostUnderstandsAutoPermissionMode(input: {
   readonly queryClient: QueryClient;
@@ -122,6 +136,7 @@ function hostUnderstandsAutoPermissionMode(input: {
   ) {
     return true;
   }
+  if (handshakeProvesPreAutoCatalog(input.hostId)) return false;
   const harnesses = input.queryClient.getQueryData<ListGuiHarnessesResponse>(
     hostQueryKeys.method<HostRpcRegistry, "agent.gui.listHarnesses">(
       input.hostId,
@@ -134,6 +149,39 @@ function hostUnderstandsAutoPermissionMode(input: {
       harness.supportedPermissionModes.includes("auto"),
     ) ?? false
   );
+}
+
+/**
+ * Whether the host's last handshake POSITIVELY PLACES it below the catalog line
+ * that carries `auto`, `agent.gui.listHarnesses@9.1`.
+ *
+ * A veto and never a proof, and the asymmetry is the point. `true` means a
+ * completed handshake named a strictly older line, which is evidence a cached
+ * catalog row cannot outrank: the rows came from a query key that carries only
+ * `hostId`, the manifest came from the connection this import is about to run
+ * on. Everything else - no handshake recorded yet, the line itself, anything
+ * ABOVE it including a future major - returns `false` and leaves the decision
+ * where it was. That is deliberately NOT
+ * `negotiatedVersionMeetsRequirement`, which fails closed on a higher major:
+ * fail-closed is right for a floor that gates a dispatch, and wrong here, where
+ * the same answer would silently demote every import on the first host to ship
+ * `agent.gui.listHarnesses@10.0`.
+ *
+ * The line is read off the exported contract rather than written as a literal,
+ * for the reason the `sessionImport.run` floor above is: a renumbering on a
+ * merge moves this with it.
+ */
+function handshakeProvesPreAutoCatalog(hostId: string): boolean {
+  const advertised = getNegotiatedHostMethodVersion(
+    hostId,
+    "agent.gui.listHarnesses",
+  );
+  if (advertised === null) return false;
+  const autoLine = agentGuiListHarnessesV91.schemaVersion;
+  if (advertised.major !== autoLine.major) {
+    return advertised.major < autoLine.major;
+  }
+  return advertised.minor < autoLine.minor;
 }
 
 /**

@@ -297,14 +297,32 @@ export type ChatRunSettingsPreReasonix = z.infer<
 // selection, so it is only expressible as a full tuple.
 /**
  * Wire-freeze copy of the LIVE settings tuple with `permissionMode` pinned
- * pre-`auto`.
+ * pre-`auto`, and ONLY `permissionMode`.
  *
- * Distinct from `chatRunSettingsSchemaPreReasonix`, which is also pre-auto but
- * additionally pins the harness roster: this one is for the lines that DO carry
- * the current harness enum and merely predate the mode - `chat.subscribe@1.7`
- * and `@1.8`, which `cli-v1.3.0` shipped. Hand-frozen field-for-field rather
- * than `.extend()`ed, so a later required field on the live tuple cannot leak
- * onto those released lines.
+ * Bound by every `chat.subscribe` line from `1.7` through `1.10` - directly as
+ * `chatSchemaV18.settings`, and through `chatQueueStateSchemaPreAuto` on the
+ * queued prompts each of those lines carries. `1.11` is the first that binds
+ * the live tuple. Hand-frozen field-for-field rather than `.extend()`ed, so a
+ * later required field on the live tuple cannot leak onto those lines.
+ *
+ * **The harness roster is deliberately live here, and that is a one-axis
+ * freeze rather than a complete one.** Four lines share this tuple and they do
+ * not agree about the roster: `1.9` and `1.10` are the Antigravity lines and
+ * MUST be able to spell `antigravity`, while `1.7` and `1.8` shipped in
+ * `cli-v1.3.0` / `host-v1.3.0` and strict-decode the twenty ids
+ * `guiHarnessIdSchemaPreAntigravity` records. Pinning the roster on this object
+ * would therefore break the two lines it exists to serve; giving `1.7`/`1.8`
+ * the pin needs a THIRD tier (pre-Antigravity AND pre-auto) plus a split of
+ * `chatSubscribeCommonServerFrameSchemasV18`, which is bound to `1.7`-`1.9`
+ * as one bundle.
+ *
+ * What holds the harness axis for `1.7`/`1.8` meanwhile is the host's floor
+ * gate - `minimumChatSubscribeMinorForHarness` puts `antigravity` at `9`, so
+ * such a chat is REFUSED to a subscriber below `1.9` rather than projected,
+ * exactly as an `auto` chat is refused below `1.11`. That gate predates this
+ * schema and is not weakened by it. Distinct from
+ * `chatRunSettingsSchemaPreReasonix`, which pins BOTH axes for the lines below
+ * `1.7`, where no such sharing forces the compromise.
  */
 export const chatRunSettingsSchemaPreAuto = z.object({
   harnessId: guiHarnessIdSchema,

@@ -46,6 +46,11 @@ export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
 export { fallbackPolicyWriteScope } from "@/lib/query-keys/providers-fallback-policy-scope";
+export {
+  autoJudgeWriteScope,
+  autoPolicyWriteScope,
+  providerAutoJudgeWriteScope,
+} from "@/lib/query-keys/auto-mode-write-scopes";
 export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {
   CLASSIC_PROVIDERS_LIST_PARAMS,

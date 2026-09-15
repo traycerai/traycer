@@ -27,6 +27,23 @@ describe("judgeWaitDisclosure", () => {
     });
   });
 
+  // The rungs are INCLUSIVE at 15 and 30 (`elapsedSeconds < RUNG`, not `<=`).
+  // 14/16/31 alone stay green under a `<` -> `<=` slip on either boundary;
+  // these two pin the exact edge so that slip goes red.
+  it("shows the elapsed counter at exactly the first rung, without the cap notice", () => {
+    expect(judgeWaitDisclosure(15)).toEqual({
+      elapsedLabel: "15s",
+      capNotice: null,
+    });
+  });
+
+  it("adds the cap notice at exactly the second rung", () => {
+    expect(judgeWaitDisclosure(30)).toEqual({
+      elapsedLabel: "30s",
+      capNotice: JUDGE_CAP_NOTICE,
+    });
+  });
+
   it("adds the cap notice once the second rung is reached", () => {
     expect(judgeWaitDisclosure(31)).toEqual({
       elapsedLabel: "31s",

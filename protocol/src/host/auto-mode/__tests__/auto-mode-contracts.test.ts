@@ -40,8 +40,8 @@ import { providerCliStateSchema } from "@traycer/protocol/host/provider-schemas"
  * import the registry is not ceremony: it is the only cheap gate between a bad
  * annotation and a dead build.
  *
- * `agent.gui.listHarnesses@8.1` is the annotation this guards today. It grows
- * `supportedPermissionModes` by one member over 8.0, which the response lane
+ * `agent.gui.listHarnesses@9.1` is the annotation this guards today. It grows
+ * `supportedPermissionModes` by one member over 9.0, which the response lane
  * refuses by default; the entry claims the growth is emission-gated, and the
  * validator rejects that claim if the growth ever disappears.
  */

@@ -112,4 +112,31 @@ describe("unsupportedPermissionModeCopy", () => {
       }),
     ).toBe("Not supported by this provider.");
   });
+
+  // The "needs a newer Traycer" accusation is gated on `mode === "auto"`.
+  // `catalogSupportedPermissionModes` is a UNION over every provider row, so
+  // a non-`auto` mode missing from that union means every available provider
+  // declined it - that is a provider fact, not a host-version fact. Only
+  // `auto` is young enough on the wire for its absence to instead mean an old
+  // host whose catalog predates the mode entirely. Without the `mode ===
+  // "auto"` guard these would wrongly blame the machine.
+  it("blames the provider, not the machine, when a non-auto mode is absent from the catalog", () => {
+    expect(
+      unsupportedPermissionModeCopy({
+        mode: "supervised",
+        harnessLabel: "Claude Code",
+        catalogSupportedModes: ["auto_accept_edits", "full_access"],
+      }),
+    ).toBe("Not supported by Claude Code.");
+  });
+
+  it("blames the provider, not the machine, when full_access is absent from the catalog", () => {
+    expect(
+      unsupportedPermissionModeCopy({
+        mode: "full_access",
+        harnessLabel: "Claude Code",
+        catalogSupportedModes: ["auto_accept_edits", "supervised"],
+      }),
+    ).toBe("Not supported by Claude Code.");
+  });
 });

@@ -629,10 +629,12 @@ describe("sessionImport.* registry membership", () => {
     expect(sessionImportScanV11.schemaVersion).toEqual({ major: 1, minor: 1 });
     expect(sessionImportScanV12.schemaVersion).toEqual({ major: 1, minor: 2 });
 
-    // `run@1.1` carries no shape delta over 1.0 - it exists so a client can
-    // detect a host that understands the `auto` permission mode in the open
-    // request, which no shape can express. Both minors stay reachable, so this
-    // asserts the pair rather than just the head.
+    // `run@1.1` is Antigravity: the first minor whose `progress` frames may
+    // name the id. `run@1.2` is the one with no shape delta over its
+    // predecessor - it exists so a client can detect a host that understands
+    // the `auto` permission mode in the open request, which no shape can
+    // express. Every minor stays reachable, so this asserts the whole line
+    // rather than just the head.
     const run = hostStreamRpcRegistry["sessionImport.run"];
     expect(run).toBeDefined();
     expect(run[1].latestMinor).toBe(2);

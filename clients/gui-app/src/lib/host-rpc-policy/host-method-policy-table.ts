@@ -1713,6 +1713,14 @@ export const HOST_METHOD_POLL_TABLE = {
   // Choosing a provider's auto-mode judge changes persisted provider
   // configuration - it lands in `provider-overrides.json` beside
   // `terminalAgentArgs`, so it takes that neighbour's policy exactly.
+  //
+  // `fifo` buys LANDING and not order here either: two picks on the same row
+  // carry different `autoJudge` values, so they are two queue keys and race,
+  // and the loser is the HOST's stored choice rather than a cache (this write
+  // invalidates `providers.list` instead of folding its response in, so the UI
+  // then faithfully reports the older selection). The ordering comes from
+  // `providerAutoJudgeWriteScope`, keyed by host AND harness, on
+  // `useProvidersSetAutoJudge`.
   "providers.setAutoJudge": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2014,6 +2022,13 @@ export const HOST_METHOD_POLL_TABLE = {
   // host, and through it the cloud, for a record that changes when a person
   // edits it.
   "autoJudge.get": { ...LATEST_SCHEDULING, poll: null },
+  // The write may not coalesce, and it also may not RACE: `useAutoJudgeSetMutation`
+  // folds each response into the `autoJudge.get` cache with `setQueriesData`, so
+  // an unordered pair leaves the cache holding whichever response landed last.
+  // `fifo` cannot supply that ordering - the queue key carries the params, so
+  // two clicks naming two different judges are two queues - and a scheduling
+  // policy answers `modeFor`, never the queue key. `autoJudgeWriteScope` is
+  // where the order comes from, exactly as for `providers.fallbackPolicy.set`.
   "autoJudge.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2021,7 +2036,9 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "autoPolicy.get": { ...LATEST_SCHEDULING, poll: null },
   // Last-write-wins on the server, so ordering is the client's job: rapid
-  // saves must reach the host in the order the user made them.
+  // saves must reach the host in the order the user made them. `fifo` is not
+  // what delivers that (see `autoJudge.set` above - two bodies are two queue
+  // keys); `autoPolicyWriteScope` on `useAutoPolicySetMutation` is.
   "autoPolicy.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

@@ -281,6 +281,17 @@ export const AUTO_MID_TURN_NOTICE =
  * present elsewhere but not here is the provider declining it. `null`
  * `catalogSupportedModes` is "not known yet" and keeps the provider string, so
  * a catalog still loading never accuses the host.
+ *
+ * The host accusation is restricted to `auto`, and the restriction is
+ * load-bearing rather than defensive. `catalogSupportedModes` is a UNION over
+ * the rows the host served, so a mode is absent from it when EITHER the host
+ * cannot spell the value OR every available provider declined it - two facts
+ * one array cannot tell apart. `auto` is the only mode young enough for the
+ * first reading to be possible at all (a pre-`auto` host filters it out of
+ * every row it serves, `agent.gui.listHarnesses@9.1`); `supervised`,
+ * `auto_accept_edits` and `full_access` predate every host that can answer this
+ * catalog, so their absence is ALWAYS the providers declining, and blaming the
+ * machine for one would send a user chasing an update that changes nothing.
  */
 export function unsupportedPermissionModeCopy(input: {
   readonly mode: PermissionMode;
@@ -288,7 +299,11 @@ export function unsupportedPermissionModeCopy(input: {
   readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
 }): string {
   const { mode, harnessLabel, catalogSupportedModes } = input;
-  if (catalogSupportedModes !== null && !catalogSupportedModes.includes(mode)) {
+  if (
+    mode === "auto" &&
+    catalogSupportedModes !== null &&
+    !catalogSupportedModes.includes(mode)
+  ) {
     return "Needs a newer Traycer on this machine.";
   }
   return `Not supported by ${harnessLabel ?? "this provider"}.`;
