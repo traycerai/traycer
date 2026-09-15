@@ -587,7 +587,22 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     getCamera: () => camera,
     getViewport: () => viewport,
     setViewport: (next) => {
+      const prev = viewport;
       viewport = next;
+      // A pan already resolved against the old box keeps its focus centred as
+      // the box resizes under it - the detail panel opening beside the floor
+      // is the resize that would otherwise strand a just-aimed agent. Skip a
+      // degenerate box (a hidden tile reads 0x0): there is nothing to centre
+      // in, and the real size restores the framing when it comes back.
+      if (
+        activePan !== null &&
+        prev.width > 0 &&
+        prev.height > 0 &&
+        next.width > 0 &&
+        next.height > 0
+      ) {
+        activePan = recenterActivePan(activePan, prev, next);
+      }
     },
     getHitRegions: () => hitRegions,
     setHitRegions: (next) => {
@@ -918,6 +933,33 @@ function shiftActivePan(runtime: OfficeRuntime, shift: OfficePoint): void {
     fromY: pan.fromY - shift.y * pan.fromZoom,
     toY: pan.toY - shift.y * pan.toZoom,
   });
+}
+
+/**
+ * Keeps an in-flight pan's DESTINATION centred on its focus when the viewport
+ * changes size under it.
+ *
+ * `panToward` freezes `toX/toY` as `viewport/2 - focus*zoom` at the frame the
+ * request is picked up. The one resize that bites: a Find or directory pick
+ * opens the transient detail panel BESIDE the floor and requests a pan in the
+ * same handler, but the panel steals width from the flex row a frame later, so
+ * the pan resolves against the wider pre-panel box and the frozen endpoint
+ * centres the focus where the floor no longer reaches - the agent lands off to
+ * the side, off-screen in a narrow tile. Only the `viewport/2` term depends on
+ * the size, so shifting each endpoint by half the delta re-centres the SAME
+ * focus without having to remember it. The origin (`fromX/fromY`) is a real
+ * past camera position and stays put; only the destination tracks the box.
+ */
+function recenterActivePan(
+  pan: CameraPan,
+  prev: ScreenSize,
+  next: ScreenSize,
+): CameraPan {
+  return {
+    ...pan,
+    toX: pan.toX + (next.width - prev.width) / 2,
+    toY: pan.toY + (next.height - prev.height) / 2,
+  };
 }
 
 /**

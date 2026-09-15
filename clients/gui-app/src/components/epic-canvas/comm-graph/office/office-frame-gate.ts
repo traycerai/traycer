@@ -75,43 +75,27 @@ export function isElementVisible(element: Element): boolean {
  * viewport, and in jsdom, where `getBoundingClientRect` is all zeros, the
  * answer is `false` and the observer drives the state from there.
  *
- * The viewport ALONE is not the test: an `IntersectionObserver` with the
- * default root also clips through the containing block chain, so a tile
- * scrolled out of the epic canvas - an `overflow-hidden` ancestor - is not
- * intersecting even when its raw box still overlaps the window. Seeding `true`
- * there is the same wasted plan/sync/bake, so the box is intersected with the
- * viewport shrunk inward by every ancestor that clips its overflow, per axis
- * because an ancestor may clip one and not the other.
+ * A CONSERVATIVE seed against the window viewport ALONE. An
+ * `IntersectionObserver` with the default root also clips through the
+ * containing-block chain, so a tile scrolled out of the epic canvas - an
+ * `overflow-hidden` ancestor - is not intersecting even when its raw box still
+ * overlaps the window; that tile reads `true` here and runs one plan/sync/bake
+ * before the observer's first async answer tears it down. That is the accepted
+ * cost of NOT reading ancestor overflow synchronously: the only way to know an
+ * ancestor clips is `getComputedStyle`, which is a prohibited call site here
+ * (see clients/gui-app/AGENTS.md), and the observer is the authority on
+ * clipping anyway. The seed's job is only to keep a foreground tile eligible at
+ * once and an off-WINDOW one idle; the observer refines the rest a beat later.
  */
 export function isElementInViewport(element: Element): boolean {
   const rect = element.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return false;
-  let clipLeft = 0;
-  let clipTop = 0;
-  let clipRight = window.innerWidth || document.documentElement.clientWidth;
-  let clipBottom = window.innerHeight || document.documentElement.clientHeight;
-  for (
-    let ancestor = element.parentElement;
-    ancestor !== null;
-    ancestor = ancestor.parentElement
-  ) {
-    const style = window.getComputedStyle(ancestor);
-    const clipsX = style.overflowX !== "visible";
-    const clipsY = style.overflowY !== "visible";
-    if (!clipsX && !clipsY) continue;
-    const box = ancestor.getBoundingClientRect();
-    if (clipsX) {
-      clipLeft = Math.max(clipLeft, box.left);
-      clipRight = Math.min(clipRight, box.right);
-    }
-    if (clipsY) {
-      clipTop = Math.max(clipTop, box.top);
-      clipBottom = Math.min(clipBottom, box.bottom);
-    }
-  }
+  const clipRight = window.innerWidth || document.documentElement.clientWidth;
+  const clipBottom =
+    window.innerHeight || document.documentElement.clientHeight;
   return (
-    rect.bottom > clipTop &&
-    rect.right > clipLeft &&
+    rect.bottom > 0 &&
+    rect.right > 0 &&
     rect.top < clipBottom &&
     rect.left < clipRight
   );

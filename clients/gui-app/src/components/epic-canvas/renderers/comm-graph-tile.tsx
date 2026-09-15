@@ -312,6 +312,25 @@ function EmptyCommGraph(props: { readonly tileInstanceId: string }) {
   );
 }
 
+/**
+ * What the chip and picker SAY, withheld while the office is measuring.
+ *
+ * The decision is local state and outlives the persisted outcome it was taken
+ * for: when the default re-enters Auto and clears that outcome for
+ * remeasurement, `resolvedViewId` goes null - the same measuring surface the
+ * canvas shows - a beat before the fresh measurement overwrites the decision.
+ * Showing the old one across that gap advertises the previous view, agent count
+ * and fit: stale for the length of a delayed history catch-up, and liable to
+ * contradict what the remeasurement lands on. Gating on `resolvedViewId` keeps
+ * the chip in lockstep with the canvas instead.
+ */
+function shownDecisionFor(
+  resolvedViewId: OfficeViewId | null,
+  decision: OfficeAutoDecision | null,
+): OfficeAutoDecision | null {
+  return resolvedViewId === null ? null : decision;
+}
+
 export function CommGraphTile(props: CommGraphTileProps) {
   const { node, viewTabId } = props;
   const { nodes: epicAgents, hostIds } = useCommGraphAgents();
@@ -438,6 +457,8 @@ export function CommGraphTile(props: CommGraphTileProps) {
   const [autoDecision, setAutoDecision] = useState<OfficeAutoDecision | null>(
     null,
   );
+  // Withheld while the office is measuring; see shownDecisionFor.
+  const shownAutoDecision = shownDecisionFor(resolvedViewId, autoDecision);
   const [autoRevision, setAutoRevision] = useState(0);
   // The latest probe, in a ref: it changes with every batch of rows, and the
   // decision reads it once. Holding it in state would re-render this tile -
@@ -996,14 +1017,14 @@ export function CommGraphTile(props: CommGraphTileProps) {
               <OfficeViewPicker
                 choice={choice}
                 autoViewId={resolvedViewId}
-                decision={autoDecision}
+                decision={shownAutoDecision}
                 onChoose={handleOfficeViewChange}
               />
             }
             autoChip={
               choice === "auto" ? (
                 <OfficeAutoChip
-                  decision={autoDecision}
+                  decision={shownAutoDecision}
                   restoredView={node.view.officeAutoView}
                 />
               ) : null
