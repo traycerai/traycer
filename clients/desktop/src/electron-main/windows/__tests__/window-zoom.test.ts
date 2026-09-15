@@ -199,6 +199,25 @@ describe("WindowZoomController", () => {
 
     expect(window.titleBarOverlayHeights).toEqual([54, 24]);
   });
+
+  it("scales the Linux native control overlay with page zoom", async () => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "linux",
+    });
+    const store = new FakeZoomStore();
+    const window = new FakeZoomWindow(1200, 700);
+    const controller = new WindowZoomController({
+      windowRegistry: { records: () => [{ window }] },
+      initialZoomPercent: 100,
+      store,
+    });
+
+    await controller.setZoomPercent(150);
+    await controller.setZoomPercent(67);
+
+    expect(window.titleBarOverlayHeights).toEqual([54, 24]);
+  });
 });
 
 describe("first-run zoom heuristic", () => {

@@ -8,6 +8,11 @@ import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/pl
 import { ClientUpdateRequiredAction } from "@/components/host/client-update-required-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { getClientAppVersion } from "@/lib/app-version";
+import {
+  PLAN_RESTRICTED_MOBILE_DETAIL,
+  PLAN_RESTRICTED_MOBILE_TITLE,
+} from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { usePressStartActivation } from "@/lib/host/press-start-activation";
@@ -122,7 +127,7 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
           data-testid="window-host-modal-overlay"
-          className="fixed inset-0 isolate z-[60] bg-black/40 duration-100 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0"
+          className="fixed inset-0 isolate z-[60] bg-black/40 duration-100 data-open:animate-in data-open:fade-in-0"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
@@ -553,6 +558,24 @@ function modalCopy(
   cause: WindowNarrationCause,
 ): WindowHostModalCopy {
   if (variant.kind === "plan-restricted") {
+    // The installed mobile app may neither name the plan nor tell the reader
+    // to upgrade (App Store guideline 3.1.1); `PlanRestrictedUpgradeAction`
+    // withholds the button beside this, so the words have to stand alone. The
+    // report fields are diagnostics, not copy, and stay as they are.
+    //
+    // The HOST-NEUTRAL heading, unlike the scope gate's and the resource
+    // monitor's: this variant is the "every lease on the account is
+    // plan-restricted" arm (`window-narration.ts`), so it carries no one host
+    // to name and the desktop copy is plural too.
+    if (isMobileApp()) {
+      return {
+        title: PLAN_RESTRICTED_MOBILE_TITLE,
+        description: PLAN_RESTRICTED_MOBILE_DETAIL,
+        reportTitle: "No host available on this plan",
+        reportMessage: "Every host on this account is plan-restricted.",
+        reportCode: "HOST_PLAN_RESTRICTED",
+      };
+    }
     return {
       title: "Your plan doesn't include remote hosts",
       description:

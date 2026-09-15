@@ -89,8 +89,8 @@ vi.mock("@/components/layout/app-shell", () => ({
   ),
 }));
 
-vi.mock("@/components/layout/header/windows-menu-bar", () => ({
-  WindowsMenuBar: () => null,
+vi.mock("@/components/layout/header/desktop-menu-bar", () => ({
+  DesktopMenuBar: () => null,
 }));
 
 vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({

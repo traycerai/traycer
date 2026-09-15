@@ -331,7 +331,7 @@ function ArtifactVersionHistoryEntryPointContent(props: {
   if (!open) {
     return (
       <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center">
-        <span className="pointer-events-auto flex shrink-0 items-center rounded-md border border-border/60 bg-canvas/80 px-0.5 shadow-sm backdrop-blur-sm">
+        <span className="pointer-events-auto flex shrink-0 items-center rounded-md border border-border/60 bg-canvas px-0.5 shadow-sm">
           <TooltipWrapper
             label="Version history"
             side="bottom"
@@ -916,7 +916,7 @@ function VersionObservationList(props: {
     return (
       <div key={entry.observationId}>
         {showDay ? (
-          <p className="sticky top-0 z-[1] border-b bg-background/95 px-3 py-1.5 text-ui-xs font-medium text-muted-foreground backdrop-blur-sm">
+          <p className="sticky top-0 z-[1] border-b bg-background px-3 py-1.5 text-ui-xs font-medium text-muted-foreground">
             {day}
           </p>
         ) : null}

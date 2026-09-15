@@ -735,7 +735,7 @@ function OnboardingStageEdgeFade(props: { readonly visible: boolean }) {
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] h-[6rem] bg-gradient-to-t from-[#303b37] via-[#303b37]/75 to-transparent backdrop-blur-sm [mask-image:linear-gradient(to_top,black_55%,transparent)] lg:hidden"
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] h-[6rem] bg-gradient-to-t from-[#303b37] via-[#303b37]/75 to-transparent [mask-image:linear-gradient(to_top,black_55%,transparent)] lg:hidden"
     />
   );
 }

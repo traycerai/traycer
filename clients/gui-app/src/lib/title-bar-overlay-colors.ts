@@ -1,9 +1,9 @@
 import { resolveCssColor } from "@/lib/css-color";
 
 /**
- * Overlay colors for the Windows native window controls (min/max/close).
+ * Overlay colors for the Windows/Linux native window controls (min/max/close).
  *
- * On Windows the frameless shell hands Chromium's Window Controls Overlay these
+ * The custom desktop shell hands Chromium's Window Controls Overlay these
  * colors via Electron's `titleBarOverlay`. Kept in its own module (no theme /
  * store imports) so the derivation stays a pure function of the CSS cascade.
  */
