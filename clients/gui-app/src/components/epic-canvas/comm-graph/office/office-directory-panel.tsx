@@ -431,7 +431,13 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
       // Reserved space rather than an overlay: it is read WHILE the floor is
       // read, and a panel that covered the office would be answering one
       // question by hiding the other.
-      className="flex h-full w-[min(30vw,15rem)] min-w-0 shrink-0 flex-col border-r border-border bg-background"
+      //
+      // Width is a fraction of the TILE, not the viewport: `30vw` capped at
+      // 15rem left a split tile far narrower than the viewport with a 240px
+      // sidebar eating most of its width. `30%` resolves against this tile's
+      // flex row, so the directory scales down with the pane and the canvas
+      // keeps its share; 15rem is still the cap on a wide tile.
+      className="flex h-full w-[min(30%,15rem)] min-w-0 shrink-0 flex-col border-r border-border bg-background"
     >
       <header className="flex min-w-0 items-center gap-2 border-b border-border px-2 py-1.5">
         <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground/90">

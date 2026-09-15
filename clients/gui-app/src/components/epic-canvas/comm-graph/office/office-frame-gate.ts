@@ -61,6 +61,36 @@ export function isElementVisible(element: Element): boolean {
 }
 
 /**
+ * Whether an element currently overlaps the browser viewport.
+ *
+ * `isElementVisible` answers "is this rendered at all" - true for an element
+ * that participates in layout even when it sits far outside the scroll
+ * viewport - so it is the wrong seed for intersection state: a tile mounted
+ * off screen would read `true` and run a full plan, scene sync and first
+ * bitmap allocation before the asynchronous `IntersectionObserver` reports
+ * `false` and tears that work down. This tests the box against the viewport
+ * the observer's default root uses, so the synchronous seed agrees with the
+ * observer's first async answer - a foreground tile is eligible at once, an
+ * off-screen one is not. A zero-sized box (not yet laid out) is not in the
+ * viewport, and in jsdom, where `getBoundingClientRect` is all zeros, the
+ * answer is `false` and the observer drives the state from there.
+ */
+export function isElementInViewport(element: Element): boolean {
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const viewportWidth =
+    window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight =
+    window.innerHeight || document.documentElement.clientHeight;
+  return (
+    rect.bottom > 0 &&
+    rect.right > 0 &&
+    rect.top < viewportHeight &&
+    rect.left < viewportWidth
+  );
+}
+
+/**
  * The rate cap and the idle skip, as one piece of state.
  *
  * Deliberately a small mutable object rather than free functions: both rules

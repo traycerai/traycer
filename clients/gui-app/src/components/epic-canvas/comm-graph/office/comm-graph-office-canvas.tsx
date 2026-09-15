@@ -98,7 +98,7 @@ import {
   OFFICE_PROJECTION_BLEED_PX,
 } from "@/lib/comm-graph/office/office-projection";
 import {
-  isElementVisible,
+  isElementInViewport,
   officeCatchUpMs,
   OfficeFrameGate,
 } from "@/components/epic-canvas/comm-graph/office/office-frame-gate";
@@ -3062,8 +3062,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     if (canvas === null) return;
     // Seeded from the DOM rather than assumed: the observer's first callback
     // is asynchronous, and a tile opened in the foreground should not wait a
-    // frame for it.
-    setIntersecting(isElementVisible(canvas));
+    // frame for it. The seed tests viewport INTERSECTION, not mere layout
+    // participation - an off-screen-but-laid-out tile must seed `false`, or it
+    // runs a full plan, sync and bitmap allocation before the observer reports
+    // false and tears it down, defeating the off-screen cost gate.
+    setIntersecting(isElementInViewport(canvas));
     const observer = new IntersectionObserver((entries) => {
       setIntersecting(entries.some((entry) => entry.isIntersecting));
     });
@@ -3116,6 +3119,19 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
    * stopped, listeners dropped, the floor released - to fix a repaint.
    */
   const readThemeRevision = useEffectEvent((): number => themeRevision);
+  /**
+   * Persist the camera from inside the loop, without the loop depending on it.
+   *
+   * `persistView` closes over `onCameraChange`, whose identity changes when the
+   * resolved view changes - listing it as a loop dependency would tear the loop
+   * down and release the floor's bitmap on every view pick. The loop needs to
+   * persist only on the rare frame a world-growing replan applies a shift while
+   * the office is manually framed, so it reads the latest `persistView` through
+   * an effect event instead.
+   */
+  const persistCameraFromLoop = useEffectEvent((): void => {
+    persistView();
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -3404,6 +3420,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         camera.y -= shift.y * camera.zoom;
         shiftPendingPan(runtime, shift);
         shiftActivePan(runtime, shift, camera.zoom);
+        // A manually framed office must survive a reload at its compensated
+        // position. The in-memory move above keeps the floor still on screen
+        // NOW; without persisting it, a Graph round trip, an LRU eviction or a
+        // restart recreates the runtime from the pre-shift `officeCamera` and
+        // the office jumps by exactly the world translation just hidden. Only
+        // the manual case needs the write - an auto-fitting office reframes
+        // itself on the next line and on every reload, so persisting there
+        // would just store a value auto-fit is about to recompute.
+        if (!runtime.isAutoFitEnabled()) persistCameraFromLoop();
       }
       // THE CAMERA SETTLES FIRST, and the frame is built from where it ended
       // up. A frame is culled to what the camera can see, so a fit or a pan
@@ -3818,6 +3843,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
    */
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+      // Bare viewer keys only. A modified chord - Cmd/Ctrl+F, Cmd/Ctrl+Minus,
+      // Cmd/Ctrl+0 - belongs to the global keybinding provider, which runs it
+      // during the capture phase BEFORE this target handler; matching it here
+      // by `event.key` alone would fire the office action on top of the global
+      // command, and the `preventDefault` below cannot undo a command already
+      // run in capture. Shift is deliberately left alone: `Shift+=` is how many
+      // keyboards produce `+`.
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
       const viewport = runtime.getViewport();
       const center = { x: viewport.width / 2, y: viewport.height / 2 };
       switch (event.key) {

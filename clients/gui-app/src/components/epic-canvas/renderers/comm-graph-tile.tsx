@@ -385,6 +385,14 @@ export function CommGraphTile(props: CommGraphTileProps) {
   // this guarantee.
   const handleOfficeCameraChange = useCallback(
     (camera: CommGraphTileCamera) => {
+      // Auto has not resolved yet: the canvas mounted here is the blank
+      // MEASURING surface (withheld by `ready`), and a pan or zoom on it frames
+      // no view. Persisting it would stamp the store with a camera whose
+      // framedView is null, which Auto's keep arm then adopts on a Floor
+      // outcome - opening the resolved office at an arbitrary framing built
+      // against an empty scene, possibly entirely off screen, instead of
+      // auto-fitting. Ignore the write until there is a view for it to be about.
+      if (resolvedViewId === null) return;
       updateOfficeCamera(viewTabId, node.id, camera, resolvedViewId);
       // The office has framed the arriving view with its own hands, which is
       // the strongest release there is: whatever the witness was holding out
