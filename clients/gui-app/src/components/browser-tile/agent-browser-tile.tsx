@@ -14,10 +14,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { usePublishBrowserGuestTile } from "@/components/epic-canvas/browser-guest/use-publish-browser-guest-tile";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
 import { BrowserTileFindAdapterBridge } from "@/components/epic-canvas/renderers/browser-tile-find-adapter";
-import {
-  BrowserTileCertificateInterstitial,
-  BrowserTileDownloadStrip,
-} from "@/components/epic-canvas/renderers/browser-tile-status-panels";
+import { BrowserTileCertificateInterstitial } from "@/components/epic-canvas/renderers/browser-tile-status-panels";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "./browser-start-page";
 import {
@@ -50,6 +47,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { DEFAULT_BROWSER_TILE_URL } from "@/lib/browser-view/browser-tile-defaults";
 import { samePageKey } from "@/lib/links/normalize-url";
+import { handlePrimaryFocus } from "@/lib/focus/primary-focus-coordinator";
 
 interface ElectronTabSurfaceNode {
   readonly instanceId: string;
@@ -327,6 +325,9 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     if (browserView === null) return;
     const subscription = browserView.onTileFocused((focusedTile) => {
       if (!isSameBrowserViewTile(focusedTile, tileKey)) return;
+      // Native focus can arrive over IPC before the webview's DOM event.
+      // Hand off ownership before either viewport or pane activation commits.
+      handlePrimaryFocus(null);
       claimViewport();
       onNativeTileFocused?.();
     });
@@ -388,8 +389,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const {
     controller: chromeController,
     navigateToUrl,
-    downloads,
-    cancelDownload,
     certificateError,
     certificateProceeding,
     proceedCertificate,
@@ -568,10 +567,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
             onRetry={retryNavigation}
           />
         </div>
-        <BrowserTileDownloadStrip
-          downloads={downloads}
-          onCancel={cancelDownload}
-        />
         <BrowserTileCertificateInterstitial
           certificateError={certificateError}
           proceeding={certificateProceeding}

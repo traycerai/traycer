@@ -119,8 +119,9 @@ function ScopedAppStatusBar(props: {
   const windowedProviders = useStatusBarWindowedProviders();
   const [usageOpen, setUsageOpen] = useState(false);
   // One subscription bridge for the segments and the panel alike, resolved
-  // where both can reach it - the same shape the header trigger uses.
-  const profileSelection = useRateLimitProfileSelection();
+  // where both can reach it - the same shape the header trigger uses - and
+  // keyed by the WATCHED host, since the accounts it names are that host's.
+  const profileSelection = useRateLimitProfileSelection(props.scope.hostId);
   // `app.rate-limits.open` has one handler slot and two possible owners, and
   // on desktop they are mutually exclusive by placement: `RateLimitIconButton`
   // owns it in the header and is not mounted while the usage controls live

@@ -218,7 +218,14 @@ export function matchDigitAction(
         return {
           actionId: action.actionId,
           digit,
-          run: () => action.dispatch(digit),
+          // Fast is a toggle: reserve repeated keydowns without flipping it
+          // again. Other digit actions keep their existing repeat behavior.
+          run: () =>
+            event.repeat &&
+            action.actionId === "model.reasoning.byDigit" &&
+            digit === 0
+              ? true
+              : action.dispatch(digit),
           dispatchSequence: action.dispatchSequence,
           sequenceState: action.sequenceState,
         };

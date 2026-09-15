@@ -168,7 +168,6 @@ export interface BrowserViewDevToolsWindow {
 export interface BrowserViewPopupWebContents {
   readonly id: number;
   once(event: "destroyed", listener: () => void): void;
-  setUserAgent(userAgent: string): void;
   setWindowOpenHandler(
     handler: (
       details: BrowserViewWindowOpenDetails,

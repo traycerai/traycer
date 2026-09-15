@@ -57,7 +57,9 @@ export function RateLimitQueueProvider(): null {
   const client = useHostClient();
   const queryClient = useQueryClient();
   const configuredProviders = useConfiguredRateLimitProviders();
-  const profileSelection = useRateLimitProfileSelection();
+  // The app-wide host's checked accounts: this queue is bound to that host
+  // (below), so its background targets are that host's segments.
+  const profileSelection = useRateLimitProfileSelection(hostId);
   useRefreshProviderRateLimitsOnTurn(
     "opencode",
     null,

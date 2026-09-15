@@ -102,11 +102,11 @@ function ScopedRateLimitIconButton({
     [],
   );
   useTitleBarDragSuppression("rate-limits", open);
-  // One subscription bridge owns active-chat + per-harness profile state for
-  // both the always-mounted glyph and the lazily-mounted popover. Passing the
-  // same snapshot down avoids N duplicate chat-store subscriptions when the
-  // Overview renders several multi-profile provider blocks.
-  const profileSelection = useRateLimitProfileSelection();
+  // One subscription bridge owns the checked-account + per-harness profile
+  // state for both the always-mounted glyph and the lazily-mounted popover,
+  // keyed by the host this surface is watching - the accounts it names are
+  // that host's, not the app-wide one's.
+  const profileSelection = useRateLimitProfileSelection(scope.hostId);
   // A PICK that has not resolved to its own client leaves this subtree on the
   // AMBIENT binding, so mounting the bars here would draw one host's usage
   // under a glyph that stands for another - and the glyph, unlike every panel

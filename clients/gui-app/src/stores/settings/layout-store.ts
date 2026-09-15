@@ -67,7 +67,40 @@ export type StatusBarProviderLimitSelections = Readonly<
   Partial<Record<RateLimitProviderId, StatusBarProviderLimitSelection>>
 >;
 
-export interface StatusBarRateLimitPreferences {
+/**
+ * The accounts one provider's strip segments describe, on one host: a list of
+ * profile ids, with `null` standing for the provider's ambient login. Order is
+ * not meaningful here - the strip draws them in the provider's own profile
+ * order, ambient last - so this is a set written as a list.
+ */
+export type StatusBarShownProfileIds = ReadonlyArray<string | null>;
+
+/** Per provider, for one host. A provider with no entry has nothing checked. */
+export type StatusBarHostShownProfiles = Readonly<
+  Partial<Record<RateLimitProviderId, StatusBarShownProfileIds>>
+>;
+
+/**
+ * Per host, then per provider. Keyed by `hostId` because a profile id names a
+ * credential on ONE machine - the same id on another host is a different
+ * account, or nothing at all - so a flat map would silently show one host's
+ * pick under another's name. Device-local like every other key in this store.
+ *
+ * A checked id whose profile no longer exists is kept and skipped at read
+ * time rather than pruned: this store never sees the provider inventory, and
+ * the intent survives a credential being removed and re-added.
+ */
+export type StatusBarShownProfiles = Readonly<
+  Record<string, StatusBarHostShownProfiles>
+>;
+
+/**
+ * The strip's usage preferences that a density preset carries
+ * (`lib/layout-presets.ts`): what a reading looks like and which limits it
+ * draws. Split from `StatusBarRateLimitPreferences` so a bundle can be a
+ * complete assignment of exactly these and nothing else.
+ */
+export interface StatusBarRateLimitDisplayPreferences {
   readonly enabled: boolean;
   /**
    * A deny-list, not an allow-list: a provider connected later shows up
@@ -81,6 +114,16 @@ export interface StatusBarRateLimitPreferences {
   readonly showBar: boolean;
   /** Whether `used` / `remaining` is spelled out after the percentage. */
   readonly showModeWord: boolean;
+}
+
+export interface StatusBarRateLimitPreferences extends StatusBarRateLimitDisplayPreferences {
+  /**
+   * Which ACCOUNTS the strip draws, per host and provider - written from the
+   * usage panel's profile cards, never from Layout, because accounts are
+   * host-scoped and Layout is not. Not a display preference: no preset
+   * carries it, and only `resetLayoutToDefaults` clears it.
+   */
+  readonly shownProfiles: StatusBarShownProfiles;
 }
 
 export interface StatusBarResourcePreferences {
@@ -197,6 +240,18 @@ interface LayoutStoreState {
     providerId: RateLimitProviderId,
     limitKey: string,
   ) => void;
+  /**
+   * Checks or unchecks one account for the strip on one host. `null` is the
+   * provider's ambient login. A no-op when the entry already says so.
+   */
+  readonly setStatusBarProfileShown: (
+    hostId: string,
+    providerId: RateLimitProviderId,
+    profileId: string | null,
+    shown: boolean,
+  ) => void;
+  /** Every host's checked accounts, gone - `resetLayoutToDefaults` only. */
+  readonly clearStatusBarShownProfiles: () => void;
   readonly setStatusBarPercentMode: (percentMode: PercentMode) => void;
   readonly setStatusBarShowTimer: (showTimer: boolean) => void;
   readonly setStatusBarShowBar: (showBar: boolean) => void;
@@ -237,14 +292,28 @@ const AUTOMATIC_LIMIT_SELECTION: StatusBarProviderLimitSelection = {
   limitKeys: [],
 };
 
+/** Nothing checked anywhere: every provider follows its last-used account. */
+const NO_SHOWN_PROFILES: StatusBarShownProfiles = {};
+
+/**
+ * The preset-able half of the usage defaults, exported on its own so the
+ * Default bundle (`lib/layout-presets.ts`) can read it without restating it
+ * and without carrying the accounts map a bundle has no opinion about.
+ */
+export const DEFAULT_STATUS_BAR_RATE_LIMIT_DISPLAY: StatusBarRateLimitDisplayPreferences =
+  {
+    enabled: true,
+    hiddenProviders: [],
+    providers: {},
+    percentMode: "used",
+    showTimer: true,
+    showBar: true,
+    showModeWord: true,
+  };
+
 const DEFAULT_STATUS_BAR_RATE_LIMITS: StatusBarRateLimitPreferences = {
-  enabled: true,
-  hiddenProviders: [],
-  providers: {},
-  percentMode: "used",
-  showTimer: true,
-  showBar: true,
-  showModeWord: true,
+  ...DEFAULT_STATUS_BAR_RATE_LIMIT_DISPLAY,
+  shownProfiles: NO_SHOWN_PROFILES,
 };
 
 const DEFAULT_STATUS_BAR_RESOURCES: StatusBarResourcePreferences = {
@@ -449,6 +518,64 @@ function persistedProviderIds(
   return [...new Set(providerIds)];
 }
 
+/** One shared empty list, so an unchecked provider never allocates. */
+const NO_SHOWN_PROFILE_IDS: StatusBarShownProfileIds = [];
+
+/**
+ * The checked accounts one provider has on one host, or the empty list. The
+ * one read path, so nothing else has to know the map is two levels deep.
+ */
+export function statusBarShownProfileIds(
+  shownProfiles: StatusBarShownProfiles,
+  hostId: string | null,
+  providerId: RateLimitProviderId,
+): StatusBarShownProfileIds {
+  if (hostId === null) return NO_SHOWN_PROFILE_IDS;
+  return shownProfiles[hostId]?.[providerId] ?? NO_SHOWN_PROFILE_IDS;
+}
+
+/**
+ * One provider's checked list. Profile ids are opaque strings and `null` is
+ * the ambient login; anything else is dropped, as are duplicates, which would
+ * otherwise make one account read as checked twice.
+ */
+function persistedShownProfileIds(value: unknown): StatusBarShownProfileIds {
+  if (!Array.isArray(value)) return NO_SHOWN_PROFILE_IDS;
+  const ids = value.filter(
+    (entry): entry is string | null =>
+      entry === null || (typeof entry === "string" && entry.length > 0),
+  );
+  return [...new Set(ids)];
+}
+
+/**
+ * The whole two-level map, re-derived entry by entry: a host key is any
+ * non-empty string (host ids are opaque), a provider key has to be one the
+ * build knows, and an entry that resolves to nothing checked is dropped rather
+ * than kept as an empty list - absent and empty mean the same thing at read
+ * time, and only one of them should be able to exist.
+ */
+function persistedShownProfiles(value: unknown): StatusBarShownProfiles {
+  if (!isRecord(value)) return NO_SHOWN_PROFILES;
+  const shownProfiles: Record<string, StatusBarHostShownProfiles> = {};
+  for (const [hostId, hostValue] of Object.entries(value)) {
+    if (hostId.length === 0 || !isRecord(hostValue)) continue;
+    const hostShown: Partial<
+      Record<RateLimitProviderId, StatusBarShownProfileIds>
+    > = {};
+    for (const [key, ids] of Object.entries(hostValue)) {
+      const providerId = rateLimitCapableProviderIdSchema.safeParse(key);
+      if (!providerId.success) continue;
+      const shown = persistedShownProfileIds(ids);
+      if (shown.length === 0) continue;
+      hostShown[providerId.data] = shown;
+    }
+    if (Object.keys(hostShown).length === 0) continue;
+    shownProfiles[hostId] = hostShown;
+  }
+  return shownProfiles;
+}
+
 function persistedRateLimits(value: unknown): StatusBarRateLimitPreferences {
   const stored: Record<string, unknown> = isRecord(value) ? value : {};
   return {
@@ -461,6 +588,7 @@ function persistedRateLimits(value: unknown): StatusBarRateLimitPreferences {
       DEFAULT_STATUS_BAR_RATE_LIMITS.hiddenProviders,
     ),
     providers: persistedProviderSelections(stored),
+    shownProfiles: persistedShownProfiles(stored.shownProfiles),
     percentMode: isPercentMode(stored.percentMode)
       ? stored.percentMode
       : DEFAULT_STATUS_BAR_RATE_LIMITS.percentMode,
@@ -717,6 +845,61 @@ export const useLayoutStore = create<LayoutStoreState>()(
                 ...statusBar.rateLimits.providers,
                 [providerId]: next,
               },
+            },
+          },
+        });
+      },
+      setStatusBarProfileShown: (hostId, providerId, profileId, shown) => {
+        const statusBar = get().statusBar;
+        const { shownProfiles } = statusBar.rateLimits;
+        const current = statusBarShownProfileIds(
+          shownProfiles,
+          hostId,
+          providerId,
+        );
+        if (current.includes(profileId) === shown) return;
+        const next = shown
+          ? [...current, profileId]
+          : current.filter((candidate) => candidate !== profileId);
+        // An emptied entry is removed rather than left as `[]`, matching what
+        // the resolver does on rehydration: one shape for "nothing checked".
+        const hostShown: Partial<
+          Record<RateLimitProviderId, StatusBarShownProfileIds>
+        > = { ...shownProfiles[hostId] };
+        if (next.length === 0) {
+          delete hostShown[providerId];
+        } else {
+          hostShown[providerId] = next;
+        }
+        const nextShownProfiles: Record<string, StatusBarHostShownProfiles> = {
+          ...shownProfiles,
+        };
+        if (Object.keys(hostShown).length === 0) {
+          delete nextShownProfiles[hostId];
+        } else {
+          nextShownProfiles[hostId] = hostShown;
+        }
+        set({
+          statusBar: {
+            ...statusBar,
+            rateLimits: {
+              ...statusBar.rateLimits,
+              shownProfiles: nextShownProfiles,
+            },
+          },
+        });
+      },
+      clearStatusBarShownProfiles: () => {
+        const statusBar = get().statusBar;
+        if (Object.keys(statusBar.rateLimits.shownProfiles).length === 0) {
+          return;
+        }
+        set({
+          statusBar: {
+            ...statusBar,
+            rateLimits: {
+              ...statusBar.rateLimits,
+              shownProfiles: NO_SHOWN_PROFILES,
             },
           },
         });

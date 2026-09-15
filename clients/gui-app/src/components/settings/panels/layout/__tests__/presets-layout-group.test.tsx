@@ -106,9 +106,12 @@ describe("<PresetsLayoutGroup />", () => {
       within(presetGroup()).getByRole("button", { name: "Compact" }),
     );
 
-    expect(useLayoutStore.getState().statusBar.rateLimits).toEqual(
-      LAYOUT_PRESETS.compact.statusBar.rateLimits,
-    );
+    // The bundle is the display half; the strip's checked accounts ride
+    // along untouched (empty here), so they are matched as an extra key.
+    expect(useLayoutStore.getState().statusBar.rateLimits).toEqual({
+      ...LAYOUT_PRESETS.compact.statusBar.rateLimits,
+      shownProfiles: {},
+    });
     expect(useLayoutStore.getState().statusBar.resources).toEqual(
       LAYOUT_PRESETS.compact.statusBar.resources,
     );
@@ -137,9 +140,12 @@ describe("<PresetsLayoutGroup />", () => {
       within(presetGroup()).getByRole("button", { name: "Detailed" }),
     );
 
-    expect(useLayoutStore.getState().statusBar.rateLimits).toEqual(
-      LAYOUT_PRESETS.detailed.statusBar.rateLimits,
-    );
+    // The bundle is the display half; the strip's checked accounts ride
+    // along untouched (empty here), so they are matched as an extra key.
+    expect(useLayoutStore.getState().statusBar.rateLimits).toEqual({
+      ...LAYOUT_PRESETS.detailed.statusBar.rateLimits,
+      shownProfiles: {},
+    });
     expect(useLayoutStore.getState().statusBar.resources).toEqual(
       LAYOUT_PRESETS.detailed.statusBar.resources,
     );
@@ -285,6 +291,32 @@ describe("<PresetsLayoutGroup />", () => {
     fireEvent.click(reset());
 
     expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(false);
+    expect(reset().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps Reset live for a page whose only change is a checked status-bar account", () => {
+    // Same shape as the mobile footer above: `matchLayoutPreset` does not
+    // read `shownProfiles`, so `match` stays `default`, while
+    // `resetLayoutToDefaults` DOES clear it.
+    render(<PresetsLayoutGroup />);
+    const reset = () =>
+      screen.getByRole("button", { name: "Reset to defaults" });
+    expect(reset().hasAttribute("disabled")).toBe(true);
+
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setStatusBarProfileShown("host-a", "codex", "work", true);
+    });
+
+    expect(pressed()).toEqual(["Default"]);
+    expect(reset().hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(reset());
+
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+    ).toEqual({});
     expect(reset().hasAttribute("disabled")).toBe(true);
   });
 

@@ -92,7 +92,7 @@ vi.mock(
     return {
       ...actual,
       useRateLimitProfileSelection: () => ({
-        activeChatSettings: null,
+        shownProfiles: {},
         lastProfileByHarness: {},
       }),
     };

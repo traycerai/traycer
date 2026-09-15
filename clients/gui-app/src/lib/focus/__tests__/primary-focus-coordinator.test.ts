@@ -8,7 +8,7 @@ const COMPOSER = { kind: "composer", surfaceId: "draft-a" } as const;
 const TERMINAL = { kind: "terminal", instanceId: "terminal-a" } as const;
 
 function endpoint(input: {
-  readonly focus: () => void;
+  readonly focus: PrimaryFocusEndpoint["focus"];
   readonly activeElement: () => Element | null;
   readonly eligible: () => boolean;
 }): PrimaryFocusEndpoint {
@@ -204,7 +204,7 @@ describe("PrimaryFocusCoordinator", () => {
     expect(focus).toHaveBeenCalledTimes(1);
     coordinator.setInteractionActive(true);
     activeElement = other;
-    coordinator.handleFocusIn(other);
+    coordinator.handleFocus(other);
     coordinator.setInteractionActive(false);
 
     expect(focus).toHaveBeenCalledTimes(1);
@@ -261,7 +261,8 @@ describe("PrimaryFocusCoordinator", () => {
     unregister();
     activeElement = null;
 
-    const relocatedFocus = vi.fn(() => {
+    const relocatedFocus = vi.fn((isCurrent: () => boolean) => {
+      expect(isCurrent()).toBe(true);
       activeElement = second;
     });
     coordinator.register(
@@ -294,7 +295,7 @@ describe("PrimaryFocusCoordinator", () => {
     );
     coordinator.request(COMPOSER);
 
-    coordinator.handleFocusIn(other);
+    coordinator.handleFocus(other);
     coordinator.register(
       COMPOSER,
       endpoint({
@@ -305,5 +306,64 @@ describe("PrimaryFocusCoordinator", () => {
     );
 
     expect(focus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "cancel",
+    "superseding request",
+    "endpoint replacement",
+    "visibility loss",
+    "eligibility loss",
+    "pointer interaction",
+  ] as const)("invalidates deferred focus after %s", (invalidation) => {
+    let visible = true;
+    let eligible = true;
+    const guards: Array<() => boolean> = [];
+    const coordinator = new PrimaryFocusCoordinator({
+      activeElement: () => null,
+      documentVisible: () => visible,
+    });
+    const first = endpoint({
+      focus: (check) => {
+        guards.push(check);
+      },
+      activeElement: () => null,
+      eligible: () => eligible,
+    });
+    coordinator.register(COMPOSER, first);
+    coordinator.request(COMPOSER);
+
+    const isCurrent = guards.at(0);
+    if (isCurrent === undefined) throw new Error("focus guard not captured");
+    expect(isCurrent()).toBe(true);
+    switch (invalidation) {
+      case "cancel":
+        coordinator.cancel(() => true);
+        break;
+      case "superseding request":
+        coordinator.request(TERMINAL);
+        break;
+      case "endpoint replacement":
+        coordinator.register(
+          COMPOSER,
+          endpoint({
+            focus: () => undefined,
+            activeElement: () => null,
+            eligible: () => true,
+          }),
+        );
+        break;
+      case "visibility loss":
+        visible = false;
+        break;
+      case "eligibility loss":
+        eligible = false;
+        break;
+      case "pointer interaction":
+        coordinator.setInteractionActive(true);
+        break;
+    }
+
+    expect(isCurrent()).toBe(false);
   });
 });

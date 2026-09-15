@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { AccentDot } from "@/components/providers/accent-dot";
 import { StatusBarMiniBar } from "@/components/layout/status-bar/status-bar-mini-bar";
 import { statusBarSegmentTooltip } from "@/components/layout/status-bar/status-bar-usage-display";
 import {
@@ -39,7 +40,24 @@ export interface StatusBarProviderSegmentProps {
 }
 
 /**
- * One provider's usage, at whatever length the strip currently has room for.
+ * One account's usage, at whatever length the strip currently has room for.
+ *
+ * A provider with several accounts checked draws one of these per account,
+ * and what tells them apart is the profile's accent dot after the provider
+ * icon - present at every rung, `icon-only` included, because it is the only
+ * mark short enough to survive there. The account's NAME joins it on the
+ * rungs that still print words (`parts.label`), so a wide strip reads
+ * `Codex · Work 57% used 4h` and a narrow one `[icon][dot] 57%`. Neither is
+ * drawn for a provider with fewer than two profiles, where there is nothing
+ * to tell the one account apart from.
+ *
+ * Clicking a segment opens the usage panel on this provider with this
+ * account's card in view. The segment itself is not a control - it sits inside
+ * the cluster's `PopoverTrigger`, which is what opens the panel, so a nested
+ * button would be both invalid markup and a second opener. Instead it names
+ * itself in `data-provider-id` / `data-profile-id`, and the trigger's own
+ * click handler reads which segment the click landed on
+ * (`statusBarSegmentAtClick`).
  *
  * Three states have a shape rather than a number, and each is deliberately
  * distinguishable at a glance:
@@ -75,6 +93,8 @@ export function StatusBarProviderSegment(
     <span
       className="inline-flex min-w-0 items-center gap-1"
       data-testid={`status-bar-provider-segment-${segment.providerId}`}
+      data-provider-id={segment.providerId}
+      data-profile-id={segment.profileId ?? ""}
       data-state={segment.state}
     >
       <TooltipWrapper
@@ -91,6 +111,21 @@ export function StatusBarProviderSegment(
         */}
         <span className="inline-flex items-center gap-1">
           {icon}
+          {segment.account === null ? null : (
+            <span
+              data-testid="status-bar-provider-account-dot"
+              className="inline-flex shrink-0"
+            >
+              <AccentDot
+                profileId={segment.account.profileId}
+                accentColor={segment.account.accentColor}
+                label={segment.account.label}
+                variant="inline"
+                size="compact"
+                className={undefined}
+              />
+            </span>
+          )}
           {segment.state === "degraded" ? (
             <TriangleAlert
               // The same amber a `running_low` percentage prints, since one can
@@ -126,20 +161,38 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
   const { segment } = props;
   const parts = statusBarUsageDetailParts(props.detail);
   if (!parts.percent) return null;
+  // The account's name, on the rungs that print words. Before the reading
+  // rather than after, so `Work 57%` and `Personal 12%` read as two labelled
+  // figures rather than one figure with two trailing words.
+  const accountName =
+    parts.label && segment.account !== null ? (
+      <span
+        data-testid="status-bar-provider-account"
+        className="whitespace-nowrap"
+      >
+        {segment.account.label}
+      </span>
+    ) : null;
   if (segment.state === "unavailable") {
     return (
-      <span aria-hidden="true" data-testid="status-bar-provider-unavailable">
-        {UNAVAILABLE_DASH}
-      </span>
+      <>
+        {accountName}
+        <span aria-hidden="true" data-testid="status-bar-provider-unavailable">
+          {UNAVAILABLE_DASH}
+        </span>
+      </>
     );
   }
   if (segment.state === "cold") {
     return (
-      <span
-        data-testid="status-bar-provider-cold-track"
-        aria-hidden="true"
-        className="h-1 w-8 shrink-0 rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
-      />
+      <>
+        {accountName}
+        <span
+          data-testid="status-bar-provider-cold-track"
+          aria-hidden="true"
+          className="h-1 w-8 shrink-0 rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+        />
+      </>
     );
   }
   const windows = windowsToDraw(segment, parts.label);
@@ -151,6 +204,7 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
   const showBar = props.showBar && parts.bar;
   return (
     <>
+      {accountName}
       {windows.map((window, index) => (
         <Fragment key={window.windowKey}>
           {index === 0 ? null : (

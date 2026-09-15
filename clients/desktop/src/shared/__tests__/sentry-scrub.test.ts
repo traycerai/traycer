@@ -42,6 +42,7 @@ describe("desktop Sentry scrub wiring", () => {
    * `@traycer/protocol/utils/text/redaction`; a module that declares a
    * credential pattern of its own has, by definition, forked the set.
    */
+  // This serially scans four client source trees and can exceed 5s on CI.
   it("declares no credential pattern outside the shared leaf", async () => {
     const offenders: string[] = [];
     const stack = [DESKTOP_SRC, GUI_APP_SRC, SHARED_ROOT, MOBILE_SRC];
@@ -69,5 +70,5 @@ describe("desktop Sentry scrub wiring", () => {
       offenders,
       `these modules define their own credential patterns instead of importing @traycer/protocol/utils/text/redaction:\n${offenders.join("\n")}`,
     ).toEqual([]);
-  });
+  }, 15_000);
 });
