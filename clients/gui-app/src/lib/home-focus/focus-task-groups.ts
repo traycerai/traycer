@@ -264,23 +264,26 @@ export interface FocusTaskGroupBody {
  * them at the render site makes that impossible rather than merely fixed -
  * there is no earlier value to go stale.
  *
- * A COLD task nests its agents like any other, and that is the correction this
- * function most recently took. It used to drop every agent of an unmounted
- * epic, on the grounds that a title only exists for an epic mounted here - so
- * the task had no body, its twisty rendered `invisible`, and the only way to
- * get a chevron was to open the task once and mount it. The premise was wrong:
- * the activity plane carries an id, a tier, a parentage and a host for every
- * agent on the account, and a row that can be opened, stopped and described as
- * `○ background` is worth drawing under a name it borrows from its surface
- * ({@link focusAgentDisplayName}). Only its jobs and pages stay absent, because
- * those planes are window-local and genuinely have nothing to say here.
+ * A COLD task contributes no chats. The activity plane carries an id, a tier,
+ * a parentage and a host for every agent on the account, but a name for none
+ * of them, and this function once nested those agents anyway under a borrowed
+ * `Agent` - which put a list of identical rows under a task that the row's own
+ * summary (`● 2 agents running · not open in this window`) and its `Stop all`
+ * already accounted for. The user asked for the single row back until the
+ * task is open here and its chats have names, so an unmounted task's agents
+ * stay on the GROUP (the summary and the Stop-all list read them) and out of
+ * the body. Whatever else names the task - a prompt from the feed, and in
+ * principle a job or a page, though those planes are window-local and a cold
+ * task rarely has one - hangs off the task at level one, since there is no
+ * chat row to hang it under.
  *
  * A chat agent's id IS its chat id, which is what lets a job's `chatId`, a
  * prompt's `chatId` and a tab's `drivenByChatId` all be looked up in a map of
  * agent ids.
  */
 export function selectTaskGroupBody(group: FocusTaskGroup): FocusTaskGroupBody {
-  const agents = group.agents;
+  const agents =
+    group.task !== null && !group.task.mountedHere ? [] : group.agents;
   const byAgentId = new Map(agents.map((agent) => [agent.agentId, agent]));
   const promptsByChatId = bucketByParent(group.prompts, (prompt) =>
     parentAgentId(prompt.chatId, byAgentId),
