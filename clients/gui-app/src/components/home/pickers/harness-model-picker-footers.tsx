@@ -484,8 +484,8 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
             centre at the two ends (`getThumbInBoundsOffset`) - without it the
             first and last dot sit half a thumb outside the thumb's reach. The
             pill thumb is 1.5rem, so this is `px-3`; `py-1` matches the slider's
-            own padding. Stack above the thumb so its shortcut stays visible. */}
-        <div className="pointer-events-none absolute inset-0 z-10 px-3 py-1">
+            own padding. Interactive stops stay below the thumb. */}
+        <div className="pointer-events-none absolute inset-0 px-3 py-1">
           <div className="relative h-full">
             {options.map((option, index) => (
               <ReasoningLevelStop
@@ -585,9 +585,9 @@ const ReasoningLevelStop = memo(function ReasoningLevelStop(
         onPointerLeave={() => setHovered(false)}
         className={cn(
           "group pointer-events-auto absolute top-1/2 flex h-6 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full disabled:cursor-not-allowed pointer-coarse:w-6",
-          // The selected stop passes pointer events through to the thumb,
-          // while keeping its shortcut badge visible above it.
-          selected && "pointer-events-none",
+          // Only the inert selected stop rises above the thumb to show its
+          // shortcut. Neighboring hit targets must stay beneath the thumb.
+          selected && "pointer-events-none z-10",
         )}
         onClick={() => {
           if (props.movedByGesture()) return;

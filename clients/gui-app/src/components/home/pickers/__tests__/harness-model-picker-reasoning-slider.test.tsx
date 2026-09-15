@@ -389,8 +389,12 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       // And matches the slider's own padding vertically, so the overlay is the
       // track's box rather than the padded row's.
       expect(overlay?.className).toContain("py-1");
-      // The selected stop's shortcut must remain visible over the thumb.
-      expect(overlay?.className).toContain("z-10");
+      // Neighboring stop targets must not cover the thumb in a narrow picker.
+      expect(overlay?.className).not.toContain("z-10");
+      expect(stops().at(0)?.className).not.toContain("z-10");
+      // Only the inert selected stop rises above it to keep its hint visible.
+      expect(stops().at(2)?.className).toContain("z-10");
+      expect(stops().at(2)?.className).toContain("pointer-events-none");
       expect(screen.getByTestId("model-reasoning-slider").className).toContain(
         "py-1",
       );
