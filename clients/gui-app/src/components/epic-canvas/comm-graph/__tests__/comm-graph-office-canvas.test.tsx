@@ -1425,33 +1425,68 @@ describe("CommGraphOfficeCanvas", () => {
 
     it("does not persist the camera when the same growth-triggered shift lands while playback auto-pan owns it (Finding 12)", () => {
       // Codex: auto-fit off is not the whole gate - while playback auto-pan
-      // owns the camera (`isPlaying && isAutoPanEnabled`, the exact regime
-      // `requestPlaybackPan` reframes under), the live camera is a TRANSIENT
-      // playback reframe `advanceCamera` deliberately never persists on its
-      // own arrival (`persistOnArrival: false` at its own request site). A
-      // world-growing shift mid-playback must not save that transient
-      // position as the user's manual framing either - the contrast (auto-fit
-      // off, NOT playing) is the sibling "persists...while manually framed"
-      // test right above, which this only adds a playback exception to.
+      // owns the camera, the live camera is a TRANSIENT playback reframe
+      // `advanceCamera` deliberately never persists on its own arrival
+      // (`persistOnArrival: false` at its own request site). A world-growing
+      // shift mid-playback must not save that transient position as the
+      // user's manual framing either - the contrast (auto-fit off, NOT
+      // playing) is the sibling "persists...while manually framed" test
+      // right above, which this only adds a playback exception to.
+      //
+      // Finding 24 update: the gate now tracks whether a playback pan has
+      // ACTUALLY reframed the camera (`cameraFramedByPlaybackRef`), not
+      // merely whether `isPlaying && isAutoPanEnabled` READS true -
+      // `requestPlaybackPan` only sets that ref when its focus is OFF
+      // SCREEN and it actually starts a pan; a null pulse (this test's old
+      // setup) makes it decline outright, which is Finding 24's OWN case
+      // and would wrongly persist here. A real pulse whose seat is far from
+      // a deliberately distant starting camera - the same "give the pan
+      // somewhere real to go" trick the pan-persist guard test uses - makes
+      // this test drive a genuine playback reframe before the shift lands.
       const { step } = installCanvas();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const onCameraChange = vi.fn();
+      const farView: CommGraphTileViewState = {
+        ...FIXED_CAMERA_VIEW,
+        x: -10000,
+        y: -10000,
+      };
+      const pulse: CommGraphPulse = {
+        kind: "agent",
+        agentId: "shift-a",
+        senderAgentId: "shift-a",
+      };
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const view = render(
         withQueryClient(
           officeElementWithView(
             SHIFT_VIEW,
             new Set(["shift-a"]),
             [SHIFT_AGENT_A],
-            // FIXED_CAMERA_VIEW (non-neutral): auto-fit off from mount, same
-            // as the manually-framed case - but this time playback is ALSO
-            // on, so mounting alone (the false -> true transition) enables
-            // auto-pan per the `playing && !wasPlayingRef.current` effect.
-            { onCameraChange, playing: true },
+            // Playback is on from mount, same as before - but now paired
+            // with a real pulse and a camera starting far from shift-a's
+            // seat, so `requestPlaybackPan` finds the focus off screen and
+            // actually starts a pan rather than declining.
+            {
+              onCameraChange,
+              playing: true,
+              view: farView,
+              pulse,
+              pulseKey: "shift-pulse-1",
+            },
           ),
         ),
       );
       setIntersecting(true);
-      step();
+      for (let index = 0; index < 8; index += 1) step();
+
+      const framedAfterPan = cameraFromFrame(frames, SHIFT_VIEWPORT);
+      if (framedAfterPan === null) throw new Error("no frame drawn after pan");
+      // Anti-vacuity: the playback pan actually moved the camera away from
+      // the deliberately-far starting point - a real reframe owns the
+      // camera here, not the decline case Finding 24's own test covers.
+      expect(framedAfterPan.x).not.toBeCloseTo(farView.x);
+      expect(framedAfterPan.y).not.toBeCloseTo(farView.y);
 
       view.rerender(
         withQueryClient(
@@ -1459,7 +1494,13 @@ describe("CommGraphOfficeCanvas", () => {
             SHIFT_VIEW,
             new Set(["shift-a", "shift-b"]),
             [SHIFT_AGENT_A, SHIFT_AGENT_B],
-            { onCameraChange, playing: true },
+            {
+              onCameraChange,
+              playing: true,
+              view: farView,
+              pulse,
+              pulseKey: "shift-pulse-1",
+            },
           ),
         ),
       );
@@ -1473,6 +1514,77 @@ describe("CommGraphOfficeCanvas", () => {
       // is not a framing to save - a later manual action (pausing, dragging)
       // is what re-persists.
       expect(onCameraChange).not.toHaveBeenCalled();
+    });
+
+    it("persists the shift-compensated camera when playback is on but DECLINED to pan, unlike the case above (Finding 24)", () => {
+      // Codex: the old guard suppressed on `isPlaying && isAutoPanEnabled`
+      // alone, but auto-pan stays enabled through every pulse where the
+      // focus is already on screen and `requestPlaybackPan` DECLINES to
+      // move - and in that regime the live camera is still exactly the
+      // user's manual framing, same as the sibling "persists...while
+      // manually framed" test at the top of this block. A null pulse (no
+      // focus, no key) is the simplest way to force that decline: the same
+      // setup the F12 test above used to use, before it was updated to
+      // drive a REAL pan for its own (contrasting) case.
+      const { step } = installCanvas();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const onCameraChange = vi.fn();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const view = render(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a"]),
+            [SHIFT_AGENT_A],
+            // FIXED_CAMERA_VIEW (non-neutral): auto-fit off from mount, same
+            // as the manually-framed case - but playback is ALSO on, with no
+            // pulse/pulseKey (both null, `officeElementWithView`'s default),
+            // so `requestPlaybackPan` declines outright (`key === null`) and
+            // never reframes the camera.
+            { onCameraChange, playing: true },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      step();
+      const before = cameraFromFrame(frames, SHIFT_VIEWPORT);
+      if (before === null) throw new Error("no frame drawn before growth");
+
+      view.rerender(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a", "shift-b"]),
+            [SHIFT_AGENT_A, SHIFT_AGENT_B],
+            { onCameraChange, playing: true },
+          ),
+        ),
+      );
+      step();
+
+      const after = cameraFromFrame(frames, SHIFT_VIEWPORT);
+      if (after === null) throw new Error("no frame drawn after growth");
+      // Anti-vacuity: the shift actually moved the camera the loop drew
+      // with, the same check the manually-framed sibling test makes.
+      expect(after.y).not.toBeCloseTo(before.y);
+
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+
+      // Playback declined to pan, so the live camera was still the user's
+      // framing all along - the write must land the SAME shift-compensated
+      // camera the frame loop settled on, exactly as the manually-framed
+      // (not playing) sibling test asserts.
+      expect(onCameraChange).toHaveBeenCalled();
+      const last = onCameraChange.mock.calls.at(-1)?.[0] as {
+        x: number;
+        y: number;
+        zoom: number;
+      };
+      expect(last.x).toBeCloseTo(after.x);
+      expect(last.y).toBeCloseTo(after.y);
+      expect(last.zoom).toBeCloseTo(after.zoom);
     });
 
     it("scales a shifted ACTIVE PAN's endpoint by that endpoint's OWN zoom, not the live camera zoom (Finding 8)", () => {
