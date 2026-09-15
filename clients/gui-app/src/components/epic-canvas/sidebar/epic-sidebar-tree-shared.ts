@@ -3,6 +3,7 @@
  * Extracted from the original monolithic epic-sidebar.tsx to eliminate duplication.
  */
 
+import type { CSSProperties } from "react";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -137,16 +138,27 @@ export function anyMutationPending(values: ReadonlyArray<boolean>): boolean {
  */
 export function useNodeIconDisplay(artifactType: EpicNodeKind): {
   readonly className: string;
-  readonly style: { color: string | undefined } | undefined;
+  readonly style: CSSProperties | undefined;
 } {
   const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
   const color = useSettingsStore((s) => s.artifactIconColors[artifactType]);
   return {
     className: cn(
       "size-3.5 shrink-0",
+      // The tint travels as a custom property rather than as `color`, the same
+      // way the six call sites that resolve this setting inline do (the
+      // add-node dropdown, the node tab icon, the artifact child index, the
+      // view menu, the colour picker, the file icons). Two idioms for one
+      // concept is how a setting ends up half-applied; a literal colour in
+      // `--swatch` also still fails `no-inline-styles`, where a literal in
+      // `color` would not.
+      colorMode === "byType" && "text-[var(--swatch)]",
       colorMode === "none" && "text-muted-foreground/70",
     ),
-    style: colorMode === "byType" ? { color } : undefined,
+    style:
+      colorMode === "byType"
+        ? ({ "--swatch": color } as CSSProperties)
+        : undefined,
   };
 }
 
