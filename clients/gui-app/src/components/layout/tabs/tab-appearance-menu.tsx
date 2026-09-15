@@ -124,7 +124,7 @@ export function TabAppearanceMenu(props: { readonly tab: HeaderTab }) {
           <Palette />
           Tab appearance
         </ContextMenuSubTrigger>
-        <ContextMenuSubContent className="max-w-xs p-3">
+        <ContextMenuSubContent layout="panel" className="max-w-xs">
           <TabColorPicker
             menu
             color={group?.color ?? customization?.color ?? null}

@@ -24,7 +24,7 @@ export function ChatsPanelSkeleton() {
       data-testid="chats-panel-skeleton"
       aria-busy="true"
     >
-      <SidebarGroup className="p-2">
+      <SidebarGroup>
         <SidebarGroupContent className="space-y-0.5">
           {ROWS.map((row) => (
             <SkeletonTreeRow

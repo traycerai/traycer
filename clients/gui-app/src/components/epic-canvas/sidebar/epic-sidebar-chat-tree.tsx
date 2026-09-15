@@ -1404,8 +1404,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                     resultCount={searchResultCount}
                   />
                 ) : null}
-                <SidebarContent className="gap-0">
-                  <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+                <SidebarContent>
+                  <SidebarGroup className="min-h-0 flex-1">
                     <SidebarGroupContent
                       ref={treeRegionRef}
                       className="flex min-h-0 flex-1 flex-col"

@@ -16,7 +16,6 @@ import {
   X,
 } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { cn } from "@/lib/utils";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
@@ -236,7 +235,6 @@ function EpicTabMenuItems(props: {
         // as a disabled item would have.
         disabled={taskPinned === null || props.isTaskPinPending}
         aria-disabled={pinUnavailable || undefined}
-        className={cn(pinUnavailable && "opacity-50")}
         // The REASON, not the raw row fact. `localOnly` no longer implies the
         // pin is unavailable - a `@1.1` host pins a local-homed epic - so an
         // attribute keyed on the row would keep marking an ENABLED item as

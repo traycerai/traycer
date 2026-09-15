@@ -379,7 +379,15 @@ function SidebarGroup({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="sidebar-group"
       data-sidebar="group"
-      className={cn("relative flex w-full min-w-0 flex-col p-2", className)}
+      // `px-2 py-1`, not `p-2`: a group holds ROWS that carry their own vertical
+      // padding, so the band only needs to keep them off the panel's edges.
+      // Every one of the app's four real panels wrote this out; their four
+      // skeletons did not, which is why a panel used to shift 4px when it
+      // finished loading.
+      className={cn(
+        "relative flex w-full min-w-0 flex-col px-2 py-1",
+        className,
+      )}
       {...props}
     />
   );

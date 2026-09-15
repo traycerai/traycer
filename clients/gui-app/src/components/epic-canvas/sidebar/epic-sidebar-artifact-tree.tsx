@@ -764,7 +764,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     <SidebarSortContext.Provider value={comparator}>
       <SidebarFilterVisibilityContext.Provider value={visibleIds}>
         <ArtifactPanelSearchShell epicId={epicId} tabId={tabId}>
-          <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+          <SidebarGroup className="min-h-0 flex-1">
             <SidebarGroupContent
               ref={treeRegionRef}
               className="flex min-h-0 flex-1 flex-col"

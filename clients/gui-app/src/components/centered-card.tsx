@@ -102,7 +102,7 @@ export function HostBootCard(props: {
           boot card is not a dialog: when a face of it does carry a title (a
           settled failure), the title centres with everything else, the way an
           alert card reads. */}
-      <CardContent className="flex flex-col items-center gap-4 py-6 text-center">
+      <CardContent className="flex flex-col items-center gap-4 text-center">
         {props.children}
       </CardContent>
     </Card>

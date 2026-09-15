@@ -291,34 +291,24 @@ const fixedPaletteFiles = [
 // the component owns how it LOOKS. A component is then let back out of that
 // default by a contract entry below.
 //
-// `notYetTightened` is the ratchet, not a policy. Each entry allows everything
-// (`"*"` - a glob, so it covers the classes the grammar cannot categorize too,
-// which a list of category names would not), which is this rule being "not yet
-// enforced" for that family. So this list is the CHECKLIST of what is left:
-// tickets 05 and 06 delete entries from it one at a time, each deletion paired
-// with the variants and the call-site migration that make the family green.
-// When the list is empty the rollout is done.
+// `notYetTightened` was the ratchet: one entry per family that had not been
+// tightened yet, each allowing everything, so the list read as the checklist of
+// what was left. **It is empty, and the rollout is done.** Every design-system
+// component in this app is now either on the `layout` default or has a contract
+// below that says exactly what a call site may still write and why.
 //
-// Patterns are regexes and the LAST matching entry wins, so a family prefix
-// (`^Dialog`) covers every part of that family and a later exact entry
-// (`^Button$`) can still speak for one component. One entry per FAMILY rather
-// than per exported name: the 176 exports of `src/components/ui` are ~40
-// families, and a 176-line list of names nobody reads is not a checklist.
+// It is kept, rather than deleted, because `noRestyle` refuses an override that
+// names a family still in it - a guard that costs an empty array and keeps
+// working if a future component is ever added the same way. Adding an entry
+// here is re-opening the ratchet, and needs the same thing closing one did: a
+// ticket that takes it back out.
 //
-// A component that is NOT listed here is already on `layout` only - it had no
-// findings when the rule went on, so there was nothing to migrate and nothing
-// to loosen.
-const notYetTightened = [
-  // tighten in ticket 06 - the overlay and container parts.
-  { pattern: "^Card", allow: ["*"] },
-  { pattern: "^ConfirmDestructiveDialog$", allow: ["*"] },
-  { pattern: "^ContextMenu", allow: ["*"] },
-  { pattern: "^DropLine$", allow: ["*"] },
-  { pattern: "^HoverCard|^HoverPreviewCard$", allow: ["*"] },
-  { pattern: "^Sidebar", allow: ["*"] },
-  { pattern: "^Toaster$", allow: ["*"] },
-  { pattern: "^Tooltip", allow: ["*"] },
-];
+// Patterns are regexes and the LAST matching entry wins, so a part-level entry
+// (`^DialogFooter$`) can speak after a family-level one, and `^Button$` - last
+// of all - can never be shadowed. A contract is needed only where a part allows
+// MORE than `layout`, or where it wants a `message` of its own; a component
+// with neither is enforced by having no entry at all.
+const notYetTightened = [];
 
 // The 9 globs covering our 17 `--text-*` FONT SIZE tokens. They are listed
 // here rather than inline because `no-restyle` needs them for the same reason
@@ -920,6 +910,112 @@ const sheetContracts = [
   },
 ];
 
+// ── The last six families, tightened in ticket 06 ──────────────────────────
+//
+// Small enough to read together, and each is one idea.
+//
+// **Sidebar** (19). `SidebarGroup`'s default moved from `p-2` to `px-2 py-1`:
+// the group holds rows that carry their own vertical padding, and all four of
+// the app's real panels wrote that out while all four of their SKELETONS kept
+// `p-2` - so a panel shifted 4px the moment it finished loading. The default
+// fixes the skeletons for free. `space-y-*` on the group's content is the
+// caller's, and `SidebarContent`'s `gap-0` was a restate.
+//
+// **Tooltip** (14). Nine of the fourteen were one `TooltipTrigger` drawn as a
+// button by hand - a box, a focus ring, a type step - now `asChild` +
+// `<Button>`. The rest is `gap-*` inside a two-line label, and `font-mono` for
+// a tooltip whose content is a PATH: what is being labelled is code, which the
+// tooltip cannot know.
+//
+// **DropLine** (9). Both allowances are facts about the moment rather than
+// about the line: the entrance animation belongs to the thing that just
+// appeared, and a line flush against a rail's edge squares the side it meets.
+//
+// **Card** (5). `size="lg"` for the full-screen centred status card - the boot
+// card and the error screen were setting `py-6` and `py-8` on the CONTENT to
+// get it, and disagreeing. `shadow-*` by name for the same reason Button
+// allows it: elevation is about where the card floats, not what it is.
+//
+// **HoverCard** (5). The content owns the SURFACE and nothing else - the
+// padding lives on `HOVER_PREVIEW_SCROLL_CLASS`, which a caller may or may not
+// use - so what is inside the card is the caller's and the card's fill,
+// border and elevation are not.
+//
+// **ContextMenu** (4). The same two changes its sibling menu took: a
+// soft-disabled row dims on `aria-disabled:` too, and a submenu holding a
+// control rather than rows is `layout="panel"`.
+const tailContracts = [
+  {
+    pattern: "^SidebarGroupContent$|^SidebarContent$|^SidebarGroup$",
+    allow: ["layout", "gap-*", "space-y-*"],
+  },
+  {
+    pattern: "^TooltipContent$",
+    allow: ["layout", "gap-*", "font-mono"],
+    message: {
+      typography:
+        '"{{className}}" is not allowed on <TooltipContent>: the tooltip owns its type. `font-mono` is allowed, because whether the LABEL is a path or a command is a fact about what is being labelled. See {{file}}.',
+    },
+  },
+  {
+    // The entrance animation is a fact about the thing that just appeared -
+    // a tab becoming active, a row taking the drop - not about the line, and
+    // `ease-spring` is a hand-written easing in `index.css`.
+    pattern: "^DropLine$",
+    allow: [
+      "layout",
+      "animate-in",
+      "fade-in",
+      "slide-in-from-*",
+      "duration-*",
+      "ease-spring",
+      // A line flush against a rail's edge squares the side it meets.
+      "rounded-l-none",
+      "rounded-r-none",
+      "rounded-l",
+      "rounded-r",
+    ],
+  },
+  {
+    // Elevation is about WHERE the card floats, exactly as on Button: the one
+    // site is a status card floating over a booting app.
+    pattern: "^Card$",
+    allow: ["layout", "shadow-xs", "shadow-sm", "shadow-md", "shadow-lg"],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <Card>: the card owns its band. Use `size` ({{sizes}}) - `lg` is the full-screen centred status card. See {{file}}.',
+    },
+  },
+  {
+    pattern: "^CardContent$|^CardHeader$|^CardFooter$",
+    allow: ["layout", "gap-*", "space-y-*"],
+  },
+  {
+    // The card is a SURFACE: it owns its fill, its border and its elevation,
+    // and nothing else. A caller that does not use `HOVER_PREVIEW_SCROLL_CLASS`
+    // supplies the inset and the type itself, because the card never had them.
+    pattern: "^HoverCardContent$",
+    allow: ["layout", "spacing", "typography", ...fontSizeTokens],
+  },
+  {
+    pattern:
+      "^ContextMenuItem$|^ContextMenuCheckboxItem$|^ContextMenuRadioItem$|^ContextMenuSubTrigger$|^ContextMenuGroup$",
+    allow: ["layout", "gap-*", "space-y-*"],
+    message: {
+      effects:
+        '"{{className}}" is not allowed on <{{component}}>: a dimmed row is a disabled row, and the primitive dims both a Radix-`disabled` and a SOFT-disabled (`aria-disabled`) one. See {{file}}.',
+    },
+  },
+  {
+    pattern: "^ContextMenuSubContent$",
+    allow: ["layout", "gap-*", "space-y-*"],
+    message: {
+      spacing:
+        '"{{className}}" is not allowed on <ContextMenuSubContent>: a submenu of ROWS is `layout="menu"` (the default) and one holding a control is `layout="panel"`. See {{file}}.',
+    },
+  },
+];
+
 // ── Button, the one family that IS enforced ─────────────────────────────────
 //
 // `layout` plus four named classes. Each is a treatment the component cannot
@@ -1026,6 +1122,7 @@ const tightenedContracts = [
   ...tabsContracts,
   ...commandContracts,
   ...sheetContracts,
+  ...tailContracts,
   ...inlinePrimitiveContracts,
   buttonContract,
 ];
@@ -1428,6 +1525,19 @@ const restyleExemptions = [
       {
         pattern: "^Button$",
         allow: ["spacing", "aria-disabled:hover:bg-transparent"],
+      },
+    ],
+  },
+  {
+    // The tab colour swatch: an `asChild` context-menu item whose child IS the
+    // control - a native `<input type="color">` stretched over the swatch it
+    // recolours - so the row's own padding would inset the thing the row is.
+    files: ["src/components/layout/tabs/tab-appearance-menu.tsx"],
+    contracts: [
+      {
+        pattern:
+          "^ContextMenuItem$|^ContextMenuCheckboxItem$|^ContextMenuRadioItem$|^ContextMenuSubTrigger$|^ContextMenuGroup$",
+        allow: ["p-0"],
       },
     ],
   },
