@@ -2416,6 +2416,53 @@ describe("CommGraphTile", () => {
     });
   });
 
+  describe("flushing a pending office framing across a mode switch (Codex 4011701267)", () => {
+    it("folds a pending, still-debounced office pan into the same write that flips the mode, instead of losing it when the canvas unmounts", async () => {
+      // The office camera persist is debounced 150ms; a wheel right before
+      // switching to Graph is still PENDING when the switch unmounts the
+      // office canvas, and that unmount cancels the timer - correct for a
+      // view-pick remount, wrong here, since D68 promises a mode switch
+      // keeps each renderer's camera. No `await`/timer advance between the
+      // wheel and the click: the claim is about catching the write BEFORE
+      // the debounce has any chance to fire on its own.
+      await reachAutoFloor();
+      expect(storedView()?.officeCamera).toBeNull();
+
+      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
+        deltaX: 80,
+        deltaY: 90,
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("comm-graph-mode-graph"));
+        await Promise.resolve();
+      });
+
+      expect(storedView()?.mode).toBe("graph");
+      // RED pre-fix: `officeCamera` stays `null` - the pending pan never
+      // reaches the store, dropped along with the cancelled timer.
+      expect(storedView()?.officeCamera).not.toBeNull();
+      expect(storedView()?.officeCameraView).toBe("floor");
+    });
+
+    it("still drops a pending pan when a genuine VIEW PICK remounts the canvas within the debounce window (guard - unaffected by the mode-switch flush)", async () => {
+      // Codex's fix folds the pending framing in ONLY on a mode switch;
+      // `onRegisterFlush` is never consulted by a view pick, so this
+      // pre-existing drop (a pan on the OLD view has no business landing on
+      // the new one) must survive untouched.
+      await reachAutoFloor();
+
+      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
+        deltaX: 80,
+        deltaY: 90,
+      });
+      await pickView("towers");
+
+      expect(storedView()?.officeView).toBe("towers");
+      expect(storedView()?.officeCameraView).toBe("towers");
+      expect(storedView()?.officeCamera).toBeNull();
+    });
+  });
+
   describe("a mode switch releases the camera witness it was never meant to satisfy (fixup 12)", () => {
     // FINDING A. `nextArmedOn` releases the witness once TWO things are both
     // true: some writer has replaced the stored view object, AND the record
