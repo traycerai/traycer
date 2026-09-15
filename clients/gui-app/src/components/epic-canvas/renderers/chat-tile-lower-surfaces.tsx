@@ -61,7 +61,6 @@ import { accumulatedDiffTotals } from "@/lib/chat/accumulated-change-rows";
 import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 import {
   backgroundHeaderSummary,
-  backgroundKind,
   backgroundRunningRowCount,
   dedupeByTaskId,
 } from "@/lib/chat/background-item-tree";
@@ -693,24 +692,6 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       }),
     [backgroundRunning, input.heldManagedCommands, dedupedBackgroundItems],
   );
-  // The chip's icon is the kind's own, running or not, so it always reads as
-  // what it stands for - activity lights that icon rather than replacing it.
-  // Running and held shells are counted together: the sets overlap, and one of
-  // either is enough to put a shell row in the section.
-  const backgroundGlyph = useMemo(
-    () =>
-      backgroundKind({
-        items: dedupedBackgroundItems,
-        hasManagedCommands:
-          input.runningManagedCommands.length > 0 ||
-          input.heldManagedCommands.length > 0,
-      }),
-    [
-      dedupedBackgroundItems,
-      input.runningManagedCommands,
-      input.heldManagedCommands,
-    ],
-  );
   const changeTotals = useMemo(
     () => accumulatedDiffTotals(input.restore.accumulatedFileChanges),
     [input.restore.accumulatedFileChanges],
@@ -813,7 +794,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     if (backgroundChip) {
       models.push({
         section: "background",
-        glyph: backgroundGlyph,
+        // The section's own mark whatever the rows are - activity lights it
+        // rather than replacing it, and the kinds are the panel's to draw.
+        glyph: "background",
         // The count IS the running count, so anything in it lights the chip -
         // and a shell whose process is alive is in that count whether or not it
         // is monitoring, since the host reports it as `running` either way
@@ -835,7 +818,6 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     agentsChip,
     backgroundChip,
     backgroundSummary,
-    backgroundGlyph,
     changeTotals,
     changedFileCount,
     agentsRunningCount,

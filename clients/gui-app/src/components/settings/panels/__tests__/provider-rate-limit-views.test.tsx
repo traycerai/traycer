@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -9,6 +10,7 @@ import {
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatResetFullDateTime } from "@/lib/relative-time";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 import {
   ClaudeRateLimitView,
   CodexRateLimitView,
@@ -63,6 +65,7 @@ function formatGrokPeriodDate(epochMs: number): string {
 afterEach(() => {
   cleanup();
   openLinkMock.mockClear();
+  useLayoutStore.setState(useLayoutStore.getInitialState(), true);
 });
 
 describe("CodexRateLimitView (extended fields)", () => {
@@ -114,6 +117,50 @@ describe("CodexRateLimitView (extended fields)", () => {
     // (rate-limit-popover.test.tsx) covers the chip actually rendering.
     render(<CodexRateLimitView data={codex} variant="popover-detail" />);
     expect(screen.queryByText("Pro 5x")).toBeNull();
+  });
+
+  /**
+   * The words follow Layout's Used / Remaining setting through the strip's
+   * `windowPercentText`; the fill does not, because the strip's mini bars
+   * stay used-based too and a bar that inverted here alone would be two
+   * readings of one fact.
+   */
+  describe("Layout's Used / Remaining setting", () => {
+    function barWidths(): ReadonlyArray<string> {
+      return Array.from(
+        document.querySelectorAll<HTMLElement>(".rounded-full > .h-full"),
+      ).map((fill) => fill.style.width);
+    }
+
+    it("prints '% used' under percentMode 'used'", () => {
+      useLayoutStore.getState().setStatusBarPercentMode("used");
+      render(<CodexRateLimitView data={codex} variant="settings" />);
+      expect(screen.getByText("4% used")).toBeTruthy();
+      expect(screen.getByText("68% used")).toBeTruthy();
+      expect(screen.getByText("20% used")).toBeTruthy();
+      expect(barWidths()).toEqual(["4%", "68%", "20%"]);
+    });
+
+    it("prints the complement as '% remaining' under percentMode 'remaining', with the bar fill unchanged", () => {
+      useLayoutStore.getState().setStatusBarPercentMode("remaining");
+      render(<CodexRateLimitView data={codex} variant="settings" />);
+      expect(screen.getByText("96% remaining")).toBeTruthy();
+      expect(screen.getByText("32% remaining")).toBeTruthy();
+      expect(screen.getByText("80% remaining")).toBeTruthy();
+      expect(screen.queryByText(/% used/)).toBeNull();
+      expect(barWidths()).toEqual(["4%", "68%", "20%"]);
+    });
+
+    it("re-renders the rows when the store flips, on the popover variant too", () => {
+      render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+      expect(screen.getByText("4% used")).toBeTruthy();
+      act(() => {
+        useLayoutStore.getState().setStatusBarPercentMode("remaining");
+      });
+      expect(screen.getByText("96% remaining")).toBeTruthy();
+      expect(screen.queryByText("4% used")).toBeNull();
+      expect(barWidths()).toEqual(["4%", "68%", "20%"]);
+    });
   });
 
   it("renders each extraWindow as its own labeled row (limit name + duration)", () => {

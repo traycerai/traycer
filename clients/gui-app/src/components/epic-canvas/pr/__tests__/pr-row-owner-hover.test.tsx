@@ -69,6 +69,7 @@ function treeIndexFromParents(): EpicTreeIndex {
 }
 
 let presentNodeIds: readonly string[] = [];
+let nodeHostId: string | null = "host-1";
 
 // One fixture drives the id list and both title lookups: a real projection
 // cannot hold a node in its id list and fail to resolve its title.
@@ -78,7 +79,7 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
     id === null || deletedNodeIds.has(id) ? null : { title: `Chat ${id}` },
   useEpicTerminalAgent: (id: string | null) =>
     id === null || deletedNodeIds.has(id) ? null : { title: `Agent ${id}` },
-  useEpicNodeHostId: () => "host-1",
+  useEpicNodeHostId: () => nodeHostId,
   useEpicTreeIndex: () => treeIndexFromParents(),
   useEpicAgentNodeIds: () => presentNodeIds,
 }));
@@ -134,7 +135,10 @@ function chatOwners(count: number): PrOwnerRef[] {
   }));
 }
 
-function renderRow(overrides: Partial<PrLightItem>): void {
+function renderRow(
+  overrides: Partial<PrLightItem>,
+  fallbackHostId: string,
+): void {
   const item: PrLightItem = { ...BASE_ITEM, ...overrides };
   presentNodeIds = item.owners
     .map((owner) => owner.ownerId)
@@ -159,7 +163,12 @@ function renderRow(overrides: Partial<PrLightItem>): void {
       }
     >
       <TooltipProvider>
-        <PrRow entry={entry} epicId="epic-1" tabId={TAB_ID} />
+        <PrRow
+          hostId={fallbackHostId}
+          entry={entry}
+          epicId="epic-1"
+          tabId={TAB_ID}
+        />
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -192,12 +201,13 @@ afterEach(() => {
   parentByNodeId = {};
   deletedNodeIds = new Set<string>();
   presentNodeIds = [];
+  nodeHostId = "host-1";
   hasSessionHandle = true;
 });
 
 describe("PrRow owner hover card", () => {
   it("opens from the row body and links every owning chat", () => {
-    renderRow({ owners: chatOwners(2) });
+    renderRow({ owners: chatOwners(2) }, "host-1");
     expect(hoverCard()).toBeNull();
 
     hoverRow();
@@ -215,7 +225,7 @@ describe("PrRow owner hover card", () => {
     // Six is past `VISIBLE_PR_OWNER_COUNT` + 1, so the band shows three chips
     // and a `+3`. The card is the whole set with no chip budget at all - the
     // reason to put it on the row rather than on the band.
-    renderRow({ owners: chatOwners(6) });
+    renderRow({ owners: chatOwners(6) }, "host-1");
 
     hoverRow();
 
@@ -227,7 +237,7 @@ describe("PrRow owner hover card", () => {
 
   it("nests a chat's sub-agents under it rather than repeating the title", () => {
     parentByNodeId = { "chat-1": null, "chat-2": "chat-1" };
-    renderRow({ owners: chatOwners(2) });
+    renderRow({ owners: chatOwners(2) }, "host-1");
 
     hoverRow();
 
@@ -236,7 +246,7 @@ describe("PrRow owner hover card", () => {
   });
 
   it("opens the owner's tile and dismisses itself", () => {
-    renderRow({ owners: chatOwners(2) });
+    renderRow({ owners: chatOwners(2) }, "host-1");
     hoverRow();
     const list = within(hoverCard() as HTMLElement).getByTestId(
       "pr-row-owner-hover-list",
@@ -263,8 +273,43 @@ describe("PrRow owner hover card", () => {
     expect(hoverCard()).toBeNull();
   });
 
+  it("uses the selected PR host only for legacy owners and preserves an owner's host", () => {
+    nodeHostId = null;
+    renderRow({ owners: chatOwners(1) }, "host-b");
+    hoverRow();
+    fireEvent.click(
+      within(
+        within(hoverCard() as HTMLElement).getByTestId(
+          "pr-row-owner-hover-list",
+        ),
+      ).getByLabelText("Open Chat chat-1"),
+    );
+    const legacyCall = openTile.mock.calls.at(0);
+    expect(legacyCall).toBeDefined();
+    if (legacyCall === undefined) throw new Error("expected legacy owner tile");
+    expect(legacyCall[0].node.hostId).toBe("host-b");
+
+    cleanup();
+    openTile.mockReset();
+    nodeHostId = "host-own";
+    renderRow({ owners: chatOwners(1) }, "host-b");
+    hoverRow();
+    fireEvent.click(
+      within(
+        within(hoverCard() as HTMLElement).getByTestId(
+          "pr-row-owner-hover-list",
+        ),
+      ).getByLabelText("Open Chat chat-1"),
+    );
+    const knownOwnerCall = openTile.mock.calls.at(0);
+    expect(knownOwnerCall).toBeDefined();
+    if (knownOwnerCall === undefined)
+      throw new Error("expected known owner tile");
+    expect(knownOwnerCall[0].node.hostId).toBe("host-own");
+  });
+
   it("heads the card with the full title and stands the row's tooltip down", () => {
-    renderRow({ owners: chatOwners(2) });
+    renderRow({ owners: chatOwners(2) }, "host-1");
 
     // Stood down for the row's whole LIFETIME, not just while the card is
     // showing: both open at 500ms from the same pointer and the title is the
@@ -285,7 +330,7 @@ describe("PrRow owner hover card", () => {
   });
 
   it("leaves an ownerless row with its title tooltip and no card", () => {
-    renderRow({ owners: [] });
+    renderRow({ owners: [] }, "host-1");
 
     hoverRow();
 
@@ -303,7 +348,7 @@ describe("PrRow owner hover card", () => {
     // been served `epic.listChatRecords` resolves none of them either. Both
     // mean the same thing to this surface: no card, tooltip stays.
     deletedNodeIds = new Set(["chat-1", "chat-2"]);
-    renderRow({ owners: chatOwners(2) });
+    renderRow({ owners: chatOwners(2) }, "host-1");
 
     hoverRow();
 
@@ -319,7 +364,7 @@ describe("PrRow owner hover card", () => {
     // while the epic store session is still null. Every projection read here
     // would throw; the row must survive that window.
     hasSessionHandle = false;
-    renderRow({ owners: chatOwners(2) });
+    renderRow({ owners: chatOwners(2) }, "host-1");
 
     hoverRow();
 

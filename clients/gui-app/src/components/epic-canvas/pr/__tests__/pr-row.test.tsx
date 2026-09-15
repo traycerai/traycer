@@ -115,6 +115,7 @@ function renderRow(overrides: Partial<PrLightItem>) {
     >
       <TooltipProvider>
         <PrRow
+          hostId="host1"
           entry={entry(overrides, () => {})}
           epicId="epic-1"
           tabId={TAB_ID}
@@ -532,6 +533,7 @@ describe("PrRow active-tile highlight", () => {
       >
         <TooltipProvider>
           <PrRow
+            hostId="host1"
             entry={{ key: "row", item: BASE_ITEM, tileId, onOpen: () => {} }}
             epicId="epic-1"
             tabId={tabId}

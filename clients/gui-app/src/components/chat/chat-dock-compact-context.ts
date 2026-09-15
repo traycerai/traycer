@@ -1,5 +1,4 @@
 import { createContext, useContext } from "react";
-import type { BackgroundItemKind } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 
 /** The three dock rows Layout ▸ Composer can fold into a chip. */
@@ -12,22 +11,17 @@ export type ChatDockSection = "filesChanged" | "activeAgents" | "background";
  * section it stands for at exactly the moment someone is scanning for it, and
  * two busy chips side by side then read as the same thing twice.
  *
- * The Background chip has no icon of its own. It borrows the icon of the one
- * kind its rows share - a wake, a sub-agent - and shows a neutral stack
- * (`mixed`) when they differ, exactly as the panel's rows would draw them.
- * `managedShell` is the host-supervised shell, which the panel draws from its
- * own glyph family rather than from the kind icons; on the chip it is always a
- * terminal, running or held. The panel keeps its pause glyph for the held ROW,
- * where the word "Held" is right beside it; a chip has no such word, so a pause
- * on a live watcher read as "this shell is paused" - which is how a shell
- * following a PR came to be drawn as stopped.
+ * One member per section, and the Background one is deliberately not a
+ * per-kind borrow any more. The chip used to take the icon of the one kind its
+ * rows shared and a neutral stack when they differed, so the same chip was a
+ * bot, a clock, a terminal or a pile of layers depending on what happened to
+ * be in the panel - and a reader scanning the strip for "the background chip"
+ * had to know the panel's contents to find it. The section's own mark, the
+ * chat-with-a-clock the notification indicators use for background work, is
+ * the one thing that says "background" wherever it appears. The panel's rows
+ * keep their per-kind icons; that is where a kind is worth telling apart.
  */
-export type ChatDockCompactChipGlyph =
-  | "filesChanged"
-  | "activeAgents"
-  | "managedShell"
-  | "mixed"
-  | BackgroundItemKind;
+export type ChatDockCompactChipGlyph = ChatDockSection;
 
 export interface ChatDockCompactChipModel {
   readonly section: ChatDockSection;

@@ -1,6 +1,5 @@
 import {
   LEFT_PANEL_DEFINITIONS,
-  type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import {
@@ -51,45 +50,12 @@ const CURATED_CATEGORY_IDS: ReadonlyArray<LeftPanelId> =
   CURATED_CATEGORY_DEFS.map((definition) => definition.id);
 
 /**
- * The context each curated definition's `isAutoVisible()` is judged against.
- * Only PR presence varies: every other curated category is unconditionally
- * visible on the bar. The empty override map keeps the switcher on each panel's
- * own rule: the rail's show/hide context menu is a desktop affordance, and the
- * phone switcher's category set is curated here rather than by it.
- *
- * Comments answers the registry's two reveal gates affirmatively because the
- * two surfaces have opposite constraints. The desktop rail is a fixed strip
- * alongside the canvas, so it can afford to hold the tab back until an artifact
- * tile reveals it. The phone sheet is the ONLY route to a thread list, a
- * permalink or a reply composer - so a tab that came and went with the shown
- * tile would leave a tap on a thread anchor with nowhere to land. The tab is
- * permanent here, and the body names the condition when the shown tile is not
- * an artifact.
+ * All curated categories remain reachable on mobile. In particular, the PR
+ * panel's host picker must be accessible when the canvas host has no PRs or
+ * cannot serve its stream. Opening the category is what starts discovery.
  */
-function switcherAvailability(
-  hasPullRequests: boolean,
-): LeftPanelAvailabilityContext {
-  return {
-    commentsPanelRevealed: true,
-    hasActiveCommentableArtifact: true,
-    hasPullRequests,
-    visibilityOverrideById: {},
-  };
-}
-
-/**
- * The categories the sheet shows right now. `hasPullRequests` is the same
- * presence signal the desktop rail gates its Pull Requests icon on, so an epic
- * with no PRs gets no PR tab - identical to desktop, where the panel earns no
- * rail slot.
- */
-export function visibleSwitcherCategoryDefs(
-  hasPullRequests: boolean,
-): ReadonlyArray<LeftPanelMetadataDefinition> {
-  const availability = switcherAvailability(hasPullRequests);
-  return CURATED_CATEGORY_DEFS.filter((definition) =>
-    definition.isAutoVisible(availability),
-  );
+export function visibleSwitcherCategoryDefs(): ReadonlyArray<LeftPanelMetadataDefinition> {
+  return CURATED_CATEGORY_DEFS;
 }
 
 /**
@@ -108,21 +74,9 @@ export function switcherCategoryTitle(
   return MOBILE_SWITCHER_TITLE_OVERRIDES[definition.id] ?? definition.title;
 }
 
-/**
- * Clamp a persisted active left-panel id to the categories currently on the
- * bar, so a selection with no tab behind it falls back to Agents rather than
- * leaving the sheet with no matching tab. `pull-requests` is the case that
- * reaches it: persisted from an epic that has since stopped reporting any PR,
- * or against a host that does not serve the PR stream.
- */
-export function clampToSwitcherCategory(
-  id: LeftPanelId,
-  hasPullRequests: boolean,
-): LeftPanelId {
-  const visible = visibleSwitcherCategoryDefs(hasPullRequests);
-  return visible.some((definition) => definition.id === id)
-    ? id
-    : DEFAULT_LEFT_PANEL_ID;
+/** Clamp a persisted desktop panel to the mobile curated categories. */
+export function clampToSwitcherCategory(id: LeftPanelId): LeftPanelId {
+  return CURATED_CATEGORY_IDS.includes(id) ? id : DEFAULT_LEFT_PANEL_ID;
 }
 
 /** Membership in the curated set, independent of present-moment visibility. */

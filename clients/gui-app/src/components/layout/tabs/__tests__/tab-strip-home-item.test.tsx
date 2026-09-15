@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabStripHomeItem } from "@/components/layout/tabs/tab-strip-home-item";
+import { headerTabClassName } from "@/components/layout/tabs/tab-chrome-tokens";
 
 afterEach(() => {
   cleanup();
@@ -108,6 +109,26 @@ describe("<TabStripHomeItem />", () => {
     expect(tab.hasAttribute("data-tab-index")).toBe(false);
     expect(tab.hasAttribute("data-strip-item-id")).toBe(false);
     expect(tab.hasAttribute("data-strip-item-mergeable")).toBe(false);
+  });
+
+  // The bubble used to be its own `h-10 w-11` box beside `h-9 … px-6` task
+  // tabs, so it read narrower and taller than its neighbours. It now stands in
+  // the same box, derived from the same token, and differs only in the width
+  // rule: a task tab fills its frame, an icon-only item sizes to its padding.
+  it("shares the task tabs' height and horizontal padding, and only the width rule differs", () => {
+    renderHomeItem(false, vi.fn(), 0);
+
+    const home = screen.getByTestId("tab-home").className.split(/\s+/);
+    const epicTab = headerTabClassName("own", false).split(/\s+/);
+    const sizing = epicTab.filter(
+      (token) => token.startsWith("h-") || token.startsWith("px-"),
+    );
+    expect(sizing).toEqual(["h-9", "px-6"]);
+    for (const token of sizing) expect(home).toContain(token);
+    expect(home).toContain("w-auto");
+    expect(home).not.toContain("w-full");
+    expect(home).not.toContain("h-10");
+    expect(home).not.toContain("w-11");
   });
 
   it("keeps [-webkit-app-region:no-drag] so the window drag region skips the control", () => {

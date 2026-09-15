@@ -19,17 +19,17 @@ interface PickerLeaderBadgeProps {
    * never reflows its surface. `corner` floats a tiny number in the icon's
    * top-right (rail, no label room); `trailing` floats just past a label's
    * right edge (reasoning pills), landing in the pill's existing trailing
-   * whitespace; `leading` floats at the top-left, opposite `corner`; `above`
-   * occupies the slider's reserved label row, centred over its stop.
+   * whitespace; `leading` floats at the top-left, opposite `corner`; `center`
+   * sits inside a slider stop or the Fast icon's slot.
    */
-  readonly placement: "corner" | "trailing" | "leading" | "above";
+  readonly placement: "corner" | "trailing" | "leading" | "center";
 }
 
 /**
  * A minimal digit-only leader hint. The held key already tells you the modifier
  * (⌘ for the rail, ⌥ for reasoning), so the badge shows just the number and
- * never masks the icon glyph or the level label - a small corner chip or a
- * trailing chip, fading in while the leader is held. All placements are
+ * leaves the level label visible. Compact controls replace their dot or icon
+ * with a centered badge while the leader is held. All placements are
  * absolutely positioned (out of flow) so the fade-in never shifts surrounding
  * layout.
  */
@@ -52,8 +52,8 @@ export function PickerLeaderBadge(props: PickerLeaderBadgeProps) {
               "absolute right-0 top-0 size-[1.125rem] text-[0.6875rem]",
             placement === "leading" &&
               "absolute left-0 top-0 size-[1.125rem] text-[0.6875rem]",
-            placement === "above" &&
-              "absolute bottom-full left-1/2 mb-2 h-[1.125rem] min-w-[1.125rem] -translate-x-1/2 px-1 text-[0.6875rem]",
+            placement === "center" &&
+              "absolute left-1/2 top-1/2 h-4 -translate-x-1/2 -translate-y-1/2 px-0.5 text-[0.625rem] shadow-none",
             placement === "trailing" &&
               "absolute left-full top-1/2 ml-1 h-[1.125rem] min-w-[1.125rem] -translate-y-[calc(50%+0.1rem)] px-1 text-[0.6875rem]",
           )}

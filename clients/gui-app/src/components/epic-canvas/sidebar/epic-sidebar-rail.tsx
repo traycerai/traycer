@@ -55,6 +55,7 @@ import {
   isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
   resolveActiveVisibleGroupIndex,
+  retainDisplayedPrPanel,
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
@@ -64,6 +65,8 @@ import {
   LEFT_PANEL_RAIL_TILE_CLASS,
 } from "@/components/epic-canvas/sidebar/left-panel-rail-tile";
 import { useEpicArtifact } from "@/lib/epic-selectors";
+import { useSurfaceHostPinWithDefault } from "@/hooks/host/use-surface-host-pin";
+import { tabSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import {
   selectPrScopeHasItems,
@@ -171,7 +174,11 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
   // The host the PR panel records presence under (see `EpicLeftPanelHost`).
-  const hostId = useCanvasHostId();
+  const canvasHostId = useCanvasHostId();
+  const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
+    tabSurfaceKey("pull-requests", tabId),
+    canvasHostId,
+  );
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
@@ -183,13 +190,16 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
     (s) => s.toggleMainCollapsed,
   );
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
-    () => ({
-      commentsPanelRevealed,
-      hasActiveCommentableArtifact,
-      hasPullRequests,
-      visibilityOverrideById,
-    }),
+    () =>
+      retainDisplayedPrPanel(panelGroups, activePanelId, {
+        commentsPanelRevealed,
+        hasActiveCommentableArtifact,
+        hasPullRequests,
+        visibilityOverrideById,
+      }),
     [
+      panelGroups,
+      activePanelId,
       commentsPanelRevealed,
       hasActiveCommentableArtifact,
       hasPullRequests,
