@@ -119,6 +119,7 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
 
 class FakeWindow implements MenuManagedWindow {
   menus: Electron.Menu[] = [];
+  readonly menuBarVisibilityCalls: boolean[] = [];
   focused = true;
   destroyed = false;
 
@@ -132,6 +133,10 @@ class FakeWindow implements MenuManagedWindow {
 
   setMenu(menu: Electron.Menu): void {
     this.menus.push(menu);
+  }
+
+  setMenuBarVisibility(visible: boolean): void {
+    this.menuBarVisibilityCalls.push(visible);
   }
 }
 
@@ -468,6 +473,29 @@ describe("MenuController", () => {
     });
 
     expect(electronState.setApplicationMenu).toHaveBeenCalledTimes(5);
+    controller.dispose();
+  });
+
+  it("keeps Linux native menu bars hidden across menu rebuilds", () => {
+    const registry = new FakeWindowRegistry();
+    const controller = new MenuController({
+      appName: "Traycer",
+      platform: "linux",
+      windowRegistry: registry,
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      tray: null,
+      zoomController: new FakeZoomController(),
+      dispatchRendererCommand: () => true,
+      checkForUpdates: () => Promise.resolve(),
+    });
+
+    controller.install();
+    registry.emitChange();
+
+    expect(registry.window.menuBarVisibilityCalls).toEqual([false, false]);
+    expect(registry.window.menus).toHaveLength(2);
     controller.dispose();
   });
 

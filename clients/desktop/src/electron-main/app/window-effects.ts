@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   nativeImage,
+  nativeTheme,
   type IpcMainInvokeEvent,
 } from "electron";
 import { log } from "./logger";
@@ -112,23 +113,33 @@ export function handleSetContentProtection(
 }
 
 /**
- * Windows-only: repaints the native window controls (min/max/close) drawn by
+ * Repaints the Windows/Linux window controls (min/max/close) drawn by
  * Chromium's Window Controls Overlay. The `BrowserWindow`'s `titleBarOverlay`
  * colors are static after creation, so the renderer pushes theme-derived
  * colors here on every theme change to keep the controls in sync with the
- * active theme / light-dark mode. macOS draws OS-native traffic lights and
- * Linux uses default chrome, so both are no-ops.
+ * active theme / light-dark mode. Linux native menus also follow the selected
+ * mode; retaining "system" avoids overriding the OS color-scheme signal.
+ * macOS keeps its OS-native traffic lights.
  */
 export function handleSetTitleBarOverlay(
   event: IpcMainInvokeEvent,
   color: unknown,
   symbolColor: unknown,
+  themeSource: unknown,
 ): void {
-  if (process.platform !== "win32") return;
+  if (process.platform !== "win32" && process.platform !== "linux") return;
   if (typeof color !== "string" || typeof symbolColor !== "string") return;
   const resolved = resolveSenderWindow(event);
   if (resolved === null) return;
   resolved.window.setTitleBarOverlay({ color, symbolColor });
+  if (
+    process.platform === "linux" &&
+    (themeSource === "system" ||
+      themeSource === "light" ||
+      themeSource === "dark")
+  ) {
+    nativeTheme.themeSource = themeSource;
+  }
 }
 
 /**

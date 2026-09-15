@@ -33,8 +33,8 @@ vi.mock("@/components/layout/app-shell", () => ({
 // in a title-bar band, and the strip routes its popup through a TanStack
 // mutation. This routing test wraps RootComponent in only a router queryClient
 // (no QueryClientProvider), so stub the module like AppShell above.
-vi.mock("@/components/layout/header/windows-menu-bar", () => ({
-  WindowsMenuBar: () => null,
+vi.mock("@/components/layout/header/desktop-menu-bar", () => ({
+  DesktopMenuBar: () => null,
 }));
 
 vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({

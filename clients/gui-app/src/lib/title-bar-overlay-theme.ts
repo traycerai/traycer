@@ -1,14 +1,19 @@
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { appLogger } from "@/lib/logger";
 import { deriveTitleBarOverlayColors } from "@/lib/title-bar-overlay-colors";
 import { subscribeResolvedTheme } from "@/lib/theme-applier";
 
 export interface TitleBarOverlaySink {
-  setTitleBarOverlay(color: string, symbolColor: string): Promise<void>;
+  setTitleBarOverlay(
+    color: string,
+    symbolColor: string,
+    themeSource: "system" | "light" | "dark",
+  ): Promise<void>;
 }
 
 /**
- * Keeps the Windows native min/max/close controls aligned with the active
- * renderer theme. Desktop startup calls this only on Windows, after preload
+ * Keeps the native min/max/close controls aligned with the active
+ * renderer theme. Windows and Linux desktop startup call this after preload
  * and renderer CSS are available.
  *
  * The load retry closes the startup race where the first computed-style read
@@ -23,13 +28,11 @@ export function installTitleBarOverlayThemeSync(
   const push = (): void => {
     if (disposed) return;
     const { color, symbolColor } = deriveTitleBarOverlayColors(doc);
-    void sink.setTitleBarOverlay(color, symbolColor).catch((error) => {
-      appLogger.error(
-        "Failed to synchronize Windows title-bar colors",
-        {},
-        error,
-      );
-    });
+    void sink
+      .setTitleBarOverlay(color, symbolColor, useSettingsStore.getState().theme)
+      .catch((error) => {
+        appLogger.error("Failed to synchronize title-bar colors", {}, error);
+      });
   };
 
   push();

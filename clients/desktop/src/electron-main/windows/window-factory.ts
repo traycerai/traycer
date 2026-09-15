@@ -56,7 +56,8 @@ export interface MainWindowOptions {
  */
 export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   const isMac = process.platform === "darwin";
-  const isWindows = process.platform === "win32";
+  const hasOverlayControls =
+    process.platform === "win32" || process.platform === "linux";
   const minSize = minimumWindowSize();
   const resolutionTest = readResolutionTestWindowConfig(process.env);
   const placementBounds =
@@ -83,17 +84,20 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     // white flash on launch. Matches the renderer's dark surface color.
     backgroundColor: "#0b0b0d",
     // macOS: traffic lights overlay the renderer so the header acts as the
-    // title bar (matches VS Code / Linear). Windows: native min/max/close
-    // controls in an overlay so the renderer can claim the rest of the
-    // title-bar surface as a drag region. Linux: default OS chrome.
-    titleBarStyle: isMac ? "hiddenInset" : isWindows ? "hidden" : "default",
+    // title bar. Windows and Linux retain native min/max/close controls
+    // while the renderer draws the surrounding menu/title-bar surface.
+    titleBarStyle: isMac
+      ? "hiddenInset"
+      : hasOverlayControls
+        ? "hidden"
+        : "default",
     trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
     // `titleBarOverlay: true` on mac activates Chromium's Window Controls
     // Overlay API so the renderer can read native control geometry via
     // `navigator.windowControlsOverlay` + the `env(titlebar-area-*)` CSS
     // env vars. Mac ignores the color/height options but the truthy value
     // is what flips WCO emission on.
-    titleBarOverlay: isWindows
+    titleBarOverlay: hasOverlayControls
       ? {
           color: "#0b0b0d",
           symbolColor: "#e5e5e5",
@@ -138,6 +142,12 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       zoomFactor: options.zoomFactor,
     },
   });
+
+  if (process.platform === "linux") {
+    // Keep the application menu attached for native roles and accelerators;
+    // the renderer supplies the visible labels in the custom title bar.
+    window.setMenuBarVisibility(false);
+  }
 
   void window.webContents.setVisualZoomLevelLimits(1, 1).catch((err) => {
     log.warn("[window] failed to lock visual zoom limits", err);

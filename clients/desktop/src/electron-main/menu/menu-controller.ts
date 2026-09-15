@@ -25,6 +25,7 @@ export interface MenuManagedWindow {
   isDestroyed(): boolean;
   isFocused(): boolean;
   setMenu(menu: Electron.Menu): void;
+  setMenuBarVisibility(visible: boolean): void;
 }
 
 export interface MenuWindowRecord {
@@ -151,6 +152,9 @@ export class MenuController {
     if (this.options.platform !== "darwin") {
       for (const record of this.options.windowRegistry.records()) {
         record.window.setMenu(menu);
+        if (this.options.platform === "linux") {
+          record.window.setMenuBarVisibility(false);
+        }
       }
     }
     this.options.tray?.setPresentation({

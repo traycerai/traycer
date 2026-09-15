@@ -10,6 +10,18 @@ import type {
   DesktopZoomBridge,
 } from "@/lib/windows/types";
 
+/** Preload platform identity; browser user agents are not a desktop capability. */
+export function resolveDesktopPlatform(
+  runnerHost: IRunnerHost,
+): "darwin" | "win32" | "linux" | null {
+  const menu: unknown = Reflect.get(runnerHost, "menu");
+  if (!isRecord(menu)) return null;
+  const platform = menu.platform;
+  return platform === "darwin" || platform === "win32" || platform === "linux"
+    ? platform
+    : null;
+}
+
 export function resolveDesktopMenuBridge(
   runnerHost: IRunnerHost,
 ): DesktopMenuBridge | null {
@@ -73,7 +85,12 @@ function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
 function isDesktopMenuPopupBridge(
   value: unknown,
 ): value is DesktopMenuPopupBridge {
-  return isRecord(value) && typeof value.openTopLevel === "function";
+  return (
+    isRecord(value) &&
+    typeof value.openTopLevel === "function" &&
+    typeof value.getSnapshot === "function" &&
+    typeof value.executeItem === "function"
+  );
 }
 
 function isDesktopSupportBridge(value: unknown): value is DesktopSupportBridge {

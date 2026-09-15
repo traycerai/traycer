@@ -1,7 +1,11 @@
 import "../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { AppHeader } from "@/components/layout/header/app-header";
+import type { DesktopMenuCommandPayload } from "@/lib/windows/types";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 // Drive the viewport switch directly; the desktop-only header children need
 // host/query/auth providers, so stub them (and both branch markers) to keep
@@ -17,9 +21,6 @@ vi.mock("@/components/layout/header/mobile-app-header", () => ({
       menu
     </button>
   ),
-}));
-vi.mock("@/components/layout/header/windows-menu-bar", () => ({
-  WindowsMenuBar: () => null,
 }));
 vi.mock("@/components/layout/tabs/tab-strip", () => ({
   TabStrip: () => <div role="tablist" aria-label="Open tabs" />,
@@ -52,6 +53,40 @@ vi.mock("@/components/layout/header/sign-in-button", () => ({
   SignInButton: () => null,
 }));
 
+function createDesktopHost(): MockRunnerHost {
+  const host = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://authn.traycer.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  Object.assign(host, {
+    menu: {
+      platform: "linux",
+      onCommand: (_handler: (payload: DesktopMenuCommandPayload) => void) => ({
+        dispose: () => undefined,
+      }),
+      getSnapshot: () =>
+        Promise.resolve({
+          revision: 1,
+          menus: [
+            { id: "file", label: "File", items: [] },
+            { id: "edit", label: "Edit", items: [] },
+            { id: "view", label: "View", items: [] },
+            { id: "window", label: "Window", items: [] },
+            { id: "help", label: "Help", items: [] },
+          ],
+        }),
+      executeItem: () => Promise.resolve(),
+      openTopLevel: () => Promise.resolve(),
+    },
+  });
+  return host;
+}
+
 describe("AppHeader mobile/desktop switch", () => {
   beforeEach(() => {
     mobileState.value = false;
@@ -80,5 +115,25 @@ describe("AppHeader mobile/desktop switch", () => {
     // host-loading never shows the tab strip, but it must NOT switch to the
     // mobile hamburger header either.
     expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
+  });
+
+  it("keeps the shared desktop menu and tab row at a narrow Linux window", () => {
+    mobileState.value = true;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RunnerHostProvider runnerHost={createDesktopHost()}>
+          <AppHeader variant="app" />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
+    expect(
+      screen.getAllByRole("navigation", { name: "Application menu" }),
+    ).toHaveLength(1);
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["File", "Edit", "View", "Window", "Help"]);
+    expect(screen.getByRole("tablist", { name: "Open tabs" })).not.toBeNull();
   });
 });

@@ -224,6 +224,8 @@ function buildFakeBridge(
     menu: {
       platform: "darwin",
       onCommand: (_handler) => ({ dispose: () => undefined }),
+      getSnapshot: async () => ({ revision: 0, menus: [] }),
+      executeItem: async (_revision: number, _itemId: string) => undefined,
       openTopLevel: async () => undefined,
     },
     appUpdates: {

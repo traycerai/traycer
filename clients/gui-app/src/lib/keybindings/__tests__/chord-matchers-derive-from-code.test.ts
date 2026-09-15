@@ -133,7 +133,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
   "gui-app/src/components/epics/epics-list-panel.tsx": 2,
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
-  "gui-app/src/components/layout/header/windows-menu-bar.tsx": 3,
+  "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
   "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 4,
   "gui-app/src/components/onboarding/onboarding-page.tsx": 4,
   "gui-app/src/components/providers/profile-dropdown.tsx": 4,

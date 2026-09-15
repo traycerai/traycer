@@ -12,18 +12,24 @@ import type { IpcMainInvokeEvent } from "electron";
 import { handleSetTitleBarOverlay } from "../window-effects";
 
 /**
- * On Windows the native min/max/close controls are drawn by Electron from the
- * `titleBarOverlay` colors. `handleSetTitleBarOverlay` lets the renderer push
- * theme-derived colors so the controls follow the active theme instead of the
- * static dark launch defaults. It is Windows-only (mac uses the WCO with
- * OS-drawn glyphs; Linux uses default chrome).
+ * On Windows and Linux the native min/max/close controls are drawn by Electron
+ * from the `titleBarOverlay` colors. `handleSetTitleBarOverlay` lets the
+ * renderer push theme-derived colors so the controls follow the active theme
+ * instead of the static dark launch defaults. macOS uses OS-drawn traffic
+ * lights.
  */
 
 const setTitleBarOverlay = vi.fn();
 const fromWebContents = vi.fn();
+const { nativeTheme } = vi.hoisted(() => ({
+  nativeTheme: {
+    themeSource: "system" as "system" | "light" | "dark",
+  },
+}));
 
 vi.mock("electron", () => ({
   app: { dock: undefined },
+  nativeTheme,
   nativeImage: {
     createFromDataURL: vi.fn(),
     createFromPath: vi.fn(),
@@ -79,6 +85,7 @@ afterAll(() => {
 beforeEach(() => {
   setTitleBarOverlay.mockClear();
   fromWebContents.mockReset();
+  nativeTheme.themeSource = "system";
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -89,7 +96,7 @@ describe("handleSetTitleBarOverlay", () => {
     setPlatform("win32");
     fromWebContents.mockReturnValue(fakeWindow(false));
 
-    handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4");
+    handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4", "dark");
 
     expect(setTitleBarOverlay).toHaveBeenCalledWith({
       color: "#1e1e2e",
@@ -97,11 +104,42 @@ describe("handleSetTitleBarOverlay", () => {
     });
   });
 
-  it("is a no-op off Windows (mac/Linux draw their own controls)", () => {
+  it("applies the renderer-provided colors to the sender window on Linux", () => {
     setPlatform("linux");
     fromWebContents.mockReturnValue(fakeWindow(false));
 
-    handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4");
+    handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4", "dark");
+
+    expect(setTitleBarOverlay).toHaveBeenCalledWith({
+      color: "#1e1e2e",
+      symbolColor: "#cdd6f4",
+    });
+    expect(nativeTheme.themeSource).toBe("dark");
+  });
+
+  it("keeps Linux system theme selection under OS control", () => {
+    setPlatform("linux");
+    fromWebContents.mockReturnValue(fakeWindow(false));
+
+    handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4", "system");
+
+    expect(nativeTheme.themeSource).toBe("system");
+  });
+
+  it("rejects an invalid Linux theme source without changing nativeTheme", () => {
+    setPlatform("linux");
+    fromWebContents.mockReturnValue(fakeWindow(false));
+
+    handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4", "sepia");
+
+    expect(nativeTheme.themeSource).toBe("system");
+  });
+
+  it("is a no-op on macOS", () => {
+    setPlatform("darwin");
+    fromWebContents.mockReturnValue(fakeWindow(false));
+
+    handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4", "system");
 
     expect(setTitleBarOverlay).not.toHaveBeenCalled();
   });
@@ -110,7 +148,7 @@ describe("handleSetTitleBarOverlay", () => {
     setPlatform("win32");
     fromWebContents.mockReturnValue(fakeWindow(false));
 
-    handleSetTitleBarOverlay(event, 123, null);
+    handleSetTitleBarOverlay(event, 123, null, "system");
 
     expect(setTitleBarOverlay).not.toHaveBeenCalled();
   });
@@ -119,7 +157,7 @@ describe("handleSetTitleBarOverlay", () => {
     setPlatform("win32");
     fromWebContents.mockReturnValue(fakeWindow(true));
 
-    handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4");
+    handleSetTitleBarOverlay(event, "#1e1e2e", "#cdd6f4", "system");
 
     expect(setTitleBarOverlay).not.toHaveBeenCalled();
   });
