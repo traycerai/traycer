@@ -7,9 +7,10 @@ import { singleDigitLeaderDigitFor } from "@/providers/keybinding-context";
 const BADGE_TRANSITION = { duration: 0.12, ease: "easeOut" } as const;
 
 interface PickerLeaderBadgeProps {
-  /** True while this surface's leader is held (the picker owns the modifier). */
-  readonly show: boolean;
   readonly index: number;
+  /** The scope's visible modifier; null hides the badge. Also names the
+   *  modifier in the accessible hint while the visual stays digit-only. */
+  readonly modifier: "mod" | "alt" | null;
   /** Verb for the aria hint, e.g. "to browse" / "to set". */
   readonly hintAction: string;
   readonly hintTarget: string;
@@ -34,17 +35,17 @@ interface PickerLeaderBadgeProps {
  * layout.
  */
 export function PickerLeaderBadge(props: PickerLeaderBadgeProps) {
-  const { show, index, hintAction, hintTarget, testId, placement } = props;
+  const { index, modifier, hintAction, hintTarget, testId, placement } = props;
   const digit = singleDigitLeaderDigitFor(index);
   return (
     <AnimatePresence initial={false}>
-      {show ? (
+      {modifier !== null ? (
         <m.span
           initial={{ opacity: 0, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.8 }}
           transition={BADGE_TRANSITION}
-          aria-label={leaderHint(digit, hintAction, hintTarget)}
+          aria-label={leaderHint(digit, modifier, hintAction, hintTarget)}
           data-testid={testId}
           className={cn(
             "pointer-events-none flex items-center justify-center rounded-[0.3rem] bg-primary font-bold tabular-nums leading-none text-primary-foreground shadow-sm ring-1 ring-primary/40",

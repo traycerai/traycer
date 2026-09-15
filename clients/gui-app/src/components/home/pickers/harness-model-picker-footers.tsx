@@ -612,7 +612,7 @@ const ReasoningLevelStop = memo(function ReasoningLevelStop(
           )}
         />
         <PickerLeaderBadge
-          show={showShortcut}
+          modifier={disabled ? null : leaderModifier}
           index={index}
           hintAction="to set"
           hintTarget={option.label}
@@ -666,7 +666,7 @@ function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
       <span className="relative inline-flex min-w-0 items-center">
         <span className="truncate">{option.label}</span>
         <PickerLeaderBadge
-          show={!disabled && leaderModifier !== null}
+          modifier={disabled ? null : leaderModifier}
           index={index}
           hintAction="to set"
           hintTarget={option.label}

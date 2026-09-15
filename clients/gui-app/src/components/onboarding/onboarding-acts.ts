@@ -1,4 +1,5 @@
 import { isMobileApp } from "@/lib/mobile-app";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 /**
  * The acts the desktop tour can play - and the only ids the desktop diorama
@@ -134,7 +135,7 @@ export const ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
     id: "command-theme",
     eyebrowLabel: "FLOW",
     title: "Move fast.\nMake it yours.",
-    body: "Use Cmd+K to create, jump, launch, and switch without breaking flow. Pick a theme; terminals and app surfaces follow it together.",
+    body: `Use ${formatChordForDisplay("mod+k")} to create, jump, launch, and switch without breaking flow. Pick a theme; terminals and app surfaces follow it together.`,
     addon: "theme",
   },
   // Last on purpose: the wizard's Import button is the only thing that starts

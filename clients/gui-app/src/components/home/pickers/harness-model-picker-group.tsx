@@ -375,7 +375,7 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
               </span>
             ) : null}
             <PickerLeaderBadge
-              show={leaderModifier !== null && selectable}
+              modifier={selectable ? leaderModifier : null}
               index={index}
               // Degraded providers stay browse-only (the leader digit browses,
               // it does not commit), so the hint must not over-promise "switch".

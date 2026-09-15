@@ -835,7 +835,12 @@ function TabItemBody(
       ? null
       : {
           modifier: leaderModifier,
-          hint: leaderHint(leaderDigitFor(index), "to switch to", displayTitle),
+          hint: leaderHint(
+            leaderDigitFor(index),
+            leaderModifier,
+            "to switch to",
+            displayTitle,
+          ),
         };
   const tooltipContent = tabTooltipContent(
     tab,

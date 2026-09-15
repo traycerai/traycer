@@ -39,7 +39,7 @@ export function FastModeFooterButton(props: FastModeFooterButtonProps) {
         />
         {inlineShortcut ? (
           <PickerLeaderBadge
-            show={leader !== null}
+            modifier={leader}
             index={9}
             hintAction="to toggle"
             hintTarget={`${upgrade.label} mode`}
@@ -51,7 +51,7 @@ export function FastModeFooterButton(props: FastModeFooterButtonProps) {
       <span className="relative inline-flex min-w-0 items-center">
         <span className="truncate">{upgrade.label}</span>
         <PickerLeaderBadge
-          show={!inlineShortcut && leader !== null}
+          modifier={inlineShortcut ? null : leader}
           index={9}
           hintAction="to toggle"
           hintTarget={`${upgrade.label} mode`}
