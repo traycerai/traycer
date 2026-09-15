@@ -252,9 +252,9 @@ export function FallbackGraceCard({
           ) : null}
         </div>
         <Button
-          size="sm"
-          variant="ghost"
-          className="h-auto px-1 py-0 text-ui-xs text-muted-foreground"
+          size="xs"
+          variant="muted"
+          className="h-auto"
           onClick={openFallbackSettings}
         >
           {FALLBACK_SETTINGS_LABEL}

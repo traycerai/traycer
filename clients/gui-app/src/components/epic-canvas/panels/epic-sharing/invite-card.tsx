@@ -80,12 +80,12 @@ export function InviteCard(props: InviteCardProps) {
         />
         <Button
           type="button"
-          variant="ghost"
-          size="xs"
+          variant="muted"
+          size="sm"
           onClick={onAddToQueue}
           disabled={!canAddInvite}
           data-testid="invite-add-button"
-          className="absolute top-1/2 right-2 -translate-y-1/2 text-ui-sm text-muted-foreground disabled:opacity-40"
+          className="absolute top-1/2 right-2 -translate-y-1/2 disabled:opacity-40 h-6"
         >
           Add
         </Button>
@@ -175,11 +175,11 @@ function InviteChip(props: {
       <span className="min-w-0 truncate">{label}</span>
       <Button
         type="button"
-        variant="ghost"
+        variant="muted-destructive"
         size="icon-xs"
         onClick={onRemove}
         disabled={isPending}
-        className="size-5 rounded-full text-muted-foreground hover:text-destructive"
+        className="size-5 rounded-full"
         aria-label={`Remove ${label} from queue`}
         data-testid="invite-queue-remove"
       >
@@ -213,9 +213,9 @@ function GithubHandleInviteInfo() {
       >
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
-          className="size-7 rounded-full text-muted-foreground"
+          className="size-7 rounded-full"
           aria-label="GitHub handle invite email notification note"
           data-testid="github-handle-invite-info"
         >

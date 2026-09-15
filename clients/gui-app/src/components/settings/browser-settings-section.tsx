@@ -457,9 +457,8 @@ function SavedWebsiteSessionsState(props: {
           {props.onRemoveAll === null ? null : (
             <Button
               type="button"
-              variant="outline"
+              variant="destructive-ghost"
               size="sm"
-              className="text-destructive hover:text-destructive"
               onClick={() => {
                 void props.onRemoveAll?.();
               }}
@@ -535,8 +534,8 @@ function SavedWebsiteSessionsManager(props: {
             <SheetTrigger asChild>
               <Button
                 type="button"
-                variant="ghost"
-                className="h-auto w-full justify-between rounded-none border-t border-border/40 px-5 py-3 text-start text-muted-foreground"
+                variant="muted"
+                className="h-auto w-full justify-between rounded-none border-t border-border/40 px-5 py-3 text-start"
               >
                 {disclosureLabel}
                 <ArrowRightIcon aria-hidden="true" />
@@ -613,9 +612,8 @@ function SavedWebsiteSessionsManager(props: {
                     />
                     <Button
                       type="button"
-                      variant="ghost"
+                      variant="muted-destructive"
                       size="sm"
-                      className="text-muted-foreground hover:text-destructive"
                       aria-label={`Remove saved website session for ${site.domain}`}
                       onClick={() => {
                         void props.onRemove(site.domain).then((removed) => {
@@ -696,8 +694,7 @@ function SavedWebsiteSessionsManager(props: {
           <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
             <Button
               type="button"
-              variant="ghost"
-              className="text-destructive hover:text-destructive"
+              variant="destructive-ghost"
               disabled={props.sites.length === 0}
               onClick={() => {
                 void props.onRemoveAll().then((removed) => {

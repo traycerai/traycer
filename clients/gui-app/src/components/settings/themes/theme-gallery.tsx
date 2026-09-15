@@ -167,10 +167,9 @@ export function ThemeGallery() {
           </Button>
           <Button
             ref={manageTrigger}
-            variant="ghost"
+            variant="muted"
             size="sm"
             onClick={() => setManageOpen(true)}
-            className="text-muted-foreground"
           >
             Manage themes
           </Button>

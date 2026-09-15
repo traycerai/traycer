@@ -578,14 +578,11 @@ function ScopedResourceMonitorPopover(props: {
             <PopoverTrigger asChild>
               <Button
                 type="button"
-                variant="ghost"
+                variant="muted"
                 size="icon-sm"
                 aria-label="Resources"
                 data-testid="resource-monitor-header-button"
-                className={cn(
-                  "text-muted-foreground hover:text-foreground",
-                  props.trigger.className,
-                )}
+                className={cn(props.trigger.className)}
               >
                 <Cpu className="size-3.5" />
               </Button>
@@ -1494,9 +1491,9 @@ function ResourceMonitorPanel(props: {
                 />
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="muted"
                   size="xs"
-                  className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
+                  className="h-6"
                   aria-label="Cancel selection"
                   onClick={rowActions.cancelSelection}
                 >
@@ -1505,14 +1502,11 @@ function ResourceMonitorPanel(props: {
                 </Button>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant={
+                    selectionCopy.destructive ? "destructive-ghost" : "muted"
+                  }
                   size="xs"
-                  className={cn(
-                    "h-6 px-1.5",
-                    selectionCopy.destructive
-                      ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
+                  className="h-6"
                   disabled={
                     rowActions.selectedCount === 0 || rowActions.isPending
                   }
@@ -1533,9 +1527,8 @@ function ResourceMonitorPanel(props: {
               <>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="muted"
                   size="icon-sm"
-                  className="text-muted-foreground hover:text-foreground"
                   aria-label="Select processes to kill"
                   onClick={rowActions.enterSelection}
                 >
@@ -2469,9 +2462,9 @@ function ConfirmableRowAction(props: {
           <Button
             ref={confirmRef}
             type="button"
-            variant="ghost"
+            variant="destructive-ghost"
             size="xs"
-            className="h-5 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            className="h-5"
             disabled={props.isPending}
             aria-label={`Confirm ${verb} ${props.label}`}
             aria-keyshortcuts="Enter"
@@ -2504,9 +2497,9 @@ function ConfirmableRowAction(props: {
           </Button>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="xs"
-            className="h-5 px-1.5 text-muted-foreground hover:text-foreground"
+            className="h-5"
             aria-label={`Keep ${props.label} running`}
             aria-keyshortcuts="Escape"
             onKeyDown={cancelFromKeyboard}
@@ -2576,12 +2569,9 @@ function RowActionTrigger(props: {
     return (
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="xs"
-        className={cn(
-          "h-6 shrink-0 px-1.5 text-muted-foreground hover:text-foreground",
-          ROW_HOVER_REVEAL,
-        )}
+        className={cn("h-6 shrink-0", ROW_HOVER_REVEAL)}
         aria-label={`Stop ${props.label}`}
         onClick={arm}
       >
@@ -2595,12 +2585,9 @@ function RowActionTrigger(props: {
     // process tree. The word carries the meaning.
     <Button
       type="button"
-      variant="ghost"
+      variant="destructive-ghost"
       size="xs"
-      className={cn(
-        "h-6 shrink-0 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive",
-        ROW_HOVER_REVEAL,
-      )}
+      className={cn("h-6 shrink-0", ROW_HOVER_REVEAL)}
       aria-label={`Kill ${props.label}`}
       onClick={arm}
     >
@@ -2815,9 +2802,9 @@ function SelectAllToggle(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="xs"
-      className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
+      className="h-6"
       onClick={props.allSelected ? props.onDeselectAll : props.onSelectAll}
     >
       {props.allSelected ? "Deselect all" : "Select all"}

@@ -2927,7 +2927,7 @@ function RateLimitErrorMessage({
       <ReportIssueAction
         context={reportContext}
         presentation="link"
-        className="h-auto p-0 text-current"
+        className={undefined}
       />
     </div>
   );

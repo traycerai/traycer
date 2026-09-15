@@ -870,11 +870,11 @@ function ManagedCommandOutputDetails(props: {
         <PopoverTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon"
             aria-label="Shell details"
             data-testid="managed-command-output-details"
-            className="size-6 text-muted-foreground hover:text-foreground"
+            className="size-6"
           >
             <Info aria-hidden className="size-3.5" />
           </Button>

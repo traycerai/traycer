@@ -602,8 +602,8 @@ function SkillEntryButton({
   return (
     <Button
       type="button"
-      size="sm"
-      className="text-ui-xs"
+      size="xs"
+      className="h-7"
       disabled={disabled}
       onClick={onOpen}
     >
@@ -644,10 +644,10 @@ function SkillSourceFilterMenu({
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={label}
-            className="relative shrink-0 text-muted-foreground hover:text-foreground"
+            className="relative shrink-0"
           >
             <ListFilter className="size-3.5" aria-hidden />
             {/* A dot, not a count: it only has to say "the list is narrowed". */}
@@ -910,8 +910,8 @@ function SkillsEmptyState({
       {canAuthor ? (
         <Button
           type="button"
-          size="sm"
-          className="text-ui-xs"
+          size="xs"
+          className="h-7"
           disabled={disabled}
           onClick={onOpenComposer}
         >

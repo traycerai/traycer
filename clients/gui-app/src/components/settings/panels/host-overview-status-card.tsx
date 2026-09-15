@@ -182,9 +182,9 @@ export function HostOverviewNameAction(props: {
     <Button
       ref={buttonRef}
       type="button"
-      variant="ghost"
-      size="sm"
-      className="size-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+      variant="muted"
+      size="inline"
+      className="size-7 shrink-0"
       // Opening a disabled editor is the other half of the same focus-loss
       // finding: block the TRIGGER while there is no name data to edit - and
       // while a write is still settling, since the editor closes before the
@@ -442,9 +442,9 @@ export function HostOverviewHeaderActions(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
-            size="sm"
-            className="size-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+            variant="muted"
+            size="inline"
+            className="size-7 shrink-0"
             aria-label={`More actions for ${hostName}`}
             data-testid="host-overview-menu"
           >

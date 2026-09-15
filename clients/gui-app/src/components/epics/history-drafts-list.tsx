@@ -84,9 +84,9 @@ export function HistoryDraftsList(props: {
           {canExpand ? (
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-ui-xs text-muted-foreground"
+              variant="muted"
+              size="xs"
+              className="h-7"
               aria-expanded={expanded}
               onClick={() => {
                 setExpanded((current) => !current);
@@ -175,12 +175,12 @@ const HistoryDraftsRow = memo(function HistoryDraftsRow(props: {
         </div>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted-destructive"
           size="icon-sm"
           aria-label={`Delete ${item.title}`}
           aria-haspopup="dialog"
           data-testid="history-drafts-row-delete"
-          className="pointer-events-auto absolute right-2 top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+          className="pointer-events-auto absolute right-2 top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();

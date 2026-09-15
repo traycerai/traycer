@@ -158,10 +158,9 @@ export function MobileNavDrawer(): ReactNode {
                 puts the user back in the drawer where they were. */}
           <Button
             type="button"
-            variant="ghost"
+            variant="destructive-ghost"
             size="icon-sm"
             aria-label="Sign out"
-            className="text-destructive"
             data-testid="mobile-nav-sign-out"
             onClick={() => {
               setSignOutOpen(true);
@@ -200,7 +199,7 @@ export function MobileNavDrawer(): ReactNode {
           // Visually a compact h-9 pill, but the tap target must still meet
           // the 44px touch floor: the ::after overlay extends the hit area
           // invisibly without growing the rendered button.
-          className="relative h-9 w-full shrink-0 justify-center gap-2 rounded-md px-4 font-semibold after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-['']"
+          className="relative h-9 w-full shrink-0 justify-center px-4 after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-['']"
           data-testid="mobile-nav-new-task"
           onClick={handleNewTask}
         >
@@ -456,7 +455,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
             key={item.id}
             type="button"
             variant="ghost"
-            className="h-10 w-full justify-start gap-3 px-3"
+            className="h-10 w-full justify-start gap-3"
             data-testid="mobile-nav-task-row"
             onClick={() => {
               openItem(item);

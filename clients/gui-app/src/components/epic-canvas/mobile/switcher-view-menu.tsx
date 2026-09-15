@@ -75,11 +75,11 @@ function SwitcherViewMenuShell(props: {
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label={props.label}
           data-testid={props.testId}
-          className="relative text-muted-foreground hover:text-foreground"
+          className="relative"
         >
           <ListFilter className="size-4" />
           <ViewMenuBadge filterCount={props.filterCount} />

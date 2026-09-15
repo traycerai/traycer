@@ -75,9 +75,8 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
         <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
-            variant="link"
-            size="sm"
-            className="h-auto px-0 text-muted-foreground"
+            variant="muted"
+            size="inline"
             onClick={() => {
               void openLink(guidance.releaseUrl, "docs", null);
             }}

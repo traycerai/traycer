@@ -604,11 +604,10 @@ function OpenTerminalButton(props: {
           <span className="inline-flex">
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="xs"
               disabled
               data-testid="setup-card-open-terminal-ended"
-              className="text-muted-foreground"
             >
               Open terminal
               <ArrowRight aria-hidden />
@@ -643,12 +642,11 @@ function RetryButton(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="destructive-ghost"
       size="xs"
       disabled={props.pending}
       onClick={props.onRetry}
       data-testid="setup-card-retry"
-      className="text-destructive hover:text-destructive"
     >
       {props.label}
       {props.pending ? (

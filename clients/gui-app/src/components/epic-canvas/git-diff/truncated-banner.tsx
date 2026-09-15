@@ -20,7 +20,7 @@ export function TruncatedBanner(props: TruncatedBannerProps) {
         onClick={props.onLoadFull}
         variant="outline"
         size="sm"
-        className="flex-shrink-0"
+        className="shrink-0"
       >
         Load Full
       </Button>

@@ -32,13 +32,13 @@ export function CommGraphOpenButton(props: CommGraphOpenButtonProps) {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label="Agent office"
       data-testid="epic-sidebar-open-comm-graph"
       disabled={disabled}
       onClick={openGraph}
-      className={cn("text-muted-foreground hover:text-foreground", className)}
+      className={cn(className)}
     >
       <Building2 className="size-4" />
     </Button>

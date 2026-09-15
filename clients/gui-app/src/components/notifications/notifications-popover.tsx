@@ -815,13 +815,12 @@ function NotificationsPopoverHeader({
           >
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               onClick={onMarkAllRead}
               disabled={isMarkAllReadDisabled}
               data-testid="notifications-mark-all-read"
               aria-label="Mark all notifications as read"
-              className="text-muted-foreground hover:text-foreground"
             >
               <CheckCheck className="size-3.5" aria-hidden />
             </Button>
@@ -835,13 +834,12 @@ function NotificationsPopoverHeader({
             >
               <Button
                 type="button"
-                variant="ghost"
+                variant="muted"
                 size="icon-sm"
                 onClick={onClearAll}
                 disabled={isClearAllDisabled}
                 data-testid="notifications-clear-all"
                 aria-label="Clear notifications"
-                className="text-muted-foreground hover:text-foreground"
               >
                 <Trash2 className="size-3.5" aria-hidden />
               </Button>
@@ -855,12 +853,11 @@ function NotificationsPopoverHeader({
           >
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               onClick={onOpenSettings}
               data-testid="notifications-open-settings"
               aria-label="Notification settings"
-              className="text-muted-foreground hover:text-foreground"
             >
               <Settings className="size-3.5" aria-hidden />
             </Button>
@@ -1215,11 +1212,11 @@ function LoadMoreButton(props: LoadMoreButtonProps): ReactNode {
         <span>Couldn&apos;t load more.</span>
         <Button
           type="button"
-          variant="ghost"
-          size="sm"
+          variant="destructive-ghost"
+          size="xs"
           onClick={props.onClick}
           data-testid={`${props.testId}-retry`}
-          className="h-auto px-2 py-0.5 text-ui-xs text-destructive hover:text-destructive"
+          className="h-auto"
         >
           Retry
         </Button>
@@ -1229,12 +1226,12 @@ function LoadMoreButton(props: LoadMoreButtonProps): ReactNode {
   return (
     <Button
       type="button"
-      variant="ghost"
-      size="sm"
+      variant="muted"
+      size="xs"
       onClick={props.onClick}
       disabled={props.isLoading}
       data-testid={props.testId}
-      className="mt-1 w-full gap-1.5 text-ui-xs text-muted-foreground"
+      className="mt-1 w-full h-7"
     >
       {props.label}
       {props.isLoading ? (
@@ -1262,10 +1259,10 @@ function FilteredEmptyState(props: {
       <Button
         type="button"
         variant="ghost"
-        size="sm"
+        size="xs"
         onClick={props.onReset}
         data-testid="notifications-filter-reset"
-        className="text-ui-xs"
+        className="h-7"
       >
         Reset filters
       </Button>

@@ -526,18 +526,17 @@ function RegenerateBranchNameOffer(props: {
         <div className="flex flex-wrap items-center justify-end gap-1.5">
           <Button
             type="button"
-            variant="ghost"
+            variant="warning-ghost"
             size="sm"
-            className="text-warning-foreground hover:bg-warning/15"
             onClick={props.onDismiss}
           >
             Keep current
           </Button>
           <Button
             type="button"
-            variant="outline"
+            variant="warning-ghost"
             size="sm"
-            className="border-warning/40 bg-background/60 text-warning-foreground hover:bg-warning/15"
+            className="border-warning/40 bg-background/60"
             onClick={props.onConfirm}
           >
             Use new prefix

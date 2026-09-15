@@ -127,13 +127,12 @@ export function PrDetailHeader(props: {
         <PrDetailGitHubLink prUrl={props.core.prUrl} />
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           onClick={props.onRefresh}
           aria-label="Refresh pull request"
           disabled={props.refreshing}
           data-testid="pr-detail-refresh"
-          className="text-muted-foreground hover:text-foreground"
         >
           <RefreshIcon
             refreshing={props.refreshing}
@@ -268,12 +267,12 @@ function PrDetailGitHubLink(props: {
     return (
       <Button
         type="button"
-        size="sm"
-        variant="ghost"
+        size="xs"
+        variant="muted"
         disabled
         aria-label="Open on GitHub"
         data-testid="pr-detail-github-link"
-        className="h-7 text-ui-xs text-muted-foreground"
+        className="h-7"
       >
         GitHub
         <ExternalLink className="size-3" aria-hidden />
@@ -282,13 +281,7 @@ function PrDetailGitHubLink(props: {
   }
 
   return (
-    <Button
-      type="button"
-      size="sm"
-      variant="ghost"
-      asChild
-      className="h-7 text-ui-xs"
-    >
+    <Button type="button" size="xs" variant="ghost" asChild className="h-7">
       <a
         href={props.prUrl}
         aria-label="Open on GitHub"

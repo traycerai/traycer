@@ -838,7 +838,8 @@ function GitSnapshotErrorBanner(props: { readonly error: HostRpcError }) {
           source: "Git changes",
         })}
         presentation="icon"
-        className="-my-1 shrink-0 text-warning-foreground"
+        variant="warning-ghost"
+        className="-my-1 shrink-0"
       />
     </div>
   );

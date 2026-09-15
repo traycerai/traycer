@@ -50,10 +50,7 @@ export function RoleDropdown(props: RoleDropdownProps) {
           variant="ghost"
           size="sm"
           disabled={disabled}
-          className={cn(
-            "justify-between gap-1.5 border-transparent text-ui-sm",
-            className,
-          )}
+          className={cn("justify-between", className)}
           aria-label={ariaLabel}
           data-testid={testId}
         >

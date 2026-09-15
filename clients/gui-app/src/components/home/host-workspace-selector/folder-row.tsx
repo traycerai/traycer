@@ -310,14 +310,14 @@ function EnvironmentButton(props: {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label="Repository settings"
         data-testid="folder-scripts-trigger"
         onClick={() => props.onEdit(props.item.displayPath)}
         // Always visible (muted, brightening on hover/focus) - user decision:
         // hover-revealed row actions were not discoverable.
-        className="text-muted-foreground opacity-[var(--fc-opacity,0.7)] transition-opacity hover:bg-accent/50 hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
+        className="opacity-[var(--fc-opacity,0.7)] transition-opacity hover:opacity-100 focus-visible:opacity-100"
       >
         <FolderCog className="size-4" aria-hidden />
       </Button>

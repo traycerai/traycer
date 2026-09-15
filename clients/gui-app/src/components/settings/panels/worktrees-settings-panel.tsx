@@ -770,9 +770,9 @@ function WorktreesPartialListingBanner(props: {
         incomplete.
       </span>
       <Button
-        variant="ghost"
+        variant="warning-ghost"
         size="sm"
-        className="h-7 shrink-0 px-2 text-warning-foreground"
+        className="h-7 shrink-0"
         onClick={() => void props.onRetry()}
       >
         Retry
@@ -785,7 +785,7 @@ function WorktreesPartialListingBanner(props: {
           source: "Worktrees",
         })}
         presentation="link"
-        className="h-auto shrink-0 p-0 text-current"
+        className="shrink-0"
       />
     </div>
   );
@@ -3089,11 +3089,10 @@ function WorktreesRepoExpansionControl(props: {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label={label}
         data-testid="worktrees-toggle-all-repos"
-        className="text-muted-foreground hover:text-foreground"
         onClick={props.onToggle}
       >
         {props.allCollapsed ? (
@@ -3202,11 +3201,10 @@ function WorktreeRowActions(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={props.triggerLabel}
             data-testid="worktree-row-actions-trigger"
-            className="text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
           >
             <MoreHorizontal className="size-4" />
           </Button>
@@ -3334,7 +3332,7 @@ function WorktreesStateMessage(props: {
             source: "Worktrees",
           })}
           presentation="icon"
-          className="text-current"
+          className={undefined}
         />
       ) : null}
     </div>

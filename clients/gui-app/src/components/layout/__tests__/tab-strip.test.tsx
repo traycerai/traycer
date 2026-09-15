@@ -1172,7 +1172,7 @@ describe("<TabStrip />", () => {
     ).toBe("var(--color-primary)");
     expect(within(rightTab).queryByTestId("tab-chrome-center")).toBeNull();
     expect(screen.queryByTestId("split-member-focus-accent")).toBeNull();
-    expect(trigger.className).toContain("text-blue-600");
+    expect(trigger.className).toContain("text-info-foreground");
     expect(
       screen.queryByTestId("split-quick-actions-status-split-a"),
     ).toBeNull();

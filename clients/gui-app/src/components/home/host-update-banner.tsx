@@ -793,10 +793,10 @@ function OperationContent(props: OperationContentProps) {
         {failedAttemptId === null ? null : (
           <Button
             type="button"
-            variant="ghost"
+            variant="destructive-ghost"
             size="icon-xs"
             aria-label="Dismiss"
-            className="text-current hover:bg-destructive/15 hover:text-current"
+            className="text-current hover:text-current"
             onClick={() => {
               props.onDismiss(failedAttemptId);
             }}
@@ -988,10 +988,10 @@ function TerminalOutcomeContent(props: TerminalOutcomeContentProps) {
       </Button>
       <Button
         type="button"
-        variant="ghost"
+        variant="destructive-ghost"
         size="icon-xs"
         aria-label="Dismiss"
-        className="text-current hover:bg-destructive/15 hover:text-current"
+        className="text-current hover:text-current"
         onClick={props.onDismiss}
       >
         <X className="size-3" aria-hidden />
@@ -1061,11 +1061,11 @@ function UpdateOrDebtContent(props: UpdateOrDebtContentProps) {
       </Button>
       <Button
         type="button"
-        variant="ghost"
+        variant="info-ghost"
         size="icon-xs"
         aria-label="Remind me later"
         data-testid="host-update-banner-snooze"
-        className="text-current hover:bg-info/15"
+        className="text-current"
         onClick={props.onSnooze}
       >
         <X className="size-3" aria-hidden />

@@ -228,9 +228,8 @@ function ForgetButton(props: {
       <Button
         type="button"
         size="icon-sm"
-        variant="ghost"
+        variant="muted-destructive"
         aria-label={`Forget ${name}`}
-        className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
         onClick={() => void props.onForget()}
       >
         <Trash2 className="size-3.5" />

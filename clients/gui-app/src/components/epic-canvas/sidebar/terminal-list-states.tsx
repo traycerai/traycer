@@ -84,7 +84,7 @@ export function TerminalsErrorState(props: {
             source: "Terminals",
           })}
           presentation="icon"
-          className="text-current"
+          className={undefined}
         />
       </div>
     </div>

@@ -204,7 +204,8 @@ function ReauthBannerShell({
                 source: "Provider sign-in",
               })}
               presentation="icon"
-              className="-my-1 -mr-1 text-destructive"
+              variant="destructive-ghost"
+              className="-my-1 -mr-1"
             />
           </div>
         </div>

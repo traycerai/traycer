@@ -532,10 +532,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                     variant="ghost"
                     size="sm"
                     aria-pressed={!advanced}
-                    className={cn(
-                      "rounded-md",
-                      !advanced && "bg-white/8 text-[#e0eccf]",
-                    )}
+                    className={cn(!advanced && "bg-white/8 text-[#e0eccf]")}
                     onClick={() => {
                       setAdvanced(false);
                       setQuery("");
@@ -547,10 +544,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                     variant="ghost"
                     size="sm"
                     aria-pressed={advanced}
-                    className={cn(
-                      "rounded-md",
-                      advanced && "bg-white/8 text-[#e0eccf]",
-                    )}
+                    className={cn(advanced && "bg-white/8 text-[#e0eccf]")}
                     onClick={() => setAdvanced(true)}
                   >
                     All colors

@@ -184,7 +184,7 @@ function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
               source: "Agent instructions",
             })}
             presentation="link"
-            className="ml-1 h-auto p-0"
+            className="ml-1"
           />
         </div>
       </AgentSelectionGuideMessage>

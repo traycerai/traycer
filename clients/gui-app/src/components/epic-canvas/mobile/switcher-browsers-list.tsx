@@ -132,11 +132,10 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
         action={
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="Add browser"
             data-testid="switcher-new-browser"
-            className="text-muted-foreground hover:text-foreground"
             disabled={isAdding}
             onClick={handleAdd}
           >
@@ -398,12 +397,12 @@ function SwitcherBrowserRowActions(props: {
       />
       <Button
         type="button"
-        variant="ghost"
+        variant="muted-destructive"
         size="icon-sm"
         disabled={isClosing}
         aria-label={closeLabel}
         data-testid={`switcher-browser-close-${tab.tabId}`}
-        className="shrink-0 text-muted-foreground hover:text-destructive"
+        className="shrink-0"
         onClick={close}
       >
         {isClosing ? (
@@ -467,11 +466,11 @@ function SwitcherBrowserDriverButton(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="info-ghost"
       size="icon-sm"
       aria-label={`Open driving chat: ${names.join(", ")}`}
       data-testid={`switcher-browser-driver-${row.tab.tabId}`}
-      className="shrink-0 text-info-foreground"
+      className="shrink-0"
       onClick={onSelect}
     >
       <Bot className="size-4" aria-hidden />
@@ -496,11 +495,11 @@ function SwitcherBrowserHostFilterMenu(props: {
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label={label}
           data-testid={`switcher-${BROWSERS_PANEL_ID}-filter`}
-          className="relative text-muted-foreground hover:text-foreground"
+          className="relative"
         >
           <ListFilter className="size-4" />
           {props.isPinned ? (

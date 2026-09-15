@@ -192,7 +192,7 @@ function ChatUsageDialogContent(props: {
               type="button"
               variant="ghost"
               size="sm"
-              className="w-fit gap-1.5 px-2"
+              className="w-fit"
               data-testid="chat-usage-drilldown-toggle"
             >
               <ChevronDown

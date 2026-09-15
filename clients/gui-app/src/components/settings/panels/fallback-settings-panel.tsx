@@ -259,7 +259,7 @@ function FallbackSettingsPanelBody(props: {
               source: "Fallback settings",
             })}
             presentation="link"
-            className="ml-1 h-auto p-0"
+            className="ml-1"
           />
         </div>
       );
@@ -1196,9 +1196,10 @@ function UnrefreshedResetNotice(props: {
       <div className="mt-1 max-w-[68ch] text-ui-sm text-muted-foreground">
         {unrefreshedResetBody(props.displaySubject)}
         <Button
+          size="inline"
           type="button"
           variant="link"
-          className="ml-1 h-auto p-0 text-ui-sm"
+          className="ml-1"
           disabled={props.readBackInFlight}
           onClick={props.onTryAgain}
           data-testid="fallback-reset-retry"
@@ -1354,9 +1355,10 @@ function FallbackSaveStatus(props: {
             (hostError.outcome === "unknown" ||
               hostError.outcome === "refused-unverified") ? (
               <Button
+                size="inline"
                 type="button"
                 variant="link"
-                className="ml-1 h-auto p-0 text-ui-sm"
+                className="ml-1"
                 disabled={readBackInFlight}
                 onClick={onCheckAgain}
                 data-testid="fallback-check-again"
@@ -1426,9 +1428,9 @@ function ProfileStepHint(): ReactNode {
           wrong under the overlay. That helper asks the modal bridge and does
           the right thing either way. */}
       <Button
+        size="inline"
         type="button"
         variant="link"
-        className="h-auto p-0 text-ui-sm"
         onClick={() => {
           navigateToSettingsSection("providers");
         }}

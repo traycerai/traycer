@@ -333,8 +333,7 @@ function ProfileApiKeyForm(props: {
           <Button
             type="button"
             size="sm"
-            variant="ghost"
-            className="text-destructive"
+            variant="destructive-ghost"
             onClick={() => {
               if (busy) return;
               // Mirror of `onSave`: the sibling's stale failure must not
@@ -674,7 +673,7 @@ export function ProfileEditDialog(props: {
                   <Button
                     type="button"
                     size="sm"
-                    variant="ghost"
+                    variant="destructive-ghost"
                     aria-label={removePresentation.ariaLabel}
                     disabled={
                       removeDisabledReason !== null ||
@@ -682,7 +681,6 @@ export function ProfileEditDialog(props: {
                       savePending
                     }
                     onClick={requestRemove}
-                    className="text-ui-sm text-destructive"
                   >
                     <Trash2 className="size-3.5" />
                     Remove profile

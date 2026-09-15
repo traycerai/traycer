@@ -74,10 +74,10 @@ function ModelProviderFilterMenu(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={label}
-            className="relative shrink-0 text-muted-foreground transition-colors hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+            className="relative shrink-0"
             data-testid="model-provider-filter-trigger"
           >
             <ListFilter className="size-4" />

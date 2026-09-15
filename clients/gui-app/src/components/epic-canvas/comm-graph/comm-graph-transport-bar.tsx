@@ -324,18 +324,13 @@ function CommGraphFollowLiveButton(props: {
     <Button
       type="button"
       size="xs"
-      variant="ghost"
+      variant="muted"
       aria-pressed={transport.following}
       data-testid="comm-graph-transport-follow-live"
       data-following={transport.following ? "true" : "false"}
       data-can-return={canReturn ? "true" : "false"}
       onClick={canReturn ? transport.returnToReplay : transport.followLive}
-      className={cn(
-        "shrink-0",
-        transport.following
-          ? "bg-primary/5 text-primary"
-          : "text-muted-foreground",
-      )}
+      className="shrink-0"
     >
       <LivePulse
         size="xs"
