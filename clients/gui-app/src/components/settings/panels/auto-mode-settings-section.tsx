@@ -329,6 +329,7 @@ function AutoPolicyControl(props: {
 }): ReactNode {
   const { policy, readState } = props;
   const unreadable = readState === "unreadable";
+  const stale = readState === "stale";
   const hasBody =
     policy !== undefined && policy.body !== null && policy.body.length > 0;
 
@@ -346,7 +347,16 @@ function AutoPolicyControl(props: {
         variant="outline"
         size="sm"
         data-testid="auto-policy-edit"
-        disabled={policy === undefined || unreadable}
+        // STALE is non-editable too, not just unreadable. A stale read is the
+        // host serving a copy it could not refresh: the body may already be
+        // behind another device AND `updatedAt` is withheld, so
+        // `autoPolicyChangedSinceLoad` has nothing to compare and the stale
+        // warning cannot fire. Editing from there is a last-write-wins save of
+        // a body this window cannot vouch for, over a policy it cannot see -
+        // the exact overwrite the warning exists to prevent, with the warning
+        // structurally unable to appear. The open-time refetch does not rescue
+        // it either: if that read is stale as well, nothing changes.
+        disabled={policy === undefined || unreadable || stale}
         onClick={props.onEdit}
       >
         {hasBody || unreadable ? "Edit policy" : "Write a policy"}

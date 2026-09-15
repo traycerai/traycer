@@ -4,6 +4,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -129,12 +130,23 @@ function hostUnderstandsAutoPermissionMode(input: {
   const negotiated =
     input.wsStreamClient.getMethodSchemaVersion("sessionImport.run");
   const required = sessionImportRunV12.schemaVersion;
-  if (
-    negotiated !== null &&
-    negotiated.major === required.major &&
-    negotiated.minor >= required.minor
-  ) {
-    return true;
+  if (negotiated !== null) {
+    if (
+      negotiated.major === required.major &&
+      negotiated.minor >= required.minor
+    ) {
+      return true;
+    }
+    // THIS method's own handshake is the authority on THIS method, in both
+    // directions - which is the half that was missing. RPC versions are
+    // negotiated per method (root AGENTS.md), so `agent.gui.listHarnesses`
+    // advertising `auto` is not evidence about `sessionImport.run`, and letting
+    // the catalog answer over a negotiated `1.1` sends `auto` into a
+    // `1.1` open request that rejects it - losing the import the user just
+    // picked sessions for. The catalog is consulted only where this method's
+    // version is genuinely UNKNOWN (`null`), which is the case the catalog
+    // proof was introduced for.
+    if (versionIsBelow(negotiated, required)) return false;
   }
   if (handshakeProvesPreAutoCatalog(input.hostId)) return false;
   const harnesses = input.queryClient.getQueryData<ListGuiHarnessesResponse>(
@@ -177,11 +189,29 @@ function handshakeProvesPreAutoCatalog(hostId: string): boolean {
     "agent.gui.listHarnesses",
   );
   if (advertised === null) return false;
-  const autoLine = agentGuiListHarnessesV91.schemaVersion;
-  if (advertised.major !== autoLine.major) {
-    return advertised.major < autoLine.major;
-  }
-  return advertised.minor < autoLine.minor;
+  return versionIsBelow(advertised, agentGuiListHarnessesV91.schemaVersion);
+}
+
+/**
+ * Whether `advertised` names a line strictly BELOW `line`.
+ *
+ * A HIGHER major answers `false`, and that is the deliberate part: it is not
+ * evidence of being below, and both callers use this to DEMOTE. Failing closed
+ * on a higher major is right for a floor that gates a dispatch
+ * (`negotiatedVersionMeetsRequirement`) and wrong here, where it would silently
+ * demote every import on the first host to ship the next major of either
+ * method.
+ *
+ * Shared by the two veto sites so they cannot drift into disagreeing about what
+ * "older" means - they already had the same three-branch comparison written out
+ * twice, which is one copy more than a rule this easy to get subtly wrong wants.
+ */
+function versionIsBelow(
+  advertised: SchemaVersion,
+  line: SchemaVersion,
+): boolean {
+  if (advertised.major !== line.major) return advertised.major < line.major;
+  return advertised.minor < line.minor;
 }
 
 /**

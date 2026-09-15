@@ -1,3 +1,5 @@
+import type { GuiHarnessOption } from "@traycer/protocol/host/index";
+import { guiHarnessOptionSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -52,6 +54,35 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
     ...overrides,
   };
 }
+
+/**
+ * A catalog row for the native-judge capability half of
+ * `providerRunsItsOwnJudge`. Built through the real schema so a field added to
+ * `guiHarnessOptionSchema` cannot silently leave this fixture behind, and
+ * defaulted to CAPABLE - every pre-existing case below asserts the stored
+ * override's effect, so the capability must not be what decides them.
+ */
+function harnessRow(overrides: {
+  readonly nativeAutoJudge: boolean;
+}): GuiHarnessOption {
+  return guiHarnessOptionSchema.parse({
+    id: CLAUDE_HARNESS_ID,
+    label: "Claude Code",
+    available: true,
+    error: null,
+    modes: ["gui"],
+    requiresApiKey: false,
+    nativeAutoJudge: overrides.nativeAutoJudge,
+  });
+}
+
+const CAPABLE_HARNESSES: ReadonlyArray<GuiHarnessOption> = [
+  harnessRow({ nativeAutoJudge: true }),
+];
+
+const INCAPABLE_HARNESSES: ReadonlyArray<GuiHarnessOption> = [
+  harnessRow({ nativeAutoJudge: false }),
+];
 
 describe("autoJudgeBillingFor", () => {
   it("resolves null (unset) to traycer - the host's own fallback", () => {
@@ -148,6 +179,7 @@ describe("providerRunsItsOwnJudge", () => {
       providerRunsItsOwnJudge({
         harnessId: CLAUDE_HARNESS_ID,
         providers: [providerState({ autoJudge: "provider" })],
+        harnesses: CAPABLE_HARNESSES,
       }),
     ).toBe(true);
   });
@@ -157,6 +189,7 @@ describe("providerRunsItsOwnJudge", () => {
       providerRunsItsOwnJudge({
         harnessId: CLAUDE_HARNESS_ID,
         providers: [providerState({ autoJudge: "traycer" })],
+        harnesses: CAPABLE_HARNESSES,
       }),
     ).toBe(false);
   });
@@ -176,6 +209,7 @@ describe("providerRunsItsOwnJudge", () => {
       providerRunsItsOwnJudge({
         harnessId: CLAUDE_HARNESS_ID,
         providers: [row],
+        harnesses: CAPABLE_HARNESSES,
       }),
     ).toBe(false);
   });
@@ -185,6 +219,7 @@ describe("providerRunsItsOwnJudge", () => {
       providerRunsItsOwnJudge({
         harnessId: CLAUDE_HARNESS_ID,
         providers: undefined,
+        harnesses: CAPABLE_HARNESSES,
       }),
     ).toBe(false);
   });
@@ -194,6 +229,7 @@ describe("providerRunsItsOwnJudge", () => {
       providerRunsItsOwnJudge({
         harnessId: null,
         providers: [providerState({ autoJudge: "provider" })],
+        harnesses: CAPABLE_HARNESSES,
       }),
     ).toBe(false);
   });
@@ -204,6 +240,52 @@ describe("providerRunsItsOwnJudge", () => {
         harnessId: CLAUDE_HARNESS_ID,
         providers: [
           providerState({ providerId: "codex", autoJudge: "provider" }),
+        ],
+        harnesses: CAPABLE_HARNESSES,
+      }),
+    ).toBe(false);
+  });
+
+  // The defect this field exists to fix: `autoJudge` is a PREFERENCE that
+  // outlives the CAPABILITY it once delegated to (a host downgrade, or a
+  // provider that lost the feature), so the stored "provider" selection alone
+  // must not be enough - the catalog row has to say the classifier still
+  // exists.
+  it("is false for a stored 'provider' selection when the catalog row is not capable (nativeAutoJudge: false)", () => {
+    expect(
+      providerRunsItsOwnJudge({
+        harnessId: CLAUDE_HARNESS_ID,
+        providers: [providerState({ autoJudge: "provider" })],
+        harnesses: INCAPABLE_HARNESSES,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when the harness catalog has not loaded yet (harnesses: undefined)", () => {
+    expect(
+      providerRunsItsOwnJudge({
+        harnessId: CLAUDE_HARNESS_ID,
+        providers: [providerState({ autoJudge: "provider" })],
+        harnesses: undefined,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when no catalog row matches the harness id", () => {
+    expect(
+      providerRunsItsOwnJudge({
+        harnessId: CLAUDE_HARNESS_ID,
+        providers: [providerState({ autoJudge: "provider" })],
+        harnesses: [
+          guiHarnessOptionSchema.parse({
+            id: "codex",
+            label: "Codex",
+            available: true,
+            error: null,
+            modes: ["gui"],
+            requiresApiKey: false,
+            nativeAutoJudge: true,
+          }),
         ],
       }),
     ).toBe(false);

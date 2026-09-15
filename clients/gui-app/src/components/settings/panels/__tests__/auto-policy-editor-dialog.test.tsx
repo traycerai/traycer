@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AutoPolicyEditorDialog } from "@/components/settings/panels/auto-policy-editor-dialog";
 import {
@@ -239,6 +240,118 @@ describe('<AutoPolicyEditorDialog /> readState="unreadable"', () => {
     );
 
     expect(screen.getByTestId("auto-policy-unreadable-warning")).toBeTruthy();
+  });
+});
+
+describe("<AutoPolicyEditorDialog /> saving", () => {
+  // Save captures `body` at click time and the parent closes this dialog on
+  // success; an editable textarea in that window silently discards whatever
+  // was typed after the click while the host stores the earlier text. This
+  // pins the draft locked, not just the Save button.
+  it("disables the textarea and refuses further edits while saving", async () => {
+    const user = userEvent.setup();
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        saving
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const textarea = screen.getByTestId(
+      "auto-policy-input",
+    ) as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(true);
+
+    // `userEvent`, unlike `fireEvent`, honors the `disabled` attribute the
+    // way a real browser does - `fireEvent.change` would still write through
+    // and pass falsely even against a dead textarea.
+    await user.type(textarea, "more text");
+    expect(textarea.value).toBe("short");
+  });
+
+  // Cancel/Esc mid-write hides an in-flight save behind a closed dialog: the
+  // write still lands, and the user has no reason to believe it did.
+  it("disables Cancel and does not call onCancel while saving", () => {
+    const onCancel = vi.fn();
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        saving
+        onCancel={onCancel}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const cancelButton = screen.getByRole("button", {
+      name: "Cancel",
+    }) as HTMLButtonElement;
+    expect(cancelButton.disabled).toBe(true);
+
+    fireEvent.click(cancelButton);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("does not call onCancel on Escape while saving", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        saving
+        onCancel={onCancel}
+        onSave={vi.fn()}
+      />,
+    );
+
+    await user.keyboard("{Escape}");
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  // Control for the three cases above: without it, every assertion there
+  // would pass against a dialog that is simply permanently dead.
+  it("keeps the textarea and Cancel live when not saving", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        saving={false}
+        onCancel={onCancel}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const textarea = screen.getByTestId(
+      "auto-policy-input",
+    ) as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(false);
+    fireEvent.change(textarea, { target: { value: "short and edited" } });
+    expect(textarea.value).toBe("short and edited");
+
+    const cancelButton = screen.getByRole("button", {
+      name: "Cancel",
+    }) as HTMLButtonElement;
+    expect(cancelButton.disabled).toBe(false);
+    fireEvent.click(cancelButton);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+
+    onCancel.mockClear();
+    await user.keyboard("{Escape}");
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
 

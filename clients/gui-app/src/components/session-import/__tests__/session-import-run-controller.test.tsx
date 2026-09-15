@@ -1255,5 +1255,131 @@ describe("<SessionImportRunController />", () => {
         expect(requireInstance(1).permissionMode).toBe("auto");
       });
     });
+
+    // RPC versions are negotiated PER METHOD (root AGENTS.md): a completed
+    // `sessionImport.run` handshake is authoritative on `sessionImport.run`
+    // in both directions, and a cached `agent.gui.listHarnesses` catalog row
+    // must never override it. Before this fix a non-null negotiated version
+    // was only a POSITIVE proof - when it was below the `auto` line the code
+    // fell through to the catalog anyway, which could still say `auto` and
+    // send it into an OPEN request the negotiated version had just shown this
+    // method rejects.
+    describe("the negotiated sessionImport.run version is authoritative", () => {
+      it("demotes auto when the negotiated version is below the auto line, even with a cached-auto catalog row", () => {
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-negotiated-below-cached-auto",
+          { major: 1, minor: 1 },
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        const response: ListGuiHarnessesResponse = {
+          harnesses: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              enabled: true,
+              available: true,
+              error: null,
+              modes: ["gui", "tui"],
+              requiresApiKey: false,
+              supportedPermissionModes: [
+                "supervised",
+                "auto_accept_edits",
+                "auto",
+                "full_access",
+              ],
+              nativeAutoJudge: false,
+              availabilityPending: false,
+            },
+          ],
+        };
+        queryDataHarness.value = response;
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        // FALSIFICATION: delete the
+        // `if (versionIsBelow(negotiated, required)) return false;` line and
+        // this goes green with 'auto' - the cached catalog row alone would be
+        // enough to pass the gate over a negotiated `1.1` that cannot parse
+        // it.
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+      });
+
+      // Control for the case above: at the `auto` line itself, negotiated
+      // proof still wins outright.  Already covered by "sends auto unchanged
+      // when the negotiated sessionImport.run version proves the host knows
+      // it" above (negotiated === sessionImportRunV12.schemaVersion, i.e.
+      // {major:1,minor:2}) - not duplicated here.
+
+      // Control: negotiated `null` still falls through to the catalog, which
+      // is the case the catalog proof exists for. Already covered by "sends
+      // auto unchanged when the cached agent.gui.listHarnesses row advertises
+      // it" above (default stub's `getMethodSchemaVersion` answers `null`) -
+      // not duplicated here.
+
+      // A HIGHER major on `sessionImport.run` itself is not evidence of being
+      // below the line (mirrors `versionIsBelow`'s own major mismatch rule),
+      // so the gate must not fail closed here - a cached `auto` row still
+      // decides it. Failing closed would demote every import the instant a
+      // host negotiated the next major of `sessionImport.run`.
+      it("still sends auto for a cached-auto row when the negotiated sessionImport.run version is on a higher major", () => {
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-negotiated-higher-major",
+          { major: sessionImportRunV12.schemaVersion.major + 1, minor: 0 },
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        const response: ListGuiHarnessesResponse = {
+          harnesses: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              enabled: true,
+              available: true,
+              error: null,
+              modes: ["gui", "tui"],
+              requiresApiKey: false,
+              supportedPermissionModes: [
+                "supervised",
+                "auto_accept_edits",
+                "auto",
+                "full_access",
+              ],
+              nativeAutoJudge: false,
+              availabilityPending: false,
+            },
+          ],
+        };
+        queryDataHarness.value = response;
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        expect(requireInstance(1).permissionMode).toBe("auto");
+      });
+    });
   });
 });

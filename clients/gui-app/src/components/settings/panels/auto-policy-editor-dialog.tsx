@@ -72,7 +72,13 @@ export function AutoPolicyEditorDialog(props: {
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) props.onCancel();
+        // Esc and the overlay are dismissals too, and dismissing mid-write
+        // hides an in-flight save behind a closed dialog: the write still
+        // lands, and the user has no reason to believe it did. A hang cannot
+        // trap anyone here - `autoPolicy.set` carries a response timeout, and
+        // an error clears `saving` with the dialog still open.
+        if (open || props.saving) return;
+        props.onCancel();
       }}
     >
       <DialogContent className="max-h-[min(85vh,52rem)] w-[min(92vw,46rem)] overflow-y-auto">
@@ -120,9 +126,19 @@ export function AutoPolicyEditorDialog(props: {
           </div>
         ) : null}
 
+        {/* Locked once Save is pressed, which is the repo's pending rule
+            (`disabled` while in flight, label untouched, inline spinner) applied
+            to the DRAFT rather than only to the button. The request captured
+            `body` at click time and the parent closes this dialog on success, so
+            an editable textarea in that window silently discards everything
+            typed after the click while the host stores the earlier text. The
+            alternative - close only when the draft still matches what was sent -
+            leaves the user holding edits that were never saved, with nothing
+            saying so; refusing the edit is the honest half. */}
         <Textarea
           value={body}
           onChange={(event) => setBody(event.target.value)}
+          disabled={props.saving}
           aria-label="Auto mode policy"
           data-testid="auto-policy-input"
           spellCheck={false}
@@ -145,6 +161,7 @@ export function AutoPolicyEditorDialog(props: {
               type="button"
               variant="outline"
               size="sm"
+              disabled={props.saving}
               onClick={props.onCancel}
             >
               Cancel

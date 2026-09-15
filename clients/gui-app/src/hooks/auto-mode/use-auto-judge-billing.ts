@@ -6,6 +6,7 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   autoJudgeBillingForRun,
   providerRunsItsOwnJudge,
@@ -87,9 +88,21 @@ export function useAutoJudgeBilling(
   // wrong. An ERROR counts as settled: it is a host that cannot answer, which
   // is the case the `false` default is actually for.
   const providersSettled = providersQuery.isSuccess || providersQuery.isError;
+  // The harness catalog is the second half of the native-judge question: the
+  // persisted `autoJudge: "provider"` is a preference, and `nativeAutoJudge` is
+  // whether there is still a classifier to delegate to. Same key the picker
+  // holds for this client, and folded into the settled gate for the reason the
+  // provider read is - classifying on an unanswered catalog would publish
+  // "Uses your Traycer credits" and flip once the rows land.
+  const harnessesQuery = useGuiHarnessesQueryForClient(client, {
+    enabled: supported,
+    subscribed: supported,
+  });
+  const harnesses = harnessesQuery.data?.harnesses;
+  const harnessesSettled = harnessesQuery.isSuccess || harnessesQuery.isError;
   const isProviderNative = useMemo(
-    () => providerRunsItsOwnJudge({ harnessId, providers }),
-    [harnessId, providers],
+    () => providerRunsItsOwnJudge({ harnessId, providers, harnesses }),
+    [harnessId, providers, harnesses],
   );
   const selection = query.data?.selection ?? null;
   const judgeHarnessId = selection === null ? null : selection.harnessId;
@@ -97,7 +110,8 @@ export function useAutoJudgeBilling(
   // (`provider-disabled`, `no-default`, `unsupported-harness`). Optional on the
   // wire, so an older host answers `undefined` and reads as "not blocked".
   const blocked = query.data?.blocked ?? null;
-  const loaded = query.data !== undefined && providersSettled;
+  const loaded =
+    query.data !== undefined && providersSettled && harnessesSettled;
   return useMemo(
     () =>
       loaded

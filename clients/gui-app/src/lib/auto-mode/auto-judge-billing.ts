@@ -14,7 +14,10 @@
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type { AutoJudgeBlocked } from "@traycer/protocol/host/auto-mode/contracts";
-import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type {
+  GuiHarnessId,
+  GuiHarnessOption,
+} from "@traycer/protocol/host/index";
 import {
   ORDERED_PROVIDERS,
   guiHarnessIdToProviderId,
@@ -164,9 +167,27 @@ export function autoJudgeBillingForRun(input: {
 export function providerRunsItsOwnJudge(input: {
   readonly harnessId: GuiHarnessId | null;
   readonly providers: ReadonlyArray<ProviderCliState> | undefined;
+  readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
 }): boolean {
-  const { harnessId, providers } = input;
+  const { harnessId, providers, harnesses } = input;
   if (harnessId === null || providers === undefined) return false;
+  if (harnesses === undefined) return false;
+  // BOTH halves, and the stored one alone is not enough. `autoJudge` is a
+  // PREFERENCE persisted in `provider-overrides.json`; `nativeAutoJudge` is
+  // whether this harness currently has a classifier to delegate to at all
+  // ("Whether this harness has a provider-native auto-mode classifier Traycer
+  // can delegate to instead of running its own judge"). A preference outlives
+  // the capability - the override survives a host downgrade, a provider losing
+  // the feature, or a build that never had it - and the host resolves the pair,
+  // falling back to its own judge when the capability is gone.
+  //
+  // Trusting the override alone also made this disagree with our OWN Settings
+  // surface: `ProviderAutoJudgeSection` renders the switch only for a row with
+  // `nativeAutoJudge`, so such a provider shows the read-only "Traycer's judge"
+  // line there while the composer claimed its classifier reviews for free.
+  // Absent capability reads `false`, matching every other unknown on this path.
+  const row = harnesses.find((candidate) => candidate.id === harnessId);
+  if (row === undefined || !row.nativeAutoJudge) return false;
   const providerId = guiHarnessIdToProviderId(harnessId);
   if (providerId === null) return false;
   const state = providers.find(

@@ -133,6 +133,27 @@ describe("<AutoModeSettingsSection />", () => {
       expect(screen.getByText("Couldn't read your policy")).toBeTruthy();
     });
 
+    // A stale read is the host serving a copy it could not refresh - the
+    // body may already be behind another device AND `updatedAt` is
+    // withheld, so `autoPolicyChangedSinceLoad` has nothing to compare and
+    // the stale warning is structurally unable to fire. Editing from there
+    // is a last-write-wins save over a policy this window cannot see, so the
+    // button must be disabled here too, not just on `unreadable`.
+    it("on a stale read: disables Edit policy even though the body is readable", () => {
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: null,
+        source: "account",
+        readState: "stale",
+      };
+      render(<AutoModeSettingsSection />);
+
+      const editButton = screen.getByTestId(
+        "auto-policy-edit",
+      ) as HTMLButtonElement;
+      expect(editButton.disabled).toBe(true);
+    });
+
     it("on a fresh read with a saved body: shows the saved summary and an enabled Edit policy button", () => {
       policy = {
         body: "## Environment\nA laptop running the desktop app.",

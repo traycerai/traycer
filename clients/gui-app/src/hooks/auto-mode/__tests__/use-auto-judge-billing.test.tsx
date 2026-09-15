@@ -5,6 +5,8 @@ import {
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
 import type { AutoJudgeGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
+import type { GuiHarnessOption } from "@traycer/protocol/host/index";
+import { guiHarnessOptionSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 
@@ -103,6 +105,37 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   ) => useProvidersListForClientMock(client, activity),
 }));
 
+// The native-judge CAPABILITY half. The hook now gates `provider-native` on the
+// catalog row's `nativeAutoJudge` as well as the persisted override, because
+// the override is a preference that outlives the capability. Defaulted to
+// capable and settled so the cases below still turn on what they are about.
+let harnessesData: { harnesses: GuiHarnessOption[] } | undefined;
+let harnessesSettled = true;
+const useGuiHarnessesQueryForClientMock = vi.hoisted(() =>
+  vi.fn<
+    () => {
+      data: { harnesses: GuiHarnessOption[] } | undefined;
+      isSuccess: boolean;
+      isError: boolean;
+    }
+  >(),
+);
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  useGuiHarnessesQueryForClient: () => useGuiHarnessesQueryForClientMock(),
+}));
+
+function harnessRow(nativeAutoJudge: boolean): GuiHarnessOption {
+  return guiHarnessOptionSchema.parse({
+    id: CLAUDE_HARNESS_ID,
+    label: "Claude Code",
+    available: true,
+    error: null,
+    modes: ["gui"],
+    requiresApiKey: false,
+    nativeAutoJudge,
+  });
+}
+
 function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
   return {
     providerId: "claude-code",
@@ -136,6 +169,13 @@ afterEach(() => {
   vi.clearAllMocks();
   autoJudgeGetData = undefined;
   providersListData = undefined;
+  harnessesData = { harnesses: [harnessRow(true)] };
+  harnessesSettled = true;
+  useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
+    data: harnessesData,
+    isSuccess: harnessesSettled,
+    isError: false,
+  }));
   useHostQueryMock.mockImplementation(() => ({ data: autoJudgeGetData }));
   useProvidersListForClientMock.mockImplementation(() => ({
     data: providersListData,
@@ -152,6 +192,12 @@ useHostQueryMock.mockImplementation(() => ({ data: autoJudgeGetData }));
 useProvidersListForClientMock.mockImplementation(() => ({
   data: providersListData,
   isSuccess: true,
+  isError: false,
+}));
+harnessesData = { harnesses: [harnessRow(true)] };
+useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
+  data: harnessesData,
+  isSuccess: harnessesSettled,
   isError: false,
 }));
 
@@ -244,6 +290,26 @@ describe("useAutoJudgeBilling", () => {
     });
   });
 
+  // JOB 4, end-to-end: the persisted override says "provider", but the
+  // harness catalog row for this run's harness is not capable
+  // (`nativeAutoJudge: false`) - a preference outliving the capability (a
+  // host downgrade, or the provider losing the feature). The hook must fall
+  // back to the host-wide (Traycer) reading rather than disclosing a
+  // classifier that no longer exists.
+  it("falls back to the traycer reading when the provider override says 'provider' but the catalog row is not capable", () => {
+    autoJudgeGetData = { selection: null };
+    providersListData = {
+      providers: [providerState({ autoJudge: "provider" })],
+    };
+    harnessesData = { harnesses: [harnessRow(false)] };
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+    );
+
+    expect(result.current).toEqual({ kind: "traycer" });
+  });
+
   // JOB 3, end-to-end: `autoJudge.get` reports both a stored selection AND a
   // blocker on it. The hook must fold that into `{ kind: "blocked" }` rather
   // than billing the stored (but unrunnable) provider selection - the same
@@ -325,6 +391,32 @@ describe("useAutoJudgeBilling", () => {
       );
 
       expect(result.current).toEqual({ kind: "traycer" });
+    });
+  });
+
+  // JOB 4: the harness catalog is the SECOND half of the native-judge
+  // question, folded into the same settled gate as `providers.list` for the
+  // same reason - classifying on an unanswered catalog is what published
+  // stale billing copy that later flipped once the rows landed.
+  describe("waits for the harness catalog to settle before publishing billing copy", () => {
+    it("returns null while autoJudge.get has data but the harness catalog is still in flight", () => {
+      autoJudgeGetData = { selection: null };
+      providersListData = {
+        providers: [providerState({ autoJudge: "provider" })],
+      };
+      harnessesData = undefined;
+      harnessesSettled = false;
+      useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
+        data: undefined,
+        isSuccess: false,
+        isError: false,
+      }));
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toBeNull();
     });
   });
 });
