@@ -84,7 +84,17 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
   }, []);
 
   const { chatMatches, messageMatches } = results;
-  const empty = chatMatches.length === 0 && messageMatches.length === 0;
+  // A section is drawn whenever it has rows OR a cursor. Since access is
+  // resolved after ranking and paging, a page whose every match was in a task
+  // the requester cannot read comes back EMPTY with a cursor still set, and the
+  // accessible match sits on the next page - so a section gated on rows alone
+  // buries a reachable result permanently.
+  const chatsShown = chatMatches.length > 0 || results.chatNextCursor !== null;
+  const messagesShown =
+    messageMatches.length > 0 || results.messageNextCursor !== null;
+  // The terminal answer, and only then: nothing on screen and nowhere left to
+  // page to.
+  const exhausted = !chatsShown && !messagesShown;
 
   return (
     <div className="flex flex-col pb-2">
@@ -96,13 +106,13 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
           Still indexing chats on this host. Some results may be missing.
         </p>
       ) : null}
-      {empty ? (
+      {exhausted ? (
         <p className="px-3 py-6 text-center text-ui-sm text-muted-foreground">
           No chats match.
         </p>
       ) : null}
 
-      {chatMatches.length > 0 ? (
+      {chatsShown ? (
         <section aria-label="Chats">
           <h3 className="px-3 pt-2 pb-1 text-ui-xs font-medium tracking-wide text-muted-foreground uppercase">
             Chats
@@ -123,6 +133,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
               );
             })}
           </ul>
+          {chatMatches.length === 0 ? <EmptyPageNote /> : null}
           {results.chatNextCursor !== null ? (
             <ShowMoreButton
               label="Show more chats"
@@ -137,7 +148,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
         </section>
       ) : null}
 
-      {messageMatches.length > 0 ? (
+      {messagesShown ? (
         <section>
           <div
             role="separator"
@@ -162,6 +173,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
               );
             })}
           </ul>
+          {messageMatches.length === 0 ? <EmptyPageNote /> : null}
           {results.messageNextCursor !== null ? (
             <ShowMoreButton
               label="Show more message matches"
@@ -344,6 +356,19 @@ function ExpandToggle(props: {
       />
       {props.label}
     </button>
+  );
+}
+
+/**
+ * A page that ranked matches but showed none of them: every one belonged to a
+ * task this requester cannot read. The section's continuation control sits
+ * right below, because the next page may well have one they can.
+ */
+function EmptyPageNote() {
+  return (
+    <p className="px-3 py-1 text-ui-xs text-muted-foreground">
+      No matches on this page.
+    </p>
   );
 }
 

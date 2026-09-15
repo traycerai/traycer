@@ -400,3 +400,52 @@ describe("ChatSearchResultsView: task names", () => {
     expect(row.textContent).not.toContain("epic-unknown");
   });
 });
+
+describe("ChatSearchResultsView: an empty page that still has a cursor", () => {
+  // Access is resolved after ranking and paging, so a page whose matches all
+  // belonged to unreadable tasks arrives empty with its cursor intact.
+  it("keeps the chats continuation reachable when the page came back empty", async () => {
+    const { onShowMoreChats } = renderView({
+      results: results({ chatMatches: [], chatNextCursor: "20" }),
+    });
+
+    expect(screen.getByText("No matches on this page.")).toBeTruthy();
+    expect(screen.queryByText("No chats match.")).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show more chats" }),
+    );
+
+    expect(onShowMoreChats.mock.calls).toEqual([["20"]]);
+  });
+
+  it("keeps the message-matches continuation reachable when that page came back empty", async () => {
+    const { onShowMoreMessages } = renderView({
+      results: results({ messageMatches: [], messageNextCursor: "20" }),
+    });
+
+    expect(
+      screen.getByRole("separator", { name: "Matches in messages" }),
+    ).toBeTruthy();
+    expect(screen.getByText("No matches on this page.")).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show more message matches" }),
+    );
+
+    expect(onShowMoreMessages.mock.calls).toEqual([["20"]]);
+  });
+
+  it("reports the terminal state only once both sections are out of pages", () => {
+    renderView({
+      results: results({
+        chatMatches: [],
+        chatNextCursor: null,
+        messageMatches: [],
+        messageNextCursor: null,
+      }),
+    });
+
+    expect(screen.getByText("No chats match.")).toBeTruthy();
+    expect(screen.queryByText("No matches on this page.")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Show more/ })).toBeNull();
+  });
+});
