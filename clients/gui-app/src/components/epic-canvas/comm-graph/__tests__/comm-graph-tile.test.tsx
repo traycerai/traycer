@@ -1397,6 +1397,53 @@ describe("CommGraphTile", () => {
 
       expect(storedView()).toMatchObject({ x: 5, y: 6, zoom: 2 });
     });
+
+    it("re-measures Auto when a followed default returns to it, instead of reopening on the dormant outcome from before it went concrete", async () => {
+      // Codex 4011701263: a tile following the Settings default measured Auto
+      // once to "floor" - `officeAutoView`. The default then goes concrete
+      // (Towers here); that branch retires the CAMERA but never touches the
+      // dormant `officeAutoView` record, which is the whole finding - it is
+      // still "floor" when the default later returns to Auto. Leaving it in
+      // place would let the Auto effect's `officeAutoView !== null` guard skip
+      // re-measurement and reopen on that stale pick even if the epic or the
+      // tile's box changed shape in between.
+      //
+      // 21dfd8a6a: the first cut of this fix (45693c4af alone) cleared the
+      // dormant record but was itself defeated by the record-disagreement
+      // effect, which fires in the SAME commit and used to spread this
+      // render's stale `node.view` back over the clear - resurrecting
+      // `officeAutoView: "floor"` verbatim. Only fixed once that arm retired
+      // through the office-camera reducer (a targeted two-field patch)
+      // instead of a whole-view replace.
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      await renderSeededOffice({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeAutoView: "floor",
+      });
+      expect(storedView()?.officeAutoView).toBe("floor");
+
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+      );
+      expect(storedView()).toMatchObject({ officeCameraView: "towers" });
+      // The dormant record survives the trip through Towers untouched - this
+      // is what makes the case non-vacuous instead of already null going in.
+      expect(storedView()?.officeAutoView).toBe("floor");
+
+      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+
+      // THE gate: Auto's own measurement effect only runs while
+      // `officeAutoView === null` - this is what actually re-arms
+      // measurement, and is the assertion 45693c4af alone could not pass.
+      expect(storedView()?.officeAutoView).toBeNull();
+      expect(storedView()?.officeCamera).toBeNull();
+      // NOT asserted null: the record-disagreement arm's retire also
+      // re-stamps `officeCameraView` to the `resolvedViewId` it computed in
+      // this same stale-but-harmless render (here, still "floor") - Auto's
+      // own effect unconditionally overwrites it the moment real measurement
+      // lands, so this leftover is transient and not part of the finding's
+      // contract (only the re-measurement gate is).
+    });
   });
 
   describe("persisted camera record (officeCameraView)", () => {
