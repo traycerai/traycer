@@ -32,6 +32,22 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => HOST_ID,
 }));
 
+vi.mock("@/components/settings/host-scope/use-host-options", () => ({
+  useHostOptions: () => ({
+    hosts: [{ hostId: HOST_ID, name: "Host A" }],
+    activeHostId: HOST_ID,
+    isLoading: false,
+    listsFailed: false,
+    retryLists: () => undefined,
+  }),
+}));
+
+vi.mock("@/components/home/host-workspace-selector/host-section", () => ({
+  WorkspaceHostSwitcher: (props: { readonly activeHostId: string | null }) => (
+    <div data-testid="pr-panel-host-switcher">{props.activeHostId}</div>
+  ),
+}));
+
 const tileNavigationMocks = vi.hoisted(() => ({
   // Typed so assertions can read the recorded call without `any` leaking
   // through `mock.calls`.
@@ -41,8 +57,19 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => tileNavigationMocks,
 }));
 
-vi.mock("@/lib/host/stream-runtime-context", () => ({
+vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/host/stream-runtime-context")
+  >()),
   useStreamMethodSupport: () => "supported",
+}));
+
+// The stream binding itself is covered by its focused hook suite. Keep this
+// embed test focused on the panel's subscription and navigation behavior; a
+// null binding still exercises the body's re-provided context without
+// requiring a HostRuntimeProvider in this mobile harness.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => null,
 }));
 
 // The WS transport is the external boundary here: fake it so the body's own
