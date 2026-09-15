@@ -10,7 +10,7 @@ const CSS = readFileSync(
 describe("panel motion duration bridge", () => {
   it("routes core animated surfaces through the effective duration variable", () => {
     const durationRule =
-      /:root\s*:is\(([^()]*)\)\s*\{([^{}]*animation-duration:\s*var\(--panel-motion-duration\)[^{}]*transition-duration:\s*var\(--panel-motion-duration\)[^{}]*)\}/s.exec(
+      /:root\s*:is\(([^()]*)\)\s*\{([^{}]*animation-duration:\s*var\(--panel-motion-duration\)[^{}]*)\}/s.exec(
         CSS,
       );
     expect(durationRule).not.toBeNull();

@@ -231,6 +231,27 @@ code,
     .tc-node-block-toolbar
   ) {
   animation-duration: var(--panel-motion-duration);
+}
+/*
+ * Only surfaces that declare transition-property opt into transition timing.
+ * Its CSS initial value is `all`: assigning a duration to a positioned popover
+ * animates Floating UI's first transform from (0, 0), and lags every re-anchor.
+ * Keyframe timing above is independent of positioning and remains shared.
+ */
+:root
+  :is(
+    [data-slot="sheet-content"],
+    [data-slot="sidebar-gap"],
+    [data-slot="sidebar-container"],
+    [data-slot="sidebar-rail"],
+    [data-slot="sidebar-group-label"],
+    [data-slot="sidebar-group-action"],
+    [data-slot="sidebar-menu-button"],
+    [data-slot="sidebar-menu-action"],
+    [data-slot="collapsible-trigger"] svg,
+    [data-landing-terminal-panel],
+    .tc-node-block-toolbar
+  ) {
   transition-duration: var(--panel-motion-duration);
 }
 /* Vaul writes inline settle durations; preserve its transition-property: none while dragging. */

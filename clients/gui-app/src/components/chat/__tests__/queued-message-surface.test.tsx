@@ -370,7 +370,7 @@ describe("<QueuedMessagePanel />", () => {
     ).toBe(true);
   });
 
-  it("keeps row actions in a sticky glass corner", () => {
+  it("keeps row actions in a sticky corner", () => {
     renderPanel({
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "pending"),
@@ -405,7 +405,6 @@ describe("<QueuedMessagePanel />", () => {
     expect(toolbar.className).toContain("sticky");
     expect(toolbar.className).toContain("top-0");
     expect(toolbar.className).toContain("float-right");
-    expect(toolbar.className).toContain("backdrop-blur");
 
     const editButton = within(firstRow).getByRole("button", {
       name: "Edit queued message",

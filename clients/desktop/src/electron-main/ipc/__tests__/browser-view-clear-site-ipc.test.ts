@@ -482,7 +482,9 @@ async function watchForgetLedger(): Promise<{
 
 let ledgerRun = 0;
 
-describe("clear-site IPC jar targeting", () => {
+// Each case resets the real ledger module and dynamically imports the IPC
+// registration graph; the default 5s can expire during that setup on CI.
+describe("clear-site IPC jar targeting", { timeout: 15_000 }, () => {
   beforeEach(() => {
     fixture.clears = [];
     fixture.failingSiteClears = [];
