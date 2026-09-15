@@ -497,13 +497,22 @@ the offered list: the sidebar, the palette's settings sub-page
 (`navigation.source.ts`), and the leader digits (`keybindings/dispatch.ts`,
 which indexes positionally and must walk the same list the sidebar badges).
 Three more can arrive holding an id and each resolves it: the route (each
-omitted section's own `beforeLoad` redirects to `/settings/general` with
-`replace` - `settings.keybindings.tsx`, `settings.link-phone.tsx`), the modal
-(falls back to General for any section the build does not offer, since its
-section is persisted across launches), and the palette's `help:keybindings`
-row, which is dropped rather than left as the one entry point that routes
-around the rest. Only Keybindings needs that last one; nothing navigates
-directly to Link mobile app, so it gets no machinery it does not need.
+unoffered section's own `beforeLoad` redirects to `/settings/general` with
+`replace` - `settings.keybindings.tsx`, `settings.link-phone.tsx`,
+`settings.delete-account.tsx`), the modal (falls back to General for any
+section the build does not offer, since its section is persisted across
+launches), and the palette's `help:keybindings` row, which is dropped rather
+than left as the one entry point that routes around the rest. Only Keybindings
+needs that last one; nothing navigates directly to Link mobile app or Delete
+account, so neither gets machinery it does not need.
+
+**The list differs in both directions.** `MOBILE_APP_OMITTED_SECTION_IDS` names
+what the phone drops; `MOBILE_APP_ONLY_SECTION_IDS` names what only the phone
+has, which today is Delete account (see its entry under § Sections). Both lists
+are applied once at module load, so each build's offered list keeps ONE identity
+for the process's life - consumers memoize on it. That guarantee used to come
+free from returning `SETTINGS_SECTIONS` itself on non-mobile builds; once both
+builds dropped something, each needed a constant of its own.
 
 The gate is by SHELL, not by attached hardware: an iPad running the mobile app
 with a keyboard paired loses the section, which is the accepted cost of
@@ -2806,11 +2815,13 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   - **Traycer subscription + credits.** The Traycer provider detail leads with a
     `TraycerSubscriptionSection` card (always visible, not gated by the
     enable/disable toggle since it is account- not binary-level) showing the
-    signed-in user's plan: tier badge (`subscriptionStatus`), a Trial badge when
-    `isInTrial`, and a **Credit breakdown** with `N% used` plus a consumed/total
-    bar per bucket - **Plan**, **Bonus**, **Bundle** - matching the VS Code
+    signed-in user's **Credit breakdown**: a consumed/total bar per bucket -
+    **Plan**, **Bonus**, **Bundle** - matching the VS Code
     extension's wording (`getCreditBreakdown`; "Bundle" is what older copy called
-    pay-as-you-go). Each bar is shown only when that bucket's total > 0; amounts
+    pay-as-you-go). There is no tier badge and no Trial badge (feedback: "badge
+    is not needed, just show plan, bonus and credits"); the tier chip lives on
+    the header popover's account cards instead. Each bar is shown only when that
+    bucket's total > 0; amounts
     are `$`-denominated. Credit-based vs rate-limit-based is decided exactly like
     the extension (`isCreditBasedPricing` - V3 plans are credit-based); **legacy /
     v2 (usage-limit) plans** instead render a **Usage limit** section with the
@@ -2828,6 +2839,24 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     (TanStack Query against `AuthService.fetchAuthenticatedUser` →
     `/api/v3/user`, `refetchOnWindowFocus`); they live only in the query cache,
     never the auth store.
+    - **Mobile-app variant (`isMobileApp()`).** App Store review guideline
+      3.1.1 forbids an app from presenting or linking to a subscription that
+      cannot be bought through Apple, and Traycer's is bought on the web - so
+      the INSTALLED mobile app renders this card as a usage readout with
+      nothing to buy. The heading is **Usage**, the "Manage subscription" link
+      is gone (Refresh stays, labelled "Refresh usage"), and the card's own
+      state lines say "usage" rather than "subscription". The account picker,
+      the Plan/Bonus/Bundle bars and the legacy rate-limit view are all
+      unchanged except for denomination: `creditMeterDetail`
+      (`traycer-subscription-views.tsx`) drops the `$` there and states the
+      same reading as `C / T credits` (no spelled-out percent - the bar
+      directly below is already the ratio). Artifact rows are untouched -
+      they were never money. The branch is the BUILD flag, never the viewport
+      hook: a narrow desktop window is still a desktop and keeps its billing.
+      The shared body is what the header popover's Traycer tab renders too, so
+      the phone's popover gets the currency-free amounts for free; that
+      popover's own plan-tier chip is hidden on the same flag
+      (`rate-limit-popover.tsx`).
   - **Traycer OpenCode binary selection.** Traycer's built-in harness runs
     through OpenCode, so its row renders the same available OpenCode CLI paths
     and lets users choose the binary for Traycer separately from the standalone
@@ -5569,6 +5598,50 @@ level`, `Host log level` and the host's log tails described the selected host.
     owner of the presentation across the dashboard AND both ticket-12 scoped
     dialogs (epic + chat) - see that file's own doc comment for the current
     rule, not this one, so the rule can't fragment across two descriptions.
+
+- `Delete account` (`panels/delete-account-settings-panel.tsx`,
+  `/settings/delete-account`, last in the **Account** group) **Installed mobile
+  app only** - listed in `MOBILE_APP_ONLY_SECTION_IDS`, so it is the one entry
+  that inverts the mobile-omission mechanism above; on every other build the
+  row is absent and the route redirects to General. It exists because App Store
+  review guideline 5.1.1(v) requires an app that creates accounts to let
+  someone start deleting theirs from inside the app. Desktop and the web GUI
+  are not under that rule and manage the account on the web, so a second,
+  slower route there would answer a question they can already answer.
+
+  There is no deletion RPC: the request goes to a Google Form that notifies
+  support, and the team performs the deletion by hand. What the panel owes the
+  reader is therefore honesty about that shape - what is removed, that it
+  cannot be undone, that a PERSON does it within 30 days, and that a
+  confirmation email follows - and it never claims the account is gone when the
+  button is pressed. Two deliberate shapes:
+
+  - **A confirm in front of the button** (`ConfirmDestructiveDialog`, action
+    label `Continue`). Not because the tap destroys anything - it opens a form -
+    but because it leaves the app for the browser, and a destructive-sounding
+    control that silently backgrounds the app reads as "it already happened".
+    The confirm is where "your account stays active until our team completes the
+    deletion" lands, which is the one sentence a reader needs BEFORE the handoff.
+  - **The account's address, shown** under the button (`Signed in as <email>.`),
+    from `useAuthUser()`. The form is pre-filled from it, so this line is what
+    lets someone notice they are about to request deletion of the wrong account
+    before they submit. Omitted rather than faked when the address has not
+    resolved (`User.email` is nullable on the wire); the form still opens with
+    its address questions blank, because it is the only deletion route the app
+    has.
+
+  The URL is built in `lib/account/account-deletion-form.ts` -
+  `buildAccountDeletionFormUrl(email)`, a pure function with its own unit test.
+  It lives apart from the panel because a wrong `entry.*` id or a mangled
+  address still produces a perfectly valid URL, so neither failure is visible in
+  a render test. It composes through `URL`/`URLSearchParams` and never by
+  concatenation: `+`, `&` and `#` are all legal in the local part of an address
+  and each one truncates or rewrites a concatenated query, which would open the
+  form pre-filled with an address that is not the user's. The open goes through
+  `useOpenLink()` with kind `account`, the same hard-external kind every other
+  identity/billing destination uses, so the runner-error mapping turns a shell
+  that cannot open links into a visible failure rather than a dead tap. On the
+  phone that lands in the external browser, which is accepted for this flow.
 
 The default editor (`defaultEditor` in the settings store) has no dedicated
 panel - the Open split button on the Epic header doubles as its picker: clicking

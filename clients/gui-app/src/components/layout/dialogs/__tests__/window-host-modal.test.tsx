@@ -10,10 +10,12 @@ import {
   type WindowHostModalProps,
 } from "@/components/layout/dialogs/window-host-modal";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
+import { setMobileApp } from "@/lib/mobile-app";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 afterEach(() => {
   cleanup();
+  setMobileApp(false);
   useDesktopDialogStore.setState({ reportIssueAvailable: false });
 });
 
@@ -115,6 +117,27 @@ describe("<WindowHostModal />", () => {
     );
     expect(screen.getByTestId("host-scope-plan-upgrade")).toBeTruthy();
     expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
+  });
+
+  // App Store review guideline 3.1.1: the installed app may neither offer the
+  // purchase nor tell the reader to upgrade. The narration still names the
+  // state and says where the setting lives.
+  it("plan-restricted: withholds the upgrade and the upgrade wording in the installed mobile app", () => {
+    setMobileApp(true);
+    renderModalWithProviders(
+      baseProps({ variant: { kind: "plan-restricted" }, onRetry: null }),
+    );
+
+    expect(screen.queryByTestId("host-scope-plan-upgrade")).toBeNull();
+    expect(screen.getByTestId("window-host-modal-title").textContent).toBe(
+      "This computer is not available to the mobile app on the current plan",
+    );
+    expect(screen.getByTestId("window-host-modal").textContent).toContain(
+      "Manage this from the Traycer desktop app.",
+    );
+    expect(screen.getByTestId("window-host-modal").textContent).not.toContain(
+      "Upgrade",
+    );
   });
 
   it("update-host: shows hostVersion, minSupportedVersion, and code in the incompatible detail", () => {

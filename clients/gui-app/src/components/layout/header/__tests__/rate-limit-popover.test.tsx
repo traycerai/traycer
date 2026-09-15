@@ -44,6 +44,7 @@ import type {
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { accountContextValue } from "@/lib/auth/traycer-subscription-content";
+import { setMobileApp } from "@/lib/mobile-app";
 import { queryKeys } from "@/lib/query-keys";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
@@ -892,6 +893,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setMobileApp(false);
   useDesktopDialogStore.setState({
     activeDialog: null,
     reportIssueAvailable: false,
@@ -2743,6 +2745,36 @@ describe("<RateLimitPopover /> Refresh all", () => {
       { force: true },
     );
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  // This popover IS reachable on the phone - `MobileAppHeader` renders
+  // `RateLimitIconButton` - and the tier chip is the one thing on the account
+  // card that names something for sale. App Store review guideline 3.1.1 says
+  // the installed app may not present a subscription it cannot sell, so the
+  // chip goes and the usage stays.
+  it("names the Traycer plan tier on desktop and drops the chip in the installed mobile app", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: false }),
+    );
+    renderPopover();
+
+    expect(screen.getByText("Pro")).not.toBeNull();
+    // The card itself is still there, named and selectable.
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }),
+    ).not.toBeNull();
+
+    cleanup();
+    setMobileApp(true);
+    renderPopover();
+
+    expect(screen.queryByText("Pro")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }),
+    ).not.toBeNull();
+    // The usage body survives, denominated in credits rather than dollars.
+    expect(screen.queryByText(/\$/)).toBeNull();
   });
 
   it("refetches Traycer when the synthetic Traycer entry is eligible", () => {
