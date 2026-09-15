@@ -125,7 +125,12 @@ describe("adversarial: hostile config content is tolerated (no crash)", () => {
     await expect(loadEffectiveShellConfig()).resolves.toBeDefined();
   });
 
-  it("strips unknown top-level and shell keys, keeping the known shape", async () => {
+  it("strips unknown shell keys but preserves unknown top-level blocks", async () => {
+    // The top level is `.passthrough()`: an unknown BLOCK is how a newer
+    // binary's setting reaches this one, so stripping it would make every
+    // read-modify-write here delete that setting. Inside a known block the
+    // shape is already agreed between both sides, so an extra key there is
+    // corruption and is still stripped.
     await writeRaw({
       version: 1,
       shell: { path: "/bin/zsh", args: ["-i"], entries: [], bogus: 42 },
@@ -134,7 +139,7 @@ describe("adversarial: hostile config content is tolerated (no crash)", () => {
     });
     const cfg = await readCliConfig();
     expect(cfg.shell.path).toBe("/bin/zsh");
-    expect("surpriseKey" in cfg).toBe(false);
+    expect(cfg.surpriseKey).toEqual({ nested: true });
     expect("bogus" in cfg.shell).toBe(false);
   });
 

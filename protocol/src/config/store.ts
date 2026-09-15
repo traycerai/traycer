@@ -17,6 +17,7 @@ import {
   cliConfigSchema,
   CLI_CONFIG_VERSION,
   EMPTY_CLI_CONFIG,
+  type BrowserConfig,
   type CliConfig,
   type FeatureSettings,
   type DetectedShell,
@@ -983,6 +984,46 @@ export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
   await writeCliConfig({
     ...current,
     features: { ...current.features, agentRoles: enabled },
+  });
+}
+
+/** Whether agents may drive the in-app browser (default on when unset). */
+export async function readBrowserConfig(): Promise<BrowserConfig> {
+  return (await readCliConfig()).browser;
+}
+
+/**
+ * Best-effort synchronous browser read, for the per-call gate on agent browser
+ * tools. Fails OPEN - any missing, unreadable, or invalid config resolves to
+ * `{ agentAccess: true }` - which is the opposite of `readFeatureSettingsSync`
+ * and deliberate: this is not an experimental capability being unlocked, it is
+ * a capability agents already have that the user may switch OFF. A corrupt
+ * config that silently disabled it would read as "the browser tools are
+ * broken", with nothing in the UI to explain why; failing open keeps the
+ * default behaviour and leaves the config error to surface where it is
+ * actionable (`readBrowserConfig`, which throws like `readLogLevels`).
+ */
+export function readBrowserConfigSync(): BrowserConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = parseCliConfig(JSON.parse(raw));
+    if (result.success) return result.data.browser;
+  } catch {
+    // An unreadable config must not revoke a capability the user never
+    // disabled - fall through to the permissive default.
+  }
+  return { agentAccess: true };
+}
+
+/**
+ * Enables or disables agent access to the in-app browser while preserving the
+ * rest of the config.
+ */
+export async function setAgentBrowserAccess(enabled: boolean): Promise<void> {
+  const current = await readCliConfig();
+  await writeCliConfig({
+    ...current,
+    browser: { ...current.browser, agentAccess: enabled },
   });
 }
 
