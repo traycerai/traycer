@@ -159,6 +159,7 @@ interface NativeStatusChange {
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
+  readonly registrationId: string;
   readonly url: string;
   readonly title: string | null;
   readonly status: "loading" | "ready" | "dead";
@@ -659,6 +660,7 @@ describe("ElectronTabSurface", () => {
         hostId: "host-1",
         sessionId: "session-1",
         tabId: "foreign-tab",
+        registrationId: "registration-1",
         url: "https://foreign.example/",
         title: null,
         status: "dead",
@@ -675,6 +677,7 @@ describe("ElectronTabSurface", () => {
         hostId: "host-1",
         sessionId: "session-1",
         tabId: "tab-1",
+        registrationId: "registration-1",
         url: "https://example.com/",
         title: null,
         status: "dead",
@@ -853,6 +856,7 @@ describe("ElectronTabSurface navigation stall", () => {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
+      registrationId: "registration-1",
       url: "https://example.com/",
       title: null,
       status: "loading",
@@ -894,7 +898,7 @@ describe("ElectronTabSurface navigation stall", () => {
     );
     await act(() => Promise.resolve());
 
-    expect(screen.getByText("Reconnecting to this session")).toBeTruthy();
+    expect(screen.getByText("Loading")).toBeTruthy();
     expect(screen.queryByText("This page did not load")).toBeNull();
 
     await act(async () => {
@@ -988,6 +992,7 @@ describe("ElectronTabSurface echo-less settle", () => {
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
+      registrationId: "registration-1",
       url,
       title: null,
       status,
@@ -1029,7 +1034,7 @@ describe("ElectronTabSurface echo-less settle", () => {
   // painted-ness is the overlay ancestor's opacity class, not the text's
   // presence in the DOM.
   function loaderOverlayClassName(): string {
-    const banner = screen.getByText("Reconnecting to this session");
+    const banner = screen.getByText("Loading");
     const overlay = banner.closest('[class*="opacity-"]');
     if (!(overlay instanceof HTMLElement)) {
       throw new Error("expected loader overlay ancestor");
@@ -1094,6 +1099,166 @@ describe("ElectronTabSurface echo-less settle", () => {
     });
 
     expect(loaderOverlayClassName()).toContain("opacity-0");
+  });
+});
+
+/**
+ * The tile remembers WHICH binding registration committed a document: true
+ * after an accepted `ready` for the current registration, reset on `dead`,
+ * and derived false again when the directory replaces the binding under the
+ * mounted surface. It gates the loading overlay so a navigation AWAY from an
+ * already-painted page does not sit the loader back over live content - only
+ * the toolbar spinner carries that in-flight navigation, as in any ordinary
+ * browser.
+ */
+describe("ElectronTabSurface document-committed loader gating", () => {
+  function statusChange(
+    status: "loading" | "ready" | "dead",
+  ): NativeStatusChange {
+    return {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      url: NODE.url,
+      title: null,
+      status,
+      reason: null,
+      canGoBack: false,
+      canGoForward: false,
+      zoomPercent: 100,
+    };
+  }
+
+  beforeEach(() => {
+    state.visible = true;
+    state.bridge = new TestBridge();
+    state.chromeInputs = [];
+    state.sessions = liveSessions();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+    stopGuestHost?.();
+    stopGuestHost = null;
+  });
+
+  // The loader panel stays mounted (at `opacity-0`/`aria-hidden` when hidden),
+  // so its painted-ness is the overlay ancestor's class/attributes, not the
+  // text's mere presence in the DOM.
+  function loaderOverlayElement(): HTMLElement {
+    const banner = screen.getByText("Loading");
+    const overlay = banner.closest('[class*="opacity-"]');
+    if (!(overlay instanceof HTMLElement)) {
+      throw new Error("expected loader overlay ancestor");
+    }
+    return overlay;
+  }
+
+  it("paints the loader before the tile has ever seen a committed document", async () => {
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    const overlay = loaderOverlayElement();
+    expect(overlay.className).toContain("opacity-100");
+    expect(overlay.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("does not repaint the loader over an already-committed page on a later loading status", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    act(() => {
+      bridge.emitStatus(statusChange("ready"));
+    });
+    expect(loaderOverlayElement().className).toContain("opacity-0");
+
+    // A navigation away from the now-painted page: the wire status flips back
+    // to `loading`, but the guest is still interactive and has already
+    // committed a document, so the loader must stay hidden - only the
+    // toolbar's own spinner (pinned separately) carries this in-flight nav.
+    act(() => {
+      bridge.emitStatus(statusChange("loading"));
+    });
+
+    const overlay = loaderOverlayElement();
+    expect(overlay.className).toContain("opacity-0");
+    expect(overlay.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("paints the loader again when the binding is replaced under the mounted surface", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    const binding = createBinding(() =>
+      Promise.resolve({ detach: () => Promise.resolve() }),
+    );
+    const view = renderTile(binding);
+    await act(() => Promise.resolve());
+
+    act(() => {
+      bridge.emitStatus(statusChange("ready"));
+    });
+    expect(loaderOverlayElement().className).toContain("opacity-0");
+
+    // The directory re-ensured the tab: same tile, same tab id, a fresh
+    // registration whose guest is a new `about:blank`. Its `loading` is a
+    // first load again, not a navigation away from a painted page, so the
+    // previous registration's commit must not hide the loader.
+    const replacement: ElectronTabBinding = {
+      ...binding,
+      registrationId: "registration-2",
+    };
+    await act(async () => {
+      view.rerender(surfaceElement(NODE, replacement));
+      await Promise.resolve();
+    });
+    act(() => {
+      bridge.emitStatus({
+        ...statusChange("loading"),
+        registrationId: "registration-2",
+      });
+    });
+
+    const overlay = loaderOverlayElement();
+    expect(overlay.className).toContain("opacity-100");
+    expect(overlay.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("shows the dead surface after ready, then paints the loader again on the next loading (documentCommitted reset)", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    act(() => {
+      bridge.emitStatus(statusChange("ready"));
+    });
+    expect(loaderOverlayElement().className).toContain("opacity-0");
+
+    act(() => {
+      bridge.emitStatus(statusChange("dead"));
+    });
+    expect(screen.getByText("Agent browser unavailable")).toBeTruthy();
+
+    // `dead` clears `documentCommitted` - the guest is re-materialized from
+    // blank, so the next `loading` has nothing committed to protect and the
+    // loader must paint again.
+    act(() => {
+      bridge.emitStatus(statusChange("loading"));
+    });
+
+    const overlay = loaderOverlayElement();
+    expect(overlay.className).toContain("opacity-100");
+    expect(overlay.getAttribute("aria-hidden")).toBe("false");
   });
 });
 
