@@ -144,6 +144,18 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   // the clock and only a genuinely stalled tab trips it.
   const [stalledNonce, setStalledNonce] = useState<number | null>(null);
   const [loadingNonce, setLoadingNonce] = useState(0);
+  // The binding registration whose guest has committed a document, or null.
+  // Before the first `ready` the guest is blank and the loader is the only
+  // thing to show; after it, a `loading` is a navigation AWAY from a page
+  // that stays painted until the next commit, and the loader must not sit
+  // over it (see `resolveTileOverlay`). Keyed by registration rather than a
+  // bare flag because the directory can replace the binding under a mounted
+  // surface (a re-ensured tab is a fresh guest at `about:blank`), and a
+  // `dead` guest is re-materialized from blank - both must derive as
+  // uncommitted.
+  const [committedRegistrationId, setCommittedRegistrationId] = useState<
+    string | null
+  >(null);
   const attemptedNavigationRef = useRef<AttemptedNavigation | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -265,6 +277,10 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         setStatus(change.status);
         setStatusReason(change.reason);
         setStatusUrl(change.url);
+        if (change.status === "ready") {
+          setCommittedRegistrationId(change.registrationId);
+        }
+        if (change.status === "dead") setCommittedRegistrationId(null);
         setCanGoBack(change.canGoBack);
         setCanGoForward(change.canGoForward);
         setZoomPercent(change.zoomPercent);
@@ -492,6 +508,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     effectiveStatus,
     surfaceReady,
     navigationStalled,
+    committedRegistrationId === registrationId,
   );
 
   return (
@@ -525,8 +542,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         <div
           hidden={showStartPage}
           // Transparent is not hidden: without this a presented, live guest
-          // still exposes the loader's role and "Reconnecting" text to
-          // assistive tech. Hide it from AT whenever it is not the shown layer.
+          // still exposes the loader's role and "Loading" text to assistive
+          // tech. Hide it from AT whenever it is not the shown layer.
           aria-hidden={!overlay.visible}
           className={cn(
             "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
@@ -673,9 +690,7 @@ function ElectronTabSurfaceStatus(props: ElectronTabSurfaceStatusProps) {
         testId={undefined}
         variant={undefined}
       />
-      <div className="text-ui-base font-medium">
-        Reconnecting to this session
-      </div>
+      <div className="text-ui-base font-medium">Loading</div>
       <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
     </>
   );

@@ -15,13 +15,14 @@ interface PickerLeaderBadgeProps {
   readonly hintTarget: string;
   readonly testId: string;
   /**
-   * All three placements are absolute / out of flow, so revealing a badge
+   * All placements are absolute / out of flow, so revealing a badge
    * never reflows its surface. `corner` floats a tiny number in the icon's
    * top-right (rail, no label room); `trailing` floats just past a label's
    * right edge (reasoning pills), landing in the pill's existing trailing
-   * whitespace; `leading` floats at the top-left, opposite `corner`.
+   * whitespace; `leading` floats at the top-left, opposite `corner`; `above`
+   * occupies the slider's reserved label row, centred over its stop.
    */
-  readonly placement: "corner" | "trailing" | "leading";
+  readonly placement: "corner" | "trailing" | "leading" | "above";
 }
 
 /**
@@ -51,6 +52,8 @@ export function PickerLeaderBadge(props: PickerLeaderBadgeProps) {
               "absolute right-0 top-0 size-[1.125rem] text-[0.6875rem]",
             placement === "leading" &&
               "absolute left-0 top-0 size-[1.125rem] text-[0.6875rem]",
+            placement === "above" &&
+              "absolute bottom-full left-1/2 mb-2 h-[1.125rem] min-w-[1.125rem] -translate-x-1/2 px-1 text-[0.6875rem]",
             placement === "trailing" &&
               "absolute left-full top-1/2 ml-1 h-[1.125rem] min-w-[1.125rem] -translate-y-[calc(50%+0.1rem)] px-1 text-[0.6875rem]",
           )}

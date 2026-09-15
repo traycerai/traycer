@@ -3667,7 +3667,7 @@ describe("ResourceMonitorPopover", () => {
     // structural sticky container and its measured section-header offset.
     const ownerRow = screen.getByText("Terminal Alpha").closest(".sticky");
     expect(ownerRow).not.toBeNull();
-    expect(ownerRow?.className).toContain("glass-inset");
+    expect(ownerRow?.className).toContain("bg-popover");
     expect(ownerRow?.getAttribute("style")).toContain("top: 0px");
   });
 

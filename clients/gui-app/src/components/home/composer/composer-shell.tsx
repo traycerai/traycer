@@ -44,7 +44,7 @@ export function ComposerDropOverlay({
   return (
     <div
       aria-hidden
-      className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary bg-card/90 backdrop-blur-sm"
+      className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary bg-card/90"
     >
       <Icon className="size-6 text-primary" aria-hidden />
       <p className="text-ui-sm font-medium text-foreground">{title}</p>

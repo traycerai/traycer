@@ -478,7 +478,7 @@ function PhoneScrim(props: {
       initial={props.reducedMotion ? false : { opacity: 0 }}
       animate={{ opacity: props.revealed ? 1 : 0 }}
       transition={{ duration: 0.32, ease: EASE }}
-      className="absolute inset-0 z-20 bg-black/45 supports-backdrop-filter:backdrop-blur-xs"
+      className="absolute inset-0 z-20 bg-black/45"
     />
   );
 }

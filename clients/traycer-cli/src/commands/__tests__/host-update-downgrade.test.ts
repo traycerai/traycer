@@ -25,7 +25,27 @@ const mocks = vi.hoisted(() => ({
   }>,
   gateStoreFormatFloorMock: vi.fn(),
   serviceManagerMayRespawnMock: vi.fn(),
+  fetchTextMock: vi.fn(),
 }));
+
+// The real store-format floor (kept real below) consults the registry on
+// every genuine downgrade: `lookupPublishedStoreFormats` fetches the LIVE
+// `versions.json` from GitHub Releases, under a 5 s watchdog that equals
+// vitest's default test timeout. Left real, every downgrade case here is a
+// network round trip, and one slow CDN reply kills the case before the
+// watchdog's own fallback can land (seen on `main` CI, 2026-09-14). Stubbed
+// to an unreachable registry: the floor logs the miss and resolves from its
+// fixed table - the same answer the live manifest gives these fixture
+// versions, which publish no store formats.
+vi.mock("../../registry/fetch-resource", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../registry/fetch-resource")>();
+  return {
+    ...actual,
+    fetchText: (...callArgs: Parameters<typeof actual.fetchText>) =>
+      mocks.fetchTextMock(...callArgs),
+  };
+});
 
 // The commit tail's post-stop check asks `serviceManagerMayRespawn` (the
 // `service/index.ts` facade) and, since the settle-wait, POLLS it for up to
@@ -271,6 +291,9 @@ describe("installHostDowngrade", () => {
     mocks.busy = false;
     mocks.beforeSwapError = false;
     mocks.lifecycleCalls = [];
+    mocks.fetchTextMock.mockRejectedValue(
+      new Error("registry unreachable in this sandbox"),
+    );
   });
 
   afterEach(() => {

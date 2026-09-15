@@ -287,7 +287,6 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
-  | "glassOpacity"
   | "homeTabEnabled"
   // The Layout page's own controls. Dotted rather than camel-cased because
   // they name a path into one persisted store's slice, not a flat
@@ -1225,7 +1224,6 @@ const ANALYTICS_SETTINGS = new Set<string>(
     defaultSelection: true,
     defaultServiceTier: true,
     diffViewerPreferences: true,
-    glassOpacity: true,
     homeTabEnabled: true,
     "layout.preset.compact": true,
     "layout.preset.default": true,
