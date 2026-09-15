@@ -503,9 +503,8 @@ export interface BrowserObservedCookieMergeResult {
  *
  * Both host->jar doors arrive here - the observed frame and the
  * `createElectronTab` seed, which used to have a `seedBrowserViewCookies` loop
- * of its own with none of the checks. Application goes through Chromium's own
- * `cookies.set`, which is what
- * normalises the attributes away from anything the sender chose.
+ * of its own with none of the checks. Changed cookies go through Chromium's
+ * own `cookies.set`; identical survivors count as applied without a write.
  *
  * Merge-only: it sets and never removes. The caller has already dropped the
  * expired cookies that would otherwise reach `cookies.set` as deletes.
@@ -514,6 +513,7 @@ export async function mergeObservedProfileCookies(
   cookies: readonly ProtocolStorageCookie[],
   browserSession: BrowserStorageSession,
   jarCookies: readonly ProtocolStorageCookie[],
+  beforeSet: (key: BrowserCookieKey) => void,
 ): Promise<BrowserObservedCookieMergeResult> {
   const currentCookies = new Map(
     jarCookies.map((cookie) => [cookieKeyId(cookie), cookie]),
@@ -549,7 +549,9 @@ export async function mergeObservedProfileCookies(
         current.secure !== parsed.secure ||
         current.sameSite !== parsed.sameSite
       ) {
-        await setStorageCookie(parsed, browserSession);
+        const details = toElectronCookieSetDetails(toCookieSetDetails(parsed));
+        beforeSet(key);
+        await browserSession.cookies.set(details);
         currentCookies.set(keyId, parsed);
       }
       applied += 1;
@@ -618,21 +620,6 @@ export async function browserJarCookies(
   browserSession: BrowserStorageSession,
 ): Promise<readonly ProtocolStorageCookie[]> {
   return browserStorageCookies(await browserSession.cookies.get({ domain }));
-}
-
-/**
- * One parsed cookie into one jar, through Chromium's own `cookies.set`
- * validation. Both application paths go through here - the tab seed and the
- * observed merge - so neither can normalise or scope a cookie differently
- * from the other.
- */
-async function setStorageCookie(
-  cookie: DesktopStorageCookie,
-  browserSession: BrowserStorageSession,
-): Promise<void> {
-  await browserSession.cookies.set(
-    toElectronCookieSetDetails(toCookieSetDetails(cookie)),
-  );
 }
 
 /**

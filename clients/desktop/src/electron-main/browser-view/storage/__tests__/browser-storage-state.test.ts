@@ -12,11 +12,12 @@ import {
 } from "../browser-storage-state";
 
 /**
- * `setStorageCookie` is what every host->jar write goes through, and it is the
- * normalisation the whole ownership model rests on: the shell decides the
- * `url`, the scope and the expiry, so the sender's attributes are re-derived
- * rather than trusted. `mergeObservedProfileCookies` is its one exported
- * caller since H05 collapsed the seed onto it, so the case lives here.
+ * `mergeObservedProfileCookies` is what every host->jar write goes through,
+ * and its `cookies.set` conversion is the normalisation the whole ownership
+ * model rests on: the shell decides the `url`, the scope and the expiry, so
+ * the sender's attributes are re-derived rather than trusted. It is the one
+ * caller of that conversion since H05 collapsed the seed onto it, so the case
+ * lives here.
  */
 describe("host-contributed cookie normalisation", () => {
   it("derives the url and scope from the cookie rather than the sender", async () => {
@@ -59,6 +60,7 @@ describe("host-contributed cookie normalisation", () => {
         },
       },
       [],
+      (_key) => undefined,
     );
 
     expect(result).toEqual({ applied: 2, refused: [] });
@@ -126,6 +128,7 @@ describe("host-contributed cookie normalisation", () => {
           },
         },
         [],
+        (_key) => undefined,
       );
 
       // Counted, not thrown: this is untrusted remote input, and one
@@ -187,6 +190,7 @@ describe("host-contributed cookie normalisation", () => {
           },
         },
         [],
+        (_key) => undefined,
       );
 
       expect(result).toEqual({ applied: 1, refused: [] });
@@ -240,6 +244,7 @@ describe("host-contributed cookie normalisation", () => {
         },
       },
       [],
+      (_key) => undefined,
     );
 
     expect(result.applied).toBe(1);
@@ -291,9 +296,12 @@ describe("compare-before-set (ticket 03)", () => {
   it("skips cookies.set for a survivor identical to its jar counterpart, and counts it as applied", async () => {
     const { set, session } = harness();
 
-    const result = await mergeObservedProfileCookies([BASE_COOKIE], session, [
-      BASE_COOKIE,
-    ]);
+    const result = await mergeObservedProfileCookies(
+      [BASE_COOKIE],
+      session,
+      [BASE_COOKIE],
+      (_key) => undefined,
+    );
 
     expect(result).toEqual({ applied: 1, refused: [] });
     expect(set).not.toHaveBeenCalled();
@@ -312,9 +320,12 @@ describe("compare-before-set (ticket 03)", () => {
       const { set, session } = harness();
       const observed = { ...BASE_COOKIE, ...override };
 
-      const result = await mergeObservedProfileCookies([observed], session, [
-        BASE_COOKIE,
-      ]);
+      const result = await mergeObservedProfileCookies(
+        [observed],
+        session,
+        [BASE_COOKIE],
+        (_key) => undefined,
+      );
 
       expect(result).toEqual({ applied: 1, refused: [] });
       expect(set).toHaveBeenCalledOnce();
@@ -336,6 +347,7 @@ describe("compare-before-set (ticket 03)", () => {
       [rotated, BASE_COOKIE],
       session,
       [BASE_COOKIE],
+      (_key) => undefined,
     );
 
     expect(result).toEqual({ applied: 2, refused: [] });
@@ -354,9 +366,12 @@ describe("compare-before-set (ticket 03)", () => {
     const { set, session } = harness();
     const observed = { ...BASE_COOKIE, domain: ".example.test" };
 
-    const result = await mergeObservedProfileCookies([observed], session, [
-      BASE_COOKIE,
-    ]);
+    const result = await mergeObservedProfileCookies(
+      [observed],
+      session,
+      [BASE_COOKIE],
+      (_key) => undefined,
+    );
 
     expect(result).toEqual({ applied: 1, refused: [] });
     expect(set).toHaveBeenCalledOnce();
@@ -372,6 +387,7 @@ describe("compare-before-set (ticket 03)", () => {
       [csrf, sidChanged, prefs],
       session,
       [csrf, BASE_COOKIE, prefs],
+      (_key) => undefined,
     );
 
     expect(result).toEqual({ applied: 3, refused: [] });
@@ -389,9 +405,12 @@ describe("compare-before-set (ticket 03)", () => {
     const { set, session } = harness();
     const partitioned = { ...BASE_COOKIE, partitionKey: "https://top.test" };
 
-    const result = await mergeObservedProfileCookies([partitioned], session, [
-      BASE_COOKIE,
-    ]);
+    const result = await mergeObservedProfileCookies(
+      [partitioned],
+      session,
+      [BASE_COOKIE],
+      (_key) => undefined,
+    );
 
     expect(result.applied).toBe(0);
     expect(result.refused).toEqual([

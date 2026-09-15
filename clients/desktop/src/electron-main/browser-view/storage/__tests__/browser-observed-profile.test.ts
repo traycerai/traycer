@@ -113,7 +113,7 @@ class ObservedApplyHarness {
    * module's own suite.
    */
   readonly headlessOriginKeyIds = new Set<string>();
-  /** Keys the applier announced to the observer before writing them. */
+  /** Keys the applier armed an observer insert mark for, before writing them. */
   readonly announcedKeys: BrowserCookieKey[] = [];
   /** Keys the applier handed back after the jar refused the write. */
   readonly releasedKeys: BrowserCookieKey[] = [];
@@ -162,10 +162,12 @@ class ObservedApplyHarness {
         !this.ownershipRuleEnabled || this.headlessOriginKeyIds.has(keyId),
       claimHeadlessOriginKeys: (keys) => {
         for (const key of keys) {
-          this.announcedKeys.push(key);
           this.headlessOriginKeyIds.add(cookieKeyId(key));
         }
         return Promise.resolve();
+      },
+      noteAppliedKeys: (keys) => {
+        this.announcedKeys.push(...keys);
       },
       releaseHeadlessOriginKeys: (keys) => {
         for (const key of keys) {
@@ -228,10 +230,12 @@ class ObservedApplyHarness {
         !this.ownershipRuleEnabled || this.headlessOriginKeyIds.has(keyId),
       claimHeadlessOriginKeys: (keys) => {
         for (const key of keys) {
-          this.announcedKeys.push(key);
           this.headlessOriginKeyIds.add(cookieKeyId(key));
         }
         return Promise.resolve();
+      },
+      noteAppliedKeys: (keys) => {
+        this.announcedKeys.push(...keys);
       },
       releaseHeadlessOriginKeys: (keys) => {
         for (const key of keys) {
