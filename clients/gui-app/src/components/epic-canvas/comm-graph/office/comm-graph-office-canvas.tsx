@@ -4032,6 +4032,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         persistView();
         return;
       }
+      // A click that SELECTS is disabled while Auto is still measuring: the
+      // selection lives only in local state the resolve-remount throws away,
+      // like the directory and Find paths (see handleDirectorySelect). The drag
+      // above is a camera gesture, not a selection, so it is left alone.
+      if (measuring) return;
       const point = toSpritePoint(event.clientX, event.clientY);
       if (point === null) return;
       // Envelopes first: a message in flight over a desk is drawn on top of
@@ -4052,7 +4057,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         : scene.hitTest(point);
       if (agentId !== null) setSelectedAgentId(agentId);
     },
-    [peekScene, persistView, runtime, setSelectedAgentId, toSpritePoint],
+    [
+      measuring,
+      peekScene,
+      persistView,
+      runtime,
+      setSelectedAgentId,
+      toSpritePoint,
+    ],
   );
 
   // A cancelled gesture is not a click: the browser took the pointer (a touch
@@ -4267,6 +4279,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             runtime.setSearchMatchIds(agentIdsToShow);
           },
           frameMatches: (agentIdsToFrame) => {
+            // Nothing to frame on the throwaway measuring mount; see
+            // handleDirectorySelect.
+            if (measuring) return;
             const scene = runtime.getScene();
             if (scene === null) return;
             const bounds = seatBoundsFor(scene, agentIdsToFrame);
@@ -4288,6 +4303,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             });
           },
           focusMatch: (agentId) => {
+            // A match focused on the throwaway measuring mount is selected only
+            // in local state that the resolve-remount discards; see
+            // handleDirectorySelect.
+            if (measuring) return;
             const scene = runtime.getScene();
             // Selecting is half the answer: the panel is where a match stops
             // being a name on a floor and becomes something you can read.
@@ -4308,7 +4327,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           },
         },
       }),
-    [runtime, setSelectedAgentId, tileInstanceId],
+    [measuring, runtime, setSelectedAgentId, tileInstanceId],
   );
   useRegisterTileFindAdapter(findAdapter);
 
@@ -4322,6 +4341,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
    */
   const handleDirectorySelect = useCallback(
     (agentId: string) => {
+      // Disabled while Auto is still measuring. This mount is a throwaway - the
+      // tile's key remounts the canvas the instant Auto resolves - so a
+      // selection made now is withheld from the view and then discarded on that
+      // remount, and a pan aims the measuring surface nobody keeps. The office
+      // is a beat from ready; the same click lands for good once it is.
+      // (`measuring` is constant for the life of this mount.)
+      if (measuring) return;
       setSelectedAgentId(agentId);
       const scene = peekScene();
       if (scene === null) return;
@@ -4337,7 +4363,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         persistOnArrival: true,
       });
     },
-    [peekScene, runtime, setSelectedAgentId],
+    [measuring, peekScene, runtime, setSelectedAgentId],
   );
 
   const handleDirectoryHover = useCallback(
