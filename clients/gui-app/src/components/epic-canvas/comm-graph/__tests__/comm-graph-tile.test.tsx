@@ -2836,6 +2836,13 @@ describe("CommGraphTile", () => {
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      // TEMPORARY shard-14 diagnostic, to be removed once the cause is known:
+      // CI answers `towers` here in roughly two runs of three while every local
+      // run - file, full shard, and shard pinned to one worker - answers
+      // `floor`. `OfficeAutoDecision` already carries the per-candidate fit
+      // zooms and the agent count, so the failure below says whether the CANVAS
+      // arrived wrong or the WORLD measured bigger, without guessing at either.
+      const decideSpy = vi.spyOn(officeAutoModule, "decideOfficeView");
       useSettingsStore.getState().setAgentOfficeDefaultView("towers");
       // Seeded at Finding B's own non-neutral numbers, not the default -
       // zeroing an already-zero Graph camera would pass whether or not the
@@ -2892,9 +2899,33 @@ describe("CommGraphTile", () => {
       // the civic rooms now push the fit to 0.554 and Auto answers TOWERS, so
       // a hand-written box turns this into a Towers case that still claims to
       // be about a Floor. See `OFFICE_CANVAS`.
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
+      try {
+        await waitFor(() => {
+          expect(storedView()?.officeAutoView).toBe("floor");
+        });
+      } catch (error) {
+        // TEMPORARY: see the `decideSpy` note above. Carried in the thrown
+        // message rather than a console line so it reaches the CI job log
+        // through the normal failure report.
+        // Re-deciding from the RECORDED inputs rather than reading the spy's
+        // results, whose `value` is `any`. `Array.prototype.map` fixes its
+        // length up front, so the calls these re-decisions append are not
+        // themselves walked.
+        const recorded = decideSpy.mock.calls.map(
+          ([input, canvas, padding]) => ({
+            canvas,
+            viewport: input.viewport,
+            agents: input.agents.length,
+            decision: officeAutoModule.decideOfficeView(input, canvas, padding),
+          }),
+        );
+        throw new Error(
+          `AUTO-DIAG ${JSON.stringify({
+            recorded,
+            stored: storedView()?.officeAutoView ?? null,
+          })} :: ${String(error)}`,
+        );
+      }
 
       // The Auto answer remounts the canvas (measuring -> floor), and that
       // remount only reports its own eligibility on the frame this next
