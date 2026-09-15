@@ -437,7 +437,7 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
       // sidebar eating most of its width. `30%` resolves against this tile's
       // flex row, so the directory scales down with the pane and the canvas
       // keeps its share; 15rem is still the cap on a wide tile.
-      className="flex h-full w-[min(30%,15rem)] min-w-0 shrink-0 flex-col border-r border-border bg-background"
+      className="flex h-full w-[30%] max-w-60 min-w-0 shrink-0 flex-col border-r border-border bg-background"
     >
       <header className="flex min-w-0 items-center gap-2 border-b border-border px-2 py-1.5">
         <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground/90">

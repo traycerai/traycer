@@ -1025,7 +1025,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
               choice === "auto" ? (
                 <OfficeAutoChip
                   decision={shownAutoDecision}
-                  restoredView={node.view.officeAutoView}
+                  restoredView={trustedAutoView}
                 />
               ) : null
             }

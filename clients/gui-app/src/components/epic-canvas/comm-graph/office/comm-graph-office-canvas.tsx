@@ -38,6 +38,7 @@ import { Maximize, Minus, PanelLeft, Plus } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import { useThemeRevision } from "@/providers/use-theme-revision";
 import {
@@ -218,6 +219,8 @@ export const FIT_PADDING = 24;
 const ZOOM_BUTTON_FACTOR = 1.25;
 /** Screen pixels an arrow key moves the floor. */
 const KEY_PAN_PX = 48;
+/** A line-mode wheel notch in CSS pixels; a page notch uses the viewport. */
+const WHEEL_LINE_HEIGHT_PX = 16;
 const AUTO_PAN_MS = 250;
 /** Pointer travel that turns a click into a drag. */
 const CLICK_SLOP_PX = 4;
@@ -4092,6 +4095,24 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     const onWheel = (event: WheelEvent): void => {
       event.preventDefault();
       runtime.takeManualControl();
+      // Deltas arrive in the event's `deltaMode` units - a line- or page-mode
+      // mouse reports a notch as 1-3, not pixels, so applying them raw moved
+      // the floor a few pixels a notch while `preventDefault` suppressed the
+      // page's own scroll, leaving wheel navigation stuck. Normalise to pixels
+      // (a line is a text row, a page is the viewport) before either gesture.
+      const viewport = runtime.getViewport();
+      const dx = wheelDeltaToPixels(
+        event.deltaX,
+        event.deltaMode,
+        viewport.width,
+        WHEEL_LINE_HEIGHT_PX,
+      );
+      const dy = wheelDeltaToPixels(
+        event.deltaY,
+        event.deltaMode,
+        viewport.height,
+        WHEEL_LINE_HEIGHT_PX,
+      );
       // THE WHEEL PANS. An office is a place with a plan, and the gesture for
       // moving around a map is scrolling it; zooming on a bare wheel made
       // every scroll past the tile change how much office there was.
@@ -4100,11 +4121,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // the mod-wheel a trackpad user reaches for means the same thing - so
       // both are the zoom, about the cursor, and nothing else is.
       if (!event.ctrlKey && !event.metaKey) {
-        panBy(event.deltaX, event.deltaY);
+        panBy(dx, dy);
         return;
       }
       const rect = container.getBoundingClientRect();
-      const factor = Math.exp(-event.deltaY / 300);
+      const factor = Math.exp(-dy / 300);
       zoomAbout(factor, event.clientX - rect.left, event.clientY - rect.top);
     };
     container.addEventListener("wheel", onWheel, { passive: false });
@@ -4455,8 +4476,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             "absolute bottom-2 left-2 z-10 flex flex-col items-start gap-1",
             // Capped against the tile: the auto chip is a sentence, and a
             // sentence has no business being wider than the office it is
-            // explaining.
-            "max-w-[min(100%,24rem)]",
+            // explaining. The box is shrink-to-fit and absolutely positioned,
+            // so its width is already clamped to the space left of `left-2` -
+            // the tile-relative cap - and this only adds the sentence ceiling.
+            "max-w-sm",
           )}
         >
           {autoChip}

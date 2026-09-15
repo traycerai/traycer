@@ -345,7 +345,7 @@ export function AppearanceSettingsPanel() {
                 <SelectTrigger
                   size="sm"
                   aria-label="Default view"
-                  className="w-[min(40vw,8rem)]"
+                  className="w-[40vw] max-w-32"
                 >
                   <SelectValue />
                 </SelectTrigger>

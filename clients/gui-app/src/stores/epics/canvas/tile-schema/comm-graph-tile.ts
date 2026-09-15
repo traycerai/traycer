@@ -216,7 +216,18 @@ export function parseCommGraphTileViewState(
   if (!isRecord(value)) return PERSISTED_COMM_GRAPH_VIEW;
   const zoom = readFiniteNumber(value.zoom, PERSISTED_COMM_GRAPH_VIEW.zoom);
   const officeView = readOfficeViewChoice(value.officeView);
-  const officeAutoView = readOfficeViewId(value.officeAutoView);
+  // An explicit office view this build cannot honour degrades to null -
+  // "inherit the Settings default". The Auto outcome recorded under that
+  // now-unknown pick is dormant, but if the inherited default is Auto at the
+  // same generation the renderer trusts it and skips measurement, reopening an
+  // arbitrarily old Floor/Towers decision the degraded pick never stood for.
+  // Drop the outcome so the newly inherited Auto measures afresh. An ABSENT
+  // officeView is "inherit from the start", not a degrade, and keeps its
+  // dormant outcome; the generation follows the view to null on its own.
+  const officeViewDegraded = degradesFrom(value.officeView, officeView);
+  const officeAutoView = officeViewDegraded
+    ? null
+    : readOfficeViewId(value.officeAutoView);
   const officeAutoGeneration = readOfficeGeneration(
     value.officeAutoGeneration,
     officeAutoView,
