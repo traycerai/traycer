@@ -240,7 +240,7 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
       hostRpcRegistry["agent.create"],
       3,
       2,
-      baseV3Request,
+      { ...baseV3Request, crossTaskChatSearch: null },
     );
     expect(toV2).toMatchObject({
       ok: false,
@@ -250,7 +250,7 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
       hostRpcRegistry["agent.create"],
       3,
       1,
-      baseV3Request,
+      { ...baseV3Request, crossTaskChatSearch: null },
     );
     expect(toV1).toMatchObject({
       ok: false,
@@ -597,9 +597,10 @@ describe("optional-method capability negotiation", () => {
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
     ).toEqual({ major: 6, minor: 0, supportedMajors: [1, 2, 3, 4, 5, 6] });
+    // agent.configure 6.1 adds the nullable cross-task chat search grant.
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 6,
-      minor: 0,
+      minor: 1,
       supportedMajors: [1, 2, 3, 4, 5, 6],
     });
   });

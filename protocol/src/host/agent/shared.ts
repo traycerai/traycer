@@ -660,6 +660,21 @@ export const createAgentRequestSchemaV30 = createAgentRequestSchemaV20.extend({
 });
 export type CreateAgentRequestV30 = z.infer<typeof createAgentRequestSchemaV30>;
 
+/**
+ * v3.1: `crossTaskChatSearch: true` grants the created agent the cross-task chat
+ * search capability (searching chats beyond its own task). The host grants it
+ * only when the sender itself holds it, and never copies it from the sender -
+ * `null` or `false` creates an agent without it.
+ *
+ * A request minor meeting a v3.0 host is re-parsed through the v3.0 schema,
+ * which strips this key: a grant sent to an older host is dropped, not
+ * applied. That errs toward less access, and is accepted.
+ */
+export const createAgentRequestSchemaV31 = createAgentRequestSchemaV30.extend({
+  crossTaskChatSearch: z.boolean().nullable(),
+});
+export type CreateAgentRequestV31 = z.infer<typeof createAgentRequestSchemaV31>;
+
 export const agentSelectionGuideRequestSchema = z.object({
   epicId: z.string(),
   senderAgentId: z.string(),
