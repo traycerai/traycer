@@ -1,4 +1,5 @@
 import type { LegendListRef } from "@legendapp/list/react";
+import { useRouter, type RouterHistory } from "@tanstack/react-router";
 import {
   useCallback,
   useEffect,
@@ -66,6 +67,28 @@ function clampIndex(index: number, itemCount: number): number {
   return Math.max(0, Math.min(index, itemCount - 1));
 }
 
+// useRouter's declared return type is non-nullable even when a standalone
+// minimap has no router provider. Narrow that external value at this boundary.
+function hasRouterHistory(
+  value: unknown,
+): value is { readonly history: RouterHistory } {
+  if (typeof value !== "object" || value === null || !("history" in value))
+    return false;
+  const history = value.history;
+  if (typeof history !== "object" || history === null) return false;
+  if (!("subscribe" in history) || typeof history.subscribe !== "function")
+    return false;
+  if (
+    !("location" in history) ||
+    typeof history.location !== "object" ||
+    history.location === null
+  )
+    return false;
+  return (
+    "href" in history.location && typeof history.location.href === "string"
+  );
+}
+
 /** One compact window of turns. Hover or focus opens the full turn list. */
 export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const { ref } = props;
@@ -114,6 +137,15 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const regionRef = useRef<HTMLDivElement | null>(null);
   const measuredRef = useMemo(() => mergeRefs(regionRef, ref), [ref]);
   const hitStripRef = useRef<HTMLButtonElement | null>(null);
+  const router: unknown = useRouter({ warn: false });
+
+  useEffect(() => {
+    if (!open || !hasRouterHistory(router)) return;
+    const origin = router.history.location.href;
+    return router.history.subscribe(({ location }) => {
+      if (location.href !== origin) setOpen(false);
+    });
+  }, [open, router]);
 
   const refreshCurrent = useCallback((): void => {
     const rawState = listRef.current?.getState();
