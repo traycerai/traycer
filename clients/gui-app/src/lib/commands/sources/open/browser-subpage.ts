@@ -3,6 +3,7 @@ import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser
 import { useBrowserSessionsForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import {
   browserTabHostname,
+  parseHttpUrl,
   resolveTabTitle,
 } from "@/lib/browser-view/browser-tab-display";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -17,6 +18,7 @@ import {
   isHostOptionSelectable,
 } from "@/components/settings/host-scope/host-option-model";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
+import { usePaletteLiveQuery } from "@/lib/commands/palette-query-context";
 import {
   DEFAULT_BROWSER_TILE_URL,
   makeBrowserSessionTileRef,
@@ -121,6 +123,35 @@ function makeBrowserHostSubpage(surfaceKey: string): CommandSubpage {
   };
 }
 
+/**
+ * A pasted http(s) URL is an address, not a search: offer to open it as a
+ * new tab directly. The typed text is a keyword so cmdk's filter keeps the
+ * row while the query IS the URL, and the root deep view surfaces it as
+ * "Browser → Open <url>" without drilling into this sub-page. Detection is
+ * strict (an explicit scheme) so a file-ish query like `foo.ts` never grows
+ * a browser row.
+ */
+function pastedUrlLeaves(
+  query: string,
+  hostLabel: string,
+  openNewTab: (url: string) => void,
+): ReadonlyArray<CommandItem> {
+  const typed = query.trim();
+  const pastedUrl = parseHttpUrl(typed)?.href ?? null;
+  if (pastedUrl === null) return [];
+  return [
+    {
+      ...openerActionLeaf({
+        id: "open:browser:url",
+        label: `Open ${pastedUrl}`,
+        keywords: [typed, pastedUrl, "browser", "url", hostLabel],
+        run: () => openNewTab(pastedUrl),
+      }),
+      statusBadge: "New tab",
+    },
+  ];
+}
+
 export function useBrowserOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
@@ -136,6 +167,7 @@ export function useBrowserOpenerItems(
     scope: { kind: "epic", epicId: ctx.activeEpicId ?? "" },
   });
   const hostEntry = useHostDirectoryEntryForHostId(targetHostId);
+  const query = usePaletteLiveQuery();
 
   const directoryLabel = hostEntry?.label.trim() ?? "";
   const hostLabel =
@@ -151,38 +183,44 @@ export function useBrowserOpenerItems(
     }),
     statusBadge: hostLabel,
   };
+  const openNewTab = (url: string): void => {
+    if (sessions.lifecycle !== "live" || sessions.hostId === null) {
+      toast.error(browserSessionsRefusal(sessions));
+      return;
+    }
+    const hostId = sessions.hostId;
+    void sessions
+      .openTab(null, url)
+      .then((opened) => {
+        openTileIntoTargetGroup({
+          tabId: ctx.activeTabId,
+          groupId: ctx.targetGroupId,
+          dedupe: false,
+          navigateNestedFocus: ctx.router.navigateNestedFocus,
+          ref: makeBrowserSessionTileRef({
+            hostId,
+            sessionId: opened.sessionId,
+            tabId: opened.tabId,
+          }),
+        });
+      })
+      .catch((cause: unknown) => {
+        toast.error(
+          cause instanceof Error ? cause.message : "Couldn't open a browser.",
+        );
+      });
+  };
   const newBrowser = openerActionLeaf({
     id: "open:browser:new",
     label: "New browser",
     keywords: ["new", "browser", "web", "page", hostLabel],
-    run: () => {
-      if (sessions.lifecycle !== "live" || sessions.hostId === null) {
-        toast.error(browserSessionsRefusal(sessions));
-        return;
-      }
-      const hostId = sessions.hostId;
-      void sessions
-        .openTab(null, DEFAULT_BROWSER_TILE_URL)
-        .then((opened) => {
-          openTileIntoTargetGroup({
-            tabId: ctx.activeTabId,
-            groupId: ctx.targetGroupId,
-            dedupe: false,
-            navigateNestedFocus: ctx.router.navigateNestedFocus,
-            ref: makeBrowserSessionTileRef({
-              hostId,
-              sessionId: opened.sessionId,
-              tabId: opened.tabId,
-            }),
-          });
-        })
-        .catch((cause: unknown) => {
-          toast.error(
-            cause instanceof Error ? cause.message : "Couldn't open a browser.",
-          );
-        });
-    },
+    run: () => openNewTab(DEFAULT_BROWSER_TILE_URL),
   });
+  const actions = [
+    changeHost,
+    newBrowser,
+    ...pastedUrlLeaves(query, hostLabel, openNewTab),
+  ];
   const openTabs = sessions.items.flatMap((session) =>
     session.tabs.map((tab) => {
       const label = resolveTabTitle(tab);
@@ -207,13 +245,12 @@ export function useBrowserOpenerItems(
         : { ...item, statusBadge: hostname };
     }),
   );
-  if (openTabs.length > 0) return [changeHost, newBrowser, ...openTabs];
+  if (openTabs.length > 0) return [...actions, ...openTabs];
   if (sessions.lifecycle === "unsupported") {
     // No retry leaf: nothing this app can do changes the host's answer, and
     // the "Loading…" leaf below would otherwise sit there forever.
     return [
-      changeHost,
-      newBrowser,
+      ...actions,
       {
         ...openerActionLeaf({
           id: "open:browser:unsupported",
@@ -227,8 +264,7 @@ export function useBrowserOpenerItems(
   }
   if (sessions.lifecycle === "failed" || sessions.lifecycle === "closed") {
     return [
-      changeHost,
-      newBrowser,
+      ...actions,
       {
         ...openerActionLeaf({
           id: "open:browser:retry",
@@ -244,8 +280,7 @@ export function useBrowserOpenerItems(
     ? "No open tabs"
     : "Loading open tabs…";
   return [
-    changeHost,
-    newBrowser,
+    ...actions,
     {
       ...openerActionLeaf({
         id: `open:browser:${sessions.inventoryReady ? "empty" : "loading"}`,

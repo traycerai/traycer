@@ -80,16 +80,6 @@ export const GENERAL = defineSettingsSection("general", {
       "shortcut",
     ],
   },
-  pinContextUsage: {
-    kind: "row",
-    group: "chatComposer",
-    search: { anchor: "general-pin-context-usage" },
-    label: "Pin context usage breakdown",
-    description:
-      "Keep the context window breakdown visible near the chat composer when usage data is available.",
-    availableWhen: alwaysAvailable,
-    keywords: ["context window", "tokens", "breakdown"],
-  },
   // Gated on DATA: the card renders only once a terminal has printed a local
   // URL, which no shell can promise — so it folds into the page.
   browser: {
@@ -152,14 +142,18 @@ export const GENERAL = defineSettingsSection("general", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
+  // Drawn by `PreventSleepSettingsSection` around its one row - the two
+  // resource-visibility toggles that used to sit beside it moved to Layout -
+  // so the group is gated exactly as that row is, and one gate hides the
+  // heading with the row it headed.
   runningAgents: {
     kind: "group",
     search: { anchor: "general-running-agents" },
     label: "Running agents",
     description: null,
     breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["activity", "background", "resources"],
+    availableWhen: isPreventSleepRowAvailable,
+    keywords: ["activity", "background", "power"],
   },
   preventSleep: {
     kind: "row",
@@ -178,25 +172,6 @@ export const GENERAL = defineSettingsSection("general", {
       "screensaver",
       "suspend",
     ],
-  },
-  globalResourcesButton: {
-    kind: "row",
-    group: "runningAgents",
-    search: { anchor: "general-global-resources-button" },
-    label: "Show global resources button",
-    description: "Show the app-wide resource monitor in the header.",
-    availableWhen: alwaysAvailable,
-    keywords: ["cpu", "memory", "ram", "monitor", "header", "toolbar"],
-  },
-  navigatorResourceStats: {
-    kind: "row",
-    group: "runningAgents",
-    search: { anchor: "general-navigator-resource-stats" },
-    label: "Show navigator resource stats",
-    description:
-      "Show compact live CPU and memory chips in task navigator rows.",
-    availableWhen: alwaysAvailable,
-    keywords: ["cpu", "memory", "ram", "chips", "sidebar"],
   },
   worktrees: {
     kind: "group",

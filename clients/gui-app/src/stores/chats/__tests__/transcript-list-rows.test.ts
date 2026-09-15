@@ -393,7 +393,7 @@ describe("transcriptListRows", () => {
   it("keeps every same-timestamp setup card projected from live events", () => {
     const setupEvent = (
       eventId: string,
-      type: ChatEvent["type"] = "setup.running",
+      type: ChatEvent["type"],
     ): ChatEvent => ({
       eventId,
       type,
@@ -419,11 +419,11 @@ describe("transcriptListRows", () => {
         skeletonComplete: false,
         invalidated: true,
         liveEvents: [
-          setupEvent("setup-live-1"),
+          setupEvent("setup-live-1", "setup.running"),
           // This boundary splits the same-timestamp setup events into two
           // projected setup-card windows, which is the cardinality under test.
           setupEvent("setup-boundary", "worktree.missing"),
-          setupEvent("setup-live-2"),
+          setupEvent("setup-live-2", "setup.running"),
         ],
       }),
       rendered: [

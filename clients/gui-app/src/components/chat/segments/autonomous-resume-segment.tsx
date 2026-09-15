@@ -1,4 +1,4 @@
-import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { isDocumentAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -381,16 +381,16 @@ function ResumeOutputPanel(props: {
   readonly outputFile: NonNullable<AutonomousResumeTrigger["outputFile"]>;
   readonly enabled: boolean;
 }) {
-  // A PDF output file would render as raw bytes through the text pipeline -
-  // don't even fetch it. Show the path and nothing more: the output folder is
-  // often outside every bound root, so any "open it from X" instruction would
-  // point somewhere the file cannot be found.
-  const isPdfOutput = isPdfAssetPath(props.outputFile.filePath);
+  // A document output file (PDF, Word) would render as raw bytes through the
+  // text pipeline - don't even fetch it. Show the path and nothing more: the
+  // output folder is often outside every bound root, so any "open it from X"
+  // instruction would point somewhere the file cannot be found.
+  const isDocumentOutput = isDocumentAssetPath(props.outputFile.filePath);
   const outputQuery = useResumeOutputFileQuery(
     props.outputFile,
-    props.enabled && !isPdfOutput,
+    props.enabled && !isDocumentOutput,
   );
-  if (isPdfOutput) {
+  if (isDocumentOutput) {
     return (
       <SegmentPanel
         label="Output"

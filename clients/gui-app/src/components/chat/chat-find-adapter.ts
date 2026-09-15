@@ -1,3 +1,4 @@
+import { findTextMatches } from "@/lib/find-engine/find-text";
 import { ChatFindHighlighter } from "@/components/chat/chat-find-highlighter";
 import type { ChatCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import type { ChatFindRow } from "@/components/chat/chat-find-projection";
@@ -161,7 +162,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     this.clearReveal = options.clearReveal;
     this.getMountedMessageRoot = options.getMountedMessageRoot;
     this.getMountedUnitRoot = options.getMountedUnitRoot;
-    this.highlighter = new ChatFindHighlighter(options.tileInstanceId);
+    this.highlighter = new ChatFindHighlighter();
     this.snapshot = createChatFindSnapshot({
       requestId: 0,
       status: "idle",
@@ -566,17 +567,18 @@ function findMatches(input: {
   readonly query: string;
   readonly matchCase: boolean;
 }): ReadonlyArray<ChatFindMatch> {
-  const needle = input.matchCase ? input.query : input.query.toLowerCase();
   const matches: ChatFindMatch[] = [];
   input.rows.forEach((row, rowIndex) => {
     let occurrenceInMessage = 0;
     row.units.forEach((unit, unitIndex) => {
-      const haystack = input.matchCase ? unit.text : unit.text.toLowerCase();
-      const step = Math.max(input.query.length, 1);
       let occurrenceInUnit = 0;
-      let index = haystack.indexOf(needle);
-      while (index !== -1) {
-        const end = index + input.query.length;
+      for (const match of findTextMatches(
+        unit.text,
+        input.query,
+        input.matchCase,
+      )) {
+        const index = match.offset;
+        const end = index + match.length;
         matches.push({
           messageId: row.messageId,
           rowIndex,
@@ -600,7 +602,6 @@ function findMatches(input: {
         });
         occurrenceInUnit += 1;
         occurrenceInMessage += 1;
-        index = haystack.indexOf(needle, index + step);
       }
     });
   });

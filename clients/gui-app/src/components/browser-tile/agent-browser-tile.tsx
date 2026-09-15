@@ -14,10 +14,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { usePublishBrowserGuestTile } from "@/components/epic-canvas/browser-guest/use-publish-browser-guest-tile";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
 import { BrowserTileFindAdapterBridge } from "@/components/epic-canvas/renderers/browser-tile-find-adapter";
-import {
-  BrowserTileCertificateInterstitial,
-  BrowserTileDownloadStrip,
-} from "@/components/epic-canvas/renderers/browser-tile-status-panels";
+import { BrowserTileCertificateInterstitial } from "@/components/epic-canvas/renderers/browser-tile-status-panels";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "./browser-start-page";
 import {
@@ -50,6 +47,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { DEFAULT_BROWSER_TILE_URL } from "@/lib/browser-view/browser-tile-defaults";
 import { samePageKey } from "@/lib/links/normalize-url";
+import { handlePrimaryFocus } from "@/lib/focus/primary-focus-coordinator";
 
 interface ElectronTabSurfaceNode {
   readonly instanceId: string;
@@ -146,6 +144,18 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   // the clock and only a genuinely stalled tab trips it.
   const [stalledNonce, setStalledNonce] = useState<number | null>(null);
   const [loadingNonce, setLoadingNonce] = useState(0);
+  // The binding registration whose guest has committed a document, or null.
+  // Before the first `ready` the guest is blank and the loader is the only
+  // thing to show; after it, a `loading` is a navigation AWAY from a page
+  // that stays painted until the next commit, and the loader must not sit
+  // over it (see `resolveTileOverlay`). Keyed by registration rather than a
+  // bare flag because the directory can replace the binding under a mounted
+  // surface (a re-ensured tab is a fresh guest at `about:blank`), and a
+  // `dead` guest is re-materialized from blank - both must derive as
+  // uncommitted.
+  const [committedRegistrationId, setCommittedRegistrationId] = useState<
+    string | null
+  >(null);
   const attemptedNavigationRef = useRef<AttemptedNavigation | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -267,6 +277,10 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         setStatus(change.status);
         setStatusReason(change.reason);
         setStatusUrl(change.url);
+        if (change.status === "ready") {
+          setCommittedRegistrationId(change.registrationId);
+        }
+        if (change.status === "dead") setCommittedRegistrationId(null);
         setCanGoBack(change.canGoBack);
         setCanGoForward(change.canGoForward);
         setZoomPercent(change.zoomPercent);
@@ -311,6 +325,9 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     if (browserView === null) return;
     const subscription = browserView.onTileFocused((focusedTile) => {
       if (!isSameBrowserViewTile(focusedTile, tileKey)) return;
+      // Native focus can arrive over IPC before the webview's DOM event.
+      // Hand off ownership before either viewport or pane activation commits.
+      handlePrimaryFocus(null);
       claimViewport();
       onNativeTileFocused?.();
     });
@@ -372,8 +389,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const {
     controller: chromeController,
     navigateToUrl,
-    downloads,
-    cancelDownload,
     certificateError,
     certificateProceeding,
     proceedCertificate,
@@ -493,6 +508,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     effectiveStatus,
     surfaceReady,
     navigationStalled,
+    committedRegistrationId === registrationId,
   );
 
   return (
@@ -526,8 +542,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         <div
           hidden={showStartPage}
           // Transparent is not hidden: without this a presented, live guest
-          // still exposes the loader's role and "Reconnecting" text to
-          // assistive tech. Hide it from AT whenever it is not the shown layer.
+          // still exposes the loader's role and "Loading" text to assistive
+          // tech. Hide it from AT whenever it is not the shown layer.
           aria-hidden={!overlay.visible}
           className={cn(
             "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
@@ -551,10 +567,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
             onRetry={retryNavigation}
           />
         </div>
-        <BrowserTileDownloadStrip
-          downloads={downloads}
-          onCancel={cancelDownload}
-        />
         <BrowserTileCertificateInterstitial
           certificateError={certificateError}
           proceeding={certificateProceeding}
@@ -678,9 +690,7 @@ function ElectronTabSurfaceStatus(props: ElectronTabSurfaceStatusProps) {
         testId={undefined}
         variant={undefined}
       />
-      <div className="text-ui-base font-medium">
-        Reconnecting to this session
-      </div>
+      <div className="text-ui-base font-medium">Loading</div>
       <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
     </>
   );

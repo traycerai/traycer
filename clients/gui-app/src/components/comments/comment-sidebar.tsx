@@ -3,6 +3,7 @@ import { MessageSquarePlus, MessageSquareWarning } from "lucide-react";
 import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { cn } from "@/lib/utils";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -398,7 +399,9 @@ function emptyMessageFor(filter: CommentThreadStatusFilter): string {
   if (filter === "open") {
     const howTo =
       "No open comments. Select text in the editor and click 💬 to start a thread";
-    return shortcutHintsVisible() ? `${howTo} (⌘⌥M).` : `${howTo}.`;
+    return shortcutHintsVisible()
+      ? `${howTo} (${formatChordForDisplay("mod+alt+m")}).`
+      : `${howTo}.`;
   }
   if (filter === "resolved") return "No resolved comments yet.";
   return "No comments on this artifact yet.";

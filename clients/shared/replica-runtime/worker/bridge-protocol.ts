@@ -53,7 +53,8 @@ import {
   type EarlyMetaEpic,
 } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -517,11 +518,29 @@ export interface RuntimeCommandMap {
     readonly records: readonly ChatRecordSummaryV11[];
     readonly issuedAtSeq: number | null;
   };
+  /**
+   * The recency patches a revision-gated list read's `unchanged` arm carried:
+   * the rows this client holds are still current, and only what a QUIET write
+   * moved (`updatedAt`, and the per-row `revision` that rides with it) is left
+   * to deliver.
+   *
+   * Its OWN command rather than a nullable `records` on the one above, because
+   * the two arms are different statements and the difference is load-bearing
+   * at the far end: a rows answer authorizes RETRACTING what it omits, and
+   * this one omits every row and retracts none.
+   */
+  "apply-chat-record-touches": {
+    readonly touched: readonly RecordListRecencyPatch[];
+  };
   "apply-chat-record-delta": { readonly delta: ChatRecordDelta };
   "apply-confirmed-chat-mutation": { readonly mutation: ConfirmedChatMutation };
   "apply-tui-agent-records": {
-    readonly records: readonly TuiAgentRecordSummaryV12[];
+    readonly records: readonly TuiAgentRecordSummaryV13[];
     readonly issuedAtSeq: number | null;
+  };
+  /** The terminal twin of `apply-chat-record-touches`. */
+  "apply-tui-agent-record-touches": {
+    readonly touched: readonly RecordListRecencyPatch[];
   };
   "apply-tui-agent-record-delta": { readonly delta: TuiAgentRecordDelta };
   "mark-chat-records-authoritative": Record<string, never>;
@@ -577,9 +596,11 @@ const RUNTIME_COMMAND_COVERAGE: {
   readonly [K in RuntimeCommandKind]: true;
 } = {
   "apply-chat-records": true,
+  "apply-chat-record-touches": true,
   "apply-chat-record-delta": true,
   "apply-confirmed-chat-mutation": true,
   "apply-tui-agent-records": true,
+  "apply-tui-agent-record-touches": true,
   "apply-tui-agent-record-delta": true,
   "mark-chat-records-authoritative": true,
   "mark-chat-records-not-authoritative": true,

@@ -51,12 +51,18 @@ import {
 } from "@/stores/epics/left-panel-store";
 import { useActiveEpicArtifactId } from "@/stores/epics/canvas/store";
 import {
+  getLeftPanelDefinition,
   isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
   resolveActiveVisibleGroupIndex,
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
+import {
+  LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
+  LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS,
+  LEFT_PANEL_RAIL_TILE_CLASS,
+} from "@/components/epic-canvas/sidebar/left-panel-rail-tile";
 import { useEpicArtifact } from "@/lib/epic-selectors";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import {
@@ -91,29 +97,19 @@ interface VisibleLeftPanelGroup {
   readonly primaryPanel: LeftPanelMetadataDefinition;
 }
 
-const PANEL_DEFINITION_BY_ID = new Map(
-  LEFT_PANEL_DEFINITIONS.map((definition) => [definition.id, definition]),
-);
-
-function getPanelDefinition(panelId: LeftPanelId): LeftPanelMetadataDefinition {
-  const definition = PANEL_DEFINITION_BY_ID.get(panelId);
-  if (definition !== undefined) return definition;
-  return LEFT_PANEL_DEFINITIONS[0];
-}
-
 function getVisibleLeftPanelGroups(
   groups: ReadonlyArray<LeftPanelGroup>,
   context: LeftPanelAvailabilityContext,
 ): ReadonlyArray<VisibleLeftPanelGroup> {
   return groups.flatMap((group) => {
     const panelIds = group.panelIds.filter((panelId) =>
-      isLeftPanelVisible(getPanelDefinition(panelId), context),
+      isLeftPanelVisible(getLeftPanelDefinition(panelId), context),
     );
     if (panelIds.length === 0) return [];
     return [
       {
         panelIds,
-        primaryPanel: getPanelDefinition(panelIds[0]),
+        primaryPanel: getLeftPanelDefinition(panelIds[0]),
       },
     ];
   });
@@ -235,7 +231,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
   const panelSectionDropDefinition =
     panelSectionDragSource === null
       ? null
-      : getPanelDefinition(panelSectionDragSource.panelId);
+      : getLeftPanelDefinition(panelSectionDragSource.panelId);
   const railBoundaryIndex = getRailBoundaryIndex(
     visibleGroups,
     railPanelDropPreview,
@@ -525,8 +521,9 @@ function RailGroupButton(props: RailGroupButtonProps) {
       kind: "left-panel-rail-item",
       viewTabId: tabId,
       panelId: primaryPanel.id,
+      orientation,
     }),
-    [primaryPanel.id, tabId],
+    [orientation, primaryPanel.id, tabId],
   );
   const { setNodeRef: dropRef, isOver } = useDroppable({
     id: getPaneScopedDndId(tabId, getLeftPanelRailDropId(primaryPanel.id)),
@@ -541,9 +538,9 @@ function RailGroupButton(props: RailGroupButtonProps) {
     <RailButton
       buttonRef={setButtonRef}
       handleListeners={listeners}
-      icons={panelIds.map((panelId) => getPanelDefinition(panelId).icon)}
+      icons={panelIds.map((panelId) => getLeftPanelDefinition(panelId).icon)}
       label={panelIds
-        .map((panelId) => getPanelDefinition(panelId).title)
+        .map((panelId) => getLeftPanelDefinition(panelId).title)
         .join(" + ")}
       orientation={orientation}
       active={active}
@@ -587,7 +584,7 @@ function RailButton(props: RailButtonProps) {
     onClick,
     onContextMenu,
   } = props;
-  const Icon = icons[0] ?? getPanelDefinition("chats").icon;
+  const Icon = icons[0] ?? getLeftPanelDefinition("chats").icon;
   const activeClass =
     orientation === "vertical"
       ? "bg-accent text-accent-foreground hover:bg-accent"
@@ -595,7 +592,7 @@ function RailButton(props: RailButtonProps) {
   const activeIndicatorClass =
     orientation === "vertical"
       ? "absolute inset-y-1 left-0 rounded-l-none rounded-r"
-      : "absolute inset-x-2 bottom-0 rounded-b-none rounded-t";
+      : LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS;
   return (
     <TooltipWrapper
       label={label}
@@ -615,11 +612,10 @@ function RailButton(props: RailButtonProps) {
         // Bubbles on to the rail's own trigger, which opens the shared menu.
         onContextMenu={onContextMenu}
         className={cn(
-          "relative size-9 rounded-md text-muted-foreground hover:text-foreground",
+          LEFT_PANEL_RAIL_TILE_CLASS,
           active && activeClass,
           isDragSource && "cursor-grabbing opacity-50",
-          dropPosition === "combine" &&
-            "bg-primary/10 text-foreground ring-1 ring-primary/60",
+          dropPosition === "combine" && LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
           isDropTarget && dropPosition === null && "bg-accent/70",
         )}
       >

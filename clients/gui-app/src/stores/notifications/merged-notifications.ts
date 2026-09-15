@@ -237,6 +237,22 @@ function compareFeedCandidates(a: FeedCandidate, b: FeedCandidate): number {
   return compareFeedIdAscending(a.feedId, b.feedId);
 }
 
+/**
+ * Newest-first across planes; the plane breaks a same-instant tie in the
+ * protocol's home order before the feed id does, so equal-timestamp rows from
+ * the two lanes still land in one deterministic order.
+ */
+function compareMergedRows(
+  a: MergedNotificationRow,
+  b: MergedNotificationRow,
+): number {
+  const createdAtDelta = b.createdAt - a.createdAt;
+  if (createdAtDelta !== 0) return createdAtDelta;
+  const planeDelta = notificationPlaneOrder(a) - notificationPlaneOrder(b);
+  if (planeDelta !== 0) return planeDelta;
+  return compareFeedIdAscending(a.feedId, b.feedId);
+}
+
 export function mergedUnreadCount(input: {
   readonly hostUnread: number;
   readonly appLocalUnread: number;
@@ -248,7 +264,7 @@ export function mergedUnreadCount(input: {
 /** Every merged row, newest-first across the active feed plus renderer-local
  * failures - the shared base the id/Attention/Recent projections all derive
  * from without recomputing their own source subscriptions. */
-function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
+export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const feedMode = useNotificationFeedMode();
   // The host that SERVED these rows, not whichever host is app-wide active -
   // `originHostId` routes activation and names the machine in the row, so the
@@ -269,13 +285,15 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
       .map((id) => globalEntriesById.get(id))
       .filter((entry): entry is NotificationEntry => entry !== undefined);
     if (feedMode === "cloud") {
-      // The host and cloud projections are ordered lanes, not two clocks.
-      // `updatedAt` has distinct semantics in each plane, so only compare
-      // timestamps inside one lane and concatenate them in protocol order.
-      // App-local failure rows and global notices are this machine's
-      // client-side state - no host or cloud feed can reproduce them - so
-      // they ride in the LOCAL lane beside the `home: local` partition rows.
-      const localRows = [
+      // One newest-first list across both planes. Every row's `createdAt` is
+      // the origin host's clock - the cloud store keeps it verbatim - so the
+      // planes share a comparable axis; the cloud-arrival and marker-touch
+      // timestamps the cloud row also carries are the ones that must never be
+      // compared, and nothing here reads them. App-local failure rows and
+      // global notices are this machine's client-side state - no host or
+      // cloud feed can reproduce them - so they ride in the local lane beside
+      // the `home: local` partition rows (empty while the cloud lane serves).
+      const rows: MergedNotificationRow[] = [
         ...hostIds
           .filter((id) => !isAutomaticAgentRecovery(hostById[id]))
           .map((id) =>
@@ -283,16 +301,15 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
           ),
         ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
+        ...Object.values(cloudRows)
+          .filter(
+            (row): row is HostNotificationsCloudFeedRowV11 => row !== undefined,
+          )
+          .filter((row) => !isAutomaticAgentRecovery(row.entry))
+          .map(rowFromCloudFeedRow),
       ];
-      localRows.sort(compareFeedCandidates);
-      const remoteRows = Object.values(cloudRows)
-        .filter(
-          (row): row is HostNotificationsCloudFeedRowV11 => row !== undefined,
-        )
-        .filter((row) => !isAutomaticAgentRecovery(row.entry))
-        .map(rowFromCloudFeedRow);
-      remoteRows.sort(compareFeedCandidates);
-      return [...localRows, ...remoteRows];
+      rows.sort(compareMergedRows);
+      return rows;
     }
     if (feedMode === "upgrade-required") return [];
     const rows: MergedNotificationRow[] = [
@@ -391,14 +408,12 @@ export function useAttentionNotificationIds(): ReadonlyArray<string> {
 }
 
 /**
- * Attention retains its severity tiers across planes, but once two rows share
- * a tier their plane is the protocol ordering key. This deliberately never
- * compares a local `updatedAt` to a cloud relay timestamp.
- *
- * Inside one plane, this machine's pack-store rows lead the ones it only heard
- * about (D7). `compareProviderPackLocalFirst` carries the same newest-first
- * then `feedId` tail `compareFeedCandidates` does, so the locality key is the
- * only thing it adds below the plane.
+ * Attention keeps its severity tiers first; inside a tier, rows are newest
+ * first across both planes (`createdAt` is the origin clock in each), then
+ * this machine's pack-store rows lead the ones it only heard about (D7).
+ * `compareProviderPackLocalFirst` carries the newest-first then `feedId` tail
+ * `compareFeedCandidates` does, so the locality key is the only thing it adds;
+ * the plane breaks whatever tie is left in the protocol's home order.
  */
 function comparePartitionedAttentionOrder(
   left: AttentionOrderEntry,
@@ -408,6 +423,8 @@ function comparePartitionedAttentionOrder(
   if (left.tier !== right.tier) {
     return left.tier === "blocking" ? -1 : 1;
   }
+  const createdAtDelta = right.row.createdAt - left.row.createdAt;
+  if (createdAtDelta !== 0) return createdAtDelta;
   const planeDelta =
     notificationPlaneOrder(left.row) - notificationPlaneOrder(right.row);
   if (planeDelta !== 0) return planeDelta;
@@ -460,11 +477,13 @@ export function useRecentNotificationIds(): ReadonlyArray<string> {
       .filter((row) => categories.has(row.category))
       .filter((row) => !unreadOnly || row.readAt === null)
       .sort((a, b) => {
-        // Plane FIRST, exactly as the Attention projection orders: the two
-        // lanes carry clocks with different semantics, so a cloud relay
-        // timestamp must never be compared against a local `createdAt` -
-        // protocol order decides between lanes, the comparator below decides
-        // within one.
+        // Newest first across both planes, exactly as Attention orders inside
+        // a tier: `createdAt` is the origin host's clock in each lane, so the
+        // lanes interleave by date and the plane only breaks a same-instant
+        // tie. Sorting the plane FIRST put every stale local-lane row above
+        // every fresh cloud row, which read as "notifications stopped".
+        const createdAtDelta = b.createdAt - a.createdAt;
+        if (createdAtDelta !== 0) return createdAtDelta;
         const planeDelta =
           notificationPlaneOrder(a) - notificationPlaneOrder(b);
         if (planeDelta !== 0) return planeDelta;

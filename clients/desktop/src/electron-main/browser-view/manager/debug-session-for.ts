@@ -16,9 +16,9 @@ interface BrowserViewDebugSessionsOptions {
 
 /**
  * Lazy per-entry CDP session construction, and the one place that decides a
- * guest's session identity. PiP capture, the annotation host, the entry
- * factory, provisioning and the manager all reach a session through this
- * collaborator, so none of them needs the manager's internals injected back.
+ * guest's session identity. The annotation host, provisioning and the manager
+ * all reach a session through this collaborator, so none of them needs the
+ * manager's internals injected back.
  */
 export class BrowserViewDebugSessions {
   private readonly onDetached: (

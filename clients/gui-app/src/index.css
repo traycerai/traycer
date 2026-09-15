@@ -192,6 +192,177 @@
   animation: prompt-stash-count-flash 700ms ease-out both;
 }
 
+/* A compact dock chip acknowledging the thing it stands for changing - the
+   first agent starting, the line counts moving. A ring radiating out of the
+   chip and nothing else: `box-shadow` alone, so the chip's own background
+   survives the animation (see the note on `prompt-stash-count-flash` above for
+   what a `both` background frame does to it), and the end frame is transparent
+   so a finished pulse leaves no residue.
+
+   Deliberately no reduced-motion override. The base layer already collapses
+   every animation to 0.01ms, which still fires `animationend` - and that event
+   is what takes `data-pulse` back off. `animation: none` would suppress it and
+   leave the attribute set for good, so the chip could never pulse again. */
+@keyframes chat-dock-chip-pulse {
+  from {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--color-primary) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+[data-chat-dock-chip][data-pulse="true"] {
+  animation: chat-dock-chip-pulse 620ms ease-out forwards;
+}
+
+/* The thumb and fill share one response: quick eased follow while dragging,
+   then a softer arrival on release or direct selection. The drag target has
+   a small attraction to catalog stops; the brief follow gives it weight
+   without coasting past the chosen level. */
+.reasoning-effort-slider .reasoning-effort-range,
+.reasoning-effort-slider > span:has(> [data-slot="slider-thumb"]) {
+  transition:
+    left 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    right 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin-inline-end 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.reasoning-effort-slider[data-dragging="true"] .reasoning-effort-range,
+.reasoning-effort-slider[data-dragging="true"]
+  > span:has(> [data-slot="slider-thumb"]) {
+  transition-duration: 80ms;
+}
+
+/* Scale the disc, not Radix's positioning wrapper: pickup must not change
+   the measured track geometry or the location of the thumb's centre. */
+.reasoning-effort-slider [data-slot="slider-thumb"] {
+  scale: 1;
+  transition:
+    scale 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 180ms ease-out,
+    border-color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.reasoning-effort-slider[data-pressed="true"] [data-slot="slider-thumb"] {
+  scale: 1.12;
+  box-shadow: 0 3px 8px rgb(0 0 0 / 22%);
+  transition-duration: 120ms;
+}
+
+.reasoning-effort-label {
+  color: color-mix(in oklab, var(--primary) 60%, var(--foreground));
+}
+
+.reasoning-effort-label[data-max="true"] {
+  color: var(--reasoning-max-accent);
+}
+
+/* A crossfade keeps entering and leaving the top level as smooth as moving
+   the thumb. The accent remains theme-owned; no provider-specific hue or
+   usage claim is implied by this treatment. */
+.reasoning-effort-range::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    to right,
+    var(--primary),
+    var(--reasoning-max-accent)
+  );
+  opacity: 0;
+  transition: opacity 320ms ease-out;
+}
+
+.reasoning-effort-max-range::after {
+  opacity: 1;
+}
+
+[dir="rtl"] .reasoning-effort-range::after {
+  background: linear-gradient(
+    to left,
+    var(--primary),
+    var(--reasoning-max-accent)
+  );
+}
+
+/* A fine edge defines the capsule without a bloom outside the footer. The
+   slow-moving light lives INSIDE the track and is driven by the shared clock. */
+.reasoning-effort-max-glow {
+  box-shadow: 0 0 0 1px
+    color-mix(in srgb, var(--reasoning-max-accent) 24%, transparent);
+}
+
+.reasoning-effort-max-sparkles {
+  animation: reasoning-sparkles-enter 320ms ease-out both;
+}
+
+.reasoning-effort-max-sparkles::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  background: radial-gradient(
+    ellipse at center,
+    rgb(255 255 255 / 0.24),
+    transparent 60%
+  );
+  transform: translateX(var(--reasoning-sheen-x, 0%));
+}
+
+@keyframes reasoning-sparkles-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Small specular highlights, not stop markers. Per-point opacity and the
+   field's gentle drift are written by one shared status-clock subscription. */
+.reasoning-effort-sparkle {
+  background: #fff;
+  filter: drop-shadow(0 0 1px rgb(255 255 255 / 0.5));
+}
+
+.reasoning-effort-sparkle-glint {
+  color: #fff;
+  font-size: 5px;
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-effort-slider .reasoning-effort-range,
+  .reasoning-effort-slider > span:has(> [data-slot="slider-thumb"]),
+  .reasoning-effort-slider[data-dragging] .reasoning-effort-range,
+  .reasoning-effort-slider[data-dragging]
+    > span:has(> [data-slot="slider-thumb"]),
+  .reasoning-effort-slider [data-slot="slider-thumb"],
+  .reasoning-effort-slider[data-pressed] [data-slot="slider-thumb"],
+  .reasoning-effort-range::after {
+    transition: none;
+  }
+  .reasoning-effort-slider[data-pressed] [data-slot="slider-thumb"] {
+    scale: 1;
+  }
+  .reasoning-effort-max-sparkles {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .reasoning-effort-max-glow {
+    box-shadow: none;
+  }
+  .reasoning-effort-range::after,
+  .reasoning-effort-max-sparkles {
+    display: none;
+  }
+}
+
 /* A label-only tooltip must never win hit-testing from what it covers.
    `TooltipContent`'s own `pointer-events-none` is NOT enough: Radix Popper
    renders the content inside a positioning wrapper of exactly the same size,
@@ -848,6 +1019,11 @@
   --color-muted: var(--muted);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
+  /* The reasoning slider's max accent is a registered theme token
+     (`themeTokens` in `lib/themes/theme-definition.ts`): its default lives in
+     `builtin-palettes.ts`, the fallback stylesheet carries it, the applier
+     writes it, and a custom theme overrides it like any other role. */
+  --color-reasoning-max-accent: var(--reasoning-max-accent);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
@@ -1228,21 +1404,6 @@
   [data-composer-editor] blockquote {
     @apply my-0.5 border-l-2 border-primary/60 pl-3 leading-snug text-muted-foreground;
   }
-}
-
-/*
- * Find-in-page highlight paints (`lib/find-engine/find-engine.ts`).
- * Uses the CSS Custom Highlight API so painting never touches
- * `window.getSelection()` - contenteditable editors don't see a
- * selection change and don't grab focus away from the find input.
- */
-::highlight(traycer-find-match) {
-  background-color: color-mix(in srgb, var(--primary) 35%, transparent);
-  color: inherit;
-}
-::highlight(traycer-find-match-active) {
-  background-color: color-mix(in srgb, var(--primary) 75%, transparent);
-  color: var(--primary-foreground);
 }
 
 /*

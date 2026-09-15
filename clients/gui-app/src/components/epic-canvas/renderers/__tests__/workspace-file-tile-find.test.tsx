@@ -137,10 +137,6 @@ const MARKDOWN_NODE: WorkspaceFileRef = {
 };
 
 const highlightEntries = new Map<string, MockCssHighlight>();
-const SOURCE_FIND_HIGHLIGHT_NAME_PREFIX = "traycer-source-find-match-";
-const SOURCE_FIND_ACTIVE_HIGHLIGHT_NAME_PREFIX =
-  "traycer-source-find-match-active-";
-
 let originalCssDescriptor: PropertyDescriptor | undefined;
 let originalWindowCssDescriptor: PropertyDescriptor | undefined;
 let originalHighlightDescriptor: PropertyDescriptor | undefined;
@@ -271,6 +267,26 @@ describe("<WorkspaceFileTile /> tile find", () => {
     });
   });
 
+  it("maps a source match after an expanding lowercase character to its original offset", async () => {
+    state.readFile = loadedReadFile("😀İstanbul report🚀", false);
+    const { container } = renderTile(CODE_NODE);
+    await waitForSearchable(CODE_NODE);
+
+    searchTile(CODE_NODE, "report", false);
+
+    await waitFor(() => {
+      expect(tileSnapshot(CODE_NODE).total).toBe(1);
+      expect(activeHighlightText()).toBe("report");
+    });
+    const range = activeHighlightRange();
+    expect(range.cloneContents().textContent).toBe("report");
+    const line = range.startContainer.parentElement?.closest("[data-line]");
+    expect(line?.textContent.indexOf("report")).toBe(11);
+    expect(
+      container.querySelector("diffs-container")?.shadowRoot,
+    ).not.toBeNull();
+  });
+
   it("keeps source highlights isolated between mounted file tiles", async () => {
     state.readFile = loadedReadFile("ab cd ab cd", false);
     renderTiles([CODE_NODE, SECOND_CODE_NODE]);
@@ -330,7 +346,13 @@ describe("<WorkspaceFileTile /> tile find", () => {
       activeUnitId: "markdown-preview",
       exactHighlight: "painted",
     });
-    expect(highlightEntries.get("traycer-find-match-active")).toBeDefined();
+    expect(
+      Array.from(highlightEntries.values()).some((highlight) =>
+        highlight.ranges.some(
+          (range) => range.cloneContents().textContent === "needle",
+        ),
+      ),
+    ).toBe(true);
 
     act(() => {
       useTileFindStore.getState().close(MARKDOWN_NODE.instanceId);
@@ -617,30 +639,56 @@ function firstSourceActiveHighlight(): MockCssHighlight | undefined {
 }
 
 function firstSourceInactiveHighlight(): MockCssHighlight | undefined {
-  return Array.from(highlightEntries)
-    .filter(([name]) => isSourceInactiveHighlightName(name))
-    .map(([_name, highlight]) => highlight)[0];
+  return sourceHighlightEntries().find(
+    ([name]) => !activeHighlightNames().has(name),
+  )?.[1];
 }
 
 function sourceActiveHighlights(): readonly MockCssHighlight[] {
-  return Array.from(highlightEntries)
-    .filter(([name]) =>
-      name.startsWith(SOURCE_FIND_ACTIVE_HIGHLIGHT_NAME_PREFIX),
-    )
+  const activeNames = activeHighlightNames();
+  return sourceHighlightEntries()
+    .filter(([name]) => activeNames.has(name))
     .map(([_name, highlight]) => highlight);
 }
 
 function sourceHighlightKeys(): readonly string[] {
-  return Array.from(highlightEntries.keys()).filter((name) =>
-    name.startsWith(SOURCE_FIND_HIGHLIGHT_NAME_PREFIX),
+  return sourceHighlightEntries().map(([name]) => name);
+}
+
+function sourceHighlightEntries(): readonly (readonly [
+  string,
+  MockCssHighlight,
+])[] {
+  return Array.from(highlightEntries).filter(([_name, highlight]) =>
+    highlight.ranges.some((range) => {
+      const root = range.startContainer.getRootNode();
+      return (
+        root instanceof ShadowRoot &&
+        root.host instanceof HTMLElement &&
+        root.host.matches("diffs-container")
+      );
+    }),
   );
 }
 
-function isSourceInactiveHighlightName(name: string): boolean {
-  return (
-    name.startsWith(SOURCE_FIND_HIGHLIGHT_NAME_PREFIX) &&
-    !name.startsWith(SOURCE_FIND_ACTIVE_HIGHLIGHT_NAME_PREFIX)
-  );
+function activeHighlightNames(): ReadonlySet<string> {
+  const names = new Set<string>();
+  const styles = [
+    ...Array.from(document.querySelectorAll("style")),
+    ...Array.from(document.querySelectorAll("diffs-container")).flatMap(
+      (host) =>
+        host.shadowRoot === null
+          ? []
+          : Array.from(host.shadowRoot.querySelectorAll("style")),
+    ),
+  ];
+  for (const style of styles) {
+    const match = style.textContent.matchAll(
+      /::highlight\(([^)]+)\)\s*\{[^}]*75%/g,
+    );
+    for (const result of match) names.add(result[1]);
+  }
+  return names;
 }
 
 function installMockCssHighlights(): void {

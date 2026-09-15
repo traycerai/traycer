@@ -173,14 +173,14 @@ class ControlledSession implements IStreamSession {
 
   close(): void {
     this.closeCount += 1;
-    this.statusHandler?.("closed", { kind: "caller" });
+    this.statusHandler?.("closed", { kind: "caller" }, null);
   }
 
   emitStatus(
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ): void {
-    this.statusHandler?.(status, reason);
+    this.statusHandler?.(status, reason, null);
   }
 
   emitFrame(
@@ -680,7 +680,7 @@ describe("usePlainTerminalAuthority integration", () => {
     expect(presentationRefsRemain()).toBe(false);
 
     act(() => {
-      stream.session.notifyStatus("reconnecting", null);
+      stream.session.notifyStatus("reconnecting", null, null);
       stream.session.deliverServerFrame(stateFrame([]), null);
       stream.session.deliverServerFrame(
         { kind: "initialized", hasBinaryPayload: false },
@@ -1259,7 +1259,9 @@ describe("usePlainTerminalAuthority integration", () => {
 
     // Renamed to take the host explicitly once the no-arg form (which read
     // the runtime slot) was removed with it (redesign P4.2).
-    act(() => test.client.notifyHostAvailabilityRecovered(HOST_ID));
+    act(() =>
+      test.client.notifyHostAvailabilityRecovered(HOST_ID, "reconnect"),
+    );
     await waitFor(() => {
       expect(
         test.messenger.calls.filter(

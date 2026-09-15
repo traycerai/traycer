@@ -2,9 +2,9 @@
  * Shared server-frame schema for the "asset stream" methods -
  * `workspace.streamAsset` and `git.streamFileAsset`. Both fetch a file's raw
  * bytes as one of the supported preview formats (five image formats - PNG,
- * JPEG, GIF, WebP, SVG - plus PDF since 1.1) and stream the same four-frame
- * sequence, so the frame shape lives here once instead of duplicated per
- * method:
+ * JPEG, GIF, WebP, SVG - plus PDF since 1.1 and Word `.docx` since 1.2) and
+ * stream the same four-frame sequence, so the frame shape lives here once
+ * instead of duplicated per method:
  *
  *   `assetHeader` -> N x `assetChunk` -> `assetComplete`
  *
@@ -59,16 +59,40 @@ export const assetMediaTypeSchemaV11 = z.enum([
   "application/pdf",
 ]);
 
+/**
+ * The IANA media type of a Word `.docx` document (OOXML WordprocessingML).
+ * Named once here: the host's extension map, the client's viewer routing and
+ * the 1.2 enum below all spell it through this constant.
+ */
+export const DOCX_MEDIA_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/**
+ * The 1.2 media-type set: Word `.docx` joins the 1.1 set. Same discipline as
+ * 1.1 - a sibling schema object, never a widening of a released enum - and
+ * the same admission/emission gating obligation on the host: the literal
+ * must never reach a peer that negotiated below 1.2.
+ */
+export const assetMediaTypeSchemaV12 = z.enum([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
+  "application/pdf",
+  DOCX_MEDIA_TYPE,
+]);
+
 /** Application-facing media type: the LATEST minor's set. */
-export type AssetMediaType = z.infer<typeof assetMediaTypeSchemaV11>;
+export type AssetMediaType = z.infer<typeof assetMediaTypeSchemaV12>;
 
 export const assetStreamErrorReasonSchema = z.enum([
   "not-found",
   // Historical name, kept as the wire literal forever: it means "not a
-  // supported asset type" (since 1.1 that set includes PDF, so a PDF
-  // request on a 1.0-negotiated stream also lands here). Renaming would be
-  // a breaking change for every shipped client's parser; display copy owns
-  // the honest phrasing.
+  // supported asset type" (since 1.1 that set includes PDF and since 1.2
+  // Word documents, so a request for either on a stream negotiated below
+  // its minor also lands here). Renaming would be a breaking change for
+  // every shipped client's parser; display copy owns the honest phrasing.
   "not-image",
   "mismatch",
   "too-large",
@@ -89,8 +113,9 @@ const assetHeaderFrameFields = {
   sizeBytes: z.number().int().nonnegative(),
   // `null` when the asset has no known intrinsic raster dimensions: an
   // SVG that declares no width/height/viewBox, or a non-raster document
-  // (PDF - pages have geometry, but the client learns it from the bytes;
-  // the host stays a validate-and-stream layer and parses no documents).
+  // (PDF, Word - pages have geometry, but the client learns it from the
+  // bytes; the host stays a validate-and-stream layer and parses no
+  // documents).
   width: z.number().int().positive().nullable(),
   height: z.number().int().positive().nullable(),
   // The git OID for an object side, else a `size:mtimeMs` fingerprint for
@@ -148,9 +173,21 @@ export const assetStreamServerFrameSchemaV11 = z.discriminatedUnion("kind", [
   pongFrameSchema,
 ]);
 
+/** The 1.2 server-frame union: identical shape, Word-capable media type. */
+export const assetStreamServerFrameSchemaV12 = z.discriminatedUnion("kind", [
+  z.object({
+    ...assetHeaderFrameFields,
+    mediaType: assetMediaTypeSchemaV12,
+  }),
+  assetChunkFrameSchema,
+  assetCompleteFrameSchema,
+  assetErrorFrameSchema,
+  pongFrameSchema,
+]);
+
 /** Application-facing frame type: the LATEST minor's shape. */
 export type AssetStreamServerFrame = z.infer<
-  typeof assetStreamServerFrameSchemaV11
+  typeof assetStreamServerFrameSchemaV12
 >;
 
 export const assetStreamClientFrameSchema = z.discriminatedUnion("kind", [

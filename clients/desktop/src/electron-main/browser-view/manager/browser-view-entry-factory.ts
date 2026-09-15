@@ -16,7 +16,6 @@ import {
 } from "./browser-view-entry-registry";
 import type { BrowserViewFind } from "./browser-view-find";
 import type { BrowserViewPopups } from "./browser-view-popups";
-import type { BrowserViewDebugSessions } from "./debug-session-for";
 
 interface BrowserViewEntryFactoryOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
@@ -24,7 +23,6 @@ interface BrowserViewEntryFactoryOptions {
   readonly find: BrowserViewFind;
   readonly popups: BrowserViewPopups;
   readonly chords: BrowserViewChords;
-  readonly debugSessions: BrowserViewDebugSessions;
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: BrowserViewWebContents,
@@ -54,7 +52,6 @@ export class BrowserViewEntryFactory {
   private readonly find: BrowserViewFind;
   private readonly popups: BrowserViewPopups;
   private readonly chords: BrowserViewChords;
-  private readonly debugSessions: BrowserViewDebugSessions;
   private readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: BrowserViewWebContents,
@@ -80,7 +77,6 @@ export class BrowserViewEntryFactory {
     this.find = options.find;
     this.popups = options.popups;
     this.chords = options.chords;
-    this.debugSessions = options.debugSessions;
     this.observePrimaryProfileOrigin = options.observePrimaryProfileOrigin;
     this.setStatus = options.setStatus;
     this.emitStatus = options.emitStatus;
@@ -167,6 +163,8 @@ export class BrowserViewEntryFactory {
       },
       certificateError: null,
       debugSession: null,
+      seedLease: null,
+      agentCdpLease: null,
       annotationSession: null,
       devToolsWindow: null,
       rendererResetPending: false,
@@ -225,10 +223,8 @@ export class BrowserViewEntryFactory {
     entry.certificateError = null;
     this.setStatus(entry, "ready", null);
     this.refreshViewport(entry);
-    void this.debugSessions
-      .ensure(entry)
-      .enableAfterCommit()
-      .catch(() => undefined);
+    // Recovery for a tab something is driving - never an attach of its own.
+    void entry.debugSession?.enableWhileLeased().catch(() => undefined);
   }
 
   private handleInPageNavigation(
@@ -246,6 +242,18 @@ export class BrowserViewEntryFactory {
     entry.currentTitle = entry.webContents.getTitle();
     this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     this.annotations.end(entry, "navigation");
+    // A same-document navigation is a settle too. Back/forward between two
+    // pushState history entries (any Turbo-style app: GitHub, for one) fires
+    // `did-start-navigation` + `did-navigate-in-page` and never
+    // `did-navigate`, so a history move that set `loading` would otherwise
+    // never return to `ready` and the tile's loader would sit over a live
+    // page for good. `setStatus` dedupes on an unchanged status, so the
+    // already-ready case (an ordinary pushState / hash change) still has to
+    // publish the new url/title/history readings through a bare emit.
+    if (entry.status !== "ready" || entry.statusReason !== null) {
+      this.setStatus(entry, "ready", null);
+      return;
+    }
     this.emitStatus(entry);
   }
 

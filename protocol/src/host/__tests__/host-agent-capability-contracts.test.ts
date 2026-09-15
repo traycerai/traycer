@@ -7,6 +7,7 @@ import {
   HOST_FILE_TRANSFER_MAX_CHUNK_BASE64_CHARS,
   HOST_FILE_TRANSFER_MAX_CHUNK_BYTES,
   HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH,
+  hostAgentCreateFromRemoteSenderV10,
   hostDirectoryListV10,
   hostFileCopyCancelV10,
   hostFileCopyFailureSchema,
@@ -46,6 +47,7 @@ const NEW_METHODS = [
   hostFileTransferOpenV10.method,
   hostFileTransferReadChunkV10.method,
   hostFileTransferCloseV10.method,
+  hostAgentCreateFromRemoteSenderV10.method,
 ] as const;
 
 describe("host-agent capability contracts", () => {
@@ -506,5 +508,133 @@ describe("host-agent capability contracts", () => {
         ],
       }),
     ).toThrow();
+  });
+
+  describe("host.agent.createFromRemoteSender", () => {
+    const CREATE_FIELDS = {
+      senderAgentId: "sender-agent",
+      epicId: "epic-1",
+      name: null,
+      surface: "gui",
+      harnessId: "claude",
+      model: null,
+      agentMode: "regular",
+      reasoningEffort: null,
+      fastMode: null,
+      permissionMode: "full_access",
+      workspace: null,
+      profileSelection: { kind: "last_used" },
+    } as const;
+
+    const GUI_SENDER_FACTS = {
+      surface: "gui",
+      hostId: "host-a",
+      settings: {
+        harnessId: "claude",
+        model: "claude-sonnet-4-5",
+        permissionMode: "full_access",
+        reasoningEffort: "high",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: "work",
+      },
+    } as const;
+
+    it("carries epicId at the top level, where the editor gate and the verb capture read it", () => {
+      const parsed = hostAgentCreateFromRemoteSenderV10.requestSchema.parse({
+        ...CREATE_FIELDS,
+        senderFacts: GUI_SENDER_FACTS,
+        workspaceIntent: null,
+      });
+      expect(parsed.epicId).toBe("epic-1");
+      expect(parsed.senderAgentId).toBe("sender-agent");
+    });
+
+    it("encodes the folderless intent the released create params cannot", () => {
+      expect(
+        hostAgentCreateFromRemoteSenderV10.requestSchema.parse({
+          ...CREATE_FIELDS,
+          senderFacts: GUI_SENDER_FACTS,
+          workspaceIntent: "folderless",
+        }).workspaceIntent,
+      ).toBe("folderless");
+      expect(
+        hostAgentCreateFromRemoteSenderV10.requestSchema.safeParse({
+          ...CREATE_FIELDS,
+          senderFacts: GUI_SENDER_FACTS,
+          workspaceIntent: "inherit",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("requires the sender facts - a bare create request is not this verb", () => {
+      expect(
+        hostAgentCreateFromRemoteSenderV10.requestSchema.safeParse({
+          ...CREATE_FIELDS,
+          workspaceIntent: null,
+        }).success,
+      ).toBe(false);
+    });
+
+    it("takes a TUI sender's launch tuple and refuses a GUI-only harness there", () => {
+      const parsed = hostAgentCreateFromRemoteSenderV10.requestSchema.parse({
+        ...CREATE_FIELDS,
+        senderFacts: {
+          surface: "tui",
+          hostId: "host-a",
+          harnessId: "codex",
+          model: "gpt-5.4",
+          reasoningEffort: null,
+          agentMode: "regular",
+          profileId: null,
+        },
+        workspaceIntent: null,
+      });
+      expect(parsed.senderFacts.surface).toBe("tui");
+      expect(
+        hostAgentCreateFromRemoteSenderV10.requestSchema.safeParse({
+          ...CREATE_FIELDS,
+          senderFacts: {
+            surface: "tui",
+            hostId: "host-a",
+            harnessId: "grok",
+            model: null,
+            reasoningEffort: null,
+            agentMode: "regular",
+            profileId: null,
+          },
+          workspaceIntent: null,
+        }).success,
+      ).toBe(false);
+    });
+
+    it("keeps the settings tuple whole - a partial one is not a settings write", () => {
+      expect(
+        hostAgentCreateFromRemoteSenderV10.requestSchema.safeParse({
+          ...CREATE_FIELDS,
+          senderFacts: {
+            surface: "gui",
+            hostId: "host-a",
+            settings: {
+              harnessId: "claude",
+              model: "claude-sonnet-4-5",
+              permissionMode: "full_access",
+              reasoningEffort: null,
+              agentMode: "regular",
+            },
+          },
+          workspaceIntent: null,
+        }).success,
+      ).toBe(false);
+    });
+
+    it("returns the created agent id and its warnings", () => {
+      expect(
+        hostAgentCreateFromRemoteSenderV10.responseSchema.parse({
+          agentId: "child-1",
+          warnings: [],
+        }).agentId,
+      ).toBe("child-1");
+    });
   });
 });

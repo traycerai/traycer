@@ -138,7 +138,9 @@ export class LogicalStream implements IStreamSession {
     // terminal transition. Replay it once so they can fail over instead of
     // remaining permanently pending.
     if (this.status === "closed") {
-      handler(this.status, this.statusReason);
+      // `null`: a retry cause belongs to a `reconnecting` transition, and
+      // this replays only a close.
+      handler(this.status, this.statusReason, null);
     }
   }
 
@@ -161,7 +163,7 @@ export class LogicalStream implements IStreamSession {
     }
     this.disposed = true;
     this.port.closeStream(this.streamId, "closed-by-caller");
-    this.transition("closed", { kind: "caller" });
+    this.transition("closed", { kind: "caller" }, null);
   }
 
   // ---- Session-driven hooks --------------------------------------------- //
@@ -217,14 +219,19 @@ export class LogicalStream implements IStreamSession {
       return false;
     }
     handler(envelope, binaryPayload);
-    this.transition("open", null);
+    this.transition("open", null, null);
     return true;
   }
 
-  /** Projects the session-wide connection status onto this stream. */
+  /**
+   * Projects the session-wide connection status onto this stream.
+   * `retryCause` is the retryable close behind a `reconnecting` projection, or
+   * `null` (see `StatusChangeHandler`).
+   */
   notifyStatus(
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    retryCause: FatalErrorDetails | null,
   ): void {
     if (this.disposed) {
       return;
@@ -238,7 +245,7 @@ export class LogicalStream implements IStreamSession {
       // this stream has no agreed version, exactly as before its first open.
       this.negotiated = false;
     }
-    this.transition(status, reason);
+    this.transition(status, reason, retryCause);
   }
 
   /** Terminal close driven by a host/stream fatal error. */
@@ -247,12 +254,13 @@ export class LogicalStream implements IStreamSession {
       return;
     }
     this.disposed = true;
-    this.transition("closed", { kind: "fatalError", details });
+    this.transition("closed", { kind: "fatalError", details }, null);
   }
 
   private transition(
     next: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    retryCause: FatalErrorDetails | null,
   ): void {
     if (this.status === next && next !== "reconnecting") {
       return;
@@ -261,7 +269,7 @@ export class LogicalStream implements IStreamSession {
     this.statusReason = reason;
     const handler = this.statusHandler;
     if (handler !== null) {
-      handler(next, reason);
+      handler(next, reason, retryCause);
     }
   }
 }

@@ -39,7 +39,7 @@ import {
 import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right-actions";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
-  handlePrimaryFocusIn,
+  handlePrimaryFocus,
   hasPrimaryFocusIntent,
   reconcilePrimaryFocus,
   resetPrimaryFocusCoordinatorForTests,
@@ -5495,7 +5495,7 @@ describe("<LandingTerminalPanel />", () => {
     const composer = document.createElement("button");
     document.body.append(composer);
     composer.focus();
-    handlePrimaryFocusIn(composer);
+    handlePrimaryFocus(composer);
     await drainDeferredListFetches(resolvers);
     await waitFor(() => {
       expect(
@@ -5638,7 +5638,7 @@ describe("<LandingTerminalPanel />", () => {
     const other = document.createElement("button");
     document.body.append(other);
     other.focus();
-    handlePrimaryFocusIn(other);
+    handlePrimaryFocus(other);
     await act(async () => {
       for (let pass = 0; pass < 10; pass += 1) {
         rejecters.splice(0).forEach((reject) => reject(new Error("offline")));

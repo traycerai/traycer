@@ -2,13 +2,23 @@ import { ChevronDown, ChevronRight, Info, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import type {
   ProviderNoticeDetail,
+  ProviderNoticeKind,
   ProviderNoticeTone,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { FallbackNoticeSettingsLink } from "@/components/chat/fallback/fallback-notice-attribution";
+import { isFallbackNoticeKind } from "@/components/chat/fallback/fallback-notice-kinds";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
 
 interface ProviderNoticeSegmentProps {
   status: "streaming" | "completed" | "errored";
+  /**
+   * Which notice this is. Only the provider-fallback arms read it, and only to
+   * add the settings link below their details - the rest of this component is
+   * kind-blind on purpose, because a harness notice and a fallback notice are
+   * the same shape of row.
+   */
+  noticeKind: ProviderNoticeKind;
   tone: ProviderNoticeTone;
   title: string;
   message: string | null;
@@ -27,7 +37,8 @@ const TONE_TEXT_CLASS: Record<ProviderNoticeTone, string> = {
 };
 
 export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
-  const { status, tone, title, message, details, findUnitId } = props;
+  const { status, noticeKind, tone, title, message, details, findUnitId } =
+    props;
   const isStreaming = status === "streaming";
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = (): void => setExpanded((current) => !current);
@@ -106,6 +117,17 @@ export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
               </div>
             ))}
           </dl>
+          {/*
+           * Inside the expanded details, never on the collapsed rule: this is
+           * the one place a historical fallback row offers an action, and it
+           * is the only KIND of action it may offer - a link to the policy
+           * that produced it. Nothing here re-dispatches.
+           */}
+          {isFallbackNoticeKind(noticeKind) ? (
+            <div className="mt-2 flex">
+              <FallbackNoticeSettingsLink />
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

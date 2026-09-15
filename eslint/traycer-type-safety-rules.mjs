@@ -34,8 +34,10 @@ const requiredArgumentRestrictions = [
       "Default parameter values are not allowed. Require callers to pass every argument explicitly.",
   },
   {
+    // A rest parameter owns its annotation; its Identifier argument does not.
+    // Selecting Identifier[typeAnnotation] left both tuple/union arms inert.
     selector:
-      ":matches(FunctionDeclaration, FunctionExpression, ArrowFunctionExpression, MethodDefinition, TSDeclareFunction, TSFunctionType, TSMethodSignature, TSCallSignatureDeclaration, TSConstructSignatureDeclaration, TSConstructorType) > RestElement > Identifier[typeAnnotation.typeAnnotation.type='TSTupleType'], :matches(FunctionDeclaration, FunctionExpression, ArrowFunctionExpression, MethodDefinition, TSDeclareFunction, TSFunctionType, TSMethodSignature, TSCallSignatureDeclaration, TSConstructSignatureDeclaration, TSConstructorType) > RestElement > Identifier[typeAnnotation.typeAnnotation.type='TSUnionType']",
+      ":matches(FunctionDeclaration, FunctionExpression, ArrowFunctionExpression, MethodDefinition, TSDeclareFunction, TSFunctionType, TSMethodSignature, TSCallSignatureDeclaration, TSConstructSignatureDeclaration, TSConstructorType) > RestElement[typeAnnotation.typeAnnotation.type='TSTupleType'], :matches(FunctionDeclaration, FunctionExpression, ArrowFunctionExpression, MethodDefinition, TSDeclareFunction, TSFunctionType, TSMethodSignature, TSCallSignatureDeclaration, TSConstructSignatureDeclaration, TSConstructorType) > RestElement[typeAnnotation.typeAnnotation.type='TSUnionType']",
     message:
       "Do not use rest-parameter tuple or union shims to emulate optional arguments. Define explicit parameters and require callers to pass `undefined` or `null` when needed.",
   },
@@ -43,7 +45,12 @@ const requiredArgumentRestrictions = [
 
 const explicitTypeReferenceRestrictions = [
   {
-    selector: "TSTypeReference[typeName.name='ReturnType']",
+    // Utility applications always carry type arguments. A bare type parameter
+    // named ReturnType is different: Tiptap requires Commands<ReturnType> in
+    // module augmentations, and declaration merging requires that exact name.
+    // Narrowing to applications keeps every ReturnType<typeof ...> violation.
+    selector:
+      "TSTypeReference[typeName.name='ReturnType']:has(TSTypeParameterInstantiation)",
     message:
       "Do not rely on `ReturnType<...>`. Define and use the concrete return type explicitly.",
   },

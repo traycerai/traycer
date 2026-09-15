@@ -21,6 +21,7 @@ import { HostRuntimeContext, useHostBinding } from "@/lib/host";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
+  RUNNING_LOW_TEXT_CLASS_NAME,
 } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
@@ -101,11 +102,11 @@ function ScopedRateLimitIconButton({
     [],
   );
   useTitleBarDragSuppression("rate-limits", open);
-  // One subscription bridge owns active-chat + per-harness profile state for
-  // both the always-mounted glyph and the lazily-mounted popover. Passing the
-  // same snapshot down avoids N duplicate chat-store subscriptions when the
-  // Overview renders several multi-profile provider blocks.
-  const profileSelection = useRateLimitProfileSelection();
+  // One subscription bridge owns the checked-account + per-harness profile
+  // state for both the always-mounted glyph and the lazily-mounted popover,
+  // keyed by the host this surface is watching - the accounts it names are
+  // that host's, not the app-wide one's.
+  const profileSelection = useRateLimitProfileSelection(scope.hostId);
   // A PICK that has not resolved to its own client leaves this subtree on the
   // AMBIENT binding, so mounting the bars here would draw one host's usage
   // under a glyph that stands for another - and the glyph, unlike every panel
@@ -157,6 +158,8 @@ function ScopedRateLimitIconButton({
         </PopoverTrigger>
       </TooltipWrapper>
       <RateLimitPopover
+        side="bottom"
+        align="end"
         onClose={() => setOpen(false)}
         profileSelection={profileSelection}
         scope={scope}
@@ -191,10 +194,7 @@ function RateLimitGlyph({
     <>
       <Gauge
         data-testid="rate-limit-gauge-icon"
-        className={cn(
-          "size-3.5",
-          isDegraded && "text-amber-600 dark:text-amber-400",
-        )}
+        className={cn("size-3.5", isDegraded && RUNNING_LOW_TEXT_CLASS_NAME)}
         aria-hidden
       />
       <span

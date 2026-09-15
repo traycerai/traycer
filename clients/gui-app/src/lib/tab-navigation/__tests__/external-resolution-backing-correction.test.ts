@@ -40,6 +40,7 @@ import {
   type TabNavigationLocation,
 } from "@/lib/tab-navigation";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { draftPathname, epicPathname } from "@/lib/routes";
 import {
   __resetTabSyncCoordinatorForTesting,
@@ -245,6 +246,7 @@ function resetStores(): void {
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useSettingsStore.setState({ homeTabEnabled: false });
   __resetTabSyncCoordinatorForTesting();
   __resetTabNavigationControllerForTesting();
 }
@@ -559,6 +561,7 @@ function pathnameForDestination(
   if (kind === "draft") return draftPathname(id);
   if (kind === "history") return "/epics";
   if (kind === "settings") return "/settings/general";
+  if (kind === "home") return "/home";
   const tab = useEpicCanvasStore.getState().tabsById[id];
   expect(tab, `no canvas tab for ${destination.refKey}`).toBeDefined();
   if (tab === undefined) throw new Error("unreachable");
@@ -724,5 +727,76 @@ describe("closing the Settings overlay over a populated strip", () => {
     history.back();
 
     expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+  });
+});
+
+/**
+ * The same stepped-landing resolver, with the Home tab on.
+ *
+ * `/` is Home's route once the redirect exists, so a back-step onto the landing
+ * has to select Home instead of minting a Start Page - and then the URL has to
+ * follow. Leaving it on `/` renders Home under a route that names something
+ * else, and `isProjectionCoherent` (which requires `/home` whenever Home holds
+ * the selection) then refuses to schedule any desktop layout write until the
+ * next navigation lands elsewhere. Not an exotic path: the phone shell boots
+ * its WebView at `/` and keeps it as the first history entry, so the system
+ * back gesture from Home arrives here every time.
+ */
+describe("stepping back onto the landing with the Home tab on", () => {
+  beforeEach(async () => {
+    resetStores();
+    useSettingsStore.setState({ homeTabEnabled: true });
+    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetStores();
+  });
+
+  it("selects Home, corrects the URL to /home, and mints no draft", () => {
+    const a = openEpic("epic-a", "A");
+    seedCommittedLayout({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(a.ref), ref: a.ref }],
+      activeItemId: tabItemId(a.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const history = makeAppliedHistory();
+    // The boot entry the phone shell leaves behind, then the tab the user
+    // actually opened on top of it.
+    history.push("/", undefined);
+    history.push(a.pathname, undefined);
+
+    history.back();
+
+    expect(useTabsStore.getState().activeItemId).toBeNull();
+    expect(history.currentPathname()).toBe("/home");
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(0);
+    // The epic tab is still there - Home is a selection, not a placement.
+    expect(flattenLayoutRefs(useTabsStore.getState())).toEqual([a.ref]);
+  });
+
+  it("mints the landing draft instead when the Home tab is off", () => {
+    useSettingsStore.setState({ homeTabEnabled: false });
+    const a = openEpic("epic-a", "A");
+    seedCommittedLayout({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(a.ref), ref: a.ref }],
+      activeItemId: tabItemId(a.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const history = makeAppliedHistory();
+    history.push("/", undefined);
+    history.push(a.pathname, undefined);
+
+    history.back();
+
+    // Pre-Home behaviour, unchanged: the landing IS the draft surface, so the
+    // step activates one and the URL stays where the step left it.
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(history.currentPathname()).toBe("/");
   });
 });

@@ -40,24 +40,6 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 export function GeneralSettingsPanel() {
   const navigate = useNavigate();
   const restartOnboarding = useOnboardingStore((s) => s.restart);
-  const showGlobalResourceMonitor = useSettingsStore(
-    (s) => s.showGlobalResourceMonitor,
-  );
-  const setShowGlobalResourceMonitor = useSettingsStore(
-    (s) => s.setShowGlobalResourceMonitor,
-  );
-  const showNavigatorResourceStats = useSettingsStore(
-    (s) => s.showNavigatorResourceStats,
-  );
-  const setShowNavigatorResourceStats = useSettingsStore(
-    (s) => s.setShowNavigatorResourceStats,
-  );
-  const pinContextUsageBreakdown = useSettingsStore(
-    (s) => s.pinContextUsageBreakdown,
-  );
-  const setPinContextUsageBreakdown = useSettingsStore(
-    (s) => s.setPinContextUsageBreakdown,
-  );
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
   const steerOnModEnterEnabled = useSettingsStore(
@@ -114,58 +96,15 @@ export function GeneralSettingsPanel() {
               />
             }
           />
-          <SettingsRow
-            row={GENERAL.definitions.pinContextUsage}
-            control={
-              <Switch
-                checked={pinContextUsageBreakdown}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("pinContextUsageBreakdown");
-                  setPinContextUsageBreakdown(value);
-                }}
-                aria-label="Pin context usage breakdown"
-              />
-            }
-          />
         </SettingsGroup>
 
         <BrowserSettingsSection />
 
-        <SettingsGroup
-          group={GENERAL.definitions.runningAgents}
-          showTitle
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <PreventSleepSettingsSection />
-          <SettingsRow
-            row={GENERAL.definitions.globalResourcesButton}
-            control={
-              <Switch
-                checked={showGlobalResourceMonitor}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("showGlobalResourceMonitor");
-                  setShowGlobalResourceMonitor(value);
-                }}
-                aria-label="Show global resources button"
-              />
-            }
-          />
-          <SettingsRow
-            row={GENERAL.definitions.navigatorResourceStats}
-            control={
-              <Switch
-                checked={showNavigatorResourceStats}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("showNavigatorResourceStats");
-                  setShowNavigatorResourceStats(value);
-                }}
-                aria-label="Show navigator resource stats"
-              />
-            }
-          />
-        </SettingsGroup>
+        {/* Carries its own "Running agents" group: one row is left in it after
+          the two resource-visibility toggles moved to Layout, and that row
+          hides itself on builds with no power bridge - so the heading has to
+          go with it rather than be gated a second time here. */}
+        <PreventSleepSettingsSection />
 
         <SettingsGroup
           group={GENERAL.definitions.worktrees}

@@ -100,6 +100,8 @@ interface HarnessModelPickerPanelProps {
   readonly onActiveRow: (rowId: string) => void;
   readonly onSelectRow: (row: HarnessModelRow) => void;
   readonly reasoningFooter: ReasoningFooterConfig | null;
+  /** The picker's `visibleOpen`, for the footer's max treatment. */
+  readonly reasoningPickerOpen: boolean;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
@@ -167,6 +169,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     onActiveRow,
     onSelectRow,
     reasoningFooter,
+    reasoningPickerOpen,
     serviceTierFooter,
     createProfileHostId,
     runTargetHostId,
@@ -325,6 +328,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
           </div>
           <HarnessModelPickerModelSettingsFooter
             reasoning={reasoningFooter}
+            pickerOpen={reasoningPickerOpen}
             serviceTier={serviceTierFooter}
           />
         </div>

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   DEFAULT_NOTIFICATION_CHIME_SOUNDS,
   disposeNotificationChimeAudio,
@@ -7,13 +7,16 @@ import {
   prepareNotificationChimeAudio,
 } from "@/lib/notifications/notification-chime";
 
+type AudioParamMock = Mock<(value: number, atTime: number) => void>;
+type OscillatorEventMock = Mock<(atTime: number) => void>;
+
 const oscillators: Array<{
   readonly frequency: {
-    readonly exponentialRampToValueAtTime: ReturnType<typeof vi.fn>;
-    readonly setValueAtTime: ReturnType<typeof vi.fn>;
+    readonly exponentialRampToValueAtTime: AudioParamMock;
+    readonly setValueAtTime: AudioParamMock;
   };
-  readonly start: ReturnType<typeof vi.fn>;
-  readonly stop: ReturnType<typeof vi.fn>;
+  readonly start: OscillatorEventMock;
+  readonly stop: OscillatorEventMock;
 }> = [];
 
 class FakeAudioContext {
@@ -27,12 +30,13 @@ class FakeAudioContext {
     const oscillator = {
       type: "sine" as OscillatorType,
       frequency: {
-        setValueAtTime: vi.fn(),
-        exponentialRampToValueAtTime: vi.fn(),
+        setValueAtTime: vi.fn<(value: number, atTime: number) => void>(),
+        exponentialRampToValueAtTime:
+          vi.fn<(value: number, atTime: number) => void>(),
       },
       connect: vi.fn(),
-      start: vi.fn(),
-      stop: vi.fn(),
+      start: vi.fn<(atTime: number) => void>(),
+      stop: vi.fn<(atTime: number) => void>(),
       onended: null as (() => void) | null,
     };
     oscillators.push(oscillator);

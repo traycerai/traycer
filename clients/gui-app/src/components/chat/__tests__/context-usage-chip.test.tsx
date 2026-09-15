@@ -22,7 +22,11 @@ import {
 } from "@/components/chat/context-usage";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_CONTEXT_INDICATOR_STYLE,
+  DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
 const RELIABLE_USAGE: TokenUsage = {
@@ -33,11 +37,51 @@ const RELIABLE_USAGE: TokenUsage = {
   contextWindow: 200_000,
 };
 
+const CACHED_USAGE: TokenUsage = {
+  inputTokens: 10_000,
+  outputTokens: 200,
+  totalTokens: 10_200,
+  contextTokens: 50_000,
+  cacheReadInputTokens: 30_000,
+  cacheCreationInputTokens: 10_000,
+  contextWindow: 200_000,
+};
+
+const NEARLY_EXHAUSTED_USAGE: TokenUsage = {
+  inputTokens: 190_000,
+  outputTokens: 1_000,
+  totalTokens: 191_000,
+  contextTokens: 190_000,
+  contextWindow: 200_000,
+};
+
+const EXHAUSTED_USAGE: TokenUsage = {
+  inputTokens: 200_000,
+  outputTokens: 1_000,
+  totalTokens: 201_000,
+  contextTokens: 200_000,
+  contextWindow: 200_000,
+};
+
+const UNTOUCHED_USAGE: TokenUsage = {
+  inputTokens: 40,
+  outputTokens: 10,
+  totalTokens: 50,
+  contextTokens: 40,
+  contextWindow: 200_000,
+};
+
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion)";
 const defaultMatchMedia = window.matchMedia.bind(window);
 
 function percentLeft(usage: TokenUsage | null): number | null {
   return computeEffectiveContextUsage(usage)?.percentLeft ?? null;
+}
+
+function pinnedFieldLabels(details: HTMLElement): string[] {
+  return Array.from(details.children).map(
+    (row) => row.firstElementChild?.textContent ?? "",
+  );
 }
 
 function queryCompactContextTrigger() {
@@ -96,7 +140,11 @@ function installReducedMotionPreference(matches: boolean): void {
 
 function resetContextUsageSettings(): void {
   window.localStorage.clear();
-  useSettingsStore.setState({ pinContextUsageBreakdown: false });
+  useSettingsStore.setState({
+    pinContextUsageBreakdown: false,
+    pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+    contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
+  });
   restoreDefaultMatchMedia();
   resetMotionReducedMotionPreference();
 }
@@ -623,6 +671,74 @@ describe("ContextUsageChip", () => {
     expect(onCompact).toHaveBeenCalledTimes(1);
   });
 
+  it("prints every breakdown field in the pinned strip by default", () => {
+    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+    render(<ContextUsageChip usage={CACHED_USAGE} onCompact={null} />);
+
+    const details = screen.getByTestId("context-usage-pinned-details");
+    expect(pinnedFieldLabels(details)).toEqual([
+      "Used",
+      "Fresh",
+      "Cache read",
+      "Cache write",
+      "Output",
+    ]);
+  });
+
+  it("prints only the selected fields in the pinned strip, in strip order", () => {
+    useSettingsStore.setState({
+      pinContextUsageBreakdown: true,
+      pinnedContextBreakdownFields: ["cacheRead", "used"],
+    });
+    render(<ContextUsageChip usage={CACHED_USAGE} onCompact={null} />);
+
+    const strip = screen.getByTestId("context-usage-pinned-strip");
+    const details = within(strip).getByTestId("context-usage-pinned-details");
+    // Strip order, whatever order the store lists them in.
+    expect(pinnedFieldLabels(details)).toEqual(["Used", "Cache read"]);
+    // The remaining figure is not a field: it leads whatever is picked.
+    expect(
+      within(strip).getByTestId("context-usage-pinned-primary").textContent,
+    ).toMatch(/Context\s+75%/);
+    expect(
+      within(strip).getByTestId("context-usage-pinned-summary"),
+    ).toBeTruthy();
+  });
+
+  it("drops the narrow-width used summary when Used is not a selected field", () => {
+    useSettingsStore.setState({
+      pinContextUsageBreakdown: true,
+      pinnedContextBreakdownFields: ["output"],
+    });
+    render(<ContextUsageChip usage={CACHED_USAGE} onCompact={null} />);
+
+    const strip = screen.getByTestId("context-usage-pinned-strip");
+    expect(
+      pinnedFieldLabels(
+        within(strip).getByTestId("context-usage-pinned-details"),
+      ),
+    ).toEqual(["Output"]);
+    expect(
+      within(strip).queryByTestId("context-usage-pinned-summary"),
+    ).toBeNull();
+  });
+
+  it("leaves the popover breakdown untouched by the pinned field picker", async () => {
+    useSettingsStore.setState({
+      pinnedContextBreakdownFields: ["output"],
+    });
+    render(<ContextUsageChip usage={CACHED_USAGE} onCompact={null} />);
+
+    fireEvent.click(screen.getByTestId("context-usage-chip"));
+
+    expect(await screen.findByText("Context window")).toBeTruthy();
+    expect(screen.getByText("Used")).toBeTruthy();
+    expect(screen.getByText("Fresh")).toBeTruthy();
+    expect(screen.getByText("Cache read")).toBeTruthy();
+    expect(screen.getByText("Cache write")).toBeTruthy();
+    expect(screen.getByText("Output")).toBeTruthy();
+  });
+
   it("trails the usage figures with the compact action in the pinned strip", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
     const onCompact = vi.fn();
@@ -639,5 +755,200 @@ describe("ContextUsageChip", () => {
 
     fireEvent.click(action);
     expect(onCompact).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ContextUsageChip indicator styles", () => {
+  it("renders the sentence and the container-query meter in the text style", () => {
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+
+    const trigger = screen.getByTestId("context-usage-chip");
+    expect(trigger.getAttribute("data-indicator-style")).toBe("text");
+    expect(trigger.textContent).toBe("75% context left");
+    expect(screen.getByTestId("context-usage-meter")).toBeTruthy();
+    expect(screen.queryByTestId("context-usage-ring")).toBeNull();
+  });
+
+  it("renders a gauge with the number inside in the ring style", () => {
+    useSettingsStore.getState().setContextIndicatorStyle("ring");
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+
+    const trigger = screen.getByRole("button", {
+      name: "Context window 75% left. Open context usage breakdown",
+    });
+    expect(trigger.getAttribute("data-indicator-style")).toBe("ring");
+    expect(screen.queryByText("75% context left")).toBeNull();
+    expect(screen.queryByTestId("context-usage-meter")).toBeNull();
+
+    const ring = screen.getByTestId("context-usage-ring");
+    expect(ring.classList.contains("size-5")).toBe(true);
+    const arc = screen.getByTestId("context-usage-ring-arc");
+    expect(arc.getAttribute("data-percent-left")).toBe("75");
+    // A quarter of the circumference is hidden for a quarter used.
+    const circumference = Number(arc.getAttribute("stroke-dasharray"));
+    expect(Number(arc.getAttribute("stroke-dashoffset"))).toBeCloseTo(
+      circumference * 0.25,
+      6,
+    );
+    expect(screen.getByTestId("context-usage-ring-value").textContent).toBe(
+      "75",
+    );
+    // Real CSS typography, not a viewBox-relative `fontSize` that shrinks with
+    // the user's UI font setting.
+    expect(
+      screen
+        .getByTestId("context-usage-ring-value")
+        .classList.contains("text-[0.625rem]"),
+    ).toBe(true);
+  });
+
+  it("keeps a visible arc at 0% left and prints the full reading at 100%", () => {
+    useSettingsStore.getState().setContextIndicatorStyle("ring");
+    const { rerender } = render(
+      <ContextUsageChip usage={EXHAUSTED_USAGE} onCompact={null} />,
+    );
+
+    const exhaustedArc = screen.getByTestId("context-usage-ring-arc");
+    expect(exhaustedArc.getAttribute("data-percent-left")).toBe("0");
+    const circumference = Number(exhaustedArc.getAttribute("stroke-dasharray"));
+    // A stub arc, not nothing: the track alone reads as "no data".
+    expect(Number(exhaustedArc.getAttribute("stroke-dashoffset"))).toBeCloseTo(
+      circumference * 0.95,
+      6,
+    );
+    expect(screen.getByTestId("context-usage-ring-value").textContent).toBe(
+      "0",
+    );
+
+    rerender(<ContextUsageChip usage={UNTOUCHED_USAGE} onCompact={null} />);
+
+    const fullArc = screen.getByTestId("context-usage-ring-arc");
+    expect(fullArc.getAttribute("data-percent-left")).toBe("100");
+    expect(Number(fullArc.getAttribute("stroke-dashoffset"))).toBeCloseTo(0, 6);
+    const value = screen.getByTestId("context-usage-ring-value");
+    expect(value.textContent).toBe("100");
+    // Three digits drop a step so they clear the stroke.
+    expect(value.classList.contains("text-[0.5rem]")).toBe(true);
+  });
+
+  it("keeps the chip at full strength at the destructive threshold, dimming it only for a healthy sentence", () => {
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+    expect(
+      screen.getByTestId("context-usage-chip").classList.contains("opacity-70"),
+    ).toBe(true);
+    cleanup();
+
+    render(
+      <ContextUsageChip usage={NEARLY_EXHAUSTED_USAGE} onCompact={null} />,
+    );
+    expect(
+      screen.getByTestId("context-usage-chip").classList.contains("opacity-70"),
+    ).toBe(false);
+    cleanup();
+
+    useSettingsStore.getState().setContextIndicatorStyle("ring");
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+    expect(
+      screen.getByTestId("context-usage-chip").classList.contains("opacity-70"),
+    ).toBe(false);
+  });
+
+  it("renders the gauge alone in the ring-only style, keeping the percentage in the label", () => {
+    useSettingsStore.getState().setContextIndicatorStyle("ring-only");
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+
+    const trigger = screen.getByRole("button", {
+      name: "Context window 75% left. Open context usage breakdown",
+    });
+    expect(trigger.getAttribute("data-indicator-style")).toBe("ring-only");
+    expect(trigger.textContent).toBe("");
+    expect(
+      screen.getByTestId("context-usage-ring").classList.contains("size-4"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByTestId("context-usage-ring-arc")
+        .getAttribute("data-percent-left"),
+    ).toBe("75");
+    expect(screen.queryByTestId("context-usage-ring-value")).toBeNull();
+    expect(trigger.hasAttribute("title")).toBe(false);
+  });
+
+  it("puts the percentage in the ring-only tooltip, where the gauge cannot print it", async () => {
+    useSettingsStore.getState().setContextIndicatorStyle("ring-only");
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+
+    fireEvent.focus(screen.getByTestId("context-usage-chip"));
+
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "75% context left",
+    );
+  });
+
+  it("restores focus to the ring-only trigger after a focused inline unpin", () => {
+    // `ring-only` nests `TooltipWrapper` between `PopoverTrigger asChild` and
+    // the button holding the trigger ref, so the ref travels two Radix slots.
+    useSettingsStore.setState({
+      contextIndicatorStyle: "ring-only",
+      pinContextUsageBreakdown: true,
+    });
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+
+    const unpinButton = screen.getByRole("button", {
+      name: "Unpin context usage breakdown",
+    });
+    unpinButton.focus();
+    fireEvent.click(unpinButton);
+
+    expect(document.activeElement).toBe(
+      screen.getByTestId("context-usage-chip"),
+    );
+  });
+
+  it("ignores the indicator style while the breakdown is pinned", () => {
+    useSettingsStore.setState({
+      contextIndicatorStyle: "ring",
+      pinContextUsageBreakdown: true,
+    });
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+
+    expect(screen.getByTestId("context-usage-pinned-strip")).toBeTruthy();
+    expect(screen.queryByTestId("context-usage-ring")).toBeNull();
+    expect(screen.queryByTestId("context-usage-chip")).toBeNull();
+  });
+
+  it.each(["text", "ring", "ring-only"] as const)(
+    "carries the severity tone on the trigger and keeps compaction reachable in the %s style",
+    (style) => {
+      useSettingsStore.getState().setContextIndicatorStyle(style);
+      const onCompact = vi.fn();
+      render(
+        <ContextUsageChip
+          usage={NEARLY_EXHAUSTED_USAGE}
+          onCompact={onCompact}
+        />,
+      );
+
+      const trigger = screen.getByRole("button", {
+        name: "Context window 5% left. Open context usage breakdown",
+      });
+      expect(trigger.classList.contains("text-destructive")).toBe(true);
+
+      fireEvent.click(screen.getByTestId("context-usage-compact-action"));
+      expect(onCompact).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("opens the breakdown popover from the ring trigger", async () => {
+    useSettingsStore.getState().setContextIndicatorStyle("ring-only");
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+
+    fireEvent.click(screen.getByTestId("context-usage-chip"));
+
+    expect(await screen.findByText("Context window")).toBeTruthy();
+    expect(screen.getByText("75% left")).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "Pin breakdown" }),
+    ).toBeTruthy();
   });
 });

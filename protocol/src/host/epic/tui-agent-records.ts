@@ -4,6 +4,14 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  agentSessionLastExitSchema,
+  agentSessionStateSchema,
+} from "@traycer/protocol/host/agent-session-state";
+import {
+  recordListRecencyPatchSchema,
+  recordListStampSchema,
+} from "@traycer/protocol/host/epic/record-list-revision";
 import { worktreeBindingWorkspaceModeSchema } from "@traycer/protocol/host/worktree-schemas";
 
 /**
@@ -431,5 +439,205 @@ export const epicListTuiAgentsUpgradeV11ToV12 = defineUpgradePath<
         ? { ...row, origin: "doc" as const }
         : { ...row, origin: "registry" as const },
     ),
+  }),
+});
+
+// ─── `epic.listTuiAgents@1.3` - revision gating, and the session facet ──────
+//
+// Two changes on one bump, because they land on the same rows and a host that
+// ships one without the other would pay the cost of the second twice.
+//
+//   1. REVISION GATING. The request carries what the client already holds and
+//      the response says whether it is still current. A 20s poll that returns
+//      the whole registry re-encoded is what this method costs today; on a
+//      large epic that is a multi-MB body per open tab per tick, and it is
+//      almost always identical to the last one. See `record-list-revision.ts`
+//      for the vocabulary and why the epoch is load-bearing.
+//   2. THE SESSION FACET. `sessionState` / `lastExit` on the row, so a reaped
+//      agent reads as asleep and resumable rather than as absent. The facet is
+//      stamped on the registry row by its binding host, so it moves the list
+//      revision like any other registry fact - which is exactly why it ships
+//      with the gating rather than after it.
+
+/**
+ * The `@1.2` registry row plus the session facet.
+ *
+ * A NEW const rather than an edit of {@link tuiAgentRecordSummaryV12RegistrySchema}
+ * for the reason `@1.2` gives for not editing `@1.1`'s: the `@1.2` response
+ * AND the frozen `@1.2`/`@1.3` STREAM FRAME SETS embed that const by
+ * reference, so mutating it in place would rewrite four released shapes at
+ * once.
+ *
+ * Both fields are plain added keys - an older peer's schema strips them - so
+ * this is additive with nothing to gate. Only the response's new ROOT arm is
+ * growth (see {@link listTuiAgentsResponseV13Schema}).
+ */
+export const tuiAgentRecordSummaryV13RegistrySchema =
+  tuiAgentRecordSummaryV12RegistrySchema.extend({
+    sessionState: agentSessionStateSchema.nullable(),
+    lastExit: agentSessionLastExitSchema.nullable(),
+  });
+export type TuiAgentRecordSummaryV13Registry = z.infer<
+  typeof tuiAgentRecordSummaryV13RegistrySchema
+>;
+
+/**
+ * The `@1.2` doc row plus the session facet, which on this arm is always
+ * `null` in practice.
+ *
+ * The fields are carried anyway rather than left off the arm: a consumer reads
+ * `row.sessionState` without first asking which population the row came from,
+ * and `null` already means "this host cannot know" - which is exactly true of
+ * a doc-resident entry, whose binding host has not upgraded far enough to
+ * stamp anything. Narrowing the arm to `z.null()` would state a fact about
+ * every future host's behaviour that this contract has no business promising.
+ */
+export const tuiAgentRecordSummaryV13DocSchema =
+  tuiAgentRecordSummaryV12DocSchema.extend({
+    sessionState: agentSessionStateSchema.nullable(),
+    lastExit: agentSessionLastExitSchema.nullable(),
+  });
+export type TuiAgentRecordSummaryV13Doc = z.infer<
+  typeof tuiAgentRecordSummaryV13DocSchema
+>;
+
+/**
+ * The `@1.2` cloud row plus the session facet, `null` until the metadata
+ * projection carries it.
+ *
+ * A replica's whole content is the cloud metadata row, and that row has no
+ * such field today - so this arm reads `null` and its tile keeps the banner it
+ * has. The field is present for the same reason it is on the doc arm: one
+ * accessor across the three populations, and `null` already says the honest
+ * thing. Carrying the facet across hosts is a server change and stays a
+ * follow-up; when it lands it needs no protocol move, because the arm already
+ * has somewhere to put the answer.
+ */
+export const tuiAgentRecordSummaryV13CloudSchema =
+  tuiAgentRecordSummaryV12CloudSchema.extend({
+    sessionState: agentSessionStateSchema.nullable(),
+    lastExit: agentSessionLastExitSchema.nullable(),
+  });
+export type TuiAgentRecordSummaryV13Cloud = z.infer<
+  typeof tuiAgentRecordSummaryV13CloudSchema
+>;
+
+/** The `@1.3` row: the same three populations, each carrying the facet. */
+export const tuiAgentRecordSummaryV13Schema = z.discriminatedUnion("origin", [
+  tuiAgentRecordSummaryV13RegistrySchema,
+  tuiAgentRecordSummaryV13DocSchema,
+  tuiAgentRecordSummaryV13CloudSchema,
+]);
+export type TuiAgentRecordSummaryV13 = z.infer<
+  typeof tuiAgentRecordSummaryV13Schema
+>;
+
+/**
+ * The `@1.3` response: a snapshot, or the statement that the client's rows are
+ * still current.
+ *
+ * ## `unchanged` is not "no answer"
+ *
+ * It carries the recency patches for rows a QUIET write touched since the
+ * client's `touchRevision` - see `recordListRecencyPatchSchema`. The sidebar
+ * orders on `updatedAt`, so an answer that said only "nothing changed" while a
+ * chat streamed would either freeze the ordering or force the snapshot back.
+ *
+ * ## Emission is gated on the NEGOTIATED VERSION, and must be
+ *
+ * `unchanged` is a new ROOT arm, which a `@1.2` peer's schema cannot parse -
+ * it is not an added key that zod strips, it is a different object. So the
+ * host emits it only when `ctx.schemaVersion` is at this minor AND the
+ * client's `knownRevision` matched, and the registry entry declares
+ * `responseGrowthProjectionGated: true` as the reviewed claim that it does.
+ * The `snapshot` arm is the `@1.2` object plus added keys, which is what keeps
+ * the older shape projecting and the additivity check satisfied.
+ *
+ * ## Why the snapshot's stamp is nullable
+ *
+ * A `@1.2` host has no list revision to report, and the `@1.2 -> @1.3` upgrade
+ * path must say so rather than invent one: a fabricated epoch would be
+ * indistinguishable from a real one, and the client would send it back as
+ * `knownRevision`. `null` is the honest statement "this answer carries no
+ * gating fact", and a client holding `null` asks for a snapshot every time -
+ * which is exactly today's behaviour. A `@1.3` host always has one, so it
+ * never emits `null` here.
+ *
+ * The `unchanged` arm's stamp is NOT nullable: only a host that computed a
+ * revision can conclude nothing changed.
+ */
+export const listTuiAgentsResponseV13Schema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("snapshot"),
+    listStamp: recordListStampSchema.nullable(),
+    tuiAgents: z.array(tuiAgentRecordSummaryV13Schema),
+  }),
+  z.object({
+    kind: z.literal("unchanged"),
+    listStamp: recordListStampSchema,
+    touched: z.array(recordListRecencyPatchSchema),
+  }),
+]);
+export type ListTuiAgentsResponseV13 = z.infer<
+  typeof listTuiAgentsResponseV13Schema
+>;
+
+/**
+ * The `@1.2` request plus what the caller already holds.
+ *
+ * REQUIRED and nullable, on the `hasDocReplica` precedent: a `@1.3` caller
+ * always knows whether it holds a stamp, and an absent field would have to be
+ * given a host-side default - which is the guess the field exists to remove.
+ * `null` says "I hold nothing", and the host answers with a snapshot.
+ *
+ * The value is whatever the last `snapshot` (or `unchanged`) answer put in
+ * `listStamp`, sent back verbatim. A client must never synthesize one, and
+ * must drop the one it holds whenever the store it was read into is replaced -
+ * the stamp describes a specific client-side row set, not a point in time.
+ */
+export const listTuiAgentsRequestV13Schema =
+  listTuiAgentsRequestV12Schema.extend({
+    knownRevision: recordListStampSchema.nullable(),
+  });
+export type ListTuiAgentsRequestV13 = z.infer<
+  typeof listTuiAgentsRequestV13Schema
+>;
+
+export const epicListTuiAgentsV13 = defineRpcContract({
+  method: "epic.listTuiAgents",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: listTuiAgentsRequestV13Schema,
+  responseSchema: listTuiAgentsResponseV13Schema,
+});
+
+/**
+ * REQUEST, `knownRevision: null`: a `@1.2` caller holds no stamp, because a
+ * `@1.2` host never issued one. Not a default - the only value that is true.
+ *
+ * RESPONSE: a `@1.2` host can only ever have produced a snapshot, so `kind`
+ * is a FACT about that peer rather than a choice, exactly as `origin` is in
+ * the `@1.1 -> @1.2` path above. `unchanged` is unreachable through here by
+ * construction: the arm exists to answer a question the older host was never
+ * asked.
+ *
+ * `listStamp: null` and the row facets `null` are the same statement in three
+ * places - that host was never able to say. See the response schema's note on
+ * why an invented epoch would be worse than a null.
+ */
+export const epicListTuiAgentsUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicListTuiAgentsV12,
+  typeof epicListTuiAgentsV13
+>({
+  from: epicListTuiAgentsV12.schemaVersion,
+  to: epicListTuiAgentsV13.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, knownRevision: null }),
+  upgradeResponse: (response) => ({
+    kind: "snapshot" as const,
+    listStamp: null,
+    tuiAgents: response.tuiAgents.map((row) => ({
+      ...row,
+      sessionState: null,
+      lastExit: null,
+    })),
   }),
 });

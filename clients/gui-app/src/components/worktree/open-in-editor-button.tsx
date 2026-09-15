@@ -18,8 +18,8 @@ import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation"
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
 import { useEditorAvailability } from "@/hooks/editor/use-editor-availability-query";
 import { useFinderOpenAvailability } from "@/hooks/editor/use-finder-open-availability";
+import { useHostPathOpenAvailability } from "@/hooks/editor/use-host-path-open-availability";
 import { useOfferableEditors } from "@/hooks/editor/use-offerable-editors";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -56,7 +56,7 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
   // one the panel is pinned to) must be the local one, not merely dialable.
   // Called unconditionally, before the early return below, per Rules of Hooks.
   const openTargetHostId = openTarget?.hostId ?? null;
-  const openTargetHostEntry = useHostDirectoryEntry(openTargetHostId);
+  const openTargetHostIsLocal = useHostPathOpenAvailability(openTargetHostId);
   // Finder rides the same RPC but has its own, stricter gate (local host AND a
   // Mac AND a host that negotiated `editor.openPaths` 1.2). Called
   // unconditionally for the same Rules-of-Hooks reason as the lookup above.
@@ -85,10 +85,6 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
 
   if (!runnerHost.hasLocalHost) return null;
 
-  const openTargetHostIsLocal =
-    openTargetHostEntry !== null &&
-    (openTargetHostEntry.kind === "local" ||
-      openTargetHostEntry.kind === "mock");
   const hostMatches = openTarget !== null && openTargetHostIsLocal;
 
   // Hide editors whose URL-scheme handler is not registered on the host's
@@ -113,7 +109,7 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
   // Takes the wire target: Finder shares the whole pressed-feedback / disable
   // cycle with the editors and differs only in the literal it sends.
   const openInEditor = (editorId: OpenPathsTarget) => {
-    if (openingEditor || openTarget === null) return;
+    if (!hostMatches || openingEditor) return;
     triggerOpenFeedback();
     mutation.mutate({ editorId, paths: [openTarget.workspacePath] });
   };

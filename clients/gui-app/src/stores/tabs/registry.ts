@@ -3,6 +3,7 @@ import { epicTabModule } from "@/stores/tabs/kinds/epic";
 import { draftTabModule } from "@/stores/tabs/kinds/draft";
 import { historyTabModule } from "@/stores/tabs/kinds/history";
 import { settingsTabModule } from "@/stores/tabs/kinds/settings";
+import { homeTabModule } from "@/stores/tabs/kinds/home";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import type {
   HeaderTab,
@@ -23,12 +24,20 @@ import type {
  * All kind-dispatched behaviors (close, duplicate, navigate) go through the
  * per-concern dispatch functions exported below. Switches are centralized here
  * - consumers call `tabRequestClose(tab)`, `tabDuplicate(tab)`, etc.
+ *
+ * `home` is registered like every other kind so it dispatches through the same
+ * seams, but it is the one kind with no strip presence: it is never in `items`,
+ * `systemTabs` or `stripOrder`, and `validRef` in `layout.ts` refuses a `home`
+ * ref outright. Registration here is what makes `isRegisteredTabKind("home")`
+ * true, so that refusal is the thing keeping a hand-edited payload from
+ * injecting a second Home into the strip.
  */
 export const TAB_KINDS = {
   epic: epicTabModule,
   draft: draftTabModule,
   history: historyTabModule,
   settings: settingsTabModule,
+  home: homeTabModule,
 } as const;
 
 /**
@@ -69,19 +78,24 @@ export function tabSurfaceDescriptor(
   kind: "settings",
 ): TabSurfaceDescriptor<"settings">;
 export function tabSurfaceDescriptor(
-  kind: HeaderTabKind,
-):
-  | TabSurfaceDescriptor<"epic">
-  | TabSurfaceDescriptor<"draft">
-  | TabSurfaceDescriptor<"history">
-  | TabSurfaceDescriptor<"settings">;
+  kind: "home",
+): TabSurfaceDescriptor<"home">;
 export function tabSurfaceDescriptor(
   kind: HeaderTabKind,
 ):
   | TabSurfaceDescriptor<"epic">
   | TabSurfaceDescriptor<"draft">
   | TabSurfaceDescriptor<"history">
-  | TabSurfaceDescriptor<"settings"> {
+  | TabSurfaceDescriptor<"settings">
+  | TabSurfaceDescriptor<"home">;
+export function tabSurfaceDescriptor(
+  kind: HeaderTabKind,
+):
+  | TabSurfaceDescriptor<"epic">
+  | TabSurfaceDescriptor<"draft">
+  | TabSurfaceDescriptor<"history">
+  | TabSurfaceDescriptor<"settings">
+  | TabSurfaceDescriptor<"home"> {
   switch (kind) {
     case "epic":
       return TAB_KINDS.epic.descriptor.surface;
@@ -91,6 +105,8 @@ export function tabSurfaceDescriptor(
       return TAB_KINDS.history.descriptor.surface;
     case "settings":
       return TAB_KINDS.settings.descriptor.surface;
+    case "home":
+      return TAB_KINDS.home.descriptor.surface;
   }
 }
 
@@ -112,6 +128,8 @@ export function tabRequestClose(tab: HeaderTab): void {
       return TAB_KINDS.history.descriptor.requestClose(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.requestClose(tab);
+    case "home":
+      return TAB_KINDS.home.descriptor.requestClose(tab);
   }
 }
 
@@ -129,6 +147,8 @@ export function tabDuplicate(tab: HeaderTab): TabNavigationIntent | null {
       return TAB_KINDS.history.descriptor.duplicate(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.duplicate(tab);
+    case "home":
+      return TAB_KINDS.home.descriptor.duplicate(tab);
   }
 }
 
@@ -146,6 +166,8 @@ export function tabResolveIntent(tab: HeaderTab): TabNavigationIntent {
       return TAB_KINDS.history.descriptor.resolveIntent(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.resolveIntent(tab);
+    case "home":
+      return TAB_KINDS.home.descriptor.resolveIntent(tab);
   }
 }
 
@@ -163,6 +185,8 @@ export function tabRouteOptions(intent: TabNavigationIntent): NavigateOptions {
       return TAB_KINDS.history.descriptor.routeOptions(intent);
     case "settings":
       return TAB_KINDS.settings.descriptor.routeOptions(intent);
+    case "home":
+      return TAB_KINDS.home.descriptor.routeOptions(intent);
   }
 }
 
@@ -180,6 +204,8 @@ export function tabActivate(intent: TabNavigationIntent): void {
       return TAB_KINDS.history.descriptor.activate(intent);
     case "settings":
       return TAB_KINDS.settings.descriptor.activate(intent);
+    case "home":
+      return TAB_KINDS.home.descriptor.activate(intent);
   }
 }
 
@@ -199,6 +225,8 @@ export function tabRequiresCloseConfirm(tab: HeaderTab): boolean {
       return TAB_KINDS.history.descriptor.requiresCloseConfirm(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.requiresCloseConfirm(tab);
+    case "home":
+      return TAB_KINDS.home.descriptor.requiresCloseConfirm(tab);
   }
 }
 
@@ -214,6 +242,7 @@ export function tabEpicId(tab: HeaderTab): string | null {
     case "draft":
     case "history":
     case "settings":
+    case "home":
       return null;
   }
 }
@@ -241,6 +270,8 @@ export function tabOpenInNewWindow(
       return TAB_KINDS.history.descriptor.openInNewWindow(tab, deps);
     case "settings":
       return TAB_KINDS.settings.descriptor.openInNewWindow(tab, deps);
+    case "home":
+      return TAB_KINDS.home.descriptor.openInNewWindow(tab, deps);
   }
 }
 
@@ -259,5 +290,7 @@ export function tabMatchesPath(tab: HeaderTab, pathname: string): boolean {
       return TAB_KINDS.history.descriptor.matchesPath(tab, pathname);
     case "settings":
       return TAB_KINDS.settings.descriptor.matchesPath(tab, pathname);
+    case "home":
+      return TAB_KINDS.home.descriptor.matchesPath(tab, pathname);
   }
 }

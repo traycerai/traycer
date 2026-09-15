@@ -6,6 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Gauge, Settings } from "lucide-react";
@@ -71,7 +72,7 @@ import {
   useRateLimitQueueTargetPhase,
 } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import {
-  resolveRateLimitProfileId,
+  resolveStatusBarProfileIds,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
@@ -99,7 +100,11 @@ import {
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import {
+  Analytics,
+  AnalyticsEvent,
+  trackSettingChanged,
+} from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   isRateLimitProfileFetchEligible,
@@ -127,11 +132,15 @@ import {
 import { TraycerSubscriptionView } from "@/components/settings/panels/traycer-subscription-views";
 import {
   useRateLimitPopoverStore,
+  type RateLimitPopoverRevealTarget,
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { cn } from "@/lib/utils";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 
@@ -433,16 +442,27 @@ export function RateLimitPopover({
   profileSelection,
   scope,
   hasExplicitPick,
+  side,
+  align,
 }: {
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
+  /**
+   * Which way the panel opens, and which of the trigger's edges it lines up
+   * with. Both are the caller's to state rather than this component's to guess:
+   * the header hangs a right-aligned panel below its glyph, and the status bar
+   * opens upward from a trigger at the left end of the strip, where an
+   * `end`-aligned panel would run off the window.
+   */
+  readonly side: "top" | "bottom";
+  readonly align: "start" | "end";
 }): ReactNode {
   return (
     <PopoverContent
-      side="bottom"
-      align="end"
+      side={side}
+      align={align}
       sideOffset={8}
       collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
@@ -802,6 +822,24 @@ function RateLimitPopoverScopedBody({
     carryViewedHostIntoSettingsScope(displayedHostId);
     openSettings({ section: "providers", resetToGeneral: false });
   }, [displayedHostId, onClose, openSettings]);
+  // "Manage provider", beside each provider's name. Same deep link the model
+  // picker and the reauth banner use, so the viewed host travels with it and
+  // Providers opens on the provider whose numbers the click came from.
+  const manageProvider = useCallback(
+    (providerId: RateLimitProviderId): void => {
+      onClose();
+      const focus = useProvidersFocusStore.getState();
+      focus.setFocusHarnessId(providerIdToGuiHarnessId(providerId));
+      // No tab named, so Providers resolves that provider's OWN first tab.
+      // `setFocusHarnessId` deliberately leaves the tab half alone (a profile
+      // deep link sets both), which means a previous link's tab stays armed -
+      // and this link, which names no tab, would then land on it.
+      focus.clearFocusTab();
+      carryViewedHostIntoSettingsScope(displayedHostId);
+      openSettings({ section: "providers", resetToGeneral: false });
+    },
+    [displayedHostId, onClose, openSettings],
+  );
 
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
@@ -862,7 +900,6 @@ function RateLimitPopoverScopedBody({
         className="grid min-h-0 flex-1 grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
       >
         <RateLimitRail
-          displayedHostId={displayedHostId}
           railTabs={railTabs}
           providers={providers}
           traycerRefreshTarget={{
@@ -882,14 +919,18 @@ function RateLimitPopoverScopedBody({
               railTabs={railTabs}
               providers={providers}
               profileSelection={profileSelection}
+              displayedHostId={displayedHostId}
               openOpenCodeModelProviders={openOpenCodeModelProviders}
+              manageProvider={manageProvider}
             />
           ) : (
             <RateLimitDetailPane
               tab={resolvedTab}
               providers={providers}
               profileSelection={profileSelection}
+              displayedHostId={displayedHostId}
               openOpenCodeModelProviders={openOpenCodeModelProviders}
+              manageProvider={manageProvider}
             />
           )}
         </div>
@@ -1029,12 +1070,16 @@ function RateLimitDetailPane({
   tab,
   providers,
   profileSelection,
+  displayedHostId,
   openOpenCodeModelProviders,
+  manageProvider,
 }: {
   readonly tab: Exclude<RateLimitPopoverTab, "overview">;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly displayedHostId: string | null;
   readonly openOpenCodeModelProviders: () => void;
+  readonly manageProvider: (providerId: RateLimitProviderId) => void;
 }): ReactNode {
   return tab === "traycer" ? (
     <TraycerRateLimitBlock variant="popover-detail" onReady={null} />
@@ -1046,14 +1091,16 @@ function RateLimitDetailPane({
       variant="popover-detail"
       onReady={null}
       profileSelection={profileSelection}
+      displayedHostId={displayedHostId}
       openOpenCodeModelProviders={openOpenCodeModelProviders}
+      manageProvider={manageProvider}
     />
   );
 }
 
 /**
  * The left rail: an Overview tab, one tab per connected provider, then a
- * "Refresh all" and a "Provider settings" icon pinned to the bottom - the same
+ * "Refresh all" and a "Status bar settings" icon pinned to the bottom - the same
  * structural shell as the composer model picker's `ProviderRail` (scrollable
  * `role="tablist"` as a `flex-1` sibling, action icons after it). The two
  * bottom icons are deliberately siblings of the tablist, not tabs inside it, so
@@ -1067,9 +1114,7 @@ function RateLimitRail({
   activeTab,
   onSelect,
   onClose,
-  displayedHostId,
 }: {
-  readonly displayedHostId: string | null;
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly traycerRefreshTarget: TraycerRefreshTarget;
@@ -1078,10 +1123,22 @@ function RateLimitRail({
   readonly onClose: () => void;
 }): ReactNode {
   const { openSettings } = useSystemTabModalActions();
-  const openProviderSettings = (): void => {
+  // The rail gear is about THIS SURFACE, not about the providers on it: every
+  // control over what the popover and the footer strip show - which limits,
+  // bars, timers, placement - lives in Layout's Status bar group. Per-provider
+  // administration is one "Manage provider" link away, beside each name.
+  //
+  // `openSettings` carries a section and nothing finer, so the group anchor
+  // travels the way a settings SEARCH RESULT's does: armed in the reveal store
+  // first, then consumed by the watcher mounted beside the panel outlet once
+  // the Layout panel is on screen. Arming before navigating costs nothing (the
+  // watcher polls until its deadline) and removes any question of ordering.
+  const openStatusBarSettings = (): void => {
     onClose();
-    carryViewedHostIntoSettingsScope(displayedHostId);
-    openSettings({ section: "providers", resetToGeneral: false });
+    useSettingsSearchStore
+      .getState()
+      .requestReveal("layout", LAYOUT.definitions.statusBar.anchor);
+    openSettings({ section: "layout", resetToGeneral: false });
   };
   return (
     <div className="flex min-h-0 flex-col items-center border-r bg-foreground/3 p-1.5">
@@ -1129,15 +1186,15 @@ function RateLimitRail({
         traycerRefreshTarget={traycerRefreshTarget}
       />
       <TooltipWrapper
-        label="Provider settings"
+        label="Status bar settings"
         side="top"
         sideOffset={undefined}
         align={undefined}
       >
         <button
           type="button"
-          aria-label="Provider settings"
-          onClick={openProviderSettings}
+          aria-label="Status bar settings"
+          onClick={openStatusBarSettings}
           className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <Settings className="size-4" />
@@ -1203,12 +1260,16 @@ function RateLimitOverview({
   railTabs,
   providers,
   profileSelection,
+  displayedHostId,
   openOpenCodeModelProviders,
+  manageProvider,
 }: {
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly displayedHostId: string | null;
   readonly openOpenCodeModelProviders: () => void;
+  readonly manageProvider: (providerId: RateLimitProviderId) => void;
 }): ReactNode {
   const [readyKeys, setReadyKeys] = useState<ReadonlySet<string>>(new Set());
   const markReady = useCallback((key: string) => {
@@ -1257,7 +1318,9 @@ function RateLimitOverview({
                 variant="popover-overview"
                 onReady={onReady}
                 profileSelection={profileSelection}
+                displayedHostId={displayedHostId}
                 openOpenCodeModelProviders={openOpenCodeModelProviders}
+                manageProvider={manageProvider}
               />
             )}
           </div>
@@ -1513,7 +1576,9 @@ function RateLimitProviderBlock({
   variant,
   onReady,
   profileSelection,
+  displayedHostId,
   openOpenCodeModelProviders,
+  manageProvider,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
@@ -1521,7 +1586,9 @@ function RateLimitProviderBlock({
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly displayedHostId: string | null;
   readonly openOpenCodeModelProviders: () => void;
+  readonly manageProvider: (providerId: RateLimitProviderId) => void;
 }): ReactNode {
   if (profiles.length > 0) {
     return (
@@ -1532,7 +1599,9 @@ function RateLimitProviderBlock({
         variant={variant}
         onReady={onReady}
         profileSelection={profileSelection}
+        displayedHostId={displayedHostId}
         openOpenCodeModelProviders={openOpenCodeModelProviders}
+        manageProvider={manageProvider}
       />
     );
   }
@@ -1544,6 +1613,7 @@ function RateLimitProviderBlock({
       variant={variant}
       onReady={onReady}
       openOpenCodeModelProviders={openOpenCodeModelProviders}
+      manageProvider={manageProvider}
     />
   );
 }
@@ -1554,14 +1624,17 @@ function SingleProfileRateLimitProviderBlock({
   variant,
   onReady,
   openOpenCodeModelProviders,
+  manageProvider,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly fetchEligible: boolean;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly openOpenCodeModelProviders: () => void;
+  readonly manageProvider: (providerId: RateLimitProviderId) => void;
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
+  const cardRef = useRevealedProfileCard(providerId, null);
   const targetPhase = useRateLimitQueueTargetPhase(providerId, null);
   // Only this lane's reads are owned by the serial queue, so only they have a
   // follow-up standing behind a read we stopped waiting for.
@@ -1631,7 +1704,10 @@ function SingleProfileRateLimitProviderBlock({
     // popover tabs (the header+body flat block otherwise floated loose against
     // the sibling cards - the design-language gap the user flagged). Overview
     // keeps its between-provider dividers; this cards each block's own content.
-    <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2">
+    <div
+      ref={cardRef}
+      className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2"
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           {/* Overview stacks every provider's block in one scrollable list with
@@ -1649,6 +1725,10 @@ function SingleProfileRateLimitProviderBlock({
               {planLabel}
             </Badge>
           ) : null}
+          <ManageProviderLink
+            providerId={providerId}
+            onManage={manageProvider}
+          />
         </div>
         <div className="flex items-center gap-1.5">
           <UsageLimitUpdatedLabel
@@ -1698,7 +1778,9 @@ function ProfileRateLimitProviderBlock({
   variant,
   onReady,
   profileSelection,
+  displayedHostId,
   openOpenCodeModelProviders,
+  manageProvider,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
@@ -1706,7 +1788,10 @@ function ProfileRateLimitProviderBlock({
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
+  /** The host whose `Show in status bar` entries the cards read and write. */
+  readonly displayedHostId: string | null;
   readonly openOpenCodeModelProviders: () => void;
+  readonly manageProvider: (providerId: RateLimitProviderId) => void;
 }): ReactNode {
   const queryClient = useQueryClient();
   // Same reason as `RateLimitRefreshAllButton`'s: this provider's own refresh
@@ -1725,10 +1810,24 @@ function ProfileRateLimitProviderBlock({
   const profileEnablementAvailable = profiles.some(
     (profile) => profile.kind === "managed",
   );
-  const activeProfileId = resolveRateLimitProfileId(
+  // The accounts the strip is drawing for this provider right now - what was
+  // checked, or the one account it falls back to - and the checks themselves.
+  // The two differ exactly when nothing is checked: the fallback card is
+  // highlighted as "on the strip" while its switch stays off, since nothing
+  // was asked for and flipping the switch is how to ask.
+  const shownProfileIds = resolveStatusBarProfileIds(
     profileSelection,
     providerId,
     profiles,
+  );
+  const checkedProfileIds = profileSelection.shownProfiles[providerId] ?? [];
+  // A provider hidden from the strip has no segment for a switch to govern;
+  // the switch goes with it rather than toggling a preference nothing shows.
+  const providerHiddenFromStrip = useLayoutStore((state) =>
+    state.statusBar.rateLimits.hiddenProviders.includes(providerId),
+  );
+  const setProfileShown = useLayoutStore(
+    (state) => state.setStatusBarProfileShown,
   );
   const targets = profiles.map((profile) => ({
     profile,
@@ -1840,6 +1939,7 @@ function ProfileRateLimitProviderBlock({
         refresh={refresh}
         isRefreshing={isRefreshing}
         refreshEligible={refreshEligibleTargets.length > 0}
+        manageProvider={manageProvider}
       />
       <div className="flex flex-col gap-2">
         {targets.map((target, index) => {
@@ -1850,7 +1950,24 @@ function ProfileRateLimitProviderBlock({
               profile={target.profile}
               profileId={target.profileId}
               fetchEligible={target.fetchEligible}
-              active={activeProfileId === target.profileId}
+              shownOnStrip={shownProfileIds.includes(target.profileId)}
+              checkedForStrip={checkedProfileIds.includes(target.profileId)}
+              onSetShownOnStrip={
+                providerHiddenFromStrip || displayedHostId === null
+                  ? null
+                  : (shown) => {
+                      trackSettingChanged(
+                        "layout",
+                        "layout.statusBar.shownProfiles",
+                      );
+                      setProfileShown(
+                        displayedHostId,
+                        providerId,
+                        target.profileId,
+                        shown,
+                      );
+                    }
+              }
               variant={variant}
               query={queries[index]}
               openOpenCodeModelProviders={openOpenCodeModelProviders}
@@ -1884,12 +2001,14 @@ function ProviderGroupHeader({
   refresh,
   isRefreshing,
   refreshEligible,
+  manageProvider,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly variant: PopoverBlockVariant;
   readonly refresh: () => Promise<void>;
   readonly isRefreshing: boolean;
   readonly refreshEligible: boolean;
+  readonly manageProvider: (providerId: RateLimitProviderId) => void;
 }): ReactNode {
   return (
     <div className="flex min-w-0 items-center justify-between gap-2">
@@ -1900,6 +2019,7 @@ function ProviderGroupHeader({
         <span className="text-ui-sm font-medium text-foreground">
           {providerDisplayName(providerId)}
         </span>
+        <ManageProviderLink providerId={providerId} onManage={manageProvider} />
       </div>
       {variant === "popover-detail" && refreshEligible ? (
         <RefreshIconButton
@@ -1909,6 +2029,43 @@ function ProviderGroupHeader({
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * "Manage provider", beside a provider's name in both popover variants.
+ *
+ * The rail gear used to be the only way out of this popover, and it went to
+ * Providers as a whole - so reaching the provider whose numbers you were
+ * reading meant finding it again in a rail of a dozen. This link carries that
+ * provider with it, which is what frees the gear to go where the popover's OWN
+ * display controls live (`RateLimitRail`, above).
+ *
+ * Its accessible name names the provider - "Manage provider: Claude Code" -
+ * because the visible words repeat once per block in Overview, and a screen
+ * reader reading eight identical "Manage provider" buttons has been told
+ * nothing. The visible string leads it rather than being replaced by it: an
+ * accessible name that does not CONTAIN the visible label is what breaks voice
+ * control, where "click Manage provider" has to match something (WCAG 2.5.3).
+ * A quiet text link rather than an icon, so it cannot be mistaken for a second
+ * copy of the gear a few pixels away on the rail.
+ */
+function ManageProviderLink({
+  providerId,
+  onManage,
+}: {
+  readonly providerId: RateLimitProviderId;
+  readonly onManage: (providerId: RateLimitProviderId) => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      aria-label={`Manage provider: ${providerDisplayName(providerId)}`}
+      onClick={() => onManage(providerId)}
+      className="shrink-0 rounded-sm text-ui-xs text-muted-foreground underline-offset-2 outline-none transition-colors hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
+    >
+      Manage provider
+    </button>
   );
 }
 
@@ -1945,6 +2102,23 @@ function RateLimitProviderProfileUsageMessage({
   );
 }
 
+/**
+ * The words on the strip switch's tooltip. Three states, because the switch
+ * being off does not always mean the account is off the strip: with nothing
+ * checked for the provider, the strip draws one account anyway, and the card
+ * for that one has to say so or the switch reads as broken.
+ */
+function showInStatusBarTooltip(
+  checked: boolean,
+  shownOnStrip: boolean,
+): string {
+  if (checked) return "Shown in the status bar. Switch off to remove it.";
+  if (shownOnStrip) {
+    return "Shown in the status bar by default until an account is checked. Switch on to keep it there.";
+  }
+  return "Show in the status bar. Every checked account gets its own segment.";
+}
+
 function RateLimitProviderProfileActions({
   profile,
   refresh,
@@ -1953,6 +2127,9 @@ function RateLimitProviderProfileActions({
   profileEnablementPending,
   profileEnablementDisabledReason,
   onSetProfileEnabled,
+  shownOnStrip,
+  checkedForStrip,
+  onSetShownOnStrip,
 }: {
   readonly profile: ProviderProfile;
   readonly refresh: () => Promise<void>;
@@ -1961,6 +2138,10 @@ function RateLimitProviderProfileActions({
   readonly profileEnablementPending: boolean;
   readonly profileEnablementDisabledReason: string | null;
   readonly onSetProfileEnabled: (enabled: boolean) => void;
+  readonly shownOnStrip: boolean;
+  readonly checkedForStrip: boolean;
+  /** `null` hides the switch: the provider itself is off the strip. */
+  readonly onSetShownOnStrip: ((shown: boolean) => void) | null;
 }): ReactNode {
   return (
     <div className="flex shrink-0 items-center gap-1">
@@ -1999,6 +2180,30 @@ function RateLimitProviderProfileActions({
           </span>
         </TooltipWrapper>
       ) : null}
+      {onSetShownOnStrip === null ? null : (
+        <TooltipWrapper
+          label={showInStatusBarTooltip(checkedForStrip, shownOnStrip)}
+          side="left"
+          sideOffset={6}
+          align={undefined}
+        >
+          {/* A labelled control rather than a second bare switch beside the
+              enable one: two identical toggles on a card say nothing about
+              which is which, and the word is short enough to keep. The word
+              is decoration for the eye; the switch's `aria-label` is the
+              name a reader hears. */}
+          <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 text-ui-xs text-muted-foreground">
+            <span aria-hidden>Status bar</span>
+            <Switch
+              aria-label={`Show ${profileDisplayLabel(profile)} in status bar`}
+              data-testid="rate-limit-profile-status-bar-switch"
+              checked={checkedForStrip}
+              className="relative before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']"
+              onCheckedChange={onSetShownOnStrip}
+            />
+          </span>
+        </TooltipWrapper>
+      )}
     </div>
   );
 }
@@ -2008,7 +2213,9 @@ function RateLimitProviderProfileRow({
   profile,
   profileId,
   fetchEligible,
-  active,
+  shownOnStrip,
+  checkedForStrip,
+  onSetShownOnStrip,
   variant,
   query,
   openOpenCodeModelProviders,
@@ -2021,7 +2228,10 @@ function RateLimitProviderProfileRow({
   readonly profile: ProviderProfile;
   readonly profileId: string | null;
   readonly fetchEligible: boolean;
-  readonly active: boolean;
+  /** Whether the strip is drawing this account - checked, or the fallback. */
+  readonly shownOnStrip: boolean;
+  readonly checkedForStrip: boolean;
+  readonly onSetShownOnStrip: ((shown: boolean) => void) | null;
   readonly variant: PopoverBlockVariant;
   readonly openOpenCodeModelProviders: () => void;
   readonly profileEnablementAvailable: boolean;
@@ -2041,6 +2251,7 @@ function RateLimitProviderProfileRow({
   const client = useHostClient();
   const refreshProfileStatus =
     useProvidersRefreshProfileStatusForClient(client);
+  const cardRef = useRevealedProfileCard(providerId, profileId);
   const targetPhase = useRateLimitQueueTargetPhase(providerId, profileId);
   const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
     providerId,
@@ -2076,19 +2287,23 @@ function RateLimitProviderProfileRow({
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         "flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2 transition-opacity duration-150",
-        active && "border-primary/60 bg-primary/5",
+        // The accent marks the cards the strip is DRAWING, which is what a
+        // reader coming from the strip is looking for; the switch beside it
+        // says whether that is by choice or by default.
+        shownOnStrip && "border-primary/60 bg-primary/5",
         !profile.enabled && "opacity-60",
       )}
-      aria-current={active ? "true" : undefined}
+      data-testid={`rate-limit-profile-card-${providerId}-${profileId ?? ""}`}
+      aria-current={shownOnStrip ? "true" : undefined}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <RateLimitProviderProfileStatusBadges
             profile={profile}
             planLabel={planLabel}
-            active={active}
           />
           <ProfileUsageUpdatedLabel
             updatedAt={profile.usageUpdatedAt}
@@ -2115,6 +2330,9 @@ function RateLimitProviderProfileRow({
           profileEnablementPending={profileEnablementPending}
           profileEnablementDisabledReason={profileEnablementDisabledReason}
           onSetProfileEnabled={onSetProfileEnabled}
+          shownOnStrip={shownOnStrip}
+          checkedForStrip={checkedForStrip}
+          onSetShownOnStrip={onSetShownOnStrip}
         />
       </div>
       <RateLimitProviderProfileUsageMessage
@@ -2129,14 +2347,62 @@ function RateLimitProviderProfileRow({
   );
 }
 
+/**
+ * The strip's deep link, answered by the card it names: a segment click armed
+ * a reveal for `(providerId, profileId)`, and the card scrolls itself into
+ * view once it is on screen, then consumes the request so the next open of
+ * the panel is not still answering it. Both card shapes mount this - the
+ * per-profile row and the profile-less provider block, whose one segment
+ * names it with `profileId: null`.
+ */
+function useRevealedProfileCard(
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): RefObject<HTMLDivElement | null> {
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const revealProfile = useRateLimitPopoverStore(
+    (state) => state.revealProfile,
+  );
+  const clearRevealProfile = useRateLimitPopoverStore(
+    (state) => state.clearRevealProfile,
+  );
+  useEffect(() => {
+    if (
+      !isRevealTargetFor(revealProfile, providerId, profileId) ||
+      cardRef.current === null
+    ) {
+      return;
+    }
+    // Guarded because an environment without the method (jsdom) would
+    // otherwise throw here BEFORE the request is consumed, leaving a reveal
+    // armed forever. The consumption is the contract; the scroll is the
+    // courtesy.
+    if (typeof cardRef.current.scrollIntoView === "function") {
+      cardRef.current.scrollIntoView({ block: "nearest" });
+    }
+    clearRevealProfile();
+  }, [clearRevealProfile, profileId, providerId, revealProfile]);
+  return cardRef;
+}
+
+function isRevealTargetFor(
+  target: RateLimitPopoverRevealTarget | null,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): boolean {
+  return (
+    target !== null &&
+    target.providerId === providerId &&
+    target.profileId === profileId
+  );
+}
+
 function RateLimitProviderProfileStatusBadges({
   profile,
   planLabel,
-  active,
 }: {
   readonly profile: ProviderProfile;
   readonly planLabel: string | null;
-  readonly active: boolean;
 }): ReactNode {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -2154,11 +2420,6 @@ function RateLimitProviderProfileStatusBadges({
       {planLabel !== null ? (
         <Badge variant="secondary" className="font-normal">
           {planLabel}
-        </Badge>
-      ) : null}
-      {active ? (
-        <Badge variant="outline" className="font-normal">
-          Active
         </Badge>
       ) : null}
       {!profile.enabled ? (
