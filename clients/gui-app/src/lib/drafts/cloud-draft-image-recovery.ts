@@ -244,12 +244,6 @@ function cloudDraftImageSourcesFor(
   return sourcesByHash.get(hash) ?? [];
 }
 
-/** Stable identity for one address, for "have I already tried this?". */
-function cloudSourceKey(source: CloudDraftImageSource): string {
-  const { taskId, chatId, ownerUserId } = source.identity;
-  return [source.hostId, taskId, chatId, ownerUserId].join("\u0000");
-}
-
 function sameCloudDraftImageSource(
   left: CloudDraftImageSource,
   right: CloudDraftImageSource,
@@ -472,13 +466,21 @@ const MAX_CLOUD_SOURCE_ATTEMPTS = CLOUD_DRAFT_IMAGE_SOURCES_PER_HASH * 2;
 async function readAndStoreFromAnyCloudSource(
   hash: string,
 ): Promise<ImageBytes | null> {
-  const tried = new Set<string>();
+  // Tried by OBJECT identity, not by address. `recordCloudDraftImageSources`
+  // mints a fresh record every time and `sameCloudDraftImageSource` - which
+  // deliberately ignores `client` - has the new one REPLACE the old for the
+  // same draft. So a re-ingest that installs a fresh requester for an address
+  // already tried produces a different object, and this loop dispatches it; an
+  // address key would have skipped it as "already tried" while the requester
+  // that failed was the only one ever asked. The replacement is usually the
+  // point: the old requester's host connection is what went away.
+  const tried = new Set<CloudDraftImageSource>();
   while (tried.size < MAX_CLOUD_SOURCE_ATTEMPTS) {
     const next = cloudDraftImageSourcesFor(hash).find(
-      (source) => !tried.has(cloudSourceKey(source)),
+      (source) => !tried.has(source),
     );
     if (next === undefined) return null;
-    tried.add(cloudSourceKey(next));
+    tried.add(next);
     const bytes = await readAndStoreCloudDraftImage(hash, next);
     if (bytes !== null) return bytes;
   }

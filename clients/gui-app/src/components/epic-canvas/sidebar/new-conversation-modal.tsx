@@ -1219,13 +1219,22 @@ export function NewConversationModalBody(props: {
       // The third call site of this helper, and the same rule as the other
       // two: it propagates deliberately rather than swallowing, so `void`
       // alone left a rejection unhandled. The flight flag is cleared by the
-      // helper's `finally` either way; this only records that the create was
-      // abandoned. The draft is untouched, so nothing is lost.
+      // helper's `finally` either way, and the draft is untouched.
+      //
+      // But untouched is not the same as EXPLAINED. This modal has a visible
+      // notice channel and the two refusals beside it already use it, so a
+      // failure that only reached the log left the user pressing Send and
+      // watching nothing happen.
       appLogger.error(
         "[new-conversation] submit image preparation failed",
         { epicId },
         error,
       );
+      raiseHostNotice({
+        kind: "refused",
+        message:
+          "The images in this prompt could not be prepared. The draft has been kept - try again.",
+      });
     });
   }, [canSubmit, epicId, raiseHostNotice, resolvedHostId, submitPreparedDraft]);
   const handleStartTerminal = useCallback(

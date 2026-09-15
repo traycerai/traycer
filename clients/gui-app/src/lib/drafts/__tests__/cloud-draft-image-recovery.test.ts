@@ -636,4 +636,51 @@ describe("cloud-draft-image-recovery", () => {
     expect(await reading).toEqual(bytes);
     expect(good.calls).toHaveLength(1);
   });
+  it("retries a source whose REQUESTER was replaced, same identity (DRIVE RED)", async () => {
+    // `sameCloudDraftImageSource` deliberately ignores `client`, so a re-ingest
+    // of the same draft REPLACES its record with one carrying a fresh
+    // requester - and the replacement is usually the point, because the old
+    // requester's host connection is what went away. Keying the tried-set by
+    // ADDRESS skipped it as already-attempted while the requester that failed
+    // was the only one ever asked; keying by the record object dispatches it.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseStale: () => void = () => undefined;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const stale = recordingClient(async (_method, _params) => {
+      await staleGate;
+      return { outcome: { status: "unavailable" as const } };
+    });
+    const fresh = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: stale.client,
+      hashes: [hash],
+    });
+    const reading = readCloudDraftImageBytes(hash);
+
+    // The SAME draft is re-ingested on a remounted mirror: identical
+    // `CloudChatIdentity`, brand new requester.
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: fresh.client,
+      hashes: [hash],
+    });
+    releaseStale();
+
+    expect(await reading).toEqual(bytes);
+    expect(fresh.calls).toHaveLength(1);
+  });
 });

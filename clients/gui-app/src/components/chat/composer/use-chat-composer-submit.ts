@@ -471,12 +471,33 @@ export function useChatComposerSubmit(
             //    for a non-side-chat, so these bytes were never asked for and
             //    the next Enter will pre-flight correctly. Abandon, keeping
             //    the draft.
-            //  - The pre-flight DID ask and every leg missed. Another Enter
-            //    changes nothing. Send it: the accepted policy for an
-            //    unresolved hash is that the host's guard is the authority,
-            //    which is exactly what an ordinary send does with one.
+            //  - The pre-flight DID ask and every leg missed. This used to
+            //    send anyway, on the policy that an unresolved hash is the
+            //    HOST's guard to rule on - which is true of an ordinary send
+            //    and false here. `startSideChat` is a unary `epic.createChat`
+            //    with no `chat.subscribe` session behind it, so there is no
+            //    negotiated bridge to resolve the hash, no
+            //    `MISSING_ATTACHMENT_BYTES` acknowledgement to retry from, and
+            //    `markFailedByAction` makes the handoff terminal with nothing
+            //    restoring the content to this composer. Same asymmetry the
+            //    new-conversation create path answers the same way: keep the
+            //    draft.
+            //
+            // So an unresolved hash abandons either way, and only the WORDING
+            // differs - a command that appeared mid-read is worth retrying
+            // immediately, a genuine miss is not.
             if (hashOnlyImageHashes(sideChat.rest).length > 0) {
-              if (!sideChatPreflight) return;
+              toast.info(
+                sideChatPreflight
+                  ? "An image in this side question could not be loaded."
+                  : "Send again to ask this as a side question.",
+                {
+                  description: sideChatPreflight
+                    ? "The draft has been kept - try removing and re-attaching it."
+                    : "The side question was typed while its images were being prepared.",
+                },
+              );
+              return;
             }
             if (onSideChat({ content: sideChat.rest, settings })) {
               clearAcceptedDraft();
