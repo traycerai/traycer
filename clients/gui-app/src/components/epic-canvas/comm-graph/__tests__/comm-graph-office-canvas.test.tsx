@@ -1100,6 +1100,48 @@ describe("CommGraphOfficeCanvas", () => {
     }
   });
 
+  it("does not spin the frame loop while eligible but not ready, and starts once a scene exists (rAF-spin gate)", () => {
+    // `ready` withholds the SCENE (built by a separate effect), while
+    // `intersecting` alone decides ELIGIBILITY - a tile can be visible on
+    // screen with its history still catching up. The loop used to start on
+    // eligibility regardless, scheduling an empty `requestAnimationFrame`
+    // every display frame while there was nothing to draw.
+    const { step } = installCanvas();
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame");
+    const sync = vi.spyOn(OfficeScene.prototype, "sync");
+    const frames = vi.spyOn(OfficeScene.prototype, "frame");
+
+    const view = render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          ready: false,
+        }),
+      ),
+    );
+    setIntersecting(true);
+
+    // Eligible, but no scene: neither the sync effect nor the loop has
+    // anything to do.
+    expect(sync).not.toHaveBeenCalled();
+    expect(rafSpy).not.toHaveBeenCalled();
+
+    rafSpy.mockClear();
+    view.rerender(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          ready: true,
+        }),
+      ),
+    );
+
+    // The sync effect built and fed a scene, and that is what wakes the
+    // loop - not a fresh eligibility flip, since none happened here.
+    expect(sync).toHaveBeenCalled();
+    expect(rafSpy).toHaveBeenCalled();
+    step();
+    expect(frames).toHaveBeenCalled();
+  });
+
   describe("F2 - the camera-shift compensation on a world-growing replan", () => {
     /**
      * Two hand-built layouts, one agent and two, the second declaring a real
@@ -1943,6 +1985,67 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
   });
 
+  it("persists the camera once a directory-select pan reaches its destination (pan-persist)", () => {
+    const { step } = installCanvas();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const onCameraChange = vi.fn();
+    const both = new Set([ORCHESTRATOR.id, REVIEWER.id, OFFSCREEN.id]);
+    render(
+      withQueryClient(
+        officeElement(both, STATIC_OFFICE, {
+          agents: [ORCHESTRATOR, REVIEWER, OFFSCREEN],
+          onCameraChange,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+
+    fireEvent.change(screen.getByTestId("comm-graph-office-directory-search"), {
+      target: { value: "Offscreen" },
+    });
+    fireEvent.click(
+      screen.getByTestId(`comm-graph-office-directory-agent-${OFFSCREEN.id}`),
+    );
+
+    // The pan is a 400ms ease; enough real frames to let it arrive.
+    for (let index = 0; index < 6; index += 1) step();
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    // A user-driven aim survives a remount, an eviction or a reload the way
+    // a drag or zoom already does.
+    expect(onCameraChange).toHaveBeenCalled();
+  });
+
+  it("does not persist the camera when a playback auto-pan reaches its destination (pan-persist guard)", () => {
+    // The negative case: a playback auto-pan reframes itself on every cursor
+    // step and must not be written back, unlike the user-driven aim above.
+    const { step } = installCanvas();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), IN_FLIGHT, {
+          onCameraChange,
+          // Far from the pulse's focus point, so the auto-pan has somewhere
+          // real to go.
+          view: { ...OFFICE_VIEW, x: -10000, y: -10000 },
+          playing: true,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    for (let index = 0; index < 8; index += 1) step();
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).not.toHaveBeenCalled();
+  });
+
   it("filters the directory to the visible set, dropping a host section with nothing left in it", () => {
     // The partition seats every agent the epic ever had, but the floor only
     // draws the as-of-cursor set - so a host whose only VISIBLE agent has not
@@ -2250,6 +2353,51 @@ describe("CommGraphOfficeCanvas", () => {
     expect(center.y).toBeGreaterThanOrEqual(after.y);
     expect(center.y).toBeLessThanOrEqual(after.y + after.height);
     expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+  });
+
+  it("pans a Find match into view through the seat book, not the viewport-culled hit regions (Find off-screen)", async () => {
+    // Same off-screen setup as F7's directory case, driven through the Find
+    // adapter instead: `search` matches by name, off the same 309-agent
+    // fixture, with the camera pinned far from every seat so the target
+    // starts with no hit region at all.
+    const { step } = installCanvas();
+    const frames = vi.spyOn(OfficeScene.prototype, "frame");
+    const fixture = makeTestEpic("triage", 309, 1);
+    const agents = fixture.agents.map(canvasAgent);
+    const target = agents.at(-1);
+    if (target === undefined) throw new Error("fixture empty");
+    render(
+      withQueryClient(
+        officeElement(new Set(agents.map((a) => a.id)), STATIC_OFFICE, {
+          agents,
+          view: { ...OFFICE_VIEW, x: -10000, y: -10000 },
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+
+    // Off screen before the search: absent from the real drawn frame's hit
+    // regions, the same box the OLD `frameMatches` read its bounds from.
+    expect(
+      lastHitRegions(frames).some((region) => region.agentId === target.id),
+    ).toBe(false);
+
+    await act(async () => {
+      await latestFindAdapter().search({
+        requestId: 1,
+        query: target.name,
+        matchCase: false,
+      });
+    });
+    for (let index = 0; index < 6; index += 1) step();
+
+    // On screen after: the real animation loop actually carried the camera
+    // to the seat book's location for an agent that never had a hit region
+    // to read a bound from.
+    expect(
+      lastHitRegions(frames).some((region) => region.agentId === target.id),
+    ).toBe(true);
   });
 });
 

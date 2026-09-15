@@ -12,7 +12,7 @@ import {
   DEFAULT_CODE_FONT_SIZE,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
-import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
+import { OFFICE_VIEW_LABELS } from "@/lib/comm-graph/office/office-view-vocabulary";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 
 vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
@@ -193,7 +193,11 @@ describe("<AppearanceSettingsPanel /> groups", () => {
 
     fireEvent.click(select);
     fireEvent.click(
-      screen.getByRole("option", { name: OFFICE_VIEWS.floor.label }),
+      // Sourced from the leaf vocabulary module, not the registry: the panel
+      // itself now reads `OFFICE_VIEW_LABELS`, so this proves the option text
+      // it actually renders, without importing every planner, measurer and
+      // painter the registry pulls in.
+      screen.getByRole("option", { name: OFFICE_VIEW_LABELS.floor }),
     );
 
     expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("floor");

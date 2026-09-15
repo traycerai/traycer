@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import {
   OFFICE_VIEW_CHOICES,
   OFFICE_VIEW_IDS,
+  OFFICE_VIEW_LABELS,
 } from "@/lib/comm-graph/office/office-view-vocabulary";
 import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 
@@ -31,5 +32,22 @@ describe("OFFICE_VIEW_IDS vs the registry", () => {
 
   it("lists Auto first, then every view in that same order", () => {
     expect(OFFICE_VIEW_CHOICES).toEqual(["auto", ...OFFICE_VIEW_IDS]);
+  });
+});
+
+/**
+ * `OFFICE_VIEW_LABELS` is a second copy of each view's display name, kept in
+ * the leaf vocabulary module so Appearance Settings can read the words
+ * without evaluating the registry and every planner, measurer and painter it
+ * pulls in. A second copy is a drift risk on its own - this is the case that
+ * removes it: a label edited on one side and not the other fails here rather
+ * than only showing up as Settings and the office disagreeing on what to call
+ * a view.
+ */
+describe("OFFICE_VIEW_LABELS vs the registry", () => {
+  it("matches the registry's own label for every view", () => {
+    for (const id of OFFICE_VIEW_IDS) {
+      expect(OFFICE_VIEW_LABELS[id]).toBe(OFFICE_VIEWS[id].label);
+    }
   });
 });

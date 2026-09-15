@@ -1,8 +1,8 @@
 /**
  * Auto's decision arithmetic, in isolation from the tile that calls it and the
- * canvas that feeds it. `decideOfficeView` takes exactly two inputs - the plan
- * input and a canvas box - and this suite pins the answer over that surface
- * only.
+ * canvas that feeds it. `decideOfficeView` takes exactly three inputs - the
+ * plan input, a canvas box, and the camera's fit margin - and this suite pins
+ * the answer over that surface only.
  */
 import { describe, expect, it } from "vitest";
 import { decideOfficeView } from "@/lib/comm-graph/office/office-auto";
@@ -79,7 +79,11 @@ describe("decideOfficeView", () => {
 
   it("falls back to Building when neither candidate reaches office detail, without measuring Building", () => {
     // The recording's own shape: 309 agents at 1040x700 reaches office detail
-    // on neither Floor nor Towers (Towers lands around 0.68x).
+    // on neither Floor nor Towers. Towers' PADDED zoom (the one that decides
+    // here) lands around 0.64x; its unpadded fit is the higher ~0.68x, close
+    // enough to the 0.7x office-detail boundary that measuring unpadded is
+    // exactly the bug this fixup corrects - see the padded-vs-unpadded gap
+    // case below.
     const decision = decideOfficeView(
       triageInput(309, 1),
       FULL_CANVAS,
@@ -95,6 +99,30 @@ describe("decideOfficeView", () => {
     // and pinning it to the float would flake on the next geometry change.
     expect(towersFit?.zoom).toBeGreaterThan(0.68 * 0.9);
     expect(towersFit?.zoom).toBeLessThan(0.68 * 1.1);
+  });
+
+  it("does not select Towers on its UNPADDED fit when the padded fit misses office detail", () => {
+    // 280 agents sits exactly in the gap the fix closes: Towers' unpadded
+    // zoom (0.729...) clears `OFFICE_LOD_OFFICE_ZOOM` (0.7) - the old,
+    // unpadded question Auto used to ask - but the PADDED zoom (0.679...),
+    // the one the camera actually opens the view at, does not. Measuring
+    // unpadded would pick Towers and then open it below the office-detail
+    // threshold, rendering the overview block map Auto exists to avoid.
+    const gap = triageInput(280, 1);
+
+    const unpadded = decideOfficeView(gap, FULL_CANVAS, 0);
+    expect(unpadded.view).toBe("towers");
+    const unpaddedTowersFit = unpadded.fits.find(
+      (fit) => fit.view === "towers",
+    );
+    expect(unpaddedTowersFit?.zoom).toBeGreaterThanOrEqual(
+      OFFICE_LOD_OFFICE_ZOOM,
+    );
+
+    const padded = decideOfficeView(gap, FULL_CANVAS, FIT_PADDING);
+    expect(padded.view).toBe("building");
+    const paddedTowersFit = padded.fits.find((fit) => fit.view === "towers");
+    expect(paddedTowersFit?.zoom).toBeLessThan(OFFICE_LOD_OFFICE_ZOOM);
   });
 
   it("carries both measured zooms and the agent count on the decision", () => {
