@@ -49,7 +49,6 @@ describe("listHistoryLandingDrafts", () => {
         }),
       ],
       query: "",
-      currentHostId: "host-a",
       excludeDraftId: null,
     });
 
@@ -59,7 +58,7 @@ describe("listHistoryLandingDrafts", () => {
     expect(listed[0]?.title).toBe("newer line");
   });
 
-  it("excludes replica and foreign-owned drafts (T8's surface)", () => {
+  it("lists every non-empty draft regardless of ownership - replica, foreign-owned, local and unadopted alike - and excludes only empty content", () => {
     const replica = draft({
       id: "replica",
       origin: "replica",
@@ -80,45 +79,35 @@ describe("listHistoryLandingDrafts", () => {
       origin: null,
       ownerHostId: null,
     });
-
-    expect(isHistoryListedLandingDraft(replica, "host-a")).toBe(false);
-    expect(isHistoryListedLandingDraft(foreign, "host-a")).toBe(false);
-    expect(isHistoryListedLandingDraft(local, "host-a")).toBe(true);
-    expect(isHistoryListedLandingDraft(unadopted, "host-a")).toBe(true);
-
-    expect(
-      listHistoryLandingDrafts({
-        drafts: [replica, foreign, local, unadopted],
-        query: "",
-        currentHostId: "host-a",
-        excludeDraftId: null,
-      }).map((row) => row.id),
-    ).toEqual(["local", "unadopted"]);
-  });
-
-  it("excludes a foreign-owned draft while this host is unresolved", () => {
-    const foreign = draft({
-      id: "foreign",
+    const empty = draft({
+      id: "empty",
       origin: "own",
-      ownerHostId: "host-b",
-    });
-    const unadopted = draft({
-      id: "unadopted",
-      origin: null,
-      ownerHostId: null,
+      ownerHostId: "host-a",
+      content: { type: "doc", content: [] },
     });
 
-    expect(isHistoryListedLandingDraft(foreign, null)).toBe(false);
-    expect(isHistoryListedLandingDraft(unadopted, null)).toBe(true);
+    expect(isHistoryListedLandingDraft(replica)).toBe(true);
+    expect(isHistoryListedLandingDraft(foreign)).toBe(true);
+    expect(isHistoryListedLandingDraft(local)).toBe(true);
+    expect(isHistoryListedLandingDraft(unadopted)).toBe(true);
+    expect(isHistoryListedLandingDraft(empty)).toBe(false);
 
     expect(
       listHistoryLandingDrafts({
-        drafts: [foreign, unadopted],
+        drafts: [replica, foreign, local, unadopted, empty],
         query: "",
-        currentHostId: null,
         excludeDraftId: null,
       }).map((row) => row.id),
-    ).toEqual(["unadopted"]);
+    ).toEqual(
+      expect.arrayContaining(["replica", "foreign", "local", "unadopted"]),
+    );
+    expect(
+      listHistoryLandingDrafts({
+        drafts: [replica, foreign, local, unadopted, empty],
+        query: "",
+        excludeDraftId: null,
+      }),
+    ).toHaveLength(4);
   });
 
   it("leaves out the draft the composer above it is editing", () => {
@@ -133,7 +122,6 @@ describe("listHistoryLandingDrafts", () => {
       listHistoryLandingDrafts({
         drafts: [typing, retained],
         query: "",
-        currentHostId: "host-a",
         excludeDraftId: "typing",
       }).map((row) => row.id),
     ).toEqual(["retained"]);
@@ -160,7 +148,6 @@ describe("listHistoryLandingDrafts", () => {
       listHistoryLandingDrafts({
         drafts: [withWorkspace, other],
         query: "drafts facet",
-        currentHostId: null,
         excludeDraftId: null,
       }),
     ).toEqual([

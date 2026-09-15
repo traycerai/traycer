@@ -32,6 +32,9 @@ export function draftDocumentFromCloudHead(
     ownerHostId: summary.ownerHostId,
     origin: "replica" as const,
     adoption: { state: "adopted" as const, hostId: summary.ownerHostId },
+    // The `draft/v1` head never carries a supersession pointer: a re-mint
+    // reaches a window only through the owner host's subscribe stream.
+    supersedes: null,
     publication,
   };
   if (record.kind === "stash-entry") {

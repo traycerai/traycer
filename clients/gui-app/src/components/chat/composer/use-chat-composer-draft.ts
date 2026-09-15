@@ -69,9 +69,9 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
 
   const handleSelectionChange = useCallback(
     (selection: { from: number; to: number }) => {
-      setSelectionInStore(args.chatId, selection);
+      setSelectionInStore(args.chatId, selection, args.hostId);
     },
-    [args.chatId, setSelectionInStore],
+    [args.chatId, args.hostId, setSelectionInStore],
   );
 
   // `resetEpoch` bumps (queue-edit restore, failed-send restore, a quote
