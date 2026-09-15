@@ -38,10 +38,11 @@ export function DeleteAccountSettingsPanel(): ReactNode {
   const openLink = useOpenLink();
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Blank is "not resolved", not an address: `User.email` is nullable on the
-  // wire, and an empty string would pre-fill the form with nothing while the
-  // line below claimed an account was named.
-  const rawEmail = query.data?.user.email ?? null;
-  const email = rawEmail !== null && rawEmail.length > 0 ? rawEmail : null;
+  // wire and arrives un-normalized, so a whitespace-only value would pre-fill
+  // the form with nothing while the line below claimed an account was named.
+  // Trimmed once here so the display and the form URL agree on what resolved.
+  const trimmedEmail = query.data?.user.email?.trim() ?? "";
+  const email = trimmedEmail.length > 0 ? trimmedEmail : null;
 
   return (
     <SettingsPanelShell
