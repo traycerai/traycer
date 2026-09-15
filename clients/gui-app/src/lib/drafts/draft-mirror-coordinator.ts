@@ -49,8 +49,9 @@ import {
   composerSubmittedDraftDeleteIsPending,
   dropComposerAbsentFromList,
   findComposerChatIdByDraftId,
+  pendingSubmittedDraftDelete,
   pendingSubmittedDraftDeleteHostId,
-  pendingSubmittedDraftDeleteIdsForHost,
+  pendingSubmittedDraftDeletesForHost,
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
@@ -104,8 +105,9 @@ import {
   completeLandingDraftDelete,
   landingDraftIsRetired,
   pendingLandingDraftDeleteHostId,
-  pendingLandingDraftDeleteIdsForHost,
+  pendingLandingDraftDeletesForHost,
   retireLandingDraft,
+  retireLandingDraftForRetract,
   resolveLandingDraftRetirementOwner,
 } from "./landing-draft-retirement";
 
@@ -385,10 +387,10 @@ const sink: DraftMirrorSink = {
       composerSubmittedDraftDeleteIsPending(draftId)
     );
   },
-  pendingDeleteIdsForHost(hostId) {
+  pendingDeletesForHost(hostId) {
     return [
-      ...pendingLandingDraftDeleteIdsForHost(hostId),
-      ...pendingSubmittedDraftDeleteIdsForHost(hostId),
+      ...pendingLandingDraftDeletesForHost(hostId),
+      ...pendingSubmittedDraftDeletesForHost(hostId),
     ];
   },
   settleDelete(hostId, draftId, outcome) {
@@ -574,6 +576,11 @@ async function applyHostDocument(document: DraftDocument): Promise<void> {
     cloudIngestSeq += 1;
     cloudIngestSeqByDraft.set(document.draftId, cloudIngestSeq);
   }
+  // This apply's own reservation. The blob read below can outlast a newer
+  // apply of the same row (or a newer directory run's reservation before
+  // its head read), and cloud heads carry revision 0 so nothing later
+  // fences an older head by revision: whoever reserved last wins the row.
+  const applySeq = cloudIngestSeq;
   if (rejectRetiredLandingDocument(document)) return;
   if (composerSubmittedDraftDeleteIsPending(document.draftId)) {
     await retrySubmittedDraftDelete(document.draftId);
@@ -587,6 +594,12 @@ async function applyHostDocument(document: DraftDocument): Promise<void> {
       client,
       hashes,
     );
+    if (
+      document.kind === "landing" &&
+      cloudIngestSeqByDraft.get(document.draftId) !== applySeq
+    ) {
+      return;
+    }
     rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
     if (document.kind === "stash-entry") {
       await ingestStashDocument(document, images);
@@ -812,15 +825,18 @@ function routeLocalDelete(draftId: string): void {
   // A foreign row (still in the store: the notice precedes its removal) is
   // not this placement's to `drafts.delete`. Its cloud row is retracted on
   // the user's authority through the placement host instead; the owner
-  // host tombstones its own row from there. Best effort: a host without
-  // `drafts.retract` leaves the owner's row (lossy, not broken).
+  // host tombstones its own row from there. The receipt records the
+  // retract so the placement host's session retries it until the host
+  // answers; a host without `drafts.retract` leaves the owner's row
+  // (lossy, not broken).
   if (
     explicitHostId === null &&
     landing !== undefined &&
     landingRowIsForeign(landing)
   ) {
     if (landingAdoptionHostId !== null) {
-      retractDraftThroughHost(landingAdoptionHostId, draftId);
+      retireLandingDraftForRetract(draftId, landingAdoptionHostId);
+      void retractDraftThroughHost(landingAdoptionHostId, draftId);
     }
     return;
   }
@@ -834,20 +850,44 @@ function routeLocalDelete(draftId: string): void {
 }
 
 /**
- * Retract a draft's cloud row on the user's authority through `hostId`'s
- * session client, for a row that host does not own (it would answer a
- * `drafts.delete` with `absent` and the owner's cloud row would survive).
- * Best effort and silent: a host without `drafts.retract` leaves the row.
+ * Retract a draft's cloud row on the user's authority through `hostId`,
+ * for a row that host does not own (it would answer a `drafts.delete` with
+ * `absent` and the owner's cloud row would survive). The caller has
+ * recorded the pending retract on the id's receipt; the answer settles it
+ * through the sink like a delete's (`deleted` / `absent` / `unsupported`
+ * are terminal, a failure leaves it pending for the host's session to
+ * retry). A mounted session is preferred, as for a delete; otherwise the
+ * request goes out on the bare client. Resolves once the host has answered
+ * or the request has failed and been left pending.
  */
-function retractDraftThroughHost(hostId: string, draftId: string): void {
+async function retractDraftThroughHost(
+  hostId: string,
+  draftId: string,
+): Promise<void> {
+  const session = sessions.get(hostId)?.session;
+  if (session !== undefined) {
+    const outcome = await session.retractOnHostOutcome(draftId);
+    if (outcome !== "failed") sink.settleDelete(hostId, draftId, outcome);
+    return;
+  }
   const client = sessionClients.get(hostId);
   if (client === undefined) return;
-  void client.request("drafts.retract", { draftId }).catch((error: unknown) => {
-    if (isDraftsCapabilityMissing(error)) return;
+  try {
+    const response = await client.request("drafts.retract", { draftId });
+    sink.settleDelete(
+      hostId,
+      draftId,
+      response.retracted ? "deleted" : "absent",
+    );
+  } catch (error: unknown) {
+    if (isDraftsCapabilityMissing(error)) {
+      sink.settleDelete(hostId, draftId, "unsupported");
+      return;
+    }
     appLogger.warn("[draft-mirror] drafts.retract failed", {
       error: describeLogError(error),
     });
-  });
+  }
 }
 
 /**
@@ -914,6 +954,7 @@ export function acquireDraftMirrorSession(
       },
       upsert: (draft) => args.client.request("drafts.upsert", { draft }),
       delete: (draftId) => args.client.request("drafts.delete", { draftId }),
+      retract: (draftId) => args.client.request("drafts.retract", { draftId }),
     },
     streamClient: args.streamClient,
     sink,
@@ -1044,7 +1085,8 @@ export async function submitComposerDraft(chatId: string): Promise<void> {
   // row's ownership reads; a host that already retracted it (the ack raced
   // this submit) has nothing left to pay.
   if (before.supersedes !== null) {
-    retractDraftThroughHost(hostId, before.supersedes);
+    store.recordPendingSubmittedDraftRetract(before.supersedes, hostId);
+    await retractDraftThroughHost(hostId, before.supersedes);
   }
   // A row the tab host does not own (a replica, or another host's row),
   // submitted without an edit that would have forked it: `drafts.delete`
@@ -1054,7 +1096,8 @@ export async function submitComposerDraft(chatId: string): Promise<void> {
   // same rule the landing path applies to a foreign row.
   if (composerDraftRowIsForeign(before, hostId)) {
     store.fenceAndDetachSubmittedDraft(chatId, before.draftId, null);
-    retractDraftThroughHost(hostId, before.draftId);
+    store.recordPendingSubmittedDraftRetract(before.draftId, hostId);
+    await retractDraftThroughHost(hostId, before.draftId);
     return;
   }
   // Then retire the id. `clearDraft` keeps it, so an edit made during the
@@ -1066,11 +1109,13 @@ export async function submitComposerDraft(chatId: string): Promise<void> {
 }
 
 async function retrySubmittedDraftDelete(draftId: string): Promise<void> {
-  const hostId = pendingSubmittedDraftDeleteHostId(draftId);
-  if (hostId === null) return;
-  const session = sessions.get(hostId)?.session;
+  const pending = pendingSubmittedDraftDelete(draftId);
+  if (pending === null) return;
+  const session = sessions.get(pending.hostId)?.session;
   if (session === undefined) return;
-  const outcome = await session.deleteOnHostOutcome(draftId);
+  const outcome = pending.retract
+    ? await session.retractOnHostOutcome(draftId)
+    : await session.deleteOnHostOutcome(draftId);
   if (outcome !== "failed") {
     useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
   }

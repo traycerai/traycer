@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { legacyComposerDraftId } from "@/lib/drafts/draft-ids";
 
 import {
+  pendingSubmittedDraftDeletesForHost,
   readComposerDraftSnapshot,
   useComposerDraftStore,
   type DraftState,
@@ -231,7 +232,7 @@ describe("composer draft store hydration", () => {
 
     expect(
       useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
-    ).toEqual({ hostId: "host-a" });
+    ).toEqual({ hostId: "host-a", retract: false });
   });
 
   it("hydrates a persisted supersedes value, and treats an absent one as null", async () => {
@@ -262,6 +263,76 @@ describe("composer draft store hydration", () => {
     const drafts = useComposerDraftStore.getState().drafts;
     expect(drafts.forked?.supersedes).toBe("d-old");
     expect(drafts.plain?.supersedes).toBeNull();
+  });
+});
+
+describe("composer draft store: pending submitted draft retract entries", () => {
+  it("hydrates a persisted pendingSubmittedDraftDeletes entry missing retract to retract: false", async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          drafts: {},
+          pendingSubmittedDraftDeletes: {
+            "legacy-pending-delete": { hostId: "host-a" },
+          },
+        },
+      }),
+    );
+
+    await useComposerDraftStore.persist.rehydrate();
+
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[
+        "legacy-pending-delete"
+      ],
+    ).toEqual({ hostId: "host-a", retract: false });
+  });
+
+  it("recordPendingSubmittedDraftRetract leaves an existing entry as is", () => {
+    useComposerDraftStore.setState({
+      pendingSubmittedDraftDeletes: {
+        "already-pending": { hostId: "host-a", retract: false },
+      },
+    });
+
+    useComposerDraftStore
+      .getState()
+      .recordPendingSubmittedDraftRetract("already-pending", "host-b");
+
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[
+        "already-pending"
+      ],
+    ).toEqual({ hostId: "host-a", retract: false });
+  });
+
+  it("recordPendingSubmittedDraftRetract on a fresh id writes a pending retract", () => {
+    useComposerDraftStore
+      .getState()
+      .recordPendingSubmittedDraftRetract("fresh-retract", "host-a");
+
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[
+        "fresh-retract"
+      ],
+    ).toEqual({ hostId: "host-a", retract: true });
+  });
+
+  it("pendingSubmittedDraftDeletesForHost lists both a delete and a retract entry with their kinds", () => {
+    useComposerDraftStore.setState({
+      pendingSubmittedDraftDeletes: {
+        "delete-entry": { hostId: "host-a", retract: false },
+        "retract-entry": { hostId: "host-a", retract: true },
+        "other-host-entry": { hostId: "host-b", retract: true },
+      },
+    });
+
+    expect(pendingSubmittedDraftDeletesForHost("host-a")).toEqual([
+      { draftId: "delete-entry", retract: false },
+      { draftId: "retract-entry", retract: true },
+    ]);
   });
 });
 

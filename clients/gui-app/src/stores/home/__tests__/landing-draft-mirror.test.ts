@@ -19,10 +19,12 @@ import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fak
 import {
   completeLandingDraftDelete,
   landingDraftIsRetired,
-  pendingLandingDraftDeleteIdsForHost,
+  pendingLandingDraftDeleteHostId,
+  pendingLandingDraftDeletesForHost,
   resetLandingDraftRetirementsForTests,
   retireLandingDraft,
 } from "@/lib/drafts/landing-draft-retirement";
+import { notifyDraftLocalDelete } from "@/lib/drafts/draft-local-edits";
 import { scopedPersistKey, STORE_KEYS } from "@/lib/persist";
 import {
   adoptLandingDraft,
@@ -1041,6 +1043,170 @@ describe("landing draft host-mirror bookkeeping", () => {
     });
   });
 
+  describe("cloud ingest ordering: same-revision heads fenced by the ingest sequence token", () => {
+    type MissingBlobResponse = {
+      readonly ok: false;
+      readonly reason: "missing";
+    };
+
+    function mountIngestOrderingHost(hostId: string): {
+      readonly pending: Map<
+        string,
+        { readonly resolve: (response: MissingBlobResponse) => void }
+      >;
+    } {
+      const pending = new Map<
+        string,
+        { readonly resolve: (response: MissingBlobResponse) => void }
+      >();
+      const readBlob = (hash: string): Promise<MissingBlobResponse> => {
+        let resolve: (response: MissingBlobResponse) => void = () => undefined;
+        const promise = new Promise<MissingBlobResponse>((nextResolve) => {
+          resolve = nextResolve;
+        });
+        pending.set(hash, { resolve });
+        return promise;
+      };
+      const client = {
+        request: (method: string, params: unknown) => {
+          if (method === "drafts.readBlob") {
+            return readBlob((params as { readonly sha256: string }).sha256);
+          }
+          return Promise.reject(new Error(`unexpected ${method}`));
+        },
+      };
+      acquireDraftMirrorSession({
+        hostId,
+        client: client as never,
+        streamClient: fakeDraftStreamClient(),
+        timing: undefined,
+      });
+      return { pending };
+    }
+
+    function landingHeadWith(input: {
+      readonly hostId: string;
+      readonly draftId: string;
+      readonly hash: string;
+      readonly text: string;
+    }): Extract<DraftDocument, { readonly kind: "landing" }> {
+      return {
+        draftId: input.draftId,
+        kind: "landing",
+        target: { epicId: null, chatId: null, blockId: null },
+        revision: 0,
+        lastTouchedAt: 1,
+        workspace: null,
+        supersedes: null,
+        ownerHostId: input.hostId,
+        origin: "own",
+        adoption: { state: "adopted", hostId: input.hostId },
+        publication: {
+          status: "unpublished",
+          lastPublishedAt: null,
+          publishedRevision: null,
+          halted: null,
+        },
+        portable: {
+          content: {
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: input.text }],
+              },
+            ],
+          },
+          selection: null,
+          runSettings: null,
+          composerMode: "chat",
+          blobHashes: [input.hash],
+          closed: false,
+        },
+      };
+    }
+
+    it("drops an older landing head whose blob read resolves after a newer apply of the same row", async () => {
+      const hostId = "host-ingest-ordering-newer-first";
+      const id = "ingest-ordering-newer-first";
+      const { pending } = mountIngestOrderingHost(hostId);
+      const hashOld = "11".repeat(32);
+      const hashNew = "22".repeat(32);
+      const older = landingHeadWith({
+        hostId,
+        draftId: id,
+        hash: hashOld,
+        text: "old",
+      });
+      const newer = landingHeadWith({
+        hostId,
+        draftId: id,
+        hash: hashNew,
+        text: "new",
+      });
+
+      const applyOlder = applyIncomingDraftDocument(older);
+      const applyNewer = applyIncomingDraftDocument(newer);
+
+      await vi.waitFor(() => {
+        expect(pending.has(hashOld)).toBe(true);
+        expect(pending.has(hashNew)).toBe(true);
+      });
+
+      // The newer apply's blob read resolves and is awaited first; the older
+      // apply's resolves after. Both heads carry revision 0 (a cloud head),
+      // so revision alone cannot fence the older one out - only the ingest
+      // sequence token reserved at apply-start can.
+      pending.get(hashNew)?.resolve({ ok: false, reason: "missing" });
+      await applyNewer;
+      pending.get(hashOld)?.resolve({ ok: false, reason: "missing" });
+      await applyOlder;
+
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === id);
+      expect(draft?.content).toEqual(newer.portable.content);
+    });
+
+    it("contrast: resolving the blob reads in apply order also lands on the newer content", async () => {
+      const hostId = "host-ingest-ordering-natural-order";
+      const id = "ingest-ordering-natural-order";
+      const { pending } = mountIngestOrderingHost(hostId);
+      const hashOld = "33".repeat(32);
+      const hashNew = "44".repeat(32);
+      const older = landingHeadWith({
+        hostId,
+        draftId: id,
+        hash: hashOld,
+        text: "old",
+      });
+      const newer = landingHeadWith({
+        hostId,
+        draftId: id,
+        hash: hashNew,
+        text: "new",
+      });
+
+      const applyOlder = applyIncomingDraftDocument(older);
+      const applyNewer = applyIncomingDraftDocument(newer);
+
+      await vi.waitFor(() => {
+        expect(pending.has(hashOld)).toBe(true);
+        expect(pending.has(hashNew)).toBe(true);
+      });
+
+      pending.get(hashOld)?.resolve({ ok: false, reason: "missing" });
+      await applyOlder;
+      pending.get(hashNew)?.resolve({ ok: false, reason: "missing" });
+      await applyNewer;
+
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === id);
+      expect(draft?.content).toEqual(newer.portable.content);
+    });
+  });
+
   it("removes a dirty row on an external retirement event without losing the owner delete retry", () => {
     const hostId = "host-window-owner";
     const id = useLandingDraftStore.getState().createDraft(null);
@@ -1072,7 +1238,9 @@ describe("landing draft host-mirror bookkeeping", () => {
 
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
     expect(landingDraftIsRetired(id)).toBe(true);
-    expect(pendingLandingDraftDeleteIdsForHost(hostId)).toEqual([id]);
+    expect(
+      pendingLandingDraftDeletesForHost(hostId).map((entry) => entry.draftId),
+    ).toEqual([id]);
   });
 
   it("consumes an unknown-owner retirement when its first owner document arrives", async () => {
@@ -1080,7 +1248,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     const id = "unknown-owner-retirement";
     const deletes: string[] = [];
     retireLandingDraft(id, null);
-    expect(pendingLandingDraftDeleteIdsForHost(hostId)).toEqual([]);
+    expect(pendingLandingDraftDeletesForHost(hostId)).toEqual([]);
 
     const stream = controlledStream();
     acquireDraftMirrorSession({
@@ -1143,7 +1311,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
     expect(landingDraftIsRetired(id)).toBe(true);
     await vi.waitFor(() => {
-      expect(pendingLandingDraftDeleteIdsForHost(hostId)).toEqual([]);
+      expect(pendingLandingDraftDeletesForHost(hostId)).toEqual([]);
     });
   });
 
@@ -1219,12 +1387,14 @@ describe("landing draft host-mirror bookkeeping", () => {
       document,
     });
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
-    expect(pendingLandingDraftDeleteIdsForHost("host-a")).toEqual([id]);
-    expect(pendingLandingDraftDeleteIdsForHost("host-b")).toEqual([]);
+    expect(
+      pendingLandingDraftDeletesForHost("host-a").map((entry) => entry.draftId),
+    ).toEqual([id]);
+    expect(pendingLandingDraftDeletesForHost("host-b")).toEqual([]);
 
     completeLandingDraftDelete(id);
     expect(landingDraftIsRetired(id)).toBe(true);
-    expect(pendingLandingDraftDeleteIdsForHost("host-a")).toEqual([]);
+    expect(pendingLandingDraftDeletesForHost("host-a")).toEqual([]);
     await ingestCloudDraftSummary({
       hostId: "host-a",
       summary,
@@ -1238,7 +1408,9 @@ describe("landing draft host-mirror bookkeeping", () => {
     const id = "row-free-retirement";
     const deletes: string[] = [];
     retireLandingDraft(id, hostId);
-    expect(pendingLandingDraftDeleteIdsForHost(hostId)).toEqual([id]);
+    expect(
+      pendingLandingDraftDeletesForHost(hostId).map((entry) => entry.draftId),
+    ).toEqual([id]);
 
     acquireDraftMirrorSession({
       hostId,
@@ -1265,7 +1437,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     await vi.waitFor(() => {
       expect(deletes).toEqual([id]);
     });
-    expect(pendingLandingDraftDeleteIdsForHost(hostId)).toEqual([]);
+    expect(pendingLandingDraftDeletesForHost(hostId)).toEqual([]);
     expect(landingDraftIsRetired(id)).toBe(true);
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
   });
@@ -1634,6 +1806,84 @@ describe("landing draft host-mirror bookkeeping", () => {
       expect(
         useLandingDraftStore.getState().drafts.some((d) => d.id === newId),
       ).toBe(true);
+    });
+  });
+
+  describe("routeLocalDelete: retract receipt lifecycle on a foreign row", () => {
+    const PLACEMENT = "host-placement-retract";
+
+    it("deleting a foreign row records a retract receipt on the placement host and completes it on the host's answer", async () => {
+      type RetractResponse = { readonly retracted: boolean };
+      const retracts: string[] = [];
+      let resolveRetract: (response: RetractResponse) => void = () => undefined;
+      const retract = (draftId: string): Promise<RetractResponse> => {
+        retracts.push(draftId);
+        return new Promise<RetractResponse>((nextResolve) => {
+          resolveRetract = nextResolve;
+        });
+      };
+      acquireDraftMirrorSession({
+        hostId: PLACEMENT,
+        client: {
+          request: (method: string, params: unknown) => {
+            if (method === "drafts.list") {
+              return Promise.resolve({
+                drafts: [],
+                tombstones: [],
+                snapshotSeq: 0,
+                scopeId: null,
+              });
+            }
+            if (method === "drafts.retract") {
+              return retract((params as { draftId: string }).draftId);
+            }
+            return Promise.reject(new Error(`unexpected ${String(method)}`));
+          },
+        } as never,
+        streamClient: fakeDraftStreamClient(),
+        timing: { debounceMs: 0, maxWaitMs: 0 },
+      });
+      bindLandingAdoptionHost(PLACEMENT);
+
+      const id = "placement-retract-receipt";
+      useLandingDraftStore.setState({
+        drafts: [
+          {
+            id,
+            content: EMPTY_LANDING_DRAFT_CONTENT,
+            selection: null,
+            lastTouchedAt: 0,
+            settings: null,
+            composerMode: "chat" as const,
+            workspace: emptyLandingDraftWorkspaceSnapshot(),
+            ...freshLandingMirrorState(),
+            adoption: { state: "adopted" as const, hostId: "host-owner" },
+            origin: "replica" as const,
+            ownerHostId: "host-owner",
+          },
+        ],
+        activeDraftId: null,
+      });
+
+      notifyDraftLocalDelete(id);
+
+      await vi.waitFor(() => {
+        expect(retracts).toEqual([id]);
+      });
+      expect(
+        pendingLandingDraftDeletesForHost(PLACEMENT).find(
+          (entry) => entry.draftId === id,
+        ),
+      ).toEqual({ draftId: id, retract: true });
+      expect(pendingLandingDraftDeleteHostId(id)).toBe(PLACEMENT);
+      expect(landingDraftIsRetired(id)).toBe(true);
+
+      resolveRetract({ retracted: true });
+
+      await vi.waitFor(() => {
+        expect(pendingLandingDraftDeleteHostId(id)).toBeNull();
+      });
+      expect(landingDraftIsRetired(id)).toBe(true);
     });
   });
 });

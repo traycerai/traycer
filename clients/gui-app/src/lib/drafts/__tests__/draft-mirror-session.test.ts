@@ -17,6 +17,7 @@ import {
   type DraftMirrorSink,
   type DraftsHostRpc,
   type DraftsStreamSubscribe,
+  type PendingHostDelete,
 } from "@/lib/drafts/draft-mirror-session";
 import {
   applyComposerHostDelete,
@@ -174,11 +175,15 @@ function createRpc(handlers: {
     write: DraftWrite,
   ) => Promise<{ readonly draft: DraftDocument }>;
   readonly delete: (draftId: string) => Promise<{ readonly deleted: boolean }>;
+  readonly retract?: (
+    draftId: string,
+  ) => Promise<{ readonly retracted: boolean }>;
 }): DraftsHostRpc {
   return {
     list: handlers.list,
     upsert: handlers.upsert,
     delete: handlers.delete,
+    retract: handlers.retract ?? (() => Promise.resolve({ retracted: true })),
   };
 }
 
@@ -225,7 +230,11 @@ function createSink(options: {
     settles,
     isDirty: (draftId) => options.dirty.has(draftId),
     isDeletePending: (draftId) => options.pendingDeletes?.has(draftId) ?? false,
-    pendingDeleteIdsForHost: () => [...(options.pendingDeletes ?? [])],
+    pendingDeletesForHost: () =>
+      [...(options.pendingDeletes ?? [])].map((draftId) => ({
+        draftId,
+        retract: false,
+      })),
     settleDelete: (hostId, draftId, outcome) => {
       settles.push({ hostId, draftId, outcome });
       options.pendingDeletes?.delete(draftId);
@@ -261,6 +270,83 @@ function createSink(options: {
     },
     applyCloudScope: (_hostId, scopeId) => {
       scopes.push(scopeId);
+    },
+  };
+}
+
+/**
+ * A minimal sink for exercising `pendingDeletesForHost` / `settleDelete`
+ * against a caller-owned, mutable list of pending retract/delete entries -
+ * used by the `drafts.retract` bootstrap-retry tests, where the interesting
+ * behavior is entirely in which entries settle and what the rpc records.
+ */
+function createRetractTrackingSink(
+  pendingEntries: PendingHostDelete[],
+): DraftMirrorSink & {
+  readonly settles: ReadonlyArray<{
+    readonly hostId: string;
+    readonly draftId: string;
+    readonly outcome: DraftDeleteOutcome;
+  }>;
+} {
+  const settles: Array<{
+    readonly hostId: string;
+    readonly draftId: string;
+    readonly outcome: DraftDeleteOutcome;
+  }> = [];
+  return {
+    settles,
+    isDirty: (_draftId) => {
+      void _draftId;
+      return false;
+    },
+    isDeletePending: (_draftId) => {
+      void _draftId;
+      return false;
+    },
+    pendingDeletesForHost: (_hostId) => {
+      void _hostId;
+      return [...pendingEntries];
+    },
+    settleDelete: (hostId, draftId, outcome) => {
+      settles.push({ hostId, draftId, outcome });
+      const index = pendingEntries.findIndex(
+        (entry) => entry.draftId === draftId,
+      );
+      if (index !== -1) pendingEntries.splice(index, 1);
+    },
+    applyUpsert: (_document) => {
+      void _document;
+      return Promise.resolve();
+    },
+    applyDelete: (_draftId) => {
+      void _draftId;
+    },
+    collectDirtyWrites: (_hostId) => {
+      void _hostId;
+      return Promise.resolve([]);
+    },
+    rememberSynced: (_draftId, _hostRevision, _collectedGeneration) => {
+      void _draftId;
+      void _hostRevision;
+      void _collectedGeneration;
+    },
+    prepareWrite: (_hostId, write) => {
+      void _hostId;
+      return Promise.resolve(write);
+    },
+    dropAbsentFromList: (_hostId, _listedIds) => {
+      void _hostId;
+      void _listedIds;
+    },
+    adoptUnadoptedLandingDrafts: (_hostId, _wanted) => {
+      void _hostId;
+      void _wanted;
+      return Promise.resolve();
+    },
+    applyCloudScope: (_hostId, _scopeId) => {
+      void _hostId;
+      void _scopeId;
     },
   };
 }
@@ -807,6 +893,170 @@ describe("DraftMirrorSession", () => {
     session.close();
   });
 
+  it("retries a pending retract with drafts.retract at bootstrap and settles deleted", async () => {
+    const pendingEntries: PendingHostDelete[] = [
+      { draftId: "r1", retract: true },
+      { draftId: "d1", retract: false },
+    ];
+    const sink = createRetractTrackingSink(pendingEntries);
+    const retractCalls: string[] = [];
+    const deleteCalls: string[] = [];
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: (draftId) => {
+          deleteCalls.push(draftId);
+          return Promise.resolve({ deleted: true });
+        },
+        retract: (draftId) => {
+          retractCalls.push(draftId);
+          return Promise.resolve({ retracted: true });
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(sink.settles).toEqual([
+        { hostId: HOST_ID, draftId: "r1", outcome: "deleted" },
+        { hostId: HOST_ID, draftId: "d1", outcome: "deleted" },
+      ]);
+    });
+    expect(retractCalls).toEqual(["r1"]);
+    expect(deleteCalls).toEqual(["d1"]);
+    session.close();
+  });
+
+  it("retries a pending retract with drafts.retract at bootstrap and settles absent", async () => {
+    const pendingEntries: PendingHostDelete[] = [
+      { draftId: "r1", retract: true },
+      { draftId: "d1", retract: false },
+    ];
+    const sink = createRetractTrackingSink(pendingEntries);
+    const retractCalls: string[] = [];
+    const deleteCalls: string[] = [];
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: (draftId) => {
+          deleteCalls.push(draftId);
+          return Promise.resolve({ deleted: true });
+        },
+        retract: (draftId) => {
+          retractCalls.push(draftId);
+          return Promise.resolve({ retracted: false });
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(sink.settles).toEqual([
+        { hostId: HOST_ID, draftId: "r1", outcome: "absent" },
+        { hostId: HOST_ID, draftId: "d1", outcome: "deleted" },
+      ]);
+    });
+    expect(retractCalls).toEqual(["r1"]);
+    expect(deleteCalls).toEqual(["d1"]);
+    session.close();
+  });
+
+  it("a host without drafts.retract settles the retract unsupported without tearing the session down", async () => {
+    const pendingEntries: PendingHostDelete[] = [
+      { draftId: "r1", retract: true },
+    ];
+    const sink = createRetractTrackingSink(pendingEntries);
+    const retractCalls: string[] = [];
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+        retract: (draftId) => {
+          retractCalls.push(draftId);
+          if (draftId === "r1") {
+            return Promise.reject(unsupportedError("drafts.retract"));
+          }
+          return Promise.resolve({ retracted: true });
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(sink.settles).toEqual([
+        { hostId: HOST_ID, draftId: "r1", outcome: "unsupported" },
+      ]);
+    });
+    // The retract capability being missing does not tear the whole drafts
+    // session down: a fresh retract still reaches the rpc instead of being
+    // short-circuited to "unsupported" by a wrongly-flipped capability flag.
+    await expect(session.retractOnHostOutcome("r2")).resolves.toBe("deleted");
+    expect(retractCalls).toEqual(["r1", "r2"]);
+    session.close();
+  });
+
+  it("a transport failure leaves the retract pending", async () => {
+    const pendingEntries: PendingHostDelete[] = [
+      { draftId: "r1", retract: true },
+    ];
+    const sink = createRetractTrackingSink(pendingEntries);
+    let retractCalls = 0;
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+        retract: () => {
+          retractCalls += 1;
+          return Promise.reject(new Error("transport error"));
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(retractCalls).toBeGreaterThanOrEqual(1);
+    });
+    expect(sink.settles).toEqual([]);
+    await expect(session.retractOnHostOutcome("r1")).resolves.toBe("failed");
+    expect(sink.settles).toEqual([]);
+    session.close();
+  });
+
   it("does not erase a composer draft synced to host A when host B bootstraps", async () => {
     const typed = {
       type: "doc" as const,
@@ -843,7 +1093,7 @@ describe("DraftMirrorSession", () => {
     const sink: DraftMirrorSink = {
       isDirty: (draftId) => composerDraftIsDirty(draftId),
       isDeletePending: () => false,
-      pendingDeleteIdsForHost: () => [],
+      pendingDeletesForHost: () => [],
       settleDelete: (_hostId, _draftId, _outcome) => {
         void _hostId;
         void _draftId;
@@ -989,7 +1239,7 @@ describe("DraftMirrorSession", () => {
     const sink: DraftMirrorSink = {
       isDirty: (draftId) => composerDraftIsDirty(draftId),
       isDeletePending: () => false,
-      pendingDeleteIdsForHost: () => [],
+      pendingDeletesForHost: () => [],
       settleDelete: (_hostId, _draftId, _outcome) => {
         void _hostId;
         void _draftId;
@@ -1187,7 +1437,7 @@ describe("DraftMirrorSession", () => {
     const upserted: string[] = [];
     const sink: DraftMirrorSink = {
       isDeletePending: () => false,
-      pendingDeleteIdsForHost: () => [],
+      pendingDeletesForHost: () => [],
       settleDelete: (_hostId, _draftId, _outcome) => {
         void _hostId;
         void _draftId;

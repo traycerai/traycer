@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { PendingHostDelete } from "@/lib/drafts/draft-mirror-session";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
@@ -80,6 +81,13 @@ export interface DraftState {
 
 export interface PendingSubmittedDraftDelete {
   readonly hostId: string;
+  /**
+   * The pending request is a `drafts.retract` of a cloud row `hostId` does
+   * not own (a foreign chat row submitted unedited, or the ancestor of a
+   * fork submitted before its first ack), not a `drafts.delete`. Entries
+   * persisted before the field existed are deletes.
+   */
+  readonly retract: boolean;
 }
 
 interface ComposerDraftStore {
@@ -178,6 +186,15 @@ interface ComposerDraftStore {
     chatId: string,
     draftId: string,
     hostId: string | null,
+  ) => void;
+  /**
+   * Record a pending `drafts.retract` of `draftId` through `hostId`, retried
+   * by that host's session until it answers (`completeSubmittedDraftDelete`
+   * clears it). An id already pending a request keeps its entry.
+   */
+  readonly recordPendingSubmittedDraftRetract: (
+    draftId: string,
+    hostId: string,
   ) => void;
   readonly completeSubmittedDraftDelete: (draftId: string) => void;
   readonly bindTarget: (chatId: string, epicId: string) => void;
@@ -417,7 +434,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
                 ? state.pendingSubmittedDraftDeletes
                 : {
                     ...state.pendingSubmittedDraftDeletes,
-                    [draftId]: { hostId },
+                    [draftId]: { hostId, retract: false },
                   },
             drafts: {
               ...state.drafts,
@@ -434,6 +451,19 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
                 publication: null,
                 syncedGeneration: current.generation,
               },
+            },
+          };
+        });
+      },
+      recordPendingSubmittedDraftRetract: (draftId, hostId) => {
+        set((state) => {
+          if (state.pendingSubmittedDraftDeletes[draftId] !== undefined) {
+            return state;
+          }
+          return {
+            pendingSubmittedDraftDeletes: {
+              ...state.pendingSubmittedDraftDeletes,
+              [draftId]: { hostId, retract: true },
             },
           };
         });
@@ -523,7 +553,10 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             if (!isRecord(value)) continue;
             const hostId = normalizedNullableId(value.hostId);
             if (draftId.length === 0 || hostId === null) continue;
-            pendingSubmittedDraftDeletes[draftId] = { hostId };
+            pendingSubmittedDraftDeletes[draftId] = {
+              hostId,
+              retract: value.retract === true,
+            };
           }
         }
         return { ...currentState, drafts, pendingSubmittedDraftDeletes };
@@ -626,13 +659,23 @@ export function pendingSubmittedDraftDeleteHostId(
   );
 }
 
-export function pendingSubmittedDraftDeleteIdsForHost(
+export function pendingSubmittedDraftDelete(
+  draftId: string,
+): PendingSubmittedDraftDelete | null {
+  return (
+    useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId] ??
+    null
+  );
+}
+
+/** Every entry still pending a request through `hostId`, with its kind. */
+export function pendingSubmittedDraftDeletesForHost(
   hostId: string,
-): readonly string[] {
+): readonly PendingHostDelete[] {
   return Object.entries(
     useComposerDraftStore.getState().pendingSubmittedDraftDeletes,
   ).flatMap(([draftId, pending]) =>
-    pending?.hostId === hostId ? [draftId] : [],
+    pending?.hostId === hostId ? [{ draftId, retract: pending.retract }] : [],
   );
 }
 

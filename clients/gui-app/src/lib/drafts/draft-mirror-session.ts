@@ -6,6 +6,7 @@ import {
   type DraftHeldRevisionState,
   type DraftWrite,
   type DraftsDeleteResponse,
+  type DraftsRetractResponse,
   type DraftsListResponse,
   type DraftsSubscribeServerFrameV10,
   type DraftsUpsertResponse,
@@ -23,10 +24,20 @@ export interface DraftDirtyWrite {
   readonly generation: number;
 }
 
+/**
+ * A request the sink still owes a host for a retired id: a `drafts.delete`
+ * of a row that host owns, or (`retract`) a `drafts.retract` of a cloud row
+ * it does not, retried on the same schedule until the host answers.
+ */
+export interface PendingHostDelete {
+  readonly draftId: string;
+  readonly retract: boolean;
+}
+
 export interface DraftMirrorSink {
   isDirty(draftId: string): boolean;
   isDeletePending(draftId: string): boolean;
-  pendingDeleteIdsForHost(hostId: string): readonly string[];
+  pendingDeletesForHost(hostId: string): readonly PendingHostDelete[];
   /**
    * A pending delete retried by this session got an answer from `hostId`
    * (never `failed`). The sink decides what the answer means per store: a
@@ -67,6 +78,7 @@ export interface DraftsHostRpc {
   list(): Promise<DraftsListResponse>;
   upsert(write: DraftWrite): Promise<DraftsUpsertResponse>;
   delete(draftId: string): Promise<DraftsDeleteResponse>;
+  retract(draftId: string): Promise<DraftsRetractResponse>;
 }
 
 export interface DraftsStreamSubscribe {
@@ -255,19 +267,55 @@ export class DraftMirrorSession {
    * it means for the receipt.
    */
   async deleteOnHostOutcome(draftId: string): Promise<DraftDeleteOutcome> {
+    return this.removeOnHost(draftId, () => this.runDeleteOnHost(draftId));
+  }
+
+  /**
+   * `drafts.retract` of a cloud row this host does not own, on the user's
+   * authority, with the same chaining as a delete (the id is retired for
+   * this session, and the request queues behind an in-flight upsert of the
+   * same id). `retracted: false` is `absent` - the row was already gone.
+   * A host without the method answers `unsupported` for THIS request only:
+   * the drafts capability itself is intact, so the session stays up.
+   */
+  async retractOnHostOutcome(draftId: string): Promise<DraftDeleteOutcome> {
+    return this.removeOnHost(draftId, () => this.runRetractOnHost(draftId));
+  }
+
+  private removeOnHost(
+    draftId: string,
+    run: () => Promise<DraftDeleteOutcome>,
+  ): Promise<DraftDeleteOutcome> {
     this.retiredDraftIds.add(draftId);
     this.clearTimer(draftId);
     const pending = this.sendChain.get(draftId);
     if (pending !== undefined) pending.next = null;
     const outstanding = this.deleteChain.get(draftId);
     if (outstanding !== undefined) return outstanding;
-    const deleting = this.runDeleteOnHost(draftId).finally(() => {
-      if (this.deleteChain.get(draftId) === deleting) {
+    const removing = run().finally(() => {
+      if (this.deleteChain.get(draftId) === removing) {
         this.deleteChain.delete(draftId);
       }
     });
-    this.deleteChain.set(draftId, deleting);
-    return deleting;
+    this.deleteChain.set(draftId, removing);
+    return removing;
+  }
+
+  private async runRetractOnHost(draftId: string): Promise<DraftDeleteOutcome> {
+    this.clearTimer(draftId);
+    await this.sendChain.get(draftId)?.promise;
+    if (this.closed) return "failed";
+    if (this.capabilityMissing) return "unsupported";
+    try {
+      const response = await this.rpc.retract(draftId);
+      return response.retracted ? "deleted" : "absent";
+    } catch (error: unknown) {
+      if (isDraftsCapabilityMissing(error)) return "unsupported";
+      appLogger.warn("[draft-mirror] drafts.retract failed", {
+        error: describeLogError(error),
+      });
+      return "failed";
+    }
   }
 
   private async runDeleteOnHost(draftId: string): Promise<DraftDeleteOutcome> {
@@ -618,10 +666,12 @@ export class DraftMirrorSession {
   }
 
   private async retryPendingDeletes(): Promise<void> {
-    for (const draftId of this.sink.pendingDeleteIdsForHost(this.hostId)) {
-      const outcome = await this.deleteOnHostOutcome(draftId);
+    for (const pending of this.sink.pendingDeletesForHost(this.hostId)) {
+      const outcome = pending.retract
+        ? await this.retractOnHostOutcome(pending.draftId)
+        : await this.deleteOnHostOutcome(pending.draftId);
       if (outcome !== "failed") {
-        this.sink.settleDelete(this.hostId, draftId, outcome);
+        this.sink.settleDelete(this.hostId, pending.draftId, outcome);
       }
     }
   }
@@ -668,8 +718,8 @@ export class DraftMirrorSession {
     this.clearAllTimers();
     this.streamSession?.close();
     this.streamSession = null;
-    for (const draftId of this.sink.pendingDeleteIdsForHost(this.hostId)) {
-      this.sink.settleDelete(this.hostId, draftId, "unsupported");
+    for (const pending of this.sink.pendingDeletesForHost(this.hostId)) {
+      this.sink.settleDelete(this.hostId, pending.draftId, "unsupported");
     }
   }
 

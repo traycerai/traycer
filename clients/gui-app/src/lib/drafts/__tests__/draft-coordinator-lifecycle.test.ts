@@ -207,7 +207,7 @@ describe("submitComposerDraft", () => {
     expect(readDraft().content).not.toEqual(typed("accepted steer"));
     expect(
       useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
-    ).toEqual({ hostId: HOST_ID });
+    ).toEqual({ hostId: HOST_ID, retract: false });
 
     releaseDraftMirrorSession(HOST_ID);
     mountSession(log);
@@ -264,6 +264,7 @@ describe("submitComposerDraft", () => {
 interface ForeignSubmitLog {
   readonly retracts: string[];
   readonly deletes: string[];
+  retractFailures: number;
 }
 
 function mountTabHostSession(hostId: string, log: ForeignSubmitLog) {
@@ -280,7 +281,12 @@ function mountTabHostSession(hostId: string, log: ForeignSubmitLog) {
           });
         }
         if (method === "drafts.retract") {
-          log.retracts.push((params as { draftId: string }).draftId);
+          const draftId = (params as { draftId: string }).draftId;
+          if (log.retractFailures > 0) {
+            log.retractFailures -= 1;
+            return Promise.reject(new Error("offline"));
+          }
+          log.retracts.push(draftId);
           return Promise.resolve({ retracted: true });
         }
         if (method === "drafts.delete") {
@@ -332,7 +338,11 @@ describe("submitComposerDraft: a row the tab host does not own (fixup B)", () =>
   const TAB_HOST = "host-tab";
 
   it("a replica row retracts through the tab host instead of deleting, dropping the id with no pending delete", async () => {
-    const log: ForeignSubmitLog = { retracts: [], deletes: [] };
+    const log: ForeignSubmitLog = {
+      retracts: [],
+      deletes: [],
+      retractFailures: 0,
+    };
     mountTabHostSession(TAB_HOST, log);
     bindComposerDraftHost(CHAT_ID, TAB_HOST);
 
@@ -345,18 +355,65 @@ describe("submitComposerDraft: a row the tab host does not own (fixup B)", () =>
 
     await submitComposerDraft(CHAT_ID);
 
-    expect(log.retracts).toEqual([draftId]);
-    expect(log.deletes).toEqual([]);
     expect(
       useComposerDraftStore.getState().drafts[CHAT_ID]?.draftId,
     ).toBeNull();
-    expect(
-      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
-    ).toBeUndefined();
+    // The fake answers the retract, so the pending entry - not just the
+    // draft binding - is expected to drain once that answer lands.
+    await vi.waitFor(() => {
+      expect(log.retracts).toEqual([draftId]);
+      expect(
+        useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
+      ).toBeUndefined();
+    });
+    expect(log.deletes).toEqual([]);
+  });
+
+  it("a failed retract stays pending and is retried by the session", async () => {
+    const log: ForeignSubmitLog = {
+      retracts: [],
+      deletes: [],
+      retractFailures: 1,
+    };
+    mountTabHostSession(TAB_HOST, log);
+    bindComposerDraftHost(CHAT_ID, TAB_HOST);
+
+    const draftId = "foreign-submit-retract-retry";
+    await applyForeignComposerDocument({
+      draftId,
+      ownerHostId: "host-owner",
+      origin: "replica",
+    });
+
+    await submitComposerDraft(CHAT_ID);
+
+    await vi.waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
+      ).toEqual({ hostId: TAB_HOST, retract: true });
+    });
+    expect(log.retracts).toEqual([]);
+
+    // The bootstrap retry path: releasing and remounting the session runs
+    // `retryPendingDeletes`, which retries the still-pending retract - this
+    // time the fake answers it.
+    releaseDraftMirrorSession(TAB_HOST);
+    mountTabHostSession(TAB_HOST, log);
+
+    await vi.waitFor(() => {
+      expect(log.retracts).toEqual([draftId]);
+      expect(
+        useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
+      ).toBeUndefined();
+    });
   });
 
   it("an own row whose owner differs from the tab host also retracts through the tab host instead of deleting", async () => {
-    const log: ForeignSubmitLog = { retracts: [], deletes: [] };
+    const log: ForeignSubmitLog = {
+      retracts: [],
+      deletes: [],
+      retractFailures: 0,
+    };
     mountTabHostSession(TAB_HOST, log);
     bindComposerDraftHost(CHAT_ID, TAB_HOST);
 
@@ -369,18 +426,24 @@ describe("submitComposerDraft: a row the tab host does not own (fixup B)", () =>
 
     await submitComposerDraft(CHAT_ID);
 
-    expect(log.retracts).toEqual([draftId]);
-    expect(log.deletes).toEqual([]);
     expect(
       useComposerDraftStore.getState().drafts[CHAT_ID]?.draftId,
     ).toBeNull();
-    expect(
-      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
-    ).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(log.retracts).toEqual([draftId]);
+      expect(
+        useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
+      ).toBeUndefined();
+    });
+    expect(log.deletes).toEqual([]);
   });
 
   it("contrast: an own row owned by the tab host itself still goes through drafts.delete", async () => {
-    const log: ForeignSubmitLog = { retracts: [], deletes: [] };
+    const log: ForeignSubmitLog = {
+      retracts: [],
+      deletes: [],
+      retractFailures: 0,
+    };
     mountTabHostSession(TAB_HOST, log);
     bindComposerDraftHost(CHAT_ID, TAB_HOST);
 
@@ -402,7 +465,11 @@ describe("submitComposerDraft: an unacknowledged fork (fixup round 3)", () => {
   const TAB_HOST = "host-tab-fork";
 
   it("retracts the ancestor through the tab host and deletes the fresh id", async () => {
-    const log: ForeignSubmitLog = { retracts: [], deletes: [] };
+    const log: ForeignSubmitLog = {
+      retracts: [],
+      deletes: [],
+      retractFailures: 0,
+    };
     mountTabHostSession(TAB_HOST, log);
     bindComposerDraftHost(CHAT_ID, TAB_HOST);
 
@@ -432,6 +499,50 @@ describe("submitComposerDraft: an unacknowledged fork (fixup round 3)", () => {
     expect(
       useComposerDraftStore.getState().pendingSubmittedDraftDeletes[freshId],
     ).toBeUndefined();
+    // The fake answered the ancestor's retract too - its receipt drains
+    // under its own (ancestor) id, distinct from the fresh id's delete.
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[
+        "ancestor-row"
+      ],
+    ).toBeUndefined();
+  });
+
+  it("a failed ancestor retract stays pending under the ancestor id", async () => {
+    const log: ForeignSubmitLog = {
+      retracts: [],
+      deletes: [],
+      retractFailures: 1,
+    };
+    mountTabHostSession(TAB_HOST, log);
+    bindComposerDraftHost(CHAT_ID, TAB_HOST);
+
+    await applyForeignComposerDocument({
+      draftId: "ancestor-row-retry",
+      ownerHostId: "host-owner",
+      origin: "replica",
+    });
+
+    useComposerDraftStore.getState().detachDraftIdentity(CHAT_ID);
+    const freshId =
+      useComposerDraftStore.getState().drafts[CHAT_ID]?.draftId ?? null;
+    expect(freshId).not.toBeNull();
+    if (freshId === null) throw new Error("expected a fresh draftId");
+
+    await submitComposerDraft(CHAT_ID);
+
+    await vi.waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().pendingSubmittedDraftDeletes[
+          "ancestor-row-retry"
+        ],
+      ).toEqual({ hostId: TAB_HOST, retract: true });
+    });
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[freshId],
+    ).toBeUndefined();
+    expect(log.deletes).toEqual([freshId]);
+    expect(log.retracts).toEqual([]);
   });
 });
 
@@ -814,7 +925,7 @@ describe("session/write plane: fork carries supersedes", () => {
     expect(secondWrite?.write.supersedes).toBeNull();
   });
 
-  it("routeLocalDelete retracts a foreign landing row through the placement host's client instead of calling drafts.delete", () => {
+  it("routeLocalDelete retracts a foreign landing row through the placement host's client instead of calling drafts.delete", async () => {
     const id = "foreign-delete-retract";
     const retracts: string[] = [];
     const log: HostLog = {
@@ -872,7 +983,9 @@ describe("session/write plane: fork carries supersedes", () => {
 
     notifyDraftLocalDelete(id);
 
-    expect(retracts).toEqual([id]);
+    await vi.waitFor(() => {
+      expect(retracts).toEqual([id]);
+    });
     expect(log.deletes).toEqual([]);
   });
 });
