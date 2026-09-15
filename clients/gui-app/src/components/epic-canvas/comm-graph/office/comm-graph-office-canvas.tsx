@@ -3054,11 +3054,46 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // person just made survives the switch instead of being dropped with the
   // unmounted canvas; see `onRegisterFlush`.
   const takePendingView = useCallback((): CommGraphTileCamera | null => {
+    const clearTimer = (): void => {
+      if (persistTimerRef.current !== null) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+    };
+    // An in-flight user-directed aim (a directory row or a Find result) is
+    // moving the camera toward a destination it persists ON ARRIVAL - but until
+    // it arrives no debounce is scheduled, so leaving Office mid-pan would
+    // unmount before either fires and reopen at the pre-pan framing. Flush the
+    // DESTINATION the pan was aimed at so the switch keeps it. An auto-pan
+    // (persistOnArrival false) is not a framing to keep, and nothing is while
+    // auto-fit still owns the frame.
+    if (!runtime.isAutoFitEnabled()) {
+      const active = runtime.getActivePan();
+      if (active !== null && active.persistOnArrival) {
+        clearTimer();
+        return { x: active.toX, y: active.toY, zoom: active.toZoom };
+      }
+      // The one frame before a request becomes the active pan: materialise the
+      // same destination the loop would, so a switch in that gap keeps it too.
+      if (runtime.hasPanRequest()) {
+        const request = runtime.takePanRequest();
+        if (request !== null && request.persistOnArrival) {
+          const pan = panToward({
+            camera: runtime.getCamera(),
+            viewport: runtime.getViewport(),
+            request,
+            startedAt: 0,
+          });
+          clearTimer();
+          return { x: pan.toX, y: pan.toY, zoom: pan.toZoom };
+        }
+      }
+    }
     if (persistTimerRef.current === null) return null;
     window.clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
     return currentViewPatch();
-  }, [currentViewPatch]);
+  }, [currentViewPatch, runtime]);
 
   useEffect(() => {
     onRegisterFlush(takePendingView);
