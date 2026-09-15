@@ -251,10 +251,15 @@ export class BrowserSessionsRegistry {
   private readonly deps: BrowserSessionsRegistryDeps;
   private readonly stopLocalHostChanges: () => void;
   private readonly stopBearerRotations: () => void;
+  private readonly primaryProfileDeltas: { dispose: () => void };
+  private forgetLedgerAckOrder = 0;
   private disposed = false;
 
   constructor(deps: BrowserSessionsRegistryDeps) {
     this.deps = deps;
+    this.primaryProfileDeltas = deps.jar.onPrimaryProfileDelta((delta) => {
+      this.sendPrimaryProfileDelta(delta);
+    });
     this.stopLocalHostChanges = deps.subscribeLocalHostChange(() => {
       for (const stream of this.streams.values()) stream.retryLifecycleReady();
     });
@@ -293,21 +298,27 @@ export class BrowserSessionsRegistry {
       });
       return;
     }
-    const stream = new BrowserSessionsStream(windowId, key, this.deps, () => {
-      // A stream that will never reach a socket stops holding a place under
-      // the cap: it is dropped from the map by the same edge that reported
-      // `failed` to the renderer, and re-opening it is one invoke away.
-      //
-      // It WAS holding one - `start()` records the identity before the
-      // directory read that fails here, so `holdsConnection` is true
-      // throughout - which makes this delete a place handed back to the
-      // window without any renderer having released a stream. The renderer
-      // reads that from the failure itself, by the message: this one is not
-      // {@link BROWSER_SESSIONS_WINDOW_CAP_MESSAGE}, so a place freed.
-      if (this.streams.get(id) !== stream) return;
-      this.streams.delete(id);
-      stream.dispose();
-    });
+    const stream = new BrowserSessionsStream(
+      windowId,
+      key,
+      this.deps,
+      () => ++this.forgetLedgerAckOrder,
+      () => {
+        // A stream that will never reach a socket stops holding a place under
+        // the cap: it is dropped from the map by the same edge that reported
+        // `failed` to the renderer, and re-opening it is one invoke away.
+        //
+        // It WAS holding one - `start()` records the identity before the
+        // directory read that fails here, so `holdsConnection` is true
+        // throughout - which makes this delete a place handed back to the
+        // window without any renderer having released a stream. The renderer
+        // reads that from the failure itself, by the message: this one is not
+        // {@link BROWSER_SESSIONS_WINDOW_CAP_MESSAGE}, so a place freed.
+        if (this.streams.get(id) !== stream) return;
+        this.streams.delete(id);
+        stream.dispose();
+      },
+    );
     this.streams.set(id, stream);
     stream.start();
   }
@@ -450,10 +461,29 @@ export class BrowserSessionsRegistry {
 
   dispose(): void {
     this.disposed = true;
+    this.primaryProfileDeltas.dispose();
     this.stopLocalHostChanges();
     this.stopBearerRotations();
     for (const stream of this.streams.values()) stream.dispose();
     this.streams.clear();
+  }
+
+  private sendPrimaryProfileDelta(delta: BrowserPrimaryProfileDelta): void {
+    const carriers = new Map<string, BrowserSessionsStream>();
+    for (const stream of this.streams.values()) {
+      if (!stream.primaryProfileDeltaReady || !stream.ackReceived) continue;
+      const carrier = carriers.get(stream.hostId);
+      if (carrier === undefined || stream.lastAckOrder > carrier.lastAckOrder) {
+        carriers.set(stream.hostId, stream);
+      }
+    }
+    for (const stream of this.streams.values()) {
+      const carrier = carriers.get(stream.hostId);
+      // Until an ack proves authorization, preserve delivery on every ready stream.
+      if (carrier === undefined || carrier === stream) {
+        stream.sendPrimaryProfileDelta(delta);
+      }
+    }
   }
 
   private sendOncePerHost(frame: BrowserSessionsClientFrame): number {
@@ -481,13 +511,13 @@ class BrowserSessionsStream {
   readonly hostId: string;
   private readonly key: BrowserSessionsStreamKey;
   private readonly deps: BrowserSessionsRegistryDeps;
+  private readonly nextForgetLedgerAckOrder: () => number;
   private readonly onFailedToOpen: () => void;
 
   private transport: BrowserSessionsHostTransport | null = null;
   private client: BrowserSessionsStreamClient | null = null;
   private electronTabs: ElectronTabs | null = null;
   private forgetLedgerChanges: { dispose: () => void } | null = null;
-  private primaryProfileDeltas: { dispose: () => void } | null = null;
 
   private disposed = false;
   /**
@@ -524,6 +554,9 @@ class BrowserSessionsStream {
    * predecessor heard.
    */
   private sentForgetLedgerRevision = 0;
+  /** Any ack, including revision zero, authorizes this incarnation as a carrier. */
+  ackReceived = false;
+  lastAckOrder = 0;
   /**
    * The `requestId` this host issued as its STANDING capture request.
    *
@@ -580,12 +613,14 @@ class BrowserSessionsStream {
     windowId: string,
     key: BrowserSessionsStreamKey,
     deps: BrowserSessionsRegistryDeps,
+    nextForgetLedgerAckOrder: () => number,
     onFailedToOpen: () => void,
   ) {
     this.windowId = windowId;
     this.hostId = key.hostId;
     this.key = key;
     this.deps = deps;
+    this.nextForgetLedgerAckOrder = nextForgetLedgerAckOrder;
     this.onFailedToOpen = onFailedToOpen;
   }
 
@@ -664,18 +699,6 @@ class BrowserSessionsStream {
         this.emit({ kind: "tabReleased", capability });
       },
     });
-    // Unsolicited cookie deltas from the durable `primary` jar. Gated on this
-    // connection having sent `electronTabLifecycleReady`: that readiness is
-    // what makes the stream jar-authorized on the host, so a connection that
-    // has not sent it would be dropped there anyway.
-    this.primaryProfileDeltas = this.deps.jar.onPrimaryProfileDelta((delta) => {
-      if (this.connectionStatus !== "open" || !this.lifecycleReadySent) return;
-      this.sendClientFrame({
-        kind: "primaryProfileDelta",
-        hasBinaryPayload: false,
-        ...delta,
-      });
-    });
     // A forget landed in this machine's ledger, in whichever window performed
     // it. Every stream pushes its host's fresh digest.
     this.forgetLedgerChanges = this.deps.jar.onForgetLedgerChanged(() => {
@@ -700,11 +723,9 @@ class BrowserSessionsStream {
         error: describeLogError(cause),
       });
       // `teardown()`, not `teardownTransport()`: the electron-tab registration
-      // and the two jar subscriptions above are already installed by the time
+      // and the ledger subscription above are already installed by the time
       // the client constructor can throw, and closing only the transport left
-      // them registered until `dispose()` with nothing to drive them - a
-      // `primaryProfileDelta` handler holding a live jar listener on a stream
-      // that will never open.
+      // them registered until `dispose()` with nothing to drive them.
       this.teardown();
       this.emitStatus("failed", "Browser sessions stream could not open.");
     }
@@ -739,6 +760,19 @@ class BrowserSessionsStream {
     if (this.connectionStatus !== "open" || this.client === null) return false;
     this.client.sendClientFrame(frame);
     return true;
+  }
+
+  get primaryProfileDeltaReady(): boolean {
+    return this.connectionStatus === "open" && this.lifecycleReadySent;
+  }
+
+  sendPrimaryProfileDelta(delta: BrowserPrimaryProfileDelta): void {
+    if (!this.primaryProfileDeltaReady) return;
+    this.sendClientFrame({
+      kind: "primaryProfileDelta",
+      hasBinaryPayload: false,
+      ...delta,
+    });
   }
 
   /** Re-drives the attach burst once this machine has a host id to declare. */
@@ -928,8 +962,6 @@ class BrowserSessionsStream {
     this.resolveCaptureAckWaiters();
     this.forgetLedgerChanges?.dispose();
     this.forgetLedgerChanges = null;
-    this.primaryProfileDeltas?.dispose();
-    this.primaryProfileDeltas = null;
     this.electronTabs?.dispose();
     this.electronTabs = null;
     this.client?.close();
@@ -1017,6 +1049,8 @@ class BrowserSessionsStream {
     const closed = this.connectionId;
     this.connectionId = null;
     this.sentForgetLedgerRevision = 0;
+    this.ackReceived = false;
+    this.lastAckOrder = 0;
     this.standingCaptureRequestId = null;
     if (closed !== null) this.deps.jar.releaseForgetLedgerConnection(closed);
   }
@@ -1164,6 +1198,8 @@ class BrowserSessionsStream {
   private handleForgetLedgerAck(revision: number): void {
     const connectionId = this.connectionId;
     if (connectionId === null) return;
+    this.ackReceived = true;
+    this.lastAckOrder = this.nextForgetLedgerAckOrder();
     log.info("[browser-sessions] host acked the forget ledger", {
       hostId: this.hostId,
       revision,
