@@ -112,6 +112,21 @@ export function handleSetContentProtection(
   resolved.window.setContentProtection(enabled === true);
 }
 
+/** The private theme bridge sends resolved hex or legacy RGB(A), not CSS tokens. */
+function isTitleBarColor(color: string): boolean {
+  if (/^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i.test(color)) return true;
+  const rgb =
+    /^(rgb|rgba)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*((?:\d+(?:\.\d+)?|\.\d+)))?\s*\)$/i.exec(
+      color,
+    );
+  if (rgb === null || rgb.slice(2, 5).some((channel) => Number(channel) > 255))
+    return false;
+  const alpha = rgb[5];
+  return rgb[1]?.toLowerCase() === "rgba"
+    ? alpha !== undefined && Number(alpha) <= 1
+    : alpha === undefined;
+}
+
 /**
  * Repaints the Windows/Linux window controls (min/max/close) drawn by
  * Chromium's Window Controls Overlay. The `BrowserWindow`'s `titleBarOverlay`
@@ -129,6 +144,7 @@ export function handleSetTitleBarOverlay(
 ): void {
   if (process.platform !== "win32" && process.platform !== "linux") return;
   if (typeof color !== "string" || typeof symbolColor !== "string") return;
+  if (!isTitleBarColor(color) || !isTitleBarColor(symbolColor)) return;
   const resolved = resolveSenderWindow(event);
   if (resolved === null) return;
   resolved.window.setTitleBarOverlay({ color, symbolColor });

@@ -123,6 +123,58 @@ describe("handleSetTitleBarOverlay", () => {
     expect(nativeTheme.themeSource).toBe("dark");
   });
 
+  for (const platform of ["win32", "linux"] as const) {
+    it(`accepts normalized hex and rgb colors on ${platform}`, () => {
+      setPlatform(platform);
+      fromWebContents.mockReturnValue(fakeWindow(false));
+
+      const validColors = [
+        ["#abc", "#abcd"],
+        ["#a1b2c3", "#a1b2c3d4"],
+        ["rgb( 12, 34, 56 )", "rgba(12, 34, 56, 0.5)"],
+      ] as const;
+
+      for (const [color, symbolColor] of validColors) {
+        handleSetTitleBarOverlay(event, color, symbolColor, "dark");
+
+        expect(setTitleBarOverlay).toHaveBeenLastCalledWith({
+          color,
+          symbolColor,
+        });
+        expect(setBackgroundColor).toHaveBeenLastCalledWith(color);
+      }
+    });
+  }
+
+  for (const platform of ["win32", "linux"] as const) {
+    it.each([
+      ["#12", "#fff"],
+      ["#ggg", "#fff"],
+      ["", "#fff"],
+      ["not-a-color", "#fff"],
+      ["var(--title-bar-color)", "#fff"],
+      ["oklch(0.5 0.2 120)", "#fff"],
+      ["rgb(1, 2)", "#fff"],
+      ["rgb(1.5, 2, 3)", "#fff"],
+      ["rgb(1, 256, 3)", "#fff"],
+      ["rgba(1, 2, 3, 1.1)", "#fff"],
+      ["#fff", "rgba(1, 2, 3, -0.1)"],
+    ] as const)(
+      `rejects invalid color pair on ${platform}: %s / %s`,
+      (color, symbolColor) => {
+        setPlatform(platform);
+        fromWebContents.mockReturnValue(fakeWindow(false));
+        nativeTheme.themeSource = "light";
+
+        handleSetTitleBarOverlay(event, color, symbolColor, "dark");
+
+        expect(setTitleBarOverlay).not.toHaveBeenCalled();
+        expect(setBackgroundColor).not.toHaveBeenCalled();
+        expect(nativeTheme.themeSource).toBe("light");
+      },
+    );
+  }
+
   it("keeps Linux system theme selection under OS control", () => {
     setPlatform("linux");
     fromWebContents.mockReturnValue(fakeWindow(false));
