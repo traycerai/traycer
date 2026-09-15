@@ -68,6 +68,20 @@ const resolveMocks = vi.hoisted(() => ({
   >(() => Promise.resolve(null)),
 }));
 
+const sonnerMocks = vi.hoisted(() => ({
+  info: vi.fn(),
+  error: vi.fn(),
+  success: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    info: sonnerMocks.info,
+    error: sonnerMocks.error,
+    success: sonnerMocks.success,
+  },
+}));
+
 vi.mock("@/lib/drafts/resolve-draft-image-bytes", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -1124,8 +1138,8 @@ describe("RR4: a confirmation invalidated WHILE the dialog is open is caught eve
 // ─── RR6: the /btw bare-hash guard distinguishes a mid-read command from a
 //          pre-flight that asked and every leg missed ────────────────────
 
-describe("RR6: a pre-existing /btw whose image resolves NOWHERE sends, per the accepted policy", () => {
-  it("sends the bare hash rather than leaving the send button permanently dead", async () => {
+describe("RR6: a pre-existing /btw whose image resolves NOWHERE keeps the draft and says so", () => {
+  it("abandons with a notice rather than forwarding a bare hash into a unary create", async () => {
     const taskId = "chat-rr6-preexisting-btw-unresolved";
     // Every leg misses - the pre-flight DID ask, and nothing ever answers.
     resolveMocks.resolveDraftImageBytes.mockResolvedValue(null);
@@ -1150,20 +1164,32 @@ describe("RR6: a pre-existing /btw whose image resolves NOWHERE sends, per the a
       expect(result.current.annotationPreparationPending).toBe(false);
     });
 
-    // Pre-fix: the guard treated a surviving hash as ALWAYS the race and
-    // returned - two Enters, two reads, zero sends, zero toasts, and a send
-    // button that is permanently dead because the SECOND Enter's pre-flight
-    // agrees with the document exactly as the first one did.
+    // RR6 originally made this SEND, reasoning that an unresolved hash is the
+    // host's dangling-hash guard to rule on - true of an ordinary send, and
+    // false here. `startSideChat` is a unary `epic.createChat` with no
+    // `chat.subscribe` session behind it: no negotiated bridge, no
+    // `MISSING_ATTACHMENT_BYTES` to retry from, and `markFailedByAction`
+    // makes the handoff terminal with nothing restoring the content to a
+    // composer that has already been cleared. The prompt was simply lost.
+    //
+    // What RR6 was protecting is still protected, and it is the reason this
+    // is not a plain revert: the old PRE-RR6 behaviour was a silent no-op
+    // (two Enters, two reads, zero sends, zero toasts, a permanently dead
+    // button). The abandonment is now ANNOUNCED, so the user knows the image
+    // is the problem and can remove it.
     await waitFor(() => {
-      expect(onSideChat).toHaveBeenCalledTimes(1);
+      expect(sonnerMocks.info).toHaveBeenCalledWith(
+        "An image in this side question could not be loaded.",
+        expect.objectContaining({
+          description:
+            "The draft has been kept - try removing and re-attaching it.",
+        }),
+      );
     });
+    expect(onSideChat).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
-    expect(editor.clearCount).toBe(1);
-    // The host's dangling-hash guard is the remaining authority - the digest
-    // still travels bare, exactly as an ordinary send does with one.
-    const atoms = collectImageAtoms(onSideChat.mock.calls[0][0].content);
-    expect(atoms).toHaveLength(1);
-    expect(atoms[0]?.hash).toBe(HASH_A);
+    // And nothing was cleared: the prompt and its image are still there.
+    expect(editor.clearCount).toBe(0);
   });
 
   it("control: a /btw typed DURING the read still abandons rather than forwarding a bare hash (see also R3 (2))", async () => {
