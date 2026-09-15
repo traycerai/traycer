@@ -561,11 +561,6 @@ function buildFakeBridge(
         sha256: "",
         capturedAt: 0,
       }),
-      getDebugSnapshot: async (input) => ({
-        ...input,
-        consoleEntries: [],
-        networkEntries: [],
-      }),
       startAnnotation: async () => ({ ok: true as const }),
       cancelAnnotation: async () => undefined,
       setAnnotationTargetChatLabel: async () => undefined,

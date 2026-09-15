@@ -100,9 +100,7 @@ describe("useStartPageWallpaperImage", () => {
   });
 });
 
-function curatedEntry(
-  overrides: Partial<CuratedWallpaper> = {},
-): CuratedWallpaper {
+function curatedEntry(overrides: Partial<CuratedWallpaper>): CuratedWallpaper {
   return {
     id: "dunes",
     title: "Dunes",
@@ -148,7 +146,7 @@ describe("applyCuratedStartPageWallpaper / chooseStartPageWallpaper", () => {
       height: 1600,
     });
 
-    await applyCuratedStartPageWallpaper(curatedEntry());
+    await applyCuratedStartPageWallpaper(curatedEntry({}));
 
     expect(imageProcessingMocks.process).not.toHaveBeenCalled();
     expect(cacheMocks.write).toHaveBeenCalledWith("start-page-wallpaper", blob);
@@ -175,7 +173,7 @@ describe("applyCuratedStartPageWallpaper / chooseStartPageWallpaper", () => {
       height: 1280,
     });
 
-    await applyCuratedStartPageWallpaper(curatedEntry());
+    await applyCuratedStartPageWallpaper(curatedEntry({}));
 
     expect(imageProcessingMocks.process).toHaveBeenCalledWith(
       downloaded,
@@ -226,7 +224,7 @@ describe("applyCuratedStartPageWallpaper / chooseStartPageWallpaper", () => {
       height: 100,
     });
 
-    const applyPromise = applyCuratedStartPageWallpaper(curatedEntry());
+    const applyPromise = applyCuratedStartPageWallpaper(curatedEntry({}));
     await removeStartPageWallpaper();
     deferred.resolve(new Blob(["x"], { type: "image/webp" }));
 
@@ -291,7 +289,7 @@ describe("applyCuratedStartPageWallpaper / chooseStartPageWallpaper", () => {
       }),
     );
 
-    const dunesApply = applyCuratedStartPageWallpaper(curatedEntry());
+    const dunesApply = applyCuratedStartPageWallpaper(curatedEntry({}));
     await vi.waitFor(() => expect(cacheMocks.write).toHaveBeenCalledTimes(1));
     const ridgeApply = applyCuratedStartPageWallpaper(
       curatedEntry({ id: "ridge", title: "Ridge" }),

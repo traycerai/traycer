@@ -3262,7 +3262,12 @@ export const epicSchemaSurfaceBaseline = {
                                             "model_rerouted",
                                             "model_verification",
                                             "safety_buffering",
-                                            "harness_message"
+                                            "harness_message",
+                                            "fallback_applied",
+                                            "fallback_returned",
+                                            "fallback_return_blocked",
+                                            "fallback_wait_resumed",
+                                            "fallback_settled"
                                           ]
                                         },
                                         "tone": {
@@ -5137,6 +5142,55 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "failure": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "reason": {
+                                          "type": "string",
+                                          "enum": [
+                                            "auth",
+                                            "rate_limit",
+                                            "billing",
+                                            "model_unavailable",
+                                            "provider_unavailable",
+                                            "provider_connection_failed",
+                                            "context_exhausted",
+                                            "request_rejected",
+                                            "turn_start_timeout",
+                                            "missing_terminal_event",
+                                            "background_work_failed",
+                                            "session_budget"
+                                          ]
+                                        },
+                                        "resetsAt": {
+                                          "type": "number"
+                                        },
+                                        "resetsAtSource": {
+                                          "type": "string",
+                                          "enum": [
+                                            "provider",
+                                            "probe"
+                                          ]
+                                        },
+                                        "scope": {
+                                          "type": "string"
+                                        },
+                                        "providerDetail": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reason"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -6504,6 +6558,35 @@ export const epicSchemaSurfaceBaseline = {
                             }
                           ]
                         }
+                      },
+                      "turnProfile": {
+                        "type": "object",
+                        "properties": {
+                          "profileId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "labelSnapshot": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "profileId",
+                          "labelSnapshot"
+                        ]
                       }
                     },
                     "required": [
@@ -11912,7 +11995,12 @@ export const epicSchemaSurfaceBaseline = {
                                             "model_rerouted",
                                             "model_verification",
                                             "safety_buffering",
-                                            "harness_message"
+                                            "harness_message",
+                                            "fallback_applied",
+                                            "fallback_returned",
+                                            "fallback_return_blocked",
+                                            "fallback_wait_resumed",
+                                            "fallback_settled"
                                           ]
                                         },
                                         "tone": {
@@ -13874,6 +13962,56 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "failure": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "reason": {
+                                          "type": "string",
+                                          "enum": [
+                                            "auth",
+                                            "rate_limit",
+                                            "billing",
+                                            "model_unavailable",
+                                            "provider_unavailable",
+                                            "provider_connection_failed",
+                                            "context_exhausted",
+                                            "request_rejected",
+                                            "turn_start_timeout",
+                                            "missing_terminal_event",
+                                            "background_work_failed",
+                                            "session_budget"
+                                          ]
+                                        },
+                                        "resetsAt": {
+                                          "type": "number"
+                                        },
+                                        "resetsAtSource": {
+                                          "type": "string",
+                                          "enum": [
+                                            "provider",
+                                            "probe"
+                                          ]
+                                        },
+                                        "scope": {
+                                          "type": "string"
+                                        },
+                                        "providerDetail": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reason"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -13883,7 +14021,8 @@ export const epicSchemaSurfaceBaseline = {
                                 "type",
                                 "message",
                                 "recoverable",
-                                "code"
+                                "code",
+                                "failure"
                               ],
                               "additionalProperties": false
                             },
@@ -15242,6 +15381,36 @@ export const epicSchemaSurfaceBaseline = {
                             }
                           ]
                         }
+                      },
+                      "turnProfile": {
+                        "type": "object",
+                        "properties": {
+                          "profileId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "labelSnapshot": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "profileId",
+                          "labelSnapshot"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [

@@ -7,7 +7,10 @@ import {
   parseHostOperationCommonPayload,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationKnownPayload,
+  type HostNotificationStoppedReason,
 } from "@traycer/protocol/host/notifications/payloads";
+import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -352,6 +355,89 @@ function knownBackgroundWorkRunning(
   }
 }
 
+/**
+ * Short, PROVIDER-INDEPENDENT label for one stopped reason.
+ *
+ * Deliberately a second map beside {@link agentStoppedFailureStatus} rather
+ * than a lift of it. The two surfaces want opposite shapes and must not be
+ * merged:
+ *
+ * - `agentStoppedFailureStatus` is NOTIFICATION copy: sentence-shaped and
+ *   provider-aware ("Provider is temporarily unavailable", "Anthropic rate
+ *   limit reached", and for `auth` it delegates to `providerSignedOutMessage`,
+ *   which gives Reasonix an API-key-specific sentence). It is a `body` line a
+ *   user reads out of context, so it names the provider and tells them what to
+ *   do. Its output must not change.
+ * - This map is a NOUN PHRASE for a settings matrix row and the fallback cards,
+ *   where the provider is already on screen in the identity chip and repeating
+ *   it inside the label is noise.
+ *
+ * Total over the taxonomy by construction (`Record<…, string>`), so a new
+ * stopped reason cannot ship without a label here.
+ */
+export const FALLBACK_REASON_LABELS: Record<
+  HostNotificationStoppedReason,
+  string
+> = {
+  rate_limit: "Rate limit reached",
+  billing: "Billing issue",
+  model_unavailable: "Model unavailable",
+  provider_unavailable: "Temporarily unavailable",
+  auth: "Signed out",
+  provider_connection_failed: "Connection failed",
+  context_exhausted: "Context limit reached",
+  request_rejected: "Provider rejected the request",
+  turn_start_timeout: "Provider did not start in time",
+  missing_terminal_event: "Provider stopped responding",
+  background_work_failed: "Background work stopped",
+  session_budget: "Session limit reached",
+};
+
+/**
+ * {@link FALLBACK_REASON_LABELS} keyed by the PERSISTED failure vocabulary.
+ *
+ * Indexing a `Record<HostNotificationStoppedReason, string>` with an
+ * `AgentFailureReason` is the compile-time proof that persisted ⊆ host;
+ * `runtimeFailureReason` (`host/agent/gui/agent-runtime.ts`) proves the other
+ * direction. Between them the two lists cannot drift, which is what lets
+ * `content-blocks.ts` re-declare the taxonomy instead of importing it across a
+ * layer boundary it may not cross.
+ */
+export function fallbackReasonLabel(reason: AgentFailureReason): string {
+  return FALLBACK_REASON_LABELS[reason];
+}
+
+/**
+ * What a ladder step is called in USER-FACING text.
+ *
+ * `"rung"` and `"ladder"` are engine words on the ux-surfaces never-say list,
+ * and so are the step ids themselves - a notice row reading `Rung: tier` is
+ * two of them in four characters. The settings panel already resolved this for
+ * its own surfaces (`FALLBACK_RUNG_COPY`, which calls the concept a "step");
+ * this map exists because a notice's `details` value is built HOST-side and the
+ * GUI cannot fix it on the way out. That is the same constraint that put
+ * {@link FALLBACK_REASON_LABELS} here rather than in the client: a `details`
+ * value is an open `string`, so a GUI-side lookup would be a string-indexed
+ * cast that fails open on anything it has not heard of.
+ *
+ * `"manual"` is not a ladder step - it is what the cursor reads as when the
+ * user picked the destination themselves, so the ladder index names no rung.
+ *
+ * `Record<…, string>` over the union, so a fifth step cannot ship without copy.
+ */
+export const FALLBACK_RUNG_LABELS: Record<FallbackRungKind | "manual", string> =
+  {
+    profile: "Another profile",
+    tier: "Equivalent model",
+    wait: "Waiting for reset",
+    notify: "Notify only",
+    manual: "Chosen by you",
+  };
+
+export function fallbackRungLabel(rung: FallbackRungKind | "manual"): string {
+  return FALLBACK_RUNG_LABELS[rung];
+}
+
 function agentStoppedFailureStatus(
   reason: string | null,
   providerId: ProviderId | null,
@@ -401,6 +487,13 @@ function agentStoppedFailureStatus(
       return "Provider stopped responding";
     case "background_work_failed":
       return "Background work stopped";
+    // Provider-NEUTRAL even though only one provider emits the code today, and
+    // for the same reason `context_exhausted` is: the limit is a property of
+    // this conversation, not of the account or the vendor's capacity. Naming
+    // the provider here would read as a provider-side condition, which is
+    // precisely the misreading that made this a `rate_limit` in the first place.
+    case "session_budget":
+      return "Session limit reached";
     case null:
     default:
       return "Failed";
@@ -426,6 +519,14 @@ function agentStalledStatus(
       return "Provider is taking longer than expected";
     case "provider_reroute":
       return "Provider is rerouting";
+    // The provider-fallback engine's armed-traversal notice. A stalled row
+    // rather than a failure row on purpose: the turn died, but the host is
+    // already acting on it and the user's only decision is whether to let it -
+    // which is the opposite of the "a human must intervene" the failure row
+    // means. `reason` is open text on this payload, so this arm is additive and
+    // an older host simply renders the generic status below.
+    case "fallback_pending":
+      return "Trying a fallback provider";
     default:
       return "Stalled";
   }

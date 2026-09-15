@@ -1,3 +1,4 @@
+import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -145,6 +146,10 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
         kind: "delete-artifact",
         artifactId: variables.artifactId,
       });
+      pruneRecoveryTiles(
+        (tile, epicId) =>
+          epicId === variables.epicId && tile.id === variables.artifactId,
+      );
       Analytics.getInstance().track(AnalyticsEvent.ArtifactDeleted, null);
       const hostId = client?.getActiveHostId() ?? null;
       if (hostId !== null) {

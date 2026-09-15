@@ -850,7 +850,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
 
     act(() => {
       healedHandshake();
-      fixture.client.notifyHostAvailabilityRecovered(HOST_ID);
+      fixture.client.notifyHostAvailabilityRecovered(HOST_ID, "reconnect");
     });
 
     await waitFor(() => {

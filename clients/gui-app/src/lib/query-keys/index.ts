@@ -38,11 +38,13 @@ export {
   browserQueryKeys,
 } from "@/lib/query-keys/browser-mutation-keys";
 export { resourcesMutationKeys } from "@/lib/query-keys/resources-mutation-keys";
+export { chatFallbackMutationKeys } from "@/lib/query-keys/chat-fallback-mutation-keys";
 export { managedCommandMutationKeys } from "@/lib/query-keys/managed-command-mutation-keys";
 export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
+export { fallbackPolicyWriteScope } from "@/lib/query-keys/providers-fallback-policy-scope";
 export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {
   CLASSIC_PROVIDERS_LIST_PARAMS,

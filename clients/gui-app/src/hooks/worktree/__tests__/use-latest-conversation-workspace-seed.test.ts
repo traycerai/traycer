@@ -56,6 +56,8 @@ function terminalAgent(
     terminalAgentArgs: null,
     terminalShellCommand: null,
     terminalShellArgs: null,
+    sessionState: null,
+    lastExit: null,
   };
 }
 

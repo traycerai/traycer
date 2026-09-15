@@ -40,6 +40,7 @@ import {
 import { UNANSWERABLE_INTERVIEW_DISMISS_REASON } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import type { PendingInterviewView } from "@/components/epic-canvas/renderers/chat-tile-types";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
+import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -147,6 +148,7 @@ function props(
     },
     todo: null,
     restoreContext: RESTORE_CONTEXT,
+    providerFallback: NO_PROVIDER_FALLBACK,
     backgroundItems: undefined,
     backgroundStopPendingTaskIds: EMPTY_BACKGROUND_STOP_TASK_IDS,
     backgroundStopAllPending: false,

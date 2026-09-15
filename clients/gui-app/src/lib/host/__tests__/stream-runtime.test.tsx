@@ -1012,4 +1012,39 @@ describe("HostStreamProvider", () => {
     expect(result.current).toBeInstanceOf(WsStreamClient);
     expect(streamFactorySpy.build).toHaveBeenCalledTimes(1);
   });
+
+  it("forwards the kind of each recovery its stream reports, for the host it heartbeats", () => {
+    // G4: the sweep a recovery drives re-asks less after a stall than after a
+    // reconnect, so this wiring hands the transport's kind through rather
+    // than picking one.
+    const subscribeSpy = vi.spyOn(
+      WsStreamClient.prototype,
+      "subscribeAvailabilityRecovered",
+    );
+    const notifySpy = vi.spyOn(
+      HostClient.prototype,
+      "notifyHostAvailabilityRecovered",
+    );
+    try {
+      mountLocalHost();
+      renderHook(() => useWsStreamClient(), { wrapper });
+      const listeners = subscribeSpy.mock.calls.map(([listener]) => listener);
+      expect(listeners).not.toHaveLength(0);
+
+      for (const listener of listeners) {
+        listener("stall");
+      }
+      expect(notifySpy).toHaveBeenCalledWith(
+        mockLocalHostEntry.hostId,
+        "stall",
+      );
+      expect(notifySpy).not.toHaveBeenCalledWith(
+        mockLocalHostEntry.hostId,
+        "reconnect",
+      );
+    } finally {
+      subscribeSpy.mockRestore();
+      notifySpy.mockRestore();
+    }
+  });
 });

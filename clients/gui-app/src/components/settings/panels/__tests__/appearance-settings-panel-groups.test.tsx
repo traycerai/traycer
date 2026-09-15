@@ -147,13 +147,15 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(documentPosition(terminal, iconColors)).toBe("before");
   });
 
-  it("offers a shared hide option for chat and artifact minimaps", () => {
+  // The minimap side control moved to Settings > Layout's Chat group, where it
+  // sits with the other message-pane placement controls; its `settings-store`
+  // key is unchanged.
+  it("no longer renders the minimap side control", () => {
     renderPanel(queryClient);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Minimap position" }));
-    fireEvent.click(screen.getByRole("option", { name: "Hidden" }));
-
-    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");
+    expect(
+      screen.queryByRole("combobox", { name: "Minimap position" }),
+    ).toBeNull();
   });
 
   it("renders named sections as h2 headings outside separate bordered cards", () => {

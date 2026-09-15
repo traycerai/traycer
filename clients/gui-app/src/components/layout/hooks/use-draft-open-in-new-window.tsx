@@ -1,3 +1,4 @@
+import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useCallback, useMemo } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { LANDING_ROUTE, draftPathname } from "@/lib/routes";
@@ -165,7 +166,9 @@ export function useDraftOpenInNewWindowFlow(
         // than leaving them where they are.
         const wasActive =
           router.state.location.pathname === draftPathname(draftId);
-        tabCommandCoordinator.closeRefAfterConfirmed(ref);
+        withoutTabRecovery(() =>
+          tabCommandCoordinator.closeRefAfterConfirmed(ref),
+        );
         if (wasActive) {
           void navigate(LANDING_ROUTE);
         }

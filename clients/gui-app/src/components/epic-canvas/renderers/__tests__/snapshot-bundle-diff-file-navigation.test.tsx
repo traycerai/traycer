@@ -178,6 +178,14 @@ const PDF_ENTRY: SnapshotBundleSectionEntry = {
   reason: "snapshot",
 };
 
+const DOCX_ENTRY: SnapshotBundleSectionEntry = {
+  filePath: "docs/brief.docx",
+  beforeContent: null,
+  afterContent: null,
+  operation: "edit",
+  reason: "snapshot",
+};
+
 describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -234,11 +242,11 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
     });
   });
 
-  // `snapshotBundleFileCoverageState` checks the PDF extension BEFORE the
-  // reason check - a PDF's blobs are never captured, so it must read as
-  // "binary" (the same terminal coverage the git bundle gives its media
+  // `snapshotBundleFileCoverageState` checks the DOCUMENT extension BEFORE
+  // the reason check - a document's blobs are never captured, so it must read
+  // as "binary" (the same terminal coverage the git bundle gives its media
   // rows) rather than as an "unloaded" file that was simply never searched.
-  it("computes binary coverage state for a .pdf bundle entry", () => {
+  it("computes binary coverage state for document bundle entries", () => {
     const node = snapshotBundleNode();
 
     render(
@@ -246,7 +254,7 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
         <SnapshotBundleDiffTileContent
           node={node}
           viewTabId="view-1"
-          entries={[ENTRY, PDF_ENTRY]}
+          entries={[ENTRY, PDF_ENTRY, DOCX_ENTRY]}
         />
       </TooltipProvider>,
     );
@@ -263,17 +271,24 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
       throw new Error("expected a files entry for the PDF path");
     }
     expect(pdfFile.coverageState).toBe("binary");
+    const docxFile = registration.files.find(
+      (file) => file.filePath === DOCX_ENTRY.filePath,
+    );
+    if (docxFile === undefined) {
+      throw new Error("expected a files entry for the Word document path");
+    }
+    expect(docxFile.coverageState).toBe("binary");
     const textFile = registration.files.find(
       (file) => file.filePath === ENTRY.filePath,
     );
     expect(textFile?.coverageState).toBe("unloaded");
   });
 
-  // A PDF row renders a placeholder, never a text diff - `buildSnapshotUnifiedPatch`
-  // and `diffLineCountsFromContents` must not be handed its (possibly
-  // ASCII-authored, possibly large) contents. A sibling text entry in the
-  // same bundle still gets both calls.
-  it("skips buildSnapshotUnifiedPatch and diffLineCountsFromContents for a .pdf bundle entry", () => {
+  // A document row renders a placeholder, never a text diff -
+  // `buildSnapshotUnifiedPatch` and `diffLineCountsFromContents` must not be
+  // handed its (possibly ASCII-authored, possibly large) contents. A sibling
+  // text entry in the same bundle still gets both calls.
+  it("skips buildSnapshotUnifiedPatch and diffLineCountsFromContents for document bundle entries", () => {
     const node = snapshotBundleNode();
 
     render(
@@ -281,7 +296,7 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
         <SnapshotBundleDiffTileContent
           node={node}
           viewTabId="view-1"
-          entries={[ENTRY, PDF_ENTRY]}
+          entries={[ENTRY, PDF_ENTRY, DOCX_ENTRY]}
         />
       </TooltipProvider>,
     );

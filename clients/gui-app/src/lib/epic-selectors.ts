@@ -35,6 +35,10 @@ import {
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
+import type {
   GuiHarnessId,
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -1540,6 +1544,175 @@ export function useRegisteredEpicLiveAgents(
 }
 
 /**
+ * How many terminal agents each named epic has running and how many are
+ * asleep, read from the epics this window has mounted.
+ *
+ * ## Why it is not derived from the resource plane
+ *
+ * The resource monitor's own projection lists owners that own PROCESSES, and
+ * a sleeping agent owns none - that is what asleep means. Counting from there
+ * would answer zero for every agent the count exists to surface, and the only
+ * way to make one appear would be to synthesize a process row for it, which
+ * the Resource Manager must not do: it stays honest about processes. So the
+ * count comes from the RECORD plane, where a sleeping agent is a row like any
+ * other.
+ *
+ * `stopped` and `null` are in neither number, and deliberately: `stopped` is
+ * an agent that is over as a record, and `null` is a row whose serving host
+ * cannot know (a peer host, a cloud replica, a host that predates the facet).
+ * Reporting either as running or asleep would be this client guessing.
+ *
+ * Epics this window has not mounted are absent from the map rather than zero -
+ * "we hold no session for it" and "it has no agents" are different answers,
+ * and the caller renders nothing for the first.
+ *
+ * ## Scoped to `hostId`, which is not optional
+ *
+ * A count of running and sleeping agents is a fact about one MACHINE, and the
+ * session this window holds for an epic belongs to whichever host that epic
+ * is open on - which need not be the host the caller is reading under. The
+ * Resource Manager is the caller and has its own picker, so an epic open on
+ * host A and viewed under host B printed A's numbers in B's section header,
+ * beside a process list correctly attributed to B.
+ *
+ * So the session's host must MATCH, the row's host must match, and anything
+ * unattributed is refused. Every refusal omits the epic rather than reporting
+ * zero, which the paragraph above already gives the caller a rendering for.
+ * A count that is absent is a count the user does not read; a count that is
+ * wrong is one they act on.
+ */
+export interface EpicAgentSessionCounts {
+  readonly running: number;
+  readonly sleeping: number;
+}
+
+export function useRegisteredEpicAgentSessionCounts(
+  epicIds: readonly string[],
+  hostId: string | null,
+): ReadonlyMap<string, EpicAgentSessionCounts> {
+  const registry = getOpenEpicRegistry();
+  const encodedCounts = useSyncExternalStore(
+    (listener) => subscribeToRegisteredEpics(registry, epicIds, listener),
+    () => agentSessionCountsSnapshot(registry, epicIds, hostId),
+    () => JSON.stringify([]),
+  );
+  return useMemo(
+    () => decodeAgentSessionCounts(encodedCounts),
+    [encodedCounts],
+  );
+}
+
+/**
+ * Encoded `[epicId, running, sleeping]` triples, for the reason the live-agent
+ * snapshot below encodes its own: `useSyncExternalStore` compares by value,
+ * and every one of these stores notifies on changes that move neither count.
+ */
+function agentSessionCountsSnapshot(
+  registry: OpenEpicSessionRegistry,
+  epicIds: readonly string[],
+  hostId: string | null,
+): string {
+  // No host to attribute the reading to: nothing here is true of anything.
+  if (hostId === null) return JSON.stringify([]);
+  return JSON.stringify(
+    epicIds.flatMap((epicId): Array<[string, number, number]> => {
+      const handle = registry.peek(epicId);
+      if (handle === null) return [];
+      // The session must be THIS host's. One window holds one session per
+      // epic, for whichever host that epic is open on - so a caller reading
+      // under a different host is being handed another machine's view, and
+      // "2 running / 3 sleeping" under host B's picker is not a number with
+      // a correct reading. `null` is refused with it: an unattributed handle
+      // is evidence for no host in particular, and counting it under the one
+      // on screen is the same guess by another route.
+      //
+      // Omitted, not zeroed, per this map's contract: absent means "no
+      // session held for it here", which is exactly the situation, and the
+      // caller already renders no count for that.
+      if (getEpicSessionHandleHostId(handle) !== hostId) return [];
+      const agents = handle.store.getState().tuiAgents;
+      let running = 0;
+      let sleeping = 0;
+      for (const id of agents.allIds) {
+        const agent = agents.byId[id];
+        // And the ROW's own host. A session on one host can hold rows for
+        // agents bound elsewhere (a peer-host row, a replica). Their facet is
+        // `null` today, so they already fall out of both branches below -
+        // this makes the count's scope a property of this loop rather than of
+        // the facet staying null for a row this host does not run.
+        if (agent.hostId !== hostId) continue;
+        const state = agent.sessionState;
+        if (state === "running") running += 1;
+        else if (state === "sleeping") sleeping += 1;
+      }
+      return [[epicId, running, sleeping]];
+    }),
+  );
+}
+
+function decodeAgentSessionCounts(
+  encodedCounts: string,
+): ReadonlyMap<string, EpicAgentSessionCounts> {
+  const decoded: unknown = JSON.parse(encodedCounts);
+  const counts = new Map<string, EpicAgentSessionCounts>();
+  if (!Array.isArray(decoded)) return counts;
+  for (const entry of decoded) {
+    if (!Array.isArray(entry)) continue;
+    const epicId: unknown = entry[0];
+    const running: unknown = entry[1];
+    const sleeping: unknown = entry[2];
+    if (
+      typeof epicId !== "string" ||
+      typeof running !== "number" ||
+      typeof sleeping !== "number"
+    ) {
+      continue;
+    }
+    counts.set(epicId, { running, sleeping });
+  }
+  return counts;
+}
+
+/**
+ * Subscribes to the registry and to every currently-registered epic among
+ * `epicIds`, re-reconciling as sessions come and go. Shared by the two
+ * cross-epic readers here, which differ only in what they read out of the
+ * stores they are watching.
+ */
+function subscribeToRegisteredEpics(
+  registry: OpenEpicSessionRegistry,
+  epicIds: readonly string[],
+  listener: () => void,
+): () => void {
+  const unsubscribeByHandle = new Map<object, () => void>();
+  const reconcileHandleSubscriptions = () => {
+    const currentHandles = new Set<object>();
+    for (const epicId of epicIds) {
+      const handle = registry.peek(epicId);
+      if (handle === null || currentHandles.has(handle)) continue;
+      currentHandles.add(handle);
+      if (!unsubscribeByHandle.has(handle)) {
+        unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
+      }
+    }
+    for (const [handle, unsubscribe] of unsubscribeByHandle) {
+      if (currentHandles.has(handle)) continue;
+      unsubscribe();
+      unsubscribeByHandle.delete(handle);
+    }
+  };
+  reconcileHandleSubscriptions();
+  const unsubscribeRegistry = registry.subscribe(() => {
+    reconcileHandleSubscriptions();
+    listener();
+  });
+  return () => {
+    unsubscribeRegistry();
+    for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
+  };
+}
+
+/**
  * Encoded per-ref tuples (`[kind, title, hostId]`, or `null`) so
  * `useSyncExternalStore` compares by value: the registry and every store
  * notify on unrelated changes, and a fresh array per notification would
@@ -2020,6 +2193,44 @@ export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
       : EMPTY_ROLE_CLAIMS,
   );
   return enabled ? claims : EMPTY_ROLE_CLAIMS;
+}
+
+/**
+ * One node's session facet: whether its binding host says the agent is
+ * running, asleep or over, and why the last session ended.
+ *
+ * Both fields `null` for every node that is not a terminal agent this session
+ * holds a row for, and for a terminal agent whose serving host cannot know -
+ * a peer-host row, a cloud replica, a host that predates the facet. `null`
+ * NEVER means stopped, so a consumer renders it exactly as it rendered every
+ * row before the facet shipped.
+ *
+ * A two-field VIEW rather than the projection itself, so a row that renders
+ * only the badge does not re-render when the agent's title, worktree binding
+ * or launch metadata moves.
+ */
+export interface AgentSessionFacetView {
+  readonly sessionState: AgentSessionState | null;
+  readonly lastExit: AgentSessionLastExit | null;
+}
+
+const UNKNOWN_AGENT_SESSION_FACET: AgentSessionFacetView = Object.freeze({
+  sessionState: null,
+  lastExit: null,
+});
+
+export function useEpicAgentSessionFacet(
+  nodeId: string,
+): AgentSessionFacetView {
+  return useEpicStore(
+    useShallow((s): AgentSessionFacetView => {
+      if (!Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+        return UNKNOWN_AGENT_SESSION_FACET;
+      }
+      const agent = s.tuiAgents.byId[nodeId];
+      return { sessionState: agent.sessionState, lastExit: agent.lastExit };
+    }),
+  );
 }
 
 export function useEpicAgentRoleClaimsByAgentId(): Readonly<

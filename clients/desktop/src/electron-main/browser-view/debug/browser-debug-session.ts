@@ -4,17 +4,13 @@ import type {
   BrowserCdpResult,
   BrowserCdpTarget,
 } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserViewDebugSnapshotData } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserViewDebugger,
   BrowserViewWebContents,
 } from "../browser-view-port";
 import { describeLogError, log } from "../../app/logger";
 import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
-import { BrowserDebugTelemetry } from "./browser-debug-telemetry";
 import { BrowserFrameRoutes } from "./browser-frame-routes";
-import { BrowserPipCapture } from "./browser-pip-capture";
-import type { BrowserPipCaptureStartInput } from "./browser-pip-capture";
 import { isRecord, recordValue } from "../guards";
 
 interface BrowserDebugSessionOptions {
@@ -28,12 +24,18 @@ interface CdpEvent {
   readonly sessionId: string | undefined;
 }
 
+/** One consumer's claim on the guest's attached debugger. */
+export interface BrowserDebugLease {
+  /** Attaches and enables the CDP domains; resolves once they are live. */
+  ready(): Promise<void>;
+  /** Idempotent. The last release detaches the debugger. */
+  release(): void;
+}
+
 export class BrowserDebugSession {
   private readonly webContents: BrowserDebugWebContents;
   private readonly onDetached: (reason: string) => void;
-  private readonly telemetry: BrowserDebugTelemetry;
   private readonly frameRoutes: BrowserFrameRoutes;
-  private readonly pipCapture: BrowserPipCapture;
   private readonly bindingCalledListeners = new Set<
     (params: Record<string, unknown>) => void
   >();
@@ -44,6 +46,7 @@ export class BrowserDebugSession {
     this.handleDebuggerDetach(args);
   };
   private enabled = false;
+  private leases = 0;
   private enablePromise: Promise<void> | null = null;
   private attachedBySession = false;
   private listening = false;
@@ -55,8 +58,6 @@ export class BrowserDebugSession {
   constructor(options: BrowserDebugSessionOptions) {
     this.webContents = options.webContents;
     this.onDetached = options.onDetached;
-    this.telemetry = new BrowserDebugTelemetry(options.webContents.id);
-    this.pipCapture = new BrowserPipCapture(options.webContents);
     this.frameRoutes = new BrowserFrameRoutes({
       browserDebugger: () => this.webContents.debugger,
       isAttached: () => this.isAttached(),
@@ -178,10 +179,37 @@ export class BrowserDebugSession {
     );
   }
 
-  enableAfterCommit(): Promise<void> {
+  /**
+   * A consumer that needs CDP takes a lease. The first one attaches the
+   * debugger and enables the domains; the last release detaches again, so a
+   * tab nobody is driving stays a plain Chromium tab rather than one running
+   * with `Runtime.enable` side effects for the page to read.
+   */
+  acquire(): BrowserDebugLease {
+    if (this.disposed) throw new Error("Browser debug session is disposed");
+    this.leases += 1;
+    let released = false;
+    return {
+      ready: () => this.enableWhileLeased(),
+      release: () => {
+        if (released) return;
+        released = true;
+        this.leases -= 1;
+        this.detachIfUnleased();
+      },
+    };
+  }
+
+  /**
+   * Brings the domains back up after a navigation or a renderer reload, for a
+   * tab a lease holder is still driving. Recovery only: a tab nobody has
+   * leased must not gain a debugger here.
+   */
+  enableWhileLeased(): Promise<void> {
     if (this.disposed) {
       return Promise.reject(new Error("Browser debug session is disposed"));
     }
+    if (this.leases === 0) return Promise.resolve();
     if (this.isAttached()) {
       if (this.enabled) return Promise.resolve();
       if (this.enablePromise !== null) return this.enablePromise;
@@ -202,7 +230,6 @@ export class BrowserDebugSession {
       Promise.all([
         browserDebugger.sendCommand("Page.enable", {}, undefined),
         browserDebugger.sendCommand("Runtime.enable", {}, undefined),
-        browserDebugger.sendCommand("Log.enable", {}, undefined),
         browserDebugger.sendCommand("Network.enable", {}, undefined),
         // DOM.describeNode requires its domain to be enabled first.
         browserDebugger.sendCommand("DOM.enable", {}, undefined),
@@ -224,6 +251,10 @@ export class BrowserDebugSession {
         this.enablePromise = null;
         this.enabled = false;
         this.frameRoutes.clear();
+        // Listeners off first, the order `detachIfUnleased` and `dispose` use:
+        // the detach below is ours, and the detach listener exists to report
+        // the ones we did not ask for.
+        this.stopListening();
         if (this.attachedBySession && browserDebugger.isAttached()) {
           try {
             browserDebugger.detach();
@@ -234,7 +265,6 @@ export class BrowserDebugSession {
           }
         }
         this.attachedBySession = false;
-        this.stopListeningIfIdle();
         log.warn("[browser-view] debugger domain enable failed", {
           error: describeLogError(err),
         });
@@ -244,29 +274,10 @@ export class BrowserDebugSession {
     return enablePromise;
   }
 
-  startPipCapture(input: BrowserPipCaptureStartInput): Promise<void> {
-    if (this.disposed) throw new Error("Browser debug session is disposed");
-    this.pipCapture.start(input);
-    return Promise.resolve();
-  }
-
-  stopPipCapture(): void {
-    this.pipCapture.stop();
-  }
-
-  isPipCapturing(): boolean {
-    return this.pipCapture.isCapturing();
-  }
-
-  snapshot(): BrowserViewDebugSnapshotData {
-    return this.telemetry.snapshot();
-  }
-
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.enablePromise = null;
-    this.pipCapture.stall();
     const browserDebugger = this.webContents.debugger;
     this.stopListening();
     this.sessionEnd.resolve();
@@ -301,11 +312,6 @@ export class BrowserDebugSession {
     } else if (event.method === "Page.frameDetached") {
       this.frameRoutes.handleFrameDetached(event.params, event.sessionId);
     }
-    if (
-      this.telemetry.handleEvent(event.method, event.params, event.sessionId)
-    ) {
-      return;
-    }
     if (event.method === "Runtime.bindingCalled") {
       for (const listener of this.bindingCalledListeners) {
         listener(event.params);
@@ -331,6 +337,24 @@ export class BrowserDebugSession {
       this.attachedBySession = true;
     }
     return browserDebugger;
+  }
+
+  private detachIfUnleased(): void {
+    if (this.leases > 0 || this.disposed) return;
+    const browserDebugger = this.webContents.debugger;
+    const attachedBySession = this.attachedBySession;
+    // Listeners off first: this detach is deliberate, and the detach listener
+    // exists to report the ones we did not ask for.
+    this.stopListening();
+    this.resetDetachedState();
+    if (!attachedBySession || !browserDebugger.isAttached()) return;
+    try {
+      browserDebugger.detach();
+    } catch (err) {
+      log.warn("[browser-view] debugger detach failed", {
+        error: describeLogError(err),
+      });
+    }
   }
 
   private resetDetachedState(): void {
@@ -396,10 +420,7 @@ export class BrowserDebugSession {
   }
 }
 
-type BrowserDebugWebContents = Pick<
-  BrowserViewWebContents,
-  "id" | "debugger" | "capturePage"
->;
+type BrowserDebugWebContents = Pick<BrowserViewWebContents, "id" | "debugger">;
 
 function cdpFailure(
   command: BrowserCdpCommand,

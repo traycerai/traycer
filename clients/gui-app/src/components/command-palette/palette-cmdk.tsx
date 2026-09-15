@@ -52,7 +52,10 @@ import type {
  */
 function SubpageItemLabel({ label }: { label: string }) {
   const slash = label.lastIndexOf("/");
-  if (slash === -1) {
+  // The directory dimming is a file-path convention; a URL label (the
+  // Browser sub-page's "Open https://…" leaf) has slashes that are not
+  // directories, and a bare origin would otherwise dim entirely.
+  if (slash === -1 || label.includes("://")) {
     return <span className="truncate">{label}</span>;
   }
   return (
@@ -635,15 +638,26 @@ function FlatSubpageRows(props: {
   ));
 }
 
+/**
+ * The Browser sub-page's action rows (vs. the open-tab inventory below them):
+ * host pick, blank new tab, and the pasted-URL leaf the sub-page emits only
+ * while the live query is an http(s) URL.
+ */
+const BROWSER_ACTION_IDS: ReadonlySet<string> = new Set([
+  "open:browser:host",
+  "open:browser:new",
+  "open:browser:url",
+]);
+
 function BrowserSubpageView(props: {
   readonly items: ReadonlyArray<CommandItemShape>;
   readonly onSelect: (item: CommandItemShape) => void;
 }) {
-  const browserActions = props.items.filter(
-    (item) => item.id === "open:browser:host" || item.id === "open:browser:new",
+  const browserActions = props.items.filter((item) =>
+    BROWSER_ACTION_IDS.has(item.id),
   );
   const inventoryItems = props.items.filter(
-    (item) => item.id !== "open:browser:host" && item.id !== "open:browser:new",
+    (item) => !BROWSER_ACTION_IDS.has(item.id),
   );
   const hostLabel = browserActions.find(
     (item) => item.id === "open:browser:host",

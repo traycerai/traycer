@@ -24,6 +24,7 @@ import {
   assetStreamClientFrameSchema,
   assetStreamServerFrameSchema,
   assetStreamServerFrameSchemaV11,
+  assetStreamServerFrameSchemaV12,
 } from "@traycer/protocol/host/asset-stream-schemas";
 
 export const gitStreamFileAssetSideSchema = z.enum(["old", "new"]);
@@ -66,5 +67,14 @@ export const gitStreamFileAssetV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: gitStreamFileAssetOpenRequestSchema,
   serverFrameSchema: assetStreamServerFrameSchemaV11,
+  clientFrameSchema: assetStreamClientFrameSchema,
+});
+
+/** 1.2 adds Word `.docx` - same delta as `workspace.streamAsset@1.2`. */
+export const gitStreamFileAssetV12 = defineStreamRpcContract({
+  method: "git.streamFileAsset",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: gitStreamFileAssetOpenRequestSchema,
+  serverFrameSchema: assetStreamServerFrameSchemaV12,
   clientFrameSchema: assetStreamClientFrameSchema,
 });

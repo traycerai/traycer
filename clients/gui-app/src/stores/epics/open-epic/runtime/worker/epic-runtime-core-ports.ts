@@ -23,7 +23,8 @@ import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runt
  */
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -149,12 +150,14 @@ export interface EpicRuntimeCorePortSource {
     records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
   ): void;
+  applyChatRecordTouches(patches: readonly RecordListRecencyPatch[]): void;
   applyChatRecordDelta(delta: ChatRecordDelta): void;
   applyConfirmedChatMutation(mutation: ConfirmedChatMutation): void;
   applyTuiAgentRecords(
-    records: readonly TuiAgentRecordSummaryV12[],
+    records: readonly TuiAgentRecordSummaryV13[],
     issuedAtSeq: number | null,
   ): void;
+  applyTuiAgentRecordTouches(patches: readonly RecordListRecencyPatch[]): void;
   applyTuiAgentRecordDelta(delta: TuiAgentRecordDelta): void;
   markChatRecordListAuthoritative(): void;
   markChatRecordListNotAuthoritative(): void;
@@ -739,9 +742,11 @@ type RecordPlaneCommand = Extract<
   {
     kind:
       | "apply-chat-records"
+      | "apply-chat-record-touches"
       | "apply-chat-record-delta"
       | "apply-confirmed-chat-mutation"
       | "apply-tui-agent-records"
+      | "apply-tui-agent-record-touches"
       | "apply-tui-agent-record-delta"
       | "mark-chat-records-authoritative"
       | "mark-chat-records-not-authoritative";
@@ -781,9 +786,11 @@ function isRecordPlaneCommand(
 ): command is RecordPlaneCommand {
   switch (command.kind) {
     case "apply-chat-records":
+    case "apply-chat-record-touches":
     case "apply-confirmed-chat-mutation":
     case "apply-chat-record-delta":
     case "apply-tui-agent-records":
+    case "apply-tui-agent-record-touches":
     case "apply-tui-agent-record-delta":
     case "mark-chat-records-authoritative":
     case "mark-chat-records-not-authoritative":
@@ -817,6 +824,9 @@ function applyRecordPlaneCommand(
         command.payload.issuedAtSeq,
       );
       return;
+    case "apply-chat-record-touches":
+      source.applyChatRecordTouches(command.payload.touched);
+      return;
     case "apply-confirmed-chat-mutation":
       source.applyConfirmedChatMutation(command.payload.mutation);
       return;
@@ -828,6 +838,9 @@ function applyRecordPlaneCommand(
         command.payload.records,
         command.payload.issuedAtSeq,
       );
+      return;
+    case "apply-tui-agent-record-touches":
+      source.applyTuiAgentRecordTouches(command.payload.touched);
       return;
     case "apply-tui-agent-record-delta":
       source.applyTuiAgentRecordDelta(command.payload.delta);

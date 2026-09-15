@@ -30,6 +30,7 @@ import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-con
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
+import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import { makeMessage } from "./chat-message-fixtures";
@@ -193,6 +194,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
+              folded={new Set()}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -262,6 +264,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
+              folded={new Set()}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -577,6 +580,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     composer,
     todo: null,
     restoreContext: emptyRestore(),
+    providerFallback: NO_PROVIDER_FALLBACK,
     backgroundItems: undefined,
     backgroundStopPendingTaskIds: new Set(),
     backgroundStopAllPending: false,

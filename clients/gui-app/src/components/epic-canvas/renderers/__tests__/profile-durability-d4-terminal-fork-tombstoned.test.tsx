@@ -200,6 +200,8 @@ function sourceAgentWithProfile(profileId: string | null): ForkableTuiAgent {
     terminalAgentArgs: null,
     terminalShellCommand: "claude",
     terminalShellArgs: ["--resume", "source-session"],
+    sessionState: null,
+    lastExit: null,
   };
 }
 

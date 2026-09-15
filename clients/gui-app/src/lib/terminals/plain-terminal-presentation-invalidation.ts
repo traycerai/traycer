@@ -1,3 +1,4 @@
+import { recoveryTiles } from "@/lib/tab-recovery/history";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-schemas";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -116,6 +117,16 @@ export function acknowledgedPlainTerminalPresentationIdsForScope(
       );
     }
   }
+  for (const { tile } of recoveryTiles().filter(
+    (entry) => entry.epicId === scope.epicId,
+  )) {
+    addAcknowledgedTerminalId(
+      terminalIds,
+      tile,
+      hostId,
+      pendingCreateTerminalIdentities,
+    );
+  }
   return terminalIds;
 }
 
@@ -146,6 +157,17 @@ function hasPlainTerminalPresentationRefs(
     }),
   );
   if (closed) return true;
+  if (
+    recoveryTiles().some(
+      ({ tile }) =>
+        tile.type === "terminal" &&
+        !isUnsupportedEpicTerminalRef(tile) &&
+        tile.hostId === hostId &&
+        tile.id === terminalId,
+    )
+  )
+    return true;
+
   // Narrowed like its two siblings in this file. The landing list is mixed, and
   // a browser tab's `sessionId` names the device's shared browser session -
   // a host-minted id from a namespace nothing proves disjoint from terminal

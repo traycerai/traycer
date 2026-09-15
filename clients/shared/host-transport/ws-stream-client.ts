@@ -65,6 +65,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
+import { isRetryableSessionLifecycleFatal } from "./i-stream-session";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamClient, StreamParamsProvider } from "./i-stream-client";
 import { describeRetryableClose } from "./retryable-close-log";
@@ -77,6 +78,7 @@ import type {
 import type { WebSocketCloseEvent, WebSocketErrorEvent } from "./ws-factory";
 import type { IntervalHandle, TimerHandle } from "./timer-handle";
 import type { ReconnectAllOptions } from "./host-stream-client";
+import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
 import { backoffFor } from "./backoff";
 
 /**
@@ -265,15 +267,19 @@ function createInertStreamSession(closedReason: string): IStreamSession {
         if (closed) {
           return;
         }
-        statusHandler?.("closed", {
-          kind: "fatalError",
-          details: {
-            code: "CLIENT_CLOSED",
-            reason: `stream client was already closed (${closedReason})`,
-            incompatibleMethods: null,
-            upgradeGuidance: null,
+        statusHandler?.(
+          "closed",
+          {
+            kind: "fatalError",
+            details: {
+              code: "CLIENT_CLOSED",
+              reason: `stream client was already closed (${closedReason})`,
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+            },
           },
-        });
+          null,
+        );
       });
     },
     requestReconnect: () => undefined,
@@ -417,7 +423,9 @@ export class WsStreamClient<
     string,
     PendingHostCredentialProvision
   >();
-  private readonly availabilityRecoveredListeners = new Set<() => void>();
+  private readonly availabilityRecoveredListeners = new Set<
+    (kind: AvailabilityRecoveryKind) => void
+  >();
   private closed = false;
   private closedReason: string | null = null;
 
@@ -534,8 +542,8 @@ export class WsStreamClient<
       // compatibility abort, so it fires on EVERY state-carrying ack rather
       // than only the ones whose method version also happened to negotiate.
       onHostCredentialState: this.options.onHostCredentialState,
-      onAvailabilityRecovered: () => {
-        this.emitAvailabilityRecovered();
+      onAvailabilityRecovered: (kind) => {
+        this.emitAvailabilityRecovered(kind);
       },
     });
     removeSession = () => {
@@ -743,16 +751,20 @@ export class WsStreamClient<
    * Subscribes to positive evidence that the host endpoint just RECOVERED
    * availability after a period of being unreachable or unresponsive. Fired by
    * any owned session when (a) it re-opens after a drop (its status was
-   * `"reconnecting"` when the handshake completed), or (b) a heartbeat pong
-   * lands after a stall-length gap WITHOUT the socket ever dropping - the
-   * host-event-loop-stall case, where an established stream survives the
-   * 60s pong cutoff while fresh unary dials time out and strand their
-   * queries in a permanent error state. Consumers use this to drive
-   * `HostClient.notifyHostAvailabilityRecovered(hostId)` so those stranded
-   * queries refetch; multiple sessions recovering at once each fire, so
-   * consumers should coalesce.
+   * `"reconnecting"` when the handshake completed), reported as
+   * `"reconnect"`, or (b) a heartbeat pong lands after a stall-length gap
+   * WITHOUT the socket ever dropping - the host-event-loop-stall case, where
+   * an established stream survives the 60s pong cutoff while fresh unary
+   * dials time out and strand their queries in a permanent error state - or
+   * answers a wake probe, both reported as `"stall"`: the socket survived,
+   * so the process answering is the one that answered before. Consumers use
+   * this to drive `HostClient.notifyHostAvailabilityRecovered(hostId, kind)`
+   * so those stranded queries refetch; multiple sessions recovering at once
+   * each fire, so consumers should coalesce.
    */
-  subscribeAvailabilityRecovered(listener: () => void): () => void {
+  subscribeAvailabilityRecovered(
+    listener: (kind: AvailabilityRecoveryKind) => void,
+  ): () => void {
     this.availabilityRecoveredListeners.add(listener);
     return () => {
       this.availabilityRecoveredListeners.delete(listener);
@@ -1115,7 +1127,7 @@ export class WsStreamClient<
     return false;
   }
 
-  private emitAvailabilityRecovered(): void {
+  private emitAvailabilityRecovered(kind: AvailabilityRecoveryKind): void {
     if (this.closed) {
       return;
     }
@@ -1124,7 +1136,7 @@ export class WsStreamClient<
     // the socket's message processing or the other listeners.
     for (const listener of Array.from(this.availabilityRecoveredListeners)) {
       try {
-        listener();
+        listener(kind);
       } catch (error) {
         console.error(
           `[stream] availability-recovered listener threw (client=${this.instanceId})`,
@@ -1495,11 +1507,12 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     | ((hostId: string, state: HostCredentialState) => void)
     | null;
   /**
-   * Reports positive host-recovery evidence to the owning client - see
+   * Reports positive host-recovery evidence to the owning client, with the
+   * kind of edge that produced it - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
-   * sites and why they exist.
+   * sites, why they exist, and which kind each reports.
    */
-  readonly onAvailabilityRecovered: () => void;
+  readonly onAvailabilityRecovered: (kind: AvailabilityRecoveryKind) => void;
 }
 
 /**
@@ -1791,7 +1804,7 @@ class StreamSession<
     }
     this.teardownTimers();
     this.teardownSocket(1000, "closed-by-caller");
-    this.transitionTo("closed", { kind: "caller" });
+    this.transitionTo("closed", { kind: "caller" }, null);
   }
 
   /**
@@ -2085,13 +2098,13 @@ class StreamSession<
 
     const selected = this.config.endpoint();
     if (selected === null || selected.websocketUrl === null) {
-      this.transitionTo("reconnecting", null);
+      this.transitionTo("reconnecting", null, null);
       this.scheduleReconnect();
       return;
     }
 
     if (this.reconnectAttempt === 0) {
-      this.transitionTo("connecting", null);
+      this.transitionTo("connecting", null, null);
     }
 
     let token: string;
@@ -2099,7 +2112,7 @@ class StreamSession<
       token = extractBearerForOpenFrame(this.config.bearer());
     } catch (cause) {
       if (cause instanceof MissingBearerTokenForOpenFrameError) {
-        this.transitionTo("reconnecting", null);
+        this.transitionTo("reconnecting", null, null);
         this.scheduleReconnect();
         return;
       }
@@ -2131,7 +2144,7 @@ class StreamSession<
       console.debug(
         `[stream] pre-dial bearer already expired; revalidating before dial method=${String(this.config.method)}`,
       );
-      this.transitionTo("reconnecting", null);
+      this.transitionTo("reconnecting", null, null);
       void this.revalidateThenReconnect(
         auth,
         {
@@ -2360,7 +2373,12 @@ class StreamSession<
         // once was the client's late ping, not a host outage (see
         // `PONG_GAP_RECOVERY_SLACK_MS`), and a sweep on it refetches queries
         // nothing stranded.
-        this.config.onAvailabilityRecovered();
+        //
+        // Both edges are a `"stall"`: the socket survived, so the process
+        // answering is the one that answered before, and what it already
+        // answered still stands. Only the reads that failed in the gap are
+        // stranded, and the sweep this feeds re-asks only those.
+        this.config.onAvailabilityRecovered("stall");
       } else if (stallLengthGap) {
         console.debug(
           `[stream] pong gap of ${pongGapMs}ms was the client's own late ping (host answered in ${hostAnswerMs ?? -1}ms) - no recovery`,
@@ -2499,10 +2517,11 @@ class StreamSession<
       }
       this.teardownTimers();
       this.teardownSocket(1000, "mirror-incompatible");
-      this.transitionTo("closed", {
-        kind: "fatalError",
-        details: compat.details,
-      });
+      this.transitionTo(
+        "closed",
+        { kind: "fatalError", details: compat.details },
+        null,
+      );
       return;
     }
 
@@ -2594,9 +2613,12 @@ class StreamSession<
     this.oldestUnansweredPingSentAt = null;
     this.startHeartbeat();
     this.armHealthyDwell();
-    this.transitionTo("open", null);
+    this.transitionTo("open", null, null);
     if (recoveredFromUnavailable) {
-      this.config.onAvailabilityRecovered();
+      // A `"reconnect"`: the host may have restarted while this socket was
+      // down, so a read that settled before the drop may describe a process
+      // that is gone.
+      this.config.onAvailabilityRecovered("reconnect");
     }
     // If the bearer rotated DURING the handshake - after the open frame was sent
     // but before we became `subscribed` - that rotation's `notifyBearerRotated`
@@ -2745,24 +2767,30 @@ class StreamSession<
     // `retryable` marks a transient host-side rejection. The stable subscribe-
     // timeout code is checked too because hosts through 1.1.9 emitted it without
     // the additive flag; a new client must still recover when paired with one of
-    // those hosts. In either case credential recovery cannot help, so route it
-    // through ordinary transport reconnect before the `UNAUTHORIZED` branch.
+    // those hosts. The chat session's lifecycle codes are the same case for
+    // `chat.subscribe`: a host released before it flagged them sends them bare,
+    // and reading them as terminal is what turned a Try again pressed mid-open
+    // into "This agent could not be opened." In every case credential recovery
+    // cannot help, so route it through ordinary transport reconnect before the
+    // `UNAUTHORIZED` branch.
     if (
       details.retryable === true ||
-      details.code === STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE
+      details.code === STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE ||
+      isRetryableSessionLifecycleFatal(this.config.method, details)
     ) {
       // A transient host blip must not count toward the credential give-up
       // bound, mirroring the `network-error` revalidation outcome: clear any
       // streak left by a prior genuine `UNAUTHORIZED` episode so a later real
       // rejection starts from a clean slate.
       this.noProgressUnauthorizedReconnects = 0;
-      // The details go no further than this branch: the reconnect below is
-      // reported to consumers as a bare `reconnecting` transition, and a
-      // retryable close is by definition one the client does not act on. That
-      // is right for the transport, but it made a host that retries forever
-      // (a shipped 1.2.0 host refusing a chat store written by 1.3, once per
-      // reconnect) silent everywhere - the tile spun, and no log named the
-      // host's reason. One line here is what support has to go on.
+      // The details ride the `reconnecting` transition below as its
+      // `retryCause` - never as a close reason, because the stream is not
+      // closed - so a consumer that counts failed attempts can name the host's
+      // code. Before they did, a host that retries forever (a shipped 1.2.0
+      // host refusing a chat store written by 1.3, once per reconnect) was
+      // silent everywhere: the tile spun, and no log named the host's reason.
+      // This line is still what support has to go on where no tile is
+      // watching.
       const retryableClose = describeRetryableClose({
         method: this.config.method,
         code: details.code,
@@ -2773,7 +2801,7 @@ class StreamSession<
         console.warn(retryableClose.line);
       }
       this.teardownSocket(1000, "host-retryable");
-      this.onTransportDrop();
+      this.dropAndReconnect(details);
       return;
     }
     // `UNAUTHORIZED` is recoverable when an auth revalidator is wired: the
@@ -2817,7 +2845,9 @@ class StreamSession<
     this.teardownSocket(1000, "host-unauthorized");
     this.slowClientReconnectStreak = 0;
     this.lastCloseWasSlowClient = false;
-    this.resetForReconnect();
+    // `null`: this close is not a retryable one. Revalidation decides whether
+    // there is a next attempt at all.
+    this.resetForReconnect(null);
 
     void this.revalidateThenReconnect(auth, details, rejectedToken);
   }
@@ -3016,7 +3046,7 @@ class StreamSession<
     // "reconnecting", not "closed": the session IS coming back, and consumers
     // already render this state as an interruption rather than a failure. The
     // app-level clock banner is what names the cause.
-    this.transitionTo("reconnecting", null);
+    this.transitionTo("reconnecting", null, null);
     if (this.disposed) {
       this.clearClockPark();
     }
@@ -3105,10 +3135,7 @@ class StreamSession<
     }
     this.teardownTimers();
     this.teardownSocket(1000, "host-fatal-error");
-    this.transitionTo("closed", {
-      kind: "fatalError",
-      details,
-    });
+    this.transitionTo("closed", { kind: "fatalError", details }, null);
   }
 
   private handleSocketError(): void {
@@ -3176,6 +3203,16 @@ class StreamSession<
   }
 
   private onTransportDrop(): void {
+    this.dropAndReconnect(null);
+  }
+
+  /**
+   * {@link onTransportDrop} for a drop the host EXPLAINED: `retryCause` is the
+   * retryable close's details, published on the `reconnecting` transition this
+   * drop causes (see `StatusChangeHandler`). Its one caller is the retryable
+   * arm of `handleFatalErrorFrame`; every other drop has no cause to give.
+   */
+  private dropAndReconnect(retryCause: FatalErrorDetails | null): void {
     if (this.disposed) {
       return;
     }
@@ -3189,7 +3226,7 @@ class StreamSession<
       this.slowClientReconnectStreak = 0;
     }
     this.lastCloseWasSlowClient = false;
-    this.resetForReconnect();
+    this.resetForReconnect(retryCause);
     this.scheduleReconnect();
   }
 
@@ -3261,9 +3298,10 @@ class StreamSession<
    * Clears the per-connect socket + timers and transitions to "reconnecting"
    * WITHOUT scheduling the redial. `onTransportDrop` follows it with
    * `scheduleReconnect`; the `UNAUTHORIZED` path follows it with a revalidation
-   * that decides whether to reconnect or go terminal.
+   * that decides whether to reconnect or go terminal. `retryCause` goes out on
+   * the transition (see {@link dropAndReconnect}).
    */
-  private resetForReconnect(): void {
+  private resetForReconnect(retryCause: FatalErrorDetails | null): void {
     this.negotiatedSchemaVersion = null;
     this.config.onTransportReconnect(this.config.method);
     this.clearHeartbeat();
@@ -3293,7 +3331,7 @@ class StreamSession<
     this.supportsHostCredentialProvision = false;
     this.phase = "idle";
     this.pendingBinaryEnvelope = null;
-    this.transitionTo("reconnecting", null);
+    this.transitionTo("reconnecting", null, retryCause);
   }
 
   private scheduleReconnect(): void {
@@ -3443,6 +3481,7 @@ class StreamSession<
   private transitionTo(
     next: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    retryCause: FatalErrorDetails | null,
   ): void {
     if (this.status === next && next !== "reconnecting") {
       return;
@@ -3452,7 +3491,7 @@ class StreamSession<
     if (handler === null) {
       return;
     }
-    handler(next, reason);
+    handler(next, reason, retryCause);
   }
 
   private disposeSession(): boolean {

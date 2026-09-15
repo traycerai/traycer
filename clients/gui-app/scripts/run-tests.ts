@@ -174,6 +174,17 @@ if (runsFirstShard) {
       exitCode,
       runBrowserRegression("scripts/toast-close-button-touch-browser.mjs"),
     );
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/docx-preview-browser-regression.mjs"),
+    );
+    // A CSS duration accidentally applied to transition-property: all sends
+    // Floating UI surfaces from the viewport corner on mount and re-anchor;
+    // only a real browser can measure that layout and style interpolation.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/panel-motion-position-browser.mjs"),
+    );
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design

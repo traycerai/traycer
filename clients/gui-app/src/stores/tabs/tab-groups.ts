@@ -21,18 +21,18 @@ export const TAB_COLORS = [
 ] as const;
 
 const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
-const customizationSchema = z.object({
+export const tabCustomizationSchema = z.object({
   color: colorSchema.nullable(),
   icon: z.string().max(32).nullable(),
   groupId: z.string().max(128).nullable(),
 });
-const groupSchema = z.object({
+export const tabGroupSchema = z.object({
   name: z.string().max(80),
   color: colorSchema,
   collapsed: z.boolean(),
 });
-export type TabCustomization = z.infer<typeof customizationSchema>;
-export type TabGroup = z.infer<typeof groupSchema>;
+export type TabCustomization = z.infer<typeof tabCustomizationSchema>;
+export type TabGroup = z.infer<typeof tabGroupSchema>;
 export type TabCustomizations = Readonly<Record<string, TabCustomization>>;
 export type TabGroups = Readonly<Record<string, TabGroup>>;
 export const DEFAULT_TAB_CUSTOMIZATION: TabCustomization = {
@@ -42,12 +42,12 @@ export const DEFAULT_TAB_CUSTOMIZATION: TabCustomization = {
 };
 
 export function parseTabCustomizations(value: unknown): TabCustomizations {
-  const parsed = z.record(z.string(), customizationSchema).safeParse(value);
+  const parsed = z.record(z.string(), tabCustomizationSchema).safeParse(value);
   return parsed.success ? parsed.data : {};
 }
 
 export function parseTabGroups(value: unknown): TabGroups {
-  const parsed = z.record(z.string(), groupSchema).safeParse(value);
+  const parsed = z.record(z.string(), tabGroupSchema).safeParse(value);
   return parsed.success ? parsed.data : {};
 }
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
+import type { AvailabilityRecoveryKind } from "@traycer-clients/shared/host-transport/availability-recovery-kind";
 import type { ResourcesStreamCallbacks } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
@@ -40,7 +41,7 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
 // The transport, present only so the mount can subscribe to its recovery
 // signal. Nothing below ever calls through it — the resources stream itself is
 // driven by `__setResourcesStreamClientFactoryForTests`.
-const recoveryListeners = new Set<() => void>();
+const recoveryListeners = new Set<(kind: AvailabilityRecoveryKind) => void>();
 
 const fakeStreamClient: IHostStreamClient<HostStreamRpcRegistry> = {
   subscribe: () => {
@@ -70,9 +71,12 @@ const fakeStreamClient: IHostStreamClient<HostStreamRpcRegistry> = {
   instanceId: "fake-global-resources-stream-client",
 };
 
-/** The host came back — a resume, a restart, or an in-place upgrade. */
+/**
+ * The host came back — a resume, a restart, or an in-place upgrade. Fired as a
+ * reconnect; the mount ignores the kind.
+ */
 function fireAvailabilityRecovered(): void {
-  for (const listener of Array.from(recoveryListeners)) listener();
+  for (const listener of Array.from(recoveryListeners)) listener("reconnect");
 }
 
 describe("GlobalResourcesStreamMount", () => {

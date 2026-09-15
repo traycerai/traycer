@@ -8,6 +8,7 @@ import {
   Keyboard,
   LineChart,
   Palette,
+  PanelBottom,
   PanelsTopLeft,
   QrCode,
   Server,
@@ -15,17 +16,20 @@ import {
   Settings as SettingsIcon,
   TerminalSquare,
   Volume2,
+  Waypoints,
 } from "lucide-react";
 import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
   | "general"
   | "appearance"
+  | "layout"
   | "opening-behavior"
   | "app-notifications"
   | "providers"
   | "notifications"
   | "agents"
+  | "fallback"
   | "keybindings"
   | "shell"
   | "worktrees"
@@ -40,6 +44,24 @@ export type SettingsSectionId =
   | "app-diagnostics"
   | "diagnostics"
   | "usage";
+
+/**
+ * The Fallback section's id, as a value.
+ *
+ * Exported because the chat surfaces link INTO this section from six places -
+ * the grace card, the waiting card, the destination menu's empty state, the
+ * attribution details, the error card and the return banner - each doing
+ * `openSettings({ section: FALLBACK_SETTINGS_SECTION_ID })`. A bare `"fallback"`
+ * at each of those sites would make a rename a set of silently dead links
+ * rather than a compile error, and they are on the failure path, where nobody
+ * would find them.
+ *
+ * `as const satisfies` rather than a `SettingsSectionId` annotation: the
+ * annotation would widen the value to the whole union, and `openSettings` and
+ * `settingsRouteOptions` both build a literal route path from it.
+ */
+export const FALLBACK_SETTINGS_SECTION_ID =
+  "fallback" as const satisfies SettingsSectionId;
 
 /**
  * What a section BELONGS to — the organising idea of the whole surface.
@@ -101,10 +123,13 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now sixteen. Providers,
- * Worktrees, the host's Notifications, Agent selection, Shell and Diagnostics
- * are the eleventh through sixteenth and go without. Providers is the newest
- * to lose one, to Opening behavior taking the third Application slot.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now eighteen. The whole
+ * host group - Overview, Providers, Worktrees, the host's Notifications, Agent
+ * selection, Fallback, Shell and Diagnostics - is the eleventh through
+ * eighteenth and goes without. Overview is the newest to lose one, to Layout
+ * taking the seventh Application slot. Fallback was added into the digit-less
+ * tail and so moved no existing shortcut - it sits between Agent selection and
+ * Shell, both already there.
  *
  * Worktrees is the one that lost a digit to the app-scoped Sounds
  * entry below. That follows from keeping Application entries together at the
@@ -170,6 +195,17 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "app-diagnostics",
     label: "Diagnostics",
     icon: Activity,
+    group: "app",
+  },
+  // Where the app's own chrome SITS and how much of it shows - the status bar
+  // first, the composer and the sidebar's own layout beside it later. It is a
+  // page rather than a group inside Appearance because the controls answer
+  // "where does this live", not "what does it look like", and because a
+  // per-window rate-limit list needs room Appearance does not have.
+  {
+    id: "layout",
+    label: "Layout",
+    icon: PanelBottom,
     group: "app",
   },
   {
@@ -241,6 +277,18 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "agents",
     label: "Agent selection",
     icon: Bot,
+    group: "host",
+  },
+  // Beside Agent selection, and for the same reason it sits under the picker at
+  // all: both configure how a chat agent gets ROUTED, and both answer per host,
+  // because the providers and accounts a fallback can reach are that machine's.
+  // "Fallback" and not "Automatic fallback" - the section is the whole subject,
+  // and "Automatic fallback" is the master toggle INSIDE it, so using the same
+  // words for both would make the rail row read as a switch.
+  {
+    id: "fallback",
+    label: "Fallback",
+    icon: Waypoints,
     group: "host",
   },
   {

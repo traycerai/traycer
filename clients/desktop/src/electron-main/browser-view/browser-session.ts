@@ -233,35 +233,6 @@ export function ensureBrowserViewSession(
   );
 }
 
-/**
- * A plain desktop Chrome User-Agent for guest partitions, carrying NO
- * `Electron/<ver>` token and NO Traycer product token - exactly the shape a
- * real Chrome sends. Guests are browser tabs, and providers (Google's
- * `disallowed_useragent`, others) refuse sign-in for any UA containing
- * "Electron", which broke OAuth completing inside a guest/popup. The Chrome
- * version tracks the runtime; the platform token is the standard per-OS string
- * a real Chrome reports (macOS reports Intel even on Apple Silicon, matching
- * Chrome). Traycer's own host/renderer comms keep their branded UA via
- * `configureUserAgent()` on the default session.
- *
- * Guests get this clean UA too, but not via a session-level `setUserAgent`
- * call here: guest partition sessions are never the default session, so with
- * no explicit session UA they fall through to `app.userAgentFallback`, which
- * `configureUserAgent()` sets to this same value. That one lever covers both
- * guests and their popups (popups share the opener's partition session) -
- * exported for `configureUserAgent()` to consume.
- */
-export function guestBrowserUserAgent(): string {
-  const platformToken = guestBrowserPlatformToken();
-  return `Mozilla/5.0 (${platformToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
-}
-
-function guestBrowserPlatformToken(): string {
-  if (process.platform === "darwin") return "Macintosh; Intel Mac OS X 10_15_7";
-  if (process.platform === "win32") return "Windows NT 10.0; Win64; x64";
-  return "X11; Linux x86_64";
-}
-
 /** The named jar, bypassing the saved-logins pref. */
 export function ensureBrowserViewSessionForPartition(
   partition: string,

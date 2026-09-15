@@ -29,7 +29,7 @@ function tileKey() {
 
 describe("createBrowserTileFindAdapter", () => {
   it("begins a new finding session on search: findNext true, forward true", () => {
-    const browserView = new RecordingBrowserViewBridge();
+    const browserView = new RecordingBrowserViewBridge({});
     const adapter = createBrowserTileFindAdapter({
       browserView,
       tileKey: tileKey(),
@@ -49,7 +49,7 @@ describe("createBrowserTileFindAdapter", () => {
   });
 
   it("advances the active session forward on next(): findNext false, forward true", () => {
-    const browserView = new RecordingBrowserViewBridge();
+    const browserView = new RecordingBrowserViewBridge({});
     const adapter = createBrowserTileFindAdapter({
       browserView,
       tileKey: tileKey(),
@@ -67,7 +67,7 @@ describe("createBrowserTileFindAdapter", () => {
   });
 
   it("advances the active session backward on previous(): findNext false, forward false", () => {
-    const browserView = new RecordingBrowserViewBridge();
+    const browserView = new RecordingBrowserViewBridge({});
     const adapter = createBrowserTileFindAdapter({
       browserView,
       tileKey: tileKey(),

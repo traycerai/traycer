@@ -11,6 +11,9 @@ const drainDesktopTabsPersistence = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
 const publishPromptStashReset = vi.fn<() => void>();
+const resetTabRecoveryHistory = vi.fn<() => Promise<void>>(() =>
+  Promise.resolve(),
+);
 vi.mock("@/lib/windows/per-window-projection-debounce", () => ({
   flushActiveDesktopPerWindowProjection: () =>
     flushActiveDesktopPerWindowProjection(),
@@ -20,6 +23,9 @@ vi.mock("@/stores/tabs/desktop-tabs-persistence", () => ({
 }));
 vi.mock("@/lib/composer/prompt-stash-channel", () => ({
   publishPromptStashReset: () => publishPromptStashReset(),
+}));
+vi.mock("@/lib/tab-recovery/history", () => ({
+  resetTabRecoveryHistory: () => resetTabRecoveryHistory(),
 }));
 
 // The real module reaches `idb-keyval` on first use, which jsdom has no
@@ -125,6 +131,8 @@ beforeEach(() => {
   flushActiveDesktopPerWindowProjection.mockClear();
   drainDesktopTabsPersistence.mockClear();
   publishPromptStashReset.mockClear();
+  resetTabRecoveryHistory.mockReset();
+  resetTabRecoveryHistory.mockResolvedValue(undefined);
   clearAppearanceCache.mockClear();
   clearAppearanceCache.mockResolvedValue(undefined);
 
@@ -287,6 +295,20 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     expect(hostClearIndex).toBeLessThan(teardownIndex);
     expect(teardownIndex).toBeLessThan(sweepIndex);
   });
+
+  it("stops before the sweep and reload when tab-recovery reset fails", async () => {
+    resetTabRecoveryHistory.mockRejectedValueOnce(
+      new Error("tab recovery reset failed"),
+    );
+
+    await expect(clearAllPersistedStores({ hostClear: null })).rejects.toThrow(
+      "tab recovery reset failed",
+    );
+
+    expect(resetTabRecoveryHistory).toHaveBeenCalledTimes(1);
+    expect(localStorageMock.getItem("traycer-gui-app:settings")).toBe("{}");
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
@@ -325,7 +347,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     return { deleted };
   }
 
-  it("deletes only known renderer dbs (landing-image, file-edit-recovery, prompt-stash); same-prefix + unrelated dbs survive", async () => {
+  it("deletes only known renderer dbs (landing-image, file-edit-recovery, prompt-stash, tab-recovery); same-prefix + unrelated dbs survive", async () => {
     const { deleted } = installIndexedDB({
       databases: () => Promise.resolve(DB_NAMES.map((name) => ({ name }))),
     });
@@ -343,6 +365,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
         "traycer-gui-app:window-7:landing-images",
         "traycer-gui-app:default:file-edit-recovery",
         "traycer-gui-app:window-7:file-edit-recovery",
+        "traycer-gui-app:tab-recovery",
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
@@ -428,10 +451,9 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
 
     await clearAllPersistedStores({ hostClear: null });
 
-    // The fixed appearance db is also always deleted by name, alongside
-    // prompt-stash - both land before the peer-window notify.
     expect(order).toEqual([
       "deleted:traycer-gui-app:prompt-stash",
+      "deleted:traycer-gui-app:tab-recovery",
       "deleted:traycer-gui-app:appearance",
       "reset",
     ]);
@@ -570,21 +592,25 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("deleteDatabase onblocked resolves so the wipe still reloads", async () => {
+  it("rejects and does not reload when tab-recovery deletion is blocked", async () => {
     const value = {
       databases: vi.fn(() =>
         Promise.resolve([{ name: "traycer-gui-app:default:landing-images" }]),
       ),
-      deleteDatabase: vi.fn((_name: string) => {
+      deleteDatabase: vi.fn((name: string) => {
         const request = {
           onsuccess: null as (() => void) | null,
           onerror: null as (() => void) | null,
           onblocked: null as (() => void) | null,
           error: null as DOMException | null,
         };
-        // Blocked path: resolve (not reject) so a stuck connection can't abort
-        // the rest of the wipe/reload sequence.
-        queueMicrotask(() => request.onblocked?.());
+        // Other renderer stores remain best effort, while recovery deletion is
+        // authoritative: a stuck recovery connection must stop before reload.
+        queueMicrotask(() =>
+          name === "traycer-gui-app:tab-recovery"
+            ? request.onblocked?.()
+            : request.onsuccess?.(),
+        );
         return request;
       }),
     };
@@ -594,9 +620,9 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
       value,
     });
 
-    await expect(
-      clearAllPersistedStores({ hostClear: null }),
-    ).resolves.toBeUndefined();
-    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    await expect(clearAllPersistedStores({ hostClear: null })).rejects.toThrow(
+      "blocked",
+    );
+    expect(reloadSpy).not.toHaveBeenCalled();
   });
 });

@@ -14,6 +14,7 @@ import type {
   FileAssetState,
   FileAssetStatus,
 } from "@/hooks/assets/use-file-asset";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 
 interface ReadFileState {
@@ -54,6 +55,7 @@ const state = vi.hoisted(() => ({
   } satisfies ReadFileState,
   editSessionCalls: 0,
   findAdapterCalls: 0,
+  hostEntry: null as HostDirectoryEntry | null,
   openPaths: vi.fn(),
   triggerOpenExternally: vi.fn(),
   editSession: {
@@ -68,12 +70,8 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
+  useHostDirectoryEntry: () => state.hostEntry,
 }));
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
@@ -262,6 +260,17 @@ function nodeFor(filePath: string): WorkspaceFileRef {
   };
 }
 
+function hostEntry(kind: HostDirectoryEntry["kind"]): HostDirectoryEntry {
+  return {
+    hostId: "host-A",
+    label: "Host A",
+    kind,
+    websocketUrl: "ws://127.0.0.1:1234",
+    version: "1.2.0",
+    transportDialability: "dialable",
+  };
+}
+
 function renderTile(node: WorkspaceFileRef): RenderResult {
   return render(<WorkspaceFileTile node={node} viewTabId="tab-1" isActive />);
 }
@@ -290,6 +299,7 @@ function resetState(): void {
   };
   state.editSessionCalls = 0;
   state.findAdapterCalls = 0;
+  state.hostEntry = hostEntry("local");
   state.openPaths.mockReset();
   state.triggerOpenExternally.mockReset();
 }
@@ -329,6 +339,58 @@ describe("<WorkspaceFileTile /> image mode", () => {
       ).toBeTruthy();
       expect(state.editSessionCalls).toBe(0);
       expect(state.findAdapterCalls).toBe(0);
+    },
+  );
+
+  it.each(["ready", "loading", "fallback"] as const)(
+    "hides image Open Externally controls for a remote host in the %s state",
+    (status) => {
+      state.hostEntry = hostEntry("remote");
+      state.asset = {
+        status,
+        url: status === "ready" ? "blob:image" : null,
+        meta: null,
+        reason:
+          status === "fallback" ? "This image could not be loaded." : null,
+        totalBytes: status === "fallback" ? 42 : null,
+        servedFromCache: false,
+      };
+
+      renderTile(nodeFor("assets/photo.png"));
+
+      expect(
+        screen.queryByRole("button", { name: "Open externally" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Open Externally" }),
+      ).toBeNull();
+      expect(state.openPaths).not.toHaveBeenCalled();
+      expect(state.triggerOpenExternally).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["ready", "loading", "fallback"] as const)(
+    "hides image Open Externally controls for an unresolved host in the %s state",
+    (status) => {
+      state.hostEntry = null;
+      state.asset = {
+        status,
+        url: status === "ready" ? "blob:image" : null,
+        meta: null,
+        reason:
+          status === "fallback" ? "This image could not be loaded." : null,
+        totalBytes: status === "fallback" ? 42 : null,
+        servedFromCache: false,
+      };
+
+      renderTile(nodeFor("assets/photo.png"));
+
+      expect(
+        screen.queryByRole("button", { name: "Open externally" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Open Externally" }),
+      ).toBeNull();
     },
   );
 
@@ -438,5 +500,18 @@ describe("<WorkspaceFileTile /> image mode", () => {
 
     expect(screen.queryByText("This image could not be decoded.")).toBeNull();
     expect(screen.getByTestId("workspace-image-preview")).toBeTruthy();
+  });
+
+  it("hides the fallback open action after a remote image decode failure", () => {
+    state.hostEntry = hostEntry("remote");
+    renderTile(nodeFor("assets/photo.png"));
+
+    fireEvent.error(screen.getByRole("img", { name: "photo.png" }));
+
+    expect(screen.getByText("This image could not be decoded.")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Open Externally" }),
+    ).toBeNull();
+    expect(state.openPaths).not.toHaveBeenCalled();
   });
 });

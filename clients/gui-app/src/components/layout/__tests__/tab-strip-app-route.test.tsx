@@ -136,6 +136,12 @@ vi.mock("@/components/resources/resource-monitor-popover", () => ({
   ResourceMonitorPopover: () => null,
 }));
 
+// The strip hosts the same two surfaces, and it is the DEFAULT placement, so
+// this route harness mounts it on every render and needs the same stub.
+vi.mock("@/components/layout/status-bar/app-status-bar", () => ({
+  AppStatusBar: () => null,
+}));
+
 vi.mock("@/components/auth/user-menu", () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));

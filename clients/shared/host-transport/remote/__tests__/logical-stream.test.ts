@@ -138,7 +138,7 @@ describe("LogicalStream", () => {
     const stream = createStream([], []);
     stream.updateSchemaVersion({ major: 1, minor: 4 });
 
-    stream.notifyStatus("reconnecting", null);
+    stream.notifyStatus("reconnecting", null, null);
     expect(stream.getNegotiatedSchemaVersion()).toBeNull();
 
     // The resume re-establishes it; nothing else does.

@@ -1,18 +1,42 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useSyncExternalStore, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useCloudDraftsDirectory } from "@/hooks/drafts/use-cloud-drafts-directory";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import {
+  cloudDraftIdentityKey,
+  cloudDraftKindsSnapshot,
+  subscribeCloudDraftKinds,
+} from "@/lib/drafts/cloud-draft-kinds";
+import { openableCloudDrafts } from "@/lib/drafts/cloud-drafts-visibility";
 
 export function CloudDraftsSection(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
 }): ReactNode {
   const directory = useCloudDraftsDirectory(props.client, props.hostId);
-  const foreign = useMemo(() => {
-    if (props.hostId === null) return [];
-    return directory.chats.filter((chat) => chat.ownerHostId !== props.hostId);
-  }, [directory.chats, props.hostId]);
-  if (!directory.visible || foreign.length === 0) return null;
+  const kinds = useSyncExternalStore(
+    subscribeCloudDraftKinds,
+    cloudDraftKindsSnapshot,
+    cloudDraftKindsSnapshot,
+  );
+  const hosts = useHostDirectoryList();
+  const hostLabels = hosts.data;
+  const labelByHostId = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const entry of hostLabels ?? []) labels.set(entry.hostId, entry.label);
+    return labels;
+  }, [hostLabels]);
+  const openable = useMemo(
+    () =>
+      openableCloudDrafts({
+        chats: directory.chats,
+        hostId: props.hostId,
+        kinds,
+      }),
+    [directory.chats, kinds, props.hostId],
+  );
+  if (!directory.visible || openable.length === 0) return null;
   return (
     <section
       data-testid="cloud-drafts-section"
@@ -22,12 +46,16 @@ export function CloudDraftsSection(props: {
         Drafts from other devices
       </h2>
       <ul className="flex flex-col gap-1">
-        {foreign.map((chat) => {
-          const ownerLabel = chat.ownerHostId;
+        {openable.map((chat) => {
+          // A host id is not a name. The owner can be a device this directory
+          // has never listed (removed from the account, or not yet fetched),
+          // and a bare UUID is worse copy than saying so.
+          const ownerLabel =
+            labelByHostId.get(chat.ownerHostId) ?? "another device";
           const title = chat.title ?? "Untitled draft";
           return (
             <li
-              key={`${chat.identity.taskId}:${chat.identity.chatId}`}
+              key={cloudDraftIdentityKey(chat)}
               className="rounded-md px-2 py-1.5 text-ui-sm"
             >
               <span className="text-foreground">{title}</span>

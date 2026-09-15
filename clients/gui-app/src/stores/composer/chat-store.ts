@@ -34,7 +34,9 @@ import type {
   PlanSource,
   PlanStatus,
   PlanStep,
+  AgentFailure,
   ProviderNoticeDetail,
+  ProviderNoticeKind,
   ProviderNoticeTone,
   ToolCallManagedCommand,
   ToolInputDetail,
@@ -200,6 +202,12 @@ export interface ProviderNoticeSegment {
   id: string;
   kind: "provider_notice";
   status: "streaming" | "completed" | "errored";
+  // WHICH notice this is, carried straight off the block's `providerNotice`.
+  // Dropped here until the provider-fallback surfaces needed it: the three
+  // fallback arms render differently from the harness ones - a settings link in
+  // their details, and the resumed-turn marker for `fallback_wait_resumed` -
+  // and none of that can be inferred from a tone and a title.
+  noticeKind: ProviderNoticeKind;
   tone: ProviderNoticeTone;
   title: string;
   message: string | null;
@@ -406,6 +414,18 @@ export type MessageSegment =
       message: string;
       recoverable: boolean;
       code: string | null;
+      /**
+       * The host's typed description of WHY the turn died, stamped once at the
+       * emitter and carried unchanged. `null` on rows persisted before the
+       * field existed, and on any row from a host below the line that sends it.
+       *
+       * Read rather than re-derived, which is the whole point of the payload:
+       * `message` and `code` are provider prose, and the fallback affordances
+       * on this row (which rungs are eligible, whether a reset time may be
+       * rendered as a time) turn on a classification that must agree with the
+       * one the engine acted on.
+       */
+      failure: AgentFailure | null;
     }
   | {
       id: string;
@@ -655,6 +675,55 @@ export interface ChatMessage {
    * row; `undefined` on live and non-final rows.
    */
   turnHasOnlyAutonomousResumeSegments?: boolean;
+  /**
+   * The host turn this assistant row belongs to. Absent on user rows, on
+   * synthesized event rows, and on records persisted before `turnId` existed.
+   *
+   * It exists so a row can be matched against a turn id the HOST names - the
+   * error card's manual-rung affordances, which must attach to the one failed
+   * attempt the host is describing and to no other row, so a transcript
+   * holding three failed attempts offers them once rather than three times.
+   *
+   * Deliberately NOT the row id, which is `assistant:<turnKey>` and is a
+   * presentation key: `assistantTurnKey` synthesizes `ts:<timestamp>` for a
+   * legacy record, so splitting the row id would compare a timestamp against a
+   * turn id. Absent here means "this row has no turn identity", which is the
+   * same answer as "not the failed attempt" - so a row that never sets it
+   * renders no actions rather than the wrong ones.
+   */
+  turnId?: string;
+  /**
+   * The id of the ONE error segment on this row that carries the manual
+   * recovery actions (Retry / Switch… / Wait), or absent when this row carries
+   * none.
+   *
+   * `turnId` says which host attempt a row belongs to; this says which SEGMENT
+   * inside the row the affordances hang off. Both are needed, and neither
+   * substitutes for the other: a failed turn routinely carries several error
+   * blocks that all share one `turnId` (the queue-pause notice the host appends
+   * beside the failure, a non-terminal extension error before the real
+   * terminal), and a turn that was steered splits into several ROWS that also
+   * all share it. Turn identity alone therefore selects a set, not a place.
+   *
+   * Resolved once per turn over the complete pre-split block list by
+   * `manualRungAnchorSegmentId` - read its doc for the predicate and for why
+   * the per-row walk it replaced was wrong across a split - and stamped on the
+   * single row that contains the chosen segment. Every other row of the turn
+   * leaves it absent, which is the same answer a row with no error at all
+   * gives, so a reader needs no special case for either.
+   *
+   * Absent rather than `null` for `turnId`'s reason one field up: an explicit
+   * `undefined` would be a present key whose value must not be read as an
+   * identity.
+   *
+   * `renderAssistantTurnRows` is the only writer, and that is safe rather than
+   * merely tidy: of the three other assistant rows `rendered-messages.ts`
+   * builds, two carry `segments: []` and can hold no anchor, and the third -
+   * the synthesized notification-anchor row - carries one error segment on
+   * purpose and no `turnId`, so it offered no rungs before this field existed
+   * and offers none now. Absence here and absence there agree.
+   */
+  manualRungAnchorId?: string;
   /**
    * Whether this completed row should render the elapsed footer. `false` for
    * a background-completion notification that no provider turn adopted; its

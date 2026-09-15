@@ -191,7 +191,7 @@ function emitSnapshot(
   events: ReadonlyArray<ChatEvent>,
   messages: ReadonlyArray<Message>,
 ): void {
-  callbacks.onConnectionStatus("open", null);
+  callbacks.onConnectionStatus("open", null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -246,7 +246,7 @@ function emitWindowedSnapshot(
   callbacks: ChatStreamCallbacks,
   restorableSetupInterruption: RestorableSetupInterruption | null,
 ): void {
-  callbacks.onConnectionStatus("open", null);
+  callbacks.onConnectionStatus("open", null, null);
   callbacks.onWindowedSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -535,6 +535,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
         reason: null,
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
       harness.callbacks().onMessageAccepted({
         kind: "messageAccepted",
