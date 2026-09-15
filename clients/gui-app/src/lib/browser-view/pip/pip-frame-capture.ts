@@ -17,9 +17,7 @@ import {
 } from "@/lib/browser-view/sessions/electron-tab-directory";
 import {
   openPipHeadlessStream,
-  PIP_HEADLESS_MAX_HEIGHT,
-  PIP_HEADLESS_MAX_WIDTH,
-  PIP_HEADLESS_QUALITY,
+  currentPipHeadlessFrameBudget,
 } from "@/lib/browser-view/pip/pip-headless-stream";
 import type {
   AgentCursorPosition,
@@ -286,9 +284,7 @@ function startNativePipCapture(input: {
       sessionId: input.binding.sessionId,
       tabId: input.binding.tabId,
       registrationId: input.binding.registrationId,
-      maxWidth: PIP_HEADLESS_MAX_WIDTH,
-      maxHeight: PIP_HEADLESS_MAX_HEIGHT,
-      quality: PIP_HEADLESS_QUALITY,
+      ...currentPipHeadlessFrameBudget(),
     })
     .catch((error: unknown) => {
       failPipConversion(
@@ -314,14 +310,15 @@ function startHeadlessPipCapture(input: {
   readonly tabId: string;
 }): () => void {
   let disposed = false;
+  const headlessBudget = currentPipHeadlessFrameBudget();
   const stream = openPipHeadlessStream({
     client: input.client,
     epicId: input.epicId,
     sessionId: input.sessionId,
     tabId: input.tabId,
-    maxWidth: PIP_HEADLESS_MAX_WIDTH,
-    maxHeight: PIP_HEADLESS_MAX_HEIGHT,
-    quality: PIP_HEADLESS_QUALITY,
+    maxWidth: headlessBudget.maxWidth,
+    maxHeight: headlessBudget.maxHeight,
+    quality: headlessBudget.quality,
     onFrame: (frame, jpegBytes) => {
       if (disposed) return;
       applyCaptureFrame({

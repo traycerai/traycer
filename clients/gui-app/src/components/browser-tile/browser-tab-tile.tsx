@@ -65,6 +65,7 @@ export interface BrowserTabTileProps {
   readonly persistViewportPreset:
     | ((preset: BrowserViewViewportPresetId) => void)
     | null;
+  readonly persistZoomFactor: ((factor: number) => void) | null;
   /**
    * Where a link the page wants in a new tab goes. The disposition is the
    * page's own: a background open (middle/ctrl/cmd-click) must not steal
@@ -337,6 +338,7 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
         sessionId: props.node.sessionId,
         url: props.tab.url,
         viewportPreset: props.node.viewportPreset,
+        zoomFactor: props.node.zoomFactor,
       }}
       binding={props.binding}
       placement={props.placement}
@@ -344,6 +346,7 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
       pageSessionId={props.pageSessionId}
       onRequestClose={props.onRequestClose}
       persistViewportPreset={props.persistViewportPreset}
+      persistZoomFactor={props.persistZoomFactor}
       onOpenLinkInNewTile={props.onOpenLinkInNewTile}
       onRequestNewTab={props.onRequestNewTab}
       onConvertToPip={props.onConvertToPip}

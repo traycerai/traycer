@@ -133,6 +133,7 @@ function tabStatus(viewed: boolean): BrowserViewNativeTabStatusChange {
     registrationId: "registration-1",
     url: "https://example.com/",
     title: "Example",
+    faviconUrl: null,
     status: "ready",
     reason: null,
     canGoBack: false,

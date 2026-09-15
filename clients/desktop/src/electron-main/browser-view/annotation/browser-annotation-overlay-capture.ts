@@ -2,6 +2,7 @@ import {
   ELEMENT_PICKER_LIMITS,
   ELEMENT_PICKER_STYLE_PROPS,
 } from "./browser-element-picker-script";
+import { readComponentHint } from "./browser-element-component-hint";
 import { boundedString } from "../guards";
 
 /**
@@ -10,6 +11,7 @@ import { boundedString } from "../guards";
  */
 export function captureOverlayElement(el: Element): Record<string, unknown> {
   const rect = el.getBoundingClientRect().toJSON();
+  const hint = readComponentHint(el);
   return {
     selector: boundedString(
       selectorPath(el),
@@ -38,6 +40,9 @@ export function captureOverlayElement(el: Element): Record<string, unknown> {
       bottom: round(rect.bottom),
       left: round(rect.left),
     },
+    componentName: hint.componentName,
+    sourceFile: hint.sourceFile,
+    sourceLine: hint.sourceLine,
     computedStyles: stylesOf(el),
   };
 }

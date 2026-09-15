@@ -1060,6 +1060,7 @@ describe("preload new-capability wiring", () => {
       maxWidth: 640,
       maxHeight: 360,
       quality: 70,
+      deviceScaleFactor: 2,
     };
     const frames: BrowserScreencastServerFrame[] = [];
     const subscription = bridge.browserView.onPipCaptureFrame((frame) => {

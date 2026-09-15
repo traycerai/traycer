@@ -44,6 +44,7 @@ const NODE = {
   sessionId: "session-1",
   url: "https://example.com/",
   viewportPreset: "responsive",
+  zoomFactor: 1,
 } as const;
 
 function binding(): ElectronTabBinding {
@@ -74,6 +75,7 @@ function renderLandingSurface(): void {
         pageSessionId="browser-session:session-1:tab-1"
         onRequestClose={() => undefined}
         persistViewportPreset={null}
+        persistZoomFactor={null}
         onOpenLinkInNewTile={null}
         onRequestNewTab={null}
         onConvertToPip={null}

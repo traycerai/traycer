@@ -5,11 +5,13 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { BrowserViewportState } from "@traycer/protocol/host/browser/viewport";
 import { BrowserViewportHandles } from "@/components/browser-tile/browser-viewport-handles";
 import { BrowserViewportToolbar } from "@/components/browser-tile/browser-viewport-toolbar";
+import type { BrowserViewDeviceProfile } from "@traycer-clients/shared/platform/browser-device-profiles";
 import type { BrowserViewportController } from "@/components/browser-tile/use-browser-viewport";
 
 function viewportState(
@@ -33,6 +35,8 @@ function makeController(
 ): BrowserViewportController {
   const state = overrides.state ?? viewportState(390, 844, "fixed");
   return {
+    emulateDevice: null,
+    guestRegistrationId: "guest-1",
     state,
     size: overrides.size === undefined ? state.applied : overrides.size,
     expanded: true,
@@ -772,5 +776,335 @@ describe("BrowserViewportToolbar", () => {
         x: 376,
       }),
     );
+  });
+});
+
+/**
+ * The device character is derived from the size the tile is CONFIRMED at, so it
+ * holds for every way a size can arrive - including one restored from persistence,
+ * which reaches no menu at all.
+ */
+describe("<BrowserViewportToolbar /> device emulation", () => {
+  /** Typed so the assertions below are checked rather than trusted. */
+  function deviceSpy(): Mock<
+    (profile: BrowserViewDeviceProfile | null) => Promise<void>
+  > {
+    const spy =
+      vi.fn<(profile: BrowserViewDeviceProfile | null) => Promise<void>>();
+    spy.mockResolvedValue(undefined);
+    return spy;
+  }
+
+  it("emulates the device of a size restored from persistence", () => {
+    const emulateDevice = deviceSpy();
+    // No interaction at all: this is a tile reopened at a size main remembered.
+    render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size: { width: 390, height: 844 },
+          emulateDevice,
+        })}
+      />,
+    );
+
+    expect(emulateDevice).toHaveBeenCalledTimes(1);
+    const profile = emulateDevice.mock.calls[0]?.[0] ?? null;
+    expect(profile).not.toBeNull();
+    expect(profile?.mobile).toBe(true);
+    expect(profile?.touch).toBe(true);
+    expect(profile?.devicePixelRatio).toBeGreaterThan(1);
+  });
+
+  it("treats a rotated device as the same device", () => {
+    const emulateDevice = deviceSpy();
+    render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(844, 390, "fixed"),
+          size: { width: 844, height: 390 },
+          emulateDevice,
+        })}
+      />,
+    );
+
+    expect(emulateDevice.mock.calls[0]?.[0]?.touch).toBe(true);
+  });
+
+  it("clears emulation for Fit, which is a pane rather than a device", () => {
+    const emulateDevice = deviceSpy();
+    render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(0, 0, "fit"),
+          size: null,
+          emulateDevice,
+        })}
+      />,
+    );
+
+    // null is the starting value, so nothing needs to be sent.
+    expect(emulateDevice).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing for a freeform size that is not a named device", () => {
+    const emulateDevice = deviceSpy();
+    render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(517, 433, "fixed"),
+          size: { width: 517, height: 433 },
+          emulateDevice,
+        })}
+      />,
+    );
+
+    expect(emulateDevice).not.toHaveBeenCalled();
+  });
+
+  it("clears the device when a tile goes from a phone back to Fit", async () => {
+    const emulateDevice = deviceSpy();
+    const { rerender } = render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size: { width: 390, height: 844 },
+          emulateDevice,
+        })}
+      />,
+    );
+    expect(emulateDevice.mock.calls[0]?.[0]?.mobile).toBe(true);
+
+    rerender(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(0, 0, "fit"),
+          size: null,
+          emulateDevice,
+        })}
+      />,
+    );
+
+    // Fit is a pane, not a device: the page must stop being told it is a phone.
+    await waitFor(() => {
+      expect(emulateDevice).toHaveBeenCalledTimes(2);
+    });
+    expect(emulateDevice.mock.calls[1]?.[0]).toBeNull();
+  });
+
+  it("does not resend the same device when the tile re-renders", () => {
+    const emulateDevice = deviceSpy();
+    const size = { width: 390, height: 844 };
+    const { rerender } = render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size,
+          emulateDevice,
+        })}
+      />,
+    );
+
+    // A fresh controller object every render is normal here - the tile builds
+    // `emulateDevice` inline - so the guard, not the dependency list, is what
+    // keeps this from becoming an IPC message per render.
+    rerender(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size: { ...size },
+          emulateDevice,
+        })}
+      />,
+    );
+    rerender(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size: { ...size },
+          emulateDevice,
+        })}
+      />,
+    );
+
+    expect(emulateDevice).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("<BrowserViewportToolbar /> device emulation across guests", () => {
+  function deviceSpy(): Mock<
+    (profile: BrowserViewDeviceProfile | null) => Promise<void>
+  > {
+    const spy =
+      vi.fn<(profile: BrowserViewDeviceProfile | null) => Promise<void>>();
+    spy.mockResolvedValue(undefined);
+    return spy;
+  }
+
+  it("re-applies the device when the guest is replaced at the same size", () => {
+    const emulateDevice = deviceSpy();
+    const size = { width: 390, height: 844 };
+    const { rerender } = render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size,
+          emulateDevice,
+          guestRegistrationId: "guest-1",
+        })}
+      />,
+    );
+    expect(emulateDevice).toHaveBeenCalledTimes(1);
+
+    // A crash or a cross-window move: same tab, same size, NEW webContents. The
+    // override died with the old guest, so it has to be restated.
+    rerender(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size: { ...size },
+          emulateDevice,
+          guestRegistrationId: "guest-2",
+        })}
+      />,
+    );
+
+    expect(emulateDevice).toHaveBeenCalledTimes(2);
+    expect(emulateDevice.mock.calls[1]?.[0]?.mobile).toBe(true);
+  });
+
+  it("does not resend when two named devices share a size and a profile", () => {
+    const emulateDevice = deviceSpy();
+    // 412x915 is both a Pixel 7 and a Galaxy S20 Ultra. A lookup by size can only
+    // return one row; the guard compares the PROFILE, so which one it picks is
+    // not observable.
+    const { rerender } = render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(412, 915, "fixed"),
+          size: { width: 412, height: 915 },
+          emulateDevice,
+        })}
+      />,
+    );
+    rerender(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(412, 915, "fixed"),
+          size: { width: 412, height: 915 },
+          emulateDevice,
+        })}
+      />,
+    );
+
+    expect(emulateDevice).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("<BrowserViewportToolbar /> emulation outlives the panel", () => {
+  function deviceSpy(): Mock<
+    (profile: BrowserViewDeviceProfile | null) => Promise<void>
+  > {
+    const spy =
+      vi.fn<(profile: BrowserViewDeviceProfile | null) => Promise<void>>();
+    spy.mockResolvedValue(undefined);
+    return spy;
+  }
+
+  it("clears the device when Fit collapses the controls", async () => {
+    const emulateDevice = deviceSpy();
+    const { rerender } = render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size: { width: 390, height: 844 },
+          expanded: true,
+          emulateDevice,
+        })}
+      />,
+    );
+    expect(emulateDevice.mock.calls[0]?.[0]?.mobile).toBe(true);
+
+    // reset() applies Fit AND closes the panel in one step. An effect living
+    // inside the panel unmounted before it could clear the override, leaving the
+    // page a phone with no control on screen to undo it.
+    rerender(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(0, 0, "fit"),
+          size: null,
+          expanded: false,
+          emulateDevice,
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(emulateDevice).toHaveBeenCalledTimes(2);
+    });
+    expect(emulateDevice.mock.calls[1]?.[0]).toBeNull();
+  });
+
+  it("still emulates while the controls are closed", () => {
+    const emulateDevice = deviceSpy();
+    // A tile restored at a phone size with the panel shut is still a phone.
+    render(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size: { width: 390, height: 844 },
+          expanded: false,
+          emulateDevice,
+        })}
+      />,
+    );
+
+    expect(emulateDevice).toHaveBeenCalledTimes(1);
+    expect(emulateDevice.mock.calls[0]?.[0]?.touch).toBe(true);
+  });
+
+  it("does nothing for a tile with no viewport controller at all", () => {
+    expect(() =>
+      render(<BrowserViewportToolbar controller={null} />),
+    ).not.toThrow();
+  });
+});
+
+describe("<BrowserViewportToolbar /> emulation failure handling", () => {
+  it("retries after a failed send instead of believing it applied", async () => {
+    const emulateDevice =
+      vi.fn<(profile: BrowserViewDeviceProfile | null) => Promise<void>>();
+    emulateDevice.mockRejectedValueOnce(new Error("guest went away"));
+    emulateDevice.mockResolvedValue(undefined);
+
+    const controller = makeController({
+      state: viewportState(390, 844, "fixed"),
+      size: { width: 390, height: 844 },
+      emulateDevice,
+    });
+    const { rerender } = render(
+      <BrowserViewportToolbar controller={controller} />,
+    );
+    await waitFor(() => {
+      expect(emulateDevice).toHaveBeenCalledTimes(1);
+    });
+
+    // The first send failed. Recording it as applied would leave the page on
+    // desktop behaviour until its size or its guest changed, because every later
+    // pass would see the same key and skip.
+    rerender(
+      <BrowserViewportToolbar
+        controller={makeController({
+          state: viewportState(390, 844, "fixed"),
+          size: { width: 390, height: 844 },
+          emulateDevice,
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(emulateDevice).toHaveBeenCalledTimes(2);
+    });
+    expect(emulateDevice.mock.calls[1]?.[0]?.touch).toBe(true);
   });
 });

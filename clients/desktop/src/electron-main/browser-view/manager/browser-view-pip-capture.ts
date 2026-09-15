@@ -40,6 +40,7 @@ export class BrowserViewPipCapture {
         maxWidth: input.maxWidth,
         maxHeight: input.maxHeight,
         quality: input.quality,
+        deviceScaleFactor: input.deviceScaleFactor,
         onFrame,
       });
     } catch (err) {

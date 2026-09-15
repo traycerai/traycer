@@ -22,9 +22,15 @@ const openStream = vi.hoisted((): OpenStreamHandle => ({
 }));
 
 vi.mock("@/lib/browser-view/pip/pip-headless-stream", () => ({
-  PIP_HEADLESS_MAX_WIDTH: 480,
-  PIP_HEADLESS_MAX_HEIGHT: 360,
-  PIP_HEADLESS_QUALITY: 50,
+  PIP_HEADLESS_CSS_WIDTH: 480,
+  PIP_HEADLESS_CSS_HEIGHT: 360,
+  PIP_HEADLESS_QUALITY: 82,
+  currentPipHeadlessFrameBudget: () => ({
+    maxWidth: 960,
+    maxHeight: 720,
+    quality: 82,
+    deviceScaleFactor: 2,
+  }),
   openPipHeadlessStream: (input: {
     readonly onFrame: (
       frame: BrowserScreencastServerFrame,

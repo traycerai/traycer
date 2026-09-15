@@ -441,6 +441,7 @@ describe("<TabStrip />", () => {
       sessionId: "session-1",
       tabId: "browser-tab-1",
       viewportPreset: "responsive",
+      zoomFactor: 1,
     };
     renderTabStripForTab(
       browserTab,
@@ -490,6 +491,7 @@ describe("<TabStrip />", () => {
       sessionId: "session-1",
       tabId: "browser-tab-1",
       viewportPreset: "responsive",
+      zoomFactor: 1,
     };
     testState.browserSessionsByHost.set("host-B", [
       sessionInfo({

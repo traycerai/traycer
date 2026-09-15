@@ -44,6 +44,13 @@ const DISABLED_CAPABILITIES: TileChromeCapabilities = {
   find: false,
   siteInfo: false,
   annotate: false,
+  screenshot: false,
+  recording: false,
+  previewWindow: false,
+  hardReload: false,
+  appearance: false,
+  clearCache: false,
+  audio: false,
 };
 
 function preventNavigate(
@@ -68,6 +75,10 @@ function makeController(
     canGoBack: true,
     canGoForward: true,
     zoomPercent: 100,
+    faviconUrl: null,
+    colorSchemePreference: "system",
+    muted: false,
+    isRecording: false,
     disabled: false,
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
@@ -81,6 +92,14 @@ function makeController(
     onZoomIn: () => undefined,
     onResetZoom: () => undefined,
     onOpenDevTools: () => undefined,
+    devtoolsUnavailableReason: null,
+    onHardReload: () => undefined,
+    onColorSchemePreferenceChange: () => undefined,
+    onClearCache: () => undefined,
+    onToggleMuted: () => undefined,
+    onSaveScreenshot: null,
+    onToggleRecording: null,
+    onTogglePreviewWindow: () => undefined,
     onClearSite: () => undefined,
   };
 }
@@ -514,5 +533,369 @@ describe("<BrowserTileToolbar /> reload loading", () => {
     expect(reload()).toHaveProperty("disabled", false);
     expect(reload().getAttribute("aria-busy")).not.toBe("true");
     expect(screen.queryByTestId("browser-reload-loading")).toBeNull();
+  });
+});
+
+describe("<BrowserTileToolbar /> page controls", () => {
+  afterEach(cleanup);
+
+  function renderWith(controller: TileController): void {
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  const ALL_CAPABILITIES: TileChromeCapabilities = {
+    ...DISABLED_CAPABILITIES,
+    devtools: true,
+    hardReload: true,
+    appearance: true,
+    clearCache: true,
+    audio: true,
+  };
+
+  it("offers a hard reload beside DevTools, under Developer", () => {
+    const onHardReload = vi.fn();
+    renderWith({ ...makeController(ALL_CAPABILITIES, null), onHardReload });
+
+    openMoreMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Reload ignoring cached files" }),
+    );
+    expect(onHardReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears cached files through its own action, not the cookie one", () => {
+    const onClearCache = vi.fn();
+    const onClearSite = vi.fn();
+    renderWith({
+      ...makeController(ALL_CAPABILITIES, null),
+      onClearCache,
+      onClearSite,
+    });
+
+    openMoreMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Clear cached files for this page" }),
+    );
+    expect(onClearCache).toHaveBeenCalledTimes(1);
+    // A cache clear is not a sign-out and must never reach the jar's path.
+    expect(onClearSite).not.toHaveBeenCalled();
+  });
+
+  it("reports the emulated scheme on the Appearance row and switches it", () => {
+    const onColorSchemePreferenceChange = vi.fn();
+    renderWith({
+      ...makeController(ALL_CAPABILITIES, null),
+      colorSchemePreference: "dark",
+      onColorSchemePreferenceChange,
+    });
+
+    openMoreMenu();
+    const trigger = screen.getByRole("menuitem", { name: /Appearance/ });
+    expect(trigger.textContent).toContain("Dark");
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Light" }));
+    expect(onColorSchemePreferenceChange).toHaveBeenCalledWith("light");
+  });
+
+  it("labels the audio row by what pressing it will do", () => {
+    const onToggleMuted = vi.fn();
+    renderWith({
+      ...makeController(ALL_CAPABILITIES, null),
+      muted: true,
+      onToggleMuted,
+    });
+
+    openMoreMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unmute this page" }));
+    expect(onToggleMuted).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders none of these where the tile has no local guest behind them", () => {
+    // `siteInfo` alone keeps the overflow menu on screen, so this asserts the
+    // rows are absent rather than that the menu is.
+    renderWith({
+      ...makeController({ ...DISABLED_CAPABILITIES, siteInfo: true }, null),
+    });
+
+    openMoreMenu();
+    expect(
+      screen.queryByRole("menuitem", { name: "Reload ignoring cached files" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", {
+        name: "Clear cached files for this page",
+      }),
+    ).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Appearance/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /mute this page/i })).toBeNull();
+    // The Developer heading exists only for the rows under it.
+    expect(screen.queryByText("Developer")).toBeNull();
+  });
+});
+
+describe("<BrowserTileToolbar /> page favicon", () => {
+  afterEach(cleanup);
+
+  function renderWith(controller: TileController): void {
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  const NAV_CAPABILITIES: TileChromeCapabilities = {
+    ...DISABLED_CAPABILITIES,
+    navigate: true,
+  };
+
+  it("shows the page's own icon beside its address", () => {
+    renderWith({
+      ...makeController(NAV_CAPABILITIES, null),
+      faviconUrl: "https://example.com/favicon.ico",
+    });
+
+    const icon = document.querySelector("img[aria-hidden]");
+    expect(icon?.getAttribute("src")).toBe("https://example.com/favicon.ico");
+    // Fetching an icon must not announce which page the user is on.
+    expect(icon?.getAttribute("referrerPolicy")).toBe("no-referrer");
+    // Decorative: the address beside it already names the page.
+    expect(icon?.getAttribute("alt")).toBe("");
+  });
+
+  it("renders no icon slot when the page declares none", () => {
+    renderWith({ ...makeController(NAV_CAPABILITIES, null), faviconUrl: null });
+
+    expect(document.querySelector("img[aria-hidden]")).toBeNull();
+  });
+
+  it("drops the element when the icon fails to load, not a broken glyph", () => {
+    renderWith({
+      ...makeController(NAV_CAPABILITIES, null),
+      faviconUrl: "https://example.com/missing.png",
+    });
+
+    const icon = document.querySelector("img[aria-hidden]");
+    expect(icon).not.toBeNull();
+    if (icon !== null) fireEvent.error(icon);
+    expect(document.querySelector("img[aria-hidden]")).toBeNull();
+  });
+});
+
+describe("<BrowserTileToolbar /> screenshot", () => {
+  afterEach(cleanup);
+
+  function renderWith(controller: TileController): void {
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  const SHOT_CAPABILITIES: TileChromeCapabilities = {
+    ...DISABLED_CAPABILITIES,
+    screenshot: true,
+    previewWindow: true,
+    recording: true,
+  };
+
+  it("saves a screenshot when pressed", () => {
+    const onSaveScreenshot = vi.fn();
+    renderWith({
+      ...makeController(SHOT_CAPABILITIES, null),
+      onSaveScreenshot,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save a screenshot" }));
+    expect(onSaveScreenshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the button where there is no local guest to capture", () => {
+    // A screencast tile's pixels live on another machine.
+    renderWith({
+      ...makeController(SHOT_CAPABILITIES, null),
+      onSaveScreenshot: null,
+      onTogglePreviewWindow: () => undefined,
+      isRecording: false,
+      onToggleRecording: null,
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Save a screenshot" }),
+    ).toBeNull();
+  });
+
+  it("hides the button when the capability is off", () => {
+    renderWith({
+      ...makeController(DISABLED_CAPABILITIES, null),
+      onSaveScreenshot: () => undefined,
+      onTogglePreviewWindow: () => undefined,
+      isRecording: false,
+      onToggleRecording: null,
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Save a screenshot" }),
+    ).toBeNull();
+  });
+});
+
+describe("<BrowserTileToolbar /> floating window", () => {
+  afterEach(cleanup);
+
+  it("toggles the floating window from the overflow menu", () => {
+    const onTogglePreviewWindow = vi.fn();
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={{
+            ...makeController(
+              { ...DISABLED_CAPABILITIES, previewWindow: true },
+              null,
+            ),
+            onTogglePreviewWindow,
+          }}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+
+    openMoreMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Open a floating window on this page",
+      }),
+    );
+    // Main owns the toggle, so one row covers open and close and the label does
+    // not have to track which state the window is in.
+    expect(onTogglePreviewWindow).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("<BrowserTileToolbar /> recording", () => {
+  afterEach(cleanup);
+
+  function renderWith(controller: TileController): void {
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  const REC_CAPABILITIES: TileChromeCapabilities = {
+    ...DISABLED_CAPABILITIES,
+    recording: true,
+  };
+
+  it("offers to record, and says stop while recording", () => {
+    const onToggleRecording = vi.fn();
+    renderWith({
+      ...makeController(REC_CAPABILITIES, null),
+      onToggleRecording,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Record this page" }));
+    expect(onToggleRecording).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    renderWith({
+      ...makeController(REC_CAPABILITIES, null),
+      isRecording: true,
+      onToggleRecording,
+    });
+    const stop = screen.getByRole("button", { name: "Stop recording" });
+    // Pressed state as well as the label, so the control reads correctly to a
+    // screen reader mid-recording.
+    expect(stop.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("hides the button where there is no local guest to record", () => {
+    renderWith({
+      ...makeController(REC_CAPABILITIES, null),
+      onToggleRecording: null,
+    });
+
+    expect(
+      screen.queryByRole("button", { name: /Record this page|Stop recording/ }),
+    ).toBeNull();
+  });
+});
+
+describe("<BrowserTileToolbar /> DevTools availability", () => {
+  afterEach(cleanup);
+
+  function renderWith(controller: TileController): void {
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  const DEVTOOLS_CAPABILITIES: TileChromeCapabilities = {
+    ...DISABLED_CAPABILITIES,
+    devtools: true,
+  };
+
+  it("opens DevTools where the page is local", () => {
+    const onOpenDevTools = vi.fn();
+    renderWith({
+      ...makeController(DEVTOOLS_CAPABILITIES, null),
+      onOpenDevTools,
+    });
+
+    openMoreMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Open browser DevTools" }),
+    );
+    expect(onOpenDevTools).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses with a reason rather than hiding the row", () => {
+    const onOpenDevTools = vi.fn();
+    renderWith({
+      ...makeController(DEVTOOLS_CAPABILITIES, null),
+      devtoolsUnavailableReason: "DevTools needs the tab on this machine",
+      onOpenDevTools,
+    });
+
+    openMoreMenu();
+    // Both halves: a screen reader that hears only the reason never learns the
+    // row is the DevTools action.
+    const item = screen.getByRole("menuitem", {
+      name: "Open browser DevTools - DevTools needs the tab on this machine",
+    });
+    // A row that simply vanished would read as a bug in the app.
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain("DevTools needs the tab on this machine");
+    fireEvent.click(item);
+    expect(onOpenDevTools).not.toHaveBeenCalled();
   });
 });

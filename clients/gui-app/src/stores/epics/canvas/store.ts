@@ -101,6 +101,7 @@ import {
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
   updateBrowserTileViewportPreset,
+  updateBrowserTileZoomFactor,
   updateCommGraphTileView,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
@@ -575,6 +576,11 @@ export interface EpicCanvasStore {
     tabId: string,
     tileInstanceId: string,
     viewportPreset: BrowserViewViewportPresetId,
+  ) => void;
+  updateBrowserTileZoomFactorInTab: (
+    tabId: string,
+    tileInstanceId: string,
+    zoomFactor: number,
   ) => void;
   updateCommGraphTileViewInTab: (
     tabId: string,
@@ -2175,6 +2181,18 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
                 tileInstanceId,
                 viewportPreset,
               ),
+            ),
+          );
+        },
+
+        updateBrowserTileZoomFactorInTab: (
+          tabId,
+          tileInstanceId,
+          zoomFactor,
+        ) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateBrowserTileZoomFactor(canvas, tileInstanceId, zoomFactor),
             ),
           );
         },

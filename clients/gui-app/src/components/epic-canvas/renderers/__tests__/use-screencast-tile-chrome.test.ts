@@ -185,10 +185,18 @@ describe("useScreencastTileChrome", () => {
       forward: true,
       reload: true,
       zoom: false,
-      devtools: false,
+      // Shown as an explained refusal rather than hidden.
+      devtools: true,
       find: false,
       siteInfo: false,
       annotate: false,
+      screenshot: false,
+      recording: false,
+      previewWindow: false,
+      hardReload: false,
+      appearance: false,
+      clearCache: false,
+      audio: false,
     });
   });
 

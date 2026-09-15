@@ -244,6 +244,9 @@ describe("annotation crop helpers", () => {
         textPreview: null,
         ariaRole: null,
         accessibleName: null,
+        componentName: null,
+        sourceFile: null,
+        sourceLine: null,
         boundingBox: {
           x: 0,
           y: 0,

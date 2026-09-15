@@ -14,8 +14,25 @@ import {
   RotateCw,
   SquareMousePointer,
   VenetianMask,
+  Camera,
+  Circle,
+  CircleStop,
+  FileX,
+  MonitorCog,
+  Moon,
+  PanelTop,
+  RefreshCwOff,
+  Sun,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
+import {
+  browserToolbarMenuHasRows,
+  browserToolbarRegions,
+} from "@/components/epic-canvas/renderers/browser-tile-toolbar-regions";
+import type { BrowserViewColorSchemePreference } from "@traycer-clients/shared/platform/browser-view";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
@@ -36,6 +53,8 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuLabel,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -51,6 +70,21 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
+
+/**
+ * The `prefers-color-scheme` rows. `system` leads because it is the absence of
+ * an override, not a third scheme: a tile nobody has touched must keep
+ * following the OS, including a change made while it is open.
+ */
+const BROWSER_APPEARANCE_OPTIONS: readonly {
+  readonly id: BrowserViewColorSchemePreference;
+  readonly label: string;
+  readonly Icon: LucideIcon;
+}[] = [
+  { id: "system", label: "System", Icon: MonitorCog },
+  { id: "light", label: "Light", Icon: Sun },
+  { id: "dark", label: "Dark", Icon: Moon },
+];
 
 const BROWSER_PRIVATE_SESSION_SHIELD_COPY = {
   headline: "Private session",
@@ -69,18 +103,10 @@ export function BrowserTileToolbar(props: {
   readonly loading: boolean;
 }) {
   const controller = props.controller;
-  const capabilities = controller.capabilities;
-  const showNav =
-    capabilities.back || capabilities.forward || capabilities.reload;
-  const showAddress = capabilities.navigate;
-  const showAdvanced =
-    capabilities.zoom || capabilities.devtools || capabilities.siteInfo;
-  const showTrailing =
-    controller.viewport !== null ||
-    capabilities.annotate ||
-    props.pictureInPicture !== null ||
-    controller.profile === "isolated" ||
-    showAdvanced;
+  const { showNav, showAddress, showTrailing } = browserToolbarRegions(
+    controller,
+    props.pictureInPicture !== null,
+  );
   if (!showNav && !showAddress && !showTrailing) return null;
 
   return (
@@ -219,12 +245,18 @@ function BrowserTileToolbarAddress(props: {
     onNavigate,
     onAddressChange,
     onAddressFocusChange,
+    faviconUrl,
   } = props.controller;
   const canOpenExternally =
     useRunnerHostOrNull() !== null && isWebOriginUrl(url);
   return (
     <form className="flex min-w-0 flex-1 items-center" onSubmit={onNavigate}>
       <InputGroup className="group/address h-7 border-transparent bg-transparent shadow-none transition-[background-color,border-color,box-shadow] hover:border-input hover:bg-input/20 focus-within:bg-input/20 motion-reduce:transition-none dark:bg-transparent">
+        {faviconUrl === null ? null : (
+          <InputGroupAddon align="inline-start">
+            <BrowserFaviconImage key={faviconUrl} url={faviconUrl} />
+          </InputGroupAddon>
+        )}
         <InputGroupInput
           ref={setAddressInput}
           // The rest of the toolbar already honours `disabled`; the address
@@ -260,6 +292,239 @@ function BrowserTileToolbarAddress(props: {
         ) : null}
       </InputGroup>
     </form>
+  );
+}
+
+/**
+ * The page's icon.
+ *
+ * `url` is always a `data:` URL that main read on this tile's behalf, never the
+ * address the page declared - see `readFaviconDataUrl`. So this element issues
+ * no request, and `onError` here means the bytes would not decode rather than
+ * that a fetch failed.
+ *
+ * Keyed by url at the call site, so a page whose icon fails does not latch the
+ * failure over the next page's working one.
+ */
+function BrowserFaviconImage(props: { readonly url: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <img
+      src={props.url}
+      alt=""
+      aria-hidden
+      referrerPolicy="no-referrer"
+      className="size-4 shrink-0 rounded-[2px] object-contain"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+
+function BrowserRecordButton(props: {
+  readonly disabled: boolean;
+  readonly recording: boolean;
+  readonly onToggle: () => void;
+}) {
+  const label = props.recording ? "Stop recording" : "Record this page";
+  return (
+    <TooltipWrapper label={label} side="top" sideOffset={6} align="center">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={label}
+        aria-pressed={props.recording}
+        data-testid="browser-toggle-recording"
+        disabled={props.disabled}
+        onClick={props.onToggle}
+        className={cn(props.recording && "text-destructive")}
+      >
+        {props.recording ? <CircleStop /> : <Circle />}
+      </Button>
+    </TooltipWrapper>
+  );
+}
+
+
+function BrowserScreenshotButton(props: {
+  readonly disabled: boolean;
+  readonly onSave: () => void;
+}) {
+  return (
+    <TooltipWrapper
+      label="Save a screenshot"
+      side="top"
+      sideOffset={6}
+      align="center"
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Save a screenshot"
+        data-testid="browser-save-screenshot"
+        disabled={props.disabled}
+        onClick={props.onSave}
+      >
+        <Camera />
+      </Button>
+    </TooltipWrapper>
+  );
+}
+
+
+function BrowserAppearanceMenu(props: {
+  readonly value: BrowserViewColorSchemePreference;
+  readonly disabled: boolean;
+  readonly onChange: (preference: BrowserViewColorSchemePreference) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const current =
+    BROWSER_APPEARANCE_OPTIONS.find((option) => option.id === props.value) ??
+    BROWSER_APPEARANCE_OPTIONS[0];
+  return (
+    <DropdownMenuSub open={open} onOpenChange={setOpen}>
+      <DropdownMenuSubTrigger
+        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
+        disabled={props.disabled}
+        onClick={() => setOpen(true)}
+      >
+        <span className="min-w-0 truncate">Appearance</span>
+        <span className="min-w-0 truncate text-end text-ui-xs text-muted-foreground group-data-open:text-accent-foreground">
+          {current.label}
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent
+        sideOffset={8}
+        alignOffset={-4}
+        className="w-[min(80vw,11rem)] min-w-0"
+      >
+        <DropdownMenuRadioGroup value={props.value}>
+          {BROWSER_APPEARANCE_OPTIONS.map((option) => {
+            const Icon = option.Icon;
+            return (
+              <DropdownMenuRadioItem
+                key={option.id}
+                value={option.id}
+                className="gap-2"
+                onSelect={(event) => {
+                  event.preventDefault();
+                  props.onChange(option.id);
+                }}
+              >
+                <Icon className="size-4" aria-hidden />
+                <span className="min-w-0 flex-1">{option.label}</span>
+              </DropdownMenuRadioItem>
+            );
+          })}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+
+function BrowserPageMenuRows(props: { readonly controller: TileController }) {
+  const controller = props.controller;
+  const capabilities = controller.capabilities;
+  return (
+    <>
+        {capabilities.appearance ? (
+        <BrowserAppearanceMenu
+          value={controller.colorSchemePreference}
+          disabled={controller.disabled}
+          onChange={controller.onColorSchemePreferenceChange}
+        />
+      ) : null}
+      {capabilities.previewWindow ? (
+        <DropdownMenuItem
+          aria-label="Open a floating window on this page"
+          disabled={controller.disabled}
+          onSelect={controller.onTogglePreviewWindow}
+        >
+          <PanelTop aria-hidden />
+          Floating window
+        </DropdownMenuItem>
+      ) : null}
+      {capabilities.audio ? (
+        <DropdownMenuItem
+          aria-label={controller.muted ? "Unmute this page" : "Mute this page"}
+          disabled={controller.disabled}
+          onSelect={controller.onToggleMuted}
+        >
+          {controller.muted ? (
+            <VolumeX aria-hidden />
+          ) : (
+            <Volume2 aria-hidden />
+          )}
+          {controller.muted ? "Unmute page" : "Mute page"}
+        </DropdownMenuItem>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The Developer group: the two rows aimed at someone debugging the page rather
+ * than using it.
+ *
+ * Its own component for the same reason as the page rows - the menu is the
+ * toolbar's widest branch, and the complexity limit is the signal that it had
+ * stopped being readable in one function.
+ */
+
+function BrowserDeveloperMenuRows(props: {
+  readonly controller: TileController;
+}) {
+  const controller = props.controller;
+  const capabilities = controller.capabilities;
+  if (!capabilities.devtools && !capabilities.hardReload) return null;
+  return (
+    <>
+        <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
+          Developer
+        </DropdownMenuLabel>
+        {capabilities.hardReload ? (
+          <DropdownMenuItem
+            aria-label="Reload ignoring cached files"
+            disabled={controller.disabled}
+            onSelect={controller.onHardReload}
+          >
+            <RefreshCwOff aria-hidden />
+            Hard reload
+          </DropdownMenuItem>
+        ) : null}
+        {capabilities.devtools ? (
+          <DropdownMenuItem
+            aria-label={
+              controller.devtoolsUnavailableReason === null
+                ? "Open browser DevTools"
+                : // Both halves. The reason alone told a screen reader why
+                  // something was unavailable without ever saying WHAT, so the
+                  // row announced a refusal with no subject.
+                  `Open browser DevTools - ${controller.devtoolsUnavailableReason}`
+            }
+            // Disabled and explained rather than absent: a row that vanishes
+            // reads as a bug in the app, where the reason answers the
+            // question the user actually has.
+            disabled={
+              controller.disabled ||
+              controller.devtoolsUnavailableReason !== null
+            }
+            onSelect={controller.onOpenDevTools}
+          >
+            <Bug aria-hidden />
+            <span className="min-w-0 flex-1">Open DevTools</span>
+            {controller.devtoolsUnavailableReason === null ? null : (
+              <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+                {controller.devtoolsUnavailableReason}
+              </span>
+            )}
+          </DropdownMenuItem>
+        ) : null}
+    </>
   );
 }
 
@@ -307,10 +572,23 @@ function BrowserTileToolbarTrailing(props: {
       {capabilities.annotate && controller.annotation !== null ? (
         <BrowserAnnotateToggle controller={controller.annotation} />
       ) : null}
+      {capabilities.screenshot && controller.onSaveScreenshot !== null ? (
+        <BrowserScreenshotButton
+          disabled={controller.disabled}
+          onSave={controller.onSaveScreenshot}
+        />
+      ) : null}
+      {capabilities.recording && controller.onToggleRecording !== null ? (
+        <BrowserRecordButton
+          disabled={controller.disabled}
+          recording={controller.isRecording}
+          onToggle={controller.onToggleRecording}
+        />
+      ) : null}
       {props.pictureInPicture === null ? null : (
         <BrowserPictureInPictureButton control={props.pictureInPicture} />
       )}
-      {capabilities.zoom || capabilities.devtools || capabilities.siteInfo ? (
+      {browserToolbarMenuHasRows(capabilities) ? (
         <BrowserMoreMenu
           controller={controller}
           clearSite={clearSite}
@@ -435,6 +713,7 @@ function BrowserMoreMenu(props: {
         {capabilities.zoom ? (
           <BrowserZoomControls controller={controller} />
         ) : null}
+        <BrowserPageMenuRows controller={controller} />
         {capabilities.siteInfo ? (
           <BrowserSiteInfoMenu url={controller.url} />
         ) : null}
@@ -448,21 +727,17 @@ function BrowserMoreMenu(props: {
             {browserClearSiteLabel(clearSite.site)}
           </DropdownMenuItem>
         )}
-        {capabilities.devtools ? (
-          <>
-            <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
-              Developer
-            </DropdownMenuLabel>
-            <DropdownMenuItem
-              aria-label="Open browser DevTools"
-              disabled={controller.disabled}
-              onSelect={controller.onOpenDevTools}
-            >
-              <Bug aria-hidden />
-              Open DevTools
-            </DropdownMenuItem>
-          </>
+        {capabilities.clearCache ? (
+          <DropdownMenuItem
+            aria-label="Clear cached files for this page"
+            disabled={controller.disabled}
+            onSelect={controller.onClearCache}
+          >
+            <FileX aria-hidden />
+            Clear cache
+          </DropdownMenuItem>
         ) : null}
+        <BrowserDeveloperMenuRows controller={controller} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

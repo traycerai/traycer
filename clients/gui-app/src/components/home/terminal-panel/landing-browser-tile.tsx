@@ -8,7 +8,10 @@ import { BrowserSessionsHostProvider } from "@/components/epic-canvas/renderers/
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { DEFAULT_BROWSER_VIEWPORT_PRESET } from "@/lib/browser-view/browser-tile-defaults";
+import {
+  DEFAULT_BROWSER_VIEWPORT_PRESET,
+  DEFAULT_BROWSER_ZOOM_FACTOR,
+} from "@/lib/browser-view/browser-tile-defaults";
 import type { LandingBrowserTabRef } from "@/stores/home/landing-panel-store";
 import { INDEPENDENT_BROWSER_SCOPE } from "./use-landing-browser-reconciliation";
 
@@ -148,6 +151,8 @@ function LandingBrowserTileBody(props: {
       hostId: props.tab.hostId,
       sessionId: props.tab.sessionId,
       tabId: props.tab.tabId,
+      // Nor a zoom choice, for the same reason: the panel remembers nothing.
+      zoomFactor: DEFAULT_BROWSER_ZOOM_FACTOR,
       // The panel does not persist a viewport choice (`persistViewportPreset`
       // is null below), so every tile opens on the default and a change lasts
       // as long as the tile does.
@@ -173,6 +178,7 @@ function LandingBrowserTileBody(props: {
       pageSessionId={props.tab.instanceId}
       onRequestClose={props.onRequestClose}
       persistViewportPreset={null}
+      persistZoomFactor={null}
       onOpenLinkInNewTile={props.onOpenLinkInNewTile}
       onRequestNewTab={props.onRequestNewTab}
       // No PiP from the Start Page: `convertBrowserTabToPip` routes through an

@@ -19,3 +19,34 @@ export const DEFAULT_BROWSER_TILE_URL = "about:blank";
 
 export const DEFAULT_BROWSER_VIEWPORT_PRESET: BrowserViewViewportPresetId =
   "responsive";
+
+/**
+ * The zoom a browser tile opens at, and the bounds a remembered one is read
+ * back through.
+ *
+ * Zoom is remembered per tile because it is a statement about the PAGE, not
+ * about the session: a developer who zoomed a cramped admin panel to 125% means
+ * it for that panel, and losing it on every reopen is the kind of small
+ * forgetting that reads as the app not paying attention. The bounds match the
+ * control-action schema's, so a value that survives a round trip through
+ * persistence is one main will still accept.
+ */
+export const DEFAULT_BROWSER_ZOOM_FACTOR = 1;
+export const MIN_BROWSER_ZOOM_FACTOR = 0.25;
+export const MAX_BROWSER_ZOOM_FACTOR = 5;
+
+/**
+ * Reads a persisted zoom factor. Total rather than throwing: this parses a
+ * stored document, where a missing key means a tile written before zoom was
+ * remembered and an out-of-range one means a bound that has since moved -
+ * neither is a reason to discard the whole tile.
+ */
+export function readBrowserZoomFactor(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_BROWSER_ZOOM_FACTOR;
+  }
+  return Math.min(
+    MAX_BROWSER_ZOOM_FACTOR,
+    Math.max(MIN_BROWSER_ZOOM_FACTOR, value),
+  );
+}

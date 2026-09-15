@@ -35,6 +35,7 @@ import {
   subscribeBrowserGuestViewport,
   type BrowserGuestViewportPresentation,
 } from "@/lib/browser-view/guest/persistent-browser-guest-host";
+import type { BrowserViewDeviceProfile } from "@traycer-clients/shared/platform/browser-device-profiles";
 
 export interface BrowserViewportOrigin {
   readonly x: number;
@@ -63,6 +64,26 @@ export interface BrowserViewportController {
   readonly setRatio: (ratio: number) => void;
   readonly fitOwnedHere: boolean;
   readonly open: () => void;
+  /**
+   * Tells this tile's page what device it is being shown as, or `null` for this
+   * machine's own ratio and pointer. Absent where there is no local guest to
+   * emulate - a screencast tile's page runs elsewhere.
+   *
+   * Separate from {@link resize} because the two travel different roads: size is
+   * viewport INTENT that main persists per tab, while this is a live override on
+   * one guest's webContents that dies with it.
+   */
+  readonly emulateDevice:
+    | ((profile: BrowserViewDeviceProfile | null) => Promise<void>)
+    | null;
+  /**
+   * The native guest currently behind this tile, or `null` where there is none.
+   *
+   * Exposed because a device override belongs to ONE webContents: a consumer that
+   * remembers what it already applied has to notice when the guest underneath is
+   * replaced, which the size alone does not reveal.
+   */
+  readonly guestRegistrationId: string | null;
   readonly reset: () => Promise<void>;
   readonly resize: (
     width: number,
@@ -109,6 +130,14 @@ export function useBrowserViewport(input: {
   readonly disabled: boolean;
   readonly pageZoom: number;
   readonly native: boolean;
+  /**
+   * Applies a device character to this tile's guest, where there is one. Passed
+   * in rather than issued here: the desktop control channel belongs to the tile,
+   * and a placement with no local guest supplies nothing.
+   */
+  readonly emulateDevice:
+    | ((profile: BrowserViewDeviceProfile | null) => Promise<void>)
+    | null;
   readonly registrationId: string | null;
 }): BrowserViewportPresentation {
   const sessions = useMaybeBrowserSessionsContext();
@@ -381,6 +410,8 @@ export function useBrowserViewport(input: {
     guestViewport,
     paintedSize,
     controller: {
+      emulateDevice: input.emulateDevice,
+      guestRegistrationId: input.registrationId,
       state:
         nativeViewport === null
           ? state

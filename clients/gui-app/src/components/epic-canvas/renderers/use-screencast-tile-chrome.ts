@@ -25,11 +25,30 @@ const SCREENCAST_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
   forward: true,
   reload: true,
   zoom: false,
-  devtools: false,
+  // Shown, but as an explained refusal - see `devtoolsUnavailableReason`.
+  devtools: true,
   find: false,
   siteInfo: false,
   annotate: false,
+  // Every one of these acts on a local guest this tile does not have. They stay
+  // off rather than rendering as disabled rows: the tab IS reachable, just not
+  // from this client.
+  screenshot: false,
+  recording: false,
+  previewWindow: false,
+  hardReload: false,
+  appearance: false,
+  clearCache: false,
+  audio: false,
 };
+
+/**
+ * DevTools drives raw CDP against a page in the same process. This tab's page is
+ * on another machine, reachable only through a curated command set, so the
+ * frontend has nothing to attach to.
+ */
+const SCREENCAST_DEVTOOLS_UNAVAILABLE_REASON =
+  "DevTools needs the tab on this machine";
 
 const SCREENCAST_UNSUPPORTED_INTERACTION_TOASTS = {
   fileUpload: "File upload not supported",
@@ -106,6 +125,10 @@ export function useScreencastTileChrome(
     canGoBack: navState.canGoBack,
     canGoForward: navState.canGoForward,
     zoomPercent: 100,
+    faviconUrl: null,
+    colorSchemePreference: "system",
+    muted: false,
+    isRecording: false,
     disabled,
     zoomLocked: false,
     annotation: null,
@@ -129,6 +152,14 @@ export function useScreencastTileChrome(
     onZoomIn: ignoreChromeAction,
     onResetZoom: ignoreChromeAction,
     onOpenDevTools: ignoreChromeAction,
+    devtoolsUnavailableReason: SCREENCAST_DEVTOOLS_UNAVAILABLE_REASON,
+    onHardReload: ignoreChromeAction,
+    onColorSchemePreferenceChange: ignoreChromeAction,
+    onClearCache: ignoreChromeAction,
+    onToggleMuted: ignoreChromeAction,
+    onSaveScreenshot: null,
+    onToggleRecording: null,
+    onTogglePreviewWindow: ignoreChromeAction,
     // A screencast tile watches a headless context on the host; there is no
     // local jar here to clear, and the host's own eviction is what reaches it.
     onClearSite: null,
