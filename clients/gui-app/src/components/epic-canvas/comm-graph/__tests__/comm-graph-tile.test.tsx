@@ -705,8 +705,21 @@ function installCanvas(): { readonly step: () => void } {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
     () => context,
   );
+  // THE SAME BOX THE CASES ASK FOR, not the historical `1040x700`.
+  //
+  // A probe taken BEFORE a case calls `setOfficeCanvasSize` carries whatever
+  // this default says, and Auto latches its first answer - it does not
+  // re-measure once an outcome is written. At `1040x700` this fixture fits the
+  // Floor at 0.52 against a 0.7 threshold, so such a probe answered Towers and
+  // kept it, which is a real box and so sails past the probe's `width <= 0`
+  // guard. That cost about one CI run in three in `shard 14` and never
+  // reproduced locally, because whether the resize has propagated before the
+  // catch-up opens Auto's gate is an interleaving question.
+  //
+  // Sized off `OFFICE_CANVAS` rather than repeating its numbers, so raising the
+  // box the cases use raises this with it instead of re-opening the gap.
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    () => new DOMRect(0, 0, 1040, 700),
+    () => new DOMRect(0, 0, OFFICE_CANVAS.width, OFFICE_CANVAS.height),
   );
   let nextId = 0;
   const callbacks = new Map<number, FrameRequestCallback>();
@@ -2836,13 +2849,6 @@ describe("CommGraphTile", () => {
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
-      // TEMPORARY shard-14 diagnostic, to be removed once the cause is known:
-      // CI answers `towers` here in roughly two runs of three while every local
-      // run - file, full shard, and shard pinned to one worker - answers
-      // `floor`. `OfficeAutoDecision` already carries the per-candidate fit
-      // zooms and the agent count, so the failure below says whether the CANVAS
-      // arrived wrong or the WORLD measured bigger, without guessing at either.
-      const decideSpy = vi.spyOn(officeAutoModule, "decideOfficeView");
       useSettingsStore.getState().setAgentOfficeDefaultView("towers");
       // Seeded at Finding B's own non-neutral numbers, not the default -
       // zeroing an already-zero Graph camera would pass whether or not the
@@ -2899,33 +2905,9 @@ describe("CommGraphTile", () => {
       // the civic rooms now push the fit to 0.554 and Auto answers TOWERS, so
       // a hand-written box turns this into a Towers case that still claims to
       // be about a Floor. See `OFFICE_CANVAS`.
-      try {
-        await waitFor(() => {
-          expect(storedView()?.officeAutoView).toBe("floor");
-        });
-      } catch (error) {
-        // TEMPORARY: see the `decideSpy` note above. Carried in the thrown
-        // message rather than a console line so it reaches the CI job log
-        // through the normal failure report.
-        // Re-deciding from the RECORDED inputs rather than reading the spy's
-        // results, whose `value` is `any`. `Array.prototype.map` fixes its
-        // length up front, so the calls these re-decisions append are not
-        // themselves walked.
-        const recorded = decideSpy.mock.calls.map(
-          ([input, canvas, padding]) => ({
-            canvas,
-            viewport: input.viewport,
-            agents: input.agents.length,
-            decision: officeAutoModule.decideOfficeView(input, canvas, padding),
-          }),
-        );
-        throw new Error(
-          `AUTO-DIAG ${JSON.stringify({
-            recorded,
-            stored: storedView()?.officeAutoView ?? null,
-          })} :: ${String(error)}`,
-        );
-      }
+      await waitFor(() => {
+        expect(storedView()?.officeAutoView).toBe("floor");
+      });
 
       // The Auto answer remounts the canvas (measuring -> floor), and that
       // remount only reports its own eligibility on the frame this next
