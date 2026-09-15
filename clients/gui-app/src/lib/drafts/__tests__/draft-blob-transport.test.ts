@@ -10,6 +10,7 @@ import {
   isDraftBlobConfirmed,
   isDraftBlobUnbridgeable,
   markDraftBlobUnbridgeable,
+  hostWithholdsDraftBlobs,
   putDraftBlobs,
   readDraftBlobsIntoLocalStore,
   resetDraftBlobTransportForTests,
@@ -31,6 +32,16 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   localReadMocks.getImageBytes.mockImplementation(actual.getImageBytes);
   return { ...actual, getImageBytes: localReadMocks.getImageBytes };
 });
+
+function unsupportedError(method: string): HostRpcError {
+  return new HostRpcError({
+    code: "E_HOST_UNSUPPORTED",
+    message: "old host",
+    requestId: "r",
+    method,
+    fatalDetails: null,
+  });
+}
 
 const HOST = "host-blobs";
 // These cases never reach a successful confirmation (the host throws, or
@@ -252,6 +263,46 @@ describe("draft blob transport", () => {
     const second = await putDraftBlobs(HOST, client, [hash], OWNER);
     expect(second).toEqual([hash]);
     expect(calls()).toBe(2);
+  });
+
+  it("a REFUSAL from a retired epoch does not re-mark an upgraded host (DRIVE RED)", async () => {
+    // The mirror image of the acknowledgement fence one test up. A refusal is
+    // a verdict about the host BUILD, and the re-bootstrap that moved the epoch
+    // is the signal that the build may have changed - so a refusal from the
+    // previous connection, landing after that reset, would undo the re-probe
+    // with the very answer the re-probe existed to discard.
+    const hash = await putImage(pngBytes());
+    let releaseFirst: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const client: DraftBlobClient = {
+      request: async (_method, _params) => {
+        await gate;
+        throw unsupportedError("drafts.putBlob");
+      },
+    };
+
+    const firstCall = putDraftBlobs(HOST, client, [hash], OWNER);
+    // The reconnect re-bootstrap lands while the refusal is still on the wire.
+    forgetConfirmedDraftBlobs(HOST);
+    releaseFirst();
+    expect(await firstCall).toEqual([]);
+
+    // The host is NOT marked: this refusal describes a connection that has
+    // already been replaced.
+    expect(hostWithholdsDraftBlobs(HOST)).toBe(false);
+  });
+
+  it("a refusal on the CURRENT epoch still marks the host - positive control", async () => {
+    const hash = await putImage(pngBytes());
+    const client: DraftBlobClient = {
+      request: (_method, _params) =>
+        Promise.reject(unsupportedError("drafts.putBlob")),
+    };
+
+    expect(await putDraftBlobs(HOST, client, [hash], OWNER)).toEqual([]);
+    expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
   });
 
   it("a confirmed digest is not re-sent", async () => {

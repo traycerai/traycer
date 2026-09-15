@@ -436,7 +436,7 @@ describe("useChatComposerSubmit browser annotations", () => {
     expect(input.restore.content).toEqual(TYPED_DOC);
   });
 
-  it("sends an annotation attached while crop bytes resolve", async () => {
+  it("holds back a send when an annotation is attached while crop bytes resolve", async () => {
     const taskId = "chat-ann-late-attach";
     const first = annotationRecord(null);
     const late = annotationRecord({
@@ -464,9 +464,8 @@ describe("useChatComposerSubmit browser annotations", () => {
     act(() => {
       result.current.submitDraft("enter");
     });
-    // Attached while the IndexedDB read is in flight. `clearDraft` on
-    // acceptance wipes it, so a send built from the pre-async capture would
-    // drop it silently.
+    // Attached while the IndexedDB read is in flight, so it has a record and
+    // no resolved crop atom.
     act(() => {
       useComposerDraftStore.getState().addBrowserAnnotation(taskId, late);
     });
@@ -474,14 +473,21 @@ describe("useChatComposerSubmit browser annotations", () => {
       release?.();
       await Promise.resolve();
     });
-    await waitFor(() => {
-      expect(submit).toHaveBeenCalledTimes(1);
-    });
+    await Promise.resolve();
 
-    const input = submit.mock.calls[0][0];
-    expect(input.attachments).toContainEqual(first);
-    expect(input.attachments).toContainEqual(late);
-    expect(input.restore.browserAnnotations).toEqual([first, late]);
+    // NOT sent. The three outcomes available here are: drop the record
+    // silently, send it without its crop, or send nothing. The second was what
+    // this test used to assert, and it is the worst of them - the protocol
+    // needs the crop to ride an `imageAttachment`, and the acceptance clears
+    // the sidecar, so the image is gone for good. `commit` is synchronous by
+    // contract (that is what makes the image set exact), so this preparation
+    // cannot grow an atom for the late record; the send is abandoned instead.
+    expect(submit).not.toHaveBeenCalled();
+    // Nothing was cleared: both annotations are still on the draft, and the
+    // next send resolves them in its own pre-flight capture.
+    expect(
+      useComposerDraftStore.getState().drafts[taskId]?.browserAnnotations,
+    ).toEqual([first, late]);
   });
 });
 

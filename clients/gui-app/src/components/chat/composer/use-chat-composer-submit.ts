@@ -10,6 +10,8 @@ import { isMobileApp } from "@/lib/mobile-app";
 import { useChatStore } from "@/stores/composer/chat-store";
 import { submitComposerDraft } from "@/lib/drafts/draft-mirror-coordinator";
 import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
+import { toast } from "sonner";
+
 import { appLogger } from "@/lib/logger";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
@@ -681,6 +683,31 @@ export function useChatComposerSubmit(
                 readComposerDraftSnapshot(taskId).resetEpoch !==
                   intent.resetEpoch
               ) {
+                return;
+              }
+              // An annotation attached DURING the read has a record but no
+              // resolved crop atom, and the protocol needs the crop to ride an
+              // `imageAttachment`. Sending anyway delivered the record bare
+              // and then cleared the sidecar, so the crop was gone for good -
+              // the worst of the three outcomes. This preparation cannot grow
+              // an atom here (`commit` is synchronous by contract, which is
+              // what makes the image set exact), so the send is abandoned
+              // instead: nothing is cleared, both annotations are still in the
+              // composer, and the next send resolves them in its pre-flight
+              // capture.
+              const resolvedCrops = new Set(
+                annotationImages.map((atom) => atom.hash),
+              );
+              const late = readDraftSidecars(taskId).annotationRecords.filter(
+                (record) => !resolvedCrops.has(record.imageHash),
+              );
+              if (late.length > 0) {
+                toast.info("Attach finished - send again to include it.", {
+                  description:
+                    late.length === 1
+                      ? "An annotation was added while the images were being prepared."
+                      : `${late.length} annotations were added while the images were being prepared.`,
+                });
                 return;
               }
               submitPreparedDraft(annotationImages, draftImageBase64ByHash);

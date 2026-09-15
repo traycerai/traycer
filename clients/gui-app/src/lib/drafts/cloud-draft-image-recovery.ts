@@ -150,10 +150,30 @@ const inFlightByHash = new Map<string, Promise<ImageBytes | null>>();
 /** Hosts that answered `E_HOST_UNSUPPORTED`: never re-probed per image. */
 const payloadUnsupportedHosts = new Set<string>();
 
+/**
+ * Per-host generation of the payload-capability verdict, bumped by every
+ * re-probe signal.
+ *
+ * A cloud payload request cannot be cancelled, so one started before a
+ * re-bootstrap can reject with `E_HOST_UNSUPPORTED` after the reset has already
+ * cleared the old verdict. Re-recording it there would undo the re-probe with
+ * the very answer the re-probe existed to discard, and every candidate on that
+ * host would be skipped again until the next reconnect. So a refusal is
+ * recorded only if the generation it started under still stands - the same
+ * fence `uploadOneDraftBlob` applies to its own late results, for the same
+ * reason and on the same signal.
+ */
+const payloadCapabilityEpochs = new Map<string, number>();
+
+function payloadCapabilityEpochOf(hostId: string): number {
+  return payloadCapabilityEpochs.get(hostId) ?? 0;
+}
+
 export function resetCloudDraftImageRecoveryForTests(): void {
   sourcesByHash.clear();
   inFlightByHash.clear();
   payloadUnsupportedHosts.clear();
+  payloadCapabilityEpochs.clear();
 }
 
 /**
@@ -167,6 +187,7 @@ export function resetCloudDraftImageRecoveryForTests(): void {
  * other.
  */
 export function forgetCloudDraftPayloadUnsupportedHost(hostId: string): void {
+  payloadCapabilityEpochs.set(hostId, payloadCapabilityEpochOf(hostId) + 1);
   payloadUnsupportedHosts.delete(hostId);
 }
 
@@ -445,6 +466,10 @@ async function readAndStoreCloudDraftImage(
   source: CloudDraftImageSource,
 ): Promise<ImageBytes | null> {
   if (payloadUnsupportedHosts.has(source.hostId)) return null;
+  // Captured at the start, like the blob transport's: what matters is whether
+  // the verdict this request is about to produce describes the connection that
+  // is still live by the time it answers.
+  const capabilityEpoch = payloadCapabilityEpochOf(source.hostId);
   // Re-read at DISPATCH, not once at construction: the eager pass and the held
   // submit both run long after the ingest decided this device could read the
   // cloud, and a session demoted in between must not spend the retained host
@@ -482,8 +507,16 @@ async function readAndStoreCloudDraftImage(
     if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED") {
       // The cloud-chat surface is an optional capability. A host that predates
       // it answers this for every image, so remember it once rather than
-      // spending a refused request per hash for the life of the session.
-      payloadUnsupportedHosts.add(source.hostId);
+      // spending a refused request per hash for the life of the session - but
+      // only for the connection that produced the refusal. See
+      // `payloadCapabilityEpochs`.
+      if (payloadCapabilityEpochOf(source.hostId) === capabilityEpoch) {
+        payloadUnsupportedHosts.add(source.hostId);
+      } else {
+        appLogger.warn("[cloud-draft-image] payload refused after re-probe", {
+          hash,
+        });
+      }
       return null;
     }
     appLogger.warn("[cloud-draft-image] blob read failed", {

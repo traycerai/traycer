@@ -387,7 +387,19 @@ async function uploadOneDraftBlob(
     return true;
   } catch (error: unknown) {
     if (isBlobUnsupported(error)) {
-      markBlobUnsupported(hostId);
+      // Fenced on the SAME epoch as a success, and for the mirror reason. A
+      // refusal is a verdict about the host BUILD, and the re-bootstrap that
+      // moved the epoch is the signal that the build may have changed - so a
+      // refusal from the previous connection, landing after that reset, would
+      // re-mark an upgraded host unsupported and short-circuit every blob call
+      // until the next reconnect. Undoing the re-probe with the very answer it
+      // was meant to discard.
+      if (blobEpochOf(hostId) === epoch) markBlobUnsupported(hostId);
+      else {
+        appLogger.warn("[draft-blobs] putBlob refused after re-bootstrap", {
+          sha256,
+        });
+      }
       return false;
     }
     appLogger.warn("[draft-blobs] putBlob failed", {

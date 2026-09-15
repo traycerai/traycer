@@ -2289,15 +2289,23 @@ function useChatTileSessionViewModel(
   // submit is about to inline. Not gated on `dirty`: a pristine edit still
   // REFERENCES those hashes, and only the park question cares whether the user
   // has typed.
+  //
+  // Keyed by the mounted TILE, not the chat. `contentByHolder` is
+  // process-wide and the same chat can be open in several tiles, each with its
+  // own `activeInlineEdit` in its own reducer - so a chat-keyed holder had them
+  // share one slot. Unmounting a tile that never opened an edit then released
+  // the slot belonging to the tile that had one, and the next reconcile reaped
+  // bytes the surviving editor still names. Same reason the queue-edit
+  // saved-draft holder is keyed by `instanceId`.
   useEffect(() => {
-    const holderId = `inline-edit:${node.id}`;
+    const holderId = `inline-edit:${node.instanceId}`;
     if (activeInlineEdit !== null) {
       holdComposerContentImageRoots(holderId, activeInlineEdit.currentContent);
     }
     return () => {
       releaseComposerContentImageRoots(holderId);
     };
-  }, [activeInlineEdit, node.id]);
+  }, [activeInlineEdit, node.instanceId]);
 
   const displayedMessages = useMemo(() => {
     if (activeInlineEdit === null) return renderedMessages;

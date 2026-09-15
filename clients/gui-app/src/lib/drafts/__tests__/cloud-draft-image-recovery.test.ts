@@ -8,6 +8,7 @@ import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fak
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
+  forgetCloudDraftPayloadUnsupportedHost,
   recordCloudDraftImageSources,
   readCloudDraftImageBytes,
   recoverCloudDraftImages,
@@ -536,5 +537,59 @@ describe("cloud-draft-image-recovery", () => {
     }
 
     expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
+  });
+  it("a payload refusal from a retired capability epoch does not re-mark an upgraded host (DRIVE RED)", async () => {
+    // `epic.readCloudChatPayload` is not cancellable, so a request started
+    // before a re-bootstrap can reject with E_HOST_UNSUPPORTED after the reset
+    // has already cleared the verdict. Re-recording it there undoes the
+    // re-probe with the very answer the re-probe existed to discard, and every
+    // candidate on that host is skipped again until the next reconnect.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseRefusal: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseRefusal = resolve;
+    });
+    const refusing = recordingClient(async (_method, _params) => {
+      await gate;
+      throw new HostRpcError({
+        code: "E_HOST_UNSUPPORTED",
+        message: "old host",
+        requestId: "r",
+        method: "epic.readCloudChatPayload",
+        fatalDetails: null,
+      });
+    });
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-upgrading",
+      client: refusing.client,
+      hashes: [hash],
+    });
+    const refusedRead = readCloudDraftImageBytes(hash);
+    // The mirror re-bootstraps while that refusal is still on the wire.
+    forgetCloudDraftPayloadUnsupportedHost("host-upgrading");
+    releaseRefusal();
+    expect(await refusedRead).toBeNull();
+
+    // The upgraded host is asked again rather than short-circuited.
+    const serving = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-after-upgrade" },
+      hostId: "host-upgrading",
+      client: serving.client,
+      hashes: [hash],
+    });
+
+    expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
+    expect(serving.calls).toHaveLength(1);
   });
 });
