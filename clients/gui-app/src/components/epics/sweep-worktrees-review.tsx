@@ -74,7 +74,7 @@ export function SweepWorktreesReview(props: {
       <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-y-auto border-t border-border/60 bg-foreground/2 px-5 py-4">
         {props.inventoryChanged ? (
           <p
-            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-sm text-foreground"
+            className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-ui-sm text-foreground"
             data-testid="sweep-inventory-changed"
           >
             What is running changed. Review the updated consequences before
@@ -83,7 +83,7 @@ export function SweepWorktreesReview(props: {
         ) : null}
         {props.snapshot.pendingUncertain.length > 0 ? (
           <p
-            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-sm text-foreground"
+            className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-ui-sm text-foreground"
             data-testid="sweep-review-uncertain"
           >
             {props.snapshot.pendingUncertain.join(", ")} unconfirmed — check the
@@ -110,7 +110,7 @@ export function SweepWorktreesReview(props: {
                 <p className="text-ui-xs font-medium">
                   {worktreeIdentity(row)}
                 </p>
-                <p className="text-ui-xs text-amber-700 dark:text-amber-400">
+                <p className="text-ui-xs text-warning-foreground">
                   {unprovenRowHint(row)}
                 </p>
               </div>

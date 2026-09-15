@@ -159,7 +159,7 @@ function WorktreeCleanupRow(props: {
   let hint: ReactNode = null;
   if (candidate.uncommittedCount > 0) {
     hint = (
-      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />
         {candidate.uncommittedCount} uncommitted change
         {candidate.uncommittedCount === 1 ? "" : "s"} will be lost
@@ -170,7 +170,7 @@ function WorktreeCleanupRow(props: {
     // surface this before any branchStatus hint, which a detached row can
     // still carry (e.g. probed against the workspace's default branch).
     hint = (
-      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />
         Detached HEAD — commits could be orphaned by removal
       </span>
@@ -182,7 +182,7 @@ function WorktreeCleanupRow(props: {
     !status.mergedIntoDefault
   ) {
     hint = (
-      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />
         {status.ahead} commit{status.ahead === 1 ? "" : "s"} not on the default
         branch
@@ -197,7 +197,7 @@ function WorktreeCleanupRow(props: {
     // exist but the count is unknown (no upstream). The branch ref survives
     // removal, so this names the state without claiming unrecoverable loss.
     hint = (
-      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />
         Local-only commits not on the default branch — never pushed
       </span>

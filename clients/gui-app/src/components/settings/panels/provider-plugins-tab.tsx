@@ -106,7 +106,7 @@ function PluginsNotices(props: {
   return (
     <>
       {props.sessionNotice !== null ? (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-xs text-amber-700 dark:text-amber-200">
+        <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-ui-xs text-warning-foreground">
           {props.sessionNotice}
         </div>
       ) : null}

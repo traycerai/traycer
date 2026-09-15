@@ -263,7 +263,7 @@ function CommGraphTransportTrack(props: {
             className={cn(
               "absolute top-1 bottom-1 w-px -translate-x-1/2",
               marker.event.kind === "a2a_notice"
-                ? "bg-amber-500/70"
+                ? "bg-warning/70"
                 : "bg-foreground/25",
             )}
             style={{ left: `${marker.fraction * 100}%` }}

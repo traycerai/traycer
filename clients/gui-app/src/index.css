@@ -722,6 +722,52 @@
   overflow-wrap: break-word;
 }
 
+/*
+ * The markdown table's chrome, moved here from inline `style` objects in
+ * `markdown/components/table-wrapper.tsx`. The elements already carried these
+ * class names - they were markers with no rules behind them - so this is where
+ * the styling always belonged. Unlayered, like the two rules above, so it
+ * outranks Tailwind Typography's own prose table styles.
+ *
+ * The `--traycer-code-*` fallbacks are kept exactly as the inline styles wrote
+ * them: a neutral grey that shows through if a surface renders this markdown
+ * outside the scope that declares those variables.
+ */
+.traycer-md-table-wrap {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  border: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+}
+
+.traycer-md-table-wrap > table {
+  min-width: 480px;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.traycer-md-table-wrap thead {
+  background: var(--traycer-code-header-bg, rgba(127, 127, 127, 0.1));
+}
+
+.traycer-md-th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-bottom: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+  border-right: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+  background: var(--traycer-code-header-bg, rgba(127, 127, 127, 0.1));
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.traycer-md-td {
+  border-top: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+  border-right: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+  padding: 0.5rem 0.75rem;
+}
+
 :root {
   /* The pressed-state scrim (see the `press-scrim` utility). Neutral rather
      than hue-matched: it dims a surface, it does not tint it, so the accent
@@ -1008,10 +1054,13 @@
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-success-foreground: var(--success-foreground);
   --color-success: var(--success);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);

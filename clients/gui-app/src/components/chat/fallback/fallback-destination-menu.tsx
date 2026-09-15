@@ -268,7 +268,7 @@ export function FallbackDestinationMenu({
         <div
           role="status"
           aria-live="polite"
-          className="px-1 text-ui-xs text-amber-700 empty:sr-only dark:text-amber-300"
+          className="px-1 text-ui-xs text-warning-foreground empty:sr-only"
         >
           {refusal}
         </div>

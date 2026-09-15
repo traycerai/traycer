@@ -761,7 +761,7 @@ function WorktreesPartialListingBanner(props: {
     <div
       role="status"
       aria-live="polite"
-      className="flex items-center gap-2 border-b border-border/60 bg-amber-500/10 px-4 py-2 text-ui-sm text-amber-700 dark:text-amber-300"
+      className="flex items-center gap-2 border-b border-border/60 bg-warning/10 px-4 py-2 text-ui-sm text-warning-foreground"
     >
       <AlertTriangle className="size-4 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1 wrap-anywhere">
@@ -772,7 +772,7 @@ function WorktreesPartialListingBanner(props: {
       <Button
         variant="ghost"
         size="sm"
-        className="h-7 shrink-0 px-2 text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+        className="h-7 shrink-0 px-2 text-warning-foreground"
         onClick={() => void props.onRetry()}
       >
         Retry
@@ -2170,7 +2170,7 @@ function WorktreeBulkDeleteDialog(props: {
                 </DialogDescription>
                 {summary.dirtyLoss !== null ? (
                   <p
-                    className="text-ui-sm leading-relaxed text-amber-700 dark:text-amber-400"
+                    className="text-ui-sm leading-relaxed text-warning-foreground"
                     data-testid="worktree-bulk-delete-dirty-loss"
                   >
                     {summary.dirtyLoss}
@@ -2186,7 +2186,7 @@ function WorktreeBulkDeleteDialog(props: {
                 ) : null}
                 {summary.unknownRiskCaveat !== null ? (
                   <p
-                    className="text-ui-sm leading-relaxed text-amber-700 dark:text-amber-400"
+                    className="text-ui-sm leading-relaxed text-warning-foreground"
                     data-testid="worktree-bulk-delete-unknown-caveat"
                   >
                     {summary.unknownRiskCaveat}
@@ -2578,7 +2578,7 @@ function WorktreeTierPill(props: {
       >
         <Badge
           variant="outline"
-          className="gap-1 font-medium border-dashed border-amber-600/40 bg-amber-500/5 text-amber-700 dark:border-amber-400/40 dark:text-amber-300/90"
+          className="gap-1 font-medium border-dashed border-warning/40 bg-warning/5 text-warning-foreground"
           data-testid="worktree-tier-pill"
           data-tier="unknown"
         >

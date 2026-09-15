@@ -330,6 +330,29 @@ Testing Library role queries.
 
 Materialized from `skills-lock.json` under `.agents/` / `.claude/`.
 
+## Status colors
+
+Four status roles, each a `--<role>` / `--<role>-foreground` pair registered in
+`lib/themes/theme-definition.ts` and valued in `builtin-palettes.ts`. Never
+reach for a palette hue (`amber-500`, `emerald-600`, `blue-500`) — `bun run
+lint` rejects it and names these instead. Color tokens need no `cn()`
+registration; that rule is for spacing and size tokens only.
+
+- `warning` — needs attention but nothing is broken: a rate-limit notice, a
+  pending approval, a worktree that will be swept.
+- `success` — it worked: a completed task, a healthy host, a passing check.
+- `info` — worth knowing, no action implied: an update is available, a version
+  is newer, a note on a panel.
+- `destructive` — it failed or it will destroy something.
+
+The recipe is the same for all four, and it is theme-aware in one class rather
+than a light/dark pair: `border-<role>/30 bg-<role>/10
+text-<role>-foreground`. The base is the tint (use it at `/5` to `/30`, or
+solid for a dot); the foreground is text ON that tint and is verified ≥3:1
+against every preset's background, canvas, card and popover.
+`text-destructive` is the red-text spelling, and `destructive-foreground` is
+for text on a SOLID destructive fill (the unread-count badges).
+
 ## Terminal theming (xterm)
 
 Invariants only — read `src/lib/theme-applier.ts`, `terminal-theme.ts`,

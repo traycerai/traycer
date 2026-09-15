@@ -373,7 +373,7 @@ function PlanModalView(
             </div>
           ) : null}
           {unavailable ? (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-sm text-amber-900 dark:text-amber-200">
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground">
               <FileWarning className="size-3.5 shrink-0" aria-hidden />
               Full plan content is unavailable. Showing the saved preview.
             </div>

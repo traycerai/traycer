@@ -938,7 +938,7 @@ function deriveBannerClassName(
 ): string {
   const stateClassName = destructive
     ? "border-destructive/30 bg-destructive/10 text-destructive"
-    : "border-sky-500/30 bg-sky-500/10 text-sky-950 dark:text-sky-100";
+    : "border-info/30 bg-info/10 text-info-foreground";
   return cn(
     "flex items-center gap-2 rounded-md border px-3 py-2 text-ui-sm",
     stateClassName,
@@ -1065,7 +1065,7 @@ function UpdateOrDebtContent(props: UpdateOrDebtContentProps) {
         size="icon-xs"
         aria-label="Remind me later"
         data-testid="host-update-banner-snooze"
-        className="text-current hover:bg-sky-500/15 hover:text-current"
+        className="text-current hover:bg-info/15"
         onClick={props.onSnooze}
       >
         <X className="size-3" aria-hidden />

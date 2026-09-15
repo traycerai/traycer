@@ -161,7 +161,7 @@ export function MobileNavDrawer(): ReactNode {
             variant="ghost"
             size="icon-sm"
             aria-label="Sign out"
-            className="text-destructive hover:text-destructive"
+            className="text-destructive"
             data-testid="mobile-nav-sign-out"
             onClick={() => {
               setSignOutOpen(true);

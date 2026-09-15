@@ -85,7 +85,7 @@ export function BrowserAnnotationCard(props: {
             <span
               className={cn(
                 "max-w-24 shrink-0 truncate text-ui-xs text-muted-foreground",
-                staleness !== null && "text-amber-600 dark:text-amber-400",
+                staleness !== null && "text-warning-foreground",
               )}
             >
               · {secondary}

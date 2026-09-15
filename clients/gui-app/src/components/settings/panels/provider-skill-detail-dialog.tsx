@@ -904,7 +904,7 @@ function SkillBody(props: {
   }
   if (props.error !== null || props.content === null) {
     return (
-      <div className="flex min-h-0 flex-1 items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-sm text-amber-900 dark:text-amber-200">
+      <div className="flex min-h-0 flex-1 items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground">
         <FileWarning className="mt-0.5 size-3.5 shrink-0" aria-hidden />
         <span className="min-w-0">
           {props.error ?? `Could not read ${SKILL_ENTRY_FILE}.`}

@@ -416,7 +416,7 @@ function SkippedIndicator(props: {
       sideOffset={undefined}
       align={undefined}
     >
-      <span className="shrink-0 cursor-help text-ui-xs text-amber-600/90 dark:text-amber-400/80">
+      <span className="shrink-0 cursor-help text-ui-xs text-warning-foreground/90">
         Skipped
       </span>
     </TooltipWrapper>

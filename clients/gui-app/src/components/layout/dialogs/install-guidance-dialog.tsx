@@ -34,7 +34,7 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
         data-testid="install-guidance-dialog"
       >
         <div className="flex min-w-0 items-start gap-3 p-5">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sky-500/10 text-sky-600 dark:text-sky-400">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-info/10 text-info-foreground">
             <Terminal className="size-4" aria-hidden />
           </div>
           <div className="min-w-0 flex-1 space-y-3">

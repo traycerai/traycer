@@ -354,7 +354,7 @@ function DevicesSessionsBody(props: {
     <div className="flex flex-col">
       {props.actionError === null ? null : (
         <div
-          className="flex items-start gap-3 border-b border-amber-500/20 bg-amber-500/10 px-5 py-3 text-ui-sm text-amber-700 dark:text-amber-300"
+          className="flex items-start gap-3 border-b border-warning/20 bg-warning/10 px-5 py-3 text-ui-sm text-warning-foreground"
           role="alert"
         >
           <ShieldAlert className="mt-0.5 size-4 shrink-0" />

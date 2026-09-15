@@ -293,7 +293,7 @@ function BrowserTabStateSlot(props: {
         <button
           type="button"
           aria-label={`Open driving chat: ${names.join(", ")}`}
-          className="flex size-6 cursor-pointer items-center justify-center rounded-sm text-blue-500 outline-none hover:bg-blue-500/10 focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex size-6 cursor-pointer items-center justify-center rounded-sm text-info-foreground outline-none hover:bg-info/10 focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => props.onOpenDrivingChat(driver)}
         >
           <Bot className="size-3.5" aria-hidden />

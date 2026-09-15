@@ -205,7 +205,7 @@ function ArtifactStatusDot(props: {
     <span
       className={cn(
         "size-2 shrink-0 rounded-full",
-        STATUS_DOT_CLASSES[props.status] ?? "bg-slate-400",
+        STATUS_DOT_CLASSES[props.status] ?? "bg-muted-foreground",
       )}
     />
   );

@@ -204,7 +204,7 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
             "text-ui-xs",
             captureState.conflict.severity === "duplicate"
               ? "text-destructive"
-              : "text-amber-600 dark:text-amber-400",
+              : "text-warning-foreground",
           )}
         >
           {captureState.conflict.message}

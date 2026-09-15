@@ -403,7 +403,7 @@ function TileFindStatusLabel(props: {
         className={cn(
           "min-w-[5ch] text-right text-ui-xs text-muted-foreground",
           destructive && "text-destructive",
-          snapshot.status === "partial" && "text-amber-600 dark:text-amber-400",
+          snapshot.status === "partial" && "text-warning-foreground",
         )}
         data-status={snapshot.status}
       >

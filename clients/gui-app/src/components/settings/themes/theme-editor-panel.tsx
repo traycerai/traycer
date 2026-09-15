@@ -74,7 +74,7 @@ function ThemeContrastStatus({ draft }: { draft: ThemeDefinition }) {
         "text-xs leading-relaxed",
         hasTransparency || contrast >= 4.5
           ? "text-[#bec6b5]"
-          : "text-amber-200",
+          : "text-warning-foreground",
       )}
     >
       {message} Only the main text and background colors are checked.
@@ -142,7 +142,7 @@ function ColorField({
         <p
           id={errorId}
           role="alert"
-          className="col-span-full text-xs text-rose-300"
+          className="col-span-full text-xs text-destructive"
         >
           Enter a color such as #8AB4F8. This value has not been applied.
         </p>
@@ -621,7 +621,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
               </label>
               <ThemeContrastStatus draft={draft} />
               {error ? (
-                <p role="alert" className="text-sm text-rose-300">
+                <p role="alert" className="text-sm text-destructive">
                   {error}
                 </p>
               ) : null}

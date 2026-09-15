@@ -243,7 +243,7 @@ function HostScopeNotice(props: {
       <div
         className={cn(
           "font-medium text-ui-sm",
-          props.tone === "warn" ? "text-amber-500" : "text-foreground",
+          props.tone === "warn" ? "text-warning-foreground" : "text-foreground",
         )}
       >
         {props.title}

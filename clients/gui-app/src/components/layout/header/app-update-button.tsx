@@ -54,7 +54,7 @@ export function AppUpdateHeaderButton() {
             aria-label={label}
             data-testid="app-update-header-button"
             className={cn(
-              "rounded-full bg-sky-500 text-white hover:bg-sky-600 hover:text-white",
+              "rounded-full bg-info text-white",
               blockedReason !== null && "disabled:opacity-60",
             )}
             onClick={() => {
@@ -85,7 +85,7 @@ export function AppUpdateHeaderButton() {
             disabled
             aria-label={label}
             data-testid="app-update-header-button"
-            className="rounded-full text-sky-600 opacity-100 disabled:opacity-100 dark:text-sky-300"
+            className="rounded-full text-info-foreground opacity-100 disabled:opacity-100"
           >
             <DownloadProgressRing progress={progress} />
           </Button>
@@ -161,8 +161,8 @@ function AppUpdateReadyButton(props: {
           className={cn(
             "rounded-full text-white",
             needsManualInstall
-              ? "bg-sky-500 hover:bg-sky-600 hover:text-white"
-              : "bg-emerald-500 hover:bg-emerald-600 hover:text-white",
+              ? "bg-info hover:text-white"
+              : "bg-success hover:text-white",
             installBlockedReason !== null && "disabled:opacity-60",
             installInFlight && "disabled:opacity-100",
           )}

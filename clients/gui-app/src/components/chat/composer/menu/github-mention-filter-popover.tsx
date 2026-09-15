@@ -151,7 +151,7 @@ export function GithubMentionFilterPopover(
             {isDefault ? null : (
               <span
                 data-testid="github-mention-filter-dot"
-                className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-amber-500"
+                className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-warning"
               />
             )}
           </Button>

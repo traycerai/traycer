@@ -765,7 +765,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
     <>
       <span
         aria-hidden
-        className="flex size-4 shrink-0 items-center justify-center rounded bg-gradient-to-br from-indigo-500 to-purple-500 text-white"
+        className="flex size-4 shrink-0 items-center justify-center rounded bg-primary text-primary-foreground"
       >
         <WorkflowIcon className="size-2.5" />
       </span>

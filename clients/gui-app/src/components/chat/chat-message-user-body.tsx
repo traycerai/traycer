@@ -956,7 +956,7 @@ function MessageActionBar({
           size="icon-sm"
           tooltip={false}
           disabled={!actions.enabled}
-          className="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300"
+          className="text-success-foreground"
           onClick={actions.onDeleteConfirm}
         >
           <Check className="size-3.5" aria-hidden />

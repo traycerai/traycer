@@ -619,7 +619,7 @@ function CanvasTopRail(props: { readonly className: string }) {
       )}
     >
       <div className="flex items-center gap-1 text-code-xs italic text-muted-foreground/80">
-        <span className="size-1.5 rounded-full bg-emerald-400" />
+        <span className="size-1.5 rounded-full bg-success" />
         All changes synced
       </div>
     </div>

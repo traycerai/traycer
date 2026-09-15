@@ -736,7 +736,7 @@ function StatusIcon(props: {
     return (
       <Check
         aria-hidden
-        className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+        className="size-3.5 shrink-0 text-success-foreground"
       />
     );
   }

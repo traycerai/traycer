@@ -657,7 +657,7 @@ function ArtifactVersionHistoryPanel(props: {
         <div className="grid min-h-0 flex-1 grid-cols-[minmax(13rem,0.7fr)_minmax(0,1.3fr)] overflow-hidden">
           <div className="min-h-0 overflow-y-auto border-r">
             {settings.data?.settings.enabled === false ? (
-              <div className="m-3 rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-ui-sm">
+              <div className="m-3 rounded-lg border border-info/30 bg-info/10 p-3 text-ui-sm">
                 <p className="font-medium">
                   Version history is off — turn it on in Settings.
                 </p>
@@ -946,7 +946,7 @@ function VersionObservationList(props: {
               {renormalizedByEditorUpdate ? (
                 <Badge
                   variant="outline"
-                  className="border-blue-500/30 text-blue-600 dark:text-blue-400"
+                  className="border-info/30 text-info-foreground"
                 >
                   re-normalized by editor update
                 </Badge>
@@ -957,7 +957,7 @@ function VersionObservationList(props: {
               {isNewOutcome && props.outcome.status === "clean" ? (
                 <Badge
                   variant="outline"
-                  className="border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                  className="border-success/30 text-success-foreground"
                 >
                   Restored
                 </Badge>
@@ -965,7 +965,7 @@ function VersionObservationList(props: {
               {isNewOutcome && props.outcome.status === "renormalized" ? (
                 <Badge
                   variant="outline"
-                  className="border-blue-500/30 text-blue-600 dark:text-blue-400"
+                  className="border-info/30 text-info-foreground"
                 >
                   re-normalized by a newer editor version — review
                 </Badge>
@@ -1025,18 +1025,18 @@ function VersionDiffView(props: {
   return (
     <div className="flex min-h-0 flex-col overflow-hidden">
       {props.outcome === "clean" ? (
-        <p className="border-b border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-ui-sm text-emerald-700 dark:text-emerald-300">
+        <p className="border-b border-success/30 bg-success/10 px-4 py-2 text-ui-sm text-success-foreground">
           Restored as a new version.
         </p>
       ) : null}
       {props.outcome === "renormalized" ? (
-        <p className="border-b border-blue-500/30 bg-blue-500/10 px-4 py-2 text-ui-sm text-blue-700 dark:text-blue-300">
+        <p className="border-b border-info/30 bg-info/10 px-4 py-2 text-ui-sm text-info-foreground">
           Restored. Content was re-normalized by a newer editor version —
           formatting may differ slightly.
         </p>
       ) : null}
       {props.outcome === "degraded" ? (
-        <p className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-ui-sm text-amber-700 dark:text-amber-300">
+        <p className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-ui-sm text-warning-foreground">
           Restored as a new version with missing image content. The new row is
           marked Body only.
         </p>
@@ -1182,7 +1182,7 @@ function RestoreVersionDialog(props: {
           </DialogDescription>
         </DialogHeader>
         {props.refreshing ? (
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-ui-sm">
+          <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-ui-sm">
             The artifact changed since you looked. Refreshing the checks before
             restoring…
           </div>
@@ -1199,7 +1199,7 @@ function RestoreVersionDialog(props: {
             </p>
             {props.preflight.threadCount > 0 ? (
               <div className="flex gap-2 rounded-lg border p-3">
-                <InfoIcon className="mt-0.5 size-4 shrink-0 text-blue-500" />
+                <InfoIcon className="mt-0.5 size-4 shrink-0 text-info-foreground" />
                 <p>
                   {props.preflight.threadCount} anchored{" "}
                   {props.preflight.threadCount === 1 ? "comment" : "comments"}:
@@ -1208,8 +1208,8 @@ function RestoreVersionDialog(props: {
               </div>
             ) : null}
             {props.preflight.imagesMissing.length > 0 ? (
-              <div className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-                <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-600" />
+              <div className="flex gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3">
+                <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
                 <div>
                   <p className="font-medium">
                     {props.preflight.imagesMissing.length} image{" "}
@@ -1227,7 +1227,7 @@ function RestoreVersionDialog(props: {
           </div>
         )}
         {props.unavailable === null ? null : (
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+          <div className="rounded-lg border border-warning/30 bg-warning/10 p-3">
             <p>{props.unavailable}</p>
             {props.retryable ? (
               <Button

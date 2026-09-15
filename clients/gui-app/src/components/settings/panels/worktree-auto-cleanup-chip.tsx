@@ -132,9 +132,7 @@ function AutoCleanupChipFace(props: {
           data-tone={props.tone}
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            props.tone === "on"
-              ? "bg-emerald-500 dark:bg-emerald-400"
-              : "bg-muted-foreground/50",
+            props.tone === "on" ? "bg-success" : "bg-muted-foreground/50",
           )}
           aria-hidden
         />
@@ -420,7 +418,7 @@ function AutoCleanupPopoverPanel(props: {
         <p
           role="status"
           data-testid="worktree-auto-cleanup-paused"
-          className="text-ui-xs text-pretty text-amber-700 dark:text-amber-300"
+          className="text-ui-xs text-pretty text-warning-foreground"
         >
           {AUTO_CLEANUP_PAUSED_COPY[policy.pausedReason]}
         </p>
@@ -457,7 +455,7 @@ function AutoCleanupStatusLines(props: {
         <p
           role="alert"
           data-testid="worktree-auto-cleanup-conflict"
-          className="text-ui-xs text-pretty text-amber-700 dark:text-amber-300"
+          className="text-ui-xs text-pretty text-warning-foreground"
         >
           Automatic cleanup was changed somewhere else. The current setting is
           shown above — apply your change again if you still want it.

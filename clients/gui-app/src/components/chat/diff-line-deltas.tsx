@@ -29,9 +29,7 @@ export function DiffLineDeltas(props: {
       )}
     >
       {additions > 0 ? (
-        <span className="text-emerald-600 dark:text-emerald-400">
-          +{additions}
-        </span>
+        <span className="text-success-foreground">+{additions}</span>
       ) : null}
       {deletions > 0 ? (
         <span className="text-destructive">−{deletions}</span>

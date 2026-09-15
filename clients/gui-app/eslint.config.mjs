@@ -1256,6 +1256,75 @@ export default tseslint.config(
           ],
         },
       ],
+      "shadcn/no-raw-colors": [
+        "error",
+        {
+          allow: [
+            // UPSTREAM BUG, shadcn-ui/lint#8: for `text-<name>` the rule
+            // consults only `--color-*` and reports everything else as an
+            // undeclared color, so our 17 `--text-*` FONT SIZE tokens read as
+            // colors. Reproduced in isolation with a two-line theme. Delete
+            // this list when the issue closes - it is not a design decision,
+            // and while it stands a genuinely undeclared `text-<color>` in
+            // these namespaces goes unreported.
+            "text-ui",
+            "text-ui-*",
+            "text-title-*",
+            "text-code",
+            "text-code-*",
+            "text-badge",
+            "text-display",
+            "text-micro",
+            "text-overline",
+
+            // A SECOND upstream bug, distinct from #8 and not yet filed: the
+            // rule treats every `fill-*` / `stroke-*` as naming a color, but
+            // `fill-none` and `stroke-none` are real Tailwind utilities for
+            // the CSS keyword `none`. (`fill-current`, `stroke-current` and
+            // `fill-transparent` are all recognized, so it is only the keyword
+            // pair.) Nothing else in the codebase can express "no fill".
+            "fill-none",
+            "stroke-none",
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // Vendor artwork. These are other people's marks - VS Code's blues, the
+    // Claude orange, the provider logos - reproduced at their real values
+    // because that is what makes them recognizable. A theme token would be
+    // wrong by definition, and `currentColor` would flatten a multi-colour
+    // logo into one shade.
+    files: [
+      "src/components/icons/editor-icons.tsx",
+      "src/components/home/pickers/harness-icons.tsx",
+    ],
+    rules: {
+      "shadcn/no-raw-colors": "off",
+    },
+  },
+  {
+    // Surfaces whose colour does NOT come from the theme, so no theme token
+    // can express them:
+    //
+    //   - the two sign-in surfaces paint on `StandaloneShell`'s fixed dark
+    //     photo backdrop (see the full-bleed surface note in AGENTS.md). The
+    //     Traycer mark is white on that artwork and the hero button is white
+    //     with near-black label, in BOTH appearances - they are not following
+    //     a theme and must not start.
+    //   - the profile avatar's background is a hashed palette entry or a
+    //     colour the user picked (`resolveProfileAccentColor`), never a token,
+    //     so its initials need a fixed dark that reads on those values.
+    //     `--foreground` would flip with the theme while the chip behind it
+    //     did not.
+    files: [
+      "src/components/auth/cinematic-backdrop.tsx",
+      "src/components/layout/header/sign-in/device-code-progress.tsx",
+      "src/components/providers/profile-avatar-badge.tsx",
+    ],
+    rules: {
+      "shadcn/no-raw-colors": "off",
     },
   },
 

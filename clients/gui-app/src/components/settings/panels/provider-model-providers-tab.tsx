@@ -1123,7 +1123,7 @@ function ModelProviderRow(props: {
           {entry.connected ? (
             <span
               aria-hidden
-              className="size-1.5 shrink-0 rounded-full bg-emerald-500 dark:bg-emerald-400"
+              className="size-1.5 shrink-0 rounded-full bg-success"
             />
           ) : null}
           <span className="truncate text-ui-sm text-foreground">

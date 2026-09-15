@@ -567,7 +567,7 @@ function DuplicateAccountNotice({
   readonly profile: ProviderProfile;
 }): ReactNode {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-900 dark:text-amber-200">
+    <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning-foreground">
       <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0">
         <div className="text-ui-sm font-medium">Account already linked</div>
@@ -904,7 +904,7 @@ export function AddProfileIdentityStep({
         </div>
       </div>
       {duplicateLabel !== null ? (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-ui-xs text-amber-900 dark:text-amber-200">
+        <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-ui-xs text-warning-foreground">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>This is the same account as {duplicateLabel}.</span>
         </div>

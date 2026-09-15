@@ -471,7 +471,7 @@ function SwitcherBrowserDriverButton(props: {
       size="icon-sm"
       aria-label={`Open driving chat: ${names.join(", ")}`}
       data-testid={`switcher-browser-driver-${row.tab.tabId}`}
-      className="shrink-0 text-blue-500 hover:text-blue-500"
+      className="shrink-0 text-info-foreground"
       onClick={onSelect}
     >
       <Bot className="size-4" aria-hidden />

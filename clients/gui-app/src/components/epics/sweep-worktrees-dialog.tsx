@@ -1636,7 +1636,7 @@ function sessionOutcomeHint(
   if (outcome.kind === "uncertain") {
     return (
       <span
-        className="mt-0.5 flex items-start gap-1 text-ui-xs text-amber-600 dark:text-amber-400"
+        className="mt-0.5 flex items-start gap-1 text-ui-xs text-warning-foreground"
         data-testid="sweep-worktrees-row-outcome"
       >
         <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden />
@@ -1688,9 +1688,7 @@ function SweepRowHint(props: {
     <span
       className={cn(
         "mt-0.5 flex items-start gap-1 text-ui-xs",
-        cautious
-          ? "text-amber-600 dark:text-amber-400"
-          : "text-muted-foreground",
+        cautious ? "text-warning-foreground" : "text-muted-foreground",
       )}
       data-testid="sweep-worktrees-hint"
     >

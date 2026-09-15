@@ -732,7 +732,7 @@ function PrecedenceNotice(props: {
 }): ReactNode {
   if (props.notice === null) return null;
   return (
-    <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-xs text-amber-900 dark:text-amber-200">
+    <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-xs text-warning-foreground">
       {props.notice}
     </p>
   );

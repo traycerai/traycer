@@ -1184,10 +1184,10 @@ function UnrefreshedResetNotice(props: {
   return (
     <div
       role="alert"
-      className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-5 py-4"
+      className="rounded-lg border border-warning/40 bg-warning/5 px-5 py-4"
       data-testid="fallback-reset-unrefreshed"
     >
-      <div className="font-medium text-ui-sm text-amber-600 dark:text-amber-400">
+      <div className="font-medium text-ui-sm text-warning-foreground">
         {props.message}
       </div>
       {/* A `div`, not the `p` its sibling notice uses: this one carries a
@@ -1221,10 +1221,10 @@ function UnreadablePolicyNotice(): ReactNode {
   return (
     <div
       role="alert"
-      className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-5 py-4"
+      className="rounded-lg border border-warning/40 bg-warning/5 px-5 py-4"
       data-testid="fallback-policy-unreadable"
     >
-      <div className="font-medium text-ui-sm text-amber-600 dark:text-amber-400">
+      <div className="font-medium text-ui-sm text-warning-foreground">
         Your saved fallback settings couldn&apos;t be read
       </div>
       <p className="mt-1 max-w-[68ch] text-ui-sm text-muted-foreground">

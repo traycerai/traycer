@@ -324,7 +324,7 @@ function ArtifactTreeItemLabel(props: {
               aria-label={statusLabel ?? undefined}
               className={cn(
                 "size-2 shrink-0 rounded-full",
-                STATUS_DOT_CLASSES[row.status] ?? "bg-slate-400",
+                STATUS_DOT_CLASSES[row.status] ?? "bg-muted-foreground",
               )}
               role="status"
             />

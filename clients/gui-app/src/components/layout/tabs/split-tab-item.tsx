@@ -241,7 +241,7 @@ function SplitQuickActions(props: {
             SPLIT_TAB_CONTROL_CLASS,
             "hover:bg-accent/60 [-webkit-app-region:no-drag]",
             props.engaged
-              ? "text-blue-600 hover:text-blue-500 dark:text-blue-300 dark:hover:text-blue-200"
+              ? "text-info-foreground"
               : "text-muted-foreground hover:text-foreground",
           )}
         >
