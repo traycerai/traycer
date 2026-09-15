@@ -1444,6 +1444,32 @@ describe("CommGraphTile", () => {
       // lands, so this leftover is transient and not part of the finding's
       // contract (only the re-measurement gate is).
     });
+
+    it("clears the dormant Auto outcome when the default returns to Auto even while the tile is in Graph mode", async () => {
+      // CodeRabbit (Major): 45693c4af's clear was gated behind
+      // `node.view.mode !== "office"`, so a default returning to Auto while
+      // the tile is on the GRAPH never touched the dormant `officeAutoView` -
+      // no office canvas is mounted to remeasure, and the witness arm below
+      // only retires the office CAMERA, not the outcome. Switching back to
+      // Office later would then hit the Auto effect's
+      // `officeAutoView !== null` guard and skip the required re-measurement.
+      // Asserted with no office switch and no Auto measurement at all - the
+      // claim is about the STORE write the default flip itself makes, kept
+      // off the flakier measurement path entirely.
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      await renderSeededOffice({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        mode: "graph",
+        officeAutoView: "floor",
+      });
+      expect(storedView()?.mode).toBe("graph");
+      expect(storedView()?.officeAutoView).toBe("floor");
+
+      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+
+      expect(storedView()?.mode).toBe("graph");
+      expect(storedView()?.officeAutoView).toBeNull();
+    });
   });
 
   describe("persisted camera record (officeCameraView)", () => {
