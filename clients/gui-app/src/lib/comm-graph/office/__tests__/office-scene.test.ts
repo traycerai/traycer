@@ -13951,6 +13951,131 @@ describe("OfficeScene fixup 8c - the settle trigger fires once and never again (
   });
 });
 
+describe("OfficeScene Finding 25 - the settle latch re-arms for a new history source", () => {
+  /**
+   * The R3 latch above is right for a RECONNECT (the same agents replaying),
+   * but a NEW host joining the fan-in is a different event: its agents were
+   * never part of the set before, its own feed starts behind (the null
+   * snapshot boundary), and by the time it catches up the ORIGINAL settle
+   * has already latched `feedSettled` - so, pre-fix, the new team's
+   * catch-up owed the planner nothing and was stranded in the provisional
+   * cubbies its incomplete statuses forced, for the life of the mount. The
+   * fix re-arms the latch when the agent set changes while the feed is
+   * behind (`reArmSettleForNewHistorySource`), so the new host's own
+   * catch-up counts as a settle.
+   *
+   * Reuses the `triage` fixture's team-0 (lead + members) as the "new
+   * host" - the same topology the 8c settle test already proves plans a
+   * room once its lead wakes - rather than a hand-built team, so the
+   * classification (lead/member/root) is the one `partitionOfficePopulation`
+   * is already exercised against.
+   */
+  it("re-plans a newly-joined team once ITS feed settles, even though this scene already settled once before it arrived", () => {
+    let calls = 0;
+    const countingView: OfficeView = {
+      ...OFFICE_VIEWS.building,
+      plan: (input) => {
+        calls += 1;
+        return OFFICE_VIEWS.building.plan(input);
+      },
+    };
+    const fixture = makeTestEpic("triage", 40, 1);
+    const allAgents = fixture.agents;
+    const lead = "team-0-lead";
+    if (!fixture.statusById.has(lead)) {
+      throw new Error("fixture has no team-0-lead");
+    }
+    const team0Ids = new Set(
+      allAgents
+        .filter((one) => one.id === lead || one.parentId === lead)
+        .map((one) => one.id),
+    );
+    if (team0Ids.size < 2) {
+      throw new Error("team-0 needs a lead and at least one member");
+    }
+    // Everybody EXCEPT team-0: the root, the other teams, the leaves - a
+    // valid office on its own, and the one this scene settles BEFORE team-0
+    // ever joins.
+    const baseAgents = allAgents.filter((one) => !team0Ids.has(one.id));
+    const baseIds = new Set(baseAgents.map((one) => one.id));
+    const idleBase = new Map<string, OfficeAgentStatus>(
+      baseAgents.map((one) => [one.id, "idle" as const]),
+    );
+
+    const scene = new OfficeScene(countingView, null);
+
+    // Phase 1/2: an ordinary settle, exactly like the R3 tests above - this
+    // scene has ALREADY latched `feedSettled` before team-0 ever joins.
+    scene.sync(
+      sceneInput({
+        agents: baseAgents,
+        visibleAgentIds: baseIds,
+        statusById: idleBase,
+      }),
+    );
+    expect(calls).toBe(1);
+    scene.sync(
+      sceneInput({
+        agents: baseAgents,
+        visibleAgentIds: baseIds,
+        statusById: idleBase,
+        feedSettled: true,
+      }),
+    );
+    expect(calls).toBe(2);
+
+    // Phase 3: team-0 joins - a NEW host's agents - while ITS feed is still
+    // behind (`feedSettled: false`, the fan-in's null snapshot boundary).
+    // The agent set changing forces its own provisional plan, drawn from
+    // statuses nobody has confirmed yet.
+    const allIds = new Set(allAgents.map((one) => one.id));
+    const idleAll = new Map<string, OfficeAgentStatus>(
+      allAgents.map((one) => [one.id, "idle" as const]),
+    );
+    scene.sync(
+      sceneInput({
+        agents: allAgents,
+        visibleAgentIds: allIds,
+        statusById: idleAll,
+        feedSettled: false,
+      }),
+    );
+    expect(calls).toBe(3);
+    const provisional = layoutOf(scene);
+    const kindsOf = (layout: OfficeLayout): ReadonlyArray<string | undefined> =>
+      [...team0Ids].map((id) => layout.desks.get(id)?.kind);
+    expect(kindsOf(provisional).every((kind) => kind === "cubby")).toBe(true);
+    for (const id of team0Ids) {
+      expect(scene.whereabouts(id)).toBe("Quiet stack");
+    }
+
+    // Phase 4: team-0's OWN feed catches up - `feedSettled: true` again,
+    // this time with its lead awake. RED before the fix: the latch is
+    // already up from phase 2, so `settling` never fires and this sync
+    // costs the planner nothing - team-0 stays stranded in the provisional
+    // cubbies phase 3 forced, for the life of the mount (the 8c P2, now
+    // reopened by a second history source rather than the first). The fix
+    // re-arms the latch in phase 3 (agent set changed while behind), so
+    // this sync IS a settle.
+    const settledAll = new Map(idleAll);
+    settledAll.set(lead, "awaiting");
+    scene.sync(
+      sceneInput({
+        agents: allAgents,
+        visibleAgentIds: allIds,
+        statusById: settledAll,
+        feedSettled: true,
+      }),
+    );
+    expect(calls).toBe(4);
+    const settled = layoutOf(scene);
+    expect(kindsOf(settled).every((kind) => kind === "desk")).toBe(true);
+    for (const id of team0Ids) {
+      expect(scene.whereabouts(id)).not.toBe("Quiet stack");
+    }
+  });
+});
+
 describe("OfficeScene fixup 8c - the settle plan walks people, it does not pop them (R4)", () => {
   interface SettledScene {
     readonly scene: OfficeScene;
