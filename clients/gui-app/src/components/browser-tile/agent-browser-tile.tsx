@@ -36,6 +36,7 @@ import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-key
 import { resolveTileOverlay } from "@/components/epic-canvas/renderers/resolve-tile-overlay";
 import type { TileOverlaySurface } from "@/components/epic-canvas/renderers/resolve-tile-overlay";
 import type {
+  BrowserViewNativeTabStatusChange,
   BrowserViewStatus,
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -120,10 +121,83 @@ function agentTileSessionFacts(
 }
 
 /**
- * How long a tile may sit at `loading` with no progress report before it
- * resolves to the stalled/retry surface (see the stall effect below).
+ * How long a loading episode may run without settling before it resolves to
+ * the stalled/retry surface (see the stall effect below).
  */
 const NAVIGATION_STALL_TIMEOUT_MS = 30_000;
+
+/**
+ * The desktop's last accepted status reading for one guest incarnation, plus
+ * the one fact the tile derives from the sequence of readings: whether this
+ * incarnation has ever committed a document (see `resolveTileOverlay`).
+ */
+interface NativeTabReading {
+  readonly registrationId: string;
+  readonly status: BrowserViewStatus;
+  readonly reason: string | null;
+  readonly url: string;
+  readonly canGoBack: boolean;
+  readonly canGoForward: boolean;
+  readonly zoomPercent: number;
+  readonly navigationAttempt: number;
+  readonly documentCommitted: boolean;
+}
+
+/** What a tile knows about a guest it has not heard from: blank and loading. */
+const INITIAL_TAB_READING: NativeTabReading = {
+  registrationId: "",
+  status: "loading",
+  reason: null,
+  url: "",
+  canGoBack: false,
+  canGoForward: false,
+  zoomPercent: 100,
+  navigationAttempt: 0,
+  documentCommitted: false,
+};
+
+/**
+ * Folds one accepted status change into the reading. `documentCommitted`
+ * is the only carried-over field: true after a `ready`, cleared by `dead`
+ * (the guest is re-materialized from blank), and inherited across a
+ * `loading` only from a reading for the SAME registration - a previous
+ * incarnation's commit says nothing about this guest.
+ */
+function nextTabReading(
+  previous: NativeTabReading | null,
+  change: BrowserViewNativeTabStatusChange,
+): NativeTabReading {
+  return {
+    registrationId: change.registrationId,
+    status: change.status,
+    reason: change.reason,
+    url: change.url,
+    canGoBack: change.canGoBack,
+    canGoForward: change.canGoForward,
+    zoomPercent: change.zoomPercent,
+    navigationAttempt: change.navigationAttempt,
+    documentCommitted: documentCommittedAfter(previous, change),
+  };
+}
+
+function documentCommittedAfter(
+  previous: NativeTabReading | null,
+  change: BrowserViewNativeTabStatusChange,
+): boolean {
+  if (change.status === "ready") return true;
+  if (change.status === "dead") return false;
+  if (previous === null) return false;
+  if (previous.registrationId !== change.registrationId) return false;
+  return previous.documentCommitted;
+}
+
+function stallEpisodeKey(
+  registrationId: string,
+  navigationAttempt: number,
+  retryNonce: number,
+): string {
+  return `${registrationId}:${navigationAttempt}:${retryNonce}`;
+}
 
 /**
  * Electron tile used for agent-created pages and native session tabs.
@@ -135,31 +209,34 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const visible = props.visible;
   const browserView = runnerHost.browserView;
   const surfaceRef = useRef<HTMLDivElement | null>(null);
-  const [status, setStatus] = useState<BrowserViewStatus>("loading");
-  const [statusReason, setStatusReason] = useState<string | null>(null);
-  const [statusUrl, setStatusUrl] = useState("");
+  // The last status reading accepted from the desktop, tagged with the
+  // binding registration it was reported for. The directory can replace the
+  // binding under a mounted surface (a re-ensured tab is a fresh guest at
+  // `about:blank`), so a reading is only ever read THROUGH the current
+  // registration: a reading for another incarnation derives as the initial
+  // state, not as a stale `ready` that hides the loader over a blank guest.
+  const [reportedReading, setReportedReading] =
+    useState<NativeTabReading | null>(null);
   // A wire `loading` with no follow-up settle would spin forever; a silent
-  // stretch resolves to a terminal retry surface instead. `loadingNonce`
-  // bumps on every incoming `loading`, so ongoing progress keeps rearming
-  // the clock and only a genuinely stalled tab trips it.
-  const [stalledNonce, setStalledNonce] = useState<number | null>(null);
-  const [loadingNonce, setLoadingNonce] = useState(0);
-  // The binding registration whose guest has committed a document, or null.
-  // Before the first `ready` the guest is blank and the loader is the only
-  // thing to show; after it, a `loading` is a navigation AWAY from a page
-  // that stays painted until the next commit, and the loader must not sit
-  // over it (see `resolveTileOverlay`). Keyed by registration rather than a
-  // bare flag because the directory can replace the binding under a mounted
-  // surface (a re-ensured tab is a fresh guest at `about:blank`), and a
-  // `dead` guest is re-materialized from blank - both must derive as
-  // uncommitted.
-  const [committedRegistrationId, setCommittedRegistrationId] = useState<
-    string | null
-  >(null);
+  // stretch resolves to a terminal retry surface instead. The clock is keyed
+  // on the navigation EPISODE (registration + desktop-minted attempt + local
+  // retry), not on report volume: a title or zoom refresh while loading is
+  // not progress and must not push the deadline out.
+  const [stalledEpisode, setStalledEpisode] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const attemptedNavigationRef = useRef<AttemptedNavigation | null>(null);
-  const [canGoBack, setCanGoBack] = useState(false);
-  const [canGoForward, setCanGoForward] = useState(false);
-  const [zoomPercent, setZoomPercent] = useState(100);
+  const registrationId = props.binding.registrationId;
+  const reading =
+    reportedReading !== null &&
+    reportedReading.registrationId === registrationId
+      ? reportedReading
+      : INITIAL_TAB_READING;
+  const status = reading.status;
+  const statusReason = reading.reason;
+  const statusUrl = reading.url;
+  const canGoBack = reading.canGoBack;
+  const canGoForward = reading.canGoForward;
+  const zoomPercent = reading.zoomPercent;
   const viewport = useBrowserViewport({
     hostId,
     sessionId: props.node.sessionId,
@@ -205,7 +282,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     [placement, tileInstanceId],
   );
   const bindSurface = props.binding.bindSurface;
-  const registrationId = props.binding.registrationId;
   const currentSurfaceAttachment = resolveCurrentSurfaceAttachment(
     surfaceAttachment,
     bindingId,
@@ -239,55 +315,58 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       statusReason,
     );
 
+  // One loading episode: this registration's guest, the attempt the desktop
+  // minted for the navigation, and a local Retry count so a click clears the
+  // stalled surface before the re-driven navigation's own attempt echoes.
+  const stallEpisode = stallEpisodeKey(
+    registrationId,
+    reading.navigationAttempt,
+    retryNonce,
+  );
   // Terminal stall is derived, not a synchronously-reset flag: the tile is
   // stalled only when the current loading episode is the one the timer fired
-  // for. A new episode - a status flip or a `loadingNonce` bump from a fresh
-  // progress report - clears it for free, with no setState in the effect.
+  // for. A new episode - a status flip, a new attempt, a Retry - clears it
+  // for free, with no setState in the effect.
   const navigationStalled =
-    effectiveStatus === "loading" && stalledNonce === loadingNonce;
+    effectiveStatus === "loading" && stalledEpisode === stallEpisode;
 
-  // Deterministic terminal transition: a `loading` that neither settles nor
-  // reports further progress within the window trips the stalled surface.
-  // `loadingNonce` restarts the timer on each progress report, so only true
-  // silence trips it. ponytail: fixed 30s ceiling; a page still streaming
-  // status updates keeps rearming, a wedged navigation does not.
+  // Deterministic terminal transition: a `loading` that does not settle
+  // within the window trips the stalled surface. The clock restarts only on a
+  // NEW episode, so a page that keeps reporting title/zoom/in-page changes
+  // for the same attempt cannot hold it off. ponytail: fixed 30s ceiling.
   useEffect(() => {
     if (effectiveStatus !== "loading") return;
     const timer = setTimeout(() => {
-      setStalledNonce(loadingNonce);
+      setStalledEpisode(stallEpisode);
     }, NAVIGATION_STALL_TIMEOUT_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [effectiveStatus, loadingNonce]);
+  }, [effectiveStatus, stallEpisode]);
 
   const onRequestClose = props.onRequestClose;
   useEffect(() => {
     if (browserView === null) return;
+    // The latch describes an attempt against the guest this subscription is
+    // for. A replaced registration is a fresh guest: a pre-echo latch left
+    // over from the old one would drop the new guest's first `ready` as a
+    // stale settle and hold the tile at loading until the stall surface.
+    attemptedNavigationRef.current = null;
     const subscription = browserView.onNativeTabStatusChange((change) => {
       if (
         change.hostId !== props.binding.hostId ||
         change.sessionId !== props.binding.sessionId ||
-        change.tabId !== props.binding.tabId
+        change.tabId !== props.binding.tabId ||
+        // The desktop reports the entry's own registration and the directory
+        // publishes bindings keyed on the same id, so a mismatch is an old
+        // incarnation's late report, never a settle this tile is waiting on.
+        change.registrationId !== registrationId
       ) {
         return;
       }
       const current = attemptedNavigationRef.current;
       if (!isStaleSettleBeforeEcho(current, change.status, change.url)) {
-        setStatus(change.status);
-        setStatusReason(change.reason);
-        setStatusUrl(change.url);
-        if (change.status === "ready") {
-          setCommittedRegistrationId(change.registrationId);
-        }
-        if (change.status === "dead") setCommittedRegistrationId(null);
-        setCanGoBack(change.canGoBack);
-        setCanGoForward(change.canGoForward);
-        setZoomPercent(change.zoomPercent);
-      }
-      // Every fresh loading report is progress: rearm the stall clock.
-      if (change.status === "loading") {
-        setLoadingNonce((nonce) => nonce + 1);
+        setReportedReading((previous) => nextTabReading(previous, change));
       }
       const next = nextAttemptedNavigationAfterStatus(
         current,
@@ -304,6 +383,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     props.binding.hostId,
     props.binding.sessionId,
     props.binding.tabId,
+    registrationId,
   ]);
 
   /**
@@ -396,8 +476,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const focusAddress = chromeController.focusAddress;
   const retryNavigation = useCallback(() => {
     // Bump the episode so the derived stall clears immediately on click,
-    // before the re-driven navigation's own status echoes back.
-    setLoadingNonce((nonce) => nonce + 1);
+    // before the re-driven navigation's own attempt echoes back.
+    setRetryNonce((nonce) => nonce + 1);
     // Re-drive the intended navigation rather than reloading the wedged
     // about:blank the initial navigation never left.
     navigateToUrl(props.node.url);
@@ -508,7 +588,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     effectiveStatus,
     surfaceReady,
     navigationStalled,
-    committedRegistrationId === registrationId,
+    reading.documentCommitted,
   );
 
   return (
