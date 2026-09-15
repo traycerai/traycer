@@ -181,6 +181,7 @@ const OFFICE_VIEW: CommGraphTileViewState = {
   mode: "office",
   officeView: null,
   officeAutoView: null,
+  officeAutoGeneration: null,
   officeCameraView: null,
   // Unread by this canvas, which is handed the PROJECTION the tile builds
   // (D68): `x`, `y` and `zoom` above are this suite's camera, and the office
@@ -3570,6 +3571,7 @@ const FIXED_CAMERA_VIEW: CommGraphTileViewState = {
   mode: "office",
   officeView: null,
   officeAutoView: null,
+  officeAutoGeneration: null,
   officeCameraView: null,
   // See `OFFICE_VIEW`: the canvas reads the three fields above, never this one.
   officeCamera: null,

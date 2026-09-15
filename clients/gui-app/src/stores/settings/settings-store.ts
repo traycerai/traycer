@@ -267,6 +267,15 @@ export interface SettingsState {
    * touched. `"auto"` measures the tile and picks by what fits.
    */
   agentOfficeDefaultView: OfficeViewChoice;
+  /**
+   * A monotonic counter bumped every time {@link agentOfficeDefaultView}
+   * changes value. A following comm-graph tile records the generation its Auto
+   * outcome was measured under, so a tile that was CLOSED while the default left
+   * Auto and returned can tell a stale outcome from a still-current one on the
+   * next mount - which a mounted-only witness cannot. Persisted, so a quiet
+   * restart matches and does not force a re-measure.
+   */
+  agentOfficeDefaultViewGeneration: number;
   pointerCursors: boolean;
   uiFontSize: number;
   codeFontSize: number;
@@ -449,6 +458,7 @@ type PersistedSettingsState = Pick<
   | "pinContextUsageBreakdown"
   | "chatTurnMinimapSide"
   | "agentOfficeDefaultView"
+  | "agentOfficeDefaultViewGeneration"
   | "pointerCursors"
   | "uiFontSize"
   | "codeFontSize"
@@ -530,6 +540,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     pinContextUsageBreakdown: state.pinContextUsageBreakdown,
     chatTurnMinimapSide: state.chatTurnMinimapSide,
     agentOfficeDefaultView: state.agentOfficeDefaultView,
+    agentOfficeDefaultViewGeneration: state.agentOfficeDefaultViewGeneration,
     pointerCursors: state.pointerCursors,
     uiFontSize: state.uiFontSize,
     codeFontSize: state.codeFontSize,
@@ -582,6 +593,7 @@ export const useSettingsStore = create<SettingsState>()(
       pinContextUsageBreakdown: DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
       chatTurnMinimapSide: DEFAULT_MINIMAP_SIDE,
       agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
+      agentOfficeDefaultViewGeneration: 0,
       pointerCursors: true,
       uiFontSize: DEFAULT_UI_FONT_SIZE,
       codeFontSize: DEFAULT_CODE_FONT_SIZE,
@@ -645,7 +657,19 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
       setMinimapSide: makeSetter(set, "chatTurnMinimapSide"),
-      setAgentOfficeDefaultView: makeSetter(set, "agentOfficeDefaultView"),
+      // Not `makeSetter`: a real change also bumps the generation, so a tile
+      // that was closed across the change can tell a stale Auto outcome from a
+      // current one on remount.
+      setAgentOfficeDefaultView: (value) =>
+        set((s) =>
+          s.agentOfficeDefaultView === value
+            ? s
+            : {
+                agentOfficeDefaultView: value,
+                agentOfficeDefaultViewGeneration:
+                  s.agentOfficeDefaultViewGeneration + 1,
+              },
+        ),
       setPointerCursors: makeSetter(set, "pointerCursors"),
       setUiFontSize: makeClampedFontSizeSetter(
         set,

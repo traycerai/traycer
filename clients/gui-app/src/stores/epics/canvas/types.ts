@@ -538,9 +538,26 @@ export interface CommGraphTileViewState extends CommGraphTileCamera {
    *
    * Persisted rather than recomputed, because a re-measure is free to answer
    * differently and the saved camera addresses whichever view was on screen
-   * when it was saved. Only re-picking Auto clears it.
+   * when it was saved. Re-picking Auto clears it, and a Settings-default change
+   * invalidates it through {@link officeAutoGeneration} - a mounted tile also
+   * clears it when it witnesses the change, but the generation is what catches a
+   * tile that was closed while the default moved.
    */
   readonly officeAutoView: OfficeViewId | null;
+  /**
+   * The Settings-default GENERATION {@link officeAutoView} was measured under,
+   * or `null` when nothing has been measured.
+   *
+   * A mounted tile witnesses a default change and clears its dormant Auto
+   * outcome, but an LRU-evicted tile cannot - a default that leaves Auto and
+   * returns while the tile is closed would otherwise leave the stale outcome in
+   * place, so the guarded re-measure never runs and the tile reopens on a pick
+   * taken against an epic that may have changed shape (and a view that no longer
+   * fits it). Stamped when Auto writes its outcome and compared on the next
+   * mount: Auto re-decides only when the generation differs, so a quiet remount
+   * or restart still re-reads the saved outcome rather than re-measuring.
+   */
+  readonly officeAutoGeneration: number | null;
   /**
    * WHICH VIEW the saved camera was framed under, or `null` for a camera
    * nobody framed.

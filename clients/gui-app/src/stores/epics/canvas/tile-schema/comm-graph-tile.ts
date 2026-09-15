@@ -43,6 +43,8 @@ export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
   // for every tile ever opened.
   officeView: null,
   officeAutoView: null,
+  // Nothing measured, so no Settings-default generation to attribute it to.
+  officeAutoGeneration: null,
   officeCameraView: null,
   // Nobody has framed the office. The tile projects this into the three fields
   // above before building the office canvas, and `null` is what that canvas
@@ -148,6 +150,25 @@ function readOfficeViewChoice(value: unknown): OfficeViewChoice | null {
 }
 
 /**
+ * The Settings-default generation an Auto outcome was measured under.
+ *
+ * `null` unless there IS an outcome and a finite, non-negative generation was
+ * persisted beside it: a stamp with no outcome frames nothing, and an outcome
+ * whose generation did not persist (a record from before this field existed)
+ * re-measures on the next mount rather than being trusted at an unknown vintage.
+ */
+function readOfficeGeneration(
+  value: unknown,
+  officeAutoView: OfficeViewId | null,
+): number | null {
+  if (officeAutoView === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+/**
  * Whether a field was a real choice this build cannot honour.
  *
  * An absent field and a persisted `null` are the SAME thing - never chosen -
@@ -196,6 +217,10 @@ export function parseCommGraphTileViewState(
   const zoom = readFiniteNumber(value.zoom, PERSISTED_COMM_GRAPH_VIEW.zoom);
   const officeView = readOfficeViewChoice(value.officeView);
   const officeAutoView = readOfficeViewId(value.officeAutoView);
+  const officeAutoGeneration = readOfficeGeneration(
+    value.officeAutoGeneration,
+    officeAutoView,
+  );
   const officeCameraView = readOfficeViewId(value.officeCameraView);
   // The camera means "this much of THAT view". Once the view it was saved
   // against has degraded away, the numbers point into a floor plan that is not
@@ -258,6 +283,14 @@ export function parseCommGraphTileViewState(
     mode === "office" &&
     !isNeutralCamera(camera);
   const officeCamera = migrates ? camera : readOfficeCamera(value.officeCamera);
+  // A MIGRATED camera's coordinates were the office's back when the only office
+  // was the Floor, so the view it frames is Floor even though a pre-split record
+  // carried no `officeCameraView` stamp. Naming it lets the record-mismatch
+  // effect neutralise the camera when the current view differs, instead of
+  // reading a null stamp as "nobody framed this" and reopening Floor-space
+  // coordinates under Towers or Building entirely off-screen. A non-migrated
+  // record keeps whatever stamp it persisted.
+  const framedView: OfficeViewId | null = migrates ? "floor" : officeCameraView;
   return {
     // The GRAPH's camera now. A migrated record's numbers went to the office
     // just above, and sprite pixels read as flow units would open the graph
@@ -269,8 +302,10 @@ export function parseCommGraphTileViewState(
     mode,
     officeView,
     officeAutoView,
-    // A degraded camera frames nothing, so it claims nothing either.
-    officeCameraView: stale ? null : officeCameraView,
+    officeAutoGeneration,
+    // A degraded camera frames nothing, so it claims nothing either; otherwise
+    // it names the view it frames - Floor for a migrated record (see above).
+    officeCameraView: stale ? null : framedView,
     // Same rule, same reason: a camera about a view this build cannot draw
     // points into empty space whichever field holds it.
     officeCamera: stale ? null : officeCamera,
@@ -315,6 +350,7 @@ function serializeCommGraphTileRef(ref: CommGraphTileRef): DesktopJsonValue {
       mode: ref.view.mode,
       officeView: ref.view.officeView,
       officeAutoView: ref.view.officeAutoView,
+      officeAutoGeneration: ref.view.officeAutoGeneration,
       officeCameraView: ref.view.officeCameraView,
       // Written field by field rather than handed over whole: the stored
       // shape is the wire format, and a spread would carry anything a future

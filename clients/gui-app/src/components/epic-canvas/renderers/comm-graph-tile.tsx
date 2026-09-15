@@ -368,6 +368,13 @@ export function CommGraphTile(props: CommGraphTileProps) {
   const settingsDefaultView = useSettingsStore(
     (state) => state.agentOfficeDefaultView,
   );
+  // The generation this tile's Auto outcome must match to be trusted. It bumps
+  // on every default change, so a tile CLOSED while the default left Auto and
+  // returned reads a different generation than its stamp on remount and
+  // re-measures - the case the mounted witness below cannot see.
+  const settingsDefaultGeneration = useSettingsStore(
+    (state) => state.agentOfficeDefaultViewGeneration,
+  );
   const choice: OfficeViewChoice = node.view.officeView ?? settingsDefaultView;
   // `null` means "Auto has not answered yet", which is the one state where
   // this tile does not know what it is drawing.
@@ -558,6 +565,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
         ...node.view,
         officeCamera: null,
         officeAutoView: null,
+        officeAutoGeneration: null,
         officeCameraView: null,
       });
       releaseWitness();
@@ -682,13 +690,25 @@ export function CommGraphTile(props: CommGraphTileProps) {
   /**
    * AUTO, run ONCE per decision and persisted.
    *
-   * The gate is `officeAutoView === null`: a measured outcome is written to
-   * the tile, so a mode toggle, an LRU remount or a restart re-reads it rather
-   * than re-deciding - which is what keeps a saved camera pointing at the view
-   * it was saved on.
+   * The gate is a FRESH outcome - `officeAutoView` set AND stamped with the
+   * current default generation - so a mode toggle, an LRU remount or a restart
+   * re-reads a measured outcome rather than re-deciding, which is what keeps a
+   * saved camera pointing at the view it was saved on. A default change bumps
+   * the generation, so an outcome measured under an older default (including one
+   * this tile was closed for) no longer matches and re-measures.
    */
   useEffect(() => {
-    if (choice !== "auto" || node.view.officeAutoView !== null) return;
+    // A missing or stale generation - the default changed since, including an
+    // Auto->concrete->Auto round-trip this tile was closed for - re-measures,
+    // as does no outcome at all. A quiet remount or restart matches and re-reads
+    // the saved outcome instead.
+    if (choice !== "auto") return;
+    if (
+      node.view.officeAutoView !== null &&
+      node.view.officeAutoGeneration === settingsDefaultGeneration
+    ) {
+      return;
+    }
     if (!measureReady) return;
     const probe = probeRef.current;
     if (probe === null) return;
@@ -727,6 +747,10 @@ export function CommGraphTile(props: CommGraphTileProps) {
       ...node.view,
       officeCamera: camera,
       officeAutoView: decision.view,
+      // Stamp the generation this outcome was measured under, so a later
+      // default change - witnessed here or not - invalidates it on the next
+      // mount instead of reopening a pick taken against a different epic shape.
+      officeAutoGeneration: settingsDefaultGeneration,
       // Whichever arm ran, the camera now frames THIS view - the Floor's
       // because it was already the Floor's, the neutral one because it was
       // just made for it.
@@ -739,6 +763,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     node.id,
     node.view,
     releaseWitness,
+    settingsDefaultGeneration,
     updateView,
     witnessedMove,
     viewTabId,
@@ -762,6 +787,8 @@ export function CommGraphTile(props: CommGraphTileProps) {
           officeCamera: null,
           officeView: "auto",
           officeAutoView: null,
+          // Nothing measured yet; Auto's own write stamps the generation.
+          officeAutoGeneration: null,
           // Nothing is drawn until Auto answers, so the neutral camera is
           // about no view yet; Auto's own write names it.
           officeCameraView: null,
