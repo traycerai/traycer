@@ -139,9 +139,10 @@ function FileEditApprovalRow(props: FileEditApprovalRowProps) {
         <Badge
           variant="outline"
           className={cn(
-            "h-4 px-1 text-overline",
+            "h-4",
             operationBadgeClassName(props.approval.operation),
           )}
+          size="sm"
         >
           {operationLabel(props.approval.operation)}
         </Badge>

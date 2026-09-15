@@ -242,9 +242,10 @@ export function BrowsersPanelLoadingState() {
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 text-ui-sm text-muted-foreground">
       <AgentSpinningDots
-        className="shrink-0 text-muted-foreground/70"
+        className="shrink-0"
         testId={undefined}
         variant={undefined}
+        tone="muted"
       />
       <span>Loading browsers…</span>
     </div>

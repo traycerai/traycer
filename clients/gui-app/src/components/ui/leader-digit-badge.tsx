@@ -42,7 +42,8 @@ export function LeaderDigitBadge(props: LeaderDigitBadgeProps) {
       <Kbd
         aria-label={ariaLabel}
         data-testid={testId}
-        className={cn("text-overline font-semibold tabular-nums", className)}
+        size="xs"
+        className={cn("tabular-nums", className)}
       >
         {symbol}
         {digit}

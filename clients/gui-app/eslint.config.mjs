@@ -309,30 +309,6 @@ const fixedPaletteFiles = [
 // findings when the rule went on, so there was nothing to migrate and nothing
 // to loosen.
 const notYetTightened = [
-  // tighten in ticket 05 - the inline, in-flow primitives.
-  { pattern: "^AgentSpinningDots$|^MutedAgentSpinner$", allow: ["*"] },
-  { pattern: "^Avatar", allow: ["*"] },
-  { pattern: "^Badge$", allow: ["*"] },
-  { pattern: "^ButtonGroup", allow: ["*"] },
-  { pattern: "^Checkbox$", allow: ["*"] },
-  { pattern: "^Collapsible", allow: ["*"] },
-  { pattern: "^Input", allow: ["*"] },
-  { pattern: "^Kbd", allow: ["*"] },
-  { pattern: "^Label$", allow: ["*"] },
-  { pattern: "^LeaderDigitBadge$|^LivePulse$|^PingRing$", allow: ["*"] },
-  { pattern: "^ProgressToastIcon$", allow: ["*"] },
-  { pattern: "^RadioGroup", allow: ["*"] },
-  { pattern: "^Select", allow: ["*"] },
-  { pattern: "^Separator$", allow: ["*"] },
-  { pattern: "^Shimmer$|^WorkingShimmerText$", allow: ["*"] },
-  { pattern: "^ShortcutHint$|^PrimaryActionShortcutHint$", allow: ["*"] },
-  { pattern: "^Skeleton$", allow: ["*"] },
-  { pattern: "^Slider", allow: ["*"] },
-  { pattern: "^StartTruncatedText$", allow: ["*"] },
-  { pattern: "^Switch$", allow: ["*"] },
-  { pattern: "^Textarea$", allow: ["*"] },
-  { pattern: "^TreeChevron", allow: ["*"] },
-
   // tighten in ticket 06 - the overlay and container parts.
   { pattern: "^Card", allow: ["*"] },
   { pattern: "^Command", allow: ["*"] },
@@ -347,6 +323,236 @@ const notYetTightened = [
   { pattern: "^Tabs", allow: ["*"] },
   { pattern: "^Toaster$", allow: ["*"] },
   { pattern: "^Tooltip", allow: ["*"] },
+];
+
+// The 9 globs covering our 17 `--text-*` FONT SIZE tokens. They are listed
+// here rather than inline because `no-restyle` needs them for the same reason
+// `no-raw-colors` does, and for the same upstream bug (shadcn-ui/lint#8): the
+// classifier reads `text-<name>` as a COLOUR whenever `--color-<name>` is
+// undeclared, so a contract that allows `typography` still rejects
+// `text-ui-sm`. Where a component's type step genuinely belongs to the site,
+// the contract has to name these as well as the category. Delete the second
+// use when #8 closes; the `no-raw-colors` one goes with it.
+const fontSizeTokens = [
+  "text-ui",
+  "text-ui-*",
+  "text-title-*",
+  "text-code",
+  "text-code-*",
+  "text-badge",
+  "text-display",
+  "text-micro",
+  "text-overline",
+];
+
+// ── The inline, in-flow primitives (ticket 05) ──────────────────────────────
+//
+// Every family the ticket-05 block used to hold, now on `layout` plus what it
+// names. A family that is NOT here came out of that block with nothing left to
+// allow - Checkbox, Switch, ButtonGroup, TreeChevron, ShortcutHint,
+// LeaderDigitBadge, LivePulse, PingRing and ProgressToastIcon are all on the
+// `layout` default, because once their variants landed no call site wrote
+// anything else.
+//
+// The test for a by-name entry is the one Button's contract set: the reason has
+// to be a fact about the SITE, not about the component. A reason that
+// generalises should have been a variant.
+const inlinePrimitiveContracts = [
+  {
+    // `rounded-full` — a pill badge is orthogonal to both axes, exactly as it
+    // is on Button. `tabular-nums` — a digit-metrics hint (a count that ticks)
+    // rather than a typeface choice. `capitalize` / `uppercase` — the CASE of
+    // the label is a fact about the STRING being rendered: these sites show a
+    // raw status id (`running`, `done`) that the design wants sentence-cased,
+    // and the badge has no say in where the string came from. The four
+    // `hover:` entries — a badge inside a clickable row lights up WITH the
+    // row; which badges are inside one is the row's business, and the alphas
+    // are the surface-independent spelling AGENTS.md requires.
+    pattern: "^Badge$",
+    allow: [
+      "layout",
+      "rounded-full",
+      "tabular-nums",
+      "capitalize",
+      "uppercase",
+      "hover:bg-foreground/5",
+      "hover:bg-foreground/8",
+      "hover:text-foreground",
+      "hover:text-muted-foreground",
+    ],
+    message: {
+      color:
+        '"{{className}}" is not allowed on <Badge>: Badge owns its colour. Use a variant: {{variants}}. `muted` is the quiet metadata tag (thin border, muted label, body weight); `success` / `warning` / `info` / `destructive` are the four status roles on the tint recipe in AGENTS.md. Add a variant in {{file}} only if the design calls for a treatment none of these provides.',
+      typography:
+        '"{{className}}" is not allowed on <Badge>: the size carries the type ({{sizes}}) - `xs` is the dense metadata chip, `sm` the overline tag on a list row. `tabular-nums` is allowed, because a badge whose label is a changing NUMBER jitters without it. See {{file}}.',
+      spacing:
+        '"{{className}}" is not allowed on <Badge>: Badge owns its spacing. Use a size ({{sizes}}) and snap a near-miss to the closest one rather than writing padding here; the base already sets `gap-1`. For space AROUND the badge use margin here, or gap on the parent. See {{file}}.',
+      shape:
+        '"{{className}}" is not allowed on <Badge>: the size carries the corner radius ({{sizes}}). `rounded-full` is the one shape a caller may choose, for a pill. See {{file}}.',
+      effects:
+        '"{{className}}" is not allowed on <Badge>: Badge owns its effects. Elevation and rings belong to a variant in {{file}} ({{variants}}).',
+      motion:
+        '"{{className}}" is not allowed on <Badge>: Badge owns its motion - its `transition-all` already covers colour and shape. Animate a wrapper element if the motion is really the layout\'s. See {{file}}.',
+      default:
+        '"{{className}}" is not allowed on <Badge>: the grammar does not recognize it, so no rule can tell what it changes. Fix the spelling, or allow it by name in the Badge contract in eslint.config.mjs with the reason.',
+    },
+  },
+  {
+    // A Collapsible is a CONTAINER, so the two things a caller may still paint
+    // on it are both about what surrounds it rather than about the disclosure:
+    // the quiet colour and compact step its trigger and content INHERIT (which
+    // is the whole reason to put them on the root instead of on each child),
+    // and the rule between it and the sibling above or below, which only the
+    // list knows about.
+    pattern: "^Collapsible$",
+    allow: [
+      "layout",
+      ...fontSizeTokens,
+      "text-muted-foreground",
+      "border-t",
+      "border-b",
+      "last:border-b-0",
+      "border-border/40",
+      "border-border/50",
+      "border-border/60",
+    ],
+  },
+  {
+    // `truncate` is the row's width talking, not the label's type.
+    pattern: "^Label$",
+    allow: ["layout", "truncate"],
+  },
+  {
+    // Same, one element down: a URL in an address bar is elided by the bar.
+    pattern: "^InputGroupInput$",
+    allow: ["layout", "truncate"],
+  },
+  {
+    // The trigger is a row of TEXT - it is the heading of the section it
+    // discloses - so its type step is that section's and is set where the
+    // heading is. Everything about the BOX is a variant.
+    pattern: "^CollapsibleTrigger$",
+    allow: ["layout", "typography", ...fontSizeTokens],
+  },
+  {
+    // The disclosed panel is a pure container; its padding lines the body up
+    // with the surface it opens inside (a dialog's gutter, a card's inset),
+    // which only that surface knows.
+    pattern: "^CollapsibleContent$",
+    allow: ["layout", "spacing"],
+  },
+  {
+    // `tabular-nums` and the horizontal padding family only. The padding is
+    // room for something the SITE puts inside the field - a leading search
+    // icon, a trailing unit, a clear button - so the field cannot know how much
+    // it needs. Everything else is a `variant`, a `size` or `font="mono"`.
+    // `bg-background` is the one colour: an input on a TINTED surface (the
+    // sidebar) restates the page background so the field still reads as a
+    // field rather than as part of the panel.
+    pattern: "^Input$",
+    allow: [
+      "layout",
+      "tabular-nums",
+      "px-*",
+      "pl-*",
+      "pr-*",
+      "ps-*",
+      "pe-*",
+      "bg-background",
+    ],
+    message: {
+      color:
+        '"{{className}}" is not allowed on <Input>: Input owns its colour. `variant="bare"` is the field drawn by something ELSE (an InputGroup, a find bar), which is what "no border, no fill" means here. See {{file}}.',
+      typography:
+        '"{{className}}" is not allowed on <Input>: the size carries the type ({{sizes}}) and `font="mono"` carries the face. The default is `text-ui md:text-ui-sm` on purpose - 16px on mobile is what stops iOS zooming a focused field - so reach for `size="sm"` only where the whole surface is compact chrome. See {{file}}.',
+      spacing:
+        '"{{className}}" is not allowed on <Input>: Input owns its spacing. Use a size ({{sizes}}); `pl-*` / `pr-*` are allowed, for room for an icon or an affordance the site places inside the field. See {{file}}.',
+      shape:
+        '"{{className}}" is not allowed on <Input>: the size carries the corner radius, and `variant="bare"` squares them for a field inside another box. See {{file}}.',
+      effects:
+        '"{{className}}" is not allowed on <Input>: Input owns its focus ring and its invalid state; `variant="bare"` is the one that cancels them. See {{file}}.',
+      motion:
+        '"{{className}}" is not allowed on <Input>: Input owns its motion. See {{file}}.',
+      default:
+        '"{{className}}" is not allowed on <Input>: the grammar does not recognize it. Fix the spelling, or allow it by name in the Input contract in eslint.config.mjs with the reason.',
+    },
+  },
+  {
+    // The reveal family, for the same reason it is on Button: which ancestor's
+    // hover shows the clear/copy button in an address bar, and under which
+    // `group/<name>`, is a fact about the GROUP. `pointer-coarse:` is the
+    // accessibility half of it - a control revealed on hover has to be
+    // permanently visible where there is no hover - and a `motion-reduce:`
+    // cancel is never a lint rule's to delete.
+    pattern: "^InputGroupButton$",
+    allow: [
+      "layout",
+      "opacity-*",
+      "transition-[color,opacity]",
+      "transition-opacity",
+      "duration-*",
+      "motion-reduce:*",
+      "pointer-coarse:opacity-*",
+      "group-hover/*",
+      "group-focus-within/*",
+      "focus-visible:opacity-*",
+    ],
+  },
+  {
+    // `tabular-nums` as on Button - a chord that counts (`⌘1` … `⌘9`) must not
+    // jitter. `text-code-xs` - a cap rendered INLINE in code-metric text (an
+    // env editor's row, a model id) matches that line's metrics; the cap is
+    // punctuation inside someone else's sentence.
+    pattern: "^Kbd$",
+    allow: ["layout", "tabular-nums", "text-code-xs"],
+  },
+  {
+    // `bg-input` - the divider between GROUPED controls takes the control
+    // border token rather than the page rule, which is `<ButtonGroup>`'s fact
+    // about its children, not the separator's.
+    pattern: "^Separator$",
+    allow: ["layout", "bg-input"],
+  },
+  {
+    // A skeleton is a stand-in for something that is not there yet, so its
+    // radius is a fact about the THING it replaces - a circular avatar, a
+    // square chip, a card - and no variant can know that. The opacity is the
+    // same argument one level up: a placeholder STACK fades toward the back to
+    // read as depth, which is a fact about the stack.
+    pattern: "^Skeleton$",
+    allow: ["layout", "rounded", "rounded-*", "opacity-*"],
+  },
+  {
+    // Text primitives: they own a geometry (a sweeping highlight band, start-
+    // side truncation) and nothing about the text itself. The type and the
+    // colour belong to the sentence the component is rendering, which is the
+    // site's. `--shimmer-text-color` is the sanctioned custom-property form
+    // (ticket 02) and the `group-*` spellings of it are a fact about which row
+    // is hovered.
+    pattern: "^Shimmer$|^WorkingShimmerText$",
+    allow: [
+      "layout",
+      "typography",
+      ...fontSizeTokens,
+      "[--shimmer-text-color:*]",
+      "*:[--shimmer-text-color:*]",
+    ],
+  },
+  {
+    // `StartTruncatedText` is the LEAF that renders the text - there is no
+    // element between it and the glyphs - so unlike the spinner it cannot
+    // "inherit" anything a caller would otherwise set. It owns direction and
+    // the truncation geometry; the type and the colour are the sentence's.
+    pattern: "^StartTruncatedText$",
+    allow: ["layout", "typography", "color", "focus-visible:outline-none"],
+  },
+  {
+    // `leading-*` - a textarea holding PROSE sets its own leading; the type
+    // ramp's line heights are tuned for one-line fields. Everything else is a
+    // `variant`, a `size` or `font="mono"`, exactly as on Input.
+    pattern: "^Textarea$",
+    allow: ["layout", "leading-*"],
+  },
 ];
 
 // ── Dialog, tightened in ticket 06 ──────────────────────────────────────────
@@ -607,51 +813,70 @@ const buttonContract = {
   },
 };
 
-const allContracts = [
-  ...notYetTightened,
+const tightenedContracts = [
   ...dialogContracts,
   ...dropdownMenuContracts,
+  ...inlinePrimitiveContracts,
   buttonContract,
 ];
 
 /**
- * The rule, with EXTRA entries added to one or more contracts for one file set.
- *
- * `extraAllow` is keyed by the contract's own `pattern` string, so an override
- * widens exactly one component and leaves the other ~40 alone:
- * `{ "^Button$": ["color"] }`.
+ * The rule, with EXTRA entries added to ONE tightened contract for one file
+ * set. `extras` is a list of `{ pattern, allow }`, where `pattern` names the
+ * contract to widen (`"^Button$"`, `"^Badge$"`, …).
  *
  * Deliberately not `"shadcn/no-restyle": "off"` for those files, which is the
  * shape ticket 03's overrides took: turning the rule off would also stop
- * checking their spacing, their sizes and every Button added to them later, to
- * let one class through. A widened contract keeps everything else enforced and
- * says in the override exactly which door is open.
+ * checking their spacing, their sizes and every component added to them later,
+ * to let one class through. A widened contract keeps everything else enforced
+ * and says in the override exactly which door is open.
+ *
+ * The widened entry is APPENDED rather than substituted in place. Contracts
+ * are matched from the END, so the copy carrying the extra classes is the one
+ * that answers.
+ *
+ * A family with no tightened contract is on the `layout` default, and widening
+ * that is exactly as meaningful - the synthesized entry says so. What is
+ * refused is a family still in `notYetTightened`: that contract already allows
+ * everything, so an exemption naming one would be a line nobody could ever
+ * delete, and the widened copy would in fact TIGHTEN it by accident.
  */
-function noRestyle(extraAllow) {
+function noRestyle(extras) {
+  const widened = extras.flatMap((extra) => {
+    if (
+      notYetTightened.some((contract) => contract.pattern === extra.pattern)
+    ) {
+      throw new Error(
+        `restyleExemptions names ${extra.pattern}, which is still permissive.`,
+      );
+    }
+    const base = tightenedContracts.find(
+      (contract) => contract.pattern === extra.pattern,
+    );
+    const allow = base === undefined ? ["layout"] : base.allow;
+    return [
+      {
+        ...(base ?? { pattern: extra.pattern }),
+        allow: [...allow, ...extra.allow],
+      },
+    ];
+  });
   return [
     "error",
     {
       allow: ["layout"],
-      contracts: allContracts.map((contract) =>
-        extraAllow[contract.pattern] === undefined
-          ? contract
-          : {
-              ...contract,
-              allow: [...contract.allow, ...extraAllow[contract.pattern]],
-            },
-      ),
+      contracts: [...notYetTightened, ...tightenedContracts, ...widened],
     },
   ];
 }
 
-// ── The call sites allowed out of part of a contract, per FILE ─────────────
+// ── The Buttons that are allowed out of part of the contract, per FILE ─────
 //
-// One entry per file. `allow` is keyed by the CONTRACT it widens and names
-// exactly what that one opens, so everything else about that component - and
-// every other component in the file - stays enforced. Deliberately NOT
+// One entry per file, and `allow` names exactly which categories it opens, so
+// everything else about Button stays enforced there. Deliberately NOT
 // `"shadcn/no-restyle": "off"` the way ticket 03's overrides are shaped:
 // turning the rule off would also stop checking that file's sizes and every
-// component added to it later, to let one class through.
+// Button added to it later, to let one class through.
 //
 // A file appears ONCE. Flat config is last-block-wins and each of these
 // becomes its own block, so a file listed twice would silently keep only the
@@ -661,6 +886,11 @@ function noRestyle(extraAllow) {
 // Each reason is a fact about the SITE, not about the component. That is the
 // test for belonging here: if the reason generalises, it should have been a
 // variant.
+//
+// `contracts` names the family being widened, because a file can need one door
+// open on two components. It has to name a TIGHTENED contract - `noRestyle`
+// throws on a pattern with no contract to widen, so a typo or a family that is
+// still permissive fails the config rather than silently doing nothing.
 const restyleExemptions = [
   {
     // Not the theme's colours at all, and already exempt from `no-raw-colors`
@@ -669,11 +899,8 @@ const restyleExemptions = [
     // appearances), and the theme editor paints its own chrome in fixed
     // colours on purpose, so the chrome does not change under the cursor
     // while you drag a slider.
-    files: [
-      "src/components/layout/header/sign-in/device-code-progress.tsx",
-      "src/components/settings/themes/theme-editor-panel.tsx",
-    ],
-    allow: { "^Button$": ["color"] },
+    files: ["src/components/layout/header/sign-in/device-code-progress.tsx"],
+    contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
   {
     // A SOLID status pip: `rounded-full bg-info text-white`, the update badge
@@ -681,7 +908,7 @@ const restyleExemptions = [
     // role's foreground on no fill); a solid one would be a variant per role
     // used once each, which is the trade the ticket says not to make.
     files: ["src/components/layout/header/app-update-button.tsx"],
-    allow: { "^Button$": ["color"] },
+    contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
   {
     // Buttons that CANCEL a variant's own state, which no allow list can
@@ -694,22 +921,14 @@ const restyleExemptions = [
       "src/components/epic-canvas/sidebar/epic-sidebar-header.tsx",
       "src/components/epic-canvas/sidebar/epic-sidebar-rail.tsx",
     ],
-    allow: { "^Button$": ["color"] },
+    contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
   {
     // A corner pill straddling the dialog edge and the overlay dim, so it
     // needs an OPAQUE fill; `outline` is the near miss and carries
     // `dark:bg-input/30`, which the dim shows through in every dark theme.
     files: ["src/components/epic-canvas/sidebar/new-conversation-modal.tsx"],
-    allow: { "^Button$": ["color"] },
-  },
-  {
-    // A resting ghost-weight fill applied by a CONTAINER QUERY
-    // (`@[26rem]/viewport:bg-foreground/5`), so the control reads as a select
-    // field only once its toolbar is wide enough. A variant cannot be
-    // conditional on the container.
-    files: ["src/components/browser-tile/browser-viewport-toolbar.tsx"],
-    allow: { "^Button$": ["color"] },
+    contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
   {
     // A quiet FILLED button (`bg-foreground/8 text-foreground`) and a disabled
@@ -717,13 +936,13 @@ const restyleExemptions = [
     // filled-quiet shape is one site, and the disabled repaint belongs to this
     // composer's send control rather than to Button.
     files: ["src/components/home/composer/composer-send-button.tsx"],
-    allow: { "^Button$": ["color"] },
+    contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
   {
     // A resting fill on the pointer-coarse actions trigger, where the glyph
     // has to read as a button before it is tapped.
     files: ["src/components/chat/chat-message-user-body.tsx"],
-    allow: { "^Button$": ["color"] },
+    contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
   {
     // `in-data-[slot=dialog-content]:bg-input/60`: secondary, but re-tinted
@@ -731,14 +950,14 @@ const restyleExemptions = [
     // preset gives popovers and secondary buttons the same value. A variant
     // cannot be conditional on the surface it lands on.
     files: ["src/components/home/composer/terminal-launch-panel.tsx"],
-    allow: { "^Button$": ["color"] },
+    contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
   {
     // Two `warning-ghost` buttons side by side, one of which is the confirm;
     // the border and fill are the only thing telling them apart. A bordered
     // status variant for one pair is the trade the ticket says not to make.
     files: ["src/components/home/worktree/worktree-scripts-dialog.tsx"],
-    allow: { "^Button$": ["color"] },
+    contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
   {
     // A popover-shaped ISLAND painted onto a Button: this file's sibling
@@ -749,7 +968,7 @@ const restyleExemptions = [
     // inset rect - a restructure with a visible result, so it is its own
     // change rather than this ticket's.
     files: ["src/components/layout/bridges/desktop-zoom-controller.tsx"],
-    allow: { "^Button$": ["color", "spacing"] },
+    contracts: [{ pattern: "^Button$", allow: ["color", "spacing"] }],
   },
   {
     // A Button used as a ROW carries the row's padding, because the row is
@@ -762,36 +981,306 @@ const restyleExemptions = [
     // `@max-[30rem]:px-0` folds a row's stop control to an icon when its
     // CONTAINER narrows, which no size can be conditional on.
     files: ["src/components/layout/shell/mobile-nav-drawer.tsx"],
-    allow: { "^Button$": ["spacing"] },
+    contracts: [{ pattern: "^Button$", allow: ["spacing"] }],
   },
   {
     files: ["src/components/chat/segments/next-steps-action-group.tsx"],
-    allow: { "^Button$": ["color", "spacing"] },
+    contracts: [{ pattern: "^Button$", allow: ["color", "spacing"] }],
   },
   {
     files: ["src/components/home-focus/home-focus-rows.tsx"],
-    allow: { "^Button$": ["spacing"] },
+    contracts: [{ pattern: "^Button$", allow: ["spacing"] }],
   },
   {
     // The last row of a settings list whose `<li>`s are `px-5 py-2.5`, with
     // the list's own top divider on it, so its padding, its squared corners
     // and that divider all line up with siblings it does not own.
     files: ["src/components/settings/browser-settings-section.tsx"],
-    allow: { "^Button$": ["color", "shape", "spacing"] },
+    contracts: [{ pattern: "^Button$", allow: ["color", "shape", "spacing"] }],
+  },
+
+  // ── ticket 05: the inline primitives' tail ────────────────────────────────
+  {
+    // A badge that floats OVER something rather than sitting in the flow, so
+    // it needs an opaque plate the ambient variants deliberately do not have:
+    // a shortcut chip over the command list, an edge label over the graph
+    // canvas, an agent role chip over a sidebar row that is itself tinted.
+    // `agent-role-badges` also takes `border-current/30`, which is the row's
+    // colour and not a colour at all.
+    files: [
+      "src/components/command-palette/palette-cmdk.tsx",
+      "src/components/epic-canvas/comm-graph/comm-graph-edge.tsx",
+      "src/components/epic-canvas/sidebar/agent-role-badges.tsx",
+    ],
+    contracts: [{ pattern: "^Badge$", allow: ["color", "effects", "shape"] }],
   },
   {
-    // The browser tile's ZOOM BAND: a bordered strip inside the menu holding a
-    // label and three square steppers, which is not a list of rows and does not
-    // want the row rhythm. The steppers stay `DropdownMenuItem`s because that is
-    // what puts them in the menu's arrow-key ring - a `<button>` inside the menu
-    // would be unreachable from the keyboard - so the band's own chrome has to
-    // live on the group and its buttons' box on the items. Named classes rather
-    // than categories, so everything else in this file stays enforced.
+    // The worktree list's badges say what a row IS about to become - swept,
+    // pending, provisional - and a DASHED border is how this panel has said
+    // "not yet real" since it shipped. A dashed status variant per role is the
+    // trade the ticket says not to make.
+    files: ["src/components/settings/panels/worktrees-settings-panel.tsx"],
+    contracts: [{ pattern: "^Badge$", allow: ["color", "shape"] }],
+  },
+  {
+    // A PR state pill dimmed to say the PR is closed, and a metadata chip that
+    // restates the card's own plate so it reads on the PR row's fill.
+    files: [
+      "src/components/epic-canvas/pr/pr-state-pill.tsx",
+      "src/components/worktree/worktree-pr-metadata.tsx",
+    ],
+    contracts: [{ pattern: "^Badge$", allow: ["color", "effects"] }],
+  },
+  {
+    // Disclosure triggers whose colour is the SEGMENT's state, not the
+    // trigger's: a failed interview turns its own header red, a segment row
+    // carries the tool's own error colour, and the comm-graph row is
+    // deliberately quieter than every other trigger because a graph row is
+    // mostly chrome.
+    files: [
+      "src/components/chat/segments/resolved-interview-card.tsx",
+      "src/components/chat/segments/segment-row.tsx",
+      "src/components/epic-canvas/comm-graph/comm-graph-event-row.tsx",
+    ],
+    contracts: [
+      {
+        pattern: "^CollapsibleTrigger$",
+        allow: ["color", "effects", "spacing", "focus-visible:outline-*"],
+      },
+    ],
+  },
+  {
+    // A trigger that IS the top edge of a card: its corners have to meet the
+    // card's, and its bottom rule is the card's divider. Both are facts about
+    // the card, and `subagent-segment` additionally paints the header as its
+    // own raised surface while the body stays flat.
+    files: [
+      "src/components/chat/segments/segment-card.tsx",
+      "src/components/chat/segments/subagent-segment.tsx",
+    ],
+    contracts: [
+      { pattern: "^CollapsibleTrigger$", allow: ["color", "shape", "effects"] },
+      { pattern: "^Collapsible$", allow: ["color"] },
+    ],
+  },
+  {
+    // The sign-in hero's fixed dark artwork again (see the Button entry for
+    // `device-code-progress`): this disclosure is painted in white alphas in
+    // BOTH appearances, and falls back to theme tokens off that surface.
+    files: ["src/components/layout/header/sign-in/device-code-fallback.tsx"],
+    contracts: [
+      { pattern: "^CollapsibleTrigger$", allow: ["color", "spacing"] },
+      { pattern: "^Collapsible$", allow: ["color"] },
+    ],
+  },
+  {
+    // A settings section whose rows are `px-5 py-3`: the trigger is one of
+    // those rows and has to line up with siblings it does not own, and its
+    // open body is a recessed well inside the section.
+    files: ["src/components/settings/panels/host-settings-disclosure.tsx"],
+    contracts: [
+      { pattern: "^CollapsibleTrigger$", allow: ["color", "spacing"] },
+      { pattern: "^CollapsibleContent$", allow: ["color"] },
+    ],
+  },
+  {
+    // A queued message is shown at 95% while it waits its turn - the one place
+    // in the transcript where "not yet sent" is said with opacity.
+    files: ["src/components/chat/queued-message-surface.tsx"],
+    contracts: [{ pattern: "^Collapsible$", allow: ["effects"] }],
+  },
+  {
+    // The generated-image disclosure: a bordered well under its own header.
+    files: [
+      "src/components/chat/segments/image-generation/image-generation.tsx",
+    ],
+    contracts: [{ pattern: "^CollapsibleContent$", allow: ["color", "shape"] }],
+  },
+  {
+    // Two doors, both about this toolbar. The Button one is a resting
+    // ghost-weight fill applied by a CONTAINER QUERY
+    // (`@[26rem]/viewport:bg-foreground/5`), so the control reads as a select
+    // field only once its toolbar is wide enough, which no variant can be
+    // conditional on. The Input one is the zoom field, which reads as a chip
+    // until it is focused rather than as something to fill in.
+    files: ["src/components/browser-tile/browser-viewport-toolbar.tsx"],
+    contracts: [
+      { pattern: "^Button$", allow: ["color"] },
+      { pattern: "^Input$", allow: ["color"] },
+    ],
+  },
+  {
+    // Fields whose VALUE is placeholder-grade: the font-size control shows the
+    // inherited size in muted text when nothing is set, and the custom-provider
+    // dialog mutes a row it is showing back rather than asking for. Both are
+    // the STATE of that one field; a `read-only:` rule in `input.tsx` would
+    // restyle every read-only input in the app, which is a design change and
+    // not this ticket's.
+    files: [
+      "src/components/settings/controls/nullable-font-size-input.tsx",
+      "src/components/settings/panels/provider-custom-model-provider-dialog.tsx",
+    ],
+    contracts: [{ pattern: "^Input$", allow: ["color"] }],
+  },
+  {
+    // An input used as the TITLE of the thing being edited - it is the
+    // heading, and it keeps the heading's type when it turns into a field.
+    files: ["src/components/settings/panels/provider-skill-detail-dialog.tsx"],
+    contracts: [
+      { pattern: "^Input$", allow: ["typography", ...fontSizeTokens] },
+      { pattern: "^Label$", allow: ["spacing"] },
+    ],
+  },
+  {
+    // The theme editor's own chrome, in fixed colours on purpose, as its
+    // Button entry above already says.
+    files: ["src/components/settings/themes/theme-editor-panel.tsx"],
+    contracts: [
+      { pattern: "^Button$", allow: ["color"] },
+      { pattern: "^Input$", allow: ["color", "typography"] },
+    ],
+  },
+  {
+    // A dialog whose field sits directly on the popover plate, so its border
+    // steps off THAT surface rather than the page; the paste well behind it is
+    // the same decision one element down.
+    files: ["src/components/settings/themes/theme-import-dialog.tsx"],
+    contracts: [
+      { pattern: "^Input$", allow: ["color"] },
+      { pattern: "^Textarea$", allow: ["color"] },
+      { pattern: "^SelectTrigger$", allow: ["color", "effects"] },
+    ],
+  },
+  {
+    // A script editor: a code well that fills its row, with its own gutter and
+    // a focus ring drawn INSIDE the box because the box is flush with the
+    // dialog's edge.
+    files: ["src/components/workspaces/repo-scripts-fields.tsx"],
+    contracts: [
+      {
+        pattern: "^Textarea$",
+        allow: ["color", "spacing", "effects", "focus-visible:ring-inset"],
+      },
+    ],
+  },
+  {
+    // Two doors in one file, because a file may appear here only once.
+    //
+    // The browser address bar: a field that is invisible until you approach
+    // it, so the whole treatment is a hover/focus-within transition on the
+    // GROUP. The control inside it renders a URL, which is a path, in the
+    // group's own gutter.
+    //
+    // And the ZOOM BAND in its overflow menu: a bordered strip holding a label
+    // and three square steppers, which is not a list of rows and does not want
+    // the row rhythm. The steppers stay `DropdownMenuItem`s because that is
+    // what puts them in the menu's arrow-key ring - a `<button>` inside the
+    // menu would be unreachable from the keyboard - so the band's own chrome
+    // has to live on the group and its buttons' box on the items. Named
+    // classes rather than categories.
     files: ["src/components/epic-canvas/renderers/browser-tile-toolbar.tsx"],
-    allow: {
-      "^DropdownMenu(Item|CheckboxItem|RadioItem|SubTrigger|Group|RadioGroup)$":
-        ["border", "border-border", "border-y", "p-0", "px-2", "py-2"],
-    },
+    contracts: [
+      { pattern: "^InputGroup$", allow: ["color", "effects", "motion"] },
+      { pattern: "^InputGroupInput$", allow: ["spacing"] },
+      {
+        pattern:
+          "^DropdownMenu(Item|CheckboxItem|RadioItem|SubTrigger|Group|RadioGroup)$",
+        allow: ["border", "border-border", "border-y", "p-0", "px-2", "py-2"],
+      },
+    ],
+  },
+  {
+    // The command palette's own search box and its keycaps: both are painted
+    // for the POPOVER plate they sit on (`color-mix` against `--popover`,
+    // because `--input` alone disappears there), and a selected command row
+    // lifts its keycap with the row.
+    files: ["src/components/ui/command.tsx"],
+    contracts: [
+      { pattern: "^InputGroup$", allow: ["color"] },
+      { pattern: "^Kbd$", allow: ["color"] },
+    ],
+  },
+  {
+    // The required-field asterisk is a pseudo-element the FORM adds to a
+    // label, so it is the form's mark rather than the label's colour.
+    files: ["src/components/layout/dialogs/desktop/report-issue-dialog.tsx"],
+    contracts: [{ pattern: "^Label$", allow: ["after:text-destructive"] }],
+  },
+  {
+    // A hashed profile accent carried as a CSS custom property - ticket 02's
+    // sanctioned form for a colour that is DATA - with the one fixed near-black
+    // that is legible on every hue it can produce.
+    files: ["src/components/providers/profile-avatar-badge.tsx"],
+    contracts: [
+      { pattern: "^AvatarFallback$", allow: ["color", "typography"] },
+    ],
+  },
+  {
+    // An avatar on the PR list's own plate: the ring cut-out has to be filled
+    // with the page background or the overlap shows through.
+    files: ["src/components/epic-canvas/pr/pr-detail-avatar.tsx"],
+    contracts: [{ pattern: "^Avatar$", allow: ["color"] }],
+  },
+  {
+    // Skeleton rows standing in for a DIFF: the added/removed counts keep
+    // their status tint while loading, because the shape of the change is
+    // known before its contents are.
+    files: [
+      "src/components/epic-canvas/git-diff/diff-bundle-loading-skeleton.tsx",
+    ],
+    contracts: [{ pattern: "^Skeleton$", allow: ["color"] }],
+  },
+  {
+    // The reasoning-effort slider is a bespoke control built ON the primitive:
+    // four hand-written classes in `index.css` (`reasoning-effort-*`) carry a
+    // glow, a gradient range and a pill thumb that no variant of a generic
+    // slider should have.
+    files: ["src/components/home/pickers/harness-model-picker-footers.tsx"],
+    contracts: [
+      { pattern: "^Slider$", allow: ["spacing", "reasoning-effort-*"] },
+      {
+        pattern: "^SliderTrack$",
+        allow: ["motion", "effects", "reasoning-effort-*"],
+      },
+      { pattern: "^SliderRange$", allow: ["color", "reasoning-effort-*"] },
+      { pattern: "^SliderThumb$", allow: ["shape"] },
+    ],
+  },
+  {
+    // A filter list inside a popover is ONE dense block: its rows are 2px
+    // apart, not the 8px a settings form uses.
+    files: [
+      "src/components/chat/composer/menu/github-mention-filter-popover.tsx",
+    ],
+    contracts: [{ pattern: "^RadioGroup$", allow: ["spacing"] }],
+  },
+  {
+    // Radios on a tinted sub-panel, where `--input` is the panel's own fill
+    // and the control would vanish into it.
+    files: ["src/components/home/worktree/repo-branch-prefix-section.tsx"],
+    contracts: [{ pattern: "^RadioGroupItem$", allow: ["color"] }],
+  },
+  {
+    // The provider re-auth banner picks a MODEL: the options are ids the user
+    // compares character by character, so they are set in the code face at the
+    // banner's own compact step.
+    files: ["src/components/chat/composer/provider-reauth-banner.tsx"],
+    contracts: [
+      { pattern: "^SelectTrigger$", allow: ["font-mono"] },
+      { pattern: "^SelectItem$", allow: ["typography", ...fontSizeTokens] },
+    ],
+  },
+  {
+    // A Select rendered as a filter CHIP in a wizard's toolbar rather than as
+    // a form field: pill-shaped, quiet at rest, and lifting on hover the way
+    // the chips beside it do.
+    files: ["src/components/session-import/session-import-wizard.tsx"],
+    contracts: [
+      {
+        pattern: "^SelectTrigger$",
+        allow: ["color", "shape", "spacing", "effects"],
+      },
+    ],
   },
 ];
 
@@ -1890,15 +2379,7 @@ export default tseslint.config(
             // this list when the issue closes - it is not a design decision,
             // and while it stands a genuinely undeclared `text-<color>` in
             // these namespaces goes unreported.
-            "text-ui",
-            "text-ui-*",
-            "text-title-*",
-            "text-code",
-            "text-code-*",
-            "text-badge",
-            "text-display",
-            "text-micro",
-            "text-overline",
+            ...fontSizeTokens,
 
             // A SECOND upstream bug, distinct from #8 and not yet filed: the
             // rule treats every `fill-*` / `stroke-*` as naming a color, but
@@ -2008,14 +2489,14 @@ export default tseslint.config(
       // Button's entry comes LAST inside `noRestyle`: contracts are matched
       // from the end, so whatever is added above it can never shadow the one
       // family that is actually enforced.
-      "shadcn/no-restyle": noRestyle({}),
+      "shadcn/no-restyle": noRestyle([]),
     },
   },
   // Each `restyleExemptions` entry, as its own block. See that list for why.
   ...restyleExemptions.map((exemption) => ({
     files: exemption.files,
     ignores: testFileGlobs,
-    rules: { "shadcn/no-restyle": noRestyle(exemption.allow) },
+    rules: { "shadcn/no-restyle": noRestyle(exemption.contracts) },
   })),
   {
     // `no-inline-styles` off, for surfaces whose colour is the CONTENT rather

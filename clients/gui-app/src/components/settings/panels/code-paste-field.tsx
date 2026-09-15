@@ -132,7 +132,7 @@ export function CodePasteField({
           type="text"
           autoComplete="off"
           spellCheck={false}
-          className="min-w-0 flex-1 font-mono text-ui-sm"
+          className="min-w-0 flex-1"
           placeholder="Paste code"
           value={displayValue}
           disabled={disabled}
@@ -154,6 +154,8 @@ export function CodePasteField({
           onKeyDown={(event) => {
             if (event.key === "Enter") submit(trimmed);
           }}
+          font="mono"
+          size="sm"
         />
         <Button
           type="button"

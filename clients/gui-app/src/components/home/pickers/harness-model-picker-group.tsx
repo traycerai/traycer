@@ -256,9 +256,9 @@ function railButtonClassName(state: {
       : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
     state.degraded
       ? "opacity-60 hover:opacity-80 data-[active=true]:opacity-75"
-      : "",
-    state.packGated ? "opacity-60" : "",
-    state.packRetryable ? "cursor-pointer" : "",
+      : null,
+    state.packGated ? "opacity-60" : null,
+    state.packRetryable ? "cursor-pointer" : null,
     "aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground",
   );
 }
@@ -346,9 +346,10 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
             </span>
             <span className="absolute inset-0 flex items-center justify-center">
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId={undefined}
                 variant={undefined}
+                tone="muted"
               />
             </span>
           </>

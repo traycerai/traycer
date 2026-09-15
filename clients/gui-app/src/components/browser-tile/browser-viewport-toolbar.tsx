@@ -182,7 +182,7 @@ function ExpandedViewportToolbar({
               aria-invalid={message !== null}
               value={values[axis]}
               disabled={controller.disabled}
-              className="h-7 w-[7ch] min-w-0 rounded-md border-transparent bg-foreground/5 px-1 text-center text-ui-xs tabular-nums shadow-none hover:bg-foreground/8 focus-visible:border-ring"
+              className="h-7 w-[7ch] min-w-0 border-transparent bg-foreground/5 text-center tabular-nums hover:bg-foreground/8"
               onFocus={() => {
                 inputFocused.current = true;
                 cancelled.current = false;
@@ -210,6 +210,7 @@ function ExpandedViewportToolbar({
                 else setDraft(null);
                 cancelled.current = false;
               }}
+              size="xs"
             />
           </span>
         ))}
@@ -287,9 +288,10 @@ function ExpandedViewportToolbar({
         <ViewportAgentIndicator controller={controller} />
         {controller.pending ? (
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId="browser-viewport-pending"
             variant={undefined}
+            tone="muted"
           />
         ) : null}
         <TooltipWrapper

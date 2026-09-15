@@ -306,7 +306,7 @@ function ProfileApiKeyForm(props: {
           id={inputId}
           type="password"
           autoComplete="off"
-          className="w-full min-w-0 flex-1 basis-48 font-mono text-ui-sm"
+          className="w-full min-w-0 flex-1 basis-48"
           placeholder={
             apiKey.configured
               ? "Replace stored key…"
@@ -318,6 +318,8 @@ function ProfileApiKeyForm(props: {
           onKeyDown={(event) => {
             if (event.key === "Enter") onSave();
           }}
+          font="mono"
+          size="sm"
         />
         <Button
           type="button"

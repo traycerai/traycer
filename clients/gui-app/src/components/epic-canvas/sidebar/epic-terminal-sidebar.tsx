@@ -441,7 +441,8 @@ function TerminalRow(props: TerminalRowProps) {
                   onChange={(event) => setRenameValue(event.target.value)}
                   onBlur={commitRename}
                   onKeyDown={handleRenameKeyDown}
-                  className="h-7 flex-1 min-w-0 px-1 text-ui-sm"
+                  className="h-7 flex-1 min-w-0 px-1"
+                  size="sm"
                 />
               </div>
             ) : (

@@ -150,9 +150,10 @@ export function AddImageToArtifactButton(props: {
                 {addMutation.isPending &&
                 addMutation.variables === artifact.id ? (
                   <AgentSpinningDots
-                    className="ml-auto text-muted-foreground"
+                    className="ml-auto"
                     testId={undefined}
                     variant={undefined}
+                    tone="muted"
                   />
                 ) : null}
               </button>

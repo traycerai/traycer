@@ -407,9 +407,10 @@ function SwitcherBrowserRowActions(props: {
       >
         {isClosing ? (
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId={undefined}
             variant={undefined}
+            tone="muted"
           />
         ) : (
           <X className="size-4" aria-hidden />

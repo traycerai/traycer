@@ -1145,10 +1145,7 @@ function ModelProviderRow(props: {
               sideOffset={undefined}
               align={undefined}
             >
-              <Badge
-                variant="outline"
-                className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal text-muted-foreground"
-              >
+              <Badge variant="muted" className="h-4" size="xs">
                 {sourceBadgeLabel(entry.source, entry.configDeclaredCustom)}
               </Badge>
             </TooltipWrapper>

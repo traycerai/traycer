@@ -61,7 +61,7 @@ export function ScrollToEndPill({
     >
       {state.kind === "streaming" ? (
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId="scroll-to-end-pill-spinner"
           variant={undefined}
         />

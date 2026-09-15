@@ -927,7 +927,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           >
             {createChat.isPending ? (
               <AgentSpinningDots
-                className="text-current"
+                className={undefined}
                 testId={undefined}
                 variant={undefined}
               />

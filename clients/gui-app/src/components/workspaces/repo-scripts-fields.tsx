@@ -115,10 +115,13 @@ function ScriptField(props: {
               }
               aria-label={`${label} (${tab.label})`}
               aria-describedby={descriptionId}
-              className="field-sizing-fixed resize-y rounded-none border-0 bg-transparent px-3 py-3 font-mono text-code-xs leading-relaxed placeholder:text-muted-foreground/50 focus-visible:ring-inset dark:bg-transparent"
+              className="field-sizing-fixed resize-y px-3 py-3 leading-relaxed placeholder:text-muted-foreground/50 focus-visible:ring-inset"
               onChange={(event) =>
                 onChange({ ...form, [tab.key]: event.target.value })
               }
+              variant="bare"
+              font="mono"
+              size="xs"
             />
           </TabsContent>
         ))}

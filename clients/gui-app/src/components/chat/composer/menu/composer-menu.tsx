@@ -339,7 +339,8 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
               <AgentSpinningDots
                 testId={undefined}
                 variant={undefined}
-                className="text-muted-foreground/60"
+                className={undefined}
+                tone="muted"
               />
             ) : null}
           </div>
@@ -507,7 +508,8 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
       <AgentSpinningDots
         testId={undefined}
         variant="orbit"
-        className="text-muted-foreground/80"
+        className={undefined}
+        tone="muted"
       />
       Loading…
     </div>

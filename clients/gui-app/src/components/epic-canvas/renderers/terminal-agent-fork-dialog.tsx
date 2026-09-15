@@ -808,7 +808,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                   }}
                   disabled={busy}
                   aria-label="Terminal interface CLI arguments"
-                  className="font-mono text-ui-xs"
+                  font="mono"
+                  size="xs"
                 />
               </label>
             </div>
@@ -855,7 +856,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
           >
             {busy ? (
               <AgentSpinningDots
-                className="text-current"
+                className={undefined}
                 testId={undefined}
                 variant={undefined}
               />

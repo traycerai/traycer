@@ -941,29 +941,16 @@ function VersionObservationList(props: {
             </span>
             <span className="mt-1.5 flex flex-wrap gap-1 empty:hidden">
               {renormalizedByEditorUpdate ? (
-                <Badge
-                  variant="outline"
-                  className="border-info/30 text-info-foreground"
-                >
-                  re-normalized by editor update
-                </Badge>
+                <Badge variant="info">re-normalized by editor update</Badge>
               ) : null}
               {entry.degraded ? (
                 <Badge variant="destructive">Body only — images missing</Badge>
               ) : null}
               {isNewOutcome && props.outcome.status === "clean" ? (
-                <Badge
-                  variant="outline"
-                  className="border-success/30 text-success-foreground"
-                >
-                  Restored
-                </Badge>
+                <Badge variant="success">Restored</Badge>
               ) : null}
               {isNewOutcome && props.outcome.status === "renormalized" ? (
-                <Badge
-                  variant="outline"
-                  className="border-info/30 text-info-foreground"
-                >
+                <Badge variant="info">
                   re-normalized by a newer editor version — review
                 </Badge>
               ) : null}

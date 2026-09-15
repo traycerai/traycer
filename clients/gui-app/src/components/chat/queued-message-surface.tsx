@@ -200,10 +200,11 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
       onOpenChange={setOpen}
       data-testid="queued-message-rows"
       className={cn(
-        "@container bg-muted/30",
+        "@container",
         props.separated === true ? "border-t border-border/50" : null,
         props.readOnly ? "opacity-95" : null,
       )}
+      variant="panel"
     >
       <QueuedMessageHeader
         open={open}
@@ -429,8 +430,9 @@ function QueuedMessageHeader(props: {
         align={undefined}
       >
         <CollapsibleTrigger
-          className="group/queue flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="group/queue flex min-w-0 flex-1 items-center text-left"
           data-testid="queued-message-header-toggle"
+          variant="panel"
         >
           <ChevronDown
             aria-hidden

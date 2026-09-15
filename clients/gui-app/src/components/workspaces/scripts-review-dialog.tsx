@@ -143,7 +143,7 @@ export function ScriptsReviewDialog(props: {
                 aria-live="polite"
               >
                 <AgentSpinningDots
-                  className="text-current"
+                  className={undefined}
                   testId={`${props.testId}-seed-spinner`}
                   variant={undefined}
                 />
@@ -184,7 +184,7 @@ export function ScriptsReviewDialog(props: {
           >
             {saveState === "saving" ? (
               <AgentSpinningDots
-                className="text-current"
+                className={undefined}
                 testId={`${props.testId}-save-spinner`}
                 variant={undefined}
               />

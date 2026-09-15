@@ -160,15 +160,18 @@ export function ChatAccumulatedChangesPanel(
         onOpenChange={setOpen}
         className={cn(
           // muted-fill-ok: panel on the chat dock / pinned stack bg-canvas; --canvas never equals --muted
-          "bg-muted/30",
           props.separated ? "border-t border-border/50" : null,
         )}
         data-testid="accumulated-changes-panel"
+        variant="panel"
       >
         <div className="flex items-stretch">
           {/* muted-fill-ok: trigger inside the canvas-surface panel above;
               --canvas never equals --muted */}
-          <CollapsibleTrigger className="group/acc flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+          <CollapsibleTrigger
+            className="group/acc flex min-w-0 flex-1 items-center text-left"
+            variant="panel"
+          >
             <ChevronDown
               aria-hidden
               className={cn(

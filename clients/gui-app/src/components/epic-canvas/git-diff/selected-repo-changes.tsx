@@ -1114,8 +1114,8 @@ function GitModuleHeader(props: {
           </span>
           <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
             <Badge
-              variant="outline"
-              className="min-w-0 max-w-full shrink rounded-full px-1.5 font-normal text-muted-foreground"
+              variant="muted"
+              className="min-w-0 max-w-full shrink rounded-full"
             >
               {module.headKind === "branch" ? (
                 <GitBranch data-icon="inline-start" aria-hidden />

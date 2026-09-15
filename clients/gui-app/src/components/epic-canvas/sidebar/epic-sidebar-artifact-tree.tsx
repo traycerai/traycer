@@ -791,9 +791,10 @@ function PendingCreateRow({ depth, name }: { depth: number; name: string }) {
       >
         <TreeChevronSpacer />
         <AgentSpinningDots
-          className="shrink-0 text-muted-foreground/70"
+          className="shrink-0"
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
         <span>{name}</span>
       </div>

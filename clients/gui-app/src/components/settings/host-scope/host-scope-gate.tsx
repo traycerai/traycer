@@ -270,7 +270,8 @@ export function HostScopeConnecting(props: {
       <AgentSpinningDots
         testId={undefined}
         variant="orbit"
-        className="text-muted-foreground"
+        className={undefined}
+        tone="muted"
       />
       Connecting to {props.hostName}…
     </div>

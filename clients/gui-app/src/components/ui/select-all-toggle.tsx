@@ -66,7 +66,9 @@ export function SelectAllToggle(props: {
           </span>
           <span>{props.actionLabel ?? "Select all"}</span>
           {props.shortcut === undefined ? null : (
-            <Kbd className="ml-0.5 font-mono">{props.shortcut}</Kbd>
+            <Kbd className="ml-0.5" variant="mono">
+              {props.shortcut}
+            </Kbd>
           )}
         </Button>
       </span>

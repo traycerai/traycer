@@ -1721,9 +1721,7 @@ function SingleProfileRateLimitProviderBlock({
             {providerDisplayName(providerId)}
           </span>
           {planLabel !== null ? (
-            <Badge variant="secondary" className="font-normal">
-              {planLabel}
-            </Badge>
+            <Badge variant="secondary">{planLabel}</Badge>
           ) : null}
           <ManageProviderLink
             providerId={providerId}
@@ -2418,15 +2416,9 @@ function RateLimitProviderProfileStatusBadges({
         {profileDisplayLabel(profile)}
       </span>
       {planLabel !== null ? (
-        <Badge variant="secondary" className="font-normal">
-          {planLabel}
-        </Badge>
+        <Badge variant="secondary">{planLabel}</Badge>
       ) : null}
-      {!profile.enabled ? (
-        <Badge variant="outline" className="font-normal">
-          Disabled
-        </Badge>
-      ) : null}
+      {!profile.enabled ? <Badge variant="outline">Disabled</Badge> : null}
     </div>
   );
 }
@@ -2835,16 +2827,12 @@ function TraycerAccountCards({
                 <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
                   {account.label}
                 </span>
-                <Badge variant="secondary" className="font-normal">
+                <Badge variant="secondary">
                   {subscriptionPlanLabel(
                     account.subscription.subscriptionStatus,
                   )}
                 </Badge>
-                {active ? (
-                  <Badge variant="outline" className="font-normal">
-                    Active
-                  </Badge>
-                ) : null}
+                {active ? <Badge variant="outline">Active</Badge> : null}
               </div>
               <ProfileUsageUpdatedLabel
                 updatedAt={

@@ -779,11 +779,13 @@ function CredentialField(props: {
         type="password"
         autoComplete="off"
         spellCheck={false}
-        className="w-full font-mono text-ui-sm"
+        className="w-full"
         placeholder="API key"
         value={props.secret}
         disabled={props.disabled}
         onChange={(event) => props.onSecretChange(event.target.value)}
+        font="mono"
+        size="sm"
       />
       {/* No env-var name any more: that came from `credentialKey`, which went
           with the classifier that decided which providers could be given a key
@@ -832,10 +834,11 @@ function PromptField(props: {
         type="text"
         autoComplete="off"
         spellCheck={false}
-        className="w-full text-ui-sm"
+        className="w-full"
         placeholder={prompt.placeholder ?? ""}
         value={props.value}
         onChange={(event) => props.onChange(event.target.value)}
+        size="sm"
       />
     </div>
   );
@@ -872,7 +875,9 @@ function ConfirmationCodeField(props: {
           type="text"
           readOnly
           value={code}
-          className="min-w-0 flex-1 font-mono text-ui-sm"
+          className="min-w-0 flex-1"
+          font="mono"
+          size="sm"
         />
         <Button
           type="button"
@@ -946,7 +951,7 @@ function OauthWaitingPanel(props: {
               type="text"
               autoComplete="off"
               spellCheck={false}
-              className="min-w-0 flex-1 font-mono text-ui-sm"
+              className="min-w-0 flex-1"
               placeholder="Paste code"
               value={props.code}
               onChange={(event) => props.onCodeChange(event.target.value)}
@@ -955,6 +960,8 @@ function OauthWaitingPanel(props: {
                 event.preventDefault();
                 props.onSubmitCode();
               }}
+              font="mono"
+              size="sm"
             />
             <Button
               type="button"

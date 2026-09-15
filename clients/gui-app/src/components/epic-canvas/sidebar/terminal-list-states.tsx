@@ -35,9 +35,10 @@ export function TerminalsLoadingState(props: {
       data-testid={`${props.testIdPrefix}-loading`}
     >
       <AgentSpinningDots
-        className="shrink-0 text-muted-foreground/70"
+        className="shrink-0"
         testId={undefined}
         variant={undefined}
+        tone="muted"
       />
       <span>Loading terminals…</span>
     </div>

@@ -136,7 +136,7 @@ export function WorktreeBranchPickerContent(
       onCloseAutoFocus={handleCloseAutoFocus}
     >
       <div className="shrink-0 border-b p-2">
-        <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+        <InputGroup className="h-8!" variant="search">
           <InputGroupInput
             ref={inputRef}
             value={query}
@@ -147,7 +147,6 @@ export function WorktreeBranchPickerContent(
               idPrefix,
               effectiveActiveEntryId,
             )}
-            className="text-ui-sm"
             onChange={(event) => setQuery(event.target.value)}
           />
           <InputGroupAddon>

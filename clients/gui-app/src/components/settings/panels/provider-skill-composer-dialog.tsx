@@ -394,9 +394,9 @@ function WriteFields({
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="review-pr"
-          className="text-ui-sm"
           disabled={disabled}
           aria-invalid={nameError !== null}
+          size="sm"
         />
       </Field>
 
@@ -411,8 +411,9 @@ function WriteFields({
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           placeholder="Reviews a pull request for correctness and style. Use whenever the user asks for a code review, mentions a PR, or asks to check a diff before merging."
-          className="min-h-[4.5rem] text-ui-sm"
+          className="min-h-[4.5rem]"
           disabled={disabled}
+          size="sm"
         />
         {overSoftLimit ? (
           <p className="text-ui-xs text-muted-foreground">
@@ -486,8 +487,8 @@ function ImportFields({
           value={source}
           onChange={(e) => setSource(e.target.value)}
           placeholder="npx skills add owner/repo"
-          className="text-ui-sm"
           disabled={disabled}
+          size="sm"
         />
       </Field>
       {canWrite ? (

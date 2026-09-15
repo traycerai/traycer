@@ -189,7 +189,7 @@ export function GitDiffRepoSwitcherDropdown(
         Workspaces
       </div>
       <div className="pt-2 pb-2">
-        <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+        <InputGroup className="h-8!" variant="search">
           <InputGroupInput
             ref={searchInputRef}
             value={props.searchQuery}
@@ -391,7 +391,7 @@ function GitDiffCountBadges(props: {
         >
           <Badge
             variant="secondary"
-            className="gap-1 px-1.5 tabular-nums"
+            className="tabular-nums"
             aria-label={moduleLabel}
           >
             <FolderGit2 className="size-3" aria-hidden />
@@ -408,7 +408,7 @@ function GitDiffCountBadges(props: {
         >
           <Badge
             variant="secondary"
-            className="gap-1 px-1.5 tabular-nums"
+            className="tabular-nums"
             aria-label={fileLabel}
           >
             <FileText className="size-3" aria-hidden />

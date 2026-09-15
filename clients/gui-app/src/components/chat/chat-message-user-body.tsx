@@ -905,7 +905,7 @@ function InlineUserMessageEditor({
         >
           {attachmentPending ? (
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId="edit-attachment-pending"
               variant={undefined}
             />

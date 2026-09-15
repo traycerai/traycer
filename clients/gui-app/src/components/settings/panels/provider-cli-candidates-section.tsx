@@ -684,7 +684,7 @@ function CustomPathForm({
       <div className="flex items-center gap-2">
         <Input
           ref={focusDraftInput}
-          className="w-full font-mono text-ui-sm"
+          className="w-full"
           placeholder="/absolute/path/to/binary"
           value={draftPath}
           onChange={(event) => onDraftPathChange(event.target.value)}
@@ -693,6 +693,8 @@ function CustomPathForm({
             if (event.key === "Enter") onSave();
             if (event.key === "Escape") onCancel();
           }}
+          font="mono"
+          size="sm"
         />
         <Button
           size="sm"
@@ -787,7 +789,7 @@ function CandidateRow({
       className={cn(
         TABLE_ROW,
         "border-b border-border/40 py-2.5 last:border-b-0 hover:bg-foreground/3",
-        presentation.unavailable ? "opacity-60" : "",
+        presentation.unavailable ? "opacity-60" : null,
       )}
     >
       <CandidateSelectionControl
@@ -1398,7 +1400,7 @@ function RowStatusLine({
           <span
             className={cn(
               "block h-full rounded-full bg-primary",
-              percent === null ? "w-1/3 animate-pulse" : "",
+              percent === null ? "w-1/3 animate-pulse" : null,
             )}
             style={
               percent === null ? undefined : { width: `${String(percent)}%` }

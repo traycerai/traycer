@@ -290,7 +290,7 @@ export function DevicesSessionsPanel() {
               Sign out everywhere
               {revokeAllSessions.isPending ? (
                 <AgentSpinningDots
-                  className="text-current"
+                  className={undefined}
                   testId={undefined}
                   variant="orbit"
                 />
@@ -423,11 +423,7 @@ function SessionRow(props: {
               {session.current ? "This session" : "Session"}
             </span>
             <Badge variant="outline">{sessionClientLabel(session)}</Badge>
-            {session.revoked ? (
-              <Badge variant="outline" className="text-muted-foreground">
-                Signed out
-              </Badge>
-            ) : null}
+            {session.revoked ? <Badge variant="muted">Signed out</Badge> : null}
           </div>
           <p className="text-ui-sm text-muted-foreground wrap-anywhere">
             {sessionDisplayLine(session)}
@@ -449,7 +445,7 @@ function SessionRow(props: {
         Sign out
         {pending ? (
           <AgentSpinningDots
-            className="text-current"
+            className={undefined}
             testId={undefined}
             variant="orbit"
           />

@@ -61,7 +61,7 @@ export function RepoStateBanner(props: RepoStateBannerProps) {
     <div className="flex items-center gap-2 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground">
       <span className="flex-1">{message}</span>
       {props.repoMode === "degraded" && (
-        <Badge variant="outline" className="ml-auto text-ui-xs">
+        <Badge variant="outline" className="ml-auto">
           Slow updates
         </Badge>
       )}

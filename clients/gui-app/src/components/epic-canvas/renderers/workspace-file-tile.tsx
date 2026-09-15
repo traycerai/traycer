@@ -1008,7 +1008,7 @@ function WorkspaceFileSettingsMenu(props: {
         </TooltipWrapper>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[min(80vw,15rem)] gap-0 p-1">
-        <Label className="cursor-pointer justify-between gap-3 rounded-md px-2 py-1.5 font-normal transition-colors hover:bg-accent">
+        <Label variant="row" className="cursor-pointer justify-between">
           <span>Word wrap</span>
           <Switch
             checked={props.wordWrap}

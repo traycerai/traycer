@@ -255,9 +255,10 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
               >
                 {openFile.pending ? (
                   <AgentSpinningDots
-                    className="size-4 text-muted-foreground"
+                    className="size-4"
                     testId="diff-tab-open-editor-spinner"
                     variant={undefined}
+                    tone="muted"
                   />
                 ) : (
                   <ExternalLink className="size-4 text-muted-foreground" />
@@ -278,7 +279,7 @@ function DiffSettingRow(props: {
   readonly onCheckedChange: (on: boolean) => void;
 }): ReactNode {
   return (
-    <Label className="cursor-pointer justify-between gap-3 rounded-md px-2 py-1.5 font-normal transition-colors hover:bg-accent">
+    <Label variant="row" className="cursor-pointer justify-between">
       <span>{props.label}</span>
       <Switch checked={props.checked} onCheckedChange={props.onCheckedChange} />
     </Label>

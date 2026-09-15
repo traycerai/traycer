@@ -651,7 +651,7 @@ function RetryButton(props: {
       {props.label}
       {props.pending ? (
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={undefined}
           variant={undefined}
         />
@@ -757,10 +757,12 @@ function StatusIcon(props: {
     );
   }
   return (
-    <AgentSpinningDots
-      className="shrink-0 text-primary"
-      testId={undefined}
-      variant={undefined}
-    />
+    <span className="inline-flex shrink-0 text-primary">
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    </span>
   );
 }

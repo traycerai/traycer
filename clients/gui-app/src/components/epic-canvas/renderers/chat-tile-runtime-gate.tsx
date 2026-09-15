@@ -136,9 +136,10 @@ export function ChatTilePreContent(props: {
     );
   const spinner = view.spinner ? (
     <AgentSpinningDots
-      className="shrink-0 text-muted-foreground"
+      className="shrink-0"
       testId={`${props.testId}-spinner`}
       variant={undefined}
+      tone="muted"
     />
   ) : null;
   const detail =

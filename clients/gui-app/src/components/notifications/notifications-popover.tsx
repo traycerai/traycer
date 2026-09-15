@@ -962,9 +962,7 @@ function NotificationFeedStatus(props: {
     >
       {props.presentation.isPending ? (
         <AgentSpinningDots
-          className={
-            degraded ? "text-warning-foreground/70" : "text-muted-foreground/60"
-          }
+          className={undefined}
           testId="notifications-feed-status-spinner"
           variant={undefined}
         />
@@ -1236,7 +1234,7 @@ function LoadMoreButton(props: LoadMoreButtonProps): ReactNode {
       {props.label}
       {props.isLoading ? (
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={`${props.testId}-spinner`}
           variant={undefined}
         />

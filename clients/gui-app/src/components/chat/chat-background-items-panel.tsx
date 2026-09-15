@@ -794,14 +794,15 @@ export function BackgroundItemsPanel(props: {
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className={cn(
-        "bg-muted/30",
-        props.separated ? "border-t border-border/50" : null,
-      )}
+      className={cn(props.separated ? "border-t border-border/50" : null)}
       data-testid="background-items-panel"
+      variant="panel"
     >
       <div className="flex items-stretch">
-        <CollapsibleTrigger className="group/background flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+        <CollapsibleTrigger
+          className="group/background flex min-w-0 flex-1 items-center text-left"
+          variant="panel"
+        >
           <ChevronDown
             aria-hidden
             className={cn(

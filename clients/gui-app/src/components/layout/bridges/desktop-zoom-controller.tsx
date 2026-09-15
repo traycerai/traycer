@@ -190,7 +190,7 @@ function DesktopZoomIndicator(props: {
             Reset to 100%
             {resetPending ? (
               <AgentSpinningDots
-                className="ml-1 text-current"
+                className="ml-1"
                 testId="desktop-zoom-reset-pending"
                 variant="dots2"
               />

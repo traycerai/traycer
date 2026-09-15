@@ -179,7 +179,8 @@ export function MentionStepChromeStatusRow(props: {
         <AgentSpinningDots
           testId={undefined}
           variant="orbit"
-          className="text-muted-foreground/80"
+          className={undefined}
+          tone="muted"
         />
       ) : null}
       {props.label}

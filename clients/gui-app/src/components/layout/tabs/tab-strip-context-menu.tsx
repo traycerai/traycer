@@ -261,9 +261,10 @@ function EpicTabMenuItems(props: {
         {pinActionLabel(pinUnavailableReason, taskPinned)}
         {!pinUnavailable && (taskPinned === null || props.isTaskPinPending) ? (
           <AgentSpinningDots
-            className="ml-auto text-muted-foreground"
+            className="ml-auto"
             testId={`tab-pin-history-spinner-${tabId}`}
             variant={undefined}
+            tone="muted"
           />
         ) : null}
       </ContextMenuItem>

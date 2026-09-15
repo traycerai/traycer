@@ -11,7 +11,6 @@ import {
   inviteKey,
   type QueuedInvite,
 } from "@/lib/epic-invites";
-import { cn } from "@/lib/utils";
 
 export interface InviteCardProps {
   readonly inviteInput: string;
@@ -68,13 +67,10 @@ export function InviteCard(props: InviteCardProps) {
           }}
           onKeyDown={handleKeyDown}
           placeholder="Enter email or GitHub handle"
-          className={cn(
-            "h-9 w-full min-w-0 pr-14",
-            inputError !== null && "border-destructive",
-          )}
+          className="h-9 w-full min-w-0 pr-14"
+          aria-invalid={inputError !== null}
           aria-label="Email or GitHub handle"
           aria-describedby={inputError !== null ? errorId : undefined}
-          aria-invalid={inputError !== null}
           disabled={isPending}
           data-testid="invite-identifier-input"
         />

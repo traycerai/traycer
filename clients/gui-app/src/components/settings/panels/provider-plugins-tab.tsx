@@ -431,8 +431,9 @@ function PluginAddFromSource({
           value={sourceDraft}
           onChange={(e) => setSourceDraft(e.target.value)}
           placeholder="plugin@marketplace or /path/to/plugin"
-          className="min-w-0 flex-1 text-ui-xs"
+          className="min-w-0 flex-1"
           disabled={pending}
+          size="xs"
         />
         <Button
           type="button"

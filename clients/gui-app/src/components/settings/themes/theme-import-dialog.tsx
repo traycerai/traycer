@@ -370,8 +370,8 @@ function ThemeImportDialogBody({
                   >
                     <SelectTrigger
                       aria-label="Sort themes"
-                      size="sm"
-                      className="w-auto border-transparent bg-transparent text-ui-xs shadow-none"
+                      size="xs"
+                      className="w-auto border-transparent bg-transparent shadow-none"
                     >
                       <SelectValue />
                     </SelectTrigger>
@@ -522,7 +522,9 @@ function ThemeImportDialogBody({
                       onChange={(event) => setJson(event.target.value)}
                       placeholder="Paste exported Traycer theme JSON or a VS Code color theme…"
                       rows={7}
-                      className="bg-foreground/3 font-mono text-ui-xs"
+                      className="bg-foreground/3"
+                      font="mono"
+                      size="xs"
                     />
                     <div className="flex justify-end">
                       <Button

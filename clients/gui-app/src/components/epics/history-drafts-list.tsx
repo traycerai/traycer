@@ -157,7 +157,8 @@ const HistoryDraftsRow = memo(function HistoryDraftsRow(props: {
                 <Badge
                   variant="secondary"
                   data-testid={`history-drafts-open-${item.id}`}
-                  className="h-4 px-1 text-overline"
+                  className="h-4"
+                  size="sm"
                 >
                   Open
                 </Badge>

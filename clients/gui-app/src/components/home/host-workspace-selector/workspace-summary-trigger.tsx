@@ -203,7 +203,7 @@ function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
   return (
     <>
       <AgentSpinningDots
-        className="size-4 shrink-0 text-current"
+        className="size-4 shrink-0"
         testId={undefined}
         variant="dots"
       />

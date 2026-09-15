@@ -203,7 +203,7 @@ function recentPrimaryAction(pending: boolean, failed: boolean): ReactNode {
   if (pending) {
     return (
       <AgentSpinningDots
-        className="text-current"
+        className={undefined}
         testId={undefined}
         variant="dots"
       />
