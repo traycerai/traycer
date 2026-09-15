@@ -3210,6 +3210,55 @@ describe("CommGraphTile", () => {
       });
       expect(storedView()?.officeAutoView).toBe("floor");
     });
+
+    it("does not re-measure an EXPLICIT Auto pick on a default generation mismatch, keeping its manual camera (Finding 4)", async () => {
+      // Codex: the generation invalidation above is Finding D68's - it only
+      // makes sense for a tile that INHERITS the default (`officeView: null`).
+      // A tile that explicitly PICKED Auto (`officeView: "auto"`) does not
+      // follow the global default at all, so an unrelated Appearance-default
+      // change bumping the generation must not re-decide it: re-running a
+      // non-Floor outcome would discard the manually framed camera the
+      // outcome re-selects unchanged.
+      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      const persisted: CommGraphTileViewState = {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeView: "auto",
+        officeAutoView: "towers",
+        officeCamera: { x: -10000, y: -20000, zoom: 4 },
+        officeCameraView: "towers",
+        officeAutoGeneration: 0,
+      };
+      await renderSeededOffice(persisted);
+      setIntersecting(true);
+      setOfficeCanvasSize(OFFICE_CANVAS);
+      caughtUp();
+      expect(decide).not.toHaveBeenCalled();
+      expect(storedView()?.officeCamera).toEqual({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+      });
+
+      // The default round-trips while this tile stays mounted, bumping the
+      // generation past what this outcome was stamped with - the ONLY thing
+      // an inheriting tile would react to.
+      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("floor"));
+      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+        2,
+      );
+
+      // Give the effect a tick to have run again if it were going to.
+      caughtUp();
+      expect(decide).not.toHaveBeenCalled();
+      expect(storedView()?.officeAutoView).toBe("towers");
+      expect(storedView()?.officeCamera).toEqual({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+      });
+    });
   });
 
   describe("readiness classification (F3, revised by fixup 8/H1)", () => {

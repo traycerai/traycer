@@ -907,6 +907,56 @@ describe("updateCommGraphTileView", () => {
     expect(ref.view.officeCameraView).toBe("towers");
     expect(next).not.toBe(state);
   });
+
+  function stateWithGeneration(officeAutoGeneration: number): EpicCanvasState {
+    const ref = {
+      ...makeCommGraphTileRef(EPIC_ID),
+      view: { ...DEFAULT_COMM_GRAPH_VIEW, officeAutoGeneration },
+    };
+    return {
+      root: {
+        kind: "pane",
+        id: "pane-1",
+        tabInstanceIds: [ref.instanceId],
+        activeTabId: ref.instanceId,
+        previewTabId: null,
+        activationHistory: [ref.instanceId],
+      },
+      activePaneId: "pane-1",
+      tilesByInstanceId: { [ref.instanceId]: ref },
+      sizesByGroupId: {},
+    };
+  }
+
+  it("stores a write that changes only officeAutoGeneration (a stamp-only refresh)", () => {
+    // Finding 5: a re-measurement that lands on the same view and camera but
+    // under a newer default generation is a STAMP-ONLY write - every other
+    // field is unchanged, so an eight-field comparison sees nothing different
+    // and drops it, leaving the stored generation stale and the tile
+    // re-measuring on every remount instead of settling on the refresh.
+    const seeded = stateWithGeneration(3);
+    const next = updateCommGraphTileView(seeded, commGraphTileId(EPIC_ID), {
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      officeAutoGeneration: 5,
+    });
+    const ref = Object.values(next.tilesByInstanceId)[0];
+    expect(ref?.type).toBe("comm-graph");
+    if (ref === undefined || ref.type !== "comm-graph") return;
+    expect(ref.view.officeAutoGeneration).toBe(5);
+    expect(next).not.toBe(seeded);
+  });
+
+  it("still dedupes an unchanged view when officeAutoGeneration also matches", () => {
+    // Mirror of the case above: a truly identical view - generation included -
+    // is still recognised as a no-op and returns the same state.
+    const seeded = stateWithGeneration(3);
+    expect(
+      updateCommGraphTileView(seeded, commGraphTileId(EPIC_ID), {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeAutoGeneration: 3,
+      }),
+    ).toBe(seeded);
+  });
 });
 
 describe("updateCommGraphTileCamera", () => {
