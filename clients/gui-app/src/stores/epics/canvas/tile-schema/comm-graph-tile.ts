@@ -181,7 +181,7 @@ function readOfficeCamera(value: unknown): CommGraphTileCamera | null {
 }
 
 /** Whether a camera is the one every renderer reads as "fit yourself". */
-function isNeutralCamera(camera: CommGraphTileCamera): boolean {
+export function isNeutralCamera(camera: CommGraphTileCamera): boolean {
   return (
     camera.x === DEFAULT_COMM_GRAPH_VIEW.x &&
     camera.y === DEFAULT_COMM_GRAPH_VIEW.y &&

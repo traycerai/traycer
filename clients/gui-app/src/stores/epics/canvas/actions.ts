@@ -44,6 +44,7 @@ import {
   isHostEpicTerminalRef,
   isUnsupportedEpicTerminalRef,
 } from "./types";
+import { isNeutralCamera } from "./tile-schema/comm-graph-tile";
 import {
   activationHistoryEqual,
   pruneActivationHistory,
@@ -1826,13 +1827,21 @@ export function updateCommGraphTileOfficeCamera(
   camera: CommGraphTileCamera,
   framedView: OfficeViewId | null,
 ): EpicCanvasState {
+  // The NEUTRAL camera is the armed/auto-fit state, and `officeCamera: null` is
+  // its one canonical spelling - the value every `officeCamera !== null` check,
+  // the witness arm and both Auto keep arms already read as "nobody has framed
+  // this, fit it". The office canvas re-arms auto-fit by persisting the neutral
+  // camera (its `onCameraChange` patch has no vocabulary for `null`), so it is
+  // collapsed to that one sentinel here rather than becoming a SECOND neutral
+  // value the rest of the office logic would have to learn to recognise.
+  const nextCamera = isNeutralCamera(camera) ? null : camera;
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isCommGraphTileRef(ref),
     (ref) => {
       if (!isCommGraphTileRef(ref)) return ref;
       if (
-        sameOfficeCamera(ref.view.officeCamera, camera) &&
+        sameOfficeCamera(ref.view.officeCamera, nextCamera) &&
         ref.view.officeCameraView === framedView
       ) {
         return ref;
@@ -1841,7 +1850,7 @@ export function updateCommGraphTileOfficeCamera(
         ...ref,
         view: {
           ...ref.view,
-          officeCamera: camera,
+          officeCamera: nextCamera,
           officeCameraView: framedView,
         },
       };

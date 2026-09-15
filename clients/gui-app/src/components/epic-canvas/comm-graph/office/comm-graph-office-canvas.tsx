@@ -65,7 +65,10 @@ import {
 import { useCommGraphOpenAgentById } from "@/components/epic-canvas/comm-graph/use-comm-graph-open-agent-by-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
-import { isDefaultCommGraphView } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import {
+  DEFAULT_COMM_GRAPH_VIEW,
+  isDefaultCommGraphView,
+} from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import { CommGraphAgentDetailSurface } from "@/components/epic-canvas/comm-graph/comm-graph-agent-detail-surface";
 import { CommGraphThreadPanel } from "@/components/epic-canvas/comm-graph/comm-graph-thread-panel";
 import { OFFICE_ENVELOPE_TINTS } from "@/components/epic-canvas/comm-graph/office/office-envelope-tints";
@@ -2989,10 +2992,33 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     }
     persistTimerRef.current = window.setTimeout(() => {
       persistTimerRef.current = null;
-      const camera = runtime.getCamera();
       // A PATCH of the three camera fields. This canvas is mounted under the
       // resolved view's key and knows nothing about which view that is, so it
       // must not be the thing that writes one back.
+      //
+      // WHILE AUTO-FIT IS ON, the NEUTRAL camera is persisted, not the fitted
+      // one. The framing the loop paints tracks the floor and the viewport, and
+      // an auto-fit loop refits IN PLACE without ever persisting - it hands the
+      // camera to the store only once a person takes manual control
+      // (`persistCameraFromLoop`, gated on auto-fit being off). Writing the live
+      // fitted numbers here would freeze THIS refit as a user framing: a later
+      // pane/directory resize or floor growth moves the loop's camera with no
+      // persist, and after an eviction or reload `createOfficeRuntime` would
+      // read the frozen pre-resize numbers, take them for a user framing,
+      // disable auto-fit, and restore a stale frame that can crop the office.
+      // The neutral camera is the "fit yourself" sentinel every renderer already
+      // reads (`isDefaultCommGraphView`), so persisting it re-arms auto-fit on
+      // the next load instead - the reducer collapses it to the `null` armed
+      // camera.
+      if (runtime.isAutoFitEnabled()) {
+        onCameraChange({
+          x: DEFAULT_COMM_GRAPH_VIEW.x,
+          y: DEFAULT_COMM_GRAPH_VIEW.y,
+          zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+        });
+        return;
+      }
+      const camera = runtime.getCamera();
       onCameraChange({ x: camera.x, y: camera.y, zoom: camera.zoom });
     }, VIEW_PERSIST_DEBOUNCE_MS);
   }, [onCameraChange, runtime]);
