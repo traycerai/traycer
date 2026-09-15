@@ -9,6 +9,7 @@ import {
   STORY_STEPS,
   storyStepDuration,
 } from "@/components/onboarding/onboarding-story-script";
+import { setMobileApp } from "@/lib/mobile-app";
 
 // `useReducedMotion` memoises the media-query answer in a module-level ref the
 // first time any component calls it, so a `matchMedia` stub can only decide the
@@ -56,7 +57,10 @@ describe("OnboardingPhoneDiorama", () => {
     motionState.reducedMotion = false;
   });
   // `globals: false`, so RTL never registers its own auto-cleanup.
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+  });
 
   describe("scenes", () => {
     it("draws the drawer over the task screen with the hamburger spotlit", () => {
@@ -83,6 +87,26 @@ describe("OnboardingPhoneDiorama", () => {
         "Release notes draft2w",
       ]);
       expect(screen.queryByTestId("onboarding-phone-sheet")).toBeNull();
+    });
+
+    it("names no subscription in the installed app's drawer miniature", () => {
+      // The miniature mirrors `MobileNavDrawer`, which withholds its
+      // subscription link in the installed app (App Store guideline 3.1.1), so
+      // the tour must not show the affordance or the word on first launch.
+      setMobileApp(true);
+      renderScene("drawer");
+
+      const drawer = screen.getByTestId("onboarding-phone-drawer");
+      expect(drawer.textContent).not.toContain("Subscription");
+      expect(drawer.textContent).toContain("Signed in");
+    });
+
+    it("keeps the subscription line in the drawer miniature outside the installed app", () => {
+      renderScene("drawer");
+
+      expect(
+        screen.getByTestId("onboarding-phone-drawer").textContent,
+      ).toContain("Subscription");
     });
 
     it("draws the switcher sheet with its category bar and the stack spotlit", () => {

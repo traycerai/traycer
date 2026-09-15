@@ -67,6 +67,7 @@ import {
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { setMobileApp } from "@/lib/mobile-app";
 
 const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
   getPathname: () => "/",
@@ -865,6 +866,7 @@ function renderPopover(): void {
 
 afterEach(() => {
   cleanup();
+  setMobileApp(false);
   resourcesKillMock.mutate.mockClear();
   stopTerminalOwnerMock.mutate.mockClear();
   managedCommandStopMock.mutate.mockClear();
@@ -4758,6 +4760,48 @@ describe("ResourceMonitorPopover · host picker", () => {
     );
 
     // Still a way back, for someone who would rather keep watching than pay.
+    fireEvent.click(
+      screen.getByTestId("resource-monitor-host-return-to-active"),
+    );
+    expect(returnToActive).toHaveBeenCalled();
+  });
+
+  // App Store review guideline 3.1.1: the installed app may not present or
+  // link to a subscription it cannot sell through Apple. The state is still
+  // reported and the way back is still offered - only the plan wording and
+  // the remedy go.
+  it("reports the plan-restricted pick with no upgrade in the installed mobile app", () => {
+    setMobileApp(true);
+    const returnToActive = vi.fn();
+    hostScopeMock.scope = watchingSecondHostScope({
+      status: "unreachable",
+      host: hostScopeOptionFixture({
+        hostId: "host-b",
+        name: "host-b",
+        isActive: false,
+        isLocalMachine: false,
+        planRestricted: true,
+      }),
+      returnToActive,
+    });
+    hostScopeMock.hasExplicitPick = true;
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    const notice = screen.getByTestId("resource-monitor-host-plan-restricted");
+    expect(notice.textContent).toContain(
+      "host-b is not available to the mobile app on the current plan",
+    );
+    expect(notice.textContent).toContain(
+      "Manage this from the Traycer desktop app.",
+    );
+    expect(notice.textContent).not.toContain("paid plan");
+    expect(screen.queryByTestId("host-scope-plan-upgrade")).toBeNull();
+    expect(openLinkMock).not.toHaveBeenCalled();
+
+    // The escape hatch is not a purchase, so it stays.
     fireEvent.click(
       screen.getByTestId("resource-monitor-host-return-to-active"),
     );

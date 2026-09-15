@@ -87,10 +87,10 @@ paths = [
 regexes = ['''^(?:d3JhcHBlZEtleQ==|cmF3S2V5)$''']
 
 [[allowlists]]
-description = "The cross-account handoff test's literal chat-session scope key, r6f1-signout. This identifies a test registry subscription and is never an authentication credential. Full-history scans also inspect the in-flight branch containing this fixture; require both its exact path and value."
+description = "Chat-registry scope keys in the auth-lifecycle cross-account handoff suite: kebab-case test identifiers (e.g. `r6f1-signout`) passed as `scopeKey` to `chatRegistry.acquire`, which the generic-api-key rule matches only because the field is literally named `scopeKey`. UI state keys, never credentials - the same shape as the chat-messages `scrollStateKey` entry above. Fourth instance of the `fetch-depth: 0` pattern: the fixture lives on the in-flight branch `fix/draft-image-hash-rewrite`, so every open PR's scan fails on it until this lands and it cannot wait for that branch to merge. Scoped to the one source path and the `scopeKey: \"...\"` field shape so unrelated findings stay reportable."
 condition = "AND"
-regexTarget = "secret"
+regexTarget = "line"
 paths = [
   '''^clients/gui-app/src/providers/__tests__/auth-lifecycle-bridge-r6f1-cross-account-handoff\.test\.tsx$''',
 ]
-regexes = ['''^r6f1-signout$''']
+regexes = ['''scopeKey: "[A-Za-z0-9_-]+"''']
