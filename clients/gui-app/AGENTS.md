@@ -72,7 +72,7 @@ Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
     the guarantee. Where a
     primitive already owns `inset-y-0`/`h-full` under a `data-*` variant, use
     `mt-safe-top` + `h-safe-dvh` under that **same** variant —
-    `tailwind-merge` only displaces a class whose modifiers match, and its
+    `cn()` only displaces a class whose modifiers match, and its
     conflict map lets `inset-y-*` displace `top-*` but not the reverse, so a
     bare `top-safe-top` ties on specificity instead of winning. `sheet.tsx` and
     `drawer.tsx` already do this per side, so their callers need nothing.
@@ -90,9 +90,12 @@ inset-0` and marked `data-full-bleed-surface`, so it takes the viewport
     HEIGHT clears the home indicator does not clear it for a line box centred
     inside that band. Do not add a second full-bleed surface — the contract
     test asserts the marker appears exactly once.
-  - New tokens must also be registered in `cn()`'s `extendTailwindMerge`
-    (`lib/utils.ts`) or they never conflict with the utility they override —
-    which is invisible on desktop, where every inset is zero.
+  - New tokens must also be registered in `cn.config.mjs` (package root),
+    followed by `bun run cn:build`, or they never conflict with the utility
+    they override — which is invisible on desktop, where every inset is zero.
+    The build writes the committed `src/lib/cn-tables.ts` that `lib/utils.ts`
+    merges against; `src/__tests__/cn-tables-up-to-date.test.ts` fails when the
+    config moves without it.
   - When a library takes geometry as a value rather than a style (Radix
     `collisionPadding`), read `readSafeAreaInsets()` from
     `lib/safe-area-insets.ts`. It is the only sanctioned runtime read; do not

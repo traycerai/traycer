@@ -10,6 +10,7 @@
     ".": "./index.ts"
   },
   "scripts": {
+    "cn:build": "cn build --full --config cn.config.mjs -o src/lib/cn-tables.ts",
     "compile": "tsgo -b",
     "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings . && NODE_OPTIONS=--max-old-space-size=6144 eslint . --cache --fix --max-warnings 0",
     "react-doctor": "npx -y react-doctor@latest . --verbose --offline --blocking warning",
@@ -71,8 +72,8 @@
     "@xterm/xterm": "catalog:",
     "@xyflow/react": "catalog:",
     "class-variance-authority": "catalog:",
-    "clsx": "catalog:",
     "cmdk": "catalog:",
+    "cn": "catalog:",
     "culori": "catalog:",
     "date-fns": "catalog:",
     "diff": "catalog:",
@@ -110,7 +111,6 @@
     "shadcn": "catalog:",
     "shiki": "catalog:",
     "sonner": "catalog:",
-    "tailwind-merge": "catalog:",
     "tailwindcss": "catalog:",
     "tailwindcss-animate": "catalog:",
     "tw-animate-css": "catalog:",
