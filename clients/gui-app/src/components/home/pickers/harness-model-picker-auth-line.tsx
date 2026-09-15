@@ -180,7 +180,7 @@ function AuthLineRow(props: {
       {props.badgeText === null ? null : (
         <Badge
           variant="outline"
-          className="h-4 max-w-full rounded-sm border-border/60 bg-muted/20 px-1.5 text-[10px] font-normal leading-none text-muted-foreground"
+          className="h-4 max-w-full rounded-sm border-border/60 bg-muted/20 px-1.5 text-micro font-normal leading-none text-muted-foreground"
         >
           <span className="truncate">{props.badgeText}</span>
         </Badge>
@@ -256,7 +256,7 @@ export function ProviderSetupManualCommand(props: {
   return (
     <span>
       Installed the CLI yourself? Running{" "}
-      <code className="rounded-sm bg-foreground/8 px-1 py-px font-mono text-[11px] text-foreground/90">
+      <code className="rounded-sm bg-foreground/8 px-1 py-px font-mono text-overline text-foreground/90">
         {props.command}
       </code>{" "}
       in your own terminal on that machine does the same.

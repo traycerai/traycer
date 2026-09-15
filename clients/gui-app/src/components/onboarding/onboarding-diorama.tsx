@@ -600,7 +600,7 @@ function WorkbenchPanelRail(props: { readonly className: string }) {
           >
             <Icon className="size-4" />
             {panel.active ? (
-              <span className="absolute inset-x-2 bottom-0 h-[2px] rounded-t bg-primary" />
+              <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-t bg-primary" />
             ) : null}
           </span>
         );
@@ -1362,7 +1362,7 @@ function OpencodeStoryBody(props: {
           <span className="flex items-center gap-1 text-overline uppercase tracking-wider text-muted-foreground">
             <span
               aria-hidden="true"
-              className="size-2 shrink-0 rounded-[2px] bg-[var(--term-ansi-blue)]"
+              className="size-2 shrink-0 rounded-xs bg-[var(--term-ansi-blue)]"
             />
             OpenCode
             {beat.to !== null ? (
@@ -1536,7 +1536,7 @@ function spotlightClass(scene: SceneId, region: SpotlightRegion): string {
   const active = activeRegionsFor(scene).includes(region);
   return cn(
     "transition-[opacity,filter,box-shadow] duration-500",
-    active ? "opacity-100 saturate-100" : "opacity-35 saturate-[0.45]",
+    active ? "opacity-100 saturate-100" : "opacity-35 saturate-45",
     active &&
       region !== "command-theme" &&
       scene !== "providers" &&

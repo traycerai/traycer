@@ -1147,7 +1147,7 @@ function ModelProviderRow(props: {
             >
               <Badge
                 variant="outline"
-                className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal text-muted-foreground"
+                className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal text-muted-foreground"
               >
                 {sourceBadgeLabel(entry.source, entry.configDeclaredCustom)}
               </Badge>

@@ -159,7 +159,7 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
               {hostPin.isPinned ? (
                 <span
                   aria-hidden
-                  className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-[9px] leading-none font-semibold text-background ring-1 ring-background"
+                  className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
                 >
                   1
                 </span>

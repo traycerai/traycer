@@ -1298,7 +1298,7 @@ function ServerRowBadges(props: {
       {shadowed ? (
         <Badge
           variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal"
+          className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal"
         >
           shadowed by project
         </Badge>
@@ -1306,7 +1306,7 @@ function ServerRowBadges(props: {
       {server.statusSource === "probe" ? (
         <Badge
           variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal text-muted-foreground"
+          className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal text-muted-foreground"
         >
           connectivity check
         </Badge>
@@ -1314,7 +1314,7 @@ function ServerRowBadges(props: {
       {server.configOnly ? (
         <Badge
           variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal"
+          className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal"
         >
           config only
         </Badge>
@@ -1322,7 +1322,7 @@ function ServerRowBadges(props: {
       {server.stdioDegraded ? (
         <Badge
           variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal"
+          className="h-4 rounded-sm border-border/60 px-1.5 text-micro font-normal"
         >
           stdio degraded
         </Badge>

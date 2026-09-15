@@ -1733,7 +1733,7 @@ function AttachmentThumbnail({
   readonly onRemove: () => void;
 }): ReactNode {
   return (
-    <div className="relative h-[38px] w-14 shrink-0 overflow-hidden rounded border border-border bg-foreground/8">
+    <div className="relative h-9.5 w-14 shrink-0 overflow-hidden rounded border border-border bg-foreground/8">
       <img
         src={image.previewUrl}
         alt={image.fileName}

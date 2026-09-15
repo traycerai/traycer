@@ -163,7 +163,7 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
             // muted-fill-ok: the meter is in the PopoverTrigger, not the
             // content, and its own inner disc below is bg-canvas - the one
             // surface --muted never collapses with
-            className="hidden size-5 rounded-full bg-[conic-gradient(currentColor_var(--context-usage-percent),var(--muted)_0)] p-[3px] @max-[28rem]:inline-flex"
+            className="hidden size-5 rounded-full bg-[conic-gradient(currentColor_var(--context-usage-percent),var(--muted)_0)] p-0.75 @max-[28rem]:inline-flex"
             style={meterStyle}
           >
             <span className="size-full rounded-full bg-canvas" />

@@ -409,7 +409,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
         aria-modal={false}
         aria-label="Theme editor"
         className={cn(
-          "fixed right-safe-right-gutter bottom-safe-bottom-gutter z-[110] flex w-[min(90vw,var(--container-sm))] max-w-safe-dvw flex-col overflow-hidden rounded-xl border shadow-xl",
+          "fixed right-safe-right-gutter bottom-safe-bottom-gutter z-110 flex w-[min(90vw,var(--container-sm))] max-w-safe-dvw flex-col overflow-hidden rounded-xl border shadow-xl",
           minimized
             ? "h-auto"
             : "max-h-[min(75svh,calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem))]",

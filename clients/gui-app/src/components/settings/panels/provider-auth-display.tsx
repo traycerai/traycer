@@ -21,7 +21,7 @@ export function ProviderAuthBadge({
   return (
     <Badge
       variant="outline"
-      className="h-4 max-w-full rounded-sm border-border/60 bg-muted/20 px-1.5 text-[10px] font-normal leading-none text-muted-foreground"
+      className="h-4 max-w-full rounded-sm border-border/60 bg-muted/20 px-1.5 text-micro font-normal leading-none text-muted-foreground"
     >
       <span className="truncate">{auth.badgeText}</span>
     </Badge>

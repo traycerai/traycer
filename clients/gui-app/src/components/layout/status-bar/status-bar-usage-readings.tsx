@@ -101,7 +101,7 @@ function FoldedProvidersChip(props: {
       <TooltipTrigger asChild>
         <span
           data-testid="status-bar-folded-providers"
-          className="shrink-0 rounded-[3px] border border-border/70 px-1 leading-none"
+          className="shrink-0 rounded-xs border border-border/70 px-1 leading-none"
         >
           {`+${props.segments.length}`}
         </span>

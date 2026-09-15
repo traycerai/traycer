@@ -176,7 +176,7 @@ function DayTile(props: {
           data-testid="usage-activity-day"
           data-day={cell.day}
           data-level={cell.level}
-          className="size-2.5 rounded-[2px]"
+          className="size-2.5 rounded-xs"
           style={{ backgroundColor: `var(--usage-heat-${String(cell.level)})` }}
         />
       </TooltipTrigger>
@@ -338,7 +338,7 @@ function LevelLegend(): ReactNode {
       {LEVELS.map((level) => (
         <span
           key={level}
-          className={cn("size-2.5 rounded-[2px]")}
+          className={cn("size-2.5 rounded-xs")}
           style={{ backgroundColor: `var(--usage-heat-${String(level)})` }}
         />
       ))}
