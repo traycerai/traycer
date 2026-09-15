@@ -254,6 +254,27 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "include": "uninstall-host-autostart.nsh"
+    },
+    "dmg": {
+      "background": "resources/bundle/dmg/assets/dmg-background.png",
+      "window": {
+        "width": 642,
+        "height": 406
+      },
+      "iconSize": 128,
+      "contents": [
+        {
+          "x": 170,
+          "y": 187,
+          "type": "file"
+        },
+        {
+          "x": 470,
+          "y": 187,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     }
   },
   "desktopName": "traycer-desktop.desktop",

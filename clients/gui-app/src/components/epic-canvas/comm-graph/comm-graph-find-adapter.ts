@@ -56,14 +56,16 @@ export function createCommGraphFindAdapter(args: {
   };
 
   const search = (input: TileFindInput): void => {
-    const needle = normalize(input.query, input.matchCase);
+    const needle = normalizeCommGraphFindText(input.query, input.matchCase);
     matches =
       needle.length === 0
         ? []
         : args.renderer
             .getNodes()
             .filter((node) =>
-              normalize(node.name, input.matchCase).includes(needle),
+              normalizeCommGraphFindText(node.name, input.matchCase).includes(
+                needle,
+              ),
             );
     activeIndex = matches.length > 0 ? 0 : -1;
     const matchIds = new Set(matches.map((match) => match.id));
@@ -122,7 +124,16 @@ export function createCommGraphFindAdapter(args: {
   };
 }
 
-function normalize(value: string, matchCase: boolean): string {
+/**
+ * Case folding, decided ONCE for everything that matches agent names in this
+ * tile. Find and the office directory ask the same question of the same
+ * strings, and a second copy of this is how a query that lights up the floor
+ * comes back empty in the list beside it.
+ */
+export function normalizeCommGraphFindText(
+  value: string,
+  matchCase: boolean,
+): string {
   return matchCase ? value : value.toLocaleLowerCase();
 }
 

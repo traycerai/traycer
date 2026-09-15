@@ -16,7 +16,6 @@ const librarySchema = z.object({
     light: z.string().nullable(),
     dark: z.string().nullable(),
   }),
-  glassOpacity: z.number().min(30).max(100),
   promptFontFamily: z.string().max(200).nullable().default(null),
   promptFontSize: z.number().min(10).max(24).default(14),
   fontLigatures: z.boolean().default(true),
@@ -28,7 +27,6 @@ interface Library {
   version: 2;
   themes: ThemeDefinition[];
   selected: { light: string | null; dark: string | null };
-  glassOpacity: number;
   promptFontFamily: string | null;
   promptFontSize: number;
   fontLigatures: boolean;
@@ -50,7 +48,6 @@ interface ThemeLibraryState extends Library {
   ) => boolean;
   deleteTheme: (id: string) => boolean;
   selectTheme: (appearance: "light" | "dark", id: string | null) => boolean;
-  setGlassOpacity: (opacity: number) => boolean;
   clearSelection: () => boolean;
   resetLibrary: () => boolean;
   setAppearancePreference: (
@@ -72,7 +69,6 @@ const emptyLibrary: Library = {
   version: 2,
   themes: [],
   selected: { light: null, dark: null },
-  glassOpacity: 100,
   promptFontFamily: null,
   promptFontSize: 14,
   fontLigatures: true,
@@ -277,8 +273,6 @@ export const useThemeLibraryStore = create<ThemeLibraryState>((set, get) => {
           selected: { ...library.selected, [appearance]: id },
         };
       }),
-    setGlassOpacity: (glassOpacity) =>
-      update((library) => ({ ...library, glassOpacity })),
     setAppearancePreference: (preference) =>
       update((library) => ({ ...library, ...preference })),
     clearSelection: () =>

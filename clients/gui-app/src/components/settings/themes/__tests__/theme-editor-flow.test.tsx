@@ -23,7 +23,6 @@ function resetThemeStores(): void {
     version: 2,
     themes: [],
     selected: { light: null, dark: null },
-    glassOpacity: 100,
     draft: null,
     error: null,
   });

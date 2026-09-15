@@ -21,6 +21,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { useOpenLink } from "@/lib/links/open-link";
+import { isMobileApp } from "@/lib/mobile-app";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 
 export interface UserMenuProps {
@@ -125,26 +126,35 @@ export function UserMenu(props: UserMenuProps) {
               )}
             </DropdownMenuItem>
           ) : null}
-          <DropdownMenuItem
-            data-testid="user-menu-manage-subscription"
-            onSelect={() => {
-              setOpen(false);
-              // Tracked on the RESOLVED open only: a failed OS handoff is not
-              // a subscription-management visit (R11). The failure toast is
-              // the link seam's, so the rejection is ignored here.
-              void openLink(manageSubscriptionUrl, "account", null).then(
-                () =>
-                  Analytics.getInstance().track(
-                    AnalyticsEvent.SubscriptionManagementOpened,
-                    { source: "direct_ui" },
-                  ),
-                ignoreError,
-              );
-            }}
-          >
-            <ExternalLink className="size-3.5" />
-            Manage subscription
-          </DropdownMenuItem>
+          {/* Withheld in the installed mobile app: App Store guideline 3.1.1
+              forbids linking out to a subscription that cannot be bought
+              through Apple, and this item opens exactly that page. This menu
+              does reach the phone - the mobile header only replaces the
+              desktop one for the `app` variant, so `host-loading` renders
+              `DesktopAppHeader`, identity menu included. Sign out and App
+              settings are unaffected. */}
+          {isMobileApp() ? null : (
+            <DropdownMenuItem
+              data-testid="user-menu-manage-subscription"
+              onSelect={() => {
+                setOpen(false);
+                // Tracked on the RESOLVED open only: a failed OS handoff is not
+                // a subscription-management visit (R11). The failure toast is
+                // the link seam's, so the rejection is ignored here.
+                void openLink(manageSubscriptionUrl, "account", null).then(
+                  () =>
+                    Analytics.getInstance().track(
+                      AnalyticsEvent.SubscriptionManagementOpened,
+                      { source: "direct_ui" },
+                    ),
+                  ignoreError,
+                );
+              }}
+            >
+              <ExternalLink className="size-3.5" />
+              Manage subscription
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             data-testid="user-menu-sign-out"

@@ -391,7 +391,7 @@ export function MobileNavDrawerSurface(
       <m.div
         aria-hidden
         className={cn(
-          "absolute inset-0 bg-black/40 supports-backdrop-filter:backdrop-blur-xs",
+          "absolute inset-0 bg-black/40",
           // Interactive for as long as the scrim is showing anything, which
           // includes a settle still in flight - otherwise a drawer caught
           // mid-open could not be pushed back from the side it is uncovering.

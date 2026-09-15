@@ -12,7 +12,17 @@ function tag(
   baselineY: number,
   width: number,
 ): OfficeNameTagCandidate {
-  return { text, tone: "default", centerX, baselineY, width };
+  // The owner rides along so placement can be asked who it actually placed.
+  // Derived from the text rather than passed, because every case here is
+  // about geometry and none of them wants a second identifier to track.
+  return {
+    text,
+    tone: "default",
+    centerX,
+    baselineY,
+    width,
+    ownerAgentId: `agent-${text}`,
+  };
 }
 
 /**
@@ -45,6 +55,7 @@ describe("layoutNameTags", () => {
       tone: "default",
       centerX: 100,
       baselineY: 50,
+      ownerAgentId: "agent-Alpha",
     });
     expect(placed[1].baselineY).toBe(60);
   });

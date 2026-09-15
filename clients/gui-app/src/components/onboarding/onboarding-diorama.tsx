@@ -447,7 +447,7 @@ function NavigationDragDemo(props: {
           scale: [0.96, 1.03, 1, 0.98],
         }}
         transition={{ duration: 1.45, ease: EASE, times: [0, 0.18, 0.76, 1] }}
-        className="pointer-events-none absolute z-30 flex w-[min(30%,12.5rem)] items-center gap-1.5 rounded-md border border-primary/45 bg-popover/95 px-2 py-1.5 text-code-xs text-popover-foreground shadow-xl backdrop-blur-sm"
+        className="pointer-events-none absolute z-30 flex w-[min(30%,12.5rem)] items-center gap-1.5 rounded-md border border-primary/45 bg-popover/95 px-2 py-1.5 text-code-xs text-popover-foreground shadow-xl"
       >
         <HarnessIcon
           harnessId={agent.harnessId}
@@ -1069,7 +1069,7 @@ function ProvidersFocusScene() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.25, ease: EASE }}
-        className="absolute inset-0 z-20 bg-black/55 supports-backdrop-filter:backdrop-blur-xs"
+        className="absolute inset-0 z-20 bg-black/55"
       />
       {/* Anchored at the chat composer (bottom-left of the left pane), not a
           centered modal — the dropdown reads as the input box's own picker. */}
@@ -1391,7 +1391,7 @@ function AgentGuideModal(props: {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.2, ease: EASE }}
-        className="absolute inset-0 z-20 bg-black/50 supports-backdrop-filter:backdrop-blur-xs"
+        className="absolute inset-0 z-20 bg-black/50"
       />
       <div className="absolute inset-0 z-30 flex items-center justify-center p-4">
         <m.div
@@ -1418,7 +1418,7 @@ function CommandThemeScene(props: { readonly reducedMotion: boolean }) {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.2, ease: EASE }}
-        className="absolute inset-0 z-20 bg-black/10 supports-backdrop-filter:backdrop-blur-xs"
+        className="absolute inset-0 z-20 bg-black/10"
       />
       <div className="absolute inset-0 z-30 flex items-center justify-center p-4">
         <CommandPalette reducedMotion={props.reducedMotion} />
