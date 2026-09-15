@@ -1,19 +1,14 @@
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
 import { cn } from "@/lib/utils";
-import { leaderHint } from "@/components/ui/leader-digit-shortcuts";
 import { singleDigitLeaderDigitFor } from "@/providers/keybinding-context";
 
 const BADGE_TRANSITION = { duration: 0.12, ease: "easeOut" } as const;
 
 interface PickerLeaderBadgeProps {
   readonly index: number;
-  /** The scope's visible modifier; null hides the badge. Also names the
-   *  modifier in the accessible hint while the visual stays digit-only. */
+  /** The scope's visible modifier; null hides the badge. */
   readonly modifier: "mod" | "alt" | null;
-  /** Verb for the aria hint, e.g. "to browse" / "to set". */
-  readonly hintAction: string;
-  readonly hintTarget: string;
   readonly testId: string;
   /**
    * All placements are absolute / out of flow, so revealing a badge
@@ -35,7 +30,7 @@ interface PickerLeaderBadgeProps {
  * layout.
  */
 export function PickerLeaderBadge(props: PickerLeaderBadgeProps) {
-  const { index, modifier, hintAction, hintTarget, testId, placement } = props;
+  const { index, modifier, testId, placement } = props;
   const digit = singleDigitLeaderDigitFor(index);
   return (
     <AnimatePresence initial={false}>
@@ -45,7 +40,7 @@ export function PickerLeaderBadge(props: PickerLeaderBadgeProps) {
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.8 }}
           transition={BADGE_TRANSITION}
-          aria-label={leaderHint(digit, modifier, hintAction, hintTarget)}
+          aria-hidden="true"
           data-testid={testId}
           className={cn(
             "pointer-events-none flex items-center justify-center rounded-[0.3rem] bg-primary font-bold tabular-nums leading-none text-primary-foreground shadow-sm ring-1 ring-primary/40",

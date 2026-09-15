@@ -2,6 +2,7 @@ import { Zap } from "lucide-react";
 import type { ServiceTierOption } from "@/components/home/data/landing-options";
 import type { ServiceTierFooterConfig } from "@/components/home/pickers/harness-model-picker-footers";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
+import { pickerLeaderControlLabel } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import { toggleServiceTier } from "@/components/home/pickers/model-service-tier";
 import { usePickerFastModeLeader } from "@/providers/keybinding-context";
 import { cn } from "@/lib/utils";
@@ -20,7 +21,12 @@ export function FastModeFooterButton(props: FastModeFooterButtonProps) {
   return (
     <button
       type="button"
-      aria-label={`${upgrade.label} mode`}
+      aria-label={pickerLeaderControlLabel(
+        `${upgrade.label} mode`,
+        9,
+        leader,
+        "to toggle",
+      )}
       aria-pressed={active}
       className={cn(
         "relative flex min-w-0 max-w-[min(34vw,8rem)] items-center gap-1.5 rounded-md px-2 py-1 text-ui-xs text-muted-foreground transition-colors aria-[pressed=false]:hover:bg-accent/30 aria-[pressed=false]:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
@@ -41,8 +47,6 @@ export function FastModeFooterButton(props: FastModeFooterButtonProps) {
           <PickerLeaderBadge
             modifier={leader}
             index={9}
-            hintAction="to toggle"
-            hintTarget={`${upgrade.label} mode`}
             testId="model-fast-mode-digit-0"
             placement="center"
           />
@@ -53,8 +57,6 @@ export function FastModeFooterButton(props: FastModeFooterButtonProps) {
         <PickerLeaderBadge
           modifier={inlineShortcut ? null : leader}
           index={9}
-          hintAction="to toggle"
-          hintTarget={`${upgrade.label} mode`}
           testId="model-fast-mode-digit-0"
           placement="trailing"
         />

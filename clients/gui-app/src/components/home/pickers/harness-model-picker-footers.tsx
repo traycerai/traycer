@@ -19,6 +19,7 @@ import {
   usePickerReasoningLeaderForIndex,
 } from "@/providers/keybinding-context";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
+import { pickerLeaderControlLabel } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import { useReasoningSliderGesture } from "@/components/home/pickers/use-reasoning-slider-gesture";
 import { FastModeFooterButton } from "@/components/home/pickers/fast-mode-footer-button";
 import {
@@ -578,7 +579,12 @@ const ReasoningLevelStop = memo(function ReasoningLevelStop(
       <button
         type="button"
         tabIndex={-1}
-        aria-label={option.label}
+        aria-label={pickerLeaderControlLabel(
+          option.label,
+          index,
+          disabled ? null : leaderModifier,
+          "to set",
+        )}
         data-testid={`model-reasoning-stop-${index}`}
         disabled={disabled}
         style={{ left: `${percent}%` }}
@@ -614,8 +620,6 @@ const ReasoningLevelStop = memo(function ReasoningLevelStop(
         <PickerLeaderBadge
           modifier={disabled ? null : leaderModifier}
           index={index}
-          hintAction="to set"
-          hintTarget={option.label}
           testId={`model-reasoning-digit-${singleDigitLeaderDigitFor(index)}`}
           placement="center"
         />
@@ -656,6 +660,12 @@ function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
       ref={buttonRef}
       type="button"
       aria-pressed={selected}
+      aria-label={pickerLeaderControlLabel(
+        option.label,
+        index,
+        disabled ? null : leaderModifier,
+        "to set",
+      )}
       disabled={disabled}
       className={cn(
         "inline-flex max-w-[min(22vw,6.5rem)] shrink-0 items-center rounded-md px-2 py-1 text-ui-xs text-muted-foreground transition-colors aria-[pressed=false]:hover:bg-accent/30 aria-[pressed=false]:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
@@ -668,8 +678,6 @@ function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
         <PickerLeaderBadge
           modifier={disabled ? null : leaderModifier}
           index={index}
-          hintAction="to set"
-          hintTarget={option.label}
           testId={`model-reasoning-digit-${singleDigitLeaderDigitFor(index)}`}
           placement="trailing"
         />

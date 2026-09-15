@@ -1,37 +1,29 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPlatformMock } from "@/__tests__/create-platform-mock";
-
-const platformMock = vi.hoisted(() => ({ mac: false }));
-
-vi.mock("@/lib/keybindings/platform", () => createPlatformMock(platformMock));
-
+import { afterEach, describe, expect, it } from "vitest";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
 
+// The badge is purely visual now - digit only, `aria-hidden`. The spoken
+// modifier name lives on the parent control's own `aria-label`, built by
+// `pickerLeaderControlLabel` (see harness-model-picker-shortcut-hint.test.ts)
+// - CodeRabbit flagged the old `aria-label` here as unreachable through a
+// parent that already owns an accessible name.
 describe("<PickerLeaderBadge />", () => {
-  beforeEach(() => {
-    platformMock.mac = false;
-  });
-
   afterEach(() => cleanup());
 
-  it("renders indexes 0-8 as the digits 1-9", () => {
+  it("renders indexes 0-8 as the digits 1-9, hidden from the accessibility tree", () => {
     for (let index = 0; index < 9; index += 1) {
       render(
         <PickerLeaderBadge
           index={index}
           modifier="mod"
-          hintAction="to switch"
-          hintTarget="Runtime Core"
           testId={`leader-badge-${index}`}
           placement="corner"
         />,
       );
       const badge = screen.getByTestId(`leader-badge-${index}`);
       expect(badge.textContent).toBe(String(index + 1));
-      expect(badge.getAttribute("aria-label")).toBe(
-        `Press Control+${index + 1} to switch Runtime Core`,
-      );
+      expect(badge.getAttribute("aria-hidden")).toBe("true");
+      expect(badge.hasAttribute("aria-label")).toBe(false);
       cleanup();
     }
   });
@@ -41,34 +33,13 @@ describe("<PickerLeaderBadge />", () => {
       <PickerLeaderBadge
         index={9}
         modifier="alt"
-        hintAction="to switch"
-        hintTarget="Runtime Core"
         testId="leader-badge-9"
         placement="corner"
       />,
     );
     const badge = screen.getByTestId("leader-badge-9");
     expect(badge.textContent).toBe("0");
-    expect(badge.getAttribute("aria-label")).toBe(
-      "Press Alt+0 to switch Runtime Core",
-    );
-  });
-
-  it("names the accessible modifier per platform (mod -> Command on macOS)", () => {
-    platformMock.mac = true;
-    render(
-      <PickerLeaderBadge
-        index={0}
-        modifier="mod"
-        hintAction="to switch"
-        hintTarget="Runtime Core"
-        testId="leader-badge-mac"
-        placement="corner"
-      />,
-    );
-    expect(
-      screen.getByTestId("leader-badge-mac").getAttribute("aria-label"),
-    ).toBe("Press Command+1 to switch Runtime Core");
+    expect(badge.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("renders nothing when modifier is null - the surface's leader is not held", () => {
@@ -76,8 +47,6 @@ describe("<PickerLeaderBadge />", () => {
       <PickerLeaderBadge
         index={0}
         modifier={null}
-        hintAction="to switch"
-        hintTarget="Runtime Core"
         testId="leader-badge-hidden"
         placement="corner"
       />,
