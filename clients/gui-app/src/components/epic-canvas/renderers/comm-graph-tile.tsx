@@ -986,6 +986,10 @@ export function CommGraphTile(props: CommGraphTileProps) {
             onCameraChange={handleOfficeCameraChange}
             officeView={OFFICE_VIEWS[resolvedViewId ?? MEASURING_VIEW_ID]}
             ready={resolvedViewId !== null && drawReady}
+            // No resolved view yet: this is the Auto measuring surface. A
+            // transient detail panel must not take width from the box Auto
+            // measures, since it resets when the resolved view remounts.
+            measuring={resolvedViewId === null}
             onAutoProbe={handleAutoProbe}
             onRegisterFlush={registerOfficeFlush}
             viewPicker={

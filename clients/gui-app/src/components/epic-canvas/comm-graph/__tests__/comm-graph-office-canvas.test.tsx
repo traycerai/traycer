@@ -383,6 +383,7 @@ function officeElement(
       // The tile has settled which view this is; these cases are about the
       // canvas, not about Auto still deciding what to hand it.
       ready
+      measuring={false}
       onAutoProbe={vi.fn()}
       onRegisterFlush={vi.fn()}
       viewPicker={null}
@@ -3681,6 +3682,7 @@ function officeElementWithView(
       // The tile has settled which view this is; these cases are about where
       // the renderer puts things, not about Auto still deciding.
       ready
+      measuring={false}
       onAutoProbe={vi.fn()}
       onRegisterFlush={vi.fn()}
       viewPicker={null}

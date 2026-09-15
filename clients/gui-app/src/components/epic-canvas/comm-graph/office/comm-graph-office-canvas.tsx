@@ -899,20 +899,24 @@ function shiftPendingPan(runtime: OfficeRuntime, shift: OfficePoint): void {
  * the shift in screen pixels - and it has to move, because the next frame
  * writes `camera.x` straight from these and would otherwise throw away the
  * compensation applied beside them.
+ *
+ * Each endpoint is scaled by ITS OWN zoom, not the live one. The pan
+ * interpolates `fromZoom -> toZoom`, so a world shift is `shift * fromZoom`
+ * screen pixels at the origin and `shift * toZoom` at the destination. Scaling
+ * both by the current zoom keeps the frame put at the instant of the shift
+ * (the interpolated compensation still equals `shift * camera.zoom` there) but
+ * leaves the destination off by `shift * (toZoom - zoom)`, and a
+ * `persistOnArrival` pan would then save that wrong framing across remounts.
  */
-function shiftActivePan(
-  runtime: OfficeRuntime,
-  shift: OfficePoint,
-  zoom: number,
-): void {
+function shiftActivePan(runtime: OfficeRuntime, shift: OfficePoint): void {
   const pan = runtime.getActivePan();
   if (pan === null) return;
   runtime.setActivePan({
     ...pan,
-    fromX: pan.fromX - shift.x * zoom,
-    toX: pan.toX - shift.x * zoom,
-    fromY: pan.fromY - shift.y * zoom,
-    toY: pan.toY - shift.y * zoom,
+    fromX: pan.fromX - shift.x * pan.fromZoom,
+    toX: pan.toX - shift.x * pan.toZoom,
+    fromY: pan.fromY - shift.y * pan.fromZoom,
+    toY: pan.toY - shift.y * pan.toZoom,
   });
 }
 
@@ -2457,6 +2461,17 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    */
   readonly ready: boolean;
   /**
+   * TRUE while this canvas is the Auto MEASURING surface (the tile has no
+   * resolved view yet). A transient agent/thread DETAIL panel takes width from
+   * the flex row, and it is LOCAL state that resets when the resolved view
+   * remounts this canvas - so a detail opened while measuring would shrink the
+   * box Auto measures, then vanish, leaving the office wider than the width its
+   * view was decided against. The persistent directory is measured (it survives
+   * the remount); the transient detail panel is withheld while measuring so Auto
+   * decides against the width the resolved office actually gets.
+   */
+  readonly measuring: boolean;
+  /**
    * What Auto would need to decide, pushed up as the inputs change.
    *
    * The measurement belongs to the TILE - a mode toggle or an LRU remount
@@ -2487,6 +2502,20 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
   ) => void;
 }
 
+/**
+ * The detail selection to SHOW, or `null` while Auto is still measuring. The
+ * detail panel is transient - it resets on the resolved view's remount - and it
+ * takes width from the flex row, so a measurement taken with it open would
+ * decide the office view against a width the office never keeps once it
+ * resolves. The persistent directory keeps its own width and is measured.
+ */
+function detailToShow(
+  measuring: boolean,
+  detail: OfficeSelectedDetail | null,
+): OfficeSelectedDetail | null {
+  return measuring ? null : detail;
+}
+
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const {
     agentIds,
@@ -2499,6 +2528,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     epicId,
     events,
     initialHistoryCaughtUp,
+    measuring,
     modeToggle,
     officeView,
     onAutoProbe,
@@ -2553,10 +2583,17 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // never has two competing explanations beside it.
   const [selectedDetail, setSelectedDetail] =
     useState<OfficeSelectedDetail | null>(null);
+  // The detail selection to SHOW. Withheld while Auto is still measuring: the
+  // panel takes width from the flex row and is local state that resets when the
+  // resolved view remounts this canvas, so letting it shrink the box Auto
+  // measures would decide the view against a width the office never keeps.
+  // Gated here so the panel, the floor highlight and the directory highlight
+  // clear together; the persistent directory keeps its width and stays measured.
+  const shownDetail = detailToShow(measuring, selectedDetail);
   const selectedAgentId =
-    selectedDetail?.kind === "agent" ? selectedDetail.agentId : null;
+    shownDetail?.kind === "agent" ? shownDetail.agentId : null;
   const selectedEdgeId =
-    selectedDetail?.kind === "pair" ? selectedDetail.edgeId : null;
+    shownDetail?.kind === "pair" ? shownDetail.edgeId : null;
   const setSelectedAgentId = useCallback((agentId: string | null) => {
     setSelectedDetail(agentId === null ? null : { kind: "agent", agentId });
   }, []);
@@ -3601,7 +3638,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         camera.x -= shift.x * camera.zoom;
         camera.y -= shift.y * camera.zoom;
         shiftPendingPan(runtime, shift);
-        shiftActivePan(runtime, shift, camera.zoom);
+        shiftActivePan(runtime, shift);
         // A manually framed office must survive a reload at its compensated
         // position. The in-memory move above keeps the floor still on screen
         // NOW; without persisting it, a Graph round trip, an LRU eviction or a
