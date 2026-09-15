@@ -262,6 +262,32 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
   });
 
+  it("keeps a valid persisted agent office default generation", async () => {
+    useSettingsStore.setState({ agentOfficeDefaultViewGeneration: 0 });
+    await rehydrateFrom({ agentOfficeDefaultViewGeneration: 7 });
+
+    expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+      7,
+    );
+  });
+
+  it.each([
+    ["a string", "5"],
+    ["a negative number", -1],
+    ["a fractional number", 1.5],
+    ["NaN", Number.NaN],
+  ])(
+    "repairs a persisted agent office default generation that is %s to 0",
+    async (_label, value) => {
+      useSettingsStore.setState({ agentOfficeDefaultViewGeneration: 9 });
+      await rehydrateFrom({ agentOfficeDefaultViewGeneration: value });
+
+      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+        0,
+      );
+    },
+  );
+
   it("updates the global artifact icon color mode", () => {
     useSettingsStore.getState().setArtifactIconColorMode("none");
 

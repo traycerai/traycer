@@ -1378,6 +1378,58 @@ describe("CommGraphOfficeCanvas", () => {
       expect(onCameraChange).not.toHaveBeenCalled();
     });
 
+    it("does not persist the camera when the same growth-triggered shift lands while playback auto-pan owns it (Finding 12)", () => {
+      // Codex: auto-fit off is not the whole gate - while playback auto-pan
+      // owns the camera (`isPlaying && isAutoPanEnabled`, the exact regime
+      // `requestPlaybackPan` reframes under), the live camera is a TRANSIENT
+      // playback reframe `advanceCamera` deliberately never persists on its
+      // own arrival (`persistOnArrival: false` at its own request site). A
+      // world-growing shift mid-playback must not save that transient
+      // position as the user's manual framing either - the contrast (auto-fit
+      // off, NOT playing) is the sibling "persists...while manually framed"
+      // test right above, which this only adds a playback exception to.
+      const { step } = installCanvas();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const onCameraChange = vi.fn();
+      const view = render(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a"]),
+            [SHIFT_AGENT_A],
+            // FIXED_CAMERA_VIEW (non-neutral): auto-fit off from mount, same
+            // as the manually-framed case - but this time playback is ALSO
+            // on, so mounting alone (the false -> true transition) enables
+            // auto-pan per the `playing && !wasPlayingRef.current` effect.
+            { onCameraChange, playing: true },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      step();
+
+      view.rerender(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a", "shift-b"]),
+            [SHIFT_AGENT_A, SHIFT_AGENT_B],
+            { onCameraChange, playing: true },
+          ),
+        ),
+      );
+      step();
+
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+
+      // Playback auto-pan owns the camera, so the shift-compensated position
+      // is not a framing to save - a later manual action (pausing, dragging)
+      // is what re-persists.
+      expect(onCameraChange).not.toHaveBeenCalled();
+    });
+
     it("scales a shifted ACTIVE PAN's endpoint by that endpoint's OWN zoom, not the live camera zoom (Finding 8)", () => {
       // Codex: a pan interpolates fromZoom -> toZoom, so a world-growing
       // replan's shift is `shift * fromZoom` screen pixels at the origin and
@@ -2437,6 +2489,77 @@ describe("CommGraphOfficeCanvas", () => {
     // Height did not change, so the y endpoint is untouched.
     expect(afterResize.y).toBeCloseTo(beforeResize.y, 6);
     expect(afterResize.zoom).toBeCloseTo(beforeResize.zoom, 6);
+  });
+
+  it("re-centers against the last NONZERO viewport when a resized restore follows a hide (Finding 13)", () => {
+    // Codex: `recenterActivePan` used to compare against the IMMEDIATELY
+    // PREVIOUS viewport - but a hidden tile's resize callback reports 0x0, so
+    // a hide followed by a resized restore saw `prev` as zero, the guard
+    // failed, and the pan resumed against its pre-hide endpoint even though
+    // the box came back at a different size. Tracking the last NONZERO
+    // viewport (`lastMeasuredViewport`) fixes it: the restore recentres
+    // against the PRE-HIDE size, not the immediate (zero) previous one.
+    const { step } = installCanvas();
+    const registered: {
+      current: (() => CommGraphTileCamera | null) | null;
+    } = { current: null };
+    const captureFlush = (
+      take: (() => CommGraphTileCamera | null) | null,
+    ): void => {
+      registered.current = take;
+    };
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          view: { ...OFFICE_VIEW, x: 1 },
+          onRegisterFlush: captureFlush,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+    step();
+
+    if (registered.current === null) {
+      throw new Error("flush was never registered");
+    }
+    const beforeHide = registered.current();
+    if (beforeHide === null) {
+      throw new Error("flush returned null before hide - no active pan");
+    }
+
+    // The tile is hidden: installCanvas's stubbed box collapses to 0x0, the
+    // shape a `display:none` resize callback reports. A degenerate box is
+    // not one to centre in, so this must not move the destination at all.
+    setCanvasSize({ width: 0, height: 0 });
+    const afterHide = registered.current();
+    if (afterHide === null) {
+      throw new Error("flush returned null while hidden - pan dropped");
+    }
+    expect(afterHide.x).toBeCloseTo(beforeHide.x, 6);
+    expect(afterHide.y).toBeCloseTo(beforeHide.y, 6);
+
+    // The tile returns at a DIFFERENT size than it had before the hide
+    // (1040 -> 700, narrower still than the pre-hide box) - the restore a
+    // pane resize during a hide would report.
+    setCanvasSize({ width: 700, height: 700 });
+    const afterRestore = registered.current();
+    if (afterRestore === null) {
+      throw new Error("flush returned null after restore - pan dropped");
+    }
+
+    // Anti-vacuity: a real size change from the PRE-HIDE box, or the shift
+    // below is trivially 0 regardless of whether the fix runs.
+    expect(700).not.toBe(1040);
+    expect(afterRestore.x).toBeCloseTo(beforeHide.x + (700 - 1040) / 2, 6);
+    expect(afterRestore.y).toBeCloseTo(beforeHide.y, 6);
+    expect(afterRestore.zoom).toBeCloseTo(beforeHide.zoom, 6);
   });
 
   it("filters the directory to the visible set, dropping a host section with nothing left in it", () => {
