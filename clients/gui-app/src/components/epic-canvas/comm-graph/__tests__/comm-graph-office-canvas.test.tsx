@@ -3103,6 +3103,118 @@ describe("CommGraphOfficeCanvas", () => {
     expect(directory.className).not.toContain("30vw");
   });
 
+  it("disables the row, pip and team controls while measuring, and re-enables them once resolved (Finding 27)", () => {
+    // Codex: `handleDirectorySelect` already early-returns while Auto is
+    // measuring (Finding 22), but the panel's own row, pip and team buttons
+    // stayed enabled and silently discarded every activation - a pointer or
+    // keyboard user saw an apparently actionable control that did nothing.
+    // `disabled={measuring}` propagates the same gate onto the controls
+    // themselves. Uses the `triage` fixture with one team's lead woken (the
+    // same premise the 8c settle tests use), since only a LIVE team renders
+    // under "Teams at work" as a team button with member pips beside it - a
+    // cold team folds into the Quiet paragraph's text instead.
+    const fixture = makeTestEpic("triage", 15, 1);
+    const idle = new Map<string, OfficeAgentStatus>(
+      fixture.agents.map((agent) => [agent.id, "idle" as const]),
+    );
+    const cold = partitionOfficePopulation({
+      agents: fixture.agents,
+      statusById: idle,
+      previous: null,
+    });
+    // `memberAgentIds` is the LEAD first, then the rest - the lead gets the
+    // team's row/button, everybody else gets a pip - so a team of just the
+    // lead alone renders no pip at all. Pick the first team with a member
+    // beyond the lead.
+    const candidate = cold.hosts
+      .flatMap((host) => host.teams)
+      .find((team) => team.memberAgentIds.length > 1);
+    if (candidate === undefined) {
+      throw new Error("fixture has no team with a pip-worthy member");
+    }
+    const statusById = new Map(idle);
+    statusById.set(candidate.leadAgentId, "awaiting");
+    const partition = partitionOfficePopulation({
+      agents: fixture.agents,
+      statusById,
+      previous: null,
+    });
+    const team = partition.hosts
+      .flatMap((host) => host.teams)
+      .find((one) => one.teamId === candidate.teamId);
+    if (team === undefined || !team.live) {
+      throw new Error("waking the lead did not make the team live");
+    }
+    const pipAgentId = team.memberAgentIds[1];
+    const visibleAgentIds = new Set(fixture.agents.map((agent) => agent.id));
+    const nameById = new Map(
+      fixture.agents.map((agent) => [agent.id, agent.name]),
+    );
+
+    const view = render(
+      <OfficeDirectoryPanel
+        partition={partition}
+        visibleAgentIds={visibleAgentIds}
+        statusById={statusById}
+        nameById={nameById}
+        hostNameById={new Map()}
+        selectedAgentId={null}
+        onSelectAgent={vi.fn()}
+        onHoverAgent={vi.fn()}
+        onClose={vi.fn()}
+        disabled
+      />,
+    );
+
+    expect(
+      screen.getByTestId<HTMLButtonElement>(
+        "comm-graph-office-directory-agent-agent-root",
+      ).disabled,
+    ).toBe(true);
+    expect(
+      screen.getByTestId<HTMLButtonElement>(
+        `comm-graph-office-directory-pip-${pipAgentId}`,
+      ).disabled,
+    ).toBe(true);
+    expect(
+      screen.getByTestId<HTMLButtonElement>(
+        `comm-graph-office-directory-team-${team.teamId}`,
+      ).disabled,
+    ).toBe(true);
+
+    // Contrast: `disabled={false}` (omitted defaults the same way) - the
+    // same three controls are enabled, proving the gate is measuring-only.
+    view.rerender(
+      <OfficeDirectoryPanel
+        partition={partition}
+        visibleAgentIds={visibleAgentIds}
+        statusById={statusById}
+        nameById={nameById}
+        hostNameById={new Map()}
+        selectedAgentId={null}
+        onSelectAgent={vi.fn()}
+        onHoverAgent={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByTestId<HTMLButtonElement>(
+        "comm-graph-office-directory-agent-agent-root",
+      ).disabled,
+    ).toBe(false);
+    expect(
+      screen.getByTestId<HTMLButtonElement>(
+        `comm-graph-office-directory-pip-${pipAgentId}`,
+      ).disabled,
+    ).toBe(false);
+    expect(
+      screen.getByTestId<HTMLButtonElement>(
+        `comm-graph-office-directory-team-${team.teamId}`,
+      ).disabled,
+    ).toBe(false);
+  });
+
   it("zooms about a real hovered agent on double-click, same as it does an empty floor (F6)", () => {
     const { step } = installCanvas();
     const frames = vi.spyOn(OfficeScene.prototype, "frame");
