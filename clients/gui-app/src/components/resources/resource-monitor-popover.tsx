@@ -2948,9 +2948,9 @@ function OwnerTreeRow(props: {
     <div>
       <div
         className={cn(
-          "group relative flex items-center pr-3.5 transition-colors hover:bg-foreground/5",
-          selected && "bg-foreground/5",
-          visibleExpanded && "sticky z-10 bg-popover",
+          "group relative flex items-center pr-3.5 transition-colors",
+          visibleExpanded ? "sticky z-10 bg-popover" : "hover:bg-foreground/5",
+          selected && !visibleExpanded && "bg-foreground/5",
         )}
         style={{
           paddingLeft: `${props.depth}rem`,
