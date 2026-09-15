@@ -646,22 +646,29 @@ export function CommGraphTile(props: CommGraphTileProps) {
     const witnessDistrustsTheCamera =
       witnessedMove && node.view.officeCamera !== null;
     if (!recordNamesAnotherView && !witnessDistrustsTheCamera) return;
-    updateView(viewTabId, node.id, {
-      ...node.view,
-      officeCamera: null,
-      officeCameraView: resolvedViewId,
-    });
-    // This write is what RELEASES the witness, and the two are load-bearing
-    // on each other: the release is explicit (a by-value no-op in the store
-    // must still release), and because it always sets a camera that was
-    // non-null to `null`, it always terminates rather than re-firing.
+    // Retire through the OFFICE-CAMERA reducer, not a whole-view replace. This
+    // arm only means to drop the stale camera and re-stamp the framed view; a
+    // `{...node.view}` spread also writes back every OTHER field from this
+    // render's now-stale closure. When the followed-default effect above fires
+    // in the SAME commit - a default returning to Auto dirties both - its
+    // `officeAutoView: null` clear was undone by this spread resurrecting the
+    // dormant outcome, so the Auto effect's `officeAutoView !== null` guard
+    // still skipped and the tile reopened on the stale pick. Patching only the
+    // two fields this arm owns leaves that clear (and any other concurrently
+    // changed field) at its current store value, so the two effects commute.
+    // The neutral camera collapses to the `null` armed value in the reducer.
+    updateOfficeCamera(viewTabId, node.id, NEUTRAL_CAMERA, resolvedViewId);
+    // The write above RELEASES the witness with it, and the two are
+    // load-bearing on each other: the release is explicit (a by-value no-op in
+    // the store must still release), and because it always sets a camera that
+    // was non-null to `null`, it always terminates rather than re-firing.
     releaseWitness();
   }, [
     node.id,
     node.view,
     releaseWitness,
     resolvedViewId,
-    updateView,
+    updateOfficeCamera,
     viewTabId,
     witnessedMove,
   ]);
