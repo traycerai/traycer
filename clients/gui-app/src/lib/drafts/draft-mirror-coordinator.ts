@@ -1077,9 +1077,26 @@ export async function submitComposerDraft(chatId: string): Promise<void> {
   const store = useComposerDraftStore.getState();
   store.clearDraft(chatId);
   if (before.draftId === null || hostId === null) return;
+  // A row the tab host does not own (a replica, or another host's row),
+  // submitted without an edit that would have forked it: `drafts.delete`
+  // there would answer `absent` and the owner's cloud row would survive.
+  // The id is dropped with no pending delete, and the cloud row is
+  // retracted on the user's authority through the tab host instead - the
+  // same rule the landing path applies to a foreign row.
+  const foreign = composerDraftRowIsForeign(before, hostId);
+  // Retire the id BEFORE any host round trip below is awaited. `clearDraft`
+  // keeps it, so an edit typed during an awaited retract or delete would
+  // re-dirty the id, the mirror could upsert it, and the tombstone that
+  // follows would remove that content and mark it synced. Fenced first,
+  // the next edit mints a fresh id and a fresh host row.
+  store.fenceAndDetachSubmittedDraft(
+    chatId,
+    before.draftId,
+    foreign ? null : hostId,
+  );
   // A fork whose first write has not been acknowledged still carries
   // `supersedes`: the upsert that would make the host retract the
-  // ancestor's cloud row has not landed (and after the fence below it never
+  // ancestor's cloud row has not landed (and after the fence above it never
   // will), while the delete of the fresh id answers `absent`. The ancestor
   // is retracted here on the user's authority instead, whatever the fresh
   // row's ownership reads; a host that already retracted it (the ack raced
@@ -1088,23 +1105,11 @@ export async function submitComposerDraft(chatId: string): Promise<void> {
     store.recordPendingSubmittedDraftRetract(before.supersedes, hostId);
     await retractDraftThroughHost(hostId, before.supersedes);
   }
-  // A row the tab host does not own (a replica, or another host's row),
-  // submitted without an edit that would have forked it: `drafts.delete`
-  // there would answer `absent` and the owner's cloud row would survive.
-  // The id is dropped with no pending delete, and the cloud row is
-  // retracted on the user's authority through the tab host instead - the
-  // same rule the landing path applies to a foreign row.
-  if (composerDraftRowIsForeign(before, hostId)) {
-    store.fenceAndDetachSubmittedDraft(chatId, before.draftId, null);
+  if (foreign) {
     store.recordPendingSubmittedDraftRetract(before.draftId, hostId);
     await retractDraftThroughHost(hostId, before.draftId);
     return;
   }
-  // Then retire the id. `clearDraft` keeps it, so an edit made during the
-  // flush/delete round-trip below would be published under the id this
-  // function is about to tombstone, and the tombstone would mark that
-  // content synced. The next edit mints a fresh id and a fresh host row.
-  store.fenceAndDetachSubmittedDraft(chatId, before.draftId, hostId);
   await retrySubmittedDraftDelete(before.draftId);
 }
 

@@ -461,6 +461,86 @@ describe("submitComposerDraft: a row the tab host does not own (fixup B)", () =>
   });
 });
 
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolveFn: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((res) => {
+    resolveFn = res;
+  });
+  return { promise, resolve: (value: T) => resolveFn(value) };
+}
+
+interface DeferredForeignSubmitLog {
+  readonly retracts: string[];
+  readonly deletes: string[];
+  readonly upserts: DraftWrite[];
+  readonly deferredRetracts: Map<string, Deferred<{ retracted: boolean }>>;
+}
+
+// `mountTabHostSession`'s fake has no way to hold a `drafts.retract` open, and
+// every existing caller resolves it immediately - adding that here rather
+// than threading a knob through `ForeignSubmitLog` keeps the six passing
+// fixup-B/round-3 cases untouched. This also answers `drafts.upsert`, which
+// `mountTabHostSession` does not: the one test below that needs this fixture
+// edits the row while the retract is parked, and with zero debounce that
+// edit's dirty write reaches the session as an upsert.
+function mountTabHostSessionWithDeferredRetract(
+  hostId: string,
+  log: DeferredForeignSubmitLog,
+) {
+  return acquireDraftMirrorSession({
+    hostId,
+    client: {
+      request: (method: string, params: unknown) => {
+        if (method === "drafts.list") {
+          return Promise.resolve({
+            drafts: [],
+            tombstones: [],
+            snapshotSeq: 0,
+            scopeId: null,
+          });
+        }
+        if (method === "drafts.retract") {
+          const draftId = (params as { draftId: string }).draftId;
+          log.retracts.push(draftId);
+          const deferred = log.deferredRetracts.get(draftId);
+          if (deferred !== undefined) return deferred.promise;
+          return Promise.resolve({ retracted: true });
+        }
+        if (method === "drafts.delete") {
+          log.deletes.push((params as { draftId: string }).draftId);
+          return Promise.resolve({ deleted: true });
+        }
+        if (method === "drafts.upsert") {
+          const write = (params as { draft: DraftWrite }).draft;
+          log.upserts.push(write);
+          const document: DraftDocument = {
+            ...write,
+            ownerHostId: hostId,
+            origin: "own",
+            adoption: { state: "adopted", hostId },
+            publication: {
+              status: "unpublished",
+              lastPublishedAt: null,
+              publishedRevision: null,
+              halted: null,
+            },
+            revision: 1,
+          };
+          return Promise.resolve({ draft: document });
+        }
+        return Promise.reject(new Error(`unexpected ${String(method)}`));
+      },
+    } as never,
+    streamClient: fakeDraftStreamClient(),
+    timing: { debounceMs: 0, maxWaitMs: 0 },
+  });
+}
+
 describe("submitComposerDraft: an unacknowledged fork (fixup round 3)", () => {
   const TAB_HOST = "host-tab-fork";
 
@@ -543,6 +623,82 @@ describe("submitComposerDraft: an unacknowledged fork (fixup round 3)", () => {
     ).toBeUndefined();
     expect(log.deletes).toEqual([freshId]);
     expect(log.retracts).toEqual([]);
+  });
+
+  it("an edit typed during the awaited ancestor retract lands on a fresh id and is not tombstoned", async () => {
+    const log: DeferredForeignSubmitLog = {
+      retracts: [],
+      deletes: [],
+      upserts: [],
+      deferredRetracts: new Map(),
+    };
+    const deferredRetract = createDeferred<{ retracted: boolean }>();
+    log.deferredRetracts.set("ancestor-row", deferredRetract);
+    mountTabHostSessionWithDeferredRetract(TAB_HOST, log);
+    bindComposerDraftHost(CHAT_ID, TAB_HOST);
+
+    await applyForeignComposerDocument({
+      draftId: "ancestor-row",
+      ownerHostId: "host-owner",
+      origin: "replica",
+    });
+
+    useComposerDraftStore.getState().detachDraftIdentity(CHAT_ID);
+    const freshId =
+      useComposerDraftStore.getState().drafts[CHAT_ID]?.draftId ?? null;
+    expect(freshId).not.toBeNull();
+    if (freshId === null) throw new Error("expected a fresh draftId");
+
+    // Not awaited: `submitComposerDraft` reads `before` and fences the row
+    // synchronously before it ever suspends on the ancestor retract, so the
+    // fence has already run by the time this line returns.
+    const submit = submitComposerDraft(CHAT_ID);
+
+    await vi.waitFor(() => {
+      expect(log.retracts).toContain("ancestor-row");
+    });
+
+    // The fence retires the id before the ancestor retract is awaited - the
+    // row already shows no draftId while submit is parked on the deferred
+    // retract.
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ID]?.draftId,
+    ).toBeNull();
+
+    // The keystroke that lands while the retract round trip is still open.
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(CHAT_ID, typed("after submit"), { from: 1, to: 1 });
+
+    const editedRow = useComposerDraftStore.getState().drafts[CHAT_ID];
+    if (editedRow === undefined) throw new Error("expected an edited row");
+    const editedId = editedRow.draftId;
+    expect(editedId).not.toBeNull();
+    expect(editedId).not.toBe(freshId);
+    expect(editedRow.supersedes).toBeNull();
+    expect(editedRow.generation).toBeGreaterThan(editedRow.syncedGeneration);
+
+    deferredRetract.resolve({ retracted: true });
+    await submit;
+
+    expect(log.retracts).toEqual(["ancestor-row"]);
+    // The fresh id's delete, not the edited id's - the edit that landed
+    // during the awaited retract must not ride the fresh id's tombstone, and
+    // must not be tombstoned under its own id either.
+    expect(log.deletes).toEqual([freshId]);
+    const finalRow = useComposerDraftStore.getState().drafts[CHAT_ID];
+    if (finalRow === undefined) {
+      throw new Error("expected the edited row to survive");
+    }
+    expect(finalRow.draftId).toBe(editedId);
+    expect(finalRow.content).toEqual(typed("after submit"));
+    if (editedId === null) throw new Error("expected an edited id");
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[editedId],
+    ).toBeUndefined();
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[freshId],
+    ).toBeUndefined();
   });
 });
 
