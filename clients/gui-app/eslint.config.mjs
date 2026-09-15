@@ -216,6 +216,13 @@ const sanctionedArbitraryValues = [
   // there is no scale to be off. The second entry is the same thing under a
   // variant (`data-[x=y]:[mask-image:…]`): an entry containing a `:` is
   // matched against the whole token, variants included.
+  //
+  // Deliberately not narrowed to a list of properties, and the cost is stated
+  // rather than overlooked: `[padding:13px]` passes here while `p-[13px]` does
+  // not. Enumerating the properties Tailwind has no utility for would be a
+  // list that goes stale every Tailwind release, and the escape is rare enough
+  // (95 sites) that a reviewer sees each one. Narrow this if it ever becomes
+  // the way an off-scale value gets in.
   "[*:*]",
   "*:[*:*]",
 
