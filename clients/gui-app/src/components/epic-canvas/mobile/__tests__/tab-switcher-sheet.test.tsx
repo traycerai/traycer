@@ -6,10 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import {
-  prPresenceScopeKey,
-  usePrPresenceStore,
-} from "@/stores/epics/pr-presence-store";
 import type {
   EpicArtifactRef,
   EpicCanvasTileRef,
@@ -72,52 +68,6 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => HOST_ID,
 }));
 
-// Method support is client-wide handshake evidence; drive it directly so the
-// sheet's "presence AND not known-unsupported" rule is testable without a
-// transport. Only this one export is displaced - `StreamRuntimeContext` itself
-// stays real for anything else in the tree that reads it.
-const streamState = vi.hoisted((): { prSupport: string | null } => ({
-  prSupport: "supported",
-}));
-vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/lib/host/stream-runtime-context")
-  >()),
-  useStreamMethodSupport: () => streamState.prSupport,
-}));
-
-// The presence probe is a live PR subscription; stand in for it with a fake
-// that reports whatever this test wants the host to have answered, so the
-// bootstrap path (probe -> presence -> tab) stays observable without a
-// transport.
-const probeState = vi.hoisted(() => ({
-  mounts: 0,
-  reports: null as boolean | null,
-}));
-vi.mock(
-  "@/components/epic-canvas/mobile/switcher-pr-presence-probe",
-  async () => {
-    const { useEffect } = await import("react");
-    const { usePrPresenceStore } =
-      await import("@/stores/epics/pr-presence-store");
-    return {
-      SwitcherPrPresenceProbe: (props: {
-        readonly epicId: string;
-        readonly hostId: string | null;
-      }) => {
-        const record = usePrPresenceStore((s) => s.recordPrPresence);
-        useEffect(() => {
-          probeState.mounts += 1;
-          const reports = probeState.reports;
-          if (reports === null || props.hostId === null) return;
-          record(props.hostId, props.epicId, reports);
-        }, [props.epicId, props.hostId, record]);
-        return null;
-      },
-    };
-  },
-);
-
 const TAB_ID = "tab-switcher-test";
 const EPIC_ID = "epic-1";
 const HOST_ID = "host-A";
@@ -126,29 +76,12 @@ const CATEGORY_NAMES = [
   "Artifacts",
   "File Tree",
   "Git Diff",
+  "Pull Requests",
   "Terminals",
   "Browsers",
   "Sharing",
   "Comments",
 ];
-
-/**
- * The Pull requests category is presence-gated exactly as the desktop rail
- * icon is, and the presence store is the only signal for it.
- */
-function setPullRequestPresence(hasPullRequests: boolean): void {
-  usePrPresenceStore.setState({
-    hasItemsByScopeKey: hasPullRequests
-      ? { [prPresenceScopeKey(HOST_ID, EPIC_ID)]: true }
-      : {},
-  });
-}
-
-function resetProbe(): void {
-  probeState.mounts = 0;
-  probeState.reports = null;
-  streamState.prSupport = "supported";
-}
 
 function renderSheet(open: boolean, onOpenChange: (open: boolean) => void) {
   return render(
@@ -166,17 +99,15 @@ describe("<TabSwitcherSheet />", () => {
     mobileState.value = true;
     // Reset the shared left-panel store so category selection never leaks.
     useLeftPanelStore.setState({ activePanelIdByTabId: {} });
-    setPullRequestPresence(false);
-    resetProbe();
   });
   afterEach(cleanup);
 
-  it("renders exactly the eight always-on category tabs when open on mobile", () => {
+  it("renders every curated category, including Pull Requests, when open on mobile", () => {
     renderSheet(true, () => {});
     for (const name of CATEGORY_NAMES) {
       expect(screen.getByRole("tab", { name })).toBeTruthy();
     }
-    expect(screen.getAllByRole("tab")).toHaveLength(8);
+    expect(screen.getAllByRole("tab")).toHaveLength(9);
   });
 
   it("keeps the Comments tab on the bar with no artifact tile open", () => {
@@ -258,16 +189,7 @@ describe("<TabSwitcherSheet />", () => {
     expect(screen.getByTestId("mock-artifacts-list")).toBeTruthy();
   });
 
-  it("omits the Pull Requests tab while the epic has no PRs", () => {
-    renderSheet(true, () => {});
-    expect(screen.queryByRole("tab", { name: "Pull Requests" })).toBeNull();
-    expect(
-      screen.queryByTestId("mobile-switcher-tab-pull-requests"),
-    ).toBeNull();
-  });
-
-  it("adds the Pull Requests tab once the epic has PRs, right after Git Diff", () => {
-    setPullRequestPresence(true);
+  it("keeps Pull Requests reachable before its panel has reported presence", () => {
     renderSheet(true, () => {});
     const tabs = screen.getAllByRole("tab");
     expect(tabs).toHaveLength(9);
@@ -371,7 +293,6 @@ describe("<TabSwitcherSheet />", () => {
   });
 
   it("shows the embedded desktop PR panel body when the category is selected", async () => {
-    setPullRequestPresence(true);
     const user = userEvent.setup();
     renderSheet(true, () => {});
     await user.click(screen.getByRole("tab", { name: "Pull Requests" }));
@@ -383,8 +304,7 @@ describe("<TabSwitcherSheet />", () => {
     expect(embed.dataset.category).toBe("pull-requests");
   });
 
-  it("keeps a persisted pull-requests selection while the epic still has PRs", () => {
-    setPullRequestPresence(true);
+  it("keeps a persisted pull-requests selection with no presence cache", () => {
     useLeftPanelStore.setState({
       activePanelIdByTabId: { [TAB_ID]: "pull-requests" },
     });
@@ -396,87 +316,17 @@ describe("<TabSwitcherSheet />", () => {
     ).toBe("active");
   });
 
-  it("clamps a persisted pull-requests selection to Chats when the epic has no PRs", () => {
+  it("keeps a persisted pull-requests selection when stream support is unknown", () => {
     useLeftPanelStore.setState({
       activePanelIdByTabId: { [TAB_ID]: "pull-requests" },
     });
     renderSheet(true, () => {});
-    // The tab is gone, so the sheet must fall back rather than strand itself
-    // on a category with no trigger and no body.
-    expect(
-      screen.getByRole("tab", { name: "Chats" }).getAttribute("data-state"),
-    ).toBe("active");
-    expect(screen.getByTestId("mock-agents-list")).toBeTruthy();
-  });
-
-  it("omits the tab against a host that does not advertise the PR stream, however stale the recorded presence", () => {
-    // Presence is persisted per (host, epic) and outlives the host build that
-    // recorded it. Showing the tab here would land the panel's visible "Update
-    // required" surface; on a phone the category is simply absent instead.
-    setPullRequestPresence(true);
-    streamState.prSupport = "unsupported";
-    renderSheet(true, () => {});
-    expect(screen.queryByRole("tab", { name: "Pull Requests" })).toBeNull();
-    expect(screen.getAllByRole("tab")).toHaveLength(8);
-  });
-
-  it("clamps a persisted pull-requests selection when the host lost stream support", () => {
-    setPullRequestPresence(true);
-    streamState.prSupport = "unsupported";
-    useLeftPanelStore.setState({
-      activePanelIdByTabId: { [TAB_ID]: "pull-requests" },
-    });
-    renderSheet(true, () => {});
-    expect(
-      screen.getByRole("tab", { name: "Chats" }).getAttribute("data-state"),
-    ).toBe("active");
-    expect(screen.getByTestId("mock-agents-list")).toBeTruthy();
-  });
-
-  it("holds the tab while support is merely unknown, so a reconnect can't blink it out", () => {
-    // Support is cleared on every reconnect and re-learned from the next
-    // handshake manifest. Only a definite `unsupported` hides the category.
-    setPullRequestPresence(true);
-    streamState.prSupport = "unknown";
-    renderSheet(true, () => {});
     expect(screen.getByRole("tab", { name: "Pull Requests" })).toBeTruthy();
-  });
-
-  it("holds the tab while no stream client exists yet", () => {
-    setPullRequestPresence(true);
-    streamState.prSupport = null;
-    renderSheet(true, () => {});
-    expect(screen.getByRole("tab", { name: "Pull Requests" })).toBeTruthy();
-  });
-
-  it("reveals the tab on a device with no recorded presence once the probe reports PRs", () => {
-    // The bootstrap case: nothing in the presence store, so without the probe
-    // the tab could never appear and the body that writes presence could never
-    // mount. The probe answers first, and the bar picks it up live.
-    probeState.reports = true;
-    renderSheet(true, () => {});
-    expect(screen.getByRole("tab", { name: "Pull Requests" })).toBeTruthy();
-  });
-
-  it("leaves the tab off when the probe reports the epic has no PRs", () => {
-    probeState.reports = false;
-    renderSheet(true, () => {});
-    expect(screen.queryByRole("tab", { name: "Pull Requests" })).toBeNull();
   });
 
   it("renders nothing when closed (controlled open prop)", () => {
     renderSheet(false, () => {});
     expect(screen.queryByTestId("mobile-tab-switcher-sheet")).toBeNull();
-  });
-
-  it("does not run the presence probe while the sheet is closed", () => {
-    renderSheet(false, () => {});
-    expect(probeState.mounts).toBe(0);
-  });
-
-  it("runs the presence probe while the sheet is open", () => {
-    renderSheet(true, () => {});
-    expect(probeState.mounts).toBe(1);
   });
 
   it("renders nothing on desktop even when asked to open", () => {
@@ -568,8 +418,6 @@ describe("<TabSwitcherSheet /> close-on-open", () => {
   beforeEach(() => {
     mobileState.value = true;
     useLeftPanelStore.setState({ activePanelIdByTabId: {} });
-    setPullRequestPresence(false);
-    resetProbe();
   });
   afterEach(() => {
     cleanup();
@@ -593,7 +441,6 @@ describe("<TabSwitcherSheet /> close-on-open", () => {
     // The switcher is the way back from an empty pane, so its first observation
     // there is `null` - which must not read as "nothing observed yet" and
     // suppress the close, leaving the drawer over the tile just opened.
-    setPullRequestPresence(true);
     seedCanvasWithNoTiles();
     const onOpenChange = vi.fn();
     renderSheet(true, onOpenChange);
@@ -623,7 +470,6 @@ describe("<TabSwitcherSheet /> close-on-open", () => {
   });
 
   it("closes when a PR row tap lands its detail tile", () => {
-    setPullRequestPresence(true);
     const tiles = {
       "inst-1": artifactRef("a1", "inst-1"),
       "inst-2": prDetailRef("pr-7", "inst-2"),

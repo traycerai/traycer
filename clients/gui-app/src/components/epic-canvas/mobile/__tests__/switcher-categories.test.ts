@@ -17,21 +17,21 @@ const RAIL_PANEL_IDS = LEFT_PANEL_DEFINITIONS.map(
 
 describe("switcher categories", () => {
   it("carries every desktop rail panel", () => {
-    const visible = visibleSwitcherCategoryDefs(true).map(
+    const visible = visibleSwitcherCategoryDefs().map(
       (definition) => definition.id,
     );
     expect([...visible].sort()).toEqual([...RAIL_PANEL_IDS].sort());
   });
 
   it("puts Browsers where the rail does, directly after Terminals", () => {
-    const visible = visibleSwitcherCategoryDefs(true).map(
+    const visible = visibleSwitcherCategoryDefs().map(
       (definition) => definition.id,
     );
     expect(visible.indexOf("browsers")).toBe(visible.indexOf("terminals") + 1);
   });
 
   it("reuses the rail's Browsers identity rather than forking the copy", () => {
-    const bar = visibleSwitcherCategoryDefs(true).find(
+    const bar = visibleSwitcherCategoryDefs().find(
       (definition) => definition.id === "browsers",
     );
     const rail = LEFT_PANEL_DEFINITIONS.find(
@@ -41,15 +41,15 @@ describe("switcher categories", () => {
   });
 
   it("keeps a persisted Browsers selection instead of clamping it to Agents", () => {
-    expect(clampToSwitcherCategory("browsers", false)).toBe("browsers");
+    expect(clampToSwitcherCategory("browsers")).toBe("browsers");
     expect(isSwitcherCategory("browsers")).toBe(true);
   });
 
-  it("still drops Pull Requests on an epic with none", () => {
-    const visible = visibleSwitcherCategoryDefs(false).map(
+  it("keeps Pull Requests reachable before presence is known", () => {
+    const visible = visibleSwitcherCategoryDefs().map(
       (definition) => definition.id,
     );
-    expect(visible).not.toContain("pull-requests");
+    expect(visible).toContain("pull-requests");
     expect(visible).toContain("browsers");
   });
 });
