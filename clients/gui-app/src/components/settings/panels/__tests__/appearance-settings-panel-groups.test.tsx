@@ -203,6 +203,20 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("floor");
   });
 
+  it("sizes the Default view selector as a fluid width with a tokenized cap (Finding 16)", () => {
+    // A fixed `w-[min(40vw,8rem)]` caps a new layout surface at an arbitrary
+    // rem, which the GUI fluid-sizing rule forbids - `w-[40vw]` (fluid)
+    // plus a tokenized `max-w-32` ceiling replaces it. Scoped to the
+    // "Default view" trigger only: "Display zoom" carries the same
+    // `w-[min(40vw,8rem)]` shape and is deliberately out of scope here.
+    renderPanel(queryClient);
+
+    const select = screen.getByRole("combobox", { name: "Default view" });
+    expect(select.className).toContain("w-[40vw]");
+    expect(select.className).toContain("max-w-32");
+    expect(select.className).not.toContain("w-[min(40vw,8rem)]");
+  });
+
   // The minimap side control moved to Settings > Layout's Chat group, where it
   // sits with the other message-pane placement controls; its `settings-store`
   // key is unchanged.

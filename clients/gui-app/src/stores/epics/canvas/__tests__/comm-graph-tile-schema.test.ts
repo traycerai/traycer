@@ -163,6 +163,90 @@ describe("comm-graph tile schema", () => {
     expect(parsed.view.officeAutoView).toBeNull();
   });
 
+  it("clears a degraded officeView's dormant Auto outcome too, not just the choice (Finding 20)", () => {
+    // Codex: an explicit office view this build cannot honour degrades to
+    // null - "inherit the Settings default". The Auto outcome recorded under
+    // that now-unknown pick is dormant, but if the inherited default is Auto
+    // at the same generation the renderer trusts it and skips measurement,
+    // reopening an arbitrarily old decision the degraded pick never stood
+    // for. Both the outcome and its generation stamp must go with it.
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: {
+        x: 0,
+        y: 0,
+        zoom: 1,
+        mode: "office",
+        // A view id no build ships - degrades to null.
+        officeView: "penthouse",
+        officeAutoView: "towers",
+        officeAutoGeneration: 7,
+      },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeView).toBeNull();
+    expect(parsed.view.officeAutoView).toBeNull();
+    expect(parsed.view.officeAutoGeneration).toBeNull();
+  });
+
+  it("keeps a dormant Auto outcome when officeView is ABSENT - inherited from the start, not a degrade (Finding 20)", () => {
+    // Non-vacuous contrast: an ABSENT officeView is "inherit from the
+    // start", not a value this build failed to read, so it must not trigger
+    // the same clear the unreadable-value case above does.
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: {
+        x: 0,
+        y: 0,
+        zoom: 1,
+        mode: "office",
+        officeAutoView: "towers",
+        officeAutoGeneration: 7,
+      },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeView).toBeNull();
+    expect(parsed.view.officeAutoView).toBe("towers");
+    expect(parsed.view.officeAutoGeneration).toBe(7);
+  });
+
+  it('keeps a dormant Auto outcome when officeView is "auto" - a read value, not a degrade (Finding 20)', () => {
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: {
+        x: 0,
+        y: 0,
+        zoom: 1,
+        mode: "office",
+        officeView: "auto",
+        officeAutoView: "towers",
+        officeAutoGeneration: 7,
+      },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeView).toBe("auto");
+    expect(parsed.view.officeAutoView).toBe("towers");
+    expect(parsed.view.officeAutoGeneration).toBe(7);
+  });
+
   it("degrades an officeCameraView this build does not register, resetting the camera", () => {
     const parsed = parseTileRef({
       id: commGraphTileId(EPIC_ID),

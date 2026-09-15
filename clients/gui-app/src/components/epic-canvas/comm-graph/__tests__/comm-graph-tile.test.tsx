@@ -3374,6 +3374,59 @@ describe("CommGraphTile", () => {
     expect(withheldText).toBe("Auto · measuring…");
   });
 
+  it("withholds a stale inherited Auto outcome's chip label too, not only the canvas (Finding 19)", async () => {
+    // Codex: Finding 6 withheld the CANVAS from a stale inherited Auto
+    // outcome at render, but the chip's `restoredView` prop still read
+    // `node.view.officeAutoView` straight off the record regardless of
+    // trust - so a tile whose generation went stale kept showing "measured
+    // earlier" for a view the canvas itself had already stopped trusting.
+    // `restoredView` is now `trustedAutoView`, the same predicate the canvas
+    // resolves through - so an untrusted outcome withholds both.
+    useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("towers"));
+    act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+    expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+      2,
+    );
+
+    const persisted: CommGraphTileViewState = {
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      officeAutoView: "towers",
+      officeAutoGeneration: 0,
+    };
+    await renderSeededOffice(persisted);
+    setIntersecting(true);
+    setOfficeCanvasSize(OFFICE_CANVAS);
+
+    // Stale generation (0 !== 2, an INHERITED tile) - untrusted, so the chip
+    // must fall all the way to "measuring…", not "Auto · Towers · measured
+    // earlier".
+    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
+      "Auto · measuring…",
+    );
+  });
+
+  it("shows a TRUSTED inherited Auto outcome's chip label, contrasting the stale case above (Finding 19)", async () => {
+    const persisted: CommGraphTileViewState = {
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      officeAutoView: "towers",
+      officeAutoGeneration: 0,
+    };
+    await renderSeededOffice(persisted);
+    setIntersecting(true);
+    setOfficeCanvasSize(OFFICE_CANVAS);
+    caughtUp();
+
+    // The Settings default generation is untouched (0) here, so it matches
+    // the stamp - trusted, and the chip shows the restored view rather than
+    // withholding it. Non-vacuous proof that the withholding above is about
+    // the STALE generation, not the chip having stopped reading the outcome
+    // at all.
+    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
+      "Auto · Towers · measured earlier",
+    );
+  });
+
   describe("readiness classification (F3, revised by fixup 8/H1)", () => {
     it("plans a restored Building before replay is ready (fixup 8 draws it), and still classifies its cold arrival as hot once replay confirms it awaiting", async () => {
       const sync = vi.spyOn(OfficeScene.prototype, "sync");

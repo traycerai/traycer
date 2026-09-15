@@ -1689,6 +1689,26 @@ describe("CommGraphOfficeCanvas", () => {
     );
   });
 
+  it("caps the auto-chip chrome at a tokenized sentence width, not a fixed rem (Finding 18)", () => {
+    // `max-w-[min(100%,24rem)]` caps a new layout surface at an arbitrary
+    // fixed rem, which the GUI fluid-sizing rule forbids - `max-w-sm`
+    // replaces it, relying on the wrapper already being clamped by its own
+    // absolute positioning against the tile.
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          autoChip: <OfficeAutoChip decision={null} restoredView={null} />,
+        }),
+      ),
+    );
+
+    const chip = screen.getByTestId("comm-graph-office-auto-chip");
+    const chrome = chip.parentElement;
+    expect(chrome).not.toBeNull();
+    expect(chrome?.className).toContain("max-w-sm");
+    expect(chrome?.className).not.toContain("max-w-[min(100%,24rem)]");
+  });
+
   it("reads the LOD chip as Office at 1x and Overview once zoomed out past 0.7x", () => {
     renderOffice(new Set([ORCHESTRATOR.id]));
 
@@ -1727,6 +1747,59 @@ describe("CommGraphOfficeCanvas", () => {
     });
 
     expect(onCameraChange).toHaveBeenCalledWith({ x: -40, y: -25, zoom: 1 });
+  });
+
+  it("scales a line-mode wheel notch by the line height before panning, not by the raw delta (Finding 21)", () => {
+    // Codex: a line-mode wheel (`deltaMode: 1`, a real OS/mouse notch unit,
+    // not CSS pixels) used to pan by the raw delta unchanged - a deltaY of 3
+    // moved the camera 3px, when the notch itself is worth a full line
+    // (`WHEEL_LINE_HEIGHT_PX = 16`) of motion. `wheelDeltaToPixels` now
+    // normalizes it first.
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          onCameraChange,
+        }),
+      ),
+    );
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+
+    fireEvent.wheel(surface, { deltaX: 0, deltaY: 3, deltaMode: 1 });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    // 3 lines * 16px/line = 48px, not the raw 3px a pixel-mode read would
+    // apply.
+    expect(onCameraChange).toHaveBeenCalledWith({ x: 0, y: -48, zoom: 1 });
+  });
+
+  it("leaves a pixel-mode wheel notch unscaled, contrasting the line-mode case above (Finding 21)", () => {
+    // Non-vacuous contrast: `deltaMode: 0` (the default OS unit for a
+    // trackpad/precise wheel) must still pan by the raw delta unchanged -
+    // proving the normalization above is keyed on `deltaMode`, not a change
+    // that scales every wheel event regardless of its unit.
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          onCameraChange,
+        }),
+      ),
+    );
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+
+    fireEvent.wheel(surface, { deltaX: 0, deltaY: 48, deltaMode: 0 });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).toHaveBeenCalledWith({ x: 0, y: -48, zoom: 1 });
   });
 
   it("zooms about the cursor on ctrl-wheel instead of panning", () => {
@@ -2706,7 +2779,12 @@ describe("CommGraphOfficeCanvas", () => {
     );
 
     const directory = screen.getByTestId("comm-graph-office-directory");
-    expect(directory.className).toContain("w-[min(30%,15rem)]");
+    // Finding 17: `w-[min(30%,15rem)]` capped the sidebar at a fixed 15rem,
+    // which the GUI fluid-sizing rule forbids for a new layout surface -
+    // `w-[30%]` (against the panel's own flex row, not the viewport) plus a
+    // tokenized `max-w-60` ceiling replaces it.
+    expect(directory.className).toContain("w-[30%]");
+    expect(directory.className).toContain("max-w-60");
     expect(directory.className).not.toContain("30vw");
   });
 
