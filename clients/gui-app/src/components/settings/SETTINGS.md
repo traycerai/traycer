@@ -1422,17 +1422,17 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       defaults" assertion with it. `DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN` was
       added to `settings-store` for the one value that had no constant.
 
-      |                     | Default              | Compact                                                              | Detailed                    |
-      | ------------------- | -------------------- | -------------------------------------------------------------------- | --------------------------- |
-      | Mode word/bar/timer | on                   | all off                                                              | all on                      |
-      | Percent mode        | Used                 | Used                                                                 | Used                        |
-      | Providers           | tightest limit       | tightest limit, none hidden                                          | tightest limit, none hidden |
-      | Resource metrics    | CPU/Memory/Processes | CPU                                                                  | all four (adds RAM share)   |
-      | Composer rows       | visible              | three docks + access compact, mic & compaction hidden, image VISIBLE | all visible                 |
-      | Reasoning           | Text                 | Bars                                                                 | Bars + text                 |
-      | Pin breakdown       | off                  | off                                                                  | on, all fields              |
-      | Context indicator   | Text                 | Ring only                                                            | Text                        |
-      | Sidebar chips       | none                 | none                                                                 | CPU/Memory/Processes        |
+      |                     | Default        | Compact                                                              | Detailed                    |
+      | ------------------- | -------------- | -------------------------------------------------------------------- | --------------------------- |
+      | Mode word/bar/timer | on             | all off                                                              | all on                      |
+      | Percent mode        | Used           | Used                                                                 | Used                        |
+      | Providers           | tightest limit | tightest limit, none hidden                                          | tightest limit, none hidden |
+      | Resource metrics    | CPU/Processes  | CPU                                                                  | all four (adds RAM share)   |
+      | Composer rows       | visible        | three docks + access compact, mic & compaction hidden, image VISIBLE | all visible                 |
+      | Reasoning           | Text           | Bars                                                                 | Bars + text                 |
+      | Pin breakdown       | off            | off                                                                  | on, all fields              |
+      | Context indicator   | Text           | Ring only                                                            | Text                        |
+      | Sidebar chips       | none           | none                                                                 | CPU/Memory/Processes        |
 
       **Compact hides a composer button only where the verb survives without
       it**: the dictation chord starts voice input, and the command palette
@@ -1997,9 +1997,14 @@ md:top-0`): positioned against the nearest scrollport - the settings
     and workspace pickers, hard against the context-usage cluster, so a chip
     coming and going never shifts those pickers - and one click opens the row
     again; the pill folds to its icon with the name on hover. A chip always
-    draws its own icon (`Bot`, or Background's per-kind glyph - a
-    host-supervised shell is a `Terminal` whether it is running or held, never
-    a pause) and shows activity ON that icon rather than replacing it: the
+    draws its own icon - `FileDiff`, `Bot`, and for Background the section's
+    own chat-with-a-clock (`MessageSquareClock`, the same mark the indicators
+    use for background-only activity). Background used to borrow the panel's
+    per-kind row icon and a neutral `Layers` stack when kinds mixed, so the
+    same chip was a bot, a clock, a terminal or a pile depending on the
+    panel's contents; one mark says "background" wherever it is, and never a
+    pause - a held shell is stated in the chip's sentence. Activity shows ON
+    that icon rather than replacing it: the
     glyph and the count turn `primary`, and the glyph shimmers (an opacity
     sweep on the shared status clock, never a CSS `animation:`). A chip is
     `[icon] N` at every width - it once printed the word for its state after
@@ -2320,12 +2325,17 @@ Greeting and Introduction` - so the page read as a monitor name followed
       stale. `FocusTaskGroup` therefore carries flat `agents` / `jobs` /
       `browsers` / `prompts` and no parent links at all.
     - **A cold task is one summary row.** Agent titles only exist for epics
-      mounted in this window, so a cold task contributes no chat rows and a
-      placeholder would name work nobody can open. It reads `n agents · not
-open in this window`, keeps a disclosure only for jobs and pages this
-      window can still see, and hangs those off the task. A cold task that is
-      in Needs you on the indicator alone shows the attention glyph and nests
-      no prompt - there is no row to nest.
+      mounted in this window, so a cold task contributes no chat rows: a list
+      of rows all called `Agent` said nothing the count does not, and the user
+      asked for the single row back. It reads `● n agents running · not open
+in this window` (`○ … background` when none is mid-turn) beside its
+      `Stop all`, keeps a disclosure only for prompts, jobs and pages this
+      window can still see, and hangs those off the task at level one. A cold
+      task that is in Needs you on the indicator alone shows the attention
+      glyph and nests no prompt - there is no row to nest. Nested chat rows
+      appear once the task is open here and names are known; the
+      `CircleDashed` glyph is for the rarer MOUNTED agent whose projection has
+      no surface yet.
     - **Badges count the WHOLE subtree** (`taskGroupCounts`): `N need you`
       (loaded prompt rows), `N active` (mid-turn agents), `N bg` (jobs at any
       level), `N browsers`. They are read off the group's flat lists rather
@@ -2387,20 +2397,19 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       which hosts a task is split across. Choices are pruned when their row
       leaves the page, which keeps the self-pruning the row-local state gave
       for free: a task that comes back comes back at the page's default.
-    - **The expand default is latched on the first render that HAS TASKS**, not
-      on mount. Three or fewer tasks in TOTAL expand all, otherwise everything
-      is collapsed; the reader scrolls one page, so a rule applied per section
-      would expand eight tasks whenever they happened to be four and four. The
-      latch waits for `groups.length > 0` rather than for the page to have
-      something on it, because the notification feed can answer before the
-      activity plane: a first frame holding one unplaced prompt and no tasks
-      would otherwise latch `0 <= 3` and throw twenty tasks open when they
-      landed. Both the latch and the prune are adjusted DURING render rather
-      than from an effect - the supported shape for state derived from props,
-      and idempotent, so the immediate re-run finds the latch set and nothing
-      stale left. Chat rows have no second disclosure: hiding a monitor behind
-      another click would make finding it a two-gesture job on a page whose
-      whole purpose is one glance.
+    - **Every task starts collapsed, whatever the page holds.** There used to
+      be a count-based default - three or fewer tasks in total opened
+      themselves, latched on the first frame that had any - and it went for
+      two reasons: the user asked for no auto-expand, and a default that
+      depends on how many rows happen to be running is a page whose shape
+      changes for reasons the reader cannot see. The section headings already
+      say how much is there, and the twisty is one click. The only disclosure
+      state is the rows the user has touched this session, pruned DURING
+      render rather than from an effect - the supported shape for state
+      derived from props, and idempotent, so the immediate re-run finds
+      nothing stale left. Chat rows have no second disclosure: hiding a
+      monitor behind another click would make finding it a two-gesture job on
+      a page whose whole purpose is one glance.
     - **No row carries a trailing `Open`**: the row body already spans the card
       and opens the same thing, so the second control was one extra tab stop
       per row announcing a verb the row had already offered. Stop / Stop all
@@ -2428,7 +2437,12 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       timestamp. `needs you` is warning-toned, `turn` / `running` carry a
       primary dot, `background` / `waiting` a hollow muted one; every WORD is
       muted except needs-you, because a column of coloured words is a column
-      nobody scans. Agents have no start time on the activity plane, so their
+      nobody scans. The mid-turn tier PRINTS as `running` (`focusTierWord`,
+      `focus-row-labels.ts`) everywhere Home spells it - the status cell, the
+      cold-task summary, the Stop-all list - because `● turn` read as a noun
+      with no verb; the `turn` state, the wire field and the `tier` union keep
+      their names. `background` is unchanged: it matches the Background panel,
+      the chip and the `N bg` badge. Agents have no start time on the activity plane, so their
       cell shows the word alone rather than an invented duration. `held` is a
       RESERVED slot in the registry - real in the vocabulary, unreachable from
       today's rows, because no field carries the flag and inventing one is new

@@ -891,6 +891,7 @@ import {
   worktreeListByWorkspacePathsRequestSchemaV14,
   worktreeListByWorkspacePathsResponseSchemaV14,
   worktreeListBindingsForEpicRequestSchema,
+  worktreeListBindingsForEpicRequestSchemaV13,
   worktreeListBindingsForEpicResponseSchema,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV12,
@@ -4560,6 +4561,23 @@ export const worktreeListBindingsForEpicUpgradeV11ToV12 = defineUpgradePath<
       isGitResolvePending: false,
     })),
   }),
+});
+
+export const worktreeListBindingsForEpicV13 = defineRpcContract({
+  method: "worktree.listBindingsForEpic",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: worktreeListBindingsForEpicRequestSchemaV13,
+  responseSchema: worktreeListBindingsForEpicResponseSchemaV12,
+});
+
+export const worktreeListBindingsForEpicUpgradeV12ToV13 = defineUpgradePath<
+  typeof worktreeListBindingsForEpicV12,
+  typeof worktreeListBindingsForEpicV13
+>({
+  from: worktreeListBindingsForEpicV12.schemaVersion,
+  to: worktreeListBindingsForEpicV13.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, purpose: "git" }),
+  upgradeResponse: (response) => response,
 });
 
 // Note: git contract definitions are imported from git-contracts.ts above
@@ -9001,7 +9019,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listBindingsForEpic": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: worktreeListBindingsForEpicV10,
@@ -9016,6 +9034,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: worktreeListBindingsForEpicV12,
           upgradeFromPreviousVersion:
             worktreeListBindingsForEpicUpgradeV11ToV12,
+        },
+        3: {
+          contract: worktreeListBindingsForEpicV13,
+          upgradeFromPreviousVersion:
+            worktreeListBindingsForEpicUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
