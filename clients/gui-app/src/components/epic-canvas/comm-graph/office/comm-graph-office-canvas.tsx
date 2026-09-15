@@ -2631,16 +2631,20 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const appliedDprRef = useRef<number>(1);
   const wasPlayingRef = useRef(playing);
   const autoPannedKeyRef = useRef<string | null>(null);
-  // TRUE once a playback auto-pan has actually reframed the camera and no
-  // manual gesture has reclaimed it since - i.e. the live camera is a transient
-  // playback position, not the user's framing. Set where `requestPlaybackPan`
-  // starts a pan; cleared wherever a framing is stored (`persistView`). The
-  // shift path reads it to tell "playback is enabled but DECLINED, so the live
-  // camera is still the user's framing" (persist the compensated frame) from
-  // "playback OWNS the camera" (defer) - `isPlaying && isAutoPanEnabled` alone
-  // conflates the two, because auto-pan stays enabled through every pulse it
-  // declines when the focus is already on screen.
-  const cameraFramedByPlaybackRef = useRef(false);
+  // The user's last MANUAL framing, in world coords - the framing a reload
+  // should restore. It follows the live camera through manual gestures (synced
+  // wherever a framing is stored, `persistView`) but NOT through playback
+  // auto-pans, which reframe the live camera transiently and never persist. A
+  // world-growing shift offsets it too, so it stays in the current world's
+  // coordinates even while playback owns the live camera: the shift path
+  // persists THIS, not the live camera, so a reframe mid-shift no longer leaves
+  // the stored baseline in the old world and jumps on the next reload. Seeded
+  // from the same view the runtime's camera is.
+  const manualCameraRef = useRef<OfficeCamera>({
+    x: view.x,
+    y: view.y,
+    zoom: clampZoom(view.zoom),
+  });
   const persistTimerRef = useRef<number | null>(null);
   // ONE detail surface at a time, the same rule the node graph follows:
   // opening a character replaces an open thread and vice versa, so the floor
@@ -3149,11 +3153,16 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   }, [runtime]);
 
   const persistView = useCallback(() => {
-    // Storing a framing means the live camera is now a kept manual (or neutral
-    // auto-fit) frame, not a transient playback reframe - so re-arm the shift
-    // path. Only manual gestures and persistOnArrival aims reach here; playback
-    // auto-pans (persistOnArrival false) never do, by design.
-    cameraFramedByPlaybackRef.current = false;
+    // A framing is being stored, so the live camera IS the manual baseline now
+    // - sync it. Only manual gestures and persistOnArrival aims reach here;
+    // playback auto-pans (persistOnArrival false) never do, so this never
+    // captures a playback reframe. Skipped while auto-fit owns the frame: the
+    // baseline is meaningless then (the shift path is gated off too) and
+    // `currentViewPatch` writes the neutral sentinel, not the live numbers.
+    if (!runtime.isAutoFitEnabled()) {
+      const camera = runtime.getCamera();
+      manualCameraRef.current = { x: camera.x, y: camera.y, zoom: camera.zoom };
+    }
     if (persistTimerRef.current !== null) {
       window.clearTimeout(persistTimerRef.current);
     }
@@ -3161,7 +3170,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       persistTimerRef.current = null;
       onCameraChange(currentViewPatch());
     }, VIEW_PERSIST_DEBOUNCE_MS);
-  }, [currentViewPatch, onCameraChange]);
+  }, [currentViewPatch, onCameraChange, runtime]);
 
   // Take whatever a pending persist would have written, clearing the timer so
   // the debounced fire does not also run. `null` when nothing is pending - the
@@ -3420,6 +3429,22 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     persistView();
   });
 
+  // Persist the MANUAL BASELINE from inside the loop, not the live camera. On a
+  // world-growing shift the live camera may be a playback reframe that must not
+  // be saved, but the shifted baseline is the framing to keep. Shares the
+  // persist debounce with `persistView` (one write pending at a time), and like
+  // it reads at fire time so a burst of shifts coalesces to the last baseline.
+  const persistManualBaselineFromLoop = useEffectEvent((): void => {
+    if (persistTimerRef.current !== null) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = window.setTimeout(() => {
+      persistTimerRef.current = null;
+      const camera = manualCameraRef.current;
+      onCameraChange({ x: camera.x, y: camera.y, zoom: camera.zoom });
+    }, VIEW_PERSIST_DEBOUNCE_MS);
+  });
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
@@ -3503,14 +3528,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       if (key === autoPannedKeyRef.current) return;
       autoPannedKeyRef.current = key;
       if (isOnScreen(focus, runtime.getCamera(), viewport)) return;
-      // A pan starts here, so the live camera is now a playback reframe until a
-      // manual gesture reclaims it: a world-shift must defer rather than save it
-      // as the user's framing. Reaching here (focus off screen) is the only
-      // place playback actually moves the camera - the early return above is the
-      // DECLINE the shift path must still be allowed to persist under.
-      cameraFramedByPlaybackRef.current = true;
       // Playback reframes itself on every cursor step, so its landing is not a
-      // camera to write back.
+      // camera to write back. The manual baseline (`manualCameraRef`) is left
+      // untouched here on purpose - a playback pan must not move it, so a later
+      // shift still persists the user's framing rather than this reframe.
       runtime.requestPan({ focus, zoom: null, persistOnArrival: false });
     };
 
@@ -3724,6 +3745,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         camera.y -= shift.y * camera.zoom;
         shiftPendingPan(runtime, shift);
         shiftActivePan(runtime, shift);
+        // The manual baseline slid with the world too, and by its OWN zoom, not
+        // the live camera's (playback may have zoomed the live one away). Keep
+        // it in the current world so what a reload restores stays put.
+        const base = manualCameraRef.current;
+        manualCameraRef.current = {
+          x: base.x - shift.x * base.zoom,
+          y: base.y - shift.y * base.zoom,
+          zoom: base.zoom,
+        };
         // A manually framed office must survive a reload at its compensated
         // position. The in-memory move above keeps the floor still on screen
         // NOW; without persisting it, a Graph round trip, an LRU eviction or a
@@ -3733,21 +3763,17 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         // itself on the next line and on every reload, so persisting there
         // would just store a value auto-fit is about to recompute.
         //
-        // AND ONLY A MANUAL framing, not a transient one. While a playback
-        // auto-pan actually OWNS the camera, the live camera is a reframe
-        // `advanceCamera` deliberately never persists; writing it here on a
-        // shift would save that playback position as the user's framing, and a
-        // remount would restore it instead of their last manual one. But
-        // `isPlaying && isAutoPanEnabled` is too broad: auto-pan stays enabled
-        // through every pulse where the focus is already on screen and
-        // `requestPlaybackPan` DECLINES to move, and in that regime the live
-        // camera is still exactly the user's framing - deferring there is the
-        // gap that loses the compensated frame across a Graph round trip,
-        // eviction or reload. So gate on whether playback has REALLY reframed
-        // the camera (`cameraFramedByPlaybackRef`) rather than on whether it
-        // could: defer only while a reframe owns the camera, persist otherwise.
-        if (!runtime.isAutoFitEnabled() && !cameraFramedByPlaybackRef.current) {
-          persistCameraFromLoop();
+        // We persist the BASELINE, never the live camera. While a playback
+        // auto-pan owns the camera the live one is a reframe `advanceCamera`
+        // deliberately never saves; the baseline still holds the user's framing
+        // and, offset above, is exactly what a reload should reopen at. When
+        // playback merely declined (focus on screen) the baseline and the live
+        // camera are the same framing, so this is right in both regimes - and
+        // it fixes the case a boolean that only tracked "playback owns it" still
+        // lost: a shift under an owning reframe left the stored baseline in the
+        // old world and jumped on reload.
+        if (!runtime.isAutoFitEnabled()) {
+          persistManualBaselineFromLoop();
         }
       }
       // THE CAMERA SETTLES FIRST, and the frame is built from where it ended
@@ -4436,6 +4462,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           onSelectAgent={handleDirectorySelect}
           onHoverAgent={handleDirectoryHover}
           onClose={hideDirectory}
+          // Selection is gated while Auto measures (handleDirectorySelect
+          // early-returns then), so the panel disables its row, pip and team
+          // buttons rather than presenting controls that silently do nothing.
+          disabled={measuring}
         />
       )}
       <div

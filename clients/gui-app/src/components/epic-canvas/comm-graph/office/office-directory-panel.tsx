@@ -142,6 +142,17 @@ export interface OfficeDirectoryPanelProps {
   readonly onSelectAgent: (agentId: string) => void;
   readonly onHoverAgent: (agentId: string | null) => void;
   readonly onClose: () => void;
+  /**
+   * Selection is unavailable while Auto is still measuring (an extended history
+   * catch-up can hold there a while): the canvas withholds any selection made
+   * then and discards it on the measuring->resolved remount. The row, pip and
+   * team buttons carry this on their `disabled`, so a pointer or keyboard user
+   * sees and hears an unavailable control instead of an apparently actionable
+   * one that silently does nothing. Search and close stay usable - neither
+   * selects. Close still works because the directory is worth dismissing even
+   * before the office resolves. Absent (the default) means enabled.
+   */
+  readonly disabled?: boolean;
 }
 
 function statusOf(
@@ -305,6 +316,7 @@ function buildSections(args: {
 
 export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
   const {
+    disabled,
     hostNameById,
     nameById,
     onClose,
@@ -374,8 +386,9 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
         // itself goes to the lead, and these go to the people under them.
         aria-label={`${member.name}, ${STATUS_LABELS[member.status]}`}
         data-testid={`comm-graph-office-directory-pip-${member.agentId}`}
-        className="relative size-3 shrink-0 rounded-xs leading-none"
+        className="relative size-3 shrink-0 rounded-xs leading-none disabled:opacity-50"
         style={{ backgroundColor: officePipColor(member.status, palette) }}
+        disabled={disabled}
         onClick={() => onSelectAgent(member.agentId)}
         onPointerEnter={() => onHoverAgent(member.agentId)}
         onPointerLeave={() => onHoverAgent(null)}
@@ -390,7 +403,7 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
         </span>
       </button>
     ),
-    [onHoverAgent, onSelectAgent, palette],
+    [disabled, onHoverAgent, onSelectAgent, palette],
   );
 
   const renderAgentRow = useCallback(
@@ -402,9 +415,10 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
           aria-current={member.agentId === selectedAgentId}
           className={cn(
             "flex w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-xs",
-            "hover:bg-foreground/8",
+            "hover:bg-foreground/8 disabled:opacity-50 disabled:hover:bg-transparent",
             member.agentId === selectedAgentId && "bg-foreground/8",
           )}
+          disabled={disabled}
           onClick={() => onSelectAgent(member.agentId)}
           onPointerEnter={() => onHoverAgent(member.agentId)}
           onPointerLeave={() => onHoverAgent(null)}
@@ -421,7 +435,7 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
         </button>
       </li>
     ),
-    [onHoverAgent, onSelectAgent, palette, selectedAgentId],
+    [disabled, onHoverAgent, onSelectAgent, palette, selectedAgentId],
   );
 
   return (
@@ -514,10 +528,11 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
                           data-testid={`comm-graph-office-directory-team-${team.teamId}`}
                           aria-current={team.actionAgentId === selectedAgentId}
                           className={cn(
-                            "min-w-0 flex-1 truncate rounded-sm text-left text-ui-xs",
+                            "min-w-0 flex-1 truncate rounded-sm text-left text-ui-xs disabled:opacity-50",
                             team.actionAgentId === selectedAgentId &&
                               "text-foreground",
                           )}
+                          disabled={disabled}
                           // Always a visible agent: the office cannot locate an
                           // absent one, and the detail panel cannot open one.
                           onClick={() => onSelectAgent(team.actionAgentId)}
