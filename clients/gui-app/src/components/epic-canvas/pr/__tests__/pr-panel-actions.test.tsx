@@ -1,37 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
+import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import type {
-  PrLightItem,
-  PrSubscribeListForEpicServerFrame,
-} from "@traycer/protocol/host/pr-schemas";
-import {
-  MockStreamSession as SharedMockStreamSession,
-  MockWsStreamClient as SharedMockWsStreamClient,
-} from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
-import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { __resetPrListSubscriptionsForTesting } from "@/hooks/pr/use-pr-list-subscription";
-
-vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
-  useCanvasHostId: () => "host1",
-}));
-
+  PrListSubscriptionData,
+  PrListSubscriptionResult,
+} from "@/hooks/pr/use-pr-list-subscription";
 import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
-
-/**
- * The list subscription is the only external boundary this component has, and
- * the shared fixture fakes exactly that - see `pr-stream-test-fixtures.ts`.
- */
-type MockStreamSession =
-  SharedMockStreamSession<PrSubscribeListForEpicServerFrame>;
-type MockWsStreamClient =
-  SharedMockWsStreamClient<PrSubscribeListForEpicServerFrame>;
-// Instantiation expression: binds the shared generic class to THIS
-// suite's frame type, so `new MockWsStreamClient()` needs no argument.
-const MockWsStreamClient =
-  SharedMockWsStreamClient<PrSubscribeListForEpicServerFrame>;
 
 function buildPrItem(overrides: Partial<PrLightItem>): PrLightItem {
   return {
@@ -59,102 +34,67 @@ function buildPrItem(overrides: Partial<PrLightItem>): PrLightItem {
   };
 }
 
-function resetCanvas(): void {
-  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+function data(items: readonly PrLightItem[]): PrListSubscriptionData {
+  return { sourceStatus: "ok", notice: null, items };
 }
 
-describe("PrPanelActions staleness hint", () => {
-  let queryClient: QueryClient;
-  let mockWsStreamClient: MockWsStreamClient;
+interface TestSubscription {
+  readonly data: PrListSubscriptionData | null;
+  readonly error: PrListSubscriptionResult["error"];
+  readonly isPending: boolean;
+  readonly sendRefresh: Mock<() => void>;
+}
 
-  const renderActions = (props: { epicId: string; tabId: string }) => {
-    return render(
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <StreamRuntimeContext.Provider
-            value={{
-              wsStreamClient: mockWsStreamClient,
-              hostId: null,
-              retain: null,
-            }}
-          >
-            <PrPanelActions
-              epicId={props.epicId}
-              tabId={props.tabId}
-              collapsed={false}
-            />
-          </StreamRuntimeContext.Provider>
-        </TooltipProvider>
-      </QueryClientProvider>,
+function subscription(value: PrListSubscriptionData | null): TestSubscription {
+  return {
+    data: value,
+    error: null,
+    isPending: value === null,
+    sendRefresh: vi.fn(),
+  };
+}
+
+function renderActions(value: TestSubscription, enabled: boolean): void {
+  render(<PrPanelActions subscription={value} enabled={enabled} />);
+}
+
+describe("PrPanelActions", () => {
+  afterEach(cleanup);
+
+  it("renders freshness from the subscription supplied by the panel body", () => {
+    renderActions(
+      subscription(data([buildPrItem({ observedAt: null })])),
+      true,
     );
-  };
-
-  const emitSnapshot = async (
-    epicId: string,
-    items: readonly PrLightItem[],
-  ): Promise<MockStreamSession> => {
-    await waitFor(() => {
-      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
-    });
-    const session = mockWsStreamClient.getSession("pr.subscribeListForEpic", {
-      epicId,
-      mode: "foreground",
-    });
-    expect(session).toBeDefined();
-    if (session === undefined) throw new Error("missing list session");
-    session.emitFrame({
-      kind: "snapshot",
-      hasBinaryPayload: false,
-      sourceStatus: "ok",
-      notice: null,
-      items: [...items],
-    });
-    return session;
-  };
-
-  beforeEach(() => {
-    // `usePrListSubscription` keeps its sessions in a MODULE-level registry,
-    // which outlives both the canvas store and the query client this suite
-    // already resets. Every test here happens to build a fresh
-    // `MockWsStreamClient`, so no key collides today - but nothing in the
-    // suite states that, and the first test that reuses a client would
-    // silently inherit a live entry. Same reason
-    // `pr-detail-body.test.tsx` resets its own registry on both hooks.
-    __resetPrListSubscriptionsForTesting();
-    resetCanvas();
-    queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    mockWsStreamClient = new MockWsStreamClient();
+    expect(screen.getByTestId("pr-panel-staleness").textContent).toBe(
+      "Not yet fetched",
+    );
   });
 
-  afterEach(() => {
-    cleanup();
-    __resetPrListSubscriptionsForTesting();
-    resetCanvas();
-    queryClient.clear();
+  it("renders an updated label when the selected host reports an observation", () => {
+    renderActions(
+      subscription(data([buildPrItem({ observedAt: 1_000 })])),
+      true,
+    );
+    expect(screen.getByTestId("pr-panel-staleness").textContent).toMatch(
+      /^Updated /,
+    );
   });
 
-  it("says 'Not yet fetched' when the subscription has data but no PR has ever been observed", async () => {
-    const epicId = "epic-never-fetched";
-    renderActions({ epicId, tabId: "tab-nf" });
-    // A snapshot with items whose `observedAt` is all null - the host has
-    // discovered the PRs but never successfully swept any of them.
-    await emitSnapshot(epicId, [buildPrItem({ observedAt: null })]);
-
-    const hint = await screen.findByTestId("pr-panel-staleness");
-    expect(hint.textContent).toBe("Not yet fetched");
+  it("sends refresh through the exact subscription instance passed by the body", () => {
+    const current = subscription(data([]));
+    renderActions(current, true);
+    fireEvent.click(screen.getByTestId("pr-panel-refresh"));
+    expect(current.sendRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("says 'Updated …' once at least one PR carries a real observedAt", async () => {
-    const epicId = "epic-fetched";
-    renderActions({ epicId, tabId: "tab-f" });
-    await emitSnapshot(epicId, [buildPrItem({ observedAt: 1_000 })]);
-
-    const hint = await screen.findByTestId("pr-panel-staleness");
-    await waitFor(() => {
-      expect(hint.textContent).not.toBe("Not yet fetched");
-    });
-    expect(hint.textContent).toMatch(/^Updated /);
+  it("keeps refresh disabled when the shared panel subscription is not enabled", () => {
+    const current = subscription(data([]));
+    renderActions(current, false);
+    expect(
+      screen.getByTestId("pr-panel-refresh").getAttribute("disabled"),
+    ).not.toBeNull();
+    fireEvent.click(screen.getByTestId("pr-panel-refresh"));
+    expect(current.sendRefresh).not.toHaveBeenCalled();
   });
 });
