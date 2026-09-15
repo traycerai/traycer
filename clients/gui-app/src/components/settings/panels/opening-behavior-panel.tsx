@@ -35,10 +35,11 @@ import {
 
 /**
  * Settings > Opening behavior: the one page that answers "where does the thing
- * I just clicked end up". Two groups - links (which surface a URL opens on)
- * and tile placement (this pane, a split, or picture-in-picture, plus what a
- * host-opened browser tab does, which is a placement question wearing another
- * name) - so the page reads as two questions rather than three.
+ * I just clicked end up". Three groups - links (which surface a URL opens on),
+ * tile placement (this pane, a split, or picture-in-picture), and agent-opened
+ * tabs (whether a tab the agent opened surfaces at all). The last one used to
+ * sit as a standalone row under tile placement, where it read as a fifth
+ * per-type override drawn with the wrong tint; it is a gate, not a placement.
  *
  * Every control is a plain enum select over the settings store. The modifier
  * keys that override a choice per click get ONE platform-aware legend under
@@ -66,14 +67,6 @@ const TILE_PLACEMENT_DEFAULT_LABELS: Record<
 > = {
   ...TILE_PLACEMENT_LABELS,
   "per-category": "Per tile type",
-};
-/**
- * A side chat is always placed relative to the chat it was asked from, so
- * "this pane" would be ambiguous here: the options name the SOURCE chat.
- */
-const SIDE_CHAT_PLACEMENT_LABELS: Record<TilePlacement, string> = {
-  tab: "As a tab of the source chat",
-  split: "In a split beside the source chat",
 };
 /** Only the browser category can float - the other two have no PiP host. */
 const BROWSER_TILE_PLACEMENT_LABELS: Record<BrowserTilePlacement, string> = {
@@ -249,7 +242,7 @@ export function OpeningBehaviorPanel(): ReactNode {
                 row={OPENING_BEHAVIOR.definitions.tileSideChat}
                 control={
                   <EnumSelect
-                    labels={SIDE_CHAT_PLACEMENT_LABELS}
+                    labels={TILE_PLACEMENT_LABELS}
                     isValue={isTilePlacement}
                     value={tilePlacement.sideChat}
                     onValueChange={(sideChat) => {
@@ -262,6 +255,15 @@ export function OpeningBehaviorPanel(): ReactNode {
               />
             </div>
           ) : null}
+        </SettingsGroup>
+
+        <SettingsGroup
+          group={OPENING_BEHAVIOR.definitions.agentTabs}
+          showTitle
+          tone="default"
+          dataTestId="settings-opening-agent-tabs"
+          fill={false}
+        >
           <SettingsRow
             row={OPENING_BEHAVIOR.definitions.agentOpenedTabs}
             control={
