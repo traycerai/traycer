@@ -2401,14 +2401,15 @@ describe("CommGraphOfficeCanvas", () => {
     }
   });
 
-  it("caps the controls row to the pane and lets it wrap, with pointer-events-auto punched through per control (Finding 32)", () => {
+  it("caps the controls row to the pane with fluid opposing insets and lets it wrap, pointer-events-auto punched through per control (Findings 32 and 33)", () => {
     // Codex: at the 240px minimum split the floor is only ~168px wide, and
     // the toggle/view-picker group plus the mode-toggle buttons no longer fit
-    // on one line - without a cap the row overflowed LEFT and, under the
-    // container's overflow-hidden, clipped the directory toggle and view
-    // picker themselves. jsdom lays nothing out, so this asserts the utility
-    // classes rather than measured geometry - the established pattern for
-    // Tailwind arbitrary-value layout classes in this repo.
+    // on one line - pinned only to the right the row overflowed LEFT and, under
+    // the container's overflow-hidden, clipped the directory toggle and view
+    // picker themselves. F33: the cap is opposing spacing-token insets
+    // (`inset-x-2`), never a raw-rem max-width, per the GUI fluid-sizing rule.
+    // jsdom lays nothing out, so this asserts the utility classes rather than
+    // measured geometry - the established pattern for Tailwind layout classes.
     render(
       withQueryClient(
         officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
@@ -2427,7 +2428,9 @@ describe("CommGraphOfficeCanvas", () => {
     const row = group.parentElement;
     if (row === null) throw new Error("group has no parent row");
 
-    expect(row.className).toContain("max-w-[calc(100%-1rem)]");
+    expect(row.className).toContain("inset-x-2");
+    // F33: no raw-rem cap on this layout surface.
+    expect(row.className).not.toContain("max-w-[calc");
     expect(row.className).toContain("flex-wrap");
     expect(row.className).toContain("pointer-events-none");
 

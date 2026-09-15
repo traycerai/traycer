@@ -2431,16 +2431,18 @@ function OfficeChromeRow(props: {
   readonly modeToggle: ReactNode;
 }) {
   return (
-    // Right-anchored, but capped to the pane and allowed to wrap. At the 240px
-    // minimum split the floor is only ~168px wide and the group plus the mode
-    // buttons no longer fit on one line; without the cap the row overflows LEFT
-    // and, under the container's `overflow-hidden`, clips the directory toggle
-    // and view picker - the very controls a person needs to escape that split.
-    // `max-w` keeps the row inside the pane and `flex-wrap` drops the mode
-    // buttons to a second line instead of clipping. The frame is
-    // `pointer-events-none` (each control re-enables its own) so the transparent
-    // gap a wrap opens up over the floor does not swallow a pan.
-    <div className="pointer-events-none absolute top-2 right-2 z-10 flex max-w-[calc(100%-1rem)] flex-wrap items-center justify-end gap-1">
+    // Anchored on BOTH sides (opposing insets), not a fixed-width cap, and
+    // allowed to wrap. At the 240px minimum split the floor is only ~168px wide
+    // and the group plus the mode buttons no longer fit on one line; pinned only
+    // to the right, the row would overflow LEFT and, under the container's
+    // `overflow-hidden`, clip the directory toggle and view picker - the very
+    // controls a person needs to escape that split. `inset-x-2` holds it inside
+    // the pane fluidly (spacing tokens, no fixed layout width) and `flex-wrap`
+    // drops the mode buttons to a second line instead of clipping; `justify-end`
+    // keeps them hugging the right. The frame is `pointer-events-none` (each
+    // control re-enables its own) so the full-width transparent frame does not
+    // swallow a pan.
+    <div className="pointer-events-none absolute inset-x-2 top-2 z-10 flex flex-wrap items-center justify-end gap-1">
       <div
         className={cn(
           "pointer-events-auto flex items-center gap-0.5 rounded-md",
