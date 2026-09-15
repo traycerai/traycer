@@ -78,15 +78,6 @@ paths = [
 regexes = ['''^YmFkLf(?:8|4)udHh0$''']
 
 [[allowlists]]
-description = "Chat-registry scope keys in the cross-account handoff suite. `scopeKey` names the registry bucket a chat handle is acquired under - `r6f1-signout` and `r6f1-switch` are the two arms of that test, and the suite asserts on them verbatim, which is what a test label can do and a credential cannot. The generic-api-key rule matches them only because the field name ends in `Key`, the same reason the `scrollStateKey` entry above exists. Fourth instance of the pattern those entries describe: `fetch-depth: 0` makes every PR's scan read the in-flight branch that introduces them, so this one fixture fails the gitleaks job on every open PR in the repo and cannot wait for that branch to merge. Scoped to both exact values and the one source path so unrelated findings stay reportable."
-condition = "AND"
-regexTarget = "secret"
-paths = [
-  '''^clients/gui-app/src/providers/__tests__/auth-lifecycle-bridge-r6f1-cross-account-handoff\.test\.tsx$''',
-]
-regexes = ['''^r6f1-(?:signout|switch)$''']
-
-[[allowlists]]
 description = "Self-describing base64 placeholders in the browser-session key-custody suite: `d3JhcHBlZEtleQ==` decodes to the ASCII string `wrappedKey` and `cmF3S2V5` to `rawKey`. They are the payloads of `storeKeyWrapRequest` / `storeKeyUnwrapRequest` frames, and the assertions alongside them match on the value verbatim (`user-1:host-1:cmF3S2V5`), which is what a placeholder can do and a credential cannot. The generic-api-key rule matches on base64 shape and entropy only. Third instance of the pattern the two entries above describe: `fetch-depth: 0` makes every PR's scan read the in-flight branch that introduces them (`feat/browser-security-hardening`), so this one fixture fails the gitleaks job on every open PR in the repo and cannot wait for that branch to merge. Scoped to the exact values and the one source path so unrelated findings stay reportable."
 condition = "AND"
 regexTarget = "secret"
