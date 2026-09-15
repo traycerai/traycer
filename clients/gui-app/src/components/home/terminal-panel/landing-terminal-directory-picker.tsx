@@ -96,7 +96,8 @@ export function LandingTerminalDirectoryPicker(
           aria-busy={props.isPending}
           loop
           onKeyDown={handleKeyDown}
-          className="h-full min-h-0 rounded-none bg-transparent"
+          variant="embedded"
+          className="h-full min-h-0"
         >
           <CommandInput
             ref={inputRef}
@@ -128,7 +129,7 @@ export function LandingTerminalDirectoryPicker(
               Opening terminal…
             </div>
           ) : null}
-          <CommandList className="max-h-none min-h-0 flex-1">
+          <CommandList className="max-h-none min-h-0 flex-1 p-1">
             <CommandEmpty>No matching directories.</CommandEmpty>
             <CommandGroup heading="Create terminal in workspace">
               {props.workspacePaths.map((workspacePath) => (
@@ -137,7 +138,7 @@ export function LandingTerminalDirectoryPicker(
                   value={workspacePath}
                   onSelect={() => props.onSelect(workspacePath)}
                   disabled={props.isPending}
-                  className="items-start py-2"
+                  className="items-start"
                 >
                   <Folder className="mt-0.5 size-4 text-muted-foreground" />
                   <span className="min-w-0 flex-1">

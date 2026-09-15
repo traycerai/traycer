@@ -354,7 +354,7 @@ function ThemePicker({
               ? `saved:${id}`
               : `builtin:${id}`
           }
-          className="min-h-0 rounded-lg"
+          className="min-h-0"
         >
           <CommandInput
             aria-label={`Search ${appearance} themes`}

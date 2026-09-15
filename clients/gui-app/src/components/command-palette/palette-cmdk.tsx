@@ -673,7 +673,7 @@ function BrowserSubpageView(props: {
         heading={
           hostLabel === undefined ? "Open tabs" : `Open tabs on ${hostLabel}`
         }
-        className="pt-3"
+        className="mt-2"
       >
         <FlatSubpageRows items={inventoryItems} onSelect={props.onSelect} />
       </CommandGroup>

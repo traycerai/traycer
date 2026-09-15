@@ -203,7 +203,8 @@ export function PaneOpener(props: PaneOpenerProps) {
         loop
         shouldFilter={searchRunTarget === null && !hostRankedResultSubpage}
         onKeyDown={handleKeyDown}
-        className="h-full min-h-0 bg-transparent"
+        variant="embedded"
+        className="h-full min-h-0"
       >
         <PaletteQueryProvider value={query}>
           <CommandInput
@@ -226,7 +227,7 @@ export function PaneOpener(props: PaneOpenerProps) {
           />
           {/* `max-h-none` overrides the primitive's `max-h-72` cap so the list
               fills the full pane height instead of clipping mid-way. */}
-          <CommandList ref={listRef} className="max-h-none min-h-0 flex-1">
+          <CommandList ref={listRef} className="max-h-none min-h-0 flex-1 p-1">
             {renderListBody()}
           </CommandList>
         </PaletteQueryProvider>

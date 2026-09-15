@@ -329,14 +329,15 @@ function PromptStashControlImpl(props: PromptStashControlProps) {
             loop
             value={selectedId ?? ""}
             onValueChange={setHighlightedId}
-            className="max-h-full min-h-0 rounded-lg bg-transparent p-0"
+            variant="embedded"
+            className="max-h-full min-h-0"
           >
             <div className="flex h-8 items-center gap-1.5 border-b border-border/60 px-2.5 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground">
               <Bookmark className="size-3" aria-hidden />
               <span>Stashed prompts</span>
             </div>
             <CommandList ref={listRef} className="min-h-0 max-h-none">
-              <CommandGroup className="p-1">
+              <CommandGroup>
                 {rows.map((row) =>
                   row.kind === "entry" ? (
                     <PromptStashEntryRowView
@@ -389,7 +390,7 @@ function PromptStashEntryRowView(props: {
       value={props.entry.id}
       data-prompt-stash-id={props.entry.id}
       disabled={props.busy}
-      className="group/stash grid min-h-9 cursor-pointer grid-cols-[minmax(0,1fr)_9rem] items-start gap-1.5 overflow-hidden rounded-md px-2 py-1.5 [&>svg:last-child]:hidden"
+      className="group/stash grid min-h-9 cursor-pointer grid-cols-[minmax(0,1fr)_9rem] items-start gap-1.5 overflow-hidden [&>svg:last-child]:hidden"
       onPointerDown={(event) => event.preventDefault()}
       onMouseMove={props.onHighlight}
       onSelect={props.onRestore}
@@ -524,7 +525,7 @@ function PromptStashUnavailableRowView(props: {
       value={props.id}
       data-prompt-stash-id={props.id}
       disabled={props.busy}
-      className="group/stash grid min-h-9 cursor-default grid-cols-[minmax(0,1fr)_9rem] items-start gap-1.5 overflow-hidden rounded-md px-2 py-1.5 opacity-70 [&>svg:last-child]:hidden"
+      className="group/stash grid min-h-9 cursor-default grid-cols-[minmax(0,1fr)_9rem] items-start gap-1.5 overflow-hidden [&>svg:last-child]:hidden"
       onPointerDown={(event) => event.preventDefault()}
       onMouseMove={props.onHighlight}
       onSelect={() => undefined}

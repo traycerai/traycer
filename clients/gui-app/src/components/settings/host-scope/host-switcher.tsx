@@ -573,7 +573,6 @@ function HostSwitcherRow(props: {
       // no assistive tech, so without this a screen reader heard the scoped row
       // and every other row as the same text.
       aria-current={props.scoped ? "true" : undefined}
-      className="text-ui-sm"
     >
       <HostOptionRow
         host={host}

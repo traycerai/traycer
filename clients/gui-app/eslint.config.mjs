@@ -311,7 +311,6 @@ const fixedPaletteFiles = [
 const notYetTightened = [
   // tighten in ticket 06 - the overlay and container parts.
   { pattern: "^Card", allow: ["*"] },
-  { pattern: "^Command", allow: ["*"] },
   { pattern: "^ConfirmDestructiveDialog$", allow: ["*"] },
   { pattern: "^ContextMenu", allow: ["*"] },
   { pattern: "^Drawer", allow: ["*"] },
@@ -818,6 +817,51 @@ const tabsContracts = [
   },
 ];
 
+// ── Command, tightened in ticket 06 ────────────────────────────────────────
+//
+// Two props carry what the family's 43 findings were writing by hand.
+//
+// `variant="embedded"` is the palette mounted inside a surface that already
+// drew a plate - a popover, a pane - so it contributes none of its own. Five
+// surfaces said that as some subset of `rounded-none bg-transparent p-0` and
+// disagreed about which parts to include; the missing third is exactly why two
+// of them then restored the row gutter on the list.
+//
+// `selection="flat"` is the OTHER kind of list: a picker of values, where a row
+// can be the CHOSEN one as well as the one under the cursor. The primitive
+// marks the cursor with the primary, which is also how a chosen row reads, so
+// two pickers cancelled the lift by hand - both with `bg-accent`, the fill
+// AGENTS.md rules out on a raised surface. 153 of the app's 155 items want the
+// lift, so it stays the default.
+//
+// About a third of the rest were restates of the item default (`px-2`,
+// `py-1.5`, `text-ui-sm`, `hover:text-foreground`,
+// `data-[selected=true]:text-foreground`) and deleted with no visual change.
+const commandContracts = [
+  {
+    // A pure container: `max-h`, scrolling and nothing else. The row gutter
+    // inside it is the caller's, for the same reason `CollapsibleContent`'s
+    // inset is - an embedded palette's rows line up with the surface around
+    // them, which only that surface knows.
+    pattern: "^CommandList$",
+    allow: ["layout", "spacing"],
+  },
+  {
+    pattern: "^CommandItem$|^CommandGroup$",
+    allow: ["layout", "gap-*", "space-y-*"],
+    message: {
+      color:
+        '"{{className}}" is not allowed on <{{component}}>: the row owns its states. The keyboard cursor is `selection` on the <Command> around it - `lifted` (the default) for a list of actions, `flat` for a picker whose chosen row is already marked in the primary. A hand-written `bg-accent/*` is also the fill AGENTS.md rules out on a raised surface. See {{file}}.',
+      spacing:
+        '"{{className}}" is not allowed on <{{component}}>: the palette owns its row rhythm, and `variant="embedded"` is how a palette gives up its own plate and gutter to the surface around it. `gap-*` inside a row is yours. See {{file}}.',
+      shape:
+        '"{{className}}" is not allowed on <{{component}}>: the row owns its corners, and they already answer to the surface - a palette inside a dialog rounds further than one inside a popover. See {{file}}.',
+      effects:
+        '"{{className}}" is not allowed on <{{component}}>: a dimmed row is a disabled row, which the primitive already dims. See {{file}}.',
+    },
+  },
+];
+
 // ── Button, the one family that IS enforced ─────────────────────────────────
 //
 // `layout` plus four named classes. Each is a treatment the component cannot
@@ -922,6 +966,7 @@ const tightenedContracts = [
   ...dropdownMenuContracts,
   ...popoverContracts,
   ...tabsContracts,
+  ...commandContracts,
   ...inlinePrimitiveContracts,
   buttonContract,
 ];
@@ -1298,6 +1343,15 @@ const restyleExemptions = [
         allow: ["spacing", "aria-disabled:hover:bg-transparent"],
       },
     ],
+  },
+  {
+    // NOT a design-system component: `lucide-react` exports an icon named
+    // `Command`, and the rule keys a contract off the IMPORTED NAME - aliasing
+    // it (`Command as CommandIcon`, which this file does for the reader) does
+    // not change what the rule sees. The tour's fake command palette is drawn
+    // in fixed colours anyway, for the reason `fixedPaletteFiles` gives.
+    files: ["src/components/onboarding/onboarding-diorama.tsx"],
+    contracts: [{ pattern: "^Command$", allow: ["color"] }],
   },
   {
     // The mobile tab switcher's strip, whose indicator cannot be the

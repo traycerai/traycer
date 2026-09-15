@@ -10,7 +10,7 @@ import {
   ChevronRight,
   ChevronUp,
   ClipboardCheck,
-  Command,
+  Command as CommandIcon,
   Download,
   FileCode2,
   FileText,
@@ -1453,7 +1453,7 @@ function CommandPalette(props: { readonly reducedMotion: boolean }) {
       className="z-30 flex w-[min(82%,26rem)] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-2xl"
     >
       <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
-        <Command className="size-3.5 text-muted-foreground" />
+        <CommandIcon className="size-3.5 text-muted-foreground" />
         <span className="text-ui-sm text-muted-foreground">
           Type a command...
         </span>
