@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
 import type {
   DesktopAuthSessionSnapshot,
@@ -28,6 +29,7 @@ interface CapturedMenuItem {
 
 const electronState = vi.hoisted(() => ({
   setApplicationMenu: vi.fn(),
+  getAllWindows: vi.fn(),
   lastTemplate: null as readonly CapturedMenuItem[] | null,
 }));
 
@@ -38,6 +40,9 @@ vi.mock("electron", () => ({
       return { template };
     },
     setApplicationMenu: electronState.setApplicationMenu,
+  },
+  BrowserWindow: {
+    getAllWindows: electronState.getAllWindows,
   },
   app: {
     isPackaged: false,
@@ -418,6 +423,8 @@ function runControllerCommand(
 describe("MenuController", () => {
   beforeEach(() => {
     electronState.setApplicationMenu.mockClear();
+    electronState.getAllWindows.mockClear();
+    electronState.getAllWindows.mockReturnValue([]);
     electronState.lastTemplate = null;
   });
 
@@ -496,6 +503,39 @@ describe("MenuController", () => {
 
     expect(registry.window.menuBarVisibilityCalls).toEqual([false, false]);
     expect(registry.window.menus).toHaveLength(2);
+    controller.dispose();
+  });
+
+  it("broadcasts menu changes to live renderer windows after a rebuild", () => {
+    const liveSend = vi.fn();
+    const destroyedSend = vi.fn();
+    electronState.getAllWindows.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, send: liveSend },
+      },
+      {
+        isDestroyed: () => true,
+        webContents: { isDestroyed: () => false, send: destroyedSend },
+      },
+    ]);
+    const controller = new MenuController({
+      appName: "Traycer",
+      platform: "linux",
+      windowRegistry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      tray: null,
+      zoomController: new FakeZoomController(),
+      dispatchRendererCommand: () => true,
+      checkForUpdates: () => Promise.resolve(),
+    });
+
+    controller.install();
+
+    expect(liveSend).toHaveBeenCalledWith(RunnerHostEvent.menuChanged);
+    expect(destroyedSend).not.toHaveBeenCalled();
     controller.dispose();
   });
 

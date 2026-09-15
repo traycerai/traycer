@@ -14,6 +14,7 @@ import { subscribe, type Disposable, type Listener } from "./subscribe";
 export interface MenuBridgeSurface {
   menu: {
     getSnapshot(): Promise<DesktopMenuSnapshot>;
+    onChange(handler: () => void): Disposable;
     executeItem(revision: number, itemId: string): Promise<void>;
 
     readonly platform: DesktopRuntimePlatform;
@@ -40,6 +41,8 @@ export function buildMenuBridge(): MenuBridgeSurface {
           revision,
           itemId,
         ) as Promise<void>,
+      onChange: (handler) =>
+        subscribe<void>(RunnerHostEvent.menuChanged, handler),
       onCommand: (handler) =>
         subscribe<MenuCommandPayload>(RunnerHostEvent.menuCommand, handler),
       openTopLevel: (menuId, anchorX, anchorY) =>

@@ -125,7 +125,8 @@ export function executeApplicationMenuItem(
   // documented click method handles native roles and checkbox/radio changes.
   const focused = webContents.getFocusedWebContents();
   const target =
-    focused !== null && BrowserWindow.fromWebContents(focused) === window
+    focused !== null &&
+    BrowserWindow.fromWebContents(focused.hostWebContents ?? focused) === window
       ? focused
       : sender;
   action.item.click({}, window, target);

@@ -81,6 +81,7 @@ function createDesktopHost(): MockRunnerHost {
           ],
         }),
       executeItem: () => Promise.resolve(),
+      onChange: (_handler: () => void) => ({ dispose: () => undefined }),
       openTopLevel: () => Promise.resolve(),
     },
   });

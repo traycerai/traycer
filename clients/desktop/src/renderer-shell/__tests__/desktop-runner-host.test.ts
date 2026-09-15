@@ -226,6 +226,7 @@ function buildFakeBridge(
       onCommand: (_handler) => ({ dispose: () => undefined }),
       getSnapshot: async () => ({ revision: 0, menus: [] }),
       executeItem: async (_revision: number, _itemId: string) => undefined,
+      onChange: (_handler: () => void) => ({ dispose: () => undefined }),
       openTopLevel: async () => undefined,
     },
     appUpdates: {

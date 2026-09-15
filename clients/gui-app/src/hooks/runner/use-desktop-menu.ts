@@ -1,4 +1,10 @@
-import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { resolveDesktopMenuPopupBridge } from "@/lib/windows/desktop-capabilities";
 import {
@@ -28,6 +34,16 @@ function menuBridgeQueryScopeId(
 export function useDesktopMenu() {
   const host = useRunnerHostOrNull();
   const menu = host === null ? null : resolveDesktopMenuPopupBridge(host);
+  const queryClient = useQueryClient();
+  const scopeId = menuBridgeQueryScopeId(menu);
+  useEffect(() => {
+    const subscription = menu?.onChange(() => {
+      void queryClient.invalidateQueries({
+        queryKey: runnerQueryKeys.applicationMenu(scopeId),
+      });
+    });
+    return () => subscription?.dispose();
+  }, [menu, queryClient, scopeId]);
   const snapshot = useQuery(
     queryOptions<DesktopMenuSnapshot>({
       queryKey: runnerQueryKeys.applicationMenu(menuBridgeQueryScopeId(menu)),

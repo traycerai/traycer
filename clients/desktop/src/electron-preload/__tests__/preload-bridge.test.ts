@@ -186,6 +186,7 @@ interface PreloadBridge {
   menu: {
     readonly platform: "darwin" | "win32" | "linux";
     onCommand(handler: (payload: unknown) => void): { dispose: () => void };
+    onChange(handler: () => void): { dispose: () => void };
     getSnapshot(): Promise<DesktopMenuSnapshot>;
     executeItem(revision: number, itemId: string): Promise<void>;
     openTopLevel(
@@ -752,8 +753,12 @@ describe("preload new-capability wiring", () => {
     });
 
     const commands: unknown[] = [];
+    const changes: number[] = [];
     const subscription = bridge.menu.onCommand((payload) => {
       commands.push(payload);
+    });
+    const changeSubscription = bridge.menu.onChange(() => {
+      changes.push(changes.length + 1);
     });
     await expect(bridge.menu.getSnapshot()).resolves.toEqual({
       revision: 8,
@@ -770,6 +775,10 @@ describe("preload new-capability wiring", () => {
       command: "app.openLogs",
       windowId: "preload-window",
     });
+    fakeElectron.emit(RunnerHostEvent.menuChanged, undefined);
+    expect(changes).toEqual([1]);
+    changeSubscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.menuChanged, undefined);
     subscription.dispose();
     fakeElectron.emit(RunnerHostEvent.menuCommand, {
       command: "app.aboutDetails",

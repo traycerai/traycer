@@ -20,6 +20,7 @@ interface FakeMenu {
 const electronState = vi.hoisted(() => ({
   applicationMenu: null as FakeMenu | null,
   focusedWebContents: null as object | null,
+  windowsByWebContents: new Map<object, object>(),
   browserWindow: {
     isDestroyed: () => false,
   },
@@ -27,7 +28,8 @@ const electronState = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({
   BrowserWindow: {
-    fromWebContents: () => electronState.browserWindow,
+    fromWebContents: (contents: object) =>
+      electronState.windowsByWebContents.get(contents) ?? null,
   },
   Menu: {
     getApplicationMenu: () => electronState.applicationMenu,
@@ -147,6 +149,8 @@ const sender = {} as WebContents;
 beforeEach(() => {
   electronState.applicationMenu = null;
   electronState.focusedWebContents = sender;
+  electronState.windowsByWebContents.clear();
+  electronState.windowsByWebContents.set(sender, electronState.browserWindow);
 });
 
 describe("application menu snapshots", () => {
@@ -229,6 +233,46 @@ describe("application menu snapshots", () => {
     const click = vi.fn();
     const application = buildApplicationMenu(click);
     electronState.applicationMenu = application.menu;
+    const snapshot = readApplicationMenuSnapshot(sender);
+
+    executeApplicationMenuItem(sender, snapshot.revision, "file/0");
+
+    expect(click).toHaveBeenCalledWith({}, electronState.browserWindow, sender);
+  });
+
+  it("uses a focused guest's host contents when it belongs to the sender window", () => {
+    const click = vi.fn();
+    const application = buildApplicationMenu(click);
+    electronState.applicationMenu = application.menu;
+    const guestHostContents = {} as WebContents;
+    const focusedGuest = { hostWebContents: guestHostContents } as WebContents;
+    electronState.windowsByWebContents.set(
+      guestHostContents,
+      electronState.browserWindow,
+    );
+    electronState.focusedWebContents = focusedGuest;
+    const snapshot = readApplicationMenuSnapshot(sender);
+
+    executeApplicationMenuItem(sender, snapshot.revision, "file/0");
+
+    expect(click).toHaveBeenCalledWith(
+      {},
+      electronState.browserWindow,
+      focusedGuest,
+    );
+  });
+
+  it("keeps the sender as the click target for a focused guest in another window", () => {
+    const click = vi.fn();
+    const application = buildApplicationMenu(click);
+    electronState.applicationMenu = application.menu;
+    const foreignWindow = { isDestroyed: () => false };
+    const foreignHostContents = {} as WebContents;
+    const focusedGuest = {
+      hostWebContents: foreignHostContents,
+    } as WebContents;
+    electronState.windowsByWebContents.set(foreignHostContents, foreignWindow);
+    electronState.focusedWebContents = focusedGuest;
     const snapshot = readApplicationMenuSnapshot(sender);
 
     executeApplicationMenuItem(sender, snapshot.revision, "file/0");

@@ -553,6 +553,9 @@ export interface DesktopServiceBridge {
 
 export interface DesktopMenuBridge {
   getSnapshot(): Promise<DesktopMenuSnapshot>;
+  onChange(handler: () => void): {
+    dispose: () => void;
+  };
   executeItem(revision: number, itemId: string): Promise<void>;
 
   readonly platform: DesktopRuntimePlatform;

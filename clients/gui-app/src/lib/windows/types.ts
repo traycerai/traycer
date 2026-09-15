@@ -454,6 +454,7 @@ export interface DesktopMenuSnapshot {
 }
 
 export interface DesktopMenuPopupBridge {
+  onChange(handler: () => void): { dispose(): void };
   getSnapshot(): Promise<DesktopMenuSnapshot>;
   executeItem(revision: number, itemId: string): Promise<void>;
 

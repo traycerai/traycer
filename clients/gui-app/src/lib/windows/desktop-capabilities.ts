@@ -89,7 +89,8 @@ function isDesktopMenuPopupBridge(
     isRecord(value) &&
     typeof value.openTopLevel === "function" &&
     typeof value.getSnapshot === "function" &&
-    typeof value.executeItem === "function"
+    typeof value.executeItem === "function" &&
+    typeof value.onChange === "function"
   );
 }
 

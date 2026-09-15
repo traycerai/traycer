@@ -440,6 +440,7 @@ export const RunnerHostEvent = {
    */
   authVerificationRevoked: "runnerHost:event:windows:authSession:revoked",
   menuCommand: "runnerHost:event:menu:command",
+  menuChanged: "runnerHost:event:menu:changed",
   migrationRunChange: "runnerHost:event:migration:runChange",
   accessibilityThemeChange: "runnerHost:event:accessibilityTheme:change",
   certificateErrorPending: "runnerHost:event:cert:errorPending",

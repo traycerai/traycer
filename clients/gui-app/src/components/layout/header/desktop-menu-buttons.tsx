@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { DesktopTopLevelMenuId } from "@/lib/windows/types";
+import { DESKTOP_MENU_ITEMS } from "@/lib/windows/desktop-menu-items";
 import { useDesktopMenu } from "@/hooks/runner/use-desktop-menu";
 import {
   Menubar,
@@ -20,17 +20,6 @@ import { DesktopMenuEntries } from "@/components/layout/header/desktop-menu-entr
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 
 const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
-const DESKTOP_MENU_ITEMS: ReadonlyArray<{
-  readonly id: DesktopTopLevelMenuId;
-  readonly label: string;
-  readonly mnemonic: string;
-}> = [
-  { id: "file", label: "File", mnemonic: "F" },
-  { id: "edit", label: "Edit", mnemonic: "E" },
-  { id: "view", label: "View", mnemonic: "V" },
-  { id: "window", label: "Window", mnemonic: "W" },
-  { id: "help", label: "Help", mnemonic: "H" },
-];
 
 /** One active session: idle hover highlights, engaged hover switches menus. */
 export function DesktopMenuButtons(props: {

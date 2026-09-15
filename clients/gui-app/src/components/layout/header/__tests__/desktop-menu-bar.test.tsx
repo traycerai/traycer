@@ -45,6 +45,11 @@ interface MenuSnapshot {
   }[];
 }
 
+interface PrimaryMenuItem {
+  readonly id: string;
+  readonly label: string;
+}
+
 function entry(
   id: string,
   type: MenuEntry["type"],
@@ -66,7 +71,10 @@ function entry(
   };
 }
 
-function createSnapshot(revision: number): MenuSnapshot {
+function createSnapshot(
+  revision: number,
+  primaryItem: PrimaryMenuItem,
+): MenuSnapshot {
   return {
     revision,
     menus: [
@@ -74,7 +82,7 @@ function createSnapshot(revision: number): MenuSnapshot {
         id: "file",
         label: "File",
         items: [
-          entry("file.new", "normal", "New File", {
+          entry(primaryItem.id, "normal", primaryItem.label, {
             enabled: true,
             checked: false,
             children: [],
@@ -135,7 +143,8 @@ function buildHost(platform: DesktopPlatform) {
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
-  const snapshot = createSnapshot(17);
+  let snapshot = createSnapshot(17, { id: "file.new", label: "New File" });
+  const changeListeners = new Set<() => void>();
   const openTopLevel = vi.fn(() => Promise.resolve());
   const getSnapshot = vi.fn(() => Promise.resolve(snapshot));
   const executeItem = vi.fn(() => Promise.resolve());
@@ -147,10 +156,25 @@ function buildHost(platform: DesktopPlatform) {
       }),
       getSnapshot,
       executeItem,
+      onChange: (handler: () => void) => {
+        changeListeners.add(handler);
+        return { dispose: () => changeListeners.delete(handler) };
+      },
       openTopLevel,
     },
   });
-  return { host, openTopLevel, getSnapshot, executeItem };
+  return {
+    host,
+    openTopLevel,
+    getSnapshot,
+    executeItem,
+    updateSnapshot: (next: MenuSnapshot): void => {
+      snapshot = next;
+    },
+    emitMenuChange: (): void => {
+      for (const listener of changeListeners) listener();
+    },
+  };
 }
 
 function renderMenuBar(host: IRunnerHost): void {
@@ -244,6 +268,31 @@ for (const platform of ["win32", "linux"] as const) {
         expect(screen.getByRole("menu").textContent).toContain("Copy");
       });
       expect(screen.queryByText("New File")).toBeNull();
+    });
+
+    it("refreshes an open menu before executing an item after menu change", async () => {
+      const fixture = buildHost(platform);
+      const user = userEvent.setup();
+      renderMenuBar(fixture.host);
+      const menu = await openMenu(user, "File");
+
+      fixture.updateSnapshot(
+        createSnapshot(18, { id: "file.updated", label: "Updated File" }),
+      );
+      act(() => {
+        fixture.emitMenuChange();
+      });
+
+      await waitFor(() => {
+        expect(menu.textContent).toContain("Updated File");
+      });
+      await user.click(
+        within(menu).getByRole("menuitem", { name: "Updated File" }),
+      );
+      await waitFor(() => {
+        expect(fixture.executeItem).toHaveBeenCalledOnce();
+      });
+      expect(fixture.executeItem).toHaveBeenCalledWith(18, "file.updated");
     });
 
     it("starts a session from an Alt mnemonic", async () => {

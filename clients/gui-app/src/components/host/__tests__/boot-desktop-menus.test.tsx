@@ -55,6 +55,7 @@ function createMenuFixture(
         ],
       }),
     executeItem: () => Promise.resolve(),
+    onChange: (_handler: () => void) => ({ dispose: () => undefined }),
     openTopLevel: () => Promise.resolve(),
   };
   const host = new MockRunnerHost({
@@ -115,6 +116,19 @@ describe("<BootDesktopMenus />", () => {
         "about-details",
       );
       expect(screen.queryByTestId("boot-about-dialog")).not.toBeNull();
+    });
+
+    it(`opens the report issue dialog only when reporting is available on ${platform}`, () => {
+      const fixture = createMenuFixture(platform);
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+      renderBootMenus(fixture, () => undefined);
+
+      act(() => fixture.emit("app.reportIssue"));
+
+      expect(useDesktopDialogStore.getState().activeDialog).toBe(
+        "report-issue",
+      );
+      useDesktopDialogStore.setState({ reportIssueAvailable: false });
     });
 
     it(`disposes the ${platform} boot subscription so a routed handoff cannot duplicate commands`, () => {

@@ -35,6 +35,8 @@ export function BootDesktopMenus(props: {
       if (command === "app.openSettings") onOpenSettings();
       else if (command === "app.openLogs") dialogs.openLogs();
       else if (command === "app.aboutDetails") dialogs.openAboutDetails();
+      else if (command === "app.reportIssue" && dialogs.reportIssueAvailable)
+        dialogs.openReportIssue();
     });
     return () => subscription.dispose();
   }, [active, menu, onOpenSettings]);
