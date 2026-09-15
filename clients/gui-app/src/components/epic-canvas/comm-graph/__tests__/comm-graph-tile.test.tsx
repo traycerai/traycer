@@ -1480,6 +1480,70 @@ describe("CommGraphTile", () => {
     });
   });
 
+  describe("office camera writes while Auto is unresolved (F5)", () => {
+    it("ignores an office camera pan while Auto has not resolved a view yet", async () => {
+      // Before the first `onSnapshot`, `officeAutoView` is still `null` -
+      // Auto's choice is "auto" but nothing has answered it, so the canvas
+      // mounted here is the blank MEASURING surface. A pan on it frames no
+      // real view.
+      await renderOfficeTile();
+      await waitFor(() => {
+        expect(Array.from(openedByHost.keys()).sort()).toEqual([
+          HOST_A,
+          HOST_B,
+        ]);
+      });
+      setIntersecting(true);
+      setOfficeCanvasSize(OFFICE_CANVAS);
+      expect(storedView()?.officeAutoView).toBeNull();
+
+      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
+        deltaX: 80,
+        deltaY: 90,
+      });
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      });
+
+      // Nothing was written: a persisted camera here would carry a null
+      // `framedView`, which Auto's keep arm would later adopt on a Floor
+      // outcome, opening the resolved office at an arbitrary framing instead
+      // of auto-fitting.
+      expect(storedView()?.officeCamera).toBeNull();
+    });
+
+    it("persists an office camera pan once Auto has resolved a view", async () => {
+      // The positive control: the same gesture, after Auto has answered,
+      // still lands - the guard above must not have gone blanket-silent.
+      await renderOfficeTile();
+      await waitFor(() => {
+        expect(Array.from(openedByHost.keys()).sort()).toEqual([
+          HOST_A,
+          HOST_B,
+        ]);
+      });
+      setIntersecting(true);
+      setOfficeCanvasSize(OFFICE_CANVAS);
+      act(() => {
+        openedByHost.get(HOST_A)?.onSnapshot([], null);
+        openedByHost.get(HOST_B)?.onSnapshot([], null);
+      });
+      await waitFor(() => {
+        expect(storedView()?.officeAutoView).toBe("floor");
+      });
+
+      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
+        deltaX: 80,
+        deltaY: 90,
+      });
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      });
+
+      expect(storedView()?.officeCamera).not.toBeNull();
+    });
+  });
+
   describe("actual runtime camera on a default change (fixup 2, R1)", () => {
     // The store's own reset used to run in an EFFECT, which is one commit too
     // late: the replacement canvas already built its one-time runtime from

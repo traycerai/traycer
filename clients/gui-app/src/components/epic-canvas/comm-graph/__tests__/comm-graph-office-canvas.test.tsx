@@ -1067,6 +1067,270 @@ describe("CommGraphOfficeCanvas", () => {
     expect(syncSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("seeds ineligible for a laid-out tile scrolled off screen, and does no scene work before the observer answers (F4)", () => {
+    // `checkVisibility` answers "is this rendered at all" - true for a tile
+    // that participates in layout with no `display:none` ancestor, exactly
+    // like a real card scrolled below the fold. jsdom implements neither
+    // `checkVisibility` nor real layout, so it is stubbed by hand the same
+    // way `office-frame-gate.test.ts`'s own `isElementVisible` cases do.
+    HTMLElement.prototype.checkVisibility = () => true;
+    // The bounding box a real off-screen-but-laid-out canvas would report:
+    // real width and height, entirely below the viewport.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 5000, 1040, 700),
+    );
+    const sync = vi.spyOn(OfficeScene.prototype, "sync");
+
+    try {
+      render(
+        withQueryClient(
+          officeElement(
+            new Set([ORCHESTRATOR.id, REVIEWER.id]),
+            STATIC_OFFICE,
+            {},
+          ),
+        ),
+      );
+      // No `setIntersecting` call at all: the observer has not reported
+      // anything yet, so whatever happened here happened off the SYNCHRONOUS
+      // seed alone - the thing this fix changed.
+      expect(sync).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, "checkVisibility");
+    }
+  });
+
+  describe("F2 - the camera-shift compensation on a world-growing replan", () => {
+    /**
+     * Two hand-built layouts, one agent and two, the second declaring a real
+     * `shiftFromPrevious` - the same shape `office-scene.test.ts`'s own
+     * "fixup 1 - F2 uniform shift" describe uses to drive
+     * `OfficeScene.applyShift` without needing a real Towers growth to cross
+     * a storey boundary. Only the desks matter here; no errand spot is
+     * needed because this fix is about the CAMERA, not about a character's
+     * in-flight errand surviving the shift.
+     */
+    const SHIFT_FLOOR_1: OfficeFloor = {
+      hostId: null,
+      bounds: { col: 0, row: 0, cols: 16, rows: 20 },
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      receptionTile: { col: 0, row: 2 },
+      receptionQueueTiles: [],
+      queueFacing: "down",
+      corridorTiles: [],
+      clockTile: { col: 15, row: 0 },
+      stairsTile: null,
+      errandSpots: [],
+      cafeteria: null,
+      gameRoom: null,
+      areaSigns: [],
+      amenities: [],
+      civic: [],
+      road: null,
+    };
+    const SHIFT_FLOOR_2: OfficeFloor = {
+      ...SHIFT_FLOOR_1,
+      doorTile: { col: 0, row: 4 },
+      lobbyTile: { col: 0, row: 5 },
+      receptionTile: { col: 0, row: 6 },
+      clockTile: { col: 15, row: 4 },
+    };
+    const SHIFT_DESK_A1: OfficeSeat = {
+      seatId: "h/0/shift-a",
+      kind: "desk",
+      deskTile: { col: 2, row: 2 },
+      chairTile: { col: 2, row: 3 },
+      facing: "up",
+      hitTiles: { width: 1, height: 1 },
+      hitBox: null,
+      floorIndex: 0,
+      roomId: null,
+      hostId: null,
+      manager: false,
+      civicRoomId: null,
+    };
+    const SHIFT_DESK_A2: OfficeSeat = {
+      ...SHIFT_DESK_A1,
+      deskTile: { col: 2, row: 6 },
+      chairTile: { col: 2, row: 7 },
+    };
+    const SHIFT_DESK_B2: OfficeSeat = {
+      seatId: "h/0/shift-b",
+      kind: "desk",
+      deskTile: { col: 5, row: 6 },
+      chairTile: { col: 5, row: 7 },
+      facing: "up",
+      hitTiles: { width: 1, height: 1 },
+      hitBox: null,
+      floorIndex: 0,
+      roomId: null,
+      hostId: null,
+      manager: false,
+      civicRoomId: null,
+    };
+    function shiftAllWalkable(): ReadonlyArray<ReadonlyArray<boolean>> {
+      return Array.from({ length: 20 }, () =>
+        Array.from({ length: 16 }, () => true),
+      );
+    }
+    const SHIFT_LAYOUT_1: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 20,
+      desks: new Map([["shift-a", { ...SHIFT_DESK_A1, agentId: "shift-a" }]]),
+      seats: new Map([["h/0/shift-a", SHIFT_DESK_A1]]),
+      signs: [],
+      rooms: [],
+      floors: [SHIFT_FLOOR_1],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: shiftAllWalkable(),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    const SHIFT_LAYOUT_2: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 20,
+      desks: new Map([
+        ["shift-a", { ...SHIFT_DESK_A2, agentId: "shift-a" }],
+        ["shift-b", { ...SHIFT_DESK_B2, agentId: "shift-b" }],
+      ]),
+      seats: new Map([
+        ["h/0/shift-a", SHIFT_DESK_A2],
+        ["h/0/shift-b", SHIFT_DESK_B2],
+      ]),
+      signs: [],
+      rooms: [],
+      floors: [SHIFT_FLOOR_2],
+      doorTile: { col: 0, row: 4 },
+      lobbyTile: { col: 0, row: 5 },
+      props: [],
+      walkable: shiftAllWalkable(),
+      frozen: null,
+      // A REAL uniform shift, the same shape a storey addition reports -
+      // `applyShift` reads only this field and does not care why the plan
+      // says so.
+      shiftFromPrevious: { col: 0, row: 4 },
+      stable: true,
+    };
+    const SHIFT_VIEW: OfficeView = {
+      ...OFFICE_VIEWS.floor,
+      plan: (input) =>
+        input.agents.length <= 1 ? SHIFT_LAYOUT_1 : SHIFT_LAYOUT_2,
+    };
+    const SHIFT_AGENT_A = agent("shift-a", "Shift A");
+    const SHIFT_AGENT_B = agent("shift-b", "Shift B");
+    const SHIFT_VIEWPORT = { width: 1040, height: 700 };
+
+    it("persists the shift-compensated camera when a growth-triggered shift lands while manually framed", () => {
+      const { step } = installCanvas();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const onCameraChange = vi.fn();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      // `officeElementWithView`'s `FIXED_CAMERA_VIEW` (x:5, y:0, zoom:1) is
+      // not the schema default, so auto-fit starts OFF from the very first
+      // render - the office is manually framed, exactly the case this fix
+      // covers.
+      const view = render(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a"]),
+            [SHIFT_AGENT_A],
+            { onCameraChange },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      step();
+      const before = cameraFromFrame(frames, SHIFT_VIEWPORT);
+      if (before === null) throw new Error("no frame drawn before growth");
+
+      // The growth-triggered resync: a second agent arrives, the custom
+      // view's plan grows the floor and declares a real `shiftFromPrevious`.
+      view.rerender(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a", "shift-b"]),
+            [SHIFT_AGENT_A, SHIFT_AGENT_B],
+            { onCameraChange },
+          ),
+        ),
+      );
+      step();
+
+      const after = cameraFromFrame(frames, SHIFT_VIEWPORT);
+      if (after === null) throw new Error("no frame drawn after growth");
+      // Anti-vacuity: the shift actually moved the camera the loop drew with -
+      // otherwise the assertion below would pass even reading a persist that
+      // never happened. The shift is a pure row translation ({col: 0, row:
+      // 4}), so it is `y`, not `x`, that has to have moved.
+      expect(after.y).not.toBeCloseTo(before.y);
+
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+
+      // The write lands the SAME camera the frame loop actually settled on
+      // (shift-compensated), not the pre-shift framing.
+      expect(onCameraChange).toHaveBeenCalled();
+      const last = onCameraChange.mock.calls.at(-1)?.[0] as {
+        x: number;
+        y: number;
+        zoom: number;
+      };
+      expect(last.x).toBeCloseTo(after.x);
+      expect(last.y).toBeCloseTo(after.y);
+      expect(last.zoom).toBeCloseTo(after.zoom);
+    });
+
+    it("does not persist the camera when the same growth-triggered shift lands while auto-fitting", () => {
+      const { step } = installCanvas();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const onCameraChange = vi.fn();
+      const view = render(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a"]),
+            [SHIFT_AGENT_A],
+            // The schema-default view: auto-fit stays ON from mount, unlike
+            // the manual case above.
+            { onCameraChange, view: OFFICE_VIEW },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      step();
+
+      view.rerender(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a", "shift-b"]),
+            [SHIFT_AGENT_A, SHIFT_AGENT_B],
+            { onCameraChange, view: OFFICE_VIEW },
+          ),
+        ),
+      );
+      step();
+
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+
+      // An auto-fitting office reframes itself on the very next line and on
+      // every reload, so persisting the shift compensation here would only
+      // store a value auto-fit is about to recompute over.
+      expect(onCameraChange).not.toHaveBeenCalled();
+    });
+  });
+
   it("carries a glyph on its lod 0 pip for attention, failure, awaiting and archived", () => {
     // jsdom draws nothing, so this reads the same answer the canvas's own
     // scene would give at overview zoom, the way `envelopeRect` already does
@@ -1488,6 +1752,74 @@ describe("CommGraphOfficeCanvas", () => {
     expect(last.zoom).toBeCloseTo(1, 5);
   });
 
+  it("leaves a modified chord - Cmd/Ctrl+F, Cmd/Ctrl+Minus, Cmd/Ctrl+0 - to the global keybinding provider (F3)", () => {
+    // The global keybinding provider runs these during the CAPTURE phase,
+    // before this target handler ever sees the event - so matching them here
+    // by `event.key` alone would fire the office action on top of whatever
+    // the global command already did, and this handler's own
+    // `preventDefault` cannot undo a command that already ran.
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          onCameraChange,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    const surface = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
+
+    // `fireEvent` reports whether the event's default survived - `false`
+    // means this handler called `preventDefault`, which a bailed-out handler
+    // must never do: that would suppress the global command's own default
+    // handling too.
+    const metaF = fireEvent.keyDown(surface, { key: "f", metaKey: true });
+    const ctrlMinus = fireEvent.keyDown(surface, { key: "-", ctrlKey: true });
+    const metaZero = fireEvent.keyDown(surface, { key: "0", metaKey: true });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    // Neither the Fit nor the zoom-out ran: nothing was ever persisted.
+    expect(onCameraChange).not.toHaveBeenCalled();
+    expect(metaF).toBe(true);
+    expect(ctrlMinus).toBe(true);
+    expect(metaZero).toBe(true);
+  });
+
+  it("still fits on a bare F even though modified chords are now guarded (F3 guard)", () => {
+    // The negative case above is only worth something alongside this: a
+    // handler that bailed on every key at all would also leave `onCameraChange`
+    // silent for `metaKey+f`. This pins that the guard is scoped to the
+    // MODIFIER, not to the key.
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          onCameraChange,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    setCanvasSize({ width: 4400, height: 2500 });
+    const surface = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
+
+    fireEvent.keyDown(surface, { key: "f" });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).toHaveBeenCalledWith({ x: 88, y: 50, zoom: 6 });
+  });
+
   it("cancels a pending camera persist on unmount, leaving no stale write behind", () => {
     // The same unmount a view pick's remount performs (T6's own claim: "the
     // unmount cancels the debounce"). A pan mid-flight when that happens must
@@ -1726,6 +2058,37 @@ describe("CommGraphOfficeCanvas", () => {
     expect(row.textContent).not.toContain(team.leadAgentId);
     expect(target).not.toBe(team.leadAgentId);
     expect(ids.has(target)).toBe(true);
+  });
+
+  it("sizes the directory against the tile, not the viewport (F1)", () => {
+    // `min(30vw, 15rem)` resolves the `30vw` half against the whole browser
+    // viewport, so a split tile far narrower than the viewport still kept a
+    // 240px sidebar eating most of its width. `min(30%, 15rem)` resolves the
+    // `30%` half against this panel's own flex row instead, so the directory
+    // scales down with the pane. jsdom never lays anything out, so the only
+    // thing a test can observe here is the utility class itself.
+    const partition = partitionOfficePopulation({
+      agents: [],
+      statusById: new Map(),
+      previous: null,
+    });
+    render(
+      <OfficeDirectoryPanel
+        partition={partition}
+        visibleAgentIds={new Set()}
+        statusById={new Map()}
+        nameById={new Map()}
+        hostNameById={new Map()}
+        selectedAgentId={null}
+        onSelectAgent={vi.fn()}
+        onHoverAgent={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const directory = screen.getByTestId("comm-graph-office-directory");
+    expect(directory.className).toContain("w-[min(30%,15rem)]");
+    expect(directory.className).not.toContain("30vw");
   });
 
   it("zooms about a real hovered agent on double-click, same as it does an empty floor (F6)", () => {

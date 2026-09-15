@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  isElementInViewport,
   isElementVisible,
   officeCatchUpMs,
   OfficeFrameGate,
@@ -239,6 +240,80 @@ describe("isElementVisible", () => {
     // jsdom lays nothing out, so every element reports no boxes - which is
     // the fallback's "not rendered" answer, reached without throwing.
     expect(isElementVisible(element)).toBe(false);
+  });
+});
+
+/**
+ * F4: seeded from viewport INTERSECTION, not layout participation. A tile
+ * that is laid out but scrolled far off screen must seed `false`, or the
+ * office runs a full plan, sync and first bitmap allocation before the
+ * asynchronous `IntersectionObserver` reports `false` and tears it down -
+ * defeating the off-screen cost gate `isElementVisible` cannot answer for.
+ */
+describe("isElementInViewport", () => {
+  const originalInnerWidth = window.innerWidth;
+  const originalInnerHeight = window.innerHeight;
+
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: originalInnerHeight,
+    });
+  });
+
+  function stubViewport(width: number, height: number): void {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: width,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: height,
+    });
+  }
+
+  function stubRect(element: Element, rect: DOMRect): void {
+    element.getBoundingClientRect = () => rect;
+  }
+
+  it("is true for a box that overlaps the viewport", () => {
+    stubViewport(1024, 768);
+    const element = document.createElement("div");
+    stubRect(element, new DOMRect(100, 100, 200, 150));
+
+    expect(isElementInViewport(element)).toBe(true);
+  });
+
+  it("is false for a box laid out far outside the viewport", () => {
+    // The exact shape a tile scrolled out of view reports: real dimensions,
+    // but entirely below the fold.
+    stubViewport(1024, 768);
+    const element = document.createElement("div");
+    stubRect(element, new DOMRect(0, 5000, 100, 100));
+
+    expect(isElementInViewport(element)).toBe(false);
+  });
+
+  it("is false for a zero-sized box, the shape a not-yet-laid-out element reports", () => {
+    stubViewport(1024, 768);
+    const element = document.createElement("div");
+    stubRect(element, new DOMRect(0, 0, 0, 0));
+
+    expect(isElementInViewport(element)).toBe(false);
+  });
+
+  it("is false for a box just past every edge of the viewport", () => {
+    stubViewport(1024, 768);
+    const element = document.createElement("div");
+    // Its right edge sits exactly at the viewport's left edge - `right > 0`
+    // must fail here, not merely `right >= 0`.
+    stubRect(element, new DOMRect(-50, 0, 50, 50));
+
+    expect(isElementInViewport(element)).toBe(false);
   });
 });
 
