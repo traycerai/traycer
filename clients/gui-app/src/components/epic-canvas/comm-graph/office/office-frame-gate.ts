@@ -61,6 +61,47 @@ export function isElementVisible(element: Element): boolean {
 }
 
 /**
+ * Whether an element currently overlaps the browser viewport.
+ *
+ * `isElementVisible` answers "is this rendered at all" - true for an element
+ * that participates in layout even when it sits far outside the scroll
+ * viewport - so it is the wrong seed for intersection state: a tile mounted
+ * off screen would read `true` and run a full plan, scene sync and first
+ * bitmap allocation before the asynchronous `IntersectionObserver` reports
+ * `false` and tears that work down. This tests the box against the viewport
+ * the observer's default root uses, so the synchronous seed agrees with the
+ * observer's first async answer - a foreground tile is eligible at once, an
+ * off-screen one is not. A zero-sized box (not yet laid out) is not in the
+ * viewport, and in jsdom, where `getBoundingClientRect` is all zeros, the
+ * answer is `false` and the observer drives the state from there.
+ *
+ * A CONSERVATIVE seed against the window viewport ALONE. An
+ * `IntersectionObserver` with the default root also clips through the
+ * containing-block chain, so a tile scrolled out of the epic canvas - an
+ * `overflow-hidden` ancestor - is not intersecting even when its raw box still
+ * overlaps the window; that tile reads `true` here and runs one plan/sync/bake
+ * before the observer's first async answer tears it down. That is the accepted
+ * cost of NOT reading ancestor overflow synchronously: the only way to know an
+ * ancestor clips is `getComputedStyle`, which is a prohibited call site here
+ * (see clients/gui-app/AGENTS.md), and the observer is the authority on
+ * clipping anyway. The seed's job is only to keep a foreground tile eligible at
+ * once and an off-WINDOW one idle; the observer refines the rest a beat later.
+ */
+export function isElementInViewport(element: Element): boolean {
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const clipRight = window.innerWidth || document.documentElement.clientWidth;
+  const clipBottom =
+    window.innerHeight || document.documentElement.clientHeight;
+  return (
+    rect.bottom > 0 &&
+    rect.right > 0 &&
+    rect.top < clipBottom &&
+    rect.left < clipRight
+  );
+}
+
+/**
  * The rate cap and the idle skip, as one piece of state.
  *
  * Deliberately a small mutable object rather than free functions: both rules
@@ -70,6 +111,18 @@ export function isElementVisible(element: Element): boolean {
 export class OfficeFrameGate {
   private sinceLastFrame = 0;
   private lastDrawnMinute = -1;
+  /**
+   * Whether the floor was moving when this gate last looked.
+   *
+   * THE SETTLING FRAME IS THE ONE THAT SHOWS THE END. The loop ticks the scene
+   * and then asks whether it is animating, so the tick that lands the last
+   * walker in its chair or takes the delivered envelope off the floor is the
+   * tick after which the answer is no - and a gate that only asked the new
+   * answer would refuse exactly the frame in which the motion finishes,
+   * leaving the canvas holding the envelope a frame short of the desk and the
+   * pip two pixels shy of its seat until something else happened to move.
+   */
+  private wasAnimating = false;
 
   /**
    * Accumulates real time and answers with the elapsed slice when the cap
@@ -96,10 +149,18 @@ export class OfficeFrameGate {
    *
    * A still floor is still redrawn when the clock's MINUTE turns over, or its
    * hands would sit wrong until something else happened to move.
+   *
+   * And once more after the motion stops, for the reason `wasAnimating` gives:
+   * the frame in which a thing finishes is a frame in which nothing is moving
+   * any more. ONE more - the latch clears with it - so a settled floor goes
+   * quiescent on the next pass rather than redrawing forever.
    */
   shouldDraw(motion: OfficeFloorMotion): boolean {
+    const settling = this.wasAnimating && !motion.animating;
+    this.wasAnimating = motion.animating;
     const idle =
       !motion.animating &&
+      !settling &&
       motion.minute === this.lastDrawnMinute &&
       !motion.panning;
     if (idle) return false;
