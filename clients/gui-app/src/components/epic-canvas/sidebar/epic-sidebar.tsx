@@ -197,7 +197,6 @@ import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
-import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -539,7 +538,7 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
   "pull-requests": {
     live: {
       Body: PrPanelBody,
-      Actions: PrPanelActions,
+      Actions: null,
       Subtitle: null,
     },
     loading: emptyLoadingSlots(GenericLoadingPanelBody),
