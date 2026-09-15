@@ -34,6 +34,7 @@ import {
 import { inlineHashOnlyImageBytes } from "@/lib/composer/image-atoms";
 import { NO_HOST_HELD_HASHES } from "@/lib/composer/host-held-image-hashes";
 import { withHeldComposerContentImageRoots } from "@/lib/composer/composer-content-image-roots";
+import { appLogger } from "@/lib/logger";
 import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
@@ -1214,7 +1215,18 @@ export function NewConversationModalBody(props: {
       () => {
         draftImagePrepFlight.current = false;
       },
-    );
+    ).catch((error: unknown) => {
+      // The third call site of this helper, and the same rule as the other
+      // two: it propagates deliberately rather than swallowing, so `void`
+      // alone left a rejection unhandled. The flight flag is cleared by the
+      // helper's `finally` either way; this only records that the create was
+      // abandoned. The draft is untouched, so nothing is lost.
+      appLogger.error(
+        "[new-conversation] submit image preparation failed",
+        { epicId },
+        error,
+      );
+    });
   }, [canSubmit, epicId, raiseHostNotice, resolvedHostId, submitPreparedDraft]);
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
