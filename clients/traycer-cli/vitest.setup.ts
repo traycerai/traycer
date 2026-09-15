@@ -30,11 +30,14 @@ import { afterEach, beforeEach } from "vitest";
 const originalFetch = globalThis.fetch;
 let blockedUrls: string[] = [];
 
+// The whole 127.0.0.0/8 block is loopback, not just 127.0.0.1.
+const IPV4_LOOPBACK = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+
 function isLocalHostname(hostname: string): boolean {
   return (
     hostname === "localhost" ||
     hostname.endsWith(".localhost") ||
-    hostname === "127.0.0.1" ||
+    IPV4_LOOPBACK.test(hostname) ||
     hostname === "[::1]" ||
     hostname === "::1" ||
     hostname.endsWith(".invalid")
