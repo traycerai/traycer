@@ -30,7 +30,15 @@ import {
   render,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type {
   ReactFlowInstance,
   ReactFlowProps,
@@ -141,6 +149,10 @@ type FlowFitView = ReactFlowInstance<
   CommGraphAgentFlowNode,
   CommGraphFlowEdge
 >["fitView"];
+type FlowSetViewport = ReactFlowInstance<
+  CommGraphAgentFlowNode,
+  CommGraphFlowEdge
+>["setViewport"];
 
 function latestFindAdapter(): TileFindAdapter {
   const adapter = registerFindAdapterMock.mock.lastCall?.[0];
@@ -197,13 +209,18 @@ function createFlowInstanceStub(
 function installFlowInstance(viewport: Viewport): {
   readonly setCenter: Mock<FlowSetCenter>;
   readonly fitView: Mock<FlowFitView>;
+  readonly setViewport: Mock<FlowSetViewport>;
 } {
   const setCenter = vi.fn<FlowSetCenter>(() => Promise.resolve(true));
   const instance = createFlowInstanceStub(viewport, setCenter);
   act(() => {
     latestReactFlowProps().onInit?.(instance);
   });
-  return { setCenter, fitView: instance.fitView as Mock<FlowFitView> };
+  return {
+    setCenter,
+    fitView: instance.fitView as Mock<FlowFitView>,
+    setViewport: instance.setViewport as Mock<FlowSetViewport>,
+  };
 }
 
 function setCanvasSize(element: HTMLElement): void {
@@ -384,5 +401,91 @@ describe("CommGraphCanvas viewport", () => {
     await waitFor(() => {
       expect(setCenter).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+/**
+ * The global `MockResizeObserver` installed by `test-browser-apis.ts` is a
+ * total no-op - it never invokes its callback. This suite installs a
+ * controllable replacement for its own tests only, restored afterward so the
+ * rest of the file keeps the shared no-op.
+ */
+class ControllableResizeObserver implements ResizeObserver {
+  constructor(callback: ResizeObserverCallback) {
+    latestResizeCallback = callback;
+  }
+
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+
+let latestResizeCallback: ResizeObserverCallback | null = null;
+
+/** Handed to the callback as its observer argument; neither renderer reads it. */
+const INERT_RESIZE_OBSERVER: ResizeObserver = {
+  observe(): void {},
+  unobserve(): void {},
+  disconnect(): void {},
+};
+
+/** A `ResizeObserverEntry` carrying only the fields the effect reads. */
+function resizeEntry(width: number, height: number): ResizeObserverEntry {
+  const size: ResizeObserverSize = { inlineSize: width, blockSize: height };
+  return {
+    target: document.createElement("div"),
+    contentRect: DOMRect.fromRect({ width, height }),
+    borderBoxSize: [size],
+    contentBoxSize: [size],
+    devicePixelContentBoxSize: [size],
+  };
+}
+
+function fireResize(width: number, height: number): void {
+  const callback = latestResizeCallback;
+  if (callback === null) throw new Error("ResizeObserver was not created");
+  callback([resizeEntry(width, height)], INERT_RESIZE_OBSERVER);
+}
+
+describe("CommGraphCanvas viewport resize", () => {
+  let originalResizeObserver: typeof ResizeObserver;
+
+  beforeEach(() => {
+    originalResizeObserver = globalThis.ResizeObserver;
+    latestResizeCallback = null;
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: ControllableResizeObserver,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: originalResizeObserver,
+    });
+  });
+
+  it("keeps the point under the tile's centre under the new centre, and ignores a zero-size entry", () => {
+    const result = renderCanvas(GRAPH_DEFAULT_VIEW, STATIC_CANVAS);
+    const canvasElement = result.getByTestId("comm-graph-canvas");
+    // The effect takes its first measurement from this rect - 600x400 -
+    // before the observer ever fires.
+    setCanvasSize(canvasElement);
+    const { setViewport } = installFlowInstance({ x: 10, y: 20, zoom: 0.8 });
+
+    // Width shrinks by 200, height is unchanged: half the delta shifts x by
+    // -100 and leaves y alone, with zoom untouched.
+    fireResize(400, 400);
+
+    expect(setViewport).toHaveBeenCalledTimes(1);
+    expect(setViewport).toHaveBeenCalledWith({ x: -90, y: 20, zoom: 0.8 });
+
+    // A tile collapsed to nothing (hidden pane) has no centre worth keeping.
+    fireResize(0, 0);
+
+    expect(setViewport).toHaveBeenCalledTimes(1);
   });
 });
