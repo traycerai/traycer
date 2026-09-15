@@ -14,6 +14,7 @@ import {
 } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 
 export interface DraftSelection {
@@ -651,6 +652,14 @@ export function collectComposerDirtyWrites(): ReadonlyArray<{
     if (draft.generation <= draft.syncedGeneration) continue;
     if (draft.draftId === null) continue;
     if (isNeverTypedEmptyComposerDraft(draft)) continue;
+    // A pending inline image node means its hash rewrite has not landed yet.
+    // Publishing NOW would put the whole base64 snapshot on the wire - the
+    // upsert, the host row, every subscribe frame and the cloud head - which is
+    // the exact payload this work exists to remove. The rewrite's own document
+    // change bumps `generation` again and schedules the small write moments
+    // later; a failed ingest removes the node and does the same. Either way
+    // this draft is collectable on the next pass.
+    if (containsPendingInlineImageNode(draft.content)) continue;
     out.push({ chatId, draft });
   }
   return out;

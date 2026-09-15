@@ -1,9 +1,9 @@
 /**
- * `chat.subscribe@1.10` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session. `chat.subscribe@1.0`–`@1.9`
+ * `chat.subscribe@1.11` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0`–`@1.10`
  * (frozen, near the bottom of this file) are the exact shapes shipped in
- * earlier hosts; later minors only add to them, so a `1.10` app still bridges
- * to hosts that only know `1.0`–`1.9`. Streams have no cross-major downgrade
+ * earlier hosts; later minors only add to them, so a `1.11` app still bridges
+ * to hosts that only know `1.0`–`1.10`. Streams have no cross-major downgrade
  * bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a method
  * ships, its major must never move again - only additive minors.
  *
@@ -1790,7 +1790,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   ActionSchema extends z.ZodType,
   InterviewAnsweredSchema extends z.ZodType,
   InterviewErroredSchema extends z.ZodType,
-  LeaseFields extends z.ZodRawShape,
+  ExtraActionAckFields extends z.ZodRawShape,
 >(schemas: {
   readonly message: MessageSchema;
   readonly queue: QueueSchema;
@@ -1800,19 +1800,19 @@ function buildChatSubscribeCommonServerFrameSchemas<
   readonly interviewErrored: InterviewErroredSchema;
   /**
    * Extra `actionAck` members that exist only on the lines that mint them -
-   * `{}` on every released family, the fallback grace-hold `token` on the live
-   * one.
+   * `{}` on every released family, the fallback grace-hold `token` from `1.10`,
+   * and the draft-image refusal `cause` from `1.11`.
    *
    * Parameterized rather than defaulted onto the shared shape, which is the
    * mistake this parameter exists to prevent. `backgroundStopTaskIds` above
    * looks like a precedent for adding a defaulted key here, and is not: it is
    * in the released baseline already, so it reads as always-present to every
-   * shipped peer. A key added to this factory TODAY lands on all eleven
+   * shipped peer. A key added to this factory TODAY lands on all twelve
    * bindings at once, and `released-baseline-compat` calls that breaking on
    * each released host→client slot - correctly, since a released host never
    * emits it and a consumer that assumes it is populated reads undefined.
    */
-  readonly lease: LeaseFields;
+  readonly extraActionAckFields: ExtraActionAckFields;
 }) {
   return [
     z.object({
@@ -1830,9 +1830,9 @@ function buildChatSubscribeCommonServerFrameSchemas<
       // parses - it never emits a background-stop ack, so `[]` is the correct
       // reading, not a lossy fallback.
       backgroundStopTaskIds: z.array(z.string()).default([]),
-      // `token` on the lines that mint a lease - see `lease` on the parameter
-      // object above for why it arrives that way and not as a member here.
-      ...schemas.lease,
+      // The per-line members - see `extraActionAckFields` on the parameter
+      // object above for why they arrive that way and not as members here.
+      ...schemas.extraActionAckFields,
     }),
     z.object({
       kind: z.literal("messageAccepted"),
@@ -1944,10 +1944,38 @@ const chatSubscribeCommonServerFrameSchemasV18 =
     action: chatActionSchemaV17ToV19,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
-    lease: {},
+    extraActionAckFields: {},
   });
 
-// The live common frames (`chat.subscribe@1.10`).
+// The grace-hold LEASE minted by an accepted `fallback.holdForChoice`, and the
+// handle a later `chat.fallback.chooseTarget` presents to prove it is acting on
+// the hold it took. One live lease per traversal; a stale or foreign token is
+// rejected `CHOICE_LEASE_STALE` (`actionAck.code` is an open string, so the new
+// rejection codes need no enum growth).
+//
+// It rides the ACK rather than a frame of its own so the lease and the
+// acceptance are one message: a token delivered separately could arrive after
+// the client had already given up on the hold.
+const fallbackGraceHoldLeaseFields = {
+  token: z.string().nullable().default(null),
+};
+
+// Frozen common frames bound to `chat.subscribe@1.10`: the fallback action set
+// and the grace-hold lease, but no draft-image refusal cause. `1.11` adds that
+// one `actionAck` member, so the live list below is built on its own rather
+// than aliasing this one.
+const chatSubscribeCommonServerFrameSchemasV110 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchema,
+    event: chatEventSchema,
+    action: chatActionSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: fallbackGraceHoldLeaseFields,
+  });
+
+// The live common frames (`chat.subscribe@1.11`).
 const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
@@ -1956,16 +1984,18 @@ const chatSubscribeCommonServerFrameSchemas =
     action: chatActionSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
-    // The grace-hold LEASE minted by an accepted `fallback.holdForChoice`,
-    // and the handle a later `chat.fallback.chooseTarget` presents to prove it
-    // is acting on the hold it took. One live lease per traversal; a stale or
-    // foreign token is rejected `CHOICE_LEASE_STALE` (`actionAck.code` is an
-    // open string, so the new rejection codes need no enum growth).
-    //
-    // It rides the ACK rather than a frame of its own so the lease and the
-    // acceptance are one message: a token delivered separately could arrive
-    // after the client had already given up on the hold.
-    lease: { token: z.string().nullable().default(null) },
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      /**
+       * Why the host could not bridge a hash-only draft image. Meaningful only
+       * for status `rejected` and code `MISSING_ATTACHMENT_BYTES`. Hosts must
+       * omit it otherwise, and for peers below `chat.subscribe@1.11` -
+       * `projectChatActionAckForVersion` strips it there.
+       */
+      cause: z
+        .enum(["unsupported-format", "too-large", "not-on-host"])
+        .optional(),
+    },
   });
 
 // Frozen common frames bound to `chat.subscribe@1.0–1.3` (pre-`inReplyTo`).
@@ -1977,7 +2007,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     action: chatActionSchemaV15,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
-    lease: {},
+    extraActionAckFields: {},
   });
 
 // Frozen common frames bound to `chat.subscribe@1.4–1.5`: `inReplyTo` shipped
@@ -1996,7 +2026,7 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
     action: chatActionSchemaV15,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
-    lease: {},
+    extraActionAckFields: {},
   });
 
 // Frozen for `chat.subscribe@1.2` and earlier.
@@ -2013,6 +2043,13 @@ const chatSubscribeSharedServerFrameSchemasV12 = [
 const chatSubscribeSharedServerFrameSchemasV18 = [
   ...chatSubscribeCommonServerFrameSchemasV18,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreFallback),
+];
+// The shared frames `chat.subscribe@1.10` ships. `1.11` grows only the
+// `actionAck` member, so the two lists differ in that one schema and share the
+// `blockDelta` half by construction.
+const chatSubscribeSharedServerFrameSchemasV110 = [
+  ...chatSubscribeCommonServerFrameSchemasV110,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
   ...chatSubscribeCommonServerFrameSchemas,
@@ -3317,7 +3354,7 @@ const chatSubscribeCommonServerFrameSchemasV16 =
     action: chatActionSchemaV16,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
-    lease: {},
+    extraActionAckFields: {},
   });
 
 const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
@@ -3750,6 +3787,25 @@ const chatRangeResponseSchemaV18 = z.object({
   truncatedAtOrdinal: z.number().int().nonnegative().optional(),
 });
 
+// Frozen windowed frames for `chat.subscribe@1.10`: every live arm, bound to
+// the shared bundle without the draft-image refusal `cause`. Only the eight
+// non-shared arms are shared by reference with the live union below, because
+// `1.11` grows nothing outside `actionAck`.
+const chatSubscribeWindowedServerFrameSchemaV110 = z.discriminatedUnion(
+  "kind",
+  [
+    chatSubscribeWindowedSnapshotServerFrameSchema,
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV110,
+  ],
+);
+
 export const chatSubscribeWindowedServerFrameSchema = z.discriminatedUnion(
   "kind",
   [
@@ -4036,6 +4092,41 @@ export const chatSubscribeV19 = defineStreamRpcContract({
 export const chatSubscribeV110 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 10 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeWindowedServerFrameSchemaV110,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The live `chat.subscribe@1.11` contract.
+ *
+ * `1.10` plus draft-image bridging. Two facts ride this one minor, and only
+ * the second is a wire change:
+ *
+ *   - the host materializes hash-only draft images into epic attachments at
+ *     send, so a client may send content that names an image by hash with no
+ *     bytes attached. Nothing on the wire says so; the MINOR is the signal,
+ *     which is why the client gates on its OWN session's negotiated version
+ *     (`ChatStreamClient.draftBlobBridgeSupported`) rather than on any frame;
+ *   - a rejected `MISSING_ATTACHMENT_BYTES` acknowledgement may carry a typed
+ *     `cause` - `unsupported-format`, `too-large` or `not-on-host` - so the
+ *     client can act on the refusal instead of parsing the human `reason`.
+ *
+ * Everything else - the other frames, the client union and the open request -
+ * retains the `1.10` shape.
+ *
+ * Streams have no registry downgrade bridge, so the `cause` is held back by
+ * the host's own projection: `projectChatServerFrameForVersion` in
+ * `chat-frame-compat.ts` applies `projectChatActionAckForVersion`, which
+ * strips the key below `1.11`, and the host emission authority
+ * (`projectWindowedFrameForVersion` / `emitWindowedFrameToSubscriber` in the
+ * internal repo's `chat-session-manager.ts`) already calls it. The key is
+ * optional rather than nullable for the same reason `pendingFallback` is on
+ * `1.10`: a stripped optional member and an absent one are the same frame.
+ */
+export const chatSubscribeV111 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 11 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

@@ -5,6 +5,7 @@ import { create } from "zustand";
 
 import type { ComposerMode } from "@/components/home/data/landing-options";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
+import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import {
   notifyDraftLocalDelete,
   notifyDraftLocalEdit,
@@ -369,6 +370,16 @@ export function collectNewChatDirtyWrites(): ReadonlyArray<{
     if (patch === undefined) continue;
     if (patch.generation <= patch.syncedGeneration) continue;
     if (patch.draftId === null) continue;
+    // Same rule as the chat composer's collect: a pending inline image node is
+    // a hash rewrite still in flight, and publishing now would put the base64
+    // snapshot on the wire that the rewrite is about to make small. The
+    // rewrite's own document change re-dirties this patch moments later.
+    if (
+      patch.content !== null &&
+      containsPendingInlineImageNode(patch.content)
+    ) {
+      continue;
+    }
     out.push({ epicId, patch });
   }
   return out;

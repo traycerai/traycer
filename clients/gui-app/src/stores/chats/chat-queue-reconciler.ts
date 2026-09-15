@@ -204,6 +204,13 @@ export type ReconcileSnapshotPatch = {
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
   /**
+   * The documents behind this pass's last-copy notices, in the same order.
+   * The caller records them so a teardown can hand them to the prompt stash:
+   * a notice is a PRESENTATION, and for these sends it is the only custody
+   * there is. See {@link UnrecoverableSendPrompt}.
+   */
+  readonly appendedLastCopyPrompts: ReadonlyArray<UnrecoverableSendPrompt>;
+  /**
    * Accepted sends this pass declared dead. The caller REMOVES these from its
    * `acceptedActions` - `acceptedActions` above is an additive delta, so
    * removal needs its own channel rather than being expressible as one.
@@ -375,6 +382,37 @@ function contentLossStatement(content: JsonContent, preamble: string): string {
 function quotedDraftOf(content: JsonContent): string | null {
   const text = recoveryTextFromContent(content);
   return text.trim().length > 0 ? text : null;
+}
+
+/**
+ * A prompt whose only remaining copy is a notice in the ring, paired with the
+ * account-qualified sentence that notice says about it.
+ *
+ * The notice itself cannot carry this. `ChatErrorNotice` is a PROTOCOL type
+ * (`@traycer/protocol/host/agent/gui/subscribe`), so adding a field to it is a
+ * wire change; and its `message` holds the draft only as rendered text, which
+ * no restore can read back. So the document travels beside the notice, from
+ * the one function that builds every last-copy notice there is.
+ */
+export interface UnrecoverableSendPrompt {
+  readonly clientActionId: string;
+  readonly content: JsonContent;
+  /** The same account text the notice renders - `handedBack: false`. */
+  readonly reason: string;
+}
+
+/**
+ * The document behind {@link unrecoverableSendNotice}'s notice, for the stash
+ * handoff at teardown. Derived from the SAME input, so the two cannot drift.
+ */
+export function unrecoverableSendPrompt(
+  send: UnrecoverableSend,
+): UnrecoverableSendPrompt {
+  return {
+    clientActionId: send.clientActionId,
+    content: send.content,
+    reason: `${send.circumstance}.${deadSendAccountClauses(send.account, false)}`,
+  };
 }
 
 export function unrecoverableSendNotice(
@@ -1050,6 +1088,7 @@ export function reconcileSnapshotChange(
   const initial: ReconcileSnapshotPatch = {
     pendingActions: input.pendingActions,
     acceptedActions: {},
+    appendedLastCopyPrompts: [],
     pendingUserMessages: input.pendingUserMessages,
     failedSendRestoration: input.failedSendRestoration,
     appendedErrorNotices: [],
@@ -1117,6 +1156,23 @@ export function reconcileSnapshotChange(
       // composer after the user had followed the advice and resent it. The
       // statement carries the text, since nothing holds it once the row goes.
       if (next.failedSendRestoration !== null) {
+        const reconnectLastCopy: UnrecoverableSend = {
+          clientActionId: pending.clientActionId,
+          content: pending.restore.content,
+          circumstance: "A message was not confirmed after reconnect",
+          account: {
+            worktree: worktreeSweepFor(
+              pending.restoreWorktreeIntent,
+              input.worktreePartition,
+              false,
+            ),
+            sentSettings: pending.settings,
+            currentSettings: input.currentSettings,
+            sentAccountContext: pending.accountContext,
+            sentDeliveryPolicy: pending.deliveryPolicy,
+            currentAccountContext: input.currentAccountContext,
+          },
+        };
         return {
           ...next,
           pendingActions: withoutPendingAction(
@@ -1128,23 +1184,11 @@ export function reconcileSnapshotChange(
           ),
           appendedErrorNotices: [
             ...next.appendedErrorNotices,
-            unrecoverableSendNotice({
-              clientActionId: pending.clientActionId,
-              content: pending.restore.content,
-              circumstance: "A message was not confirmed after reconnect",
-              account: {
-                worktree: worktreeSweepFor(
-                  pending.restoreWorktreeIntent,
-                  input.worktreePartition,
-                  false,
-                ),
-                sentSettings: pending.settings,
-                currentSettings: input.currentSettings,
-                sentAccountContext: pending.accountContext,
-                sentDeliveryPolicy: pending.deliveryPolicy,
-                currentAccountContext: input.currentAccountContext,
-              },
-            }),
+            unrecoverableSendNotice(reconnectLastCopy),
+          ],
+          appendedLastCopyPrompts: [
+            ...next.appendedLastCopyPrompts,
+            unrecoverableSendPrompt(reconnectLastCopy),
           ],
         };
       }
@@ -1300,18 +1344,22 @@ function reconcileAcceptedSends(
       // longest keeps the composer, and everyone else is STATED with their
       // text inlined.
       if (next.failedSendRestoration !== null) {
+        const queuedLastCopy: UnrecoverableSend = {
+          clientActionId: accepted.clientActionId,
+          content: accepted.restore.content,
+          circumstance: "A queued message was not confirmed after reconnect",
+          account,
+        };
         return {
           ...next,
           settledAcceptedActionIds,
           appendedErrorNotices: [
             ...next.appendedErrorNotices,
-            unrecoverableSendNotice({
-              clientActionId: accepted.clientActionId,
-              content: accepted.restore.content,
-              circumstance:
-                "A queued message was not confirmed after reconnect",
-              account,
-            }),
+            unrecoverableSendNotice(queuedLastCopy),
+          ],
+          appendedLastCopyPrompts: [
+            ...next.appendedLastCopyPrompts,
+            unrecoverableSendPrompt(queuedLastCopy),
           ],
         };
       }
@@ -1345,6 +1393,18 @@ function reconcileAcceptedSends(
  */
 export type ReconcileTurnSettledInput = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
+  /**
+   * Action ids whose send is being silently RECOVERED - the host refused a
+   * hash-only image, the client is re-inlining it, and a retry is still to
+   * come.
+   *
+   * Passed because such a send has left `pendingActions` (the host answered
+   * it) while remaining very much in flight. Without this, the check below
+   * reads it as stranded, hands its prompt back to the composer, and the
+   * recovery then dispatches anyway - the user gets a successful send AND the
+   * same draft offered again.
+   */
+  readonly recoveringActionIds: ReadonlySet<string>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly messages: ReadonlyArray<Message>;
   readonly queue: ChatQueueState;
@@ -1367,6 +1427,13 @@ export type ReconcileTurnSettledPatch = {
   readonly failedSendRestoration: FailedSendRestorationState | null;
   /** Delta, appended by the caller - see {@link ReconcileSnapshotPatch}. */
   readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
+  /**
+   * The documents behind this pass's last-copy notices, in the same order.
+   * The caller records them so a teardown can hand them to the prompt stash:
+   * a notice is a PRESENTATION, and for these sends it is the only custody
+   * there is. See {@link UnrecoverableSendPrompt}.
+   */
+  readonly appendedLastCopyPrompts: ReadonlyArray<UnrecoverableSendPrompt>;
   /** See {@link ReconcileSnapshotPatch.restoredWorktreeIntent}. */
   readonly restoredWorktreeIntent: StagedWorktreeIntentSource | null;
   /**
@@ -1444,6 +1511,7 @@ export function reconcileTurnSettled(
       pendingUserMessages: input.pendingUserMessages,
       failedSendRestoration: input.failedSendRestoration,
       appendedErrorNotices: [],
+      appendedLastCopyPrompts: [],
       restoredWorktreeIntent: null,
       settledAcceptedActionIds: NO_SETTLED_ACCEPTED_IDS,
     };
@@ -1452,6 +1520,10 @@ export function reconcileTurnSettled(
   const stranded = input.pendingUserMessages.filter(
     (message) =>
       !Object.hasOwn(input.pendingActions, message.clientActionId) &&
+      // A recovering send is pending, not stranded. Its action id is gone by
+      // design; the recovery record owns it until the retry dispatches or the
+      // prompt is handed back, and exactly one of those will happen.
+      !input.recoveringActionIds.has(message.clientActionId) &&
       !queueContainsPendingSend(input.queue, message.messageId, message),
   );
   if (stranded.length === 0) {
@@ -1459,6 +1531,7 @@ export function reconcileTurnSettled(
       pendingUserMessages: input.pendingUserMessages,
       failedSendRestoration: input.failedSendRestoration,
       appendedErrorNotices: [],
+      appendedLastCopyPrompts: [],
       restoredWorktreeIntent: null,
       settledAcceptedActionIds: NO_SETTLED_ACCEPTED_IDS,
     };
@@ -1493,6 +1566,29 @@ export function reconcileTurnSettled(
     input.failedSendRestoration === null && restorable !== undefined
       ? restorable.clientActionId
       : null;
+  const lastCopySends: UnrecoverableSend[] = stranded
+    .filter(
+      (message) =>
+        !confirmedMessageIds.has(message.messageId) &&
+        message.clientActionId !== slotClaimantActionId,
+    )
+    .map((message) => ({
+      clientActionId: message.clientActionId,
+      content: message.content,
+      circumstance: "A message was not recorded before the turn stopped",
+      account: {
+        worktree: worktreeSweepFor(
+          message.restoreWorktreeIntent,
+          input.worktreePartition,
+          false,
+        ),
+        sentSettings: message.settings,
+        currentSettings: input.currentSettings,
+        sentAccountContext: message.accountContext,
+        sentDeliveryPolicy: message.deliveryPolicy,
+        currentAccountContext: input.currentAccountContext,
+      },
+    }));
   return {
     // Every stranded row this pass settled - restored or stated - takes its
     // accepted record with it, so no later pass can find the same send
@@ -1528,31 +1624,11 @@ export function reconcileTurnSettled(
       input.failedSendRestoration !== null || restorable === undefined
         ? null
         : restorable,
-    appendedErrorNotices: stranded
-      .filter(
-        (message) =>
-          !confirmedMessageIds.has(message.messageId) &&
-          message.clientActionId !== slotClaimantActionId,
-      )
-      .map((message) =>
-        unrecoverableSendNotice({
-          clientActionId: message.clientActionId,
-          content: message.content,
-          circumstance: "A message was not recorded before the turn stopped",
-          account: {
-            worktree: worktreeSweepFor(
-              message.restoreWorktreeIntent,
-              input.worktreePartition,
-              false,
-            ),
-            sentSettings: message.settings,
-            currentSettings: input.currentSettings,
-            sentAccountContext: message.accountContext,
-            sentDeliveryPolicy: message.deliveryPolicy,
-            currentAccountContext: input.currentAccountContext,
-          },
-        }),
-      ),
+    // ONE list, mapped twice. The notice and the prompt behind it are two
+    // views of the same send, and deriving them from separate filters is how
+    // they would come to disagree about which sends are stated.
+    appendedErrorNotices: lastCopySends.map(unrecoverableSendNotice),
+    appendedLastCopyPrompts: lastCopySends.map(unrecoverableSendPrompt),
   };
 }
 

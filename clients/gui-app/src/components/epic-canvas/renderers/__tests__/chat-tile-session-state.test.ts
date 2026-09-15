@@ -129,6 +129,7 @@ const MESSAGE: ChatMessage = {
 
 function inlineEditState(dirty: boolean): InlineEditState {
   return {
+    sessionId: "session-1",
     targetMessageId: "persisted-message-1",
     originalMessage: MESSAGE,
     initialContent: CONTENT,

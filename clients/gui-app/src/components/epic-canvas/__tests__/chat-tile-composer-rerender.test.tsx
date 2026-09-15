@@ -28,9 +28,19 @@ let composerRenderCount = 0;
 vi.mock("@/components/chat/composer/chat-composer", () => ({
   ChatComposer: (props: {
     readonly workspaceControls: import("react").ReactNode | null;
+    readonly getDraftBlobBridgeSupported: () => boolean;
   }) => {
     composerRenderCount += 1;
-    return <div data-testid="composer-stub">{props.workspaceControls}</div>;
+    return (
+      <div
+        data-testid="composer-stub"
+        data-draft-blob-bridge-supported={String(
+          props.getDraftBlobBridgeSupported(),
+        )}
+      >
+        {props.workspaceControls}
+      </div>
+    );
   },
 }));
 // The dock legitimately re-renders per token; stub it so the test isolates the
@@ -143,6 +153,7 @@ const TURN_IDLE: ChatLowerTurnState = {
   onStopTurn: () => null,
   steerCapable: false,
   steerProtocolSupported: true,
+  getDraftBlobBridgeSupported: () => false,
   getActiveTurnForSteer: () => null,
 };
 const TURN_RUNNING: ChatLowerTurnState = {
@@ -151,6 +162,7 @@ const TURN_RUNNING: ChatLowerTurnState = {
   onStopTurn: () => null,
   steerCapable: false,
   steerProtocolSupported: true,
+  getDraftBlobBridgeSupported: () => false,
   getActiveTurnForSteer: () => null,
 };
 const INTERVIEW: ChatLowerInterviewState = {
@@ -294,6 +306,42 @@ describe("composer isolation from per-token dock churn", () => {
     // Run status flips idle -> running: a genuine composer input change.
     rerender(<ChatLowerInteractionSurfaces {...props(TURN_RUNNING, 1)} />);
     expect(composerRenderCount).toBe(2);
+  });
+
+  it("forwards draft blob bridge support through the composer boundary", () => {
+    const { rerender } = render(
+      <ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />,
+    );
+    expect(
+      screen
+        .getByTestId("composer-stub")
+        .getAttribute("data-draft-blob-bridge-supported"),
+    ).toBe("false");
+
+    rerender(
+      <ChatLowerInteractionSurfaces
+        {...props({ ...TURN_IDLE, getDraftBlobBridgeSupported: () => true }, 1)}
+      />,
+    );
+    expect(
+      screen
+        .getByTestId("composer-stub")
+        .getAttribute("data-draft-blob-bridge-supported"),
+    ).toBe("true");
+
+    rerender(
+      <ChatLowerInteractionSurfaces
+        {...props(
+          { ...TURN_IDLE, getDraftBlobBridgeSupported: () => false },
+          2,
+        )}
+      />,
+    );
+    expect(
+      screen
+        .getByTestId("composer-stub")
+        .getAttribute("data-draft-blob-bridge-supported"),
+    ).toBe("false");
   });
 
   it("re-renders the composer when only the navigation highlight id changes", () => {

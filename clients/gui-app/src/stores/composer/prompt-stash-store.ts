@@ -10,7 +10,9 @@ import { promptStashRowId } from "@/lib/composer/prompt-stash-codec";
 import {
   deletePromptStashEntry,
   loadPromptStashSnapshot,
+  PromptStashWriteNoLongerCurrentError,
   savePromptStashSnapshot,
+  savePromptStashSnapshotWhile,
 } from "@/lib/composer/prompt-stash-repository";
 import { PROMPT_STASH_CHANNEL } from "@/lib/composer/prompt-stash-channel";
 
@@ -18,6 +20,24 @@ interface PromptStashState {
   readonly rows: ReadonlyArray<PromptStashRow>;
   readonly hydrate: () => Promise<void>;
   readonly save: (snapshot: PromptStashSnapshot) => Promise<void>;
+  /**
+   * {@link save}, abandoned if `stillCurrent()` stops holding.
+   *
+   * `save` awaits `hydrate` first, and hydration can be slow or already
+   * in flight - so a caller that checked a precondition before calling is
+   * checking it against a world that may be several awaits stale by the time
+   * the repository write happens. The unrecorded-prompt handoff is the caller
+   * this exists for: it must not write the OUTGOING account's prompt into the
+   * shared, unpartitioned stash after an identity change, and its own
+   * pre-call check cannot see a change that lands during hydration.
+   *
+   * Checked twice on purpose - before the await and after it - because those
+   * answer different questions, and only the second one covers the gap.
+   */
+  readonly saveWhile: (
+    snapshot: PromptStashSnapshot,
+    stillCurrent: () => boolean,
+  ) => Promise<void>;
   readonly remove: (entryId: string) => Promise<void>;
   /**
    * Host/cloud ingest of an immutable stash-entry. No-ops when the id
@@ -91,6 +111,40 @@ export const usePromptStashStore = create<PromptStashState>()((set, get) => ({
     const { rows, revision } = await savePromptStashSnapshot(snapshot);
     applyMutationResult(rows, revision);
     publishPromptStashChange(revision);
+  },
+  saveWhile: async (snapshot, stillCurrent) => {
+    if (!stillCurrent()) return;
+    await get().hydrate();
+    // Cheap and early, but NOT the guarantee: see below.
+    if (!stillCurrent()) return;
+    try {
+      // The check that actually holds is the one INSIDE the transaction.
+      // These two are before `runTransaction` even opens one, and a
+      // transaction can queue behind another and commit long after both
+      // passed - so on their own they let a stale durable write through.
+      const { rows, revision } = await savePromptStashSnapshotWhile(
+        snapshot,
+        stillCurrent,
+      );
+      // And the PUBLICATION is fenced too. A committed write is only half of
+      // what a caller sees; pushing these rows into the in-memory store and
+      // broadcasting the revision would put the abandoned entry in front of
+      // whoever is here now, even with the durable half correctly rolled back.
+      if (!stillCurrent()) return;
+      applyMutationResult(rows, revision);
+      publishPromptStashChange(revision);
+    } catch (error: unknown) {
+      // The abandonment is not a failure - it is this function doing its job -
+      // so it does not propagate to a caller that only asked for a best-effort
+      // save. Anything else still does.
+      if (error instanceof PromptStashWriteNoLongerCurrentError) return;
+      // An EXTERNALLY aborted transaction lands here too - the teardown called
+      // `abortLiveFencedPromptStashWrites` while this one was mid-write, so
+      // IndexedDB rejected it rather than any check of ours. Same meaning:
+      // abandoned on purpose, rolled back whole, not a failure to report.
+      if (!stillCurrent()) return;
+      throw error;
+    }
   },
   remove: async (entryId) => {
     await get().hydrate();

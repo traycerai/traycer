@@ -2,7 +2,7 @@
  * Version-aware projections for the `chat.subscribe` stream that both ends
  * need and neither owns alone.
  *
- * Two things live here:
+ * The compatibility entry points include:
  *
  * 1. `projectChatClientFrameForVersion` - the OUTBOUND half of `1.7`
  *    compatibility. A new client sends live frames; a peer that negotiated
@@ -16,11 +16,28 @@
  *    pass that keeps the `1.6` full-chat snapshot on its shallow path after
  *    `1.7` opened above it.
  *
- * Both are pure and dependency-free so the host and the OSS clients run the
+ * 3. `projectChatServerFrameForVersion` - the host's outbound projection,
+ *    including `projectChatActionAckForVersion` for the 1.11 refusal cause.
+ *
+ * These are pure and dependency-free so the host and the OSS clients run the
  * same code rather than two drifting copies.
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
+
+/** Strip draft-image refusal causes before emitting to a pre-1.11 session. */
+export function projectChatActionAckForVersion(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (frame.kind !== "actionAck") return frame;
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor >= 11) {
+    return frame;
+  }
+  if (!("cause" in frame)) return frame;
+  const { cause: _cause, ...projected } = frame;
+  return projected;
+}
 
 /**
  * A client frame already reduced to its wire form for a specific negotiated
@@ -645,12 +662,14 @@ export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
+  // The >=1.7 fast path still needs the newer 1.11 acknowledgement downgrade.
+  const bridgeProjected = projectChatActionAckForVersion(frame, negotiated);
   // BEFORE the 1.7 identity return: `chat.imported` shipped on the 1.8 line,
   // and a released 1.7 client's strict event enum fails the WHOLE snapshot on
   // an unknown member - so every pre-1.8 peer must never see the event. A
   // client that cannot render an import provenance row has nothing to do with
   // the value anyway.
-  const preImportSafe = projectPreImportedFrame(frame, negotiated);
+  const preImportSafe = projectPreImportedFrame(bridgeProjected, negotiated);
   if (supportsV17(negotiated)) return preImportSafe;
   frame = preImportSafe;
 

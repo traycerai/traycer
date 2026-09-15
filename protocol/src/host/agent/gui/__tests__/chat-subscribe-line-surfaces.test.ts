@@ -9,7 +9,9 @@
  *
  * - `1.9` is mainline's windowed line as the `v1.3.x` staging builds shipped
  *   it (delivery placement, Antigravity anchors), frozen;
- * - `1.10` is provider fallback, minted above it.
+ * - `1.10` is provider fallback, minted above it;
+ * - `1.11` is the draft-image bridge, minted above that. It inherits every
+ *   fallback surface and adds one `actionAck` member of its own.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -27,7 +29,13 @@ import {
 import { providerNoticeKindSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
-const LIVE_MINOR = 10;
+// The minor each surface was minted on. A line carries a surface from its own
+// minor UPWARD - `1.11` is not "not the fallback line", it is a later one that
+// inherits it - so these are thresholds, not equalities. Written as `===` they
+// asserted that the newest line had LOST provider fallback.
+const FALLBACK_MINOR = 10;
+const DRAFT_IMAGE_CAUSE_MINOR = 11;
+const LIVE_MINOR = DRAFT_IMAGE_CAUSE_MINOR;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -100,8 +108,8 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.10 (a line added later cannot drop out)", () => {
-    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  it("covers chat.subscribe@1.0 through @1.11 (a line added later cannot drop out)", () => {
+    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
 
@@ -117,8 +125,9 @@ describe("chat.subscribe line surfaces", () => {
   for (const minor of MINORS) {
     describe(`chat.subscribe@1.${minor}`, () => {
       const { contract } = chatSubscribeLine.versions[minor];
-      const carriesFallback = minor === LIVE_MINOR;
+      const carriesFallback = minor >= FALLBACK_MINOR;
       const carriesPlacement = minor >= 9;
+      const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
 
       it(`server frames ${carriesFallback ? "carry" : "hold back"} every provider-fallback surface`, () => {
         const text = schemaText(contract.serverFrameSchema);
@@ -146,6 +155,12 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           actionAckPropertyNames(contract.serverFrameSchema).includes("token"),
         ).toBe(carriesFallback);
+      });
+
+      it(`actionAck ${carriesRefusalCause ? "carries" : "has no"} the draft-image refusal cause`, () => {
+        expect(
+          actionAckPropertyNames(contract.serverFrameSchema).includes("cause"),
+        ).toBe(carriesRefusalCause);
       });
     });
   }

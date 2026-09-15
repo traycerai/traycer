@@ -7,6 +7,7 @@ import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import {
+  currentDraftBlobOwnerId,
   forgetBlobUnsupportedHost,
   putDraftBlobs,
   putDraftBlobsForWrite,
@@ -19,6 +20,11 @@ import {
 } from "./draft-write-codec";
 import { draftKindIsHostBound } from "./draft-portability";
 import { resetCloudDraftKindsForTests } from "./cloud-draft-kinds";
+import {
+  forgetCloudDraftPayloadUnsupportedHost,
+  recoverCloudDraftImages,
+  resetCloudDraftImageRecoveryForTests,
+} from "./cloud-draft-image-recovery";
 
 import { interviewDraftBindingKey } from "./draft-ids";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
@@ -389,7 +395,12 @@ const sink: DraftMirrorSink = {
   async prepareWrite(hostId, write) {
     const client = sessionClients.get(hostId);
     if (client === undefined) return write;
-    const confirmed = await putDraftBlobsForWrite(hostId, client, write);
+    const confirmed = await putDraftBlobsForWrite(
+      hostId,
+      client,
+      write,
+      currentDraftBlobOwnerId(),
+    );
     rememberLandingBlobsOnHost(write.draftId, confirmed);
     return write;
   },
@@ -682,6 +693,8 @@ export function acquireDraftMirrorSession(
   // host that upgraded while this renderer stayed up is not stuck
   // blob-less until restart.
   forgetBlobUnsupportedHost(args.hostId);
+  // Same signal, same reason, for the cloud payload read this host pipes.
+  forgetCloudDraftPayloadUnsupportedHost(args.hostId);
   const session = new DraftMirrorSession({
     hostId: args.hostId,
     rpc: {
@@ -702,6 +715,24 @@ export function acquireDraftMirrorSession(
   sessionClients.set(args.hostId, args.client);
   session.start();
   return session;
+}
+
+/**
+ * The requester for a host this window currently holds a draft mirror on, or
+ * `null`.
+ *
+ * The same map `applyHostDocument` consults before it fetches a document's
+ * blobs, exposed so a READER can ask the same question. That equivalence is the
+ * point: a host with no mirror session here is a host this window never
+ * uploaded a draft blob to, so there is nothing for `drafts.readBlob` to find -
+ * and a requester built some other way would be addressing a host whose draft
+ * store this window has no relationship with.
+ */
+export function draftMirrorClientForHost(
+  hostId: string | null,
+): HostRequester<HostRpcRegistry> | null {
+  if (hostId === null) return null;
+  return sessionClients.get(hostId) ?? null;
 }
 
 export function releaseDraftMirrorSession(hostId: string): void {
@@ -765,9 +796,11 @@ export async function adoptUnadoptedLandingDraftsForHost(
     if (client === undefined) continue;
     const hashes = blobHashesFromContent(draft.content);
     uploads.push(
-      putDraftBlobs(hostId, client, hashes).then((confirmed) => {
-        rememberLandingBlobsOnHost(draft.id, confirmed);
-      }),
+      putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId()).then(
+        (confirmed) => {
+          rememberLandingBlobsOnHost(draft.id, confirmed);
+        },
+      ),
     );
   }
   await Promise.all(uploads);
@@ -792,6 +825,7 @@ export function resetDraftMirrorCoordinatorForTests(): void {
   warnedUnboundInterview.clear();
   resetDraftBlobTransportForTests();
   resetCloudDraftKindsForTests();
+  resetCloudDraftImageRecoveryForTests();
   notifyCloudScopeListeners();
   // Re-bind production listeners. Tests that install their own must not
   // leave `routeLocalDelete` unbound for later files in the same worker.
@@ -856,6 +890,63 @@ export async function ingestCloudDraftSummary(input: {
   // banner came back on every tab switch.
   if (draftKindIsHostBound(input.document.kind)) return;
   await applyHostDocument(input.document);
+  await recoverIngestedCloudDraftImages(input);
+}
+
+/**
+ * Pull a cloud-ingested draft's images down from the published
+ * `image-attachment` blobs, for the window that has no other source for them.
+ *
+ * This is the ONLY path where that can be true. A document that arrives on
+ * `drafts.subscribe` came from a host this window holds a mirror on, so
+ * `applyHostDocument` has already read its blobs off that host; a document that
+ * arrives here is owned by a host this window is not mirroring, which is the
+ * second-window and offline-owner case the replica exists for.
+ *
+ * Run AFTER the apply so the row already roots these hashes, and awaited rather
+ * than detached so an ingest is one settled unit - nothing is gated on it, and
+ * each read carries its own timeout, so awaiting costs a bounded wait on a
+ * chain whose caller has already released its ingest guard.
+ *
+ * Landing and new-chat only. Stash entries also reach this function, and their
+ * bytes are deliberately NOT recovered here: a stash row's images live in the
+ * prompt-stash repository rather than this window's image partition, and
+ * `ingestRemote` is idempotent by entry id - so bytes fetched after the row
+ * lands have nowhere to go. Recovering them means handing an images map to
+ * `ingestStashDocument` BEFORE it applies, which is custody work of its own.
+ */
+async function recoverIngestedCloudDraftImages(input: {
+  readonly hostId: string;
+  readonly summary: CloudChatSummary;
+  readonly document: DraftDocument;
+}): Promise<void> {
+  const { document } = input;
+  if (document.kind !== "landing" && document.kind !== "new-chat") return;
+  const hashes = blobHashesOfDocument(document);
+  if (hashes.length === 0) return;
+  // The INGESTING host's requester: the cloud read is a byte pipe through
+  // whatever host this device runs, and this is the one we know is mounted -
+  // every site that runs the cloud ingest acquires this mirror alongside it.
+  const client = sessionClients.get(input.hostId);
+  if (client === undefined) return;
+  // Contained at this boundary, not inside the recovery module, and the
+  // asymmetry is deliberate. `useCloudDraftsIngest` calls this from a `void
+  // attemptRead(0)` chain with no catch around the ingest, so ANY rejection
+  // that reaches it is an unhandled rejection. Every failure the recovery can
+  // actually produce is already answered as a miss, so this catches only a
+  // fault nobody predicted - and it belongs here, where the consequence is,
+  // rather than in the module, where swallowing would also hide it from that
+  // module's own tests.
+  await recoverCloudDraftImages({
+    identity: input.summary.identity,
+    hostId: input.hostId,
+    client,
+    hashes,
+  }).catch((error: unknown) => {
+    appLogger.warn("[draft-mirror] cloud draft image recovery failed", {
+      error: describeLogError(error),
+    });
+  });
 }
 
 registerExtraImageRootSource({

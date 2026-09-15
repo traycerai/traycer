@@ -675,6 +675,11 @@ function mountSubmit(input: MountSubmitInput): {
         draftReadOnly: false,
         onSubmitMessage: props.onSubmitMessage,
         onSideChat: null,
+        targetHostId: null,
+        queueEditTargetId: null,
+        // T5's gate is off in these fixtures: they predate it and assert the
+        // inline behaviour, which is what `false` preserves exactly.
+        getDraftBlobBridgeSupported: () => false,
       }),
     {
       initialProps: toHookProps(input),

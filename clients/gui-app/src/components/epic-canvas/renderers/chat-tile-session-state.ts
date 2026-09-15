@@ -42,6 +42,17 @@ import type {
 const DEFAULT_SLASH_PROVIDER_ID = "claude";
 
 export interface InlineEditState {
+  /**
+   * Identity of one editing SESSION, minted by `beginInlineEdit`.
+   *
+   * `targetMessageId` cannot stand in for it: cancelling an edit of message M
+   * and reopening M is a new session with the same target, and an async submit
+   * preparation left over from the first one would otherwise recognise the
+   * second as its own and send it - with the first session's revert choices and
+   * without the user ever pressing send again. Minted at the dispatch site
+   * rather than in the reducer, so a double-invoked reducer cannot mint two.
+   */
+  readonly sessionId: string;
   readonly targetMessageId: string;
   readonly originalMessage: ChatMessageModel;
   readonly initialContent: JsonContent;
@@ -69,6 +80,7 @@ export type ChatTileUiAction =
     }
   | {
       readonly type: "beginInlineEdit";
+      readonly sessionId: string;
       readonly targetMessageId: string;
       readonly originalMessage: ChatMessageModel;
       readonly initialContent: JsonContent;
@@ -119,6 +131,7 @@ export function chatTileUiReducer(
       return {
         ...state,
         inlineEdit: {
+          sessionId: action.sessionId,
           targetMessageId: action.targetMessageId,
           originalMessage: action.originalMessage,
           initialContent: action.initialContent,

@@ -105,6 +105,7 @@ function createChatHandle(
     streamClientFactory: () => ({
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => true,
+      draftBlobBridgeSupported: () => true,
       // The windowed line's two client calls. Inert here - this fixture never
       // delivers a windowed snapshot, so nothing plans a hydration - but the
       // handle is a whole surface and a partial one would not type.
