@@ -45,6 +45,8 @@ export default defineConfig({
     // `clients/desktop/vitest.shared.ts`.
     server: { deps: { inline: [/[\\/]node_modules[\\/]zod[\\/]/] } },
     include: ["src/**/__tests__/**/*.test.ts"],
+    // Refuses any `fetch` that leaves loopback - see the file for why.
+    setupFiles: ["./vitest.setup.ts"],
     globals: false,
   },
 });
