@@ -104,6 +104,7 @@ export const runnerMutationKeys = {
   // Re-open a file the desktop save dialog just wrote (`fileDrops.openSavedFile`).
   openSavedFile: () => ["runner.fileDrops.openSavedFile"] as const,
   // Windows frameless title-bar menu strip: pop up a top-level native submenu.
+  executeMenuItem: () => ["runner.menu.executeItem"] as const,
   openTopLevelMenu: () => ["runner.menu.openTopLevel"] as const,
   zoomSet: (scope: string | null) => ["runner.zoom.set", scope] as const,
   zoomStepIn: (scope: string | null) => ["runner.zoom.stepIn", scope] as const,
@@ -151,6 +152,8 @@ export function runnerHostQueryScopeId(runnerHost: object): number {
 }
 
 export const runnerQueryKeys = {
+  applicationMenu: (scope: number | null) =>
+    ["runner.menu.snapshot", scope] as const,
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
   /**

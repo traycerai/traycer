@@ -22,6 +22,7 @@ import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
 import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
+import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
 import { Route as SettingsFallbackRouteImport } from "./routes/settings.fallback";
@@ -104,6 +105,11 @@ const SettingsAppNotificationsRoute =
 const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   id: "/appearance",
   path: "/appearance",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsDeleteAccountRoute = SettingsDeleteAccountRouteImport.update({
+  id: "/delete-account",
+  path: "/delete-account",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
@@ -204,6 +210,7 @@ export interface FileRoutesByFullPath {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -234,6 +241,7 @@ export interface FileRoutesByTo {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -267,6 +275,7 @@ export interface FileRoutesById {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -301,6 +310,7 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -331,6 +341,7 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -363,6 +374,7 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -485,6 +497,13 @@ declare module "@tanstack/react-router" {
       path: "/appearance";
       fullPath: "/settings/appearance";
       preLoaderRoute: typeof SettingsAppearanceRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/delete-account": {
+      id: "/settings/delete-account";
+      path: "/delete-account";
+      fullPath: "/settings/delete-account";
+      preLoaderRoute: typeof SettingsDeleteAccountRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/devices": {
@@ -626,6 +645,7 @@ interface SettingsRouteChildren {
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
   SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
+  SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
   SettingsFallbackRoute: typeof SettingsFallbackRoute;
@@ -650,6 +670,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
   SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
+  SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsFallbackRoute: SettingsFallbackRoute,

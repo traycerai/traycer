@@ -119,6 +119,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
   "gui-app/src/components/epic-canvas/canvas/pane-opener.tsx": 1,
   "gui-app/src/components/epic-canvas/canvas/tab-strip.tsx": 2,
+  "gui-app/src/components/epic-canvas/comm-graph/office/comm-graph-office-canvas.tsx": 1,
   "gui-app/src/components/epic-canvas/document-preview/document-search-bar.tsx": 2,
   "gui-app/src/components/epic-canvas/image-preview/image-preview.tsx": 7,
   "gui-app/src/components/epic-canvas/pip/agent-browser-pip.tsx": 6,
@@ -133,7 +134,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
   "gui-app/src/components/epics/epics-list-panel.tsx": 2,
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
-  "gui-app/src/components/layout/header/windows-menu-bar.tsx": 3,
+  "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
   "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 4,
   "gui-app/src/components/onboarding/onboarding-page.tsx": 4,
   "gui-app/src/components/providers/profile-dropdown.tsx": 4,
@@ -210,6 +211,14 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
     chars: ["+", "-", "0", "=", "F", "_", "f"],
     why: "unmodified viewer keys, as above",
   },
+  "gui-app/src/components/epic-canvas/comm-graph/office/comm-graph-office-canvas.tsx":
+    {
+      chars: ["+", "-", "0", "=", "F", "f"],
+      // The two pairs are NOT accepted for one reason, so they are not stated as
+      // one: conflating them is how a later reader concludes the office tolerates
+      // any spelling of anything, and adds a case that does resolve a chord.
+      why: "unmodified keys on the focused floor - no modifier is involved, so the character typed IS the request, and none of them resolve a registered chord. The pairs differ: +/= is ONE physical key whose unshifted character most layouts make =, while f/F is one character in either case, so caps lock or a held shift still fits the floor",
+    },
 };
 
 /** Properties only a keyboard event carries. */

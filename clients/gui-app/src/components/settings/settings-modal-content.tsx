@@ -15,6 +15,7 @@ import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-s
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { DevicesSessionsPanel } from "@/components/settings/panels/devices-sessions-panel";
 import { LinkPhonePanel } from "@/components/settings/panels/link-phone-panel";
+import { DeleteAccountSettingsPanel } from "@/components/settings/panels/delete-account-settings-panel";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
@@ -97,6 +98,7 @@ const SETTINGS_PANELS = {
   host: HostSettingsPanel,
   devices: DevicesSessionsPanel,
   "link-phone": LinkPhonePanel,
+  "delete-account": DeleteAccountSettingsPanel,
   "app-diagnostics": AppDiagnosticsSettingsPanel,
   diagnostics: DiagnosticsSettingsPanel,
   usage: UsageSettingsPanel,

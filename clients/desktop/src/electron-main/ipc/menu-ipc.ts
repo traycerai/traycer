@@ -1,3 +1,7 @@
+import {
+  readApplicationMenuSnapshot,
+  executeApplicationMenuItem,
+} from "../menu/application-menu-snapshot";
 import { BrowserWindow, Menu } from "electron";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import {
@@ -8,14 +12,33 @@ import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import { cssPixelsToWindowDips } from "../windows/css-pixel-scale";
 
 /**
- * Opens a submenu from Electron's canonical application menu for the visible
- * menu labels drawn inside the Windows frameless title bar.
+ * Renderer menubars reuse Electron's canonical menu definitions and actions.
+ * The native popup entry point remains available to existing desktop callers.
  */
 export function registerMenuIpc(bridge: RunnerIpcBridge): void {
+  bridge.handleInvoke(RunnerHostInvoke.menuGetSnapshot, (event) => {
+    if (process.platform !== "win32" && process.platform !== "linux")
+      return { revision: 0, menus: [] };
+    return readApplicationMenuSnapshot(event.sender);
+  });
+  bridge.handleInvoke(
+    RunnerHostInvoke.menuExecuteItem,
+    (event, revision: unknown, itemId: unknown) => {
+      if (process.platform !== "win32" && process.platform !== "linux") return;
+      if (
+        typeof revision !== "number" ||
+        !Number.isSafeInteger(revision) ||
+        typeof itemId !== "string"
+      ) {
+        throw new Error("menu.executeItem requires a revision and item id");
+      }
+      executeApplicationMenuItem(event.sender, revision, itemId);
+    },
+  );
   bridge.handleInvoke(
     RunnerHostInvoke.menuOpenTopLevel,
     (event, menuId: unknown, anchorX: unknown, anchorY: unknown) => {
-      if (process.platform !== "win32") return;
+      if (process.platform !== "win32" && process.platform !== "linux") return;
       if (!isDesktopTopLevelMenuId(menuId)) {
         throw new Error("menu.openTopLevel requires a known menu id");
       }

@@ -13,9 +13,12 @@ import {
   OFFICE_SPRITE_LETTERS,
   type RasterizedSprite,
 } from "@/lib/comm-graph/office/office-pixel-art";
+import { OFFICE_ACCESSORY_MAPS_BY_NAME } from "@/lib/comm-graph/office/office-sprite-maps";
+import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import type {
   OfficeAppearance,
   OfficeSpriteName,
+  OfficeSpriteRef,
 } from "@/lib/comm-graph/office/office-types";
 
 /**
@@ -26,6 +29,17 @@ import type {
  */
 const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
   character: true,
+  face: true,
+  slab: true,
+  "desk-front": true,
+  lamp: true,
+  "stairs-side": true,
+  cubby: true,
+  silhouette: true,
+  skybridge: true,
+  board: true,
+  "roof-edge": true,
+
   desk: true,
   "monitor-on": true,
   "monitor-on-b": true,
@@ -96,6 +110,56 @@ const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
   "bubble-hello": true,
   "bubble-sleep": true,
   sparkle: true,
+  "tier-step": true,
+  podium: true,
+  console: true,
+  "floor-iso-a": true,
+  "floor-iso-b": true,
+  "floor-grass-iso-a": true,
+  "floor-grass-iso-b": true,
+  "wall-iso-left": true,
+  "wall-iso-right": true,
+  "door-iso": true,
+  "desk-iso": true,
+  "block-left": true,
+  "block-right": true,
+  "block-top": true,
+  "window-lit": true,
+  "window-dark": true,
+  spire: true,
+
+  bed: true,
+  "bed-occupied": true,
+  "lounge-chair": true,
+  "low-table": true,
+  "records-door": true,
+  "cross-sign": true,
+
+  // ---- K2: the five other views' civic art -------------------------- //
+  "glass-partition": true,
+  "siren-light": true,
+  "siren-light-b": true,
+  "bed-iso": true,
+  "lounge-chair-iso": true,
+  "hospital-roof-cross": true,
+  "bus-shelter": true,
+  "warehouse-door-iso": true,
+  "medbay-bed": true,
+  "gallery-seat": true,
+
+  // ---- K3: the three civic vehicles --------------------------------- //
+  ambulance: true,
+  "ambulance-b": true,
+  "ambulance-iso": true,
+  "ambulance-iso-b": true,
+  "police-car": true,
+  "police-car-b": true,
+  "police-car-iso": true,
+  "police-car-iso-b": true,
+  "fire-engine": true,
+  "fire-engine-b": true,
+  "fire-engine-iso": true,
+  "fire-engine-iso-b": true,
 };
 
 function mapNamed(name: OfficeSpriteName): ReadonlyArray<string> {
@@ -129,6 +193,114 @@ function pixelAt(
   ];
 }
 
+/** Rasterizes through the public cache path so `facing` selection is covered. */
+function surfaceRaster(
+  ref: OfficeSpriteRef,
+  theme: "light" | "dark",
+): RasterizedSprite {
+  clearOfficeSpriteCache();
+  let dimensions: { width: number; height: number } | null = null;
+  // A HOLDER, not a bare `let`: the write below happens inside a mocked
+  // callback, which control-flow analysis cannot see, so a plain local would
+  // still be typed `null` at the check and the comparison would be between
+  // two literals.
+  const captured: { value: RasterizedSprite | null } = { value: null };
+  const restore = stubGetContext(() => ({
+    createImageData: (width: number, height: number) => {
+      dimensions = { width, height };
+      return { data: new Uint8ClampedArray(width * height * 4) };
+    },
+    putImageData: (image: { readonly data: Uint8ClampedArray }) => {
+      if (dimensions === null) throw new Error("missing raster dimensions");
+      captured.value = {
+        width: dimensions.width,
+        height: dimensions.height,
+        pixels: image.data,
+      };
+    },
+  }));
+  try {
+    officeSpriteSurface(ref, theme);
+  } finally {
+    restore();
+  }
+  const raster = captured.value;
+  if (raster === null) throw new Error("sprite did not rasterize");
+  return raster;
+}
+
+function rasterFromImageData(
+  captured: RasterizedSprite[],
+  dimensions: { value: { width: number; height: number } | null },
+  image: { readonly data: Uint8ClampedArray },
+): void {
+  const size = dimensions.value;
+  if (size === null) throw new Error("missing raster dimensions");
+  captured.push({
+    width: size.width,
+    height: size.height,
+    pixels: image.data,
+  });
+}
+
+function warmDrawPair(
+  name: OfficeSpriteName,
+  firstFacing: "left" | "right",
+): Readonly<{
+  readonly drawn: ReadonlyArray<unknown>;
+  readonly rasters: ReadonlyArray<RasterizedSprite>;
+}> {
+  clearOfficeSpriteCache();
+  const drawn: unknown[] = [];
+  const rasters: RasterizedSprite[] = [];
+  const dimensions: { value: { width: number; height: number } | null } = {
+    value: null,
+  };
+  const restore = stubGetContext(() => ({
+    drawImage: (surface: unknown) => drawn.push(surface),
+    createImageData: (width: number, height: number) => {
+      dimensions.value = { width, height };
+      return { data: new Uint8ClampedArray(width * height * 4) };
+    },
+    putImageData: (image: { readonly data: Uint8ClampedArray }) =>
+      rasterFromImageData(rasters, dimensions, image),
+  }));
+  try {
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (ctx === null) throw new Error("missing drawing context");
+    drawOfficeSprite(
+      ctx,
+      { name, facing: firstFacing },
+      { x: 0, y: 0 },
+      "light",
+    );
+    drawOfficeSprite(
+      ctx,
+      { name, facing: firstFacing === "left" ? "right" : "left" },
+      { x: 0, y: 0 },
+      "light",
+    );
+  } finally {
+    restore();
+  }
+  return { drawn, rasters };
+}
+
+const VEHICLE_SPRITE_NAMES: ReadonlyArray<OfficeSpriteName> = [
+  "ambulance",
+  "ambulance-b",
+  "ambulance-iso",
+  "ambulance-iso-b",
+  "police-car",
+  "police-car-b",
+  "police-car-iso",
+  "police-car-iso-b",
+  "fire-engine",
+  "fire-engine-b",
+  "fire-engine-iso",
+  "fire-engine-iso-b",
+];
+
 afterEach(() => {
   clearOfficeSpriteCache();
 });
@@ -144,6 +316,34 @@ describe("sprite maps", () => {
       (name) => name !== "character" && !authored.has(name),
     );
     expect(missing).toEqual([]);
+  });
+
+  /**
+   * CR3: `OFFICE_ACCESSORY_MAPS` (the array `officeSpriteMaps()` enumerates)
+   * and the accessory lookup used to be two hand-written copies of the same
+   * roster - add an accessory to one and forget the other, and nothing here
+   * caught it, since the completeness test above only walks what it's handed.
+   *
+   * The stronger half of the fix is the type, not this case:
+   * `OFFICE_ACCESSORY_MAPS_BY_NAME` is keyed on `OfficeCharacterAccessory`, the
+   * same union the scene already uses for an accessory, so a member added to
+   * that union and forgotten here is a COMPILE ERROR, not a missing sprite -
+   * confirmed directly by adding `"lanyard"` to the union, which fails with
+   * `error TS2741: Property 'lanyard' is missing in type '{ headphones:
+   * SpriteMap; }'`. This case guards the OTHER direction: that the enumerated
+   * array stays DERIVED from the record rather than drifting back into a
+   * second hand-written copy.
+   *
+   * Reference equality against the record's own values - not a label-string
+   * match - is the point: a label-based assertion would still pass if someone
+   * enumerated a DIFFERENT map under the right label, which is exactly the
+   * drift being guarded against.
+   */
+  it("enumerates the exact map object the accessory lookup names for every accessory", () => {
+    for (const [name, map] of Object.entries(OFFICE_ACCESSORY_MAPS_BY_NAME)) {
+      const enumerated = officeSpriteMaps().some((entry) => entry.map === map);
+      expect(enumerated, name).toBe(true);
+    }
   });
 
   it("are rectangular and match the size declared for their sprite", () => {
@@ -212,6 +412,143 @@ describe("sprite maps", () => {
     },
   );
 
+  /** Where the two lamps sit on the bar, per projection. */
+  const LAMPS_OBLIQUE = { ax: 10, ay: 1, bx: 12, by: 1 } as const;
+  const LAMPS_ISO = { ax: 18, ay: 2, bx: 20, by: 2 } as const;
+
+  // ONE OBJECT PER CASE rather than a six-wide tuple: the two lamp positions
+  // are a pair of points, and spelling them out positionally both trips the
+  // parameter limit and makes the call site unreadable at a glance.
+  it.each([
+    { nameA: "ambulance", nameB: "ambulance-b", lamp: LAMPS_OBLIQUE },
+    { nameA: "police-car", nameB: "police-car-b", lamp: LAMPS_OBLIQUE },
+    { nameA: "fire-engine", nameB: "fire-engine-b", lamp: LAMPS_OBLIQUE },
+    { nameA: "ambulance-iso", nameB: "ambulance-iso-b", lamp: LAMPS_ISO },
+    { nameA: "police-car-iso", nameB: "police-car-iso-b", lamp: LAMPS_ISO },
+    { nameA: "fire-engine-iso", nameB: "fire-engine-iso-b", lamp: LAMPS_ISO },
+  ] as const)(
+    "swaps the two siren lamps between $nameA and $nameB",
+    ({ nameA, nameB, lamp }) => {
+      const { ax: lampAX, ay: lampAY, bx: lampBX, by: lampBY } = lamp;
+      const frameA = rasterizeSpriteMap(
+        mapNamed(nameA),
+        officeSpriteColors({ name: nameA }, "light"),
+        false,
+      );
+      const frameB = rasterizeSpriteMap(
+        mapNamed(nameB),
+        officeSpriteColors({ name: nameB }, "light"),
+        false,
+      );
+
+      expect(pixelAt(frameA, lampAX, lampAY)).toEqual(
+        pixelAt(frameB, lampBX, lampBY),
+      );
+      expect(pixelAt(frameA, lampBX, lampBY)).toEqual(
+        pixelAt(frameB, lampAX, lampAY),
+      );
+      expect(pixelAt(frameA, lampAX, lampAY)).not.toEqual(
+        pixelAt(frameA, lampBX, lampBY),
+      );
+    },
+  );
+
+  it("guard: leaves an ordinary prop with facing left unmirrored", () => {
+    // Guard case: this is green before vehicle facing support. It protects the
+    // named vehicle exception from turning into a rule that mirrors every prop.
+    const left = surfaceRaster({ name: "desk", facing: "left" }, "light");
+    const expected = rasterizeSpriteMap(
+      mapNamed("desk"),
+      officeSpriteColors({ name: "desk" }, "light"),
+      false,
+    );
+    expect(left.pixels).toEqual(expected.pixels);
+  });
+
+  it("mirrors a vehicle with facing left relative to facing right", () => {
+    const right = surfaceRaster(
+      { name: "ambulance", facing: "right" },
+      "light",
+    );
+    const left = surfaceRaster({ name: "ambulance", facing: "left" }, "light");
+
+    for (let y = 0; y < right.height; y += 1) {
+      for (let x = 0; x < right.width; x += 1) {
+        expect(pixelAt(left, x, y), `pixel ${x},${y}`).toEqual(
+          pixelAt(right, right.width - 1 - x, y),
+        );
+      }
+    }
+  });
+
+  it.each(VEHICLE_SPRITE_NAMES)(
+    "keeps both warm-cache facing orders distinct and correct for %s",
+    (name) => {
+      for (const firstFacing of ["right", "left"] as const) {
+        const pair = warmDrawPair(name, firstFacing);
+        expect(
+          pair.rasters,
+          `${name}/${firstFacing} raster count`,
+        ).toHaveLength(2);
+        expect(pair.drawn, `${name}/${firstFacing} draw count`).toHaveLength(2);
+        expect(pair.drawn[0], `${name}/${firstFacing} cache identity`).not.toBe(
+          pair.drawn[1],
+        );
+        const secondFacing = firstFacing === "left" ? "right" : "left";
+        expect(pair.rasters[0].pixels).toEqual(
+          rasterizeSpriteMap(
+            mapNamed(name),
+            officeSpriteColors({ name, facing: firstFacing }, "light"),
+            firstFacing === "left",
+          ).pixels,
+        );
+        expect(pair.rasters[1].pixels).toEqual(
+          rasterizeSpriteMap(
+            mapNamed(name),
+            officeSpriteColors({ name, facing: secondFacing }, "light"),
+            secondFacing === "left",
+          ).pixels,
+        );
+      }
+    },
+  );
+
+  it("GUARD: keeps a desk's stray left facing out of its cache key", () => {
+    clearOfficeSpriteCache();
+    const drawn: RasterizedSprite[] = [];
+    const dimensions: { value: { width: number; height: number } | null } = {
+      value: null,
+    };
+    const restore = stubGetContext(() => ({
+      createImageData: (width: number, height: number) => {
+        dimensions.value = { width, height };
+        return { data: new Uint8ClampedArray(width * height * 4) };
+      },
+      putImageData: (image: { readonly data: Uint8ClampedArray }) =>
+        rasterFromImageData(drawn, dimensions, image),
+    }));
+    try {
+      const first = officeSpriteSurface({ name: "desk" }, "light");
+      const sizeBeforeStrayFacing = officeSpriteCacheSize();
+      const left = officeSpriteSurface(
+        { name: "desk", facing: "left" },
+        "light",
+      );
+      expect(left).toBe(first);
+      expect(officeSpriteCacheSize()).toBe(sizeBeforeStrayFacing);
+    } finally {
+      restore();
+    }
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0].pixels).toEqual(
+      rasterizeSpriteMap(
+        mapNamed("desk"),
+        officeSpriteColors({ name: "desk" }, "light"),
+        false,
+      ).pixels,
+    );
+  });
+
   it("declares the sizes the scene positions the new fixtures by", () => {
     // The rectangularity test above only proves a map AGREES with its declared
     // size; both can be wrong together. These are the numbers the scene's
@@ -239,6 +576,86 @@ describe("sprite maps", () => {
       ];
     for (const [name, width, height] of expected) {
       expect(officeSpriteSize({ name }), name).toEqual({ width, height });
+    }
+  });
+
+  /**
+   * THE MEDBAY LIGHT IS A PAIR, and a pair whose frames are the same picture is
+   * a light that does not blink.
+   *
+   * Same size, because the sign draws both at one anchor, and DIFFERENT
+   * content, because the whole of the thing is the alternation. Read off the
+   * authored maps rather than the rasterized pixels: a frame that differed only
+   * in a letter both themes resolve to the same colour would pass a pixel
+   * comparison in one theme and fail in the other.
+   */
+  it("gives the medbay light two frames of one size that are not the same picture", () => {
+    const byName = new Map(
+      officeSpriteMaps().map((entry) => [entry.name, entry.map]),
+    );
+    const frameA = byName.get("siren-light");
+    const frameB = byName.get("siren-light-b");
+    expect(frameA).toBeDefined();
+    expect(frameB).toBeDefined();
+    if (frameA === undefined || frameB === undefined) return;
+    expect(officeSpriteSize({ name: "siren-light-b" })).toEqual(
+      officeSpriteSize({ name: "siren-light" }),
+    );
+    expect(frameA.join("\n")).not.toBe(frameB.join("\n"));
+    // FRAME 0 DARK, FRAME 1 LIT, IN THAT ORDER, because the sign that drives
+    // them reads the order as a contract: it holds frame 0 while the ward is
+    // empty, alternates while a bed is taken, and holds FRAME 1 under reduced
+    // motion so a steady beacon still says occupied. Two lit frames - which is
+    // what a rotating beacon would want - make "empty" and "occupied, reduced
+    // motion" the same picture, so this asserts the distinction rather than the
+    // prettier animation. Swap the maps and this fails.
+    expect(frameA.join("")).not.toContain("y");
+    expect(frameA.join("")).not.toContain("n");
+    expect(frameB.join("")).toContain("y");
+    // AND ONLY THE LENS DIFFERS. One silhouette, housing and base included, so
+    // the alternation reads as a lamp blinking rather than a fixture changing
+    // shape - masking the three lens letters must leave the two frames equal.
+    const silhouette = (map: ReadonlyArray<string>): string =>
+      map.join("\n").replace(/[dyn]/g, "*");
+    expect(silhouette(frameA)).toBe(silhouette(frameB));
+  });
+
+  /**
+   * The isometric civic art is drawn at an anchor its PARTNER's size decides,
+   * so a size that disagrees is art drawn somewhere the tile is not.
+   *
+   * - `bed-iso` is drawn where `desk-iso` is drawn (a seat's own tile corner,
+   *   bottom-centre on the diamond);
+   * - `hospital-roof-cross` is laid ON `block-top`, at the same origin, so it
+   *   has to be the same diamond;
+   * - `warehouse-door-iso` stands free on its tile exactly as `door-iso` does;
+   * - `medbay-bed` replaces a console's two tiles on the amphitheatre floor.
+   *
+   * Pinned as EQUALITY against the partner rather than as literal numbers: the
+   * requirement is that the two agree, and a pair of literals can drift apart
+   * while both stay "right".
+   */
+  it("sizes every civic piece as the anchor it is drawn against", () => {
+    const pairs: ReadonlyArray<readonly [OfficeSpriteName, OfficeSpriteName]> =
+      [
+        ["bed-iso", "desk-iso"],
+        ["hospital-roof-cross", "block-top"],
+        ["bus-shelter", "desk-iso"],
+        ["warehouse-door-iso", "door-iso"],
+        ["medbay-bed", "console"],
+      ];
+    for (const [piece, anchor] of pairs) {
+      expect(officeSpriteSize({ name: piece }), piece).toEqual(
+        officeSpriteSize({ name: anchor }),
+      );
+    }
+    // The two one-tile seats are a tile, which is what lets a sitter's own
+    // sprite cover them.
+    for (const name of ["lounge-chair-iso", "gallery-seat"] as const) {
+      expect(officeSpriteSize({ name }), name).toEqual({
+        width: OFFICE_TILE,
+        height: OFFICE_TILE,
+      });
     }
   });
 

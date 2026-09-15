@@ -234,6 +234,8 @@ export const RunnerHostInvoke = {
   // Windows frameless title bars cannot display Electron's native menu row.
   // The renderer supplies the clicked top-level label's anchor point and main
   // opens the corresponding submenu from the canonical application Menu.
+  menuGetSnapshot: "runnerHost:menu:getSnapshot",
+  menuExecuteItem: "runnerHost:menu:executeItem",
   menuOpenTopLevel: "runnerHost:menu:openTopLevel",
   displayList: "runnerHost:display:list",
   gpuAccelerationGet: "runnerHost:gpu:get",
@@ -438,6 +440,7 @@ export const RunnerHostEvent = {
    */
   authVerificationRevoked: "runnerHost:event:windows:authSession:revoked",
   menuCommand: "runnerHost:event:menu:command",
+  menuChanged: "runnerHost:event:menu:changed",
   migrationRunChange: "runnerHost:event:migration:runChange",
   accessibilityThemeChange: "runnerHost:event:accessibilityTheme:change",
   certificateErrorPending: "runnerHost:event:cert:errorPending",

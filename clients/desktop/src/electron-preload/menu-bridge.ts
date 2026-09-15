@@ -5,6 +5,7 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   DesktopRuntimePlatform,
+  DesktopMenuSnapshot,
   DesktopTopLevelMenuId,
   MenuCommandPayload,
 } from "../ipc-contracts/window-types";
@@ -12,6 +13,10 @@ import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 export interface MenuBridgeSurface {
   menu: {
+    getSnapshot(): Promise<DesktopMenuSnapshot>;
+    onChange(handler: () => void): Disposable;
+    executeItem(revision: number, itemId: string): Promise<void>;
+
     readonly platform: DesktopRuntimePlatform;
     onCommand(handler: Listener<MenuCommandPayload>): Disposable;
     openTopLevel(
@@ -26,6 +31,18 @@ export function buildMenuBridge(): MenuBridgeSurface {
   return {
     menu: {
       platform: readDesktopRuntimePlatform(),
+      getSnapshot: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.menuGetSnapshot,
+        ) as Promise<DesktopMenuSnapshot>,
+      executeItem: (revision, itemId) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.menuExecuteItem,
+          revision,
+          itemId,
+        ) as Promise<void>,
+      onChange: (handler) =>
+        subscribe<void>(RunnerHostEvent.menuChanged, handler),
       onCommand: (handler) =>
         subscribe<MenuCommandPayload>(RunnerHostEvent.menuCommand, handler),
       openTopLevel: (menuId, anchorX, anchorY) =>

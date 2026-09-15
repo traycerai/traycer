@@ -1,4 +1,5 @@
-import { Menu, app, type BaseWindow } from "electron";
+import { BrowserWindow, Menu, app, type BaseWindow } from "electron";
+import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
 import { canOpenDevTools, isDevBuild } from "../../config";
 import { safelyOpenExternal } from "../app/security";
 import type {
@@ -25,6 +26,7 @@ export interface MenuManagedWindow {
   isDestroyed(): boolean;
   isFocused(): boolean;
   setMenu(menu: Electron.Menu): void;
+  setMenuBarVisibility(visible: boolean): void;
 }
 
 export interface MenuWindowRecord {
@@ -151,6 +153,18 @@ export class MenuController {
     if (this.options.platform !== "darwin") {
       for (const record of this.options.windowRegistry.records()) {
         record.window.setMenu(menu);
+        if (this.options.platform === "linux") {
+          record.window.setMenuBarVisibility(false);
+        }
+      }
+    }
+    // Open renderer menus must track rebuilds caused by host, auth, or window
+    // changes; otherwise a visible Settings command can retain a stale revision.
+    if (this.options.platform !== "darwin") {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+          window.webContents.send(RunnerHostEvent.menuChanged);
+        }
       }
     }
     this.options.tray?.setPresentation({

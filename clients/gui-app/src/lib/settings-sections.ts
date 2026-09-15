@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Settings as SettingsIcon,
   TerminalSquare,
+  UserX,
   Volume2,
   Waypoints,
 } from "lucide-react";
@@ -38,6 +39,7 @@ export type SettingsSectionId =
   | "host"
   | "devices"
   | "link-phone"
+  | "delete-account"
   // Two sections, both labelled "Diagnostics", and the group they sit in is
   // what distinguishes them — `app-diagnostics` is this window's own logging
   // and heap, `diagnostics` is the selected host's. The host one keeps the
@@ -244,6 +246,17 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: LineChart,
     group: "account",
   },
+  // Offered ONLY by the installed mobile app (`MOBILE_APP_ONLY_SECTION_IDS`
+  // below). Last in its group because it is the group's one irreversible
+  // action, and because appending it keeps Account contiguous without moving
+  // a single desktop row: the desktop list does not contain it at all, so no
+  // existing leader digit shifts there.
+  {
+    id: "delete-account",
+    label: "Delete account",
+    icon: UserX,
+    group: "account",
+  },
   // The host group. Everything here is scoped by the picker that heads it.
   {
     id: "host",
@@ -348,6 +361,48 @@ const MOBILE_APP_OMITTED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
 ]);
 
 /**
+ * The mirror image: sections ONLY the installed mobile app offers.
+ *
+ * - **Delete account — the requirement is the App Store's.** Guideline
+ *   5.1.1(v) obliges an app that creates accounts to offer deletion from
+ *   inside the app, and this section is how Traycer's iOS build satisfies it.
+ *   Desktop and the web GUI are not under that rule and already reach account
+ *   management on the web, so a second, slower route there would be a worse
+ *   answer to a question they can already answer. It is a scope decision, not
+ *   an inability: nothing in the panel needs a phone.
+ *
+ * Kept a separate set from `MOBILE_APP_OMITTED_SECTION_IDS` rather than a
+ * per-entry flag on the table, because the two lists answer different
+ * questions and a single `availableOn` column would have to be read in both
+ * directions at every call site.
+ */
+const MOBILE_APP_ONLY_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
+  "delete-account",
+]);
+
+/**
+ * Both offered lists, resolved once at module load.
+ *
+ * Precomputed rather than filtered per call so each build's list keeps ONE
+ * identity for the process's life - consumers memoize on it and compare it by
+ * reference. (This used to be `SETTINGS_SECTIONS` itself on every non-mobile
+ * build, which gave the same guarantee for free; now that both builds drop
+ * something, both need a constant of their own.) The `isMobileApp()` read
+ * stays inside the function below: the flag is written by the Capacitor entry
+ * before the first render, which is not necessarily before this module is
+ * evaluated.
+ */
+const DESKTOP_SECTIONS: ReadonlyArray<SettingsSection> =
+  SETTINGS_SECTIONS.filter(
+    (section) => !MOBILE_APP_ONLY_SECTION_IDS.has(section.id),
+  );
+
+const MOBILE_APP_SECTIONS: ReadonlyArray<SettingsSection> =
+  SETTINGS_SECTIONS.filter(
+    (section) => !MOBILE_APP_OMITTED_SECTION_IDS.has(section.id),
+  );
+
+/**
  * The sections a build OFFERS, as opposed to the ones it can resolve.
  *
  * `SETTINGS_SECTIONS` stays whole because it is the compatibility table:
@@ -356,15 +411,9 @@ const MOBILE_APP_OMITTED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
  * is the list anything that PRESENTS a choice reads instead — the sidebar, the
  * command palette's settings sub-page, and the leader digits, which index
  * positionally and so must walk the same list the sidebar badges do.
- *
- * Returns `SETTINGS_SECTIONS` itself where nothing is omitted, so a consumer's
- * identity comparisons and memo dependencies are unaffected.
  */
 export function visibleSettingsSections(): ReadonlyArray<SettingsSection> {
-  if (!isMobileApp()) return SETTINGS_SECTIONS;
-  return SETTINGS_SECTIONS.filter(
-    (section) => !MOBILE_APP_OMITTED_SECTION_IDS.has(section.id),
-  );
+  return isMobileApp() ? MOBILE_APP_SECTIONS : DESKTOP_SECTIONS;
 }
 
 /**

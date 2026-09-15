@@ -17,6 +17,12 @@
  * Codex/Claude windows use, so Traycer's own bars read identically
  * (feedback: "bar similar to claude/codex").
  *
+ * One thing this body reads from outside its props: `isMobileApp()`, which
+ * decides whether credit amounts are denominated in `$` (desktop, browser) or
+ * stated as plain consumption (the installed mobile app - see
+ * `creditMeterDetail`). Both callers inherit it, which is the point: the phone
+ * must not show a price for a subscription it cannot sell, on either surface.
+ *
  * The lone exception to "query-free" is `RateLimitView`, which keeps its own
  * `useHostRateLimitUsageQuery` + turn-refresh exactly as before: rendering it
  * only for rate-limit-based plans IS the tier-gate that stops the aperture pull
@@ -41,11 +47,13 @@ import {
   creditBreakdown,
   formatArtifactTokens,
   formatCredits,
+  formatCreditsPlain,
   formatRechargeRate,
   isCreditBasedPricing,
   type CreditBreakdown,
   type TraycerSubscription,
 } from "@/lib/auth/traycer-subscription-content";
+import { isMobileApp } from "@/lib/mobile-app";
 import {
   creditUsageSeverity,
   rateLimitWindowFillPercent,
@@ -159,7 +167,7 @@ function RateLimitView({
           label="Artifacts"
           consumed={artifactConsumed}
           total={artifactTotal}
-          formatValue={formatArtifactTokens}
+          unit="artifacts"
         />
       ) : (
         <p className="text-ui-xs text-muted-foreground">
@@ -171,7 +179,7 @@ function RateLimitView({
           label="Bundle"
           consumed={bundleConsumed}
           total={bundleTotal}
-          formatValue={formatCredits}
+          unit="credits"
         />
       ) : null}
     </div>
@@ -197,7 +205,7 @@ function CreditBreakdownView({
           label="Plan"
           consumed={breakdown.planConsumed}
           total={breakdown.planTotal}
-          formatValue={formatCredits}
+          unit="credits"
         />
       ) : null}
       {breakdown.bonusTotal > 0 ? (
@@ -205,7 +213,7 @@ function CreditBreakdownView({
           label="Bonus"
           consumed={breakdown.bonusConsumed}
           total={breakdown.bonusTotal}
-          formatValue={formatCredits}
+          unit="credits"
         />
       ) : null}
       {breakdown.bundleTotal > 0 ? (
@@ -213,7 +221,7 @@ function CreditBreakdownView({
           label="Bundle"
           consumed={breakdown.bundleConsumed}
           total={breakdown.bundleTotal}
-          formatValue={formatCredits}
+          unit="credits"
         />
       ) : null}
     </div>
@@ -284,27 +292,66 @@ export function MeterRow({
 }
 
 /**
+ * What a meter row is counting. Artifact allowances are not money and read the
+ * same on every shell; credits are the ones the currency rule below applies to.
+ */
+type CreditMeterUnit = "artifacts" | "credits";
+
+/**
+ * The amount line beside a bucket's label.
+ *
+ * Desktop and the browser keep the `$`-denominated consumed/total the
+ * extension shows. The INSTALLED mobile app must not present the subscription
+ * it cannot sell through Apple (App Store review guideline 3.1.1), and a
+ * dollar figure is exactly the part a reviewer reads as a price - so there the
+ * same reading is stated as consumption: bare credit counts with the unit
+ * named in words. The bar, the buckets and the numbers are unchanged; only the
+ * denomination is. No percent is spelled out beside them, because the bar
+ * directly below already IS the ratio.
+ *
+ * Branched on the PRODUCT flag rather than the viewport: this is installed-app
+ * policy, and a narrow desktop window is still a desktop that may be shown its
+ * own billing.
+ */
+function creditMeterDetail(args: {
+  readonly consumed: number;
+  readonly total: number;
+  readonly unit: CreditMeterUnit;
+}): string {
+  if (args.unit === "artifacts") {
+    return `${formatArtifactTokens(args.consumed)} / ${formatArtifactTokens(args.total)}`;
+  }
+  return isMobileApp()
+    ? `${formatCreditsPlain(args.consumed)} / ${formatCreditsPlain(args.total)} credits`
+    : `${formatCredits(args.consumed)} / ${formatCredits(args.total)}`;
+}
+
+/**
  * A credit/balance meter row - matching the Codex/Claude window rows exactly
  * via the shared `MeterRow` shell, so Traycer's own bars read identically to
  * the other providers' (feedback: "bar similar to claude/codex").
+ *
+ * The row takes a `unit` rather than a formatter so the currency decision
+ * lives in one place (`creditMeterDetail`) instead of at every call site,
+ * where a new bucket could quietly reintroduce a `$` on the phone.
  */
 function CreditMeterRow({
   label,
   consumed,
   total,
-  formatValue,
+  unit,
 }: {
   readonly label: string;
   readonly consumed: number;
   readonly total: number;
-  readonly formatValue: (value: number) => string;
+  readonly unit: CreditMeterUnit;
 }): ReactNode {
   const usedPercent = total > 0 ? (consumed / total) * 100 : 0;
   return (
     <MeterRow
       label={label}
       usedPercent={usedPercent}
-      detail={`${formatValue(consumed)} / ${formatValue(total)}`}
+      detail={creditMeterDetail({ consumed, total, unit })}
       severity={creditUsageSeverity(usedPercent)}
     />
   );

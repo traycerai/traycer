@@ -5,7 +5,8 @@ import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
-import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
+import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
+import { DesktopMenuBar } from "@/components/layout/header/desktop-menu-bar";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
@@ -51,13 +52,15 @@ export interface AppHeaderProps {
 }
 
 /**
- * App navigation chrome. On phones this delegates to the hamburger
- * `MobileAppHeader`; at >=768px it renders the desktop tab-strip header
- * (`DesktopAppHeader`) exactly as before.
+ * App navigation chrome. Browser/mobile viewports below 768px use the
+ * hamburger header. Installed Windows/Linux shells keep the desktop menu
+ * and tab row at every zoom level.
  */
 export function AppHeader(props: AppHeaderProps): ReactNode {
   const isMobile = useIsMobileViewport();
-  if (props.variant === "app" && isMobile) {
+  const desktopMenus = useDesktopMenuBarActive();
+  // A zoomed desktop window still needs its menu row and native control insets.
+  if (props.variant === "app" && isMobile && !desktopMenus) {
     return <MobileAppHeader />;
   }
   return <DesktopAppHeader variant={props.variant} />;
@@ -103,7 +106,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
           : "px-3",
       )}
     >
-      <WindowsMenuBar />
+      <DesktopMenuBar />
       {showTabStrip ? <HistoryNavButtons /> : null}
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end

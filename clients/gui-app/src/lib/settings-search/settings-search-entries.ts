@@ -10,6 +10,7 @@ import { AGENT_SELECTION } from "@/components/settings/panels/agents-settings.de
 import { APP_DIAGNOSTICS } from "@/components/settings/panels/app-diagnostics-settings.definitions";
 import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
+import { DELETE_ACCOUNT } from "@/components/settings/panels/delete-account-settings.definitions";
 import { DEVICES } from "@/components/settings/panels/devices-sessions.definitions";
 import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
 import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
@@ -44,6 +45,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     DEVICES,
     LINK_PHONE,
     USAGE,
+    DELETE_ACCOUNT,
     HOST_OVERVIEW,
     PROVIDERS,
     WORKTREES,
