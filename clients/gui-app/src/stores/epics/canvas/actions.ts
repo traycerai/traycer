@@ -1796,7 +1796,15 @@ export function updateCommGraphTileView(
         // fresh object each time, and an identity compare would call every
         // one of them a change even when the numbers are the ones already
         // stored.
-        sameOfficeCamera(ref.view.officeCamera, view.officeCamera)
+        sameOfficeCamera(ref.view.officeCamera, view.officeCamera) &&
+        // And the NINTH: the default GENERATION the Auto outcome was measured
+        // under. A re-measurement that lands on the same view and camera but
+        // under a newer default MUST still persist - it refreshes the stamp the
+        // Auto effect reads to decide whether to re-measure. Omitted, that
+        // stamp-only write reads as a no-op and is dropped, so the stored
+        // generation never catches up and a default-following tile re-measures
+        // on every remount instead of settling on the refreshed outcome.
+        ref.view.officeAutoGeneration === view.officeAutoGeneration
       ) {
         return ref;
       }

@@ -703,10 +703,22 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // as does no outcome at all. A quiet remount or restart matches and re-reads
     // the saved outcome instead.
     if (choice !== "auto") return;
-    if (
-      node.view.officeAutoView !== null &&
-      node.view.officeAutoGeneration === settingsDefaultGeneration
-    ) {
+    // The default GENERATION only governs a tile that INHERITS the default
+    // (`officeView === null`) - that is the tile whose Auto outcome was measured
+    // against the default's shape, so a default round-trip it was closed for
+    // must re-measure it (Finding D68). A tile that EXPLICITLY picked Auto
+    // (`officeView === "auto"`) does not follow the global default at all, so an
+    // unrelated Appearance-default change bumping the generation must not
+    // re-decide it: the write below keeps the camera only for a Floor outcome,
+    // so re-running a Towers/Building outcome would discard a manually framed
+    // camera it re-selects unchanged. Its non-null outcome therefore stands
+    // regardless of generation; an explicit re-pick of Auto re-measures through
+    // the pick path, which nulls the outcome rather than leaning on this gate.
+    const inheritsDefault = node.view.officeView === null;
+    const generationCurrent =
+      !inheritsDefault ||
+      node.view.officeAutoGeneration === settingsDefaultGeneration;
+    if (node.view.officeAutoView !== null && generationCurrent) {
       return;
     }
     if (!measureReady) return;
