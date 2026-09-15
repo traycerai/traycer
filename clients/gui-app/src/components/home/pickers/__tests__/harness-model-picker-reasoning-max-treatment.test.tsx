@@ -266,7 +266,7 @@ describe("reasoning slider max treatment", () => {
     it("keeps the slider's own padding independent of the footer's row padding", () => {
       mount({ value: "ultra", serviceTier: true });
 
-      expect(slider().className).toContain("py-2");
+      expect(slider().className).toContain("py-1");
       // Once, not twice: the footer keeps its own padding whether or not the
       // service-tier row shares the row.
       const footer = slider().closest("div.border-t");

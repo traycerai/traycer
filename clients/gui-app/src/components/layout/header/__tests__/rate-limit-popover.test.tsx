@@ -1257,6 +1257,39 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.queryByText("Pro 5x")).toBeNull();
   });
 
+  it("re-words every window row when Layout's Used / Remaining setting flips", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      "claude-code": readyResult(claudeReady()),
+    };
+    renderPopover();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("22% used")).toBeTruthy();
+
+    act(() => {
+      useLayoutStore.getState().setStatusBarPercentMode("remaining");
+    });
+    // The words are the strip's own (`windowPercentText`), so the popover
+    // under the footer and the footer never state one limit two ways.
+    expect(screen.getByText("96% remaining")).toBeTruthy();
+    expect(screen.getByText("78% remaining")).toBeTruthy();
+    expect(screen.queryByText("4% used")).toBeNull();
+
+    act(() => {
+      useLayoutStore.getState().setStatusBarPercentMode("used");
+    });
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.queryByText("96% remaining")).toBeNull();
+  });
+
   /**
    * Two providers with two accounts each, both `ephemeralProcess`, with a
    * reading for every card. Shared by the `Show in status bar` cases below,

@@ -16,19 +16,39 @@ export function focusTaskTitleOf(title: string | null): string {
 }
 
 /**
+ * What Home calls an agent's activity tier wherever it prints one: the status
+ * cell, the cold task's summary, the Stop-all list.
+ *
+ * The wire word for the mid-turn tier is `turn`, and the `FocusAgentRow.tier`
+ * union keeps it - but `● turn` on a row read as a noun with no verb, and the
+ * user asked for `running`. `background` stays as it is: it matches the
+ * Background panel, the background chip and the `N bg` badge, all of which the
+ * reader already knows. One helper so the word cannot drift between the three
+ * places that say it.
+ */
+const AGENT_TIER_WORDS: Readonly<Record<FocusAgentRow["tier"], string>> = {
+  turn: "running",
+  background: "background",
+};
+
+export function focusTierWord(tier: FocusAgentRow["tier"]): string {
+  return AGENT_TIER_WORDS[tier];
+}
+
+/**
  * What a row calls an agent it has no name for.
  *
  * `title` is `null` for every agent in an unmounted task - the activity stream
  * carries ids, tiers and parentage for every task on the host, and names for
- * none of them - and those agents are rows now, so the fallback is a NAME
- * rather than the lowercase `agent` it used to be, which only ever appeared
- * mid-sentence as `via agent`.
+ * none of them. Those agents are not rows (a cold task is one row, see
+ * `selectTaskGroupBody`), but `via <parent>` and the Stop-all list still name
+ * agents, so the fallback is a NAME rather than the lowercase `agent` it used
+ * to be, which only ever appeared mid-sentence.
  *
  * Read off the surface where the surface is known, which is the one other fact
- * the row could put here. Cold agents carry no surface either (an identity is
- * resolved or it is not), so in practice `Agent` is what a cold task's chats
- * read as, and the two named cases cover a MOUNTED agent whose projection has
- * not filled a title in yet.
+ * the row could put here. The two named cases cover a MOUNTED agent whose
+ * projection has not filled a title in yet; `Agent` is the rarer mounted agent
+ * whose projection has no surface yet either.
  */
 const AGENT_SURFACE_NAMES: Readonly<
   Record<NonNullable<FocusAgentRow["surface"]>, string>

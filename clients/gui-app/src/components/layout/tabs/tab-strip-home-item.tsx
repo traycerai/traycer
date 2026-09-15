@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { House } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { TabChrome } from "@/components/layout/tabs/header-tab-visual";
+import { headerTabClassName } from "@/components/layout/tabs/tab-chrome-tokens";
 import { cn } from "@/lib/utils";
 
 const HOME_TAB_LABEL = "Home";
@@ -22,9 +23,15 @@ interface TabStripHomeItemProps {
  * `data-tab-index` digit badge - is one Home must not have. What it does share
  * is the silhouette, so it borrows `TabChrome` rather than growing a second set
  * of tab-shaped tokens - passing no colour, since a manual tab colour belongs
- * to a strip record and Home has none. No `data-tab-index` in particular: the Alt-digit chords
- * index `useHeaderTabs()`, which Home is not in, so `alt+1` still names the
- * first task tab.
+ * to a strip record and Home has none - and the same `headerTabClassName`
+ * box the task tabs stand in, so the bubble is the same height and carries
+ * the same horizontal padding as its neighbours. It used to be its own
+ * `h-10 w-11` box, which read as a narrower, taller bubble beside the `h-9 …
+ * px-6` tabs. Only the width rule differs: a task tab fills its motion frame
+ * (`w-full`), while Home is icon-only and sizes to its padding. No
+ * `data-tab-index` in particular: the Alt-digit chords index
+ * `useHeaderTabs()`, which Home is not in, so `alt+1` still names the first
+ * task tab.
  */
 export function TabStripHomeItem(props: TabStripHomeItemProps): ReactNode {
   const { isActive, onActivate, badgeCount } = props;
@@ -48,11 +55,13 @@ export function TabStripHomeItem(props: TabStripHomeItemProps): ReactNode {
         data-testid="tab-home"
         data-tab-kind="home"
         onClick={onActivate}
+        // The task tabs' own box, then the two things an icon-only item does
+        // differently: it sizes to its padding rather than filling a frame,
+        // and it centres the one glyph it holds. `cn()` lets `w-auto` displace
+        // the token's `w-full`.
         className={cn(
-          "group/tab relative flex h-10 w-11 shrink-0 cursor-pointer items-center justify-center transition-colors duration-300 ease-spring [-webkit-app-region:no-drag]",
-          isActive
-            ? "z-10 text-foreground"
-            : "text-muted-foreground hover:text-foreground",
+          headerTabClassName("own", isActive),
+          "w-auto shrink-0 cursor-pointer justify-center [-webkit-app-region:no-drag]",
         )}
       >
         {/* No manual colour: Home is not a projected tab, so there is no
