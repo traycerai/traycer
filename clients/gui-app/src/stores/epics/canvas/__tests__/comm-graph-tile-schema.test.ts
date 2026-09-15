@@ -729,6 +729,36 @@ describe("comm-graph tile schema", () => {
       if (parsed === null || parsed.type !== "comm-graph") return;
       expect(parsed.view.officeCamera).toBeNull();
     });
+
+    it("keeps a framed camera when officeView is null (inheriting a concrete default), even with a stale dormant outcome", () => {
+      // `officeView: null` means "inherit the Settings default", which the
+      // renderer resolves to `agentOfficeDefaultView` and may be a concrete
+      // view like Towers - the parser cannot know which, so it must not
+      // treat `null` as Auto and let the dormant, unreadable `officeAutoView`
+      // wipe a camera that frames the resolved concrete view.
+      const parsed = parseTileRef({
+        id: commGraphTileId(EPIC_ID),
+        instanceId: "inst-1",
+        type: "comm-graph",
+        name: "Agent office",
+        hostId: UNKNOWN_HOST_PLACEHOLDER,
+        epicId: EPIC_ID,
+        view: {
+          x: 0,
+          y: 0,
+          zoom: 1,
+          mode: "office",
+          officeView: null,
+          officeAutoView: "skyline",
+          officeCameraView: "towers",
+          officeCamera: { x: 40, y: -12, zoom: 2.5 },
+        },
+      });
+      expect(parsed?.type).toBe("comm-graph");
+      if (parsed === null || parsed.type !== "comm-graph") return;
+      expect(parsed.view.officeCamera).toEqual({ x: 40, y: -12, zoom: 2.5 });
+      expect(parsed.view.officeCameraView).toBe("towers");
+    });
   });
 });
 
