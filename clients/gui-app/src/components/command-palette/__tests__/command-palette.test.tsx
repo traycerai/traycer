@@ -328,7 +328,7 @@ describe("runCommandItem", () => {
   it("keeps the palette open for an inline workspace retry", async () => {
     const retry = vi.fn<() => void>();
     const item: CommandItem = {
-      id: "open:terminals:new:host:host-1:retry",
+      id: "workspace-check:terminal:host-1:retry",
       label: "Retry workspace check",
       description: null,
       keywords: ["workspace", "retry"],

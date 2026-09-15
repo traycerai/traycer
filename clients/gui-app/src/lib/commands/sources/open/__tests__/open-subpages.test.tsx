@@ -83,6 +83,7 @@ type TerminalBindingsFixture = {
     };
     isPending: boolean;
     isError: boolean;
+    isFetching: boolean;
     refetch: () => Promise<unknown>;
   };
   remote: {
@@ -92,6 +93,8 @@ type TerminalBindingsFixture = {
     };
     isPending: boolean;
     isError: boolean;
+    isFetching: boolean;
+    refetch: () => Promise<unknown>;
   };
 };
 const terminalBindingsMock = vi.hoisted<TerminalBindingsFixture>(() => ({
@@ -102,6 +105,7 @@ const terminalBindingsMock = vi.hoisted<TerminalBindingsFixture>(() => ({
     },
     isPending: false,
     isError: false,
+    isFetching: false,
     refetch: spies.retryTerminalBindings,
   },
   remote: {
@@ -128,6 +132,7 @@ const terminalBindingsMock = vi.hoisted<TerminalBindingsFixture>(() => ({
     },
     isPending: false,
     isError: false,
+    isFetching: false,
     refetch: spies.retryTerminalBindings,
   },
 }));
@@ -601,8 +606,10 @@ afterEach(() => {
   terminalBindingsMock.active.data.folderlessCwd = "/work/default-cwd";
   terminalBindingsMock.active.isPending = false;
   terminalBindingsMock.active.isError = false;
+  terminalBindingsMock.active.isFetching = false;
   terminalBindingsMock.remote.isPending = false;
   terminalBindingsMock.remote.isError = false;
+  terminalBindingsMock.remote.isFetching = false;
   useNewConversationModalOpenStore.getState().close();
   useNewConversationModalStore.getState().resetForTests();
   useProviderLoginTerminalsStore.setState(
@@ -904,6 +911,68 @@ describe("Terminals opener sub-page", () => {
     void retry.run(CTX);
     expect(spies.retryTerminalBindings).toHaveBeenCalledOnce();
     expect(retry.keepOpen).toBe(true);
+    expect(retry.id).toBe("workspace-check:terminal:terminal-host:retry");
+    expect(retry.id.startsWith("open:terminals:")).toBe(false);
+    expect(retry.disabled).toBe(false);
+  });
+
+  it("keeps partial workspace rows visible and offers a non-terminal retry leaf", () => {
+    terminalBindingsMock.active.data.rows = [
+      ACTIVE_ROWS[0],
+      {
+        ...ACTIVE_ROWS[0],
+        hostId: "unverified-host",
+        runningDir: "/work/unverified",
+        worktreePath: "/work/unverified",
+        branch: "unverified",
+        disabledReason: "missing_worktree_path",
+        isGitResolvePending: true,
+      },
+    ];
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+    const workspaceItems = renderItems(newTerminal.subpage.useItems);
+    const workspaceLabels = workspaceItems.map((item) => item.label);
+    expect(workspaceLabels).toEqual(
+      expect.arrayContaining([
+        "/work/active-repo",
+        "Retry workspace check",
+        "Remote Terminal Mac",
+      ]),
+    );
+    expect(workspaceLabels).not.toContain("/work/unverified");
+    const retry = workspaceItems.find(
+      (item) => item.label === "Retry workspace check",
+    );
+    expect(retry?.id).toBe("workspace-check:terminal:default-host:retry");
+    expect(retry?.disabled).toBe(false);
+    expect(retry?.id.startsWith("open:terminals:")).toBe(false);
+  });
+
+  it("disables the unchanged Retry leaf while its workspace check is fetching", () => {
+    terminalBindingsMock.remote.isError = true;
+    terminalBindingsMock.remote.isFetching = true;
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+    const remoteHost = renderItems(newTerminal.subpage.useItems).find(
+      (item) => item.label === "Remote Terminal Mac",
+    );
+    if (remoteHost?.subpage === null || remoteHost?.subpage === undefined) {
+      throw new Error("expected remote-host workspace subpage");
+    }
+    const retry = renderItems(remoteHost.subpage.useItems).find(
+      (item) => item.label === "Retry workspace check",
+    );
+    expect(retry?.label).toBe("Retry workspace check");
+    expect(retry?.disabled).toBe(true);
+    expect(retry?.id).toBe("workspace-check:terminal:terminal-host:retry");
+    expect(retry?.id.startsWith("open:terminals:")).toBe(false);
   });
 
   it("does not offer the folderless fallback when another host owns a workspace", () => {

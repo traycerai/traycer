@@ -16,6 +16,7 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
@@ -69,6 +70,9 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
       ),
     [bindingsQuery.data?.rows, explicitRow],
   );
+  const hasUnverifiedRows = rows.some(
+    (row) => !isBrowsable(row) && row.isGitResolvePending,
+  );
   const selectedRow = useMemo(
     () => resolveTerminalSelection(explicitRow, rows),
     [explicitRow, rows],
@@ -81,7 +85,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
   const folderlessCwd = bindingsQuery.data?.folderlessCwd ?? null;
   const folderlessCwdFailed = hasLoadedNoRows && folderlessCwd === null;
   const launchTarget = useMemo(() => {
-    if (bindingsQuery.isError) return null;
+    if (bindingsQuery.isError || bindingsQuery.isFetching) return null;
     if (selectedRow !== null) {
       return { hostId: selectedRow.hostId, cwd: selectedRow.runningDir };
     }
@@ -92,6 +96,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     );
   }, [
     bindingsQuery.isError,
+    bindingsQuery.isFetching,
     folderlessCwd,
     hasLoadedNoRows,
     pin.resolvedHostId,
@@ -166,17 +171,24 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-border/60 bg-muted/20 px-2.5 py-2.5">
         <div className="min-w-0 text-xs text-muted-foreground">
-          {bindingsQuery.isError ? (
+          {bindingsQuery.isError || hasUnverifiedRows ? (
             <Button
               type="button"
               variant="outline"
               size="sm"
               disabled={bindingsQuery.isFetching}
               onClick={() => {
-                void bindingsQuery.refetch();
+                void bindingsQuery.refetch({ cancelRefetch: false });
               }}
             >
-              {bindingsQuery.isFetching ? "Retrying…" : "Retry"}
+              {bindingsQuery.isFetching ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="terminal-workspace-retry-spinner"
+                  variant={undefined}
+                />
+              ) : null}
+              Retry
             </Button>
           ) : (
             folderlessCwdStatus

@@ -48,6 +48,7 @@ interface BindingsQueryStub {
     | undefined;
   readonly isPending: boolean;
   readonly isError: boolean;
+  readonly isFetching?: boolean;
   readonly refetch?: () => Promise<unknown>;
 }
 
@@ -92,6 +93,7 @@ function stubLoadedBindings(): void {
     },
     isPending: false,
     isError: false,
+    isFetching: false,
     refetch: retryBindings,
   };
 }
@@ -286,6 +288,41 @@ describe("<NewTerminalPicker />", () => {
     );
     fireEvent.click(retry);
     expect(retryBindings).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Retry for partial availability and shows a spinner while fetching", () => {
+    bindingsQuery.current = {
+      data: {
+        rows: [
+          makeRow("host-1", "/work/verified", "main", null),
+          {
+            ...makeRow(
+              "host-2",
+              "/work/unverified",
+              "unverified",
+              "missing_worktree_path",
+            ),
+            isGitResolvePending: true,
+          },
+        ],
+        folderlessCwd: "/Users/tgill",
+      },
+      isPending: false,
+      isError: false,
+      isFetching: true,
+      refetch: retryBindings,
+    };
+    openPicker();
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry.textContent).toContain("Retry");
+    expect(retry.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByTestId("terminal-workspace-retry-spinner"),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("preserves the open picker when its panel header remounts", () => {

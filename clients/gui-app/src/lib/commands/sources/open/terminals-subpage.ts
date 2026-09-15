@@ -253,6 +253,7 @@ interface TerminalWorkspaceQueryState {
   readonly folderlessCwd: string | null | undefined;
   readonly isPending: boolean;
   readonly isError: boolean;
+  readonly isFetching: boolean;
   readonly retry: () => void;
 }
 
@@ -262,29 +263,35 @@ function terminalWorkspaceQueryItems(
   query: TerminalWorkspaceQueryState,
   hostClient: HostClient<HostRpcRegistry>,
 ): ReadonlyArray<CommandItem> {
-  if (query.isPending) return [terminalWorkspaceStatusHint(hostId, "loading")];
-  if (query.isError)
-    return [
-      terminalWorkspaceStatusHint(hostId, "error"),
-      {
-        ...openerActionLeaf({
-          id: `open:terminals:new:host:${hostId}:retry`,
-          label: "Retry workspace check",
-          keywords: ["workspace", "terminal", "retry"],
-          run: query.retry,
-        }),
-        keepOpen: true,
-      },
-    ];
-  return terminalWorkspaceLeaves(
-    ctx,
-    hostId,
-    {
-      rows: query.rows ?? [],
-      folderlessCwd: query.folderlessCwd ?? null,
-    },
-    hostClient,
+  if (query.isPending || (query.isFetching && !query.isError)) {
+    return [terminalWorkspaceStatusHint(hostId, "loading")];
+  }
+  const items = query.isError
+    ? [terminalWorkspaceStatusHint(hostId, "error")]
+    : terminalWorkspaceLeaves(
+        ctx,
+        hostId,
+        { rows: query.rows ?? [], folderlessCwd: query.folderlessCwd ?? null },
+        hostClient,
+      );
+  const hasUnverifiedRows = (query.rows ?? []).some(
+    (row) => !isBrowsable(row) && row.isGitResolvePending,
   );
+  if (!query.isError && !hasUnverifiedRows) return items;
+  return [
+    ...items,
+    {
+      ...openerActionLeaf({
+        // Recovery is not a terminal-open command for analytics.
+        id: `workspace-check:terminal:${hostId}:retry`,
+        label: "Retry workspace check",
+        keywords: ["workspace", "terminal", "retry"],
+        run: query.retry,
+      }),
+      keepOpen: true,
+      disabled: query.isFetching,
+    },
+  ];
 }
 
 function useHostTerminalWorkspaceItems(
@@ -309,8 +316,9 @@ function useHostTerminalWorkspaceItems(
           folderlessCwd: bindings.data?.folderlessCwd,
           isPending: bindings.isPending,
           isError: bindings.isError,
+          isFetching: bindings.isFetching,
           retry: () => {
-            void retryBindings();
+            void retryBindings({ cancelRefetch: false });
           },
         },
         hostClient,
@@ -318,6 +326,7 @@ function useHostTerminalWorkspaceItems(
     [
       bindings.data,
       bindings.isError,
+      bindings.isFetching,
       bindings.isPending,
       retryBindings,
       ctx,
@@ -377,8 +386,9 @@ function useNewTerminalWorkspaceItems(
               folderlessCwd: bindings.data?.folderlessCwd,
               isPending: bindings.isPending,
               isError: bindings.isError,
+              isFetching: bindings.isFetching,
               retry: () => {
-                void retryBindings();
+                void retryBindings({ cancelRefetch: false });
               },
             },
             hostClient,
@@ -409,6 +419,7 @@ function useNewTerminalWorkspaceItems(
     activeHostId,
     bindings.data,
     bindings.isError,
+    bindings.isFetching,
     bindings.isPending,
     retryBindings,
     ctx,

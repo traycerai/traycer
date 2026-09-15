@@ -1,4 +1,6 @@
 import type { UseQueryResult } from "@tanstack/react-query";
+import { hasBlockingWorktreeSelectorReason } from "@traycer-clients/shared/worktree/worktree-row-state";
+import { WORKTREE_DIRECTORY_CHECK_TIMEOUT_MESSAGE } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   HostRpcError,
@@ -70,11 +72,13 @@ export function useTerminalWorkspaceBindingsForClient(args: {
       // An older host strips purpose and can answer with an unresolved Git
       // placeholder. Retry it like a timeout instead of caching a successful
       // response whose disabled row spins forever. v1.3 directory checks fail
-      // the RPC on timeout and return only verified directory availability.
+      // the RPC on timeout. A partial response must preserve usable siblings;
+      // the picker offers Retry for its remaining unverified directories.
       if (
         response.rows.some(
           (row) => row.disabledReason !== null && row.isGitResolvePending,
-        )
+        ) &&
+        !response.rows.some((row) => !hasBlockingWorktreeSelectorReason(row))
       ) {
         throw new HostRpcError({
           code: "RPC_ERROR",
@@ -88,10 +92,17 @@ export function useTerminalWorkspaceBindingsForClient(args: {
     },
     options: {
       enabled: args.enabled,
-      // The transport already exhausts its own dial retries. Only retry
-      // unresolved directory checks here, without multiplying that budget.
+      staleTime: 0,
+      refetchOnMount: "always",
+      // Retry only an unfinished availability check. Auth, permission and
+      // unrelated RPC errors must surface immediately. The transport already
+      // exhausts its own dial retries, so never multiply that budget here.
       retry: (failureCount, error) =>
-        !(error instanceof RetryableTransportError) && failureCount < 2,
+        failureCount < 2 &&
+        !(error instanceof RetryableTransportError) &&
+        error.code === "RPC_ERROR" &&
+        (error.requestId === "terminal-workspace-check" ||
+          error.message === WORKTREE_DIRECTORY_CHECK_TIMEOUT_MESSAGE),
       retryDelay: (attempt) => 1_000 * 2 ** attempt,
     },
   });

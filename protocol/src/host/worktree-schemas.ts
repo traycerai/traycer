@@ -1469,13 +1469,19 @@ export type WorktreeListBindingsForEpicRequest = z.infer<
   typeof worktreeListBindingsForEpicRequestSchema
 >;
 
+/** Exact retryable directory-timeout detail carried by the RPC error. */
+export const WORKTREE_DIRECTORY_CHECK_TIMEOUT_MESSAGE =
+  "Workspace directory check timed out. Try again.";
+
 /**
  * v1.3 lets terminal launchers request directory availability without Git.
  * Omitted purpose preserves Git selector behavior. Directory reads return
- * only verified presence: errors/timeouts fail the request and can be retried.
- * Their present rows have no disabled reason and leave Git facts pending;
- * missing directories are definitive missing rows. Git consumers must keep
- * using the default purpose.
+ * verified directory presence independently of Git. Their present rows have
+ * no disabled reason and leave Git facts pending; missing directories are
+ * definitive missing rows. A partially resolved batch preserves verified
+ * siblings and marks unresolved paths disabled/pending for retry. If nothing
+ * resolves, errors/timeouts fail the request. Git consumers must keep using
+ * the default purpose.
  */
 export const worktreeListBindingsForEpicRequestSchemaV13 =
   worktreeListBindingsForEpicRequestSchema.extend({
