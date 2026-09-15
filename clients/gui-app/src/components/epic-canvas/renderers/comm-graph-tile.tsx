@@ -532,19 +532,20 @@ export function CommGraphTile(props: CommGraphTileProps) {
     const previous = followedDefaultRef.current;
     if (previous === settingsDefaultView) return;
     followedDefaultRef.current = settingsDefaultView;
-    // NOT while the Graph is on screen. The camera in the store is the
-    // Graph's, and neutralising it here would throw away a framing the office
-    // has no claim on. The mismatch this leaves in the record is the carrier:
-    // the next office mount reads it and resets at render, above.
-    if (node.view.mode !== "office") return;
+    // Only a tile still FOLLOWING the default moves; an explicit pick owns its
+    // own framing.
     if (node.view.officeView !== null) return;
-    // THE DEFAULT ENTERED AUTO. `officeAutoView` still holds the OUTCOME of the
-    // last Auto run this tile followed, and the epic or the tile's box may have
-    // changed shape since - so leaving it in place lets the Auto effect's
-    // `officeAutoView !== null` guard skip measurement and reopen on a stale
-    // Floor/Towers pick. Clear the dormant outcome so this selection goes back
-    // through measurement, exactly as an explicit Auto pick does; nothing
-    // frames a view until Auto answers.
+    // THE DEFAULT ENTERED AUTO - cleared in EITHER mode, BEFORE the office-only
+    // gate below. `officeAutoView` holds the OUTCOME of the last Auto run this
+    // tile followed, and the epic or the tile's box may have changed shape
+    // since; left in place it lets the Auto effect's `officeAutoView !== null`
+    // guard skip measurement, so the office reopens on a stale Floor/Towers
+    // pick. That includes the default returning to Auto while the GRAPH is up
+    // and no office canvas is mounted: gating this on office mode swallowed
+    // that case, and nothing else clears the dormant outcome (the witness arm
+    // retires the office CAMERA but never `officeAutoView`). Since D68 these
+    // are the office's own fields, not the Graph's `x`/`y`/`zoom`, so clearing
+    // them touches no Graph framing. Nothing frames a view until Auto answers.
     if (settingsDefaultView === "auto") {
       if (
         node.view.officeAutoView === null &&
@@ -562,8 +563,13 @@ export function CommGraphTile(props: CommGraphTileProps) {
       releaseWitness();
       return;
     }
-    // The default moved to a CONCRETE view: that view is what resolves now, and
-    // the camera is retired only when the resolved view actually changed.
+    // The default moved to a CONCRETE view. THIS retire is the office's to make
+    // only while it is on screen: neutralising the camera for the arriving view
+    // while the Graph is up is unnecessary, because the record-disagreement
+    // effect below retires it on the next office mount from the mismatch this
+    // leaves in the record. The auto case above needs no such gate - it clears
+    // the office's own dormant fields, which no later effect will.
+    if (node.view.mode !== "office") return;
     const before = previous === "auto" ? node.view.officeAutoView : previous;
     if (before === settingsDefaultView) return;
     updateView(viewTabId, node.id, {
