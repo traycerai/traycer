@@ -4,6 +4,7 @@ import type {
   FocusBrowserRow,
   FocusTaskRow,
 } from "@/lib/home-focus/focus-model";
+import { focusTierWord } from "@/lib/home-focus/focus-row-labels";
 
 /**
  * The one vocabulary every Home row answers "what is this doing" in.
@@ -14,10 +15,13 @@ import type {
  * state is a closed union resolved here rather than a sentence each row shape
  * composes for itself.
  *
- * `turn` and `running` are deliberately two states rather than one word: an
- * agent taking a turn is work the USER is waiting on, a durable shell is work
- * that will still be there tomorrow, and the page is read by someone deciding
- * which of those needs them.
+ * `turn` and `running` are deliberately two states even though they now print
+ * the same word: an agent taking a turn is work the USER is waiting on, a
+ * durable shell is work that will still be there tomorrow, and the page is
+ * read by someone deciding which of those needs them. The distinction lives in
+ * the row's kind and glyph (an agent under a task, a job with a `Terminal`);
+ * the word is what the reader asked for, and it comes from
+ * {@link focusTierWord} so the column and the cold-task summary agree.
  */
 export type FocusRowState =
   | "needs-you"
@@ -50,7 +54,7 @@ export const FOCUS_ROW_STATES: Readonly<
     wordClassName: "text-warning-foreground",
   },
   turn: {
-    word: "turn",
+    word: focusTierWord("turn"),
     dotClassName: "bg-primary",
     wordClassName: "text-muted-foreground",
   },
@@ -75,7 +79,7 @@ export const FOCUS_ROW_STATES: Readonly<
     wordClassName: "text-muted-foreground",
   },
   background: {
-    word: "background",
+    word: focusTierWord("background"),
     dotClassName: "border border-muted-foreground bg-transparent",
     wordClassName: "text-muted-foreground",
   },
