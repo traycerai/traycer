@@ -329,18 +329,27 @@ export function useChatComposerSubmit(
   // to the policy were still the staging render's. A host that reconnected and
   // negotiated a line without same-turn steering during the byte read would
   // have its restart dispatched as a STEER it can no longer serve.
+  //
+  // `steerCapable` rides with them. It gates the settings-drift comparison
+  // rather than the policy, so it looked like a different kind of fact - but it
+  // is the same kind: preparation can span a turn being REPLACED, and a capable
+  // turn arriving where an incapable one was would have its settings drift
+  // injected without the restart confirmation, while the reverse would offer a
+  // confirmation for a turn that can only fall back.
   const steerInputsRef = useRef({
     activeTurnStatus,
+    steerCapable,
     steerEnabled,
     steerProtocolSupported,
   });
   useEffect(() => {
     steerInputsRef.current = {
       activeTurnStatus,
+      steerCapable,
       steerEnabled,
       steerProtocolSupported,
     };
-  }, [activeTurnStatus, steerEnabled, steerProtocolSupported]);
+  }, [activeTurnStatus, steerCapable, steerEnabled, steerProtocolSupported]);
 
   const submitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
@@ -531,7 +540,10 @@ export function useChatComposerSubmit(
             browserAnnotations: liveAnnotationRecords,
           },
         };
-        if (deliveryPolicy === "after_safe_point" && steerCapable) {
+        if (
+          deliveryPolicy === "after_safe_point" &&
+          liveSteerInputs.steerCapable
+        ) {
           const originTurn = getActiveTurnForSteer();
           const decision = decideSteerSettings(originTurn, settings);
           if (decision.kind === "interrupt_restart") {
@@ -778,18 +790,18 @@ export function useChatComposerSubmit(
       });
     },
     [
-      // `activeTurnStatus`, `steerEnabled` and `steerProtocolSupported` are
-      // deliberately ABSENT: both readers in this callback now go through
-      // `steerInputsRef`, precisely because a value captured at this render is
-      // stale by the time an awaited image read returns. Listing them would
-      // rebuild the callback for a value it no longer reads.
+      // `activeTurnStatus`, `steerCapable`, `steerEnabled` and
+      // `steerProtocolSupported` are deliberately ABSENT: every reader in this
+      // callback now goes through `steerInputsRef`, precisely because a value
+      // captured at this render is stale by the time an awaited image read
+      // returns. Listing them would rebuild the callback for values it no
+      // longer reads.
       clearAcceptedDraft,
       editorRef,
       finalizeSend,
       onSideChat,
       pickerStore,
       getActiveTurnForSteer,
-      steerCapable,
       queueEditTargetId,
       getDraftBlobBridgeSupported,
       submitBlocked,

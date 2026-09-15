@@ -134,8 +134,21 @@ async function runPendingImageIngestJob(args: {
     // converter's awaits are: a stalled store otherwise leaves this
     // node inline forever, and with the collector's pending-node guard
     // that withholds the whole draft indefinitely.
+    // Hoisted so the WRITE is observed independently of the WAIT, exactly as
+    // the paste path does. The deadline (or an abort) ends this job; it cannot
+    // cancel an IndexedDB write already issued, so a stalled `putImage` that
+    // later succeeds seeds the store with bytes no node references - and the
+    // failure path's own reconcile can run BEFORE that write lands, with
+    // nothing scheduling another. Repeated stalled migrations accumulate.
+    const storing = putImage(bytes);
+    void storing.then(
+      () => {
+        scheduleLandingImageReconcile();
+      },
+      () => undefined,
+    );
     const hash = await withAbortableDeadline(
-      putImage(bytes),
+      storing,
       IMAGE_READ_TIMEOUT_MS,
       signal,
       () => "Storing the pasted image timed out",
