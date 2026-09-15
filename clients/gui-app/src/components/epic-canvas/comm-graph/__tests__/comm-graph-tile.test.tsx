@@ -3259,6 +3259,59 @@ describe("CommGraphTile", () => {
         zoom: 4,
       });
     });
+
+    it("withholds a stale inherited Auto outcome at RENDER too, not only in the re-measure effect (Finding 6)", async () => {
+      // Codex: Finding 1's freshness check lived only in the effect (when to
+      // re-measure). The render-time view resolution still trusted the stale
+      // `officeAutoView` unconditionally, so a default-following tile mounts
+      // with the OLD view resolved and handed to the canvas - which can plan
+      // and draw it - in the window before the effect re-measures and
+      // corrects it. The chip is not the right witness here (it reads
+      // `officeAutoView` straight off the record, restored-outcome label and
+      // all, regardless of trust); what the CANVAS is actually handed is.
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+      );
+      act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
+      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+        2,
+      );
+
+      const persisted: CommGraphTileViewState = {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeAutoView: "towers",
+        officeAutoGeneration: 0,
+      };
+      await renderSeededOffice(persisted);
+      setIntersecting(true);
+      setOfficeCanvasSize(OFFICE_CANVAS);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // Before the feed catches up and Auto gets a chance to re-measure, the
+      // canvas must be handed the MEASURING surface, not the stale Towers -
+      // a real drawable "ready" canvas already resolved to the wrong office
+      // is exactly the flash-and-discard Finding 6 is about.
+      expect(office.mock.calls.at(-1)?.[0]?.officeView.id).toBe("floor");
+      expect(lastCanvasReady(office)).toBe(false);
+      expect(decide).not.toHaveBeenCalled();
+
+      caughtUp();
+      await waitFor(() => {
+        expect(decide).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(storedView()?.officeAutoGeneration).toBe(2);
+      });
+      // Real Auto measurement, same fixture/box every other case in this file
+      // relies on for a Floor outcome - the point here is only that it is a
+      // FRESH decision (the stale "towers" seed is gone), not which view wins.
+      expect(storedView()?.officeAutoView).toBe("floor");
+    });
   });
 
   describe("readiness classification (F3, revised by fixup 8/H1)", () => {
