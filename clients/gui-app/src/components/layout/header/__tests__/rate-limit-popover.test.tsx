@@ -1376,9 +1376,10 @@ describe("<RateLimitPopover /> rail", () => {
     const eye = within(card).getByRole("button", {
       name: "Show Work in status bar",
     });
-    // The dot is the `aria-hidden` swatch `AccentDot` draws; the eye is its
-    // immediate previous sibling, so the two read as one unit.
-    const dot = eye.nextElementSibling;
+    // The dot is the `aria-hidden` swatch `AccentDot` draws; the eye (in its
+    // tooltip-trigger span) is its immediate previous sibling, so the two
+    // read as one unit.
+    const dot = eye.parentElement?.nextElementSibling;
     expect(dot).not.toBeNull();
     expect(dot?.getAttribute("aria-hidden")).toBe("true");
     expect(dot?.className).toContain("rounded-full");
@@ -1468,19 +1469,29 @@ describe("<RateLimitPopover /> rail", () => {
     };
     renderPopover();
 
-    // Checked: the strip draws it because it was asked for.
-    fireEvent.focus(
-      screen.getByRole("button", { name: "Hide Work from status bar" }),
-    );
+    // Checked: the strip draws it because it was asked for. The tooltip
+    // repeats the button's name, so it must NOT also describe the button -
+    // Radix would otherwise point `aria-describedby` at the open tooltip and
+    // a reader would hear the action twice.
+    const checkedEye = screen.getByRole("button", {
+      name: "Hide Work from status bar",
+    });
+    fireEvent.focus(checkedEye);
     let tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toBe("Hide Work from status bar");
+    expect(checkedEye.getAttribute("aria-describedby")).toBeNull();
+    expect(checkedEye.getAttribute("aria-label")).toBe(
+      "Hide Work from status bar",
+    );
 
     // Not checked, and not drawn: nothing else to say.
-    fireEvent.focus(
-      screen.getByRole("button", { name: "Show Default Codex in status bar" }),
-    );
+    const offEye = screen.getByRole("button", {
+      name: "Show Default Codex in status bar",
+    });
+    fireEvent.focus(offEye);
     tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toBe("Show Default Codex in status bar");
+    expect(offEye.getAttribute("aria-describedby")).toBeNull();
 
     // Not checked, but drawn anyway: Claude has nothing checked, so its
     // last-used account is the strip's fallback and the eye has to say so.
@@ -1497,6 +1508,17 @@ describe("<RateLimitPopover /> rail", () => {
     tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toBe(
       "Show Personal in status bar. Shown by default until an account is checked.",
+    );
+    // A reader gets the note as the description - only the words the name
+    // does not already carry, never the open tooltip's full sentence.
+    const describedBy = fallbackEye.getAttribute("aria-describedby");
+    expect(describedBy).not.toBeNull();
+    expect(describedBy).not.toBe(tooltip.id);
+    expect(document.getElementById(describedBy ?? "")?.textContent).toBe(
+      "Shown by default until an account is checked.",
+    );
+    expect(fallbackEye.getAttribute("aria-label")).toBe(
+      "Show Personal in status bar",
     );
   });
 

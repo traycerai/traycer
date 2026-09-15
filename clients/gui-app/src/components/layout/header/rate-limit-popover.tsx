@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -2119,21 +2120,31 @@ function showInStatusBarLabel(
 }
 
 /**
- * The words on the eye toggle's tooltip. Three states, because the eye being
- * off does not always mean the account is off the strip: with nothing checked
- * for the provider, the strip draws one account anyway, and the card for that
+ * The sentence the tooltip adds beyond the eye's own name, or `null` when
+ * the name says it all. Only one case has more to say: the eye being off does
+ * not always mean the account is off the strip - with nothing checked for
+ * the provider, the strip draws one account anyway, and the card for that
  * one has to say so or the toggle reads as broken.
  */
+function showInStatusBarNote(
+  checked: boolean,
+  shownOnStrip: boolean,
+): string | null {
+  if (!checked && shownOnStrip) {
+    return "Shown by default until an account is checked.";
+  }
+  return null;
+}
+
+/** The words on the eye toggle's tooltip: the name, plus the note if any. */
 function showInStatusBarTooltip(
   profile: ProviderProfile,
   checked: boolean,
   shownOnStrip: boolean,
 ): string {
   const label = showInStatusBarLabel(profile, checked);
-  if (!checked && shownOnStrip) {
-    return `${label}. Shown by default until an account is checked.`;
-  }
-  return label;
+  const note = showInStatusBarNote(checked, shownOnStrip);
+  return note === null ? label : `${label}. ${note}`;
 }
 
 /**
@@ -2156,6 +2167,8 @@ function StatusBarEyeToggle({
   readonly onSetShownOnStrip: (shown: boolean) => void;
 }): ReactNode {
   const Icon = checkedForStrip ? Eye : EyeOff;
+  const note = showInStatusBarNote(checkedForStrip, shownOnStrip);
+  const noteId = useId();
   return (
     <TooltipWrapper
       label={showInStatusBarTooltip(profile, checkedForStrip, shownOnStrip)}
@@ -2163,19 +2176,35 @@ function StatusBarEyeToggle({
       sideOffset={6}
       align={undefined}
     >
-      <button
-        type="button"
-        aria-label={showInStatusBarLabel(profile, checkedForStrip)}
-        aria-pressed={checkedForStrip}
-        data-testid="rate-limit-profile-status-bar-eye"
-        onClick={() => onSetShownOnStrip(!checkedForStrip)}
-        className={cn(
-          "inline-flex size-6 shrink-0 items-center justify-center rounded-md outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
-          checkedForStrip ? "text-foreground" : "text-muted-foreground",
+      {/* The trigger is the span, not the button (the `RefreshIconButton`
+            shape). Radix describes its trigger by the open tooltip, and this
+            tooltip starts with the button's own name, so a reader would hear
+            the action twice; its Slot concatenates `aria-describedby` rather
+            than letting the child's win, so the button cannot opt out from
+            inside. On the span the description is inert. The button carries
+            its own: the fallback note alone when there is one - the only
+            words the name does not already say - otherwise nothing. */}
+      <span className="inline-flex shrink-0">
+        <button
+          type="button"
+          aria-label={showInStatusBarLabel(profile, checkedForStrip)}
+          aria-pressed={checkedForStrip}
+          aria-describedby={note === null ? undefined : noteId}
+          data-testid="rate-limit-profile-status-bar-eye"
+          onClick={() => onSetShownOnStrip(!checkedForStrip)}
+          className={cn(
+            "inline-flex size-6 shrink-0 items-center justify-center rounded-md outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
+            checkedForStrip ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          <Icon className="size-4" aria-hidden />
+        </button>
+        {note === null ? null : (
+          <span id={noteId} className="sr-only">
+            {note}
+          </span>
         )}
-      >
-        <Icon className="size-4" aria-hidden />
-      </button>
+      </span>
     </TooltipWrapper>
   );
 }
