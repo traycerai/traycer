@@ -1590,6 +1590,162 @@ describe("CommGraphOfficeCanvas", () => {
       expect(last.y).not.toBeCloseTo(liveAfterGrowth.y);
     });
 
+    it("flushes the shifted MANUAL BASELINE on a mode-switch, not the live playback camera, while a baseline write is pending (Finding 28)", () => {
+      // Codex: a world shift under a playback reframe schedules
+      // `persistManualBaselineFromLoop` (a pending BASELINE write), sharing
+      // `persistTimerRef` with `persistView`. `takePendingView` - the
+      // mode-switch/unmount flush the tile calls via `onRegisterFlush` - used
+      // to fall back to `currentViewPatch()` (the LIVE camera) regardless of
+      // which write was actually pending, so a switch to Graph inside the
+      // 150ms debounce flushed the transient playback framing instead of the
+      // shifted manual one. `pendingBaselineWriteRef` now tracks which write
+      // is pending, and the flush returns the baseline when it is one.
+      //
+      // Same real-pan setup Finding 26 uses - reused here to reach the exact
+      // same pending-baseline-write state - but this time NOT advancing the
+      // debounce: the flush is read directly, synchronously, the way a mode
+      // switch mid-debounce actually would.
+      const onCameraChange = vi.fn();
+      const registered: {
+        current: (() => CommGraphTileCamera | null) | null;
+      } = { current: null };
+      const captureFlush = (
+        take: (() => CommGraphTileCamera | null) | null,
+      ): void => {
+        registered.current = take;
+      };
+      const farView: CommGraphTileViewState = {
+        ...FIXED_CAMERA_VIEW,
+        x: -10000,
+        y: -10000,
+      };
+      const pulse: CommGraphPulse = {
+        kind: "agent",
+        agentId: "shift-a",
+        senderAgentId: "shift-a",
+      };
+
+      // Phase 1: calibrate the shift in WORLD units - same technique as
+      // Finding 26 and Finding 8, and for the same reason: the expected
+      // baseline needs the exact shift amount. Its OWN `installCanvas()`
+      // must run to completion, `cleanup()` included, BEFORE the outer one
+      // below - see Finding 26's test for why.
+      const calibrateShift = (): { readonly x: number; readonly y: number } => {
+        const { step: calibrateStep } = installCanvas();
+        const calibrationFrames = vi.spyOn(OfficeScene.prototype, "frame");
+        const calibration = render(
+          withQueryClient(
+            officeElementWithView(
+              SHIFT_VIEW,
+              new Set(["shift-a"]),
+              [SHIFT_AGENT_A],
+              {},
+            ),
+          ),
+        );
+        setIntersecting(true);
+        calibrateStep();
+        const before = cameraFromFrame(calibrationFrames, SHIFT_VIEWPORT);
+        if (before === null) throw new Error("no calibration frame before");
+        calibration.rerender(
+          withQueryClient(
+            officeElementWithView(
+              SHIFT_VIEW,
+              new Set(["shift-a", "shift-b"]),
+              [SHIFT_AGENT_A, SHIFT_AGENT_B],
+              {},
+            ),
+          ),
+        );
+        calibrateStep();
+        const after = cameraFromFrame(calibrationFrames, SHIFT_VIEWPORT);
+        if (after === null) throw new Error("no calibration frame after");
+        cleanup();
+        return { x: before.x - after.x, y: before.y - after.y };
+      };
+      const shiftWorld = calibrateShift();
+
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const view = render(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a"]),
+            [SHIFT_AGENT_A],
+            {
+              onCameraChange,
+              playing: true,
+              view: farView,
+              pulse,
+              pulseKey: "shift-pulse-1",
+              onRegisterFlush: captureFlush,
+            },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      // Same three-frame choreography Finding 26 uses: two frames before a
+      // character even exists to resolve the pulse's focus, a third that
+      // converts the pan REQUEST into an ACTIVE pan (mid-flight, not yet
+      // arrived) - `persistOnArrival: false`, so no aim-destination branch in
+      // `takePendingView` can answer ahead of the fallback this test means to
+      // exercise.
+      step();
+      step();
+      step();
+
+      const framedAfterPan = cameraFromFrame(frames, SHIFT_VIEWPORT);
+      if (framedAfterPan === null) throw new Error("no frame drawn after pan");
+      expect(framedAfterPan.x).not.toBeCloseTo(farView.x);
+      expect(framedAfterPan.y).not.toBeCloseTo(farView.y);
+
+      view.rerender(
+        withQueryClient(
+          officeElementWithView(
+            SHIFT_VIEW,
+            new Set(["shift-a", "shift-b"]),
+            [SHIFT_AGENT_A, SHIFT_AGENT_B],
+            {
+              onCameraChange,
+              playing: true,
+              view: farView,
+              pulse,
+              pulseKey: "shift-pulse-1",
+              onRegisterFlush: captureFlush,
+            },
+          ),
+        ),
+      );
+      step();
+
+      const liveAfterGrowth = cameraFromFrame(frames, SHIFT_VIEWPORT);
+      if (liveAfterGrowth === null) {
+        throw new Error("no frame drawn after growth");
+      }
+
+      // NO timer advance - read the flush synchronously, the way a mode
+      // switch mid-debounce actually would.
+      if (registered.current === null) {
+        throw new Error("flush was never registered");
+      }
+      const flushed = registered.current();
+      if (flushed === null) throw new Error("flush returned null mid-write");
+
+      expect(onCameraChange).not.toHaveBeenCalled();
+      const expectedBaseline = {
+        x: farView.x - shiftWorld.x * farView.zoom,
+        y: farView.y - shiftWorld.y * farView.zoom,
+      };
+      expect(flushed.x).toBeCloseTo(expectedBaseline.x, 1);
+      expect(flushed.y).toBeCloseTo(expectedBaseline.y, 1);
+      expect(flushed.zoom).toBeCloseTo(farView.zoom);
+      // The distinguishing assertion: the flush answers the BASELINE, not
+      // the live playback camera on screen right now.
+      expect(flushed.x).not.toBeCloseTo(liveAfterGrowth.x);
+      expect(flushed.y).not.toBeCloseTo(liveAfterGrowth.y);
+    });
+
     it("persists the shift-compensated camera when playback is on but DECLINED to pan, unlike the case above (Finding 24)", () => {
       // Codex: the old guard suppressed on `isPlaying && isAutoPanEnabled`
       // alone, but auto-pan stays enabled through every pulse where the
