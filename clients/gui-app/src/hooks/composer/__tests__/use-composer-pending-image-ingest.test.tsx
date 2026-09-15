@@ -724,3 +724,73 @@ describe("F5: the 15s deadline and abort responsiveness (use-composer-pending-im
     );
   });
 });
+describe("a full budget does not delete an image the draft already holds", () => {
+  // The F5 block installs a never-resolving `putImage` with
+  // `mockImplementation` and the shared `afterEach` only `mockClear()`s, so a
+  // test running after it inherits that stall. Restoring the passthrough is the
+  // convention this file's afterEach comment names; without it this test times
+  // out inside `putImage` and never reaches the branch it is about.
+  beforeEach(() => {
+    const passthrough = landingImageStoreMocks.actualPutImage;
+    if (passthrough !== null) {
+      landingImageStoreMocks.putImage.mockImplementation(passthrough);
+    }
+  });
+
+  afterEach(() => {
+    const passthrough = landingImageBudgetMocks.actualReserve;
+    if (passthrough !== null) {
+      landingImageBudgetMocks.reserveLandingImageBudget.mockImplementation(
+        passthrough,
+      );
+    }
+  });
+
+  it("keeps the inline node when a MIGRATION cannot reserve capacity (DRIVE RED)", async () => {
+    // `reingestPendingImages` is the migration path: the node is already in the
+    // document carrying its own `b64content`, which is the draft's durable copy
+    // and is sendable exactly as it is. Removing it on a capacity refusal
+    // discarded the user's attachment for no reason but opening the draft while
+    // the budget was full - and unlike a rejected PASTE, there is nothing for
+    // them to re-add.
+    // `reingestPendingImages` takes NO pre-store reservation - it goes
+    // straight to the job with `reserveAfterStore: true` - so every call here
+    // is the post-store one, and refusing them all is exactly "the budget is
+    // full when the draft is opened".
+    let reservationAsked: () => void = () => undefined;
+    const settled = new Promise<void>((resolve) => {
+      reservationAsked = resolve;
+    });
+    landingImageBudgetMocks.reserveLandingImageBudget.mockImplementation(() => {
+      reservationAsked();
+      return null;
+    });
+    const editor = fakeEditor({
+      type: "doc",
+      content: [
+        pendingImageNode("legacy-1", b64Of("legacy-bytes"), "image/png"),
+      ],
+    });
+    const { result } = renderHook(() =>
+      useComposerPendingImageIngest({
+        editorRef: { current: editor.handle },
+        runPendingImageJob: immediateRunPendingImageJob,
+        draftId: null,
+      }),
+    );
+
+    result.current.reingestPendingImages();
+
+    // The job ends with NEITHER editor call - that is the whole assertion - so
+    // there is no editor mock to poll on. `settled` resolves from the job's own
+    // reservation call, which is the last thing it does before returning.
+    await settled;
+    await flushMicrotasks();
+
+    expect(landingImageStoreMocks.putImage).toHaveBeenCalled();
+    // The node is untouched: not deleted, and not rewritten to a hash whose
+    // bytes were never charged to the budget.
+    expect(editor.removeImageAttachmentById).not.toHaveBeenCalled();
+    expect(editor.rewriteImageAttachmentHashById).not.toHaveBeenCalled();
+  });
+});

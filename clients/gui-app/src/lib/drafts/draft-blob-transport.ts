@@ -470,6 +470,13 @@ async function readDraftBlobs(
   const images = new Map<string, PromptStashImageBlob>();
   if (hashes.length === 0) return images;
   if (blobUnsupportedHosts.has(hostId)) return images;
+  // Captured before the first request, exactly as `uploadOneDraftBlob` does.
+  // A read is as able to outlive its connection as a write, and a refusal is a
+  // verdict about the host BUILD - so a `drafts.readBlob` still in flight when
+  // a re-bootstrap re-probes would otherwise restore the verdict that reset
+  // just cleared, and short-circuit every blob call on an upgraded host until
+  // the next reconnect.
+  const epoch = blobEpochOf(hostId);
   for (const sha256 of hashes) {
     // Contained, and the containment is the point: an unavailable or failing
     // IndexedDB makes this reject, and OUTSIDE a catch that rejection escaped
@@ -499,7 +506,15 @@ async function readDraftBlobs(
       images.set(sha256, { bytes, mimeType });
     } catch (error: unknown) {
       if (isBlobUnsupported(error)) {
-        markBlobUnsupported(hostId);
+        if (blobEpochOf(hostId) === epoch) markBlobUnsupported(hostId);
+        else {
+          appLogger.warn("[draft-blobs] readBlob refused after re-bootstrap", {
+            sha256,
+          });
+        }
+        // Returning either way: this host answered "no such method" on the
+        // connection that served this request, so there is nothing to gain by
+        // asking it for the remaining hashes on that same connection.
         return images;
       }
       appLogger.warn("[draft-blobs] readBlob failed", {

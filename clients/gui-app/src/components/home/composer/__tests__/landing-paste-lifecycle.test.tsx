@@ -862,7 +862,7 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     competing?.release();
   });
 
-  it("re-reserves a pending image after an inactive gap and rejects it when capacity was consumed", async () => {
+  it("re-reserves a pending image after an inactive gap and KEEPS it when capacity was consumed", async () => {
     const bytes = bytesOf([6, 6, 6]);
     const hash = await sha256Hex(bytes);
 
@@ -897,22 +897,38 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     );
     await waitForEditorReady();
 
+    // The user is TOLD - the refusal still toasts - and the image STAYS.
+    //
+    // This is a migration of bytes the draft already holds inline, not a paste
+    // being admitted: `b64content` is the durable copy and the draft sends with
+    // it exactly as it is. Deleting the node here destroyed an attachment the
+    // user may no longer have anywhere, for no reason but a full budget at the
+    // moment they reopened the draft.
+    //
+    // The accepted cost, stated because it is real: an inline node keeps this
+    // draft out of `collectDirtyWrites` (`containsPendingInlineImageNode`), so
+    // the row does not SYNC until a later mount migrates it. The draft is still
+    // local, still editable, still sendable - and the toast names the exact
+    // action that clears it. Every mount retries.
     await waitFor(() => {
-      const atoms = collectImageAtoms(
-        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
-          emptyDoc(),
+      expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
+        "Couldn't add the image.",
+        expect.objectContaining({
+          description:
+            "Remove images or close a draft yourself, then try again.",
+        }),
+        expect.objectContaining({
+          message: "The image storage budget was exceeded.",
+        }),
       );
-      expect(atoms).toHaveLength(0);
     });
-    expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
-      "Couldn't add the image.",
-      expect.objectContaining({
-        description: "Remove images or close a draft yourself, then try again.",
-      }),
-      expect.objectContaining({
-        message: "The image storage budget was exceeded.",
-      }),
+    const atoms = collectImageAtoms(
+      draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+        emptyDoc(),
     );
+    expect(atoms).toHaveLength(1);
+    // Still INLINE: not rewritten to a hash whose bytes were never charged.
+    expect(atoms[0]?.b64content).not.toBeNull();
     competingReservation?.release();
   });
 

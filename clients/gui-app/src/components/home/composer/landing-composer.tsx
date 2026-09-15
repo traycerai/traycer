@@ -454,7 +454,13 @@ export function LandingComposer(props: LandingComposerProps) {
               { hash, bytes: bytes.byteLength },
             ]);
             if (postStoreReservation === null) {
-              handle.removeImageAttachmentById(id);
+              // The node STAYS, same rule as the chat composer's twin: this is
+              // a MIGRATION of bytes the draft already holds inline, not a new
+              // paste being refused. `b64content` is the durable copy and the
+              // draft sends fine unmigrated, so removing it here discarded the
+              // user's attachment for no reason but a full budget at open time.
+              // The stored hash is left unrooted for the sweep; the next
+              // re-entry tries again.
               scheduleLandingImageReconcile();
               return;
             }

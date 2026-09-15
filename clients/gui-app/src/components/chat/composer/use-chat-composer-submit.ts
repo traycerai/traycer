@@ -693,29 +693,51 @@ export function useChatComposerSubmit(
               ) {
                 return;
               }
-              // An annotation attached DURING the read has a record but no
-              // resolved crop atom, and the protocol needs the crop to ride an
-              // `imageAttachment`. Sending anyway delivered the record bare
-              // and then cleared the sidecar, so the crop was gone for good -
-              // the worst of the three outcomes. This preparation cannot grow
-              // an atom here (`commit` is synchronous by contract, which is
-              // what makes the image set exact), so the send is abandoned
-              // instead: nothing is cleared, both annotations are still in the
-              // composer, and the next send resolves them in its pre-flight
-              // capture.
+              // The annotation set must be the SAME set the crops were
+              // resolved from - in both directions, because the two sides are
+              // carried separately and only agree if nothing moved.
+              //
+              // Added: the record is live but has no resolved crop atom, and
+              // the protocol needs the crop to ride an `imageAttachment`.
+              // Sending delivered the record bare and then cleared the
+              // sidecar, so the crop was gone for good.
+              //
+              // Removed: the atom is still in `annotationImages` and
+              // `appendImageAttachmentAtoms` still appends it, while the live
+              // records no longer describe it - so the message carries a crop
+              // of something the user deleted, with no metadata saying what it
+              // is. That is the worse of the two: a send that shows an image
+              // the user chose to take out.
+              //
+              // `commit` is synchronous by contract - that is what makes the
+              // image set exact - so this preparation can neither grow an atom
+              // nor drop one safely. Either way the send is abandoned: nothing
+              // is cleared, the composer is untouched, and the next send
+              // resolves the current set in its own pre-flight capture.
               const resolvedCrops = new Set(
                 annotationImages.map((atom) => atom.hash),
               );
-              const late = readDraftSidecars(taskId).annotationRecords.filter(
-                (record) => !resolvedCrops.has(record.imageHash),
+              const liveCrops = new Set(
+                readDraftSidecars(taskId).annotationRecords.map(
+                  (record) => record.imageHash,
+                ),
               );
-              if (late.length > 0) {
-                toast.info("Attach finished - send again to include it.", {
-                  description:
-                    late.length === 1
-                      ? "An annotation was added while the images were being prepared."
-                      : `${late.length} annotations were added while the images were being prepared.`,
-                });
+              const added = [...liveCrops].filter(
+                (hash) => !resolvedCrops.has(hash),
+              ).length;
+              const removed = [...resolvedCrops].filter(
+                (hash) => !liveCrops.has(hash),
+              ).length;
+              if (added > 0 || removed > 0) {
+                toast.info(
+                  "Annotations changed - send again to include them.",
+                  {
+                    description:
+                      removed > 0
+                        ? "An annotation was removed while the images were being prepared."
+                        : "An annotation was added while the images were being prepared.",
+                  },
+                );
                 return;
               }
               submitPreparedDraft(annotationImages, draftImageBase64ByHash);

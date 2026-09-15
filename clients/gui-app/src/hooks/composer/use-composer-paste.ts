@@ -907,8 +907,27 @@ async function hashImageAttrsFromFiles(
         // line would otherwise still start a store write - work for a batch
         // that is already abandoned, landing bytes nothing will reference.
         signal.throwIfAborted();
+        // Hoisted so the WRITE can be observed independently of the WAIT. The
+        // deadline below ends this batch's wait; it cannot cancel an IndexedDB
+        // write already issued, so a stalled `putImage` that later succeeds
+        // seeds the session cache and the store with bytes no node references.
+        // The timeout path schedules a reconcile, but that sweep can run
+        // BEFORE the late write lands - and nothing scheduled another, so the
+        // orphan sat there until an unrelated reconcile happened by.
+        //
+        // Scheduling on every landing rather than only the late ones: the
+        // sweep is debounced and root-aware, so an on-time write (already
+        // rooted by `holdPendingIngestImageHash` by the time it runs) costs a
+        // coalesced no-op, and a rejection is nothing to reconcile.
+        const storing = putImage(bytes);
+        void storing.then(
+          () => {
+            scheduleLandingImageReconcile();
+          },
+          () => undefined,
+        );
         const hash = await withAbortableDeadline(
-          putImage(bytes),
+          storing,
           IMAGE_READ_TIMEOUT_MS,
           signal,
           () => `Storing ${file.name || "image"} timed out`,

@@ -95,6 +95,14 @@ interface PendingImageIngestOptions {
    * Mount-time re-entry does this: the bytes may already be stored and rooted,
    * so charging them anonymously up front would double-count against a
    * reservation that an aborted earlier job is still holding.
+   *
+   * It also says something the failure paths depend on: this node is ALREADY
+   * in the document, carrying its own `b64content`. A fresh paste has nothing
+   * to lose when ingest fails - the image was never in the draft, and removing
+   * the placeholder is the honest outcome. A re-entry does: the inline bytes
+   * are the draft's durable copy and are sendable exactly as they are, so a
+   * failed MIGRATION must leave them alone - both failure paths below
+   * return without touching the node when this is set.
    */
   readonly reserveAfterStore: boolean;
 }
@@ -146,7 +154,19 @@ async function runPendingImageIngestJob(args: {
         { hash, bytes: bytes.byteLength },
       ]);
       if (postStoreReservation === null) {
-        handle.removeImageAttachmentById(id);
+        // The node STAYS. This is a migration of bytes the draft already
+        // holds inline, not a new paste being refused: `b64content` is the
+        // durable copy, so removing the node discarded the user's attachment
+        // for no reason other than opening a draft while the budget was full.
+        //
+        // The cost is real and bounded, and it is why this branch differs from
+        // the `putImage` rejection below. An inline node keeps the draft out of
+        // `collectDirtyWrites` (see `containsPendingInlineImageNode`), so the
+        // row does not SYNC until a later re-entry migrates it - the draft is
+        // still local, still edited, still sent. A full budget is a recoverable,
+        // user-relievable condition and every mount retries. A broken store is
+        // not: there the node could never migrate, so withholding the row
+        // forever is worse than saying so and dropping it.
         scheduleLandingImageReconcile();
         return;
       }

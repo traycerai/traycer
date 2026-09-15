@@ -322,6 +322,43 @@ describe("draft blob transport", () => {
     expect(isDraftBlobConfirmed(HOST, hash, OWNER)).toBe(false);
   });
 
+  it("a readBlob refusal from a retired epoch does not re-mark an upgraded host (DRIVE RED)", async () => {
+    // The READ path is as able to outlive its connection as the write path,
+    // and its refusal is the same kind of verdict - about the host BUILD, which
+    // is exactly what a re-bootstrap says may have changed.
+    const hash = "ab".repeat(32);
+    let releaseRead: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const client: DraftBlobClient = {
+      request: async (_method, _params) => {
+        await gate;
+        throw unsupportedError("drafts.readBlob");
+      },
+    };
+
+    const reading = readDraftBlobsIntoLocalStore(HOST, client, [hash]);
+    forgetConfirmedDraftBlobs(HOST);
+    releaseRead();
+    expect((await reading).size).toBe(0);
+
+    expect(hostWithholdsDraftBlobs(HOST)).toBe(false);
+  });
+
+  it("a readBlob refusal on the CURRENT epoch still marks the host - positive control", async () => {
+    const client: DraftBlobClient = {
+      request: (_method, _params) =>
+        Promise.reject(unsupportedError("drafts.readBlob")),
+    };
+
+    expect(
+      (await readDraftBlobsIntoLocalStore(HOST, client, ["cd".repeat(32)]))
+        .size,
+    ).toBe(0);
+    expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
+  });
+
   it("a confirmed digest is not re-sent", async () => {
     const hash = await putImage(pngBytes());
     const { client, calls } = countingClient(() =>
