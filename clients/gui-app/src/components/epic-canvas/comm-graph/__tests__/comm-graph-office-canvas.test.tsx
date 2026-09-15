@@ -159,7 +159,10 @@ import {
   OFFICE_SIREN_FRAME_MS,
   officeSignsToDraw,
 } from "@/lib/comm-graph/office/office-signs";
-import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
+import type {
+  CommGraphTileCamera,
+  CommGraphTileViewState,
+} from "@/stores/epics/canvas/types";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
@@ -2097,6 +2100,83 @@ describe("CommGraphOfficeCanvas", () => {
     });
 
     expect(onCameraChange).not.toHaveBeenCalled();
+  });
+
+  it("flushes an in-flight persistOnArrival pan's DESTINATION when leaving Office mid-pan, not the pre-pan framing", () => {
+    // Codex (finding 3): a directory-row or Find aim pans the camera over a
+    // real ease and persists ONLY ON ARRIVAL - but until it arrives no
+    // debounce is scheduled either, so `takePendingView` used to answer null
+    // for a mode switch caught mid-pan and the office would reopen at the
+    // pre-pan framing instead of where the person aimed. The fix flushes the
+    // ACTIVE pan's destination directly from `runtime.getActivePan()`.
+    const { step } = installCanvas();
+    const locateSpy = vi.spyOn(OfficeScene.prototype, "locate");
+    const registered: {
+      current: (() => CommGraphTileCamera | null) | null;
+    } = { current: null };
+    const captureFlush = (
+      take: (() => CommGraphTileCamera | null) | null,
+    ): void => {
+      registered.current = take;
+    };
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          // A non-neutral starting camera keeps auto-fit OFF from mount (see
+          // "F6" above for the same trick), so nothing but the directory
+          // click's own `takeManualControl` ever touches the camera before
+          // the pan starts - the zoom the pan inherits (`zoom: null`) is
+          // deterministically still this view's 1x, not whatever auto-fit
+          // would otherwise have fitted the floor to.
+          view: { ...OFFICE_VIEW, x: 1 },
+          onRegisterFlush: captureFlush,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+    // ONE frame: `advanceCamera` takes the request and starts the active pan
+    // with `startedAt` = this very frame's timestamp, so progress is 0 here -
+    // in flight, nowhere near arrived, and nothing has debounced yet either.
+    step();
+
+    const box = locateSpy.mock.results.at(-1)?.value as {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    } | null;
+    if (box === null) {
+      throw new Error("the directory pick never located a box to aim at");
+    }
+    // The same math `panToward` uses: `installCanvas` stubs every element's
+    // box at 1040x700, and a directory pick's `zoom: null` keeps whatever
+    // the camera already had - still `OFFICE_VIEW`'s 1x, since nothing else
+    // has touched it.
+    const expected = {
+      x: 1040 / 2 - (box.x + box.width / 2) * 1,
+      y: 700 / 2 - (box.y + box.height / 2) * 1,
+      zoom: 1,
+    };
+
+    if (registered.current === null) {
+      throw new Error("flush was never registered");
+    }
+    const flushed = registered.current();
+    if (flushed === null) throw new Error("flush returned null mid-pan");
+
+    // Anti-vacuity: a real move away from the neutral mount camera, not a
+    // coincidence of `expected` happening to also be neutral.
+    expect(expected).not.toEqual({ x: 0, y: 0, zoom: 1 });
+    expect(flushed.x).toBeCloseTo(expected.x, 6);
+    expect(flushed.y).toBeCloseTo(expected.y, 6);
+    expect(flushed.zoom).toBeCloseTo(expected.zoom, 6);
   });
 
   it("filters the directory to the visible set, dropping a host section with nothing left in it", () => {
