@@ -40,6 +40,9 @@ describe("formatAgentSelectionGuideResponse", () => {
         workspaceSource(APP_DIR, "app body", 2),
       ]),
     );
+    expect(
+      text.startsWith(`${AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION}\n\n`),
+    ).toBe(true);
     expect(text).toContain("take precedence and override global");
     expect(text).toContain("apply only to files under the workspace path");
     expect(text).not.toContain("Multiple workspaces provide instructions");
