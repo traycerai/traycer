@@ -2564,6 +2564,90 @@ describe("CommGraphOfficeCanvas", () => {
     expect(afterResize.zoom).toBeCloseTo(beforeResize.zoom, 6);
   });
 
+  it("requests no pan for a directory select while Auto is still measuring (Finding 22)", () => {
+    // Codex: the mount `measuring: true` names is a throwaway - the tile's key
+    // remounts the canvas the instant Auto resolves - so a directory-select
+    // pan aimed at it targets a surface nobody keeps. `handleDirectorySelect`
+    // now returns before requesting a pan while measuring. Read back through
+    // the same `onRegisterFlush` flush Finding 9's test uses: with no active
+    // pan and nothing pending, it answers null.
+    const { step } = installCanvas();
+    const registered: {
+      current: (() => CommGraphTileCamera | null) | null;
+    } = { current: null };
+    const captureFlush = (
+      take: (() => CommGraphTileCamera | null) | null,
+    ): void => {
+      registered.current = take;
+    };
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          // Non-neutral: auto-fit stays off from the start, so `takePendingView`
+          // actually inspects the active pan / pan request rather than
+          // short-circuiting on auto-fit still owning the frame.
+          view: { ...OFFICE_VIEW, x: 1 },
+          measuring: true,
+          onRegisterFlush: captureFlush,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+    step();
+
+    if (registered.current === null) {
+      throw new Error("flush was never registered");
+    }
+    expect(registered.current()).toBeNull();
+  });
+
+  it("DOES request a pan for the same directory select once Auto has resolved, contrasting the case above (Finding 22)", () => {
+    // Non-vacuous contrast: the exact same click, `measuring: false` - the
+    // pan goes through, proving the withholding above is about the measuring
+    // mount and not the handler having stopped panning altogether.
+    const { step } = installCanvas();
+    const registered: {
+      current: (() => CommGraphTileCamera | null) | null;
+    } = { current: null };
+    const captureFlush = (
+      take: (() => CommGraphTileCamera | null) | null,
+    ): void => {
+      registered.current = take;
+    };
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          view: { ...OFFICE_VIEW, x: 1 },
+          measuring: false,
+          onRegisterFlush: captureFlush,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+    // ONE frame: the pan is now active, in flight - the same window Finding
+    // 9's test reads from.
+    step();
+
+    if (registered.current === null) {
+      throw new Error("flush was never registered");
+    }
+    expect(registered.current()).not.toBeNull();
+  });
+
   it("re-centers against the last NONZERO viewport when a resized restore follows a hide (Finding 13)", () => {
     // Codex: `recenterActivePan` used to compare against the IMMEDIATELY
     // PREVIOUS viewport - but a hidden tile's resize callback reports 0x0, so
