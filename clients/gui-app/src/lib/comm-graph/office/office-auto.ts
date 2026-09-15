@@ -73,31 +73,46 @@ const AUTO_CANDIDATES: ReadonlyArray<OfficeViewId> = ["floor", "towers"];
 const AUTO_FALLBACK: OfficeViewId = "building";
 
 /**
- * The zoom at which `size` fits inside `canvas`.
+ * The zoom at which `size` fits inside `canvas`, measured against the SAME
+ * padded viewport the camera fits the chosen plan into.
  *
- * No fit padding, unlike the camera's own `fitCamera`: this is a question
- * about the ORDER of two magnitudes - does this view reach office detail here
- * - and a 24px margin is not what decides it. A view that only fits with the
- * padding eaten is a view the camera can still frame.
+ * `fitCamera` leaves `fitPadding` px of margin on every side, so a view opens
+ * at `(canvas - 2·fitPadding) / size`, not `canvas / size`. The LOD the frame
+ * renders is decided by that opened zoom, so Auto has to ask its office-detail
+ * question at it: measured unpadded, a candidate whose bare fit clears
+ * `OFFICE_LOD_OFFICE_ZOOM` by a hair is selected, then opens just below the
+ * threshold and draws the overview block map and pips - the very detail Auto
+ * claimed would fit. The other clamps `fitCamera` applies (`MAX_FIT_ZOOM`,
+ * `clampZoom`) sit far from that threshold and cannot change the decision, so
+ * matching the padding is all it takes to reconcile the two.
  */
-function fitZoom(size: OfficeSize, canvas: OfficeSize): number {
+function fitZoom(
+  size: OfficeSize,
+  canvas: OfficeSize,
+  fitPadding: number,
+): number {
   if (size.width <= 0 || size.height <= 0) return 0;
-  if (canvas.width <= 0 || canvas.height <= 0) return 0;
-  return Math.min(canvas.width / size.width, canvas.height / size.height);
+  const availableWidth = canvas.width - fitPadding * 2;
+  const availableHeight = canvas.height - fitPadding * 2;
+  if (availableWidth <= 0 || availableHeight <= 0) return 0;
+  return Math.min(availableWidth / size.width, availableHeight / size.height);
 }
 
 /**
  * `canvas` is the tile's canvas box in CSS pixels, measured AFTER the
  * directory and any detail panel have taken their width - the space the office
- * actually gets, not the space the tile has.
+ * actually gets, not the space the tile has. `fitPadding` is the camera's fit
+ * margin (`FIT_PADDING`), so each candidate is measured at the zoom it will
+ * actually open at - see {@link fitZoom}.
  */
 export function decideOfficeView(
   input: OfficePlanInput,
   canvas: OfficeSize,
+  fitPadding: number,
 ): OfficeAutoDecision {
   const fits = AUTO_CANDIDATES.map((view) => ({
     view,
-    zoom: fitZoom(OFFICE_VIEWS[view].measure(input), canvas),
+    zoom: fitZoom(OFFICE_VIEWS[view].measure(input), canvas, fitPadding),
   }));
   const winner = fits.find((fit) => fit.zoom >= OFFICE_LOD_OFFICE_ZOOM);
   return {

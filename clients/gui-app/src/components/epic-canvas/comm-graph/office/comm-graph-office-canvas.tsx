@@ -203,8 +203,12 @@ const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
 /** As far in as a fit is ever allowed to go: past this a fitted floor is a desk. */
 const MAX_FIT_ZOOM = 6;
-/** Screen-pixel margin left around the floor when fitting. */
-const FIT_PADDING = 24;
+/**
+ * Screen-pixel margin left around the floor when fitting. Exported so Auto
+ * measures each candidate at the zoom the camera will open it at - see
+ * `decideOfficeView`.
+ */
+export const FIT_PADDING = 24;
 const ZOOM_BUTTON_FACTOR = 1.25;
 /** Screen pixels an arrow key moves the floor. */
 const KEY_PAN_PX = 48;
@@ -328,6 +332,13 @@ interface CameraPan {
   readonly toY: number;
   readonly toZoom: number;
   readonly startedAt: number;
+  /**
+   * Whether reaching the end of this move should persist the camera. True for
+   * a user-driven aim (a directory pick, a Find result) that has taken manual
+   * control and must survive a remount; false for a playback auto-pan, which
+   * reframes itself and must not be written back.
+   */
+  readonly persistOnArrival: boolean;
 }
 
 /**
@@ -339,6 +350,8 @@ interface PanRequest {
   readonly focus: OfficePoint;
   /** `null` keeps the current zoom - a move, not a reframe. */
   readonly zoom: number | null;
+  /** Carried onto the {@link CameraPan} this becomes; see it for the rule. */
+  readonly persistOnArrival: boolean;
 }
 
 /**
@@ -361,6 +374,7 @@ function panToward(args: {
     toY: viewport.height / 2 - request.focus.y * zoom,
     toZoom: zoom,
     startedAt,
+    persistOnArrival: request.persistOnArrival,
   };
 }
 
@@ -453,6 +467,15 @@ interface OfficeRuntime {
   readonly getSceneInput: () => OfficeSceneInput | null;
   readonly setSceneInput: (next: OfficeSceneInput) => void;
   /**
+   * The live scene, mirrored off `ensureScene`'s ref so the ref-free callers
+   * can reach it. The Find adapter is built during render and handed to an
+   * external factory, so reading the scene ref inside it trips the refs lint;
+   * this is the same escape the rest of the runtime is - closure state, not a
+   * React ref. `null` until the first scene is built.
+   */
+  readonly getScene: () => OfficeScene | null;
+  readonly setScene: (next: OfficeScene | null) => void;
+  /**
    * The partition the last input carried, which is the `previous` the next one
    * folds in. Held here rather than in a ref so the memo that computes it can
    * read it at all - see the note on this interface.
@@ -467,6 +490,16 @@ interface OfficeRuntime {
   readonly isEligible: () => boolean;
   readonly setEligible: (next: boolean) => void;
   readonly onEligibilityChange: (listener: (eligible: boolean) => void) => void;
+  /**
+   * Ask the frame loop to (re)start. Eligibility alone used to start it, but the
+   * SCENE is built by a separate effect gated on `ready` too, so an eligible
+   * tile whose history has not caught up would start the loop with no scene and
+   * spin `requestAnimationFrame` every frame drawing nothing. The loop now
+   * refuses to start without a scene, and the sync effect calls this once it
+   * has built one - see {@link onLoopStart}.
+   */
+  readonly requestLoopStart: () => void;
+  readonly onLoopStart: (listener: () => void) => void;
   /**
    * Whether the SCENE is suspended. Distinct from eligibility: an office that
    * was never eligible has no scene to suspend, and coming back has to know
@@ -529,11 +562,16 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
   let autoPanEnabled = true;
   let autoFitEnabled = isDefaultCommGraphView(view);
   let sceneInput: OfficeSceneInput | null = null;
+  let scene: OfficeScene | null = null;
   let partition: OfficePopulation | null = null;
   let eligible = false;
   let suspended = false;
   // Replaced by the frame loop on mount, like the invalidate listener above.
   let eligibilityListener: (next: boolean) => void = () => undefined;
+  // Replaced by the frame loop on mount; the sync effect fires it once a scene
+  // exists so a tile that became eligible before its history caught up starts
+  // the loop then rather than spinning empty frames until it does.
+  let loopStartListener: () => void = () => undefined;
   let hostNames: ReadonlyMap<string, string> = new Map();
   let nameById: ReadonlyMap<string, string> = new Map();
   let roleClaims: Readonly<Record<string, readonly RoleClaim[]>> = {};
@@ -607,6 +645,10 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     setSceneInput: (next) => {
       sceneInput = next;
     },
+    getScene: () => scene,
+    setScene: (next) => {
+      scene = next;
+    },
     getPartition: () => partition,
     setPartition: (next) => {
       partition = next;
@@ -622,6 +664,12 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     },
     onEligibilityChange: (listener) => {
       eligibilityListener = listener;
+    },
+    requestLoopStart: () => {
+      loopStartListener();
+    },
+    onLoopStart: (listener) => {
+      loopStartListener = listener;
     },
     isSuspended: () => suspended,
     setSuspended: (next) => {
@@ -863,23 +911,30 @@ function shiftActivePan(
 }
 
 /**
- * The sprite-space box covering every named agent's hit region, or `null` when
- * none of them is on the floor.
+ * The sprite-space box covering every named agent, or `null` when none of them
+ * is placed on the floor.
+ *
+ * Answered from the SEAT BOOK (`scene.locate`), not from the last frame's hit
+ * regions: those are culled to the viewport plus the cull margin, so a search
+ * for an agent scrolled off screen would find no region and never move the
+ * camera to it. `locate` answers for an agent nowhere near the view rect, which
+ * is exactly the one Find and the directory exist to reach.
  */
-function spriteBoundsFor(
-  regions: ReadonlyArray<OfficeHitRegion>,
+function seatBoundsFor(
+  scene: OfficeScene,
   agentIds: ReadonlySet<string>,
 ): OfficeRect | null {
   let left = Number.POSITIVE_INFINITY;
   let top = Number.POSITIVE_INFINITY;
   let right = Number.NEGATIVE_INFINITY;
   let bottom = Number.NEGATIVE_INFINITY;
-  for (const region of regions) {
-    if (!agentIds.has(region.agentId)) continue;
-    left = Math.min(left, region.rect.x);
-    top = Math.min(top, region.rect.y);
-    right = Math.max(right, region.rect.x + region.rect.width);
-    bottom = Math.max(bottom, region.rect.y + region.rect.height);
+  for (const agentId of agentIds) {
+    const box = scene.locate(agentId);
+    if (box === null) continue;
+    left = Math.min(left, box.x);
+    top = Math.min(top, box.y);
+    right = Math.max(right, box.x + box.width);
+    bottom = Math.max(bottom, box.y + box.height);
   }
   if (left === Number.POSITIVE_INFINITY) return null;
   return { x: left, y: top, width: right - left, height: bottom - top };
@@ -2545,13 +2600,20 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   }, [epicId]);
   const ensureScene = useCallback((): OfficeScene => {
     const current = peekScene();
-    if (current !== null) return current;
+    if (current !== null) {
+      // Keep the runtime's ref-free mirror pointing at the live scene even on
+      // the reuse path - an epic switched in place rebuilds the loop but this
+      // early return is what the sync effect hits once it settles.
+      runtime.setScene(current);
+      return current;
+    }
     // No initial layout: the first sync plans one. Handing the constructor an
     // empty plan would be a floor nobody asked for, thrown away a line later.
     const scene = new OfficeScene(officeView, null);
     sceneRef.current = { epicId, scene };
+    runtime.setScene(scene);
     return scene;
-  }, [epicId, officeView, peekScene]);
+  }, [epicId, officeView, peekScene, runtime]);
 
   // The canvas's own intersection state - the one eligibility signal no
   // context can answer, because a tile scrolled out of the epic canvas is
@@ -2905,6 +2967,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // an open request takes an envelope off a desk and starts no walk, and
     // within the same minute the idle skip would leave the pile painted.
     runtime.invalidateFrame();
+    // The scene now EXISTS, so wake the frame loop. On a tile that became
+    // eligible before its history caught up, the loop declined to start (no
+    // scene) and eligibility will not flip again; this is what starts it. It is
+    // a no-op once the loop is running, so the common ready-at-mount case, where
+    // the loop's own mount-time `start` already caught the scene, pays nothing.
+    runtime.requestLoopStart();
   }, [eligible, ensureScene, ready, runtime, sceneInput]);
 
   // Pressing Play is an explicit request to follow the action again. Pause
@@ -3216,7 +3284,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       if (key === autoPannedKeyRef.current) return;
       autoPannedKeyRef.current = key;
       if (isOnScreen(focus, runtime.getCamera(), viewport)) return;
-      runtime.requestPan({ focus, zoom: null });
+      // Playback reframes itself on every cursor step, so its landing is not a
+      // camera to write back.
+      runtime.requestPan({ focus, zoom: null, persistOnArrival: false });
     };
 
     // The frame clock is the only clock here: a pan is REQUESTED without a
@@ -3238,7 +3308,16 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       camera.x = pan.fromX + (pan.toX - pan.fromX) * eased;
       camera.y = pan.fromY + (pan.toY - pan.fromY) * eased;
       camera.zoom = pan.fromZoom + (pan.toZoom - pan.fromZoom) * eased;
-      if (progress >= 1) runtime.setActivePan(null);
+      if (progress < 1) return;
+      runtime.setActivePan(null);
+      // A user-driven aim lands where it was told to; persist it so a remount,
+      // an eviction or a reload rebuilds the office there rather than at the
+      // camera it was aimed away from. A drag persists on the gesture and an
+      // auto-pan reframes itself, so only this arrival is left to write - and
+      // never while auto-fit still owns the frame, matching the shift path.
+      if (pan.persistOnArrival && !runtime.isAutoFitEnabled()) {
+        persistCameraFromLoop();
+      }
     };
 
     /**
@@ -3480,18 +3559,24 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     const start = (): void => {
       if (raf !== 0) return;
       if (!runtime.isEligible()) return;
+      // No scene yet: it is built by the sync effect, gated on `ready` as well
+      // as eligibility, and that effect calls `requestLoopStart` once it has
+      // one. Starting the loop here without it would reschedule an empty frame
+      // every display frame - drawing nothing while a slow history feed catches
+      // up - which is exactly the spin this guard removes.
+      const scene = readScene();
+      if (scene === null) return;
       // Catch the simulation up on a bounded slice of the time spent paused,
       // so the floor resumes looking alive rather than mid-stride.
       const catchUp = officeCatchUpMs(
         pausedAt === null ? 0 : Date.now() - pausedAt,
       );
       pausedAt = null;
-      const scene = readScene();
       // Not for a SUSPENDED scene: `resume` is about to settle every walk and
       // flight anyway, so catching one up first is work whose result is thrown
       // away a moment later. The catch-up is for the loop being rebuilt under
       // a live office - a theme flip - where nothing resets the motion.
-      if (catchUp > 0 && scene !== null && !runtime.isSuspended()) {
+      if (catchUp > 0 && !runtime.isSuspended()) {
         scene.tick(catchUp);
       }
       last = performance.now();
@@ -3522,12 +3607,19 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       stop();
       staticLayer.release();
     });
+    // The scene arrives after eligibility on a tile whose history is still
+    // catching up; `start` no-ops until it exists, and this is what wakes the
+    // loop once the sync effect has built and fed one.
+    runtime.onLoopStart(() => {
+      start();
+    });
     start();
     return () => {
       stop();
       stopWatchingLogos();
       runtime.onInvalidateFrame(() => undefined);
       runtime.onEligibilityChange(() => undefined);
+      runtime.onLoopStart(() => undefined);
       // A floor's worth of pixels is real memory; it goes with the tile.
       staticLayer.release();
     };
@@ -3950,10 +4042,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             runtime.setSearchMatchIds(agentIdsToShow);
           },
           frameMatches: (agentIdsToFrame) => {
-            const bounds = spriteBoundsFor(
-              runtime.getHitRegions(),
-              agentIdsToFrame,
-            );
+            const scene = runtime.getScene();
+            if (scene === null) return;
+            const bounds = seatBoundsFor(scene, agentIdsToFrame);
             const viewport = runtime.getViewport();
             if (bounds === null || viewport.width <= 0) return;
             runtime.takeManualControl();
@@ -3966,20 +4057,26 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
               // Searching may zoom OUT to hold every match, but one nearby
               // result must not unexpectedly magnify the floor.
               zoom: Math.min(fitted.zoom, runtime.getCamera().zoom),
+              // Aiming at a result is a statement about where the camera should
+              // be, the same as a drag - so it survives a remount.
+              persistOnArrival: true,
             });
           },
           focusMatch: (agentId) => {
-            const bounds = spriteBoundsFor(
-              runtime.getHitRegions(),
-              new Set([agentId]),
-            );
-            const viewport = runtime.getViewport();
+            const scene = runtime.getScene();
             // Selecting is half the answer: the panel is where a match stops
             // being a name on a floor and becomes something you can read.
             setSelectedAgentId(agentId);
+            if (scene === null) return;
+            const bounds = seatBoundsFor(scene, new Set([agentId]));
+            const viewport = runtime.getViewport();
             if (bounds === null || viewport.width <= 0) return;
             runtime.takeManualControl();
-            runtime.requestPan({ focus: rectCenter(bounds), zoom: null });
+            runtime.requestPan({
+              focus: rectCenter(bounds),
+              zoom: null,
+              persistOnArrival: true,
+            });
           },
           clear: () => {
             runtime.setSearchMatchIds(EMPTY_MATCH_IDS);
@@ -4006,9 +4103,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       const box = scene.locate(agentId);
       if (box === null) return;
       // Aiming the camera by hand is a statement about where it should be, the
-      // same as a drag - Find's own row does exactly this.
+      // same as a drag - Find's own row does exactly this, and like a drag it
+      // is persisted (on arrival) so it survives a remount.
       runtime.takeManualControl();
-      runtime.requestPan({ focus: rectCenter(box), zoom: null });
+      runtime.requestPan({
+        focus: rectCenter(box),
+        zoom: null,
+        persistOnArrival: true,
+      });
     },
     [peekScene, runtime, setSelectedAgentId],
   );

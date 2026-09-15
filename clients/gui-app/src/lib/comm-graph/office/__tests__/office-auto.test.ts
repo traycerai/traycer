@@ -19,6 +19,9 @@ import type { OfficePlanInput } from "@/lib/comm-graph/office/views/office-view"
 /** The tile's canvas box after chrome, on the recording's own epic. */
 const FULL_CANVAS: OfficeSize = { width: 1040, height: 700 };
 
+/** The camera's fit margin, mirrored from `FIT_PADDING` on the canvas. */
+const FIT_PADDING = 24;
+
 /**
  * Built the way the scene builds it - from `partitionOfficePopulation`, not a
  * stub - matching the pattern `office-plans.test.ts` uses for the same input
@@ -51,14 +54,22 @@ function triageInput(count: number, seed: number): OfficePlanInput {
 
 describe("decideOfficeView", () => {
   it("picks Floor for a small epic on a large tile", () => {
-    const decision = decideOfficeView(triageInput(12, 1), FULL_CANVAS);
+    const decision = decideOfficeView(
+      triageInput(12, 1),
+      FULL_CANVAS,
+      FIT_PADDING,
+    );
     expect(decision.view).toBe("floor");
     const floorFit = decision.fits.find((fit) => fit.view === "floor");
     expect(floorFit?.zoom).toBeGreaterThanOrEqual(OFFICE_LOD_OFFICE_ZOOM);
   });
 
   it("picks Towers where it reaches office detail and Floor does not", () => {
-    const decision = decideOfficeView(triageInput(40, 1), FULL_CANVAS);
+    const decision = decideOfficeView(
+      triageInput(40, 1),
+      FULL_CANVAS,
+      FIT_PADDING,
+    );
     expect(decision.view).toBe("towers");
     const floorFit = decision.fits.find((fit) => fit.view === "floor");
     const towersFit = decision.fits.find((fit) => fit.view === "towers");
@@ -69,7 +80,11 @@ describe("decideOfficeView", () => {
   it("falls back to Building when neither candidate reaches office detail, without measuring Building", () => {
     // The recording's own shape: 309 agents at 1040x700 reaches office detail
     // on neither Floor nor Towers (Towers lands around 0.68x).
-    const decision = decideOfficeView(triageInput(309, 1), FULL_CANVAS);
+    const decision = decideOfficeView(
+      triageInput(309, 1),
+      FULL_CANVAS,
+      FIT_PADDING,
+    );
     expect(decision.view).toBe("building");
     // Only Floor and Towers are candidates, tried in that order - Building is
     // the fallback name, never a measured entry.
@@ -83,7 +98,11 @@ describe("decideOfficeView", () => {
   });
 
   it("carries both measured zooms and the agent count on the decision", () => {
-    const decision = decideOfficeView(triageInput(309, 1), FULL_CANVAS);
+    const decision = decideOfficeView(
+      triageInput(309, 1),
+      FULL_CANVAS,
+      FIT_PADDING,
+    );
     expect(decision.agents).toBe(309);
     expect(decision.fits).toHaveLength(2);
     for (const fit of decision.fits) {
@@ -96,14 +115,14 @@ describe("decideOfficeView", () => {
     // this is the "measured after chrome" claim: the canvas the office
     // actually gets, not the tile's own size.
     const input = triageInput(40, 1);
-    const full = decideOfficeView(input, FULL_CANVAS);
+    const full = decideOfficeView(input, FULL_CANVAS, FIT_PADDING);
     expect(full.view).toBe("towers");
 
     const halved: OfficeSize = {
       width: FULL_CANVAS.width / 2,
       height: FULL_CANVAS.height / 2,
     };
-    const half = decideOfficeView(input, halved);
+    const half = decideOfficeView(input, halved, FIT_PADDING);
     expect(half.view).toBe("building");
   });
 
@@ -111,10 +130,14 @@ describe("decideOfficeView", () => {
     // The canvas's own gate (`measuredBox.width/height <= 0`) is supposed to
     // keep this from ever reaching a real probe, but `decideOfficeView`
     // itself has to answer something rather than divide by zero or throw.
-    const decision = decideOfficeView(triageInput(12, 1), {
-      width: 0,
-      height: 0,
-    });
+    const decision = decideOfficeView(
+      triageInput(12, 1),
+      {
+        width: 0,
+        height: 0,
+      },
+      FIT_PADDING,
+    );
     expect(decision.view).toBe("building");
     for (const fit of decision.fits) {
       expect(fit.zoom).toBe(0);

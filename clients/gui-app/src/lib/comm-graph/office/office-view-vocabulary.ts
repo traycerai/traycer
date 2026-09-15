@@ -46,6 +46,23 @@ export const OFFICE_VIEW_IDS: ReadonlyArray<OfficeViewId> = [
 ];
 
 /**
+ * The display name for each view, HERE rather than only on the registry's
+ * `OfficeView.label`, for the same reason the ids are: a control that offers
+ * the choice - the Appearance default's `Select` - needs the words without
+ * evaluating `views/office-view.ts` and every planner, measurer and painter it
+ * statically pulls in. The registry's `label` is pinned equal to this entry by
+ * `office-view-registry-vocabulary.test.ts`, so the two cannot drift.
+ */
+export const OFFICE_VIEW_LABELS: Readonly<Record<OfficeViewId, string>> = {
+  floor: "Floor",
+  towers: "Towers",
+  building: "Building",
+  "mission-control": "Mission control",
+  campus: "Campus",
+  city: "City",
+};
+
+/**
  * What a tile's view setting can be: a view, or `"auto"` - which is a choice
  * about how to choose, not a seventh office.
  */

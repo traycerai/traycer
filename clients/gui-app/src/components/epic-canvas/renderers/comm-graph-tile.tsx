@@ -33,7 +33,10 @@ import type {
   OfficeViewChoice,
 } from "@/stores/epics/canvas/types";
 import { CommGraphCanvas } from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
-import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
+import {
+  CommGraphOfficeCanvas,
+  FIT_PADDING,
+} from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 import {
   decideOfficeView,
@@ -651,7 +654,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     if (!measureReady) return;
     const probe = probeRef.current;
     if (probe === null) return;
-    const decision = decideOfficeView(probe.input, probe.canvas);
+    const decision = decideOfficeView(probe.input, probe.canvas, FIT_PADDING);
     setAutoDecision(decision);
     // A FIRST measurement that lands anywhere but the Floor neutralises the
     // camera in the same write: a tile that predates this choice carries a

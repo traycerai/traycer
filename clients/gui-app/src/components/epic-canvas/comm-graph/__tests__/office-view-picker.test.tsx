@@ -29,6 +29,9 @@ import type { OfficeViewChoice } from "@/stores/epics/canvas/types";
 /** The tile's canvas box after chrome, on the recording's own epic. */
 const FULL_CANVAS: OfficeSize = { width: 1040, height: 700 };
 
+/** The camera's fit margin, mirrored from `FIT_PADDING` on the canvas. */
+const FIT_PADDING = 24;
+
 /**
  * Built the way the scene builds it, matching `office-auto.test.ts`'s own
  * helper of the same purpose - a real `decideOfficeView` result, not a
@@ -144,7 +147,11 @@ describe("OfficeViewPicker", () => {
     // `office-auto.test.ts`'s "picks Towers where it reaches office detail
     // and Floor does not") rather than a hand-built literal, so this proves
     // the fix against the actual candidate order.
-    const decision = decideOfficeView(triageInput(40, 1), FULL_CANVAS);
+    const decision = decideOfficeView(
+      triageInput(40, 1),
+      FULL_CANVAS,
+      FIT_PADDING,
+    );
     expect(decision.view).toBe("towers");
 
     renderPicker({

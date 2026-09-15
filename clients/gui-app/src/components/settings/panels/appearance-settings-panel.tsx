@@ -42,10 +42,10 @@ import {
   type TerminalCursorStyle,
 } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
-import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 import {
   isOfficeViewChoice,
   OFFICE_VIEW_CHOICES,
+  OFFICE_VIEW_LABELS,
   type OfficeViewChoice,
 } from "@/lib/comm-graph/office/office-view-vocabulary";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
@@ -57,7 +57,7 @@ import {
 } from "@/lib/analytics";
 
 function officeViewChoiceLabel(choice: OfficeViewChoice): string {
-  return choice === "auto" ? "Auto" : OFFICE_VIEWS[choice].label;
+  return choice === "auto" ? "Auto" : OFFICE_VIEW_LABELS[choice];
 }
 
 function trackedAppearanceSetter<Value>(
