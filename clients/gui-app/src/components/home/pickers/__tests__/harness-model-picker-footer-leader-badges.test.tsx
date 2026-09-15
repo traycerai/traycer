@@ -166,26 +166,20 @@ describe.each(["list", "slider"] as const)(
       expect(screen.getByTestId("model-fast-mode-digit-0")).not.toBeNull();
     });
 
-    // Slider layout floats the badge ABOVE the whole Fast button (so it does
-    // not collide with the track's own per-stop badges below); list keeps the
-    // original trailing placement next to the label. `reasoningConfig` has 2
-    // options, so `alignWithSlider` (`sliderLayout`) is true exactly under
-    // "slider" here.
-    it(`places the Fast badge ${control === "slider" ? "above" : "trailing"} the button under the ${control} control`, () => {
+    // The compact slider puts Fast’s shortcut in its icon slot; list mode
+    // keeps the trailing badge beside its label.
+    it(`places the Fast badge within the ${control} layout`, () => {
       renderUnderAltHold(reasoningConfig(false));
 
       const badge = screen.getByTestId("model-fast-mode-digit-0");
+      expect(badge.className).toContain(
+        control === "slider" ? "left-1/2" : "left-full",
+      );
       if (control === "slider") {
-        expect(badge.className).toContain("bottom-full");
-        expect(badge.className).not.toContain("left-full");
-        // "above" needs a positioned ancestor spanning the whole button, not
-        // just the inner label span, or it floats relative to the popover.
-        const fastButton = screen.getByRole("button", { name: "Fast mode" });
-        expect(fastButton.className).toContain("relative");
-      } else {
-        expect(badge.className).toContain("left-full");
-        expect(badge.className).not.toContain("bottom-full");
+        const icon = badge.parentElement?.querySelector("svg");
+        expect(icon?.getAttribute("class")).toContain("invisible");
       }
+      expect(badge.className).not.toContain("bottom-full");
     });
   },
 );
