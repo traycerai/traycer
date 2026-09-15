@@ -10,7 +10,6 @@ import { resetStatusAnimationClockForTests } from "@/lib/animation/status-animat
 import {
   ChatDockCompactStrip,
   ChatDockCompactStripProvider,
-  type ChatDockCompactChipGlyph,
   type ChatDockCompactChipModel,
   type ChatDockCompactStripValue,
   type ChatDockSection,
@@ -23,7 +22,7 @@ function chip(
 ): ChatDockCompactChipModel {
   return {
     section,
-    glyph: section === "background" ? "mixed" : section,
+    glyph: section,
     working: false,
     text,
     lineDeltas: null,
@@ -32,11 +31,8 @@ function chip(
   };
 }
 
-function chipWithGlyph(
-  section: ChatDockSection,
-  glyph: ChatDockCompactChipGlyph,
-): ChatDockCompactChipModel {
-  return { ...chip(section, "1"), glyph };
+function unitChip(section: ChatDockSection): ChatDockCompactChipModel {
+  return chip(section, "1");
 }
 
 /** The lucide class naming the icon a chip drew, or null if it drew none. */
@@ -144,7 +140,7 @@ describe("<ChatDockCompactStrip />", () => {
       chips: [
         chip("filesChanged", "+1 −2"),
         chip("activeAgents", "3"),
-        chipWithGlyph("background", "mixed"),
+        unitChip("background"),
       ],
       expanded: new Set(),
       onToggle: vi.fn(),
@@ -157,7 +153,7 @@ describe("<ChatDockCompactStrip />", () => {
       "bot",
     );
     expect(drawnIcon(screen.getByTestId("chat-dock-chip-background"))).toBe(
-      "layers",
+      "message-square-clock",
     );
     // A resting chip is the bare icon: no corner mark, no shimmer, and a
     // number that keeps the chip's own muted tone.
@@ -176,11 +172,11 @@ describe("<ChatDockCompactStrip />", () => {
     renderStrip({
       chips: [
         {
-          ...chipWithGlyph("activeAgents", "activeAgents"),
+          ...unitChip("activeAgents"),
           text: "2",
           working: true,
         },
-        chipWithGlyph("background", "wakeup"),
+        unitChip("background"),
       ],
       expanded: new Set(),
       onToggle: vi.fn(),
@@ -197,7 +193,7 @@ describe("<ChatDockCompactStrip />", () => {
     expect(agents.textContent).toBe("2");
 
     const background = screen.getByTestId("chat-dock-chip-background");
-    expect(drawnIcon(background)).toBe("alarm-clock");
+    expect(drawnIcon(background)).toBe("message-square-clock");
     expect(iconClasses(background)).not.toContain("text-primary");
     expect(shimmerGlyph("background")).toBeNull();
   });
@@ -209,8 +205,8 @@ describe("<ChatDockCompactStrip />", () => {
   it("gives a working agents chip and a working background chip the same shape", () => {
     renderStrip({
       chips: [
-        { ...chipWithGlyph("activeAgents", "activeAgents"), working: true },
-        { ...chipWithGlyph("background", "monitor"), working: true },
+        { ...unitChip("activeAgents"), working: true },
+        { ...unitChip("background"), working: true },
       ],
       expanded: new Set(),
       onToggle: vi.fn(),
@@ -229,7 +225,7 @@ describe("<ChatDockCompactStrip />", () => {
       "bot",
     );
     expect(drawnIcon(screen.getByTestId("chat-dock-chip-background"))).toBe(
-      "monitor",
+      "message-square-clock",
     );
   });
 
@@ -240,8 +236,8 @@ describe("<ChatDockCompactStrip />", () => {
   it("draws nothing at a chip's corner, working or at rest", () => {
     renderStrip({
       chips: [
-        { ...chipWithGlyph("activeAgents", "activeAgents"), working: true },
-        chipWithGlyph("background", "wakeup"),
+        { ...unitChip("activeAgents"), working: true },
+        unitChip("background"),
       ],
       expanded: new Set(),
       onToggle: vi.fn(),
@@ -261,8 +257,8 @@ describe("<ChatDockCompactStrip />", () => {
   it("renders no spinner node and no CSS animation in any state", () => {
     renderStrip({
       chips: [
-        { ...chipWithGlyph("activeAgents", "activeAgents"), working: true },
-        { ...chipWithGlyph("background", "monitor"), working: true },
+        { ...unitChip("activeAgents"), working: true },
+        { ...unitChip("background"), working: true },
       ],
       expanded: new Set(),
       onToggle: vi.fn(),
@@ -302,8 +298,8 @@ describe("<ChatDockCompactStrip />", () => {
     it("sweeps the working glyph's opacity across the cycle", () => {
       renderStrip({
         chips: [
-          { ...chipWithGlyph("activeAgents", "activeAgents"), working: true },
-          chipWithGlyph("background", "wakeup"),
+          { ...unitChip("activeAgents"), working: true },
+          unitChip("background"),
         ],
         expanded: new Set(),
         onToggle: vi.fn(),
@@ -345,49 +341,37 @@ describe("<ChatDockCompactStrip />", () => {
     });
   });
 
-  // The Background chip borrows the panel's own per-kind glyphs, so a chip
-  // over one kind of row is recognisable as that kind without opening it.
-  it.each([
-    ["subagent", "bot"],
-    ["command", "square-terminal"],
-    ["monitor", "monitor"],
-    ["wakeup", "alarm-clock"],
-    ["workflow", "workflow"],
-    ["mcp", "plug"],
-    // A managed shell is a terminal running or held. Never `circle-pause`:
-    // that glyph reads as "paused" with no row beside it saying otherwise, and
-    // a shell following a PR is the case that proved it.
-    ["managedShell", "terminal"],
-  ] as const)(
-    "draws the %s kind's icon on a resting background chip",
-    (kind, icon) => {
-      renderStrip({
-        chips: [chipWithGlyph("background", kind)],
-        expanded: new Set(),
-        onToggle: vi.fn(),
-      });
-
-      expect(drawnIcon(screen.getByTestId("chat-dock-chip-background"))).toBe(
-        icon,
-      );
-    },
-  );
-
-  // The state axis and the glyph axis are independent: a shell draws one
-  // terminal either way, and it is the shimmer and the tone that say which. A
-  // regression that reintroduced a state-dependent glyph would have to break
-  // this and the row above it together.
-  it("keeps the terminal glyph on a running managed shell", () => {
+  // The Background chip has ONE glyph - the section's own chat-with-a-clock -
+  // in both states. It used to borrow the panel's per-kind icons and a neutral
+  // stack when they mixed, so the same chip was a bot, a clock, a terminal or
+  // a pile of layers depending on the panel's contents, and a reader scanning
+  // for "the background chip" had to know those to find it. Neither a per-kind
+  // icon nor `circle-pause` may come back: the state is the shimmer and the
+  // tone, and a held shell is said in the chip's sentence.
+  it("draws the section's own mark on a resting background chip", () => {
     renderStrip({
-      chips: [
-        { ...chipWithGlyph("background", "managedShell"), working: true },
-      ],
+      chips: [unitChip("background")],
       expanded: new Set(),
       onToggle: vi.fn(),
     });
 
     const chipElement = screen.getByTestId("chat-dock-chip-background");
-    expect(drawnIcon(chipElement)).toBe("terminal");
+    expect(drawnIcon(chipElement)).toBe("message-square-clock");
+    expect(chipElement.querySelector("svg.lucide-layers")).toBeNull();
+    expect(chipElement.querySelector("svg.lucide-circle-pause")).toBeNull();
+    expect(shimmerGlyph("background")).toBeNull();
+  });
+
+  it("keeps the same mark, lit, on a working background chip", () => {
+    renderStrip({
+      chips: [{ ...unitChip("background"), working: true }],
+      expanded: new Set(),
+      onToggle: vi.fn(),
+    });
+
+    const chipElement = screen.getByTestId("chat-dock-chip-background");
+    expect(drawnIcon(chipElement)).toBe("message-square-clock");
+    expect(chipElement.querySelector("svg.lucide-layers")).toBeNull();
     expect(chipElement.querySelector("svg.lucide-circle-pause")).toBeNull();
     expect(shimmerGlyph("background")).not.toBeNull();
     expect(iconClasses(chipElement)).toContain("text-primary");
