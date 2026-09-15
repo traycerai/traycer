@@ -1118,6 +1118,15 @@ export function NewConversationModalBody(props: {
    * to the branch that has one.
    */
   const handleSubmit = useCallback((): void => {
+    // The ENTRY gate, restored. `submitPreparedDraft` re-checks `canSubmit`
+    // live at the end, which is the check that matters for a condition that
+    // arrives DURING the read - but without one here, a Cmd/Ctrl+Enter pressed
+    // while the host is disconnected or ingestion is pending still started the
+    // flight (`usePrimaryActionShortcut` invokes the callback so it can claim
+    // the shortcut, unlike a disabled button). If the condition then cleared
+    // before resolution finished, the live check passed and the chat was
+    // created from a keystroke the user had every reason to read as a no-op.
+    if (!canSubmit) return;
     const editor = editorRef.current;
     if (editor === null) return;
     const captured = editor.getJSON();
@@ -1172,9 +1181,33 @@ export function NewConversationModalBody(props: {
             // revision moves on every keystroke, so comparing it would drop a
             // send for one typed character, and the pre-flight capture is not
             // what the user is looking at by the time the modal closes.
-            submitPreparedDraftRef.current(
-              inlineHashOnlyImageBytes(live.getJSON(), base64ByHash),
+            const inlined = inlineHashOnlyImageBytes(
+              live.getJSON(),
+              base64ByHash,
             );
+            // A leg that missed leaves its node hash-only, and this path has no
+            // recovery for that. `epic.createChat` is unary: there is no
+            // `MISSING_ATTACHMENT_BYTES` acknowledgement to retry from and no
+            // restoration slot, while `cleanupAfterSubmit` clears the draft
+            // synchronously - so dispatching would delete the user's text and
+            // then fail. The chat composer can afford to send optimistically
+            // because its refusal path exists; here the honest move is to keep
+            // the draft and say why.
+            const unresolved = draftImageInliningNeeded(
+              inlined,
+              NO_HOST_HELD_HASHES,
+            );
+            if (unresolved.length > 0) {
+              raiseHostNotice({
+                kind: "refused",
+                message:
+                  unresolved.length === 1
+                    ? "An image in this prompt could not be loaded. The draft has been kept - try removing and re-attaching it."
+                    : `${unresolved.length} images in this prompt could not be loaded. The draft has been kept - try removing and re-attaching them.`,
+              });
+              return;
+            }
+            submitPreparedDraftRef.current(inlined);
           },
         });
       },
@@ -1182,7 +1215,7 @@ export function NewConversationModalBody(props: {
         draftImagePrepFlight.current = false;
       },
     );
-  }, [epicId, resolvedHostId, submitPreparedDraft]);
+  }, [canSubmit, epicId, raiseHostNotice, resolvedHostId, submitPreparedDraft]);
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;

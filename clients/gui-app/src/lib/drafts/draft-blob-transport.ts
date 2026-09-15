@@ -383,7 +383,21 @@ async function uploadOneDraftBlob(
       });
       return false;
     }
-    if (ownerUserId !== null) recordConfirmedBlob(hostId, sha256, ownerUserId);
+    if (ownerUserId === null) {
+      // Acknowledged, and still UNCONFIRMED - the third case of the same rule
+      // as the two arms above. With no signed-in identity there is nothing to
+      // memoize against, so `isDraftBlobConfirmed` will keep answering false;
+      // returning `true` here would put the digest in
+      // `confirmedHostBlobHashes` anyway, and `landingDraftPinsLocalImageBytes`
+      // would stop pinning the local bytes on the strength of a claim no memo
+      // can corroborate. The two consumers must agree, and the memo is the one
+      // that can be asked again.
+      appLogger.warn("[draft-blobs] putBlob acknowledged with no owner", {
+        sha256,
+      });
+      return false;
+    }
+    recordConfirmedBlob(hostId, sha256, ownerUserId);
     return true;
   } catch (error: unknown) {
     if (isBlobUnsupported(error)) {

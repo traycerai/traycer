@@ -305,6 +305,23 @@ describe("draft blob transport", () => {
     expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
   });
 
+  it("a null-owner upload is acknowledged but NOT reported confirmed (DRIVE RED)", async () => {
+    // `currentDraftBlobOwnerId()` can be null, and both coordinator paths pass
+    // it straight through. With no identity there is nothing to memoize
+    // against, so `isDraftBlobConfirmed` keeps answering false - and returning
+    // `true` here would still put the digest in `confirmedHostBlobHashes`,
+    // where it stops `landingDraftPinsLocalImageBytes` pinning the bytes. The
+    // two consumers have to agree, and the memo is the one that can be asked.
+    const hash = await putImage(pngBytes());
+    const { client, calls } = countingClient(() =>
+      Promise.resolve({ ok: true }),
+    );
+
+    expect(await putDraftBlobs(HOST, client, [hash], null)).toEqual([]);
+    expect(calls()).toBe(1);
+    expect(isDraftBlobConfirmed(HOST, hash, OWNER)).toBe(false);
+  });
+
   it("a confirmed digest is not re-sent", async () => {
     const hash = await putImage(pngBytes());
     const { client, calls } = countingClient(() =>

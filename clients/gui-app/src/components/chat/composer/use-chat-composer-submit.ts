@@ -485,11 +485,19 @@ export function useChatComposerSubmit(
           }
         }
 
+        // LIVE, for the same reason the blocking predicate above is: this
+        // runs after an awaited image read, and a reconnect during it sets
+        // `steerProtocolSupported` false until the new handshake completes.
+        // The render-captured `true` would resolve `after_safe_point`, and
+        // `sendMessage` does not revalidate the policy - the host would be
+        // asked to steer on a line that no longer offers it. The synchronous
+        // path reads the same ref on the same render, so nothing changes there.
+        const liveSteerInputs = steerInputsRef.current;
         const deliveryPolicy = resolveSubmitDeliveryPolicy({
           source,
-          activeTurnStatus,
-          steerEnabled,
-          steerProtocolSupported,
+          activeTurnStatus: liveSteerInputs.activeTurnStatus,
+          steerEnabled: liveSteerInputs.steerEnabled,
+          steerProtocolSupported: liveSteerInputs.steerProtocolSupported,
         });
         const sendInput: ChatComposerSubmitInput = {
           content: submittedContent,
@@ -727,7 +735,11 @@ export function useChatComposerSubmit(
       });
     },
     [
-      activeTurnStatus,
+      // `activeTurnStatus`, `steerEnabled` and `steerProtocolSupported` are
+      // deliberately ABSENT: both readers in this callback now go through
+      // `steerInputsRef`, precisely because a value captured at this render is
+      // stale by the time an awaited image read returns. Listing them would
+      // rebuild the callback for a value it no longer reads.
       clearAcceptedDraft,
       editorRef,
       finalizeSend,
@@ -735,8 +747,6 @@ export function useChatComposerSubmit(
       pickerStore,
       getActiveTurnForSteer,
       steerCapable,
-      steerEnabled,
-      steerProtocolSupported,
       queueEditTargetId,
       getDraftBlobBridgeSupported,
       submitBlocked,

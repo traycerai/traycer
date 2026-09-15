@@ -443,6 +443,15 @@ function updateHandoff(
  *
  * Registered here rather than in the draft mirror's root source so the walk
  * lives beside the state it walks, mirroring `composer-draft-store.ts`.
+ *
+ * A `failed` handoff is NOT a root, and the exclusion is load-bearing rather
+ * than tidy. `markFailed` keeps the record - nothing deletes it, and this store
+ * is PERSISTED - while `useInitialChatHandoff` never consumes a terminal one.
+ * So walking every record unconditionally pinned an image-bearing failed
+ * handoff's bytes for the life of the install, across reloads, and repeated
+ * failures would accumulate until the shared landing-image budget refused the
+ * next attachment. "Until the handoff is consumed or fails" is what the
+ * paragraph above promises; this is the half that makes "or fails" true.
  */
 registerExtraImageRootSource({
   hashes: () => {
@@ -450,6 +459,7 @@ registerExtraImageRootSource({
     for (const handoff of Object.values(
       useInitialChatHandoffStore.getState().handoffs,
     )) {
+      if (handoff.status === "failed") continue;
       hashes.push(...blobHashesFromContent(handoff.content));
     }
     return hashes;

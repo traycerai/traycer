@@ -317,7 +317,18 @@ export function useChatMessageActions(
     activeInlineEditRef.current = activeInlineEdit;
     submitPreparedEditRef.current = submitPreparedEdit;
   }, [activeInlineEdit, submitPreparedEdit]);
-  const editImagePrepFlight = useRef(false);
+  /**
+   * The edit SESSION whose image preparation is in flight, or `null`.
+   *
+   * A session rather than a boolean. The continuation'"'"'s `sessionId` checks
+   * already stop an obsolete preparation from sending, but a bare flag stayed
+   * set until that obsolete I/O settled - so an edit cancelled and reopened
+   * while a read was outstanding met the guard below and its Send did nothing,
+   * silently and with no pending state shown, for as long as a host or cloud
+   * timeout takes. Keyed by session, a new edit is never blocked by an old
+   * one'"'"'s flight, and the old flight still cannot send.
+   */
+  const editImagePrepFlight = useRef<string | null>(null);
 
   const performEditSubmit = useCallback(
     (revertFileChanges: boolean, revertArtifacts: boolean) => {
@@ -351,8 +362,8 @@ export function useChatMessageActions(
         );
         return;
       }
-      if (editImagePrepFlight.current) return;
-      editImagePrepFlight.current = true;
+      if (editImagePrepFlight.current === sessionId) return;
+      editImagePrepFlight.current = sessionId;
       const targetMessageId = activeInlineEdit.targetMessageId;
       // `currentContent` lives only in this tile's reducer, so while the read
       // runs it is the sole thing naming these bytes to the image GC.
@@ -400,7 +411,12 @@ export function useChatMessageActions(
           });
         },
         () => {
-          editImagePrepFlight.current = false;
+          // Only if this flight still owns the slot: a newer session'"'"'s
+          // preparation may have claimed it while this one was in the air, and
+          // clearing it then would unblock a double-send for that session.
+          if (editImagePrepFlight.current === sessionId) {
+            editImagePrepFlight.current = null;
+          }
         },
       ).catch((error: unknown) => {
         // The helper propagates rather than swallowing, so `void` alone left

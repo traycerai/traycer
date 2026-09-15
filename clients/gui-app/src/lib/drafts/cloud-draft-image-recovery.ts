@@ -244,6 +244,12 @@ function cloudDraftImageSourcesFor(
   return sourcesByHash.get(hash) ?? [];
 }
 
+/** Stable identity for one address, for "have I already tried this?". */
+function cloudSourceKey(source: CloudDraftImageSource): string {
+  const { taskId, chatId, ownerUserId } = source.identity;
+  return [source.hostId, taskId, chatId, ownerUserId].join("\u0000");
+}
+
 function sameCloudDraftImageSource(
   left: CloudDraftImageSource,
   right: CloudDraftImageSource,
@@ -446,18 +452,37 @@ async function awaitTransferBounded(hash: string): Promise<ImageBytes | null> {
 /**
  * Try each recorded address for `hash`, newest first, until one answers.
  *
- * Read at dispatch rather than captured with the flight, so an address recorded
- * while this transfer was queued behind the concurrency bound is included.
+ * The registry is re-read on every pass, not walked once. A transfer is
+ * single-flight per hash, so a LATER draft that records a usable address while
+ * a slow request to an earlier one is in flight does not get its own transfer -
+ * it joins this one. Iterating a snapshot meant the joiner inherited a `null`
+ * for an address that was never tried, and a mounted image whose bounded retry
+ * ladder expired against that same flight stayed unavailable until a remount.
+ *
+ * Bounded by `tried` plus a hard attempt cap: the per-hash list is capped, so
+ * the only way to keep this going is a producer recording new addresses faster
+ * than they are consumed, and one RPC per new address is the right answer to
+ * that right up until it is not.
+ *
  * Every candidate returning `null` is an ordinary outcome - the node stays
  * hash-only and the host's guard at send is the authority.
  */
+const MAX_CLOUD_SOURCE_ATTEMPTS = CLOUD_DRAFT_IMAGE_SOURCES_PER_HASH * 2;
+
 async function readAndStoreFromAnyCloudSource(
   hash: string,
 ): Promise<ImageBytes | null> {
-  for (const source of cloudDraftImageSourcesFor(hash)) {
-    const bytes = await readAndStoreCloudDraftImage(hash, source);
+  const tried = new Set<string>();
+  while (tried.size < MAX_CLOUD_SOURCE_ATTEMPTS) {
+    const next = cloudDraftImageSourcesFor(hash).find(
+      (source) => !tried.has(cloudSourceKey(source)),
+    );
+    if (next === undefined) return null;
+    tried.add(cloudSourceKey(next));
+    const bytes = await readAndStoreCloudDraftImage(hash, next);
     if (bytes !== null) return bytes;
   }
+  appLogger.warn("[cloud-draft-image] gave up after every candidate", { hash });
   return null;
 }
 

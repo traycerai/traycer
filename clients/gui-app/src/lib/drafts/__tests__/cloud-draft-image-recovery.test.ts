@@ -592,4 +592,48 @@ describe("cloud-draft-image-recovery", () => {
     expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
     expect(serving.calls).toHaveLength(1);
   });
+  it("tries a source recorded WHILE a transfer is already running (DRIVE RED)", async () => {
+    // A transfer is single-flight per hash, so a later draft recording a usable
+    // address does not get its own transfer - it joins this one. Walking a
+    // snapshot of the candidate list meant the joiner inherited a `null` for an
+    // address that was never tried.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseSwept: () => void = () => undefined;
+    const sweptGate = new Promise<void>((resolve) => {
+      releaseSwept = resolve;
+    });
+    const swept = recordingClient(async (_method, _params) => {
+      await sweptGate;
+      return { outcome: { status: "unavailable" as const } };
+    });
+    const good = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: swept.client,
+      hashes: [hash],
+    });
+    const reading = readCloudDraftImageBytes(hash);
+
+    // A second draft names the same digest while that request is in flight.
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-recorded-late" },
+      hostId: "host-a",
+      client: good.client,
+      hashes: [hash],
+    });
+    releaseSwept();
+
+    expect(await reading).toEqual(bytes);
+    expect(good.calls).toHaveLength(1);
+  });
 });
