@@ -331,6 +331,33 @@ function shownDecisionFor(
   return resolvedViewId === null ? null : decision;
 }
 
+/**
+ * Whether the feed a tile waits on is SETTLED.
+ *
+ * An epic whose agents are all unattributed - legacy rows carrying a null
+ * `hostId` - has no host feed to catch up from at all: `useCommGraphAgents`
+ * keeps nulls out of `hostIds`, and the subscription reports
+ * `initialHistoryCaughtUp: false` for as long as its own host set is empty.
+ * Together those left Auto on the blank `measuring…` surface forever on such an
+ * epic, because the measure gate could never open. An empty SOURCE set is
+ * SETTLED, not pending: there is nothing left to arrive.
+ *
+ * Answered from the same `useCommGraphAgents` result the population comes from,
+ * so there is no window where the agents are loaded but their host list is not:
+ * when the caller has agents and this has no hosts, every one of those agents is
+ * genuinely hostless. Deciding it here rather than inside the subscription keeps
+ * the subscription's "no host has reported" meaning intact, and avoids a mount
+ * race where a not-yet-dialed host set would read as caught up.
+ *
+ * Its own function so the tile stays under its complexity ceiling.
+ */
+function isFeedSettled(
+  hostIds: ReadonlyArray<string>,
+  initialHistoryCaughtUp: boolean,
+): boolean {
+  return hostIds.length === 0 || initialHistoryCaughtUp;
+}
+
 export function CommGraphTile(props: CommGraphTileProps) {
   const { node, viewTabId } = props;
   const { nodes: epicAgents, hostIds } = useCommGraphAgents();
@@ -535,6 +562,10 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // office canvas, and the last one's numbers describe a box that is gone.
     node.view.mode === "office";
 
+  // A hostless epic has no feed to catch up from, so it is settled the moment
+  // its population is; see `isFeedSettled`.
+  const feedSettled = isFeedSettled(hostIds, snapshot.initialHistoryCaughtUp);
+
   /**
    * MEASURE READY: drawable, and the population Auto measures is the settled
    * one.
@@ -546,7 +577,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
    * `measuring…` for as long as this is false, which is the state the plan
    * asks for.
    */
-  const measureReady = drawReady && snapshot.initialHistoryCaughtUp;
+  const measureReady = drawReady && feedSettled;
 
   const viewForCanvas = useMemo(
     () => officeViewForCanvas(node.view, resolvedViewId, witnessedMove),
@@ -959,7 +990,9 @@ export function CommGraphTile(props: CommGraphTileProps) {
     agentIds: projection.visibleAgentIds,
     events: projection.asOfEvents,
     hosts: snapshot.hosts,
-    initialHistoryCaughtUp: snapshot.initialHistoryCaughtUp,
+    // The same settled signal the Auto gate uses, so a hostless epic's chip
+    // does not sit on "catching up" for a feed that has nothing to send.
+    initialHistoryCaughtUp: feedSettled,
     playing: projection.playing,
     pulse: projection.pulse,
     pulseKey: projection.pulseEventKey,

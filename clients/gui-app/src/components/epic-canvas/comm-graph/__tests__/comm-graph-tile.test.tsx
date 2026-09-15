@@ -3182,15 +3182,18 @@ describe("CommGraphTile", () => {
       // down without writing anything back, so `persisted` is exactly what
       // is still on disk. While it is closed, the default round-trips
       // through a concrete view and back to Auto - the generation this
-      // outcome was stamped under (0) is now stale (2).
+      // outcome was stamped under (0) is now stale.
       cleanup();
       act(() =>
         useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
       );
       act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
-        2,
-      );
+      // The generation is a collision-free random stamp, not a counter, so the
+      // round-trip's value is READ rather than predicted; all that matters is
+      // that it no longer matches the outcome's own stamp (0).
+      const rolledGeneration =
+        useSettingsStore.getState().agentOfficeDefaultViewGeneration;
+      expect(rolledGeneration).not.toBe(0);
 
       // The tile reopens - a fresh mount reading exactly the same persisted
       // record (the generation mismatch is the ONLY thing that changed).
@@ -3206,7 +3209,7 @@ describe("CommGraphTile", () => {
         expect(decide).toHaveBeenCalled();
       });
       await waitFor(() => {
-        expect(storedView()?.officeAutoGeneration).toBe(2);
+        expect(storedView()?.officeAutoGeneration).toBe(rolledGeneration);
       });
       expect(storedView()?.officeAutoView).toBe("floor");
     });
@@ -3245,9 +3248,11 @@ describe("CommGraphTile", () => {
       // an inheriting tile would react to.
       act(() => useSettingsStore.getState().setAgentOfficeDefaultView("floor"));
       act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
-        2,
-      );
+      // A collision-free random stamp, not a counter: it only has to differ
+      // from the stamp this outcome carries (0).
+      expect(
+        useSettingsStore.getState().agentOfficeDefaultViewGeneration,
+      ).not.toBe(0);
 
       // Give the effect a tick to have run again if it were going to.
       caughtUp();
@@ -3276,9 +3281,11 @@ describe("CommGraphTile", () => {
         useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
       );
       act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
-        2,
-      );
+      // A collision-free random stamp, not a counter - read it rather than
+      // predict it; it only has to differ from this outcome's stamp (0).
+      const rolledGeneration =
+        useSettingsStore.getState().agentOfficeDefaultViewGeneration;
+      expect(rolledGeneration).not.toBe(0);
 
       const persisted: CommGraphTileViewState = {
         ...DEFAULT_COMM_GRAPH_VIEW,
@@ -3305,7 +3312,7 @@ describe("CommGraphTile", () => {
         expect(decide).toHaveBeenCalled();
       });
       await waitFor(() => {
-        expect(storedView()?.officeAutoGeneration).toBe(2);
+        expect(storedView()?.officeAutoGeneration).toBe(rolledGeneration);
       });
       // Real Auto measurement, same fixture/box every other case in this file
       // relies on for a Floor outcome - the point here is only that it is a
@@ -3385,9 +3392,11 @@ describe("CommGraphTile", () => {
     useSettingsStore.getState().setAgentOfficeDefaultView("auto");
     act(() => useSettingsStore.getState().setAgentOfficeDefaultView("towers"));
     act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
-    expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
-      2,
-    );
+    // A collision-free random stamp, not a counter: it only has to differ from
+    // the stamp this outcome carries (0).
+    expect(
+      useSettingsStore.getState().agentOfficeDefaultViewGeneration,
+    ).not.toBe(0);
 
     const persisted: CommGraphTileViewState = {
       ...DEFAULT_COMM_GRAPH_VIEW,
@@ -3398,7 +3407,8 @@ describe("CommGraphTile", () => {
     setIntersecting(true);
     setOfficeCanvasSize(OFFICE_CANVAS);
 
-    // Stale generation (0 !== 2, an INHERITED tile) - untrusted, so the chip
+    // Stale generation (0 is not the rolled stamp, an INHERITED tile) -
+    // untrusted, so the chip
     // must fall all the way to "measuring…", not "Auto · Towers · measured
     // earlier".
     expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
