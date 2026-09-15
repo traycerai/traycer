@@ -306,14 +306,27 @@ describe("isElementInViewport", () => {
     expect(isElementInViewport(element)).toBe(false);
   });
 
-  it("is false for a box just past every edge of the viewport", () => {
+  it("is false for boxes that only touch each viewport edge", () => {
+    // Each rect's box sits flush against exactly one edge with nothing past
+    // it - the strict `>`/`<` comparisons must reject all four, not just the
+    // one (`right > 0`) the single case here used to cover.
     stubViewport(1024, 768);
-    const element = document.createElement("div");
-    // Its right edge sits exactly at the viewport's left edge - `right > 0`
-    // must fail here, not merely `right >= 0`.
-    stubRect(element, new DOMRect(-50, 0, 50, 50));
+    const flushEdges: ReadonlyArray<DOMRect> = [
+      // Right edge sits exactly at the viewport's left edge.
+      new DOMRect(-50, 0, 50, 50),
+      // Left edge sits exactly at the viewport's right edge.
+      new DOMRect(1024, 0, 50, 50),
+      // Bottom edge sits exactly at the viewport's top edge.
+      new DOMRect(0, -50, 50, 50),
+      // Top edge sits exactly at the viewport's bottom edge.
+      new DOMRect(0, 768, 50, 50),
+    ];
 
-    expect(isElementInViewport(element)).toBe(false);
+    for (const rect of flushEdges) {
+      const element = document.createElement("div");
+      stubRect(element, rect);
+      expect(isElementInViewport(element)).toBe(false);
+    }
   });
 });
 
