@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useProvidersSetAutoJudge } from "@/hooks/providers/use-providers-set-auto-judge-mutation";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { providerAutoJudgeFor } from "@/lib/providers/provider-auto-judge";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
@@ -67,11 +68,36 @@ export function ProviderAutoJudgeSection({
   // effect is a cascading render, and the linter is right to refuse it). The
   // moment `stored` differs from that baseline the host has spoken since the
   // pick - whether it landed our write or another window's - and the host wins.
+  //
+  // It also carries WHEN it was made, as the authoritative read's own
+  // `dataUpdatedAt`, because expiring by value alone has a hole: if another
+  // window sets this provider back to the value we were echoing against before
+  // our invalidated refetch lands, `stored` equals `echo.against` again and the
+  // echo would mask the host's real answer for the life of the panel. A
+  // completed refetch is the round trip ending whether or not the value moved,
+  // and `dataUpdatedAt` advances on every successful fetch - including one that
+  // returns identical data - which is exactly the fetch counter that fact needs.
+  // Both conditions are kept: whichever evidence arrives first retires the echo.
   const [echo, setEcho] = useState<{
     readonly chosen: AutoJudgeKind;
     readonly against: AutoJudgeKind;
+    readonly seenAt: number;
   } | null>(null);
-  const value = echo !== null && echo.against === stored ? echo.chosen : stored;
+  // A second observer on the key the Providers panel already holds, so this
+  // costs a subscription and no request. `subscribed: false` for the same
+  // reason: the panel above owns the refresh, this only needs to read when it
+  // lands.
+  const providersQuery = useProvidersList({
+    enabled: true,
+    subscribed: false,
+  });
+  const providersUpdatedAt = providersQuery.dataUpdatedAt;
+  const value =
+    echo !== null &&
+    echo.against === stored &&
+    echo.seenAt === providersUpdatedAt
+      ? echo.chosen
+      : stored;
 
   const harnesses = harnessesQuery.data?.harnesses;
   if (harnesses === undefined) return null;
@@ -136,7 +162,11 @@ export function ProviderAutoJudgeSection({
             // control renders may reach the wire.
             if (next !== "traycer" && next !== "provider") return;
             if (next === value) return;
-            setEcho({ chosen: next, against: stored });
+            setEcho({
+              chosen: next,
+              against: stored,
+              seenAt: providersUpdatedAt,
+            });
             setAutoJudge.mutate(
               { harnessId, autoJudge: next },
               // A refused write leaves the stored value where it was, so the

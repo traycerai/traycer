@@ -156,6 +156,70 @@ export function autoJudgeSeedKeyForAttempt(
 }
 
 /**
+ * What is WRONG with the stored judge record, as three settled facts.
+ *
+ * Pure and here rather than inline in the picker for two reasons. It is the
+ * half worth testing without rendering a picker (the same argument that put
+ * `autoJudgeSeed` in this module), and inline it pushed `AutoJudgePicker` past
+ * the complexity ceiling gui-app lints at - which is the honest signal that six
+ * interdependent booleans in a component body are one decision wearing a
+ * disguise.
+ *
+ * Every field answers "only when we actually know". The toolbar store PRESENTS
+ * a substitute whenever the stored harness or model is not on offer, and never
+ * emits it - a display fallback, not a choice - so a difference between
+ * presented and stored is the detector. But it is only evidence once the
+ * catalog it was resolved against has ARRIVED: while the rows are loading the
+ * store passes the selection through untouched, and `modelsLoaded` is the
+ * store's own explicit flag for that (never `models.length`, which cannot tell
+ * "no models" from "not yet").
+ */
+export interface AutoJudgeRecordHealth {
+  /** The stored harness is not on this machine; the host will escalate. */
+  readonly storedHarnessUnavailable: boolean;
+  /** The harness is fine but the stored MODEL has left the catalog. */
+  readonly storedModelUnavailable: boolean;
+  /**
+   * Nothing will call a judge, so no billing line may be shown beside it. Two
+   * adjacent status lines - "no judge will run" and "this will be charged to
+   * your provider account" - contradict each other, and the contradiction is
+   * worse than either line alone.
+   */
+  readonly noJudgeWillRun: boolean;
+}
+
+export function autoJudgeRecordHealth(input: {
+  readonly hasStoredSelection: boolean;
+  readonly unrecognizedHarnessId: string | null;
+  readonly isBlocked: boolean;
+  readonly storedHarnessId: string;
+  readonly presentedHarnessId: string;
+  readonly storedModelSlug: string;
+  readonly presentedModelSlug: string;
+  readonly modelsLoaded: boolean;
+}): AutoJudgeRecordHealth {
+  // A record this build cannot read at all is `unrecognizedHarnessId`'s line to
+  // report; every reroute below would be a consequence of it, not a finding.
+  const readable =
+    input.hasStoredSelection && input.unrecognizedHarnessId === null;
+  const storedHarnessUnavailable =
+    readable && input.presentedHarnessId !== input.storedHarnessId;
+  const storedModelUnavailable =
+    readable &&
+    !storedHarnessUnavailable &&
+    input.modelsLoaded &&
+    // `""` is the no-carry seed for an unset record - the store is SUPPOSED to
+    // resolve it to the harness default, so a difference there is the feature.
+    input.storedModelSlug.length > 0 &&
+    input.presentedModelSlug !== input.storedModelSlug;
+  return {
+    storedHarnessUnavailable,
+    storedModelUnavailable,
+    noJudgeWillRun: input.isBlocked || storedHarnessUnavailable,
+  };
+}
+
+/**
  * The judge selection a settings emit carries. `ChatRunSettings` is the shape
  * the toolbar store speaks; only three of its fields are a fact about the
  * judge.

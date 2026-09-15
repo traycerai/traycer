@@ -9,6 +9,7 @@ import type {
   AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import {
+  autoJudgeRecordHealth,
   autoJudgeSeed,
   autoJudgeSeedKeyForAttempt,
 } from "@/components/settings/panels/auto-judge-selection";
@@ -267,6 +268,119 @@ describe("autoJudgeSeed", () => {
   });
 });
 
+// JOB 4 + JOB 5: the pure decision `AutoJudgePicker` reads instead of
+// computing six interdependent booleans inline. Table-driven because the rule
+// IS the precedence between these facts, not any one branch alone.
+describe("autoJudgeRecordHealth", () => {
+  const BASE = {
+    hasStoredSelection: true,
+    unrecognizedHarnessId: null as string | null,
+    isBlocked: false,
+    storedHarnessId: "claude",
+    presentedHarnessId: "claude",
+    storedModelSlug: "claude-sonnet",
+    presentedModelSlug: "claude-sonnet",
+    modelsLoaded: true,
+  };
+
+  it("no stored selection: everything false", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      hasStoredSelection: false,
+    });
+
+    expect(health).toEqual({
+      storedHarnessUnavailable: false,
+      storedModelUnavailable: false,
+      noJudgeWillRun: false,
+    });
+  });
+
+  // `unrecognizedHarnessId` owns this report; every reroute below it would be
+  // a CONSEQUENCE of the unrecognized id, not an independent finding - so this
+  // function must stay silent and let that line speak alone.
+  it("unrecognizedHarnessId set: everything false, even with a harness/model mismatch also present", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      unrecognizedHarnessId: "some-future-harness",
+      presentedHarnessId: "traycer",
+      presentedModelSlug: "",
+    });
+
+    expect(health).toEqual({
+      storedHarnessUnavailable: false,
+      storedModelUnavailable: false,
+      noJudgeWillRun: false,
+    });
+  });
+
+  it("harness reroute (presented differs from stored): storedHarnessUnavailable and noJudgeWillRun, never storedModelUnavailable", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      presentedHarnessId: "codex",
+      presentedModelSlug: "",
+    });
+
+    expect(health).toEqual({
+      storedHarnessUnavailable: true,
+      storedModelUnavailable: false,
+      noJudgeWillRun: true,
+    });
+  });
+
+  it("model reroute with the harness fine: storedModelUnavailable, and noJudgeWillRun stays false - a model swap still runs a judge", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      presentedModelSlug: "claude-haiku",
+    });
+
+    expect(health).toEqual({
+      storedHarnessUnavailable: false,
+      storedModelUnavailable: true,
+      noJudgeWillRun: false,
+    });
+  });
+
+  // Not evidence yet: while the model catalog is still loading the store
+  // passes the selection through untouched, so a mismatch here says nothing
+  // about availability.
+  it("model differs but modelsLoaded is false: storedModelUnavailable stays false", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      presentedModelSlug: "claude-haiku",
+      modelsLoaded: false,
+    });
+
+    expect(health.storedModelUnavailable).toBe(false);
+  });
+
+  // `""` is the no-carry seed for an unset record - the store is SUPPOSED to
+  // resolve it to the harness default, so a difference there is the feature,
+  // not evidence of an unavailable model.
+  it("stored slug is the empty no-carry seed: storedModelUnavailable stays false even though presented differs", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      storedModelSlug: "",
+      presentedModelSlug: "claude-sonnet",
+    });
+
+    expect(health.storedModelUnavailable).toBe(false);
+  });
+
+  it("isBlocked alone (no reroute): noJudgeWillRun true, both reroute flags stay false", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      isBlocked: true,
+    });
+
+    expect(health).toEqual({
+      storedHarnessUnavailable: false,
+      storedModelUnavailable: false,
+      noJudgeWillRun: true,
+    });
+  });
+});
+
 describe("<AutoJudgePicker /> status", () => {
   const selected: AutoJudgeSelection = {
     harnessId: "claude",
@@ -346,6 +460,127 @@ describe("<AutoJudgePicker /> status", () => {
       resetToGeneral: false,
     });
     expect(screen.queryByTestId("auto-judge-effective")).toBeNull();
+  });
+});
+
+// JOB 4: the defect itself - the self-billing warning rendered even when the
+// row had just said no judge will run, two adjacent lines contradicting each
+// other. Both testids are asserted together on purpose: a fix that only
+// suppresses one of them would still leave the contradiction on screen.
+describe("<AutoJudgePicker /> suppresses self-billing when no judge will run", () => {
+  const selected: AutoJudgeSelection = {
+    harnessId: "claude",
+    model: "claude-sonnet",
+    profileId: null,
+  };
+
+  it("blocked: auto-judge-self-billing is absent while auto-judge-blocked is present", async () => {
+    render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: selected,
+        effective: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          source: "selection",
+        },
+        blocked: { reason: "provider-disabled" },
+        disabled: false,
+        saving: false,
+        resetNonce: 0,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    expect(await screen.findByTestId("auto-judge-blocked")).toBeTruthy();
+    expect(screen.queryByTestId("auto-judge-self-billing")).toBeNull();
+  });
+
+  it("harness-unavailable: auto-judge-self-billing is absent while auto-judge-unavailable is present", () => {
+    // Two rows so the store has somewhere to reroute TO: "claude" is the
+    // stored harness and reports itself unavailable, "codex" is the only
+    // other eligible one - `effectiveSelectionFromHarnesses` reroutes the
+    // presented selection onto it, which is what makes
+    // `storedHarnessUnavailable` true.
+    // Snapshotted, not restated: the `finally` below used to rebuild the
+    // fixture by hand (`length = 1`, `[0].available = true`), which is a
+    // restatement of today's initial state and goes quietly wrong the day this
+    // file gains a third harness or seeds a different `available`. Deriving the
+    // restore from what was actually there cannot drift.
+    const originalHarnesses = mockedHarnesses.map((harness) => ({
+      ...harness,
+    }));
+    mockedHarnesses.push({
+      id: "codex",
+      label: "Codex",
+      available: true,
+      error: null,
+      modes: ["gui"],
+      requiresApiKey: false,
+    });
+    mockedHarnesses[0].available = false;
+
+    try {
+      render(
+        createElement(AutoJudgePicker, {
+          hostId: "host-a",
+          selection: selected,
+          effective: {
+            harnessId: "claude",
+            model: "claude-sonnet",
+            source: "selection",
+          },
+          blocked: null,
+          disabled: false,
+          saving: false,
+          resetNonce: 0,
+          onCommit: vi.fn(),
+        }),
+      );
+
+      expect(screen.getByTestId("auto-judge-unavailable")).toBeTruthy();
+      expect(screen.queryByTestId("auto-judge-self-billing")).toBeNull();
+    } finally {
+      mockedHarnesses.length = 0;
+      mockedHarnesses.push(...originalHarnesses);
+    }
+  });
+});
+
+// JOB 5: the stored judge MODEL left the catalog while the harness stayed
+// fine - before this line existed only the harness reroute was surfaced, so
+// this case display-healed silently and the host kept trying a slug that no
+// longer exists.
+describe("<AutoJudgePicker /> model-unavailable line", () => {
+  it("renders and names the stored slug when the store presents a different model than the one stored", () => {
+    const storedDifferentModel: AutoJudgeSelection = {
+      harnessId: "claude",
+      // Not in `mockedModels` ("claude-sonnet" / "claude-haiku") - the
+      // catalog reroutes the presented selection to `findDefaultModel`
+      // (`.at(0)`, "claude-sonnet"), leaving stored and presented apart.
+      model: "claude-opus-retired",
+      profileId: null,
+    };
+
+    render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: storedDifferentModel,
+        effective: {
+          harnessId: "claude",
+          model: "claude-opus-retired",
+          source: "selection",
+        },
+        blocked: null,
+        disabled: false,
+        saving: false,
+        resetNonce: 0,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    const line = screen.getByTestId("auto-judge-model-unavailable");
+    expect(line.textContent).toContain("claude-opus-retired");
   });
 });
 

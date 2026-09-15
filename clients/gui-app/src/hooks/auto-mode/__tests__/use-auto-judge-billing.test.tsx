@@ -89,7 +89,11 @@ const useProvidersListForClientMock = vi.hoisted(() =>
     (
       client: FakeClient | null,
       activity: { readonly enabled: boolean; readonly subscribed: boolean },
-    ) => { data: { providers: ProviderCliState[] } | undefined }
+    ) => {
+      data: { providers: ProviderCliState[] } | undefined;
+      isSuccess: boolean;
+      isError: boolean;
+    }
   >(),
 );
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
@@ -135,12 +139,20 @@ afterEach(() => {
   useHostQueryMock.mockImplementation(() => ({ data: autoJudgeGetData }));
   useProvidersListForClientMock.mockImplementation(() => ({
     data: providersListData,
+    // The hook now waits for this read to SETTLE, not merely to have data:
+    // classifying on an unanswered catalog is what made the mobile row publish
+    // Traycer-credits copy that later flipped. Every existing case here models
+    // a catalog that has already answered.
+    isSuccess: true,
+    isError: false,
   }));
 });
 
 useHostQueryMock.mockImplementation(() => ({ data: autoJudgeGetData }));
 useProvidersListForClientMock.mockImplementation(() => ({
   data: providersListData,
+  isSuccess: true,
+  isError: false,
 }));
 
 describe("useAutoJudgeBilling", () => {
@@ -253,5 +265,66 @@ describe("useAutoJudgeBilling", () => {
     );
 
     expect(result.current).toEqual({ kind: "blocked" });
+  });
+
+  // JOB 2: the ordering defect itself. `autoJudge.get` has already resolved,
+  // but the `providers.list` read - cold on the mobile toolbar, since no
+  // picker there has warmed it - has not. Classifying on data alone here is
+  // exactly what published "Uses your Traycer credits" and then flipped it
+  // once the providers rows landed; the hook must wait instead.
+  describe("waits for providers.list to settle before publishing billing copy", () => {
+    it("returns null while autoJudge.get has data but providers.list is still in flight", () => {
+      autoJudgeGetData = { selection: null };
+      useProvidersListForClientMock.mockImplementation(() => ({
+        data: undefined,
+        isSuccess: false,
+        isError: false,
+      }));
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toBeNull();
+    });
+
+    // Same inputs as above, settled: proves the `null` case is the WAIT and
+    // not a permanent refusal once the provider read actually lands.
+    it("resolves to provider-native once the providers read succeeds with a provider-native row", () => {
+      autoJudgeGetData = { selection: null };
+      useProvidersListForClientMock.mockImplementation(() => ({
+        data: { providers: [providerState({ autoJudge: "provider" })] },
+        isSuccess: true,
+        isError: false,
+      }));
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toEqual({
+        kind: "provider-native",
+        harnessId: CLAUDE_HARNESS_ID,
+        harnessLabel: "Claude Code",
+      });
+    });
+
+    // An ERROR still counts as settled: a host that cannot answer the
+    // providers read is what the `false` (non-native) default is for, not a
+    // reason to keep withholding billing copy forever.
+    it("classifies rather than hanging when the providers read errors, falling back to the non-native reading", () => {
+      autoJudgeGetData = { selection: null };
+      useProvidersListForClientMock.mockImplementation(() => ({
+        data: undefined,
+        isSuccess: false,
+        isError: true,
+      }));
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toEqual({ kind: "traycer" });
+    });
   });
 });

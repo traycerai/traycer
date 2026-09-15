@@ -77,6 +77,16 @@ export function useAutoJudgeBilling(
     subscribed: supported,
   });
   const providers = providersQuery.data?.providers;
+  // SETTLED, not "has data". `providerRunsItsOwnJudge` reads an absent catalog
+  // as `false`, which is the right direction for a host that cannot answer and
+  // the wrong one for a host that has not answered YET: on the mobile toolbar
+  // this read is cold (no picker mounted to have warmed it), so `autoJudge.get`
+  // routinely resolves first and the row would publish "Uses your Traycer
+  // credits" for a provider-native run, then flip to "no extra cost" when the
+  // rows land. A user choosing Auto in that window chose on copy that was
+  // wrong. An ERROR counts as settled: it is a host that cannot answer, which
+  // is the case the `false` default is actually for.
+  const providersSettled = providersQuery.isSuccess || providersQuery.isError;
   const isProviderNative = useMemo(
     () => providerRunsItsOwnJudge({ harnessId, providers }),
     [harnessId, providers],
@@ -87,7 +97,7 @@ export function useAutoJudgeBilling(
   // (`provider-disabled`, `no-default`, `unsupported-harness`). Optional on the
   // wire, so an older host answers `undefined` and reads as "not blocked".
   const blocked = query.data?.blocked ?? null;
-  const loaded = query.data !== undefined;
+  const loaded = query.data !== undefined && providersSettled;
   return useMemo(
     () =>
       loaded

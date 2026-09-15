@@ -19,6 +19,7 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import {
+  autoJudgeRecordHealth,
   autoJudgeSeed,
   autoJudgeSeedKeyForAttempt,
   autoJudgeSelectionFrom,
@@ -176,28 +177,42 @@ export function AutoJudgePicker(props: {
     onCommit: props.onCommit,
   });
   const blocked = props.blocked ?? null;
-  // The toolbar store PRESENTS the first eligible harness when the selected one
-  // is unavailable, and never emits that clamp (it is a display fallback, not a
+  // The toolbar store PRESENTS a substitute whenever the stored harness or model
+  // is not on offer, and never emits that clamp (a display fallback, not a
   // choice). Right for a composer, where the reroute is what the next turn will
   // actually run on - and a lie here, because the HOST still tries the stored
-  // harness, finds it unavailable, and escalates every call to the human
-  // instead. So the row says so. Settled facts only: the reroute passes a
-  // selection through untouched while the catalog is loading and while the
-  // harness's own availability probe is in flight.
+  // record, fails, and escalates every call to the human instead. So the row
+  // says so. The decision is pure and lives in `autoJudgeRecordHealth`; what is
+  // left here is reading the presented values off the store.
   const presentedHarnessId = useStore(store, (s) => s.selection.harnessId);
+  const presentedModelSlug = useStore(store, (s) => s.selection.modelSlug);
+  const modelsLoaded = useStore(store, (s) => s.catalog.modelsLoaded);
   const storedHarnessId = seed.values.selection.harnessId;
-  const storedHarnessUnavailable =
-    props.selection !== null &&
-    seed.unrecognizedHarnessId === null &&
-    presentedHarnessId !== storedHarnessId;
+  const storedModelSlug = seed.values.selection.modelSlug;
+  const health = autoJudgeRecordHealth({
+    hasStoredSelection: props.selection !== null,
+    unrecognizedHarnessId: seed.unrecognizedHarnessId,
+    isBlocked: blocked !== null,
+    storedHarnessId,
+    presentedHarnessId,
+    storedModelSlug,
+    presentedModelSlug,
+    modelsLoaded,
+  });
   // Read off the STORED record, not the presented harness, for two reasons:
   // the host bills whatever it has stored (the presented id can be a display
   // reroute off an unavailable harness, which the line above already names),
   // and the composer's own meta line reads the same record - so the two
   // surfaces cannot disagree about which pocket is being spent.
-  const selfBilling = autoJudgeSelfBillingWarning(
-    autoJudgeBillingFor(props.selection?.harnessId ?? null),
-  );
+  //
+  // Suppressed entirely when nothing will call a judge. The composer's
+  // disclosure already folds `blocked` in (`autoJudgeBillingForRun`); this is
+  // the Settings half of the same rule.
+  const selfBilling = health.noJudgeWillRun
+    ? null
+    : autoJudgeSelfBillingWarning(
+        autoJudgeBillingFor(props.selection?.harnessId ?? null),
+      );
   return (
     <div
       className="flex min-w-0 flex-col items-end gap-1"
@@ -278,7 +293,17 @@ export function AutoJudgePicker(props: {
           version of the app doesn&apos;t know. Pick one to replace it.
         </span>
       ) : null}
-      {blocked === null && storedHarnessUnavailable ? (
+      {blocked === null && health.storedModelUnavailable ? (
+        <span
+          data-testid="auto-judge-model-unavailable"
+          className="max-w-full text-pretty text-right text-ui-xs text-amber-700 dark:text-amber-300"
+        >
+          The judge is set to {storedModelSlug}, which this machine no longer
+          offers - Auto mode will ask you instead of judging. Pick a model to
+          replace it.
+        </span>
+      ) : null}
+      {blocked === null && health.storedHarnessUnavailable ? (
         <span
           data-testid="auto-judge-unavailable"
           className="max-w-full text-pretty text-right text-ui-xs text-amber-700 dark:text-amber-300"

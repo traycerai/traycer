@@ -168,7 +168,7 @@ function SectionLabel(props: { readonly label: string }): ReactNode {
 // one place a reviewer has to read it as a sentence.
 const VIEW_TITLE = "What the judge already blocks";
 const VIEW_DESCRIPTION =
-  "Traycer's shipped rules. They are the same on every machine, and they apply before your own policy.";
+  "Traycer's shipped rules, as this machine's Traycer has them. They apply before your own policy, and a machine on a different Traycer version can ship a different set.";
 const ALLOW_LABEL = "Allowed without asking";
 const SOFT_BLOCK_LABEL = "Always asks you";
 const SOFT_BLOCK_NOTE =

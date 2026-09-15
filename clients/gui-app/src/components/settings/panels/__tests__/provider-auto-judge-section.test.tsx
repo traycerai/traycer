@@ -43,12 +43,24 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       : { data: guiHarnessesQueryMock.data },
 }));
 
+// The echo now also expires on the authoritative read COMPLETING, not only on
+// the stored value changing - so the section observes `providers.list`'s
+// `dataUpdatedAt` as a fetch counter. Held constant here: every case below is
+// "the refetch has not landed yet", which is the window the echo exists for.
+// A test that wants the echo retired advances this instead of changing the
+// value, which is exactly the case value-only expiry could not reach.
+const providersUpdatedAt = vi.hoisted(() => ({ current: 1_000 }));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => ({ dataUpdatedAt: providersUpdatedAt.current }),
+}));
+
 vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
   useProvidersSetAutoJudge: () => setAutoJudgeMock,
 }));
 
 afterEach(() => {
   cleanup();
+  providersUpdatedAt.current = 1_000;
   vi.clearAllMocks();
   guiHarnessesQueryMock.data = undefined;
   setAutoJudgeMock.isPending = false;
@@ -306,6 +318,81 @@ describe("<ProviderAutoJudgeSection />", () => {
     rerender(
       <ProviderAutoJudgeSection
         state={providerState({ autoJudge: "provider" })}
+      />,
+    );
+
+    expect(screen.getByRole("combobox").textContent).toMatch(
+      "Claude Code's classifier",
+    );
+  });
+
+  // JOB 3: the masking case `seenAt` exists to close. Another window sets the
+  // provider back to the exact value this echo was made AGAINST before our own
+  // invalidated refetch lands - `stored` equals `echo.against` again, so a
+  // value-only expiry would keep showing the stale echo forever. A completed
+  // `providers.list` fetch (whether or not the value moved) is what must
+  // retire it instead, and `dataUpdatedAt` advancing is that fetch's signal.
+  it("expires the echo once providers.list refetches, even when the stored value round-trips back to what the echo was made against", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    const { rerender } = render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: undefined })}
+      />,
+    );
+
+    // Pick "provider" - echo.against captures the stored value at pick time,
+    // "undefined" (Traycer).
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(
+      screen.getByRole("option", { name: "Claude Code's classifier" }),
+    );
+    expect(screen.getByRole("combobox").textContent).toMatch(
+      "Claude Code's classifier",
+    );
+
+    // A refetch lands - `dataUpdatedAt` advances - and the SAME `stored` as
+    // before the pick comes back (another window set it back to Traycer,
+    // matching `echo.against` again). Value-only expiry cannot see this: it
+    // would still read as "the echo's target still matches stored" and keep
+    // masking the host's real answer.
+    providersUpdatedAt.current = 2_000;
+    rerender(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: undefined })}
+      />,
+    );
+
+    expect(screen.getByRole("combobox").textContent).toMatch("Traycer's judge");
+  });
+
+  // CONTROL for the case above: without advancing `dataUpdatedAt`, the echo
+  // still shows - that is the ordinary round-trip window it exists for, and
+  // this is what proves the expiry above is keyed on the refetch landing,
+  // not on time or a rerender alone.
+  it("control: keeps showing the echo across a rerender when providers.list has not refetched", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    const { rerender } = render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: undefined })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(
+      screen.getByRole("option", { name: "Claude Code's classifier" }),
+    );
+
+    // Same `providersUpdatedAt.current` (1_000, unchanged) and the same
+    // `stored` as before the pick - the ordinary in-flight window.
+    rerender(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: undefined })}
       />,
     );
 

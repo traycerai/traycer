@@ -249,6 +249,40 @@ describe("<AutoModeSettingsSection />", () => {
       expect(screen.queryByTestId("auto-policy-stale-warning")).toBeNull();
     });
 
+    // Regression guard for the `loadedAt === null` side of
+    // `autoPolicyChangedSinceLoad`: the editor opened when the account had no
+    // saved policy at all, and the refetch behind the click reveals another
+    // device has since CREATED one. Saving from here would destroy a record
+    // this window never saw, so the warning must fire even though there was
+    // no PRIOR `updatedAt` to compare against - the symmetric `null` check
+    // this production change replaced treated `null -> timestamp` the same
+    // as `null -> null` and let exactly this overwrite through silently.
+    it("shows the stale-edit warning when a refetch behind the open editor reveals a policy was CREATED while it was open (loadedAt: null -> a real updatedAt)", () => {
+      policy = {
+        body: null,
+        updatedAt: null,
+        source: "account",
+        readState: "fresh",
+      };
+      autoPolicyRefetchMock.mockImplementation(() => {
+        policy =
+          policy === undefined
+            ? undefined
+            : {
+                ...policy,
+                body: "## Environment\nCreated elsewhere.",
+                updatedAt: "B",
+              };
+        return Promise.resolve();
+      });
+      const { rerender } = render(<AutoModeSettingsSection />);
+
+      fireEvent.click(screen.getByTestId("auto-policy-edit"));
+      rerender(<AutoModeSettingsSection />);
+
+      expect(screen.getByTestId("auto-policy-stale-warning")).toBeTruthy();
+    });
+
     // Direct regression guard for the line itself: without
     // `void refetchPolicy();` in `openEditor`, this assertion is the one that
     // catches its removal even in a fixture where the response value never

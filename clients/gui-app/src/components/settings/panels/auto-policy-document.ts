@@ -71,16 +71,36 @@ export function autoPolicyByteLength(body: string): number {
 /**
  * Whether the record moved under the editor while it was open.
  *
- * `null` on either side answers `false`, and that is the load-bearing part: the
- * protocol sends `updatedAt: null` both for a policy that was never saved AND
- * for one the host is serving from a cache it could not refresh. Neither is
- * evidence of a change, and warning on "cannot tell" would train the user to
- * dismiss the one warning that means something.
+ * The two `null` sides are NOT symmetric, and treating them as if they were is
+ * what let a real overwrite through. `updatedAt: null` means two different
+ * things depending on which side it is on:
+ *
+ * - **`currentUpdatedAt === null`** is "cannot tell". The protocol sends it both
+ *   for a policy that was never saved and for one the host is serving from a
+ *   cache it could not refresh, so a `timestamp -> null` transition is not
+ *   evidence of a change. Warning there would train the user to dismiss the one
+ *   warning that means something.
+ * - **`loadedAt === null` with a concrete `currentUpdatedAt`** is the opposite:
+ *   the editor opened on no policy, and there is one now. That is a CREATION by
+ *   another device, and saving over it destroys a record this window never saw.
+ *   It is exactly the case the refetch on open was added to catch, and the
+ *   symmetric `null` check was swallowing it.
+ *
+ * `null -> null` stays `false`: nothing appeared.
+ *
+ * The residual imprecision is deliberate. A host serving a STALE read can
+ * report `updatedAt: null` while the account does have a policy, so a
+ * subsequent good read can trip this warning for a record that was there all
+ * along. The sentence the user sees - saving now replaces that version - is
+ * true either way, and the alternative is the silent overwrite. (An
+ * `unreadable` read cannot reach here at all: the row refuses to open the
+ * editor on one.)
  */
 export function autoPolicyChangedSinceLoad(
   loadedAt: string | null,
   currentUpdatedAt: string | null,
 ): boolean {
-  if (loadedAt === null || currentUpdatedAt === null) return false;
+  if (currentUpdatedAt === null) return false;
+  if (loadedAt === null) return true;
   return loadedAt !== currentUpdatedAt;
 }

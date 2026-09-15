@@ -87,7 +87,7 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
     search: { contributesTo: "page" },
     label: "What the judge already blocks",
     description:
-      "Traycer's own rules, before any policy of yours: what it allows without asking, what it always asks you about, and what your policy cannot turn off. The same on every machine.",
+      "Traycer's own rules, before any policy of yours: what it allows without asking, what it always asks you about, and what your policy cannot turn off. Shipped with this machine's Traycer, so a machine on a different version can have a different set.",
     availableWhen: alwaysAvailable,
     keywords: [
       "auto mode",
