@@ -44,6 +44,25 @@ const mocks = vi.hoisted(() => ({
   busyOverride: null as "busy" | null,
 }));
 
+// `host install` gates the store-format floor with `consultRegistry: true`
+// before staging, and the floor's `lookupPublishedStoreFormats` fetches the
+// LIVE `versions.json` from GitHub Releases through the real `fetchText` -
+// four attempts with backoff on a miss, under a 5 s watchdog that equals
+// vitest's default test timeout. Both cases here reached it (audited with a
+// fetch-logging preload, 2026-09-14). Stubbed to an unreachable registry so
+// the floor resolves from its fixed table and this suite never touches the
+// network; the sibling `host-update-downgrade.test.ts` does the same.
+vi.mock("../../registry/fetch-resource", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../registry/fetch-resource")>();
+  return {
+    ...actual,
+    fetchText: async () => {
+      throw new Error("registry unreachable in this sandbox");
+    },
+  };
+});
+
 vi.mock("../../installer", () => ({
   // The two swap barriers this command observes: none. Inlined rather than
   // re-exported from the real module so this factory keeps the installer out

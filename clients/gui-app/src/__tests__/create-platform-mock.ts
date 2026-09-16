@@ -21,9 +21,7 @@ export function createPlatformMock(control: PlatformMockControl) {
     ctrlLabel: () => (control.mac ? "⌃" : "Ctrl"),
     altLabel: () => (control.mac ? "⌥" : "Alt"),
     shiftLabel: () => (control.mac ? "⇧" : "Shift"),
-    leaderGlyph: (modifier: "mod" | "alt") => {
-      if (modifier === "alt") return "⌥";
-      return control.mac ? "⌘" : "⌃";
-    },
+    modSpokenLabel: () => (control.mac ? "Command" : "Control"),
+    altSpokenLabel: () => (control.mac ? "Option" : "Alt"),
   };
 }

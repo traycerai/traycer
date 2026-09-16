@@ -17,7 +17,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { PrLightItem, PrState } from "@traycer/protocol/host/pr-schemas";
-import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
 import { PrRowOwnerHover } from "@/components/epic-canvas/pr/pr-owner-hover";
 import { PrRowHoverCardContext } from "@/components/epic-canvas/pr/pr-owner-hover-context";
@@ -149,6 +148,7 @@ export interface PrRowEntry {
  * gets the same four bands to say so.
  */
 export function PrRow(props: {
+  readonly hostId: string | null;
   readonly entry: PrRowEntry;
   readonly epicId: string;
   readonly tabId: string;
@@ -168,9 +168,6 @@ export function PrRow(props: {
   // (`useIsActiveEpicArtifact`); a PR tile is renderer-only, so it matches on
   // the tile id instead of an artifact record.
   const isActive = useIsActiveTile(props.tabId, props.entry.tileId, null);
-  // The panel is canvas-serving, so its host follows the selection authority.
-  // A tile still nominates its own bound host - see `PrOwnerBadges.fallbackHostId`.
-  const activeHostId = useCanvasHostId();
 
   const handleActivate = useCallback((): void => {
     onOpen?.();
@@ -211,7 +208,7 @@ export function PrRow(props: {
       <PrRowOwnerHover
         owners={item.owners}
         epicId={props.epicId}
-        fallbackHostId={activeHostId}
+        fallbackHostId={props.hostId}
         title={titleText}
       >
         <div
@@ -260,7 +257,7 @@ export function PrRow(props: {
           <PrOwnerBadges
             owners={item.owners}
             epicId={props.epicId}
-            fallbackHostId={activeHostId}
+            fallbackHostId={props.hostId}
             className={undefined}
           />
         </div>

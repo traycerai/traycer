@@ -14,15 +14,28 @@
  * the agent's appearance, the tint and the theme - because a stale entry would
  * silently render one agent in another's colors.
  */
-import type {
-  OfficePoint,
-  OfficeSize,
-  OfficeSpriteName,
-  OfficeSpriteRef,
-  OfficeTheme,
+import {
+  OFFICE_TILE,
+  type OfficePoint,
+  type OfficeSize,
+  type OfficeSpriteName,
+  type OfficeSpriteRef,
+  type OfficeTheme,
+  type OfficeVehicleKind,
 } from "@/lib/comm-graph/office/office-types";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-view-vocabulary";
 import {
   BOX_MAP,
+  FACE_MAP,
+  SLAB_MAP,
+  DESK_FRONT_MAP,
+  LAMP_MAP,
+  STAIRS_SIDE_MAP,
+  CUBBY_MAP,
+  SILHOUETTE_MAP,
+  SKYBRIDGE_MAP,
+  BOARD_MAP,
+  ROOF_EDGE_MAP,
   BUBBLE_ATTENTION_MAP,
   BUBBLE_AWAITING_MAP,
   BUBBLE_HELLO_MAP,
@@ -45,6 +58,7 @@ import {
   CHAIR_MAP,
   CLOCK_MAP,
   COFFEE_MACHINE_MAP,
+  CONSOLE_MAP,
   DESK_MAP,
   DOOR_MAP,
   DUST_SHEET_MAP,
@@ -67,6 +81,7 @@ import {
   NAMEPLATE_MAP,
   PARTITION_MAP,
   PLANT_MAP,
+  PODIUM_MAP,
   RECEPTION_MAP,
   RUG_MAP,
   SIGN_MAP,
@@ -85,6 +100,7 @@ import {
   SHELF_MAP,
   SLEEP_BAG_MAP,
   SOFA_MAP,
+  TIER_STEP_MAP,
   TREADMILL_MAP,
   TREE_MAP,
   TV_MAP,
@@ -92,12 +108,60 @@ import {
   WATERING_CAN_MAP,
   WHITEBOARD_MAP,
   WINDOW_MAP,
+  BLOCK_LEFT_MAP,
+  BLOCK_RIGHT_MAP,
+  BLOCK_TOP_MAP,
+  DESK_ISO_MAP,
+  DOOR_ISO_MAP,
+  FLOOR_GRASS_ISO_A_MAP,
+  FLOOR_GRASS_ISO_B_MAP,
+  FLOOR_ISO_A_MAP,
+  FLOOR_ISO_B_MAP,
+  SPIRE_MAP,
+  WALL_ISO_LEFT_MAP,
+  WALL_ISO_RIGHT_MAP,
+  WINDOW_DARK_MAP,
+  WINDOW_LIT_MAP,
+  BED_MAP,
+  BED_OCCUPIED_MAP,
+  LOUNGE_CHAIR_MAP,
+  LOW_TABLE_MAP,
+  RECORDS_DOOR_MAP,
+  CROSS_SIGN_MAP,
+  // ---- K2: the five other views' civic art -------------------------- //
+  GLASS_PARTITION_MAP,
+  SIREN_LIGHT_MAP,
+  SIREN_LIGHT_B_MAP,
+  BED_ISO_MAP,
+  LOUNGE_CHAIR_ISO_MAP,
+  HOSPITAL_ROOF_CROSS_MAP,
+  BUS_SHELTER_MAP,
+  WAREHOUSE_DOOR_ISO_MAP,
+  MEDBAY_BED_MAP,
+  GALLERY_SEAT_MAP,
+  // ---- K3: the three civic vehicles --------------------------------- //
+  AMBULANCE_MAP,
+  AMBULANCE_B_MAP,
+  AMBULANCE_ISO_MAP,
+  AMBULANCE_ISO_B_MAP,
+  POLICE_CAR_MAP,
+  POLICE_CAR_B_MAP,
+  POLICE_CAR_ISO_MAP,
+  POLICE_CAR_ISO_B_MAP,
+  FIRE_ENGINE_MAP,
+  FIRE_ENGINE_B_MAP,
+  FIRE_ENGINE_ISO_MAP,
+  FIRE_ENGINE_ISO_B_MAP,
 } from "@/lib/comm-graph/office/office-prop-maps";
 import {
+  isOfficeSeatedPose,
+  officeAccessoryMap,
   officeHairMap,
   officeHeadMap,
+  officeHeadOffsetOf,
   officeSeatedMap,
   officeTorsoMap,
+  OFFICE_ACCESSORY_MAPS,
   OFFICE_HAIR_MAPS,
   OFFICE_HEAD_MAPS,
   OFFICE_SEATED_MAPS,
@@ -267,6 +331,17 @@ const EYE_COLOR = "#20242c";
 
 const SPRITE_SIZES: Readonly<Record<OfficeSpriteName, OfficeSize>> = {
   character: { width: 16, height: 20 },
+  face: { width: 16, height: 16 },
+  slab: { width: 16, height: 16 },
+  "desk-front": { width: 32, height: 16 },
+  lamp: { width: 8, height: 8 },
+  "stairs-side": { width: 16, height: 16 },
+  cubby: { width: 16, height: 16 },
+  silhouette: { width: 16, height: 16 },
+  skybridge: { width: 16, height: 16 },
+  board: { width: 16, height: 12 },
+  "roof-edge": { width: 16, height: 8 },
+
   desk: { width: 32, height: 16 },
   "monitor-on": { width: 16, height: 12 },
   "monitor-on-b": { width: 16, height: 12 },
@@ -337,11 +412,73 @@ const SPRITE_SIZES: Readonly<Record<OfficeSpriteName, OfficeSize>> = {
   "bubble-hello": { width: 14, height: 12 },
   "bubble-sleep": { width: 14, height: 12 },
   sparkle: { width: 8, height: 8 },
+  "tier-step": { width: 16, height: 16 },
+  podium: { width: 32, height: 16 },
+  console: { width: 32, height: 16 },
+  "floor-iso-a": { width: 32, height: 16 },
+  "floor-iso-b": { width: 32, height: 16 },
+  "floor-grass-iso-a": { width: 32, height: 16 },
+  "floor-grass-iso-b": { width: 32, height: 16 },
+  "wall-iso-left": { width: 16, height: 32 },
+  "wall-iso-right": { width: 16, height: 32 },
+  "door-iso": { width: 16, height: 32 },
+  "desk-iso": { width: 32, height: 24 },
+  "block-left": { width: 16, height: 16 },
+  "block-right": { width: 16, height: 16 },
+  "block-top": { width: 32, height: 16 },
+  "window-lit": { width: 8, height: 8 },
+  "window-dark": { width: 8, height: 8 },
+  spire: { width: 8, height: 24 },
+
+  // The civic vehicles: two tiles of road in oblique, a wider three-quarter
+  // box in isometric, each in two light frames.
+  ambulance: { width: 32, height: 16 },
+  "ambulance-b": { width: 32, height: 16 },
+  "ambulance-iso": { width: 40, height: 24 },
+  "ambulance-iso-b": { width: 40, height: 24 },
+  "police-car": { width: 32, height: 16 },
+  "police-car-b": { width: 32, height: 16 },
+  "police-car-iso": { width: 40, height: 24 },
+  "police-car-iso-b": { width: 40, height: 24 },
+  "fire-engine": { width: 32, height: 16 },
+  "fire-engine-b": { width: 32, height: 16 },
+  "fire-engine-iso": { width: 40, height: 24 },
+  "fire-engine-iso-b": { width: 40, height: 24 },
+
+  bed: { width: 32, height: 16 },
+  "bed-occupied": { width: 32, height: 16 },
+  "lounge-chair": { width: 16, height: 16 },
+  "low-table": { width: 32, height: 16 },
+  "records-door": { width: 16, height: 16 },
+  "cross-sign": { width: 16, height: 16 },
+
+  // ---- K2: the five other views' civic art -------------------------- //
+  "glass-partition": { width: 16, height: 16 },
+  "siren-light": { width: 8, height: 8 },
+  "siren-light-b": { width: 8, height: 8 },
+  "bed-iso": { width: 32, height: 24 },
+  "lounge-chair-iso": { width: 16, height: 16 },
+  "hospital-roof-cross": { width: 32, height: 16 },
+  "bus-shelter": { width: 32, height: 24 },
+  "warehouse-door-iso": { width: 16, height: 32 },
+  "medbay-bed": { width: 32, height: 16 },
+  "gallery-seat": { width: 16, height: 16 },
 };
 
 const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   character: [],
   desk: DESK_MAP,
+  face: FACE_MAP,
+  slab: SLAB_MAP,
+  "desk-front": DESK_FRONT_MAP,
+  lamp: LAMP_MAP,
+  "stairs-side": STAIRS_SIDE_MAP,
+  cubby: CUBBY_MAP,
+  silhouette: SILHOUETTE_MAP,
+  skybridge: SKYBRIDGE_MAP,
+  board: BOARD_MAP,
+  "roof-edge": ROOF_EDGE_MAP,
+
   "monitor-on": MONITOR_ON_MAP,
   "monitor-on-b": MONITOR_ON_B_MAP,
   "monitor-off": MONITOR_OFF_MAP,
@@ -411,7 +548,125 @@ const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   "bubble-hello": BUBBLE_HELLO_MAP,
   "bubble-sleep": BUBBLE_SLEEP_MAP,
   sparkle: SPARKLE_MAP,
+  "tier-step": TIER_STEP_MAP,
+  podium: PODIUM_MAP,
+  console: CONSOLE_MAP,
+  "floor-iso-a": FLOOR_ISO_A_MAP,
+  "floor-iso-b": FLOOR_ISO_B_MAP,
+  "floor-grass-iso-a": FLOOR_GRASS_ISO_A_MAP,
+  "floor-grass-iso-b": FLOOR_GRASS_ISO_B_MAP,
+  "wall-iso-left": WALL_ISO_LEFT_MAP,
+  "wall-iso-right": WALL_ISO_RIGHT_MAP,
+  "door-iso": DOOR_ISO_MAP,
+  "desk-iso": DESK_ISO_MAP,
+  "block-left": BLOCK_LEFT_MAP,
+  "block-right": BLOCK_RIGHT_MAP,
+  "block-top": BLOCK_TOP_MAP,
+  "window-lit": WINDOW_LIT_MAP,
+  "window-dark": WINDOW_DARK_MAP,
+  spire: SPIRE_MAP,
+
+  bed: BED_MAP,
+  "bed-occupied": BED_OCCUPIED_MAP,
+  "lounge-chair": LOUNGE_CHAIR_MAP,
+  "low-table": LOW_TABLE_MAP,
+  "records-door": RECORDS_DOOR_MAP,
+  "cross-sign": CROSS_SIGN_MAP,
+
+  // ---- K2: the five other views' civic art -------------------------- //
+  "glass-partition": GLASS_PARTITION_MAP,
+  "siren-light": SIREN_LIGHT_MAP,
+  "siren-light-b": SIREN_LIGHT_B_MAP,
+  "bed-iso": BED_ISO_MAP,
+  "lounge-chair-iso": LOUNGE_CHAIR_ISO_MAP,
+  "hospital-roof-cross": HOSPITAL_ROOF_CROSS_MAP,
+  "bus-shelter": BUS_SHELTER_MAP,
+  "warehouse-door-iso": WAREHOUSE_DOOR_ISO_MAP,
+  "medbay-bed": MEDBAY_BED_MAP,
+  "gallery-seat": GALLERY_SEAT_MAP,
+
+  // ---- K3: the three civic vehicles --------------------------------- //
+  ambulance: AMBULANCE_MAP,
+  "ambulance-b": AMBULANCE_B_MAP,
+  "ambulance-iso": AMBULANCE_ISO_MAP,
+  "ambulance-iso-b": AMBULANCE_ISO_B_MAP,
+  "police-car": POLICE_CAR_MAP,
+  "police-car-b": POLICE_CAR_B_MAP,
+  "police-car-iso": POLICE_CAR_ISO_MAP,
+  "police-car-iso-b": POLICE_CAR_ISO_B_MAP,
+  "fire-engine": FIRE_ENGINE_MAP,
+  "fire-engine-b": FIRE_ENGINE_B_MAP,
+  "fire-engine-iso": FIRE_ENGINE_ISO_MAP,
+  "fire-engine-iso-b": FIRE_ENGINE_ISO_B_MAP,
 };
+
+/**
+ * The sprites whose `left` facing is drawn by MIRRORING their `right`.
+ *
+ * `character` has always done this (see `selectCharacterMap`); vehicles are the
+ * first props to, because a road runs both ways and authoring a second copy of
+ * each van is the drift `officeHairMap` was built to avoid. Every other prop
+ * ignores a ref's `facing` entirely and resolves `mirror: false`, which is what
+ * keeps this a named exception rather than a new rule for props at large.
+ */
+const MIRRORED_PROP_NAMES: ReadonlySet<string> = new Set<OfficeSpriteName>([
+  "ambulance",
+  "ambulance-b",
+  "ambulance-iso",
+  "ambulance-iso-b",
+  "police-car",
+  "police-car-b",
+  "police-car-iso",
+  "police-car-iso-b",
+  "fire-engine",
+  "fire-engine-b",
+  "fire-engine-iso",
+  "fire-engine-iso-b",
+]);
+
+/**
+ * WHICH VEHICLE ART A VIEW USES.
+ *
+ * A view draws its vans the way it draws everything else, and the two answers
+ * are the two projections the office has: a side view for the views whose
+ * ground is axis-aligned, a three-quarter view for the two that are seen from
+ * the corner. Mission control has no road at all (decision C6) and its entry is
+ * therefore never read - it is here because the record is exhaustive over the
+ * view union, which is what makes adding a seventh view a compile error rather
+ * than a silently missing sprite.
+ */
+export type OfficeVehicleArt = "oblique" | "isometric";
+
+export const OFFICE_VEHICLE_ART: Readonly<
+  Record<OfficeViewId, OfficeVehicleArt>
+> = {
+  floor: "oblique",
+  towers: "oblique",
+  building: "oblique",
+  "mission-control": "oblique",
+  campus: "isometric",
+  city: "isometric",
+};
+
+/**
+ * The sprite one vehicle wears this frame.
+ *
+ * Three facts pick it and the facing is not among them: `left` is the mirror of
+ * `right`, so the ref carries the facing and the rasterizer does the flip.
+ */
+export function officeVehicleSpriteName(args: {
+  readonly kind: OfficeVehicleKind;
+  readonly art: OfficeVehicleArt;
+  readonly lights: 0 | 1;
+}): OfficeSpriteName {
+  const projection = args.art === "isometric" ? "-iso" : "";
+  const frame = args.lights === 1 ? "-b" : "";
+  const name = `${args.kind}${projection}${frame}`;
+  if (!isPropSpriteName(name)) {
+    throw new Error(`office: no vehicle sprite named ${name}`);
+  }
+  return name;
+}
 
 /**
  * Narrows a key of {@link PROP_MAPS} back to its own key type.
@@ -440,6 +695,27 @@ export function officeSpriteSize(ref: OfficeSpriteRef): OfficeSize {
   return SPRITE_SIZES[ref.name];
 }
 
+/**
+ * Where a TOP-LEFT anchored sprite is drawn so that its FOOT lands on a tile.
+ *
+ * A prop taller than its tile would otherwise spill DOWN over whatever sits on
+ * the row below - a plant over its own chair, a rug over the doorway. A
+ * one-tile sprite is unaffected, and a sprite SHORTER than a tile (a name
+ * plate, a pod plate) sits down on it, which is where a small thing on the
+ * floor actually is.
+ *
+ * Lives with the sprite sizes rather than with any one caller: the painter
+ * places props by it, the scene hangs the clock hands off it, and the renderer
+ * mounts a sign with it. Three copies of this arithmetic is three chances for
+ * one of them to disagree about where a sign is.
+ */
+export function officeSpriteFootY(
+  ref: OfficeSpriteRef,
+  tileRow: number,
+): number {
+  return tileRow * OFFICE_TILE - (SPRITE_SIZES[ref.name].height - OFFICE_TILE);
+}
+
 /** One entry per authored map, for the test that guards the art's shape. */
 export interface OfficeSpriteMapEntry {
   readonly name: OfficeSpriteName;
@@ -453,6 +729,7 @@ export function officeSpriteMaps(): ReadonlyArray<OfficeSpriteMapEntry> {
     ...OFFICE_TORSO_MAPS,
     ...OFFICE_SEATED_MAPS,
     ...OFFICE_HAIR_MAPS,
+    ...OFFICE_ACCESSORY_MAPS,
   ].map((part) => ({
     name: "character" as const,
     label: part.label,
@@ -617,15 +894,34 @@ interface SelectedMap {
  * `left` is never authored: it is `right` mirrored, which is both half the art
  * to keep consistent and the only way the two stay in sync when one is edited.
  */
-function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
+/** Hair, then anything worn over it, at whatever offset this head sits at. */
+function dressHead(
+  body: SpriteMap,
+  ref: OfficeSpriteRef,
+  source: "down" | "up" | "right",
+  headDy: number,
+): SpriteMap {
   const appearance = ref.appearance;
   const hairStyle = appearance === undefined ? 0 : appearance.hairStyle;
+  const haired = overlayMap(body, officeHairMap(source, hairStyle), headDy);
+  const accessory = ref.accessory;
+  if (accessory === undefined) return haired;
+  return overlayMap(haired, officeAccessoryMap(accessory), headDy);
+}
+
+function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
   const pose = ref.pose ?? "stand";
-  if (pose === "sit" || pose === "type1" || pose === "type2") {
-    // A seated head sits one row lower than a standing one, so the `up` hair
-    // rides down with it rather than floating above the scalp.
+  if (isOfficeSeatedPose(pose)) {
+    // A seated head sits a row lower than a standing one - further on a slump,
+    // less on a lean - so the `up` hair and anything over it ride down with it
+    // rather than floating above the scalp.
     return {
-      map: overlayMap(officeSeatedMap(pose), officeHairMap("up", hairStyle), 1),
+      map: dressHead(
+        officeSeatedMap(pose, ref.facing === "down" ? "down" : "up"),
+        ref,
+        ref.facing === "down" ? "down" : "up",
+        officeHeadOffsetOf(pose),
+      ),
       mirror: false,
     };
   }
@@ -637,16 +933,62 @@ function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
     0,
   );
   return {
-    map: overlayMap(body, officeHairMap(source, hairStyle), 0),
+    map: dressHead(body, ref, source, 0),
     mirror: facing === "left",
   };
+}
+
+/**
+ * Whether this ref draws a prop flipped.
+ *
+ * ONE ANSWER, because two would drift - and did. `selectMap` decides what is
+ * drawn and `officeSpriteCacheKey` decides what that drawing is filed under,
+ * and a cache key that disagreed with the drawing about whether `facing`
+ * mattered handed back the wrong surface without ever calling `selectMap`.
+ *
+ * A prop outside the set ignores `facing` however it is set, so a stray
+ * `facing: "left"` on a desk can neither flip it nor give it a second entry.
+ */
+function isMirroredProp(ref: OfficeSpriteRef): boolean {
+  return MIRRORED_PROP_NAMES.has(ref.name) && ref.facing === "left";
 }
 
 function selectMap(ref: OfficeSpriteRef): SelectedMap {
   if (ref.name === "character") {
     return selectCharacterMap(ref);
   }
-  return { map: PROP_MAPS[ref.name], mirror: false };
+  return {
+    map: PROP_MAPS[ref.name],
+    mirror: isMirroredProp(ref),
+  };
+}
+
+/**
+ * Whether this sprite PAINTS the pixel at this offset, or leaves what is behind
+ * it showing through.
+ *
+ * A sprite's box is mostly sky for most of this art - a bench is 32 x 16 of box
+ * over a seat with two legs, a bed 8 px shorter than the box a campus seat
+ * declares - so "is this drawable what the reader sees here" cannot be answered
+ * from a rect. The map is the art's own answer: `.` is the authored hole and
+ * every other letter is a colour the palette resolves (the map guard asserts
+ * that, so a letter is paint).
+ *
+ * Exported for the hit-ordering cases, which have to take their witness point
+ * from a pixel somebody can actually see: a point in the transparent corner of a
+ * box proves nothing about what a click there should name. The same composition
+ * the renderer draws is used, poses, hair and mirroring included.
+ */
+export function officeSpriteOpaqueAt(
+  ref: OfficeSpriteRef,
+  x: number,
+  y: number,
+): boolean {
+  const { map, mirror } = selectMap(ref);
+  if (y < 0 || y >= map.length) return false;
+  const row = map[y];
+  if (x < 0 || x >= row.length) return false;
+  return row[mirror ? row.length - 1 - x : x] !== ".";
 }
 
 // ---- Draw ------------------------------------------------------------ //
@@ -665,8 +1007,16 @@ const surfaceCache = new Map<string, SpriteSurface | null>();
  * A floor draws a few hundred distinct sprites at once, so this is roomy
  * enough that a live floor never evicts something it is still using, and
  * bounded enough that a long session cannot grow without limit.
+ *
+ * The densest view's working set at office zoom is about 850 surfaces in a
+ * 1280 x 700 tile - one per distinct look of every visible seated agent, plus
+ * the walkers - and the four new poses and the front-facing seated maps
+ * multiply the KEYS over that. 1,024 was within thrashing distance of it:
+ * evicting a sprite the same frame asks for again is the one failure mode a
+ * cap can have. A seated surface is under 2 KB of pixels, so 4,096 of them
+ * stay under 32 MB worst case, shared by every canvas in the tab, once.
  */
-export const OFFICE_SPRITE_CACHE_LIMIT = 1024;
+export const OFFICE_SPRITE_CACHE_LIMIT = 4096;
 
 export function clearOfficeSpriteCache(): void {
   surfaceCache.clear();
@@ -711,7 +1061,7 @@ export function officeSpriteSurface(
   ref: OfficeSpriteRef,
   theme: OfficeTheme,
 ): SpriteSurface | null {
-  const key = cacheKey(ref, theme);
+  const key = officeSpriteCacheKey(ref, theme);
   const cached = readCachedSurface(key);
   if (cached !== undefined) return cached;
   const built = buildSurface(ref, theme);
@@ -719,16 +1069,38 @@ export function officeSpriteSurface(
   return built;
 }
 
-function cacheKey(ref: OfficeSpriteRef, theme: OfficeTheme): string {
+/**
+ * What makes two sprite requests the SAME surface: the name, the palette, and
+ * for a character every part of the look that is drawn into its pixels.
+ *
+ * Exported because "how many distinct sprites does one frame ask for" is a
+ * budget, and the only honest answer to it is the key the cache itself uses.
+ */
+export function officeSpriteCacheKey(
+  ref: OfficeSpriteRef,
+  theme: OfficeTheme,
+): string {
   if (ref.name !== "character") {
-    return `${ref.name}|${theme}|${ref.tint ?? ""}`;
+    // THE KEY VARIES EXACTLY WHERE THE PIXELS DO. `facing` became a
+    // pixel-varying input for the mirrored names when `selectMap` started
+    // honouring it, and a key that ignored it meant the first facing drawn
+    // won for that name across every canvas: a van drawn facing right, then
+    // the same name and theme facing left, got the cached right-facing
+    // surface back without `selectMap` being consulted at all.
+    //
+    // What is appended is the MIRROR DECISION rather than the raw facing,
+    // which is the same thing `selectMap` computes. Every other prop's key is
+    // therefore byte-identical to what it was - a pin says so - and a facing
+    // that does not mirror (a desk's, or a van's `right`) adds no entry.
+    const mirrored = isMirroredProp(ref);
+    return `${ref.name}|${theme}|${ref.tint ?? ""}${mirrored ? "|left" : ""}`;
   }
   const appearance = ref.appearance;
   const look =
     appearance === undefined
       ? "-"
       : `${appearance.skin}${appearance.hair}${appearance.hairStyle}${appearance.shirt}${appearance.pants}`;
-  return `character|${theme}|${ref.facing ?? "down"}|${ref.pose ?? "stand"}|${look}`;
+  return `character|${theme}|${ref.facing ?? "down"}|${ref.pose ?? "stand"}|${ref.accessory ?? ""}|${look}`;
 }
 
 /**

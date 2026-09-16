@@ -14,6 +14,7 @@ import {
   acceptExhaustedPersistedRestoreFallback,
   buildRowKeyToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
+  CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
   selectActiveUserMessageId,
@@ -40,6 +41,7 @@ import {
   useChatNavigationBlockReveal,
   type ChatNavigationHighlightTarget,
 } from "@/components/chat/chat-navigation-highlight";
+import { queryMountedChatMessageRoot } from "@/components/chat/chat-find-highlighter";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -230,9 +232,35 @@ interface ChatMessagesProps {
   /** A frontmost system modal overlays the chat; body-portaled quote UI must stay hidden. */
   systemOverlayActive: boolean;
   scrollRequest: ChatMessageScrollRequest | null;
+  /**
+   * How a `kind: "message"` scroll request ended. `landed` means the hydrated
+   * target row was mounted at the navigation offset; `exhausted` means the
+   * bounded re-issue loop gave up; `cancelled` means a reader gesture or a
+   * newer request superseded it. The owner uses this to release whatever it
+   * was holding open for the landing (the windowed line's required
+   * hydration ordinal). Never called for `kind: "end"`.
+   */
+  onScrollRequestSettled:
+    | ((requestId: number, outcome: ChatScrollRequestOutcome) => void)
+    | null;
   /** Measured height of the overlaid composer/queue/pinned/agents dock
    *  (chat-tile.tsx), reserved as the transcript's bottom content inset. */
   composerOverlayHeight: number;
+}
+
+export type ChatScrollRequestOutcome = "landed" | "exhausted" | "cancelled";
+
+/**
+ * A `kind: "message"` request whose landing has not reached a terminal
+ * outcome: issued and settling, or still waiting for its row key to appear in
+ * the rendered index. Kept in a ref so a `listRows` change or a hidden→visible
+ * transition can re-issue it - a request must not be burned by a row that has
+ * not hydrated yet.
+ */
+interface PendingScrollRequestLanding {
+  readonly requestId: number;
+  readonly messageId: string;
+  readonly blockId: string | null;
 }
 
 export type ChatMessageScrollRequest =
@@ -1433,6 +1461,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     messages,
     nextStepActions,
     onVisibleOrdinalRangeChange,
+    onScrollRequestSettled,
     scrollRequest,
     systemOverlayActive,
     taskId,
@@ -1576,6 +1605,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const rowIndexByKeyRef = useRef(EMPTY_ROW_INDEX_BY_KEY);
   const scrollRequestRef = useRef(scrollRequest);
   const handledScrollRequestIdRef = useRef<number | null>(null);
+  const pendingScrollRequestLandingRef =
+    useRef<PendingScrollRequestLanding | null>(null);
+  /** The pending request whose landing has been issued at least once. */
+  const scrollRequestLandingIssuedRef = useRef<number | null>(null);
+  /**
+   * Set while `landScrollRequestRow` supersedes its OWN earlier landing of
+   * the same request (a `listRows` retry, a hidden→visible re-issue), so the
+   * superseded landing's cleanup does not report the request `cancelled`.
+   */
+  const reissuingScrollRequestIdRef = useRef<number | null>(null);
+  const onScrollRequestSettledRef = useRef(onScrollRequestSettled);
   const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
     EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
   );
@@ -2084,6 +2124,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(() => {
     scrollRequestRef.current = scrollRequest;
   }, [scrollRequest]);
+
+  useLayoutEffect(() => {
+    onScrollRequestSettledRef.current = onScrollRequestSettled;
+  }, [onScrollRequestSettled]);
 
   const backgroundToolBlockIds = useMemo<ReadonlySet<string>>(() => {
     if (backgroundItems === undefined || backgroundItems.length === 0) {
@@ -2696,6 +2740,184 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [captureLiveChatTabScrollSnapshot, setTimelineMode],
   );
 
+  const settleScrollRequest = useCallback(
+    (requestId: number, outcome: ChatScrollRequestOutcome): void => {
+      const pending = pendingScrollRequestLandingRef.current;
+      if (pending === null || pending.requestId !== requestId) return;
+      pendingScrollRequestLandingRef.current = null;
+      onScrollRequestSettledRef.current?.(requestId, outcome);
+    },
+    [],
+  );
+
+  /**
+   * Lands a cross-tile / panel scroll request's row. Same semantic-key,
+   * promise-settled, NON-animated mechanics as the reading-position restore
+   * above, because that is the path already proven across unmeasured rows on
+   * the windowed line: the row is placed where its position was computed
+   * from, so the first frame is right by construction, and the re-issue loop
+   * only absorbs the remeasurement of what just came into view. An ANIMATED
+   * `scrollToIndex` targets estimated geometry for the whole flight and the
+   * library never retargets mid-way, which is how a cold tile landed a
+   * viewport short with nothing to correct it.
+   *
+   * Success is the HYDRATED target row mounted at the navigation offset - a
+   * placeholder at the right pixel is still pending, since nothing can ring
+   * or center inside it. The row's index is re-read on every issue and check
+   * so a reindex mid-flight is followed rather than fought.
+   *
+   * Returns `false` when it could not issue at all (no list, or the row key
+   * is not in the rendered index yet); the request then stays pending and the
+   * `listRows` effect below re-attempts it. Navigation ownership and the
+   * reader-gesture generation are the same as `navigateToMessage`'s.
+   */
+  const landScrollRequestRow = useCallback(
+    (request: PendingScrollRequestLanding): boolean => {
+      const { messageId, blockId, requestId } = request;
+      const list = chatTimelineRef.current;
+      const initialIndex = rowIndexByKeyRef.current.get(messageId);
+      if (!list || initialIndex === undefined) return false;
+
+      // Superseding an earlier landing of THIS request is a re-issue, not a
+      // cancellation; any other active navigation is torn down as cancelled.
+      reissuingScrollRequestIdRef.current = requestId;
+      activeNavigationSettleCleanupRef.current?.();
+      reissuingScrollRequestIdRef.current = null;
+      const generationAtIssue = anchorUserScrollGenerationRef.current;
+      followLatchRef.current?.beginOwnedFreeNavigation();
+      const imperativeScrollGeneration = beginImperativeScrollOperation(false);
+      const scrollNode = list.getScrollableNode();
+      const viewOffset = CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+      const targetIndex = (): number | null =>
+        rowIndexByKeyRef.current.get(messageId) ?? null;
+      const issue = (index: number): Promise<void> => {
+        const target = expectedTimelineScrollTop(
+          list,
+          index,
+          viewOffset,
+          listTopOffsetAdjustmentRef.current,
+        );
+        if (target === null) return Promise.resolve();
+        return list.scrollToOffset({ offset: target, animated: false });
+      };
+      const landedOnHydratedRow = (): boolean => {
+        const index = targetIndex();
+        if (index === null) return false;
+        if (
+          !chatTimelineNavigationLandedAtLocation(
+            {
+              positionAtIndex: (positionIndex) =>
+                list.getState().positionAtIndex(positionIndex),
+              scroll: scrollNode.scrollTop,
+              topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+            },
+            { index, viewOffset, animated: false },
+            CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX,
+          )
+        ) {
+          return false;
+        }
+        return queryMountedChatMessageRoot(scrollNode, messageId) !== null;
+      };
+      // Idempotent: the cleanup below runs `finish` again after a landing
+      // that already settled, and ownership must be released exactly once.
+      let landingFinished = false;
+      const finish = (): void => {
+        if (landingFinished) return;
+        landingFinished = true;
+        finishImperativeScrollOperation(imperativeScrollGeneration);
+        followLatchRef.current?.completeOwnedFreeNavigation();
+      };
+
+      let pendingScrollPromise = issue(initialIndex);
+      let lastSettleTimedOut = false;
+      const cancelLandingLoop = settleChatTimelineNavigation({
+        awaitSettle: (onSettle) =>
+          awaitChatTimelineScrollPromiseSettle(
+            () => pendingScrollPromise,
+            (timedOut) => {
+              lastSettleTimedOut = timedOut;
+              onSettle();
+            },
+            CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
+          ),
+        isAborted: () => {
+          if (anchorUserScrollGenerationRef.current === generationAtIssue) {
+            return false;
+          }
+          // A reader gesture (or a newer navigation, which bumps the same
+          // generation first) took the viewport. The settle helper calls
+          // neither settled callback on abort, so this is the only place the
+          // owner can learn the request is over.
+          settleScrollRequest(requestId, "cancelled");
+          return true;
+        },
+        shouldYieldToReader: () => false,
+        validate: () => !lastSettleTimedOut && landedOnHydratedRow(),
+        reissue: () => {
+          const index = targetIndex();
+          if (index !== null) pendingScrollPromise = issue(index);
+        },
+        onSettledValid: () => {
+          finish();
+          restorePersistencePendingRef.current = false;
+          // Re-arm from the real landing so the 3s is measured from when the
+          // reader can actually see the target; an already-in-view row
+          // rang at issue and simply keeps ringing.
+          showNavigationHighlight(messageId, blockId);
+          if (blockId !== null) {
+            // Inner card centering only after the row landing is done: a
+            // `scrollIntoView` during the settle window would fail the 1px
+            // row-top check and be snapped back to the turn header.
+            blockReveal.requestReveal(messageId, blockId);
+          }
+          settleScrollRequest(requestId, "landed");
+        },
+        onSettledInvalid: () => {
+          finish();
+          acceptExhaustedPersistedRestoreFallback(
+            restorePersistencePendingRef,
+            pendingMeasuredFreeRestoreRef,
+          );
+          // The offset can be unreachable - a transcript shorter than the
+          // viewport, or a target in the last screenful - while the row is
+          // nonetheless mounted where the browser clamped. That is a landing
+          // the reader can see, so it still rings and reveals its card; only
+          // a row that never mounted is a genuine miss.
+          if (queryMountedChatMessageRoot(scrollNode, messageId) !== null) {
+            showNavigationHighlight(messageId, blockId);
+            if (blockId !== null) blockReveal.requestReveal(messageId, blockId);
+            settleScrollRequest(requestId, "landed");
+            return;
+          }
+          settleScrollRequest(requestId, "exhausted");
+        },
+        maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
+      });
+      // Another navigation (`scrollToEnd`, find, a restore, unmount) tears
+      // this landing down through the shared cleanup without bumping the
+      // reader generation, so `isAborted` never sees it. Report `cancelled`
+      // from here instead - otherwise the request stays pending, a later
+      // hidden→visible transition re-issues the stale landing over the tail,
+      // and the tile keeps the target row's hydration hold until its TTL.
+      activeNavigationSettleCleanupRef.current = (): void => {
+        cancelLandingLoop();
+        finish();
+        if (reissuingScrollRequestIdRef.current !== requestId) {
+          settleScrollRequest(requestId, "cancelled");
+        }
+      };
+      return true;
+    },
+    [
+      beginImperativeScrollOperation,
+      blockReveal,
+      finishImperativeScrollOperation,
+      settleScrollRequest,
+      showNavigationHighlight,
+    ],
+  );
+
   useLayoutEffect(() => {
     const pending = pendingMeasuredFreeRestoreRef.current;
     if (pending === null) return;
@@ -2856,6 +3078,19 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return;
     }
 
+    // A scroll request that has not reached a terminal outcome is the newer
+    // intent: re-issue it against the now-measurable geometry instead of
+    // replaying the saved reading position over it. Its ring stays. The
+    // re-issue supersedes its own earlier landing itself (silently, as the
+    // same request); the shared cleanup runs here only when no request is
+    // pending, or it would report that request cancelled and release it.
+    const pendingLanding = pendingScrollRequestLandingRef.current;
+    if (pendingLanding !== null) {
+      if (landScrollRequestRow(pendingLanding)) {
+        scrollRequestLandingIssuedRef.current = pendingLanding.requestId;
+      }
+      return;
+    }
     activeNavigationSettleCleanupRef.current?.();
     activeNavigationSettleCleanupRef.current = null;
     queueMicrotask(() => {
@@ -2902,6 +3137,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [
     clearNavigationHighlight,
     identity,
+    landScrollRequestRow,
     reconcileInvalidTimelineLanding,
     restorePersistedTimelineLocation,
     visible,
@@ -3135,25 +3371,57 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // it added a warning without actually closing the race.
       activityGroupOpenStore.getState().setOpen(activityGroupId, true);
     }
-    // Cross-tile jumps use the same programmatic-navigation choke point as
-    // every in-tile navigation: suppression, settle validation, and bounded
-    // re-issue are all armed before the scroll. The highlight is visual only.
-    // Animated (ticket 20 does not change minimap/deep-link semantics - find
-    // is unrelated to this call site, see navigateToMessage's own comment):
-    // a cross-tile jump is a real navigation the reader triggered elsewhere.
-    navigateToMessage(
-      request.messageId,
-      true,
-      true,
-      resolvedScrollBlockId(request.blockId),
-    );
+    // A newer request supersedes whatever the previous one was still doing.
+    const superseded = pendingScrollRequestLandingRef.current;
+    if (superseded !== null)
+      settleScrollRequest(superseded.requestId, "cancelled");
+    const landing: PendingScrollRequestLanding = {
+      requestId: request.requestId,
+      messageId: request.messageId,
+      blockId: resolvedScrollBlockId(request.blockId),
+    };
+    pendingScrollRequestLandingRef.current = landing;
+    // Same prelude as `navigateToMessage`: a cross-tile jump is an explicit
+    // navigation, so it releases any pending hydration restore and the live
+    // follow, and the ring paints at issue so an already-in-view target rings
+    // immediately (it is re-armed from the real landing).
+    forgetPendingHydrationRestore(identity);
+    pendingHydrationRestoreAnchorIdRef.current = null;
+    cancelTimelineLiveFollowForUserNavigation({
+      direction: "indeterminate",
+      freezeInFlightScroll: false,
+      publishesReaderPosition: false,
+    });
+    setScrolledActiveUserMessageIdIfChanged(request.messageId);
+    showNavigationHighlight(landing.messageId, landing.blockId);
+    // Deliberately NOT the animated `navigateToMessage` path: the landing
+    // effect right below issues `landScrollRequestRow` in this same commit,
+    // and keeps retrying while the row key is not rendered yet.
     scrollRequestRef.current = null;
   }, [
     activityGroupOpenStore,
-    navigateToMessage,
+    cancelTimelineLiveFollowForUserNavigation,
+    identity,
     scrollRequest?.requestId,
     scrollToEnd,
+    setScrolledActiveUserMessageIdIfChanged,
+    settleScrollRequest,
+    showNavigationHighlight,
   ]);
+
+  // A request whose row was not in the rendered index when it arrived (cold
+  // row on the windowed line, or a tile that learned about the message before
+  // its own stream delivered it) is re-attempted as the rows change, rather
+  // than burned. Only while it has not been ISSUED: an issued landing owns its
+  // own re-issue loop and re-reads the index itself.
+  useLayoutEffect(() => {
+    const pending = pendingScrollRequestLandingRef.current;
+    if (pending === null) return;
+    if (scrollRequestLandingIssuedRef.current === pending.requestId) return;
+    if (landScrollRequestRow(pending)) {
+      scrollRequestLandingIssuedRef.current = pending.requestId;
+    }
+  }, [landScrollRequestRow, listRows, scrollRequest?.requestId]);
 
   // --- Transcript completion signal (decision #24) -------------------------
 

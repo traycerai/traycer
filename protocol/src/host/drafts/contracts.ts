@@ -1,8 +1,6 @@
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
-  draftsClaimRequestSchema,
-  draftsClaimResponseSchema,
   draftsDeleteRequestSchema,
   draftsDeleteResponseSchema,
   draftsListRequestSchema,
@@ -11,6 +9,8 @@ import {
   draftsPutBlobResponseSchema,
   draftsReadBlobRequestSchema,
   draftsReadBlobResponseSchema,
+  draftsRetractRequestSchema,
+  draftsRetractResponseSchema,
   draftsSubscribeClientFrameSchemaV10,
   draftsSubscribeOpenRequestSchemaV10,
   draftsSubscribeServerFrameSchemaV10,
@@ -56,11 +56,18 @@ export const draftsListV10 = defineRpcContract({
   responseSchema: draftsListResponseSchema,
 });
 
-export const draftsClaimV10 = defineRpcContract({
-  method: "drafts.claim",
+/**
+ * Retract the cloud row of a draft this host holds no row for (a foreign
+ * draft deleted from History). Ownership never moves between hosts; this
+ * is the only cross-host mutation a drafts client makes, and it is a
+ * delete on the user's own authority. `{ retracted: false }` when the row
+ * was already gone.
+ */
+export const draftsRetractV10 = defineRpcContract({
+  method: "drafts.retract",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: draftsClaimRequestSchema,
-  responseSchema: draftsClaimResponseSchema,
+  requestSchema: draftsRetractRequestSchema,
+  responseSchema: draftsRetractResponseSchema,
 });
 
 /**

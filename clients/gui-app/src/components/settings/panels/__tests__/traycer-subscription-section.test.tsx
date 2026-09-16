@@ -11,6 +11,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMobileApp } from "@/lib/mobile-app";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
@@ -150,11 +151,13 @@ describe("TraycerSubscriptionSection", () => {
   beforeEach(() => {
     mocks.data = user;
     mocks.isError = false;
+    mocks.openLink.mockClear();
     useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
   });
 
   afterEach(() => {
     cleanup();
+    setMobileApp(false);
     useDesktopDialogStore.setState({
       activeDialog: null,
       reportIssueAvailable: false,
@@ -220,6 +223,77 @@ describe("TraycerSubscriptionSection", () => {
     expect(
       screen.getByText("Live artifact usage is unavailable."),
     ).toBeDefined();
+  });
+
+  // App Store review guideline 3.1.1: the installed app must not present or
+  // link to a subscription that cannot be bought through Apple. What survives
+  // is the half the user actually needs - how much credit has been used.
+  describe("installed mobile app", () => {
+    beforeEach(() => {
+      setMobileApp(true);
+    });
+
+    it("titles the card Usage and offers nothing that opens billing", () => {
+      render(<TraycerSubscriptionSection />);
+
+      expect(screen.getByText("Usage")).toBeDefined();
+      expect(screen.queryByText("Subscription")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Manage subscription/ }),
+      ).toBeNull();
+      expect(mocks.openLink).not.toHaveBeenCalled();
+      // Refresh survives - it buys nothing - but stops naming the purchase.
+      expect(
+        screen.getByRole("button", { name: "Refresh usage" }),
+      ).toBeDefined();
+    });
+
+    it("states credit usage with no currency", () => {
+      render(<TraycerSubscriptionSection />);
+
+      // Same 30-of-100 reading as the desktop test above, denominated in
+      // credits rather than dollars. No spelled-out percent: the bar below
+      // the line already shows the ratio.
+      expect(screen.getByText("30.00 / 100.00 credits")).toBeDefined();
+      expect(screen.queryByText("$30.00 / $100.00")).toBeNull();
+      // The bucket labels are bucket names, not purchasable plans, and stay.
+      expect(screen.getByText("Plan")).toBeDefined();
+    });
+
+    it("keeps the account picker and the team reading", () => {
+      render(<TraycerSubscriptionSection />);
+      act(() => {
+        useAccountContextStore
+          .getState()
+          .setAccountContext({ type: "TEAM", teamId: "team-1" });
+      });
+
+      expect(screen.getByLabelText("Account")).toBeDefined();
+      expect(screen.getByText("100.00 / 500.00 credits")).toBeDefined();
+    });
+
+    it("leaves the legacy rate-limit view free of currency too", () => {
+      mocks.data = {
+        ...user,
+        userSubscription: {
+          ...userSubscription,
+          subscriptionStatus: "PRO_PLUS_V2",
+          totalPlanCredits: undefined,
+          credit: undefined,
+          rechargeRateSeconds: 1800,
+          bundleSummary: {
+            bundleTotal: 40,
+            bundleConsumed: 10,
+            bundleRemaining: 30,
+          },
+        },
+      };
+      render(<TraycerSubscriptionSection />);
+
+      expect(screen.getByText("Rate limit")).toBeDefined();
+      expect(screen.getByText("10.00 / 40.00 credits")).toBeDefined();
+      expect(screen.queryByText("$10.00 / $40.00")).toBeNull();
+    });
   });
 
   it("gates the subscription-error report action on capability and never forwards the raw query error", () => {

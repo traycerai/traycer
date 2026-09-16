@@ -61,7 +61,7 @@ export function ImageActions(props: {
     );
   }
   return (
-    <div className="flex items-center gap-1 rounded-md border border-white/15 bg-black/65 p-1 text-white shadow-sm backdrop-blur-sm @max-[8rem]:gap-0 @max-[8rem]:border-0 @max-[8rem]:p-0">
+    <div className="flex items-center gap-1 rounded-md border border-white/15 bg-black/65 p-1 text-white shadow-sm @max-[8rem]:gap-0 @max-[8rem]:border-0 @max-[8rem]:p-0">
       {props.canCopy ? (
         <ImageActionButton
           label="Copy image"

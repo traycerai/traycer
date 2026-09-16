@@ -58,7 +58,6 @@ import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
-import { ChatComposerDraftAuthorityBanner } from "./chat-composer-draft-authority";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
@@ -557,8 +556,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const authority = useChatComposerDraftAuthority({
     chatId: taskId,
     tabHostId,
-    client: hostClient,
   });
+  // The first edit of a draft this host does not own forks it underneath
+  // (a fresh id, same content) before the keystroke lands; the editor is
+  // never held for it.
+  const handleDocumentChangeNotingEdit = useCallback(
+    (content: JsonContent, selection: { from: number; to: number }): void => {
+      authority.noteEdit();
+      handleDocumentChange(content, selection);
+    },
+    [authority, handleDocumentChange],
+  );
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
   const { submitDraft, steerConflict, annotationPreparationPending } =
@@ -577,7 +585,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
       workspaceBlocked,
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
-      draftReadOnly: authority.readOnly,
       onSubmitMessage,
       onSideChat,
     });
@@ -639,7 +646,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
-    draftReadOnly: authority.readOnly,
   });
   const utilityClearanceVisible = composerUtilityNeedsClearance({
     rowCount: promptStash.rows.length,
@@ -649,7 +655,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   return (
     <>
-      <ChatComposerDraftAuthorityBanner authority={authority} />
       <ChatComposerFallbackBanners
         topBannerKind={topBannerKind}
         fallback={providerFallback}
@@ -770,8 +775,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     hasPastedImageBytes={hasPastedImageBytes}
                     ingestPastedComposerImages={null}
                     isActive={focused}
-                    disabled={authority.readOnly}
-                    onDocumentChange={handleDocumentChange}
+                    disabled={false}
+                    onDocumentChange={handleDocumentChangeNotingEdit}
                     onSelectionChange={handleSelectionChange}
                     onSubmit={handleSubmitDraft}
                     steerHintActive={steerHintActive}
@@ -892,13 +897,6 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
-  /**
-   * The draft belongs to another host and has not been claimed. Disabling the
-   * editor is not enough on its own: the toolbar's send button and the
-   * editor's own Enter handler both reach `submitDraft` without going through
-   * it, so the gate has to sit on the submit path too.
-   */
-  readonly draftReadOnly: boolean;
 }
 
 /**
@@ -988,7 +986,6 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
     !args.attachmentPreparationPending &&
-    !args.draftReadOnly &&
     (args.draftHasText || args.draftHasImages)
   );
 }

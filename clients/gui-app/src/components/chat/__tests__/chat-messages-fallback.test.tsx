@@ -889,6 +889,7 @@ function chatScene(
           visible={state.visible}
           systemOverlayActive={false}
           scrollRequest={null}
+          onScrollRequestSettled={null}
           composerOverlayHeight={80}
         />
       </div>

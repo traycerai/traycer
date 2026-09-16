@@ -153,7 +153,9 @@ function makeGuiOnlyToolbarStore() {
   return store;
 }
 
-function renderPanel(onStart: (launch: TerminalAgentLaunch) => void) {
+function renderPanel(
+  onStart: (launch: TerminalAgentLaunch, assembledFor: string | null) => void,
+) {
   return render(
     <TerminalLaunchPanel
       store={makeToolbarStore()}
@@ -206,6 +208,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
         harnessId: "claude",
         terminalAgentArgs: null,
       }),
+      null,
     );
   });
 
@@ -225,6 +228,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       expect.objectContaining({
         terminalAgentArgs: "",
       }),
+      null,
     );
   });
 
@@ -244,6 +248,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       expect.objectContaining({
         terminalAgentArgs: "--dangerously-skip-permissions",
       }),
+      null,
     );
   });
 
@@ -260,6 +265,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({ harnessId: "claude" }),
+      null,
     );
   });
 
@@ -308,5 +314,26 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       createProfileHostId: "host-b",
       runTargetHostId: "host-b",
     });
+  });
+
+  it("passes the host it assembled the launch for", () => {
+    const onStart = vi.fn();
+    render(
+      <TerminalLaunchPanel
+        store={makeToolbarStore()}
+        pending={false}
+        disabledHint={null}
+        hostId="host-a"
+        terminalLoginSurface={null}
+        onStart={onStart}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+
+    expect(onStart).toHaveBeenCalledWith(
+      expect.objectContaining({ harnessId: "claude" }),
+      "host-a",
+    );
   });
 });

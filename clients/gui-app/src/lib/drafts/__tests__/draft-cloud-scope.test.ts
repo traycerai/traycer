@@ -7,17 +7,27 @@ import type { DraftWrite } from "@traycer/protocol/host";
 import {
   acquireDraftMirrorSession,
   draftsCloudScopeId,
+  flushAbsentOwnCloudDrafts,
   releaseDraftMirrorSession,
+  reserveCloudDraftIngestFence,
   resetDraftMirrorCoordinatorForTests,
   subscribeDraftsCloudScope,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { cloudDraftsDirectoryIsVisible } from "@/lib/drafts/cloud-drafts-visibility";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  freshLandingMirrorState,
+  useLandingDraftStore,
+  type LandingDraftTab,
+} from "@/stores/home/landing-draft-store";
+import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
 
 const HOST_ID = "host-scope";
 const SCOPE_ID = "scp_testdraftsscopeid000001";
 
 afterEach(() => {
   resetDraftMirrorCoordinatorForTests();
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
 });
 
 function streamHarness(): {
@@ -28,11 +38,15 @@ function streamHarness(): {
     readonly scopeId?: string;
   }) => void;
   readonly subscribeCalls: { count: number };
+  readonly sentFrames: unknown[];
 } {
   let onFrame: ServerFrameHandler | null = null;
   const subscribeCalls = { count: 0 };
+  const sentFrames: unknown[] = [];
   const session: IStreamSession = {
-    sendClientFrame: () => undefined,
+    sendClientFrame: (frame) => {
+      sentFrames.push(frame);
+    },
     onServerFrame: (handler) => {
       onFrame = handler;
     },
@@ -46,6 +60,7 @@ function streamHarness(): {
       onFrame?.(frame, null);
     },
     subscribeCalls,
+    sentFrames,
     client: {
       subscribe: () => {
         subscribeCalls.count += 1;
@@ -172,5 +187,126 @@ describe("cloud-drafts scope subscribe frame", () => {
       }),
     ).toBe(false);
     unsubscribe();
+  });
+});
+
+function publishedOwnRow(
+  id: string,
+  overrides: Partial<LandingDraftTab>,
+): LandingDraftTab {
+  return {
+    id,
+    content: EMPTY_LANDING_DRAFT_CONTENT,
+    selection: null,
+    lastTouchedAt: 1,
+    settings: null,
+    composerMode: "chat",
+    workspace: emptyLandingDraftWorkspaceSnapshot(),
+    ...freshLandingMirrorState(),
+    adoption: { state: "adopted", hostId: HOST_ID },
+    ownerHostId: HOST_ID,
+    origin: "own",
+    hostRevision: 1,
+    publication: {
+      status: "current",
+      lastPublishedAt: 1,
+      publishedRevision: 1,
+      halted: null,
+    },
+    ...overrides,
+  };
+}
+
+describe("flushAbsentOwnCloudDrafts", () => {
+  it("nudges a published own row the directory no longer lists with a subscribe flush for that row, and nothing else", async () => {
+    const stream = streamHarness();
+    acquireDraftMirrorSession({
+      hostId: HOST_ID,
+      client: listNullClient() as never,
+      streamClient: stream.client as never,
+      timing: undefined,
+    });
+    await vi.waitFor(() => {
+      expect(stream.subscribeCalls.count).toBe(1);
+    });
+    useLandingDraftStore.setState({
+      drafts: [
+        publishedOwnRow("absent-own", {}),
+        publishedOwnRow("listed-own", {}),
+        publishedOwnRow("unpublished-own", {
+          publication: {
+            status: "unpublished",
+            lastPublishedAt: null,
+            publishedRevision: null,
+            halted: null,
+          },
+        }),
+        publishedOwnRow("replica-row", {
+          origin: "replica",
+          ownerHostId: "host-other",
+          adoption: { state: "adopted", hostId: "host-other" },
+        }),
+        publishedOwnRow("no-session", {
+          adoption: { state: "adopted", hostId: "host-unmounted" },
+          ownerHostId: "host-unmounted",
+        }),
+        publishedOwnRow("already-nudged", {}),
+      ],
+      activeDraftId: null,
+    });
+    const listed = new Map([["listed-own", new Set([HOST_ID])]]);
+
+    const flushed = flushAbsentOwnCloudDrafts(
+      listed,
+      0,
+      new Set(["already-nudged"]),
+    );
+
+    expect(flushed).toEqual(["absent-own"]);
+    await vi.waitFor(() => {
+      expect(stream.sentFrames).toEqual([
+        { kind: "flush", hasBinaryPayload: false, draftIds: ["absent-own"] },
+      ]);
+    });
+    // Nothing is deleted client-side: the owner host settles the row.
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.map((draft) => draft.id)
+        .sort(),
+    ).toEqual(
+      [
+        "absent-own",
+        "already-nudged",
+        "listed-own",
+        "no-session",
+        "replica-row",
+        "unpublished-own",
+      ].sort(),
+    );
+    releaseDraftMirrorSession(HOST_ID);
+  });
+
+  it("does not nudge a row applied after the directory snapshot was dispatched", async () => {
+    const stream = streamHarness();
+    acquireDraftMirrorSession({
+      hostId: HOST_ID,
+      client: listNullClient() as never,
+      streamClient: stream.client as never,
+      timing: undefined,
+    });
+    await vi.waitFor(() => {
+      expect(stream.subscribeCalls.count).toBe(1);
+    });
+    useLandingDraftStore.setState({
+      drafts: [publishedOwnRow("fresh-own", {})],
+      activeDraftId: null,
+    });
+    // Reserved after the snapshot's fence (0): newer than the directory.
+    reserveCloudDraftIngestFence("fresh-own");
+
+    expect(flushAbsentOwnCloudDrafts(new Map(), 0, new Set())).toEqual([]);
+    expect(stream.sentFrames).toEqual([]);
+    releaseDraftMirrorSession(HOST_ID);
   });
 });

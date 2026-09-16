@@ -79,7 +79,7 @@ export function KeybindingsSettingsPanel() {
 
   return (
     <section className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-8 sm:py-10">
-      <header className="sticky top-0 z-10 -mx-4 mb-8 bg-background/95 px-4 py-2 backdrop-blur sm:-mx-8 sm:px-8">
+      <header className="sticky top-0 z-10 -mx-4 mb-8 bg-background px-4 py-2 sm:-mx-8 sm:px-8">
         <h1 className="text-title-lg font-semibold text-foreground">
           Keybindings
         </h1>

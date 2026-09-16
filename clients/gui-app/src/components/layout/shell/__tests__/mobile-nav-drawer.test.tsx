@@ -758,6 +758,24 @@ describe("MobileNavDrawer", () => {
       expect(useMobileNavStore.getState().open).toBe(true);
     });
 
+    // App Store review guideline 3.1.1: the installed app must not link out
+    // to a subscription that cannot be bought through Apple, and this icon
+    // opened exactly that page. It stays on the OTHER shell this drawer
+    // renders in - a narrow desktop window - which is why the branch reads the
+    // product flag rather than the viewport, and why the test above still
+    // finds the icon.
+    it("withholds the billing link in the installed mobile app", async () => {
+      setMobileApp(true);
+      renderDrawer();
+      await screen.findByTestId("mobile-nav-new-task");
+
+      expect(screen.queryByTestId("mobile-nav-manage-subscription")).toBeNull();
+      expect(screen.queryByLabelText("Manage subscription")).toBeNull();
+      // The rest of the identity row is untouched.
+      expect(screen.queryByTestId("mobile-nav-sign-out")).not.toBeNull();
+      expect(screen.queryByTestId("mobile-nav-settings")).not.toBeNull();
+    });
+
     // Notifications live in the header now (`MobileNotificationsButton`), so
     // an unresolved profile simply drops the whole account block, actions
     // included.

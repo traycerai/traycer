@@ -10,6 +10,8 @@ import { emitHostErrorNotification } from "@/stores/notifications/app-local-noti
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 import {
   epicShareRefusalFromErrorCode,
   type EpicShareRefusal,
@@ -433,7 +435,13 @@ function hostErrorToastForSimpleCode(
 function shareRefusalMessage(refusal: EpicShareRefusal): string {
   switch (refusal.kind) {
     case "needs-cloud-sync":
-      return "Sharing needs cloud sync, which isn't on your plan. Upgrade from your account menu → Manage subscription. The epic keeps working locally either way.";
+      // The installed mobile app may neither name the purchase nor point at a
+      // menu item that opens it (App Store guideline 3.1.1) - and that item is
+      // withheld there anyway, so the desktop sentence would name a control
+      // the reader cannot find. The reassurance is the same on both shells.
+      return isMobileApp()
+        ? `Sharing needs cloud sync, which isn't on your plan. ${PLAN_RESTRICTED_MOBILE_REMEDY} The epic keeps working locally either way.`
+        : "Sharing needs cloud sync, which isn't on your plan. Upgrade from your account menu → Manage subscription. The epic keeps working locally either way.";
     case "not-owned":
       return "This epic was created on this machine by a different account, so it can't be shared from yours. Sign in with the account that created it.";
     case "promotion-pending":

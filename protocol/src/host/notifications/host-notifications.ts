@@ -458,12 +458,12 @@ export const hostNotificationsHomeSchema = z.enum(["local", "cloud"]);
 export type HostNotificationsHome = z.infer<typeof hostNotificationsHomeSchema>;
 
 /**
- * Cross-plane ordering is a protocol rule, not a timestamp comparison.
- * Attention severity tiers sort first; within one tier, render the local lane
- * before the cloud lane. Recent has no tiers and therefore renders local then
- * cloud directly. Each lane retains its own native ordering and cursor
- * semantics. Origin and cloud-arrival clocks are intentionally never compared
- * across lanes.
+ * The tie-break order between the two homes, NOT a display order. Rows from
+ * both lanes render newest first by `createdAt`, which is the origin host's
+ * clock in each lane and therefore comparable across them; this order decides
+ * only between rows of the same instant. Each lane still pages with its own
+ * cursor. What must never be compared across lanes is the cloud row's arrival
+ * and marker-touch timestamps, which are not origin time at all.
  */
 export const HOST_NOTIFICATIONS_HOME_ORDER = ["local", "cloud"] as const;
 

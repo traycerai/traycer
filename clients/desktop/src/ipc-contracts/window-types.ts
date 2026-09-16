@@ -237,6 +237,27 @@ export function isDesktopTopLevelMenuId(
   return DESKTOP_TOP_LEVEL_MENU_IDS.some((menuId) => menuId === value);
 }
 
+export interface DesktopMenuEntry {
+  readonly id: string;
+  readonly type: "normal" | "separator" | "checkbox" | "radio" | "submenu";
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly checked: boolean;
+  readonly accelerator: string | null;
+  readonly children: readonly DesktopMenuEntry[];
+}
+
+export interface DesktopMenuSection {
+  readonly id: DesktopTopLevelMenuId;
+  readonly label: string;
+  readonly items: readonly DesktopMenuEntry[];
+}
+
+export interface DesktopMenuSnapshot {
+  readonly revision: number;
+  readonly menus: readonly DesktopMenuSection[];
+}
+
 export interface MenuCommandPayload {
   readonly command: MenuCommandId;
   readonly windowId: string;
