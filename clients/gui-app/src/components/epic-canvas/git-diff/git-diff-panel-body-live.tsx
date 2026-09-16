@@ -244,6 +244,9 @@ export function GitDiffPanelBodyLive(
   useEffect(() => {
     if (bindingsQuery.isPending || bindingsQuery.error !== null) return;
 
+    // Automatic workspace selection must stay unpinned: bindings may arrive
+    // before the task's agent records reveal its default host. Only a user
+    // choice below latches the host, so late records can correct this default.
     const selectedRootReady = gitRows.some(
       (row) =>
         selectedRepo !== null &&
@@ -251,10 +254,7 @@ export function GitDiffPanelBodyLive(
         row.runningDir === selectedRepo.rootRunningDir &&
         !unavailableGitRootKeys.keys.has(worktreeRowKey(row)),
     );
-    if (selectedRootReady) {
-      latchOnFirstUse();
-      return;
-    }
+    if (selectedRootReady) return;
 
     const next = pickDefaultRow(
       gitRows,
@@ -262,9 +262,6 @@ export function GitDiffPanelBodyLive(
       unavailableGitRootKeys.keys,
       ignoreWhitespace,
     );
-    if (next !== null) {
-      latchOnFirstUse();
-    }
     setSelectedRepo(
       props.epicId,
       next === null
@@ -285,7 +282,6 @@ export function GitDiffPanelBodyLive(
     selectedRepo,
     setSelectedRepo,
     unavailableGitRootKeys.keys,
-    latchOnFirstUse,
   ]);
 
   // Clear the probed-unavailable set and re-probe every root's capability, so a
@@ -356,15 +352,15 @@ export function GitDiffPanelBodyLive(
   // whose host the authority HAS declared dead is already deposed, so the
   // panel is on `followingHostId` and reads through to it - and if that host's
   // own bindings read then fails, comparing the raw preference would offer
-  // "Use active host" while the active host is precisely what already failed.
+  // "Use default host" while that default is precisely what already failed.
   // Clicking would drop the sticky pin, move nothing and change no error,
   // which is the no-op-that-reads-like-a-fix this guard exists to prevent.
   const { setSelection } = pin;
-  const canUseActiveHost =
+  const canUseDefaultHost =
     pin.selection !== null &&
     pin.followingHostId !== null &&
     pin.resolvedHostId !== pin.followingHostId;
-  const handleUseActiveHost = useCallback(() => {
+  const handleUseDefaultHost = useCallback(() => {
     setSelection(null);
   }, [setSelection]);
 
@@ -393,7 +389,7 @@ export function GitDiffPanelBodyLive(
         retryUnavailableRoots,
         unavailableGitRootKeys: unavailableGitRootKeys.keys,
         retryBindings,
-        useActiveHost: canUseActiveHost ? handleUseActiveHost : null,
+        useDefaultHost: canUseDefaultHost ? handleUseDefaultHost : null,
         resolvedHostName: resolvedHostEntry?.label ?? null,
       })}
     </StreamRuntimeContext.Provider>
@@ -415,7 +411,7 @@ function renderGitDiffPanelBody(input: {
   readonly retryUnavailableRoots: () => void;
   readonly unavailableGitRootKeys: ReadonlySet<string>;
   readonly retryBindings: () => Promise<void>;
-  readonly useActiveHost: (() => void) | null;
+  readonly useDefaultHost: (() => void) | null;
   readonly resolvedHostName: string | null;
 }): ReactNode {
   if (
@@ -475,7 +471,7 @@ function degradedGitDiffBody(input: {
   readonly retryUnavailableRoots: () => void;
   readonly unavailableGitRootKeys: ReadonlySet<string>;
   readonly retryBindings: () => Promise<void>;
-  readonly useActiveHost: (() => void) | null;
+  readonly useDefaultHost: (() => void) | null;
   readonly resolvedHostName: string | null;
 }): ReactNode {
   if (input.bindingsPending) return <DiffLoadingSkeleton variant="panel" />;
@@ -497,7 +493,7 @@ function degradedGitDiffBody(input: {
       <GitHostUnreachable
         hostName={input.resolvedHostName}
         onRetry={input.retryBindings}
-        onUseActiveHost={input.useActiveHost}
+        onUseDefaultHost={input.useDefaultHost}
       />
     );
   }
