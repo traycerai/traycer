@@ -11,33 +11,18 @@
 
 /* ---------------------------------------------------------------- atmosphere */
 
-/* One accent glow, centred slightly above the panel's centre. The softness is
-   drawn INTO the gradient rather than filtered: a blurred layer this large
-   costs a full-viewport re-raster on every theme or resize change. */
-.onboarding-glow {
-  top: 42%;
-  left: 50%;
-  width: 90vw;
-  height: 60vh;
-  translate: -50% -50%;
-  background: radial-gradient(
-    closest-side,
-    color-mix(in srgb, var(--primary) 14%, transparent),
-    transparent 60%
-  );
-  animation: onboarding-glow-in 900ms var(--onboarding-ease) both;
+/* The live dithered field (onboarding-field.tsx) owns the depth behind the
+   welcome mark. It concentrates there and fades out inside its own shader, so
+   the element itself is plain: the only thing CSS drives is how far it recedes
+   once the glass panel takes over. */
+.onboarding-field {
+  transition: opacity 320ms var(--onboarding-ease);
 }
-@keyframes onboarding-glow-in {
-  from {
-    opacity: 0;
-    transform: scale(1.06);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+.onboarding-field[data-welcoming="false"] {
+  opacity: 0.3;
 }
 
+/* Only reached when WebGL is unavailable - the field renders this instead. */
 .onboarding-dot-grid {
   background-image: radial-gradient(
     circle at 1px 1px,
@@ -316,7 +301,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .onboarding-glow,
   .onboarding-progress-label {
     animation: none;
   }

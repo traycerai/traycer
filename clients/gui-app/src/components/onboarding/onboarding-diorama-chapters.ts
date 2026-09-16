@@ -12,8 +12,9 @@ export type DioramaRegionId =
 
 export type DioramaChapter = {
   readonly id: string;
-  /** Chapter-dot label. */
+  /** Chapter-strip label. */
   readonly label: string;
+  /** The label card's headline, and the strip segment's caption. */
   readonly title: string;
   readonly line: string;
   readonly durationMs: number;
@@ -28,8 +29,11 @@ export type DioramaChapter = {
 };
 
 /**
- * The tour's script. Durations are the spec's timeline: 0–2.4s, 2.4–6.2s,
- * 6.2–8.8s, 8.8–12.5s, then hold on the last chapter.
+ * The tour's script. Every chapter runs the same 4.5s: the choreography inside
+ * it is unchanged - the longest (the drag, at ~2.8s; the two browser cursors,
+ * at ~3.7s) still runs at its own speed - and the rest of the slot is a hold,
+ * so the label card is readable before the scene moves on. After the last
+ * chapter the tour loops back to the first.
  */
 export const DIORAMA_CHAPTERS: readonly DioramaChapter[] = [
   {
@@ -37,7 +41,7 @@ export const DIORAMA_CHAPTERS: readonly DioramaChapter[] = [
     label: "Tabs",
     title: "Tasks live in tabs.",
     line: "Every task keeps its own agents, browsers and artifacts.",
-    durationMs: 2400,
+    durationMs: 4500,
     lit: ["tabs"],
     ring: "tabs",
     place: "top",
@@ -49,7 +53,7 @@ export const DIORAMA_CHAPTERS: readonly DioramaChapter[] = [
     label: "Tile",
     title: "Drag to tile.",
     line: "Drop anything from the sidebar onto the canvas.",
-    durationMs: 3800,
+    durationMs: 4500,
     lit: ["artifacts", "canvas", "browser"],
     ring: "canvas",
     place: "left",
@@ -61,7 +65,7 @@ export const DIORAMA_CHAPTERS: readonly DioramaChapter[] = [
     label: "Open",
     title: "Click to open.",
     line: "Browsers and artifacts open in place.",
-    durationMs: 2600,
+    durationMs: 4500,
     lit: ["browsers", "canvas", "browser"],
     ring: "browsers",
     place: "left",
@@ -73,7 +77,7 @@ export const DIORAMA_CHAPTERS: readonly DioramaChapter[] = [
     label: "Browse",
     title: "Agents share the page.",
     line: "Claude and Codex work in the same browser.",
-    durationMs: 3700,
+    durationMs: 4500,
     lit: ["canvas", "browser"],
     ring: "browser",
     place: "right",
@@ -92,4 +96,42 @@ export function dioramaChapterStarts(
     elapsed += chapter.durationMs;
     return start;
   });
+}
+
+/** Moves along the strip, wrapping at both ends - autoplay and the arrow keys. */
+export function stepDioramaChapter(index: number, delta: number): number {
+  const count = DIORAMA_CHAPTERS.length;
+  return (index + delta + count) % count;
+}
+
+/**
+ * The autoplay clock. A rAF loop reads elapsed time off it rather than
+ * chaining timeouts, so a pause freezes the progress fill exactly where it
+ * stood and a resume costs nothing.
+ */
+export type DioramaClock = {
+  /** When the chapter started, already shifted forward by any paused time. */
+  readonly startedAt: number;
+  /** When the clock was frozen, or null while it runs. */
+  readonly pausedAt: number | null;
+};
+
+/** Run time of the current chapter, frozen while the clock is paused. */
+export function dioramaElapsedMs(clock: DioramaClock, now: number): number {
+  return (clock.pausedAt ?? now) - clock.startedAt;
+}
+
+/** Freezes the clock, or resumes it by moving the start past the paused span. */
+export function setDioramaPaused(
+  clock: DioramaClock,
+  paused: boolean,
+  now: number,
+): DioramaClock {
+  const pausedAt = clock.pausedAt;
+  if (paused) {
+    if (pausedAt !== null) return clock;
+    return { startedAt: clock.startedAt, pausedAt: now };
+  }
+  if (pausedAt === null) return clock;
+  return { startedAt: clock.startedAt + (now - pausedAt), pausedAt: null };
 }

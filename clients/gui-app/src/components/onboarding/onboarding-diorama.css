@@ -9,6 +9,14 @@
     --onboarding-ease-in-out,
     cubic-bezier(0.77, 0, 0.175, 1)
   );
+  /* The gutter the outside label cards live in. The chapter strip reads it too,
+     so the strip lines up with the window instead of with the panel. */
+  --diorama-gutter: clamp(0rem, 15vw, 13.5rem);
+  /* One spotlight recipe, shared by the ringed region and the active chapter
+     segment - the two are the same gesture in two places. */
+  --diorama-ring:
+    0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
   display: flex;
   flex: 1;
   min-height: 0;
@@ -25,7 +33,9 @@
   flex: 1;
   min-height: 0;
   width: 100%;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.5rem, 1.4vh, 1rem);
 }
 
 /* The stage reserves the gutters the outside label cards live in. */
@@ -38,12 +48,13 @@
   grid-template-rows: minmax(0, 1fr);
   place-items: center;
   flex: 1;
+  width: 100%;
   min-width: 0;
   min-height: 0;
   /* Top room for the chapter-1 label, which sits above the window: the card
      (two lines) plus its connector needs ~6rem, and the panel clips anything
      shorter on a 949px-tall window. */
-  padding: clamp(6rem, 11vh, 6.5rem) clamp(0rem, 15vw, 13.5rem) 0;
+  padding: clamp(6rem, 11vh, 6.5rem) var(--diorama-gutter) 0;
   perspective: 1600px;
 }
 
@@ -99,18 +110,13 @@
 .diorama-window [data-dim="true"] {
   opacity: 0.6;
 }
+/* Every chapter wears the same ring, on the region's own radius, with ~3px of
+   padding inside it so the line never lands on something the region drew. No
+   inset variant: a region that would have touched the window's overflow clip
+   (the canvas, the browser tile) is inset from it in the markup instead, which
+   is the gutter the real app has between tiles anyway. */
 .diorama-window [data-ring="true"] {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent),
-    0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
-}
-/* Regions that touch the window's own edge wear the ring inside, where the
-   window's overflow clip cannot eat half of it. */
-.diorama-window [data-ring="true"][data-region="canvas"],
-.diorama-window [data-ring="true"][data-region="browser"] {
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent),
-    inset 0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
+  box-shadow: var(--diorama-ring);
 }
 
 /* --------------------------------------------------------- pins + labels */
@@ -229,6 +235,10 @@
 /* Narrow panel: no room outside the window, so the card moves in beside the
    pin and stops being a floating white tooltip. */
 @container diorama-scene (width < 1100px) {
+  .diorama-stage,
+  .diorama-chapters {
+    --diorama-gutter: 0rem;
+  }
   .diorama-stage {
     padding: 0;
   }
@@ -257,78 +267,117 @@
   }
 }
 
-/* ---------------------------------------------------------- chapter dots */
+/* --------------------------------------------------------- chapter strip */
 
+/* Four equal segments under the window, one per chapter, each labelled and
+   captioned with the same line its label card leads with. */
 .diorama-chapters {
-  display: flex;
-  align-items: center;
-  gap: clamp(0.25rem, 1.2vw, 1rem);
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: clamp(0.375rem, 1vw, 0.75rem);
+  width: 100%;
+  max-width: calc(72rem + 2 * var(--diorama-gutter));
+  padding-inline: var(--diorama-gutter);
 }
+/* Wrapped rather than stacked: the track takes a whole line, the label and
+   caption share the next one. Two text rows would cost the window ~20px of
+   height on a 949px-tall display, and the window is what the page is about. */
 .diorama-chapter {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4375rem;
-  padding: 0.25rem 0.5rem 0.4375rem;
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4375rem 0.375rem;
+  padding: 0.375rem 0.5rem 0.4375rem;
   border: 0;
   border-radius: 0.5rem;
   background: none;
   color: var(--muted-foreground);
-  font-size: 0.8125rem;
-  line-height: 1;
+  text-align: start;
   cursor: pointer;
-  transition: color 200ms var(--diorama-ease);
-}
-.diorama-chapter::before {
-  content: "";
-  width: 0.375rem;
-  height: 0.375rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--foreground) 25%, transparent);
-  transition: background 200ms var(--diorama-ease);
+  transition:
+    color 200ms var(--diorama-ease),
+    background-color 200ms var(--diorama-ease),
+    box-shadow 220ms var(--diorama-ease),
+    transform 120ms var(--diorama-ease);
 }
 .diorama-chapter[data-active="true"] {
   color: var(--foreground);
-}
-.diorama-chapter[data-active="true"]::before {
-  background: var(--primary);
+  box-shadow: var(--diorama-ring);
 }
 .diorama-chapter:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+.diorama-chapter:active:not(:focus-visible) {
+  transform: scale(0.98);
+}
 @media (hover: hover) and (pointer: fine) {
   .diorama-chapter:hover {
     color: var(--foreground);
+    background: color-mix(in srgb, var(--foreground) 6%, transparent);
   }
 }
+
+/* The header rail's fill, segment by segment: same clip-path wipe, same
+   colours. The clip is written per frame from the tour's own clock rather
+   than transitioned, because it has to stop mid-wipe when the tour pauses. */
 .diorama-chapter-track {
-  position: absolute;
-  inset-inline: 0.5rem;
-  bottom: 0.125rem;
-  height: 1px;
+  flex: 0 0 100%;
+  height: 2px;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--foreground) 12%, transparent);
 }
-.diorama-chapter-line {
+.diorama-chapter-fill {
   display: block;
   height: 100%;
+  border-radius: inherit;
   background: var(--primary);
-  transform-origin: left center;
-  animation: diorama-chapter-progress var(--diorama-chapter-duration) linear
-    both;
+  clip-path: inset(0 100% 0 0);
 }
-@keyframes diorama-chapter-progress {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(1);
+.diorama-chapter-label {
+  flex: 0 0 auto;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.25;
+}
+.diorama-chapter-caption {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Below this the caption is an ellipsis with a word in front of it. */
+@container diorama-scene (width < 720px) {
+  .diorama-chapter-caption {
+    display: none;
   }
 }
 
 /* ------------------------------------------------------------ mockup bits */
+
+/* The mock conversation is bottom-anchored, so a pane too short for the whole
+   exchange reads as a chat resting at its latest message. What it cannot hold
+   leaves a whole row at a time, at heights measured against the window itself
+   - a line cut through the middle by the composer is the one thing that reads
+   as a bug rather than as a scroll position. Below ~430cqh even the trimmed
+   set overflows, and at that size the window is past legible anyway. */
+@container diorama-window (height < 560px) {
+  .diorama-chat-prompt {
+    display: none;
+  }
+}
+@container diorama-window (height < 480px) {
+  .diorama-chat-reply {
+    display: none;
+  }
+}
 
 .diorama-sidebar-row {
   display: flex;
@@ -624,10 +673,19 @@
   .diorama-stage {
     perspective: none;
   }
-  /* Chapters still advance and the callouts still swap; only travel goes. */
+  /* Nothing advances on its own here - the strip is the only way through the
+     tour - so the scene holds on chapter 1 until someone picks another. */
   .diorama-window {
     animation-name: diorama-fade-in;
     will-change: auto;
+  }
+  .diorama-chapter {
+    transition:
+      color 200ms ease,
+      background-color 200ms ease;
+  }
+  .diorama-chapter:active:not(:focus-visible) {
+    transform: none;
   }
   .diorama-callout {
     transform: none;

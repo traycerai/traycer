@@ -24,6 +24,7 @@ import {
   onboardingStepsFor,
   type OnboardingStep,
 } from "@/components/onboarding/onboarding-steps";
+import { OnboardingField } from "@/components/onboarding/onboarding-field";
 import { OnboardingProviderPrefetch } from "@/components/onboarding/onboarding-provider-discovery";
 import { OnboardingDetectedAgents } from "@/components/onboarding/onboarding-detected-agents";
 import {
@@ -347,14 +348,7 @@ function OnboardingTour(props: {
       }}
       className="onboarding-shell relative isolate flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background font-heading text-foreground"
     >
-      <div
-        aria-hidden="true"
-        className="onboarding-glow pointer-events-none absolute"
-      />
-      <div
-        aria-hidden="true"
-        className="onboarding-dot-grid pointer-events-none absolute inset-0"
-      />
+      <OnboardingField welcoming={welcomePhase !== "ready"} />
       <div
         aria-hidden="true"
         className="onboarding-grain pointer-events-none absolute inset-0"
