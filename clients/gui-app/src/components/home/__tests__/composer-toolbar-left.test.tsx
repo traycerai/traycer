@@ -73,6 +73,7 @@ describe("<ComposerToolbarLeft />", () => {
           // The host-blaming branch has its own coverage in
           // `pickers/__tests__/permissions-picker.test.tsx`.
           catalogSupportedModes={null}
+          hostKnowsAutoMode={false}
           turnActive={false}
           judgeBilling={null}
           settingsLocked={false}
@@ -114,6 +115,7 @@ function renderToolbar(
         // no host whose judge this fixture could name, so the picker renders
         // exactly what it rendered before these three props existed.
         catalogSupportedModes={null}
+        hostKnowsAutoMode={false}
         turnActive={false}
         judgeBilling={null}
         settingsLocked={settingsLocked}

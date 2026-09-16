@@ -30,6 +30,105 @@ import { cn } from "@/lib/utils";
  * for a different reason: the record is ACCOUNT-wide and last-write-wins, so
  * every keystroke auto-saved is a keystroke racing another device.
  */
+const BANNER_CLASSNAME =
+  "flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 text-ui-sm dark:text-amber-300";
+
+/**
+ * Everything the editor has to say about the RECORD, above the textarea.
+ *
+ * Its own component because five of them accumulated and put
+ * `AutoPolicyEditorDialog` over the complexity ceiling gui-app lints at - the
+ * same signal that split `autoJudgeRecordHealth` and `AutoJudgeRecordWarnings`
+ * off their own component. Every flag is decided by the caller; this only
+ * chooses sentences, and they are deliberately NOT mutually exclusive: a read
+ * can be unreadable AND the host unable to save, and a user owed both reasons
+ * should get both.
+ */
+function AutoPolicyEditorBanners(props: {
+  readonly unreadable: boolean;
+  readonly readIsStale: boolean;
+  readonly cannotWrite: boolean;
+  readonly checkFailed: boolean;
+  readonly stale: boolean;
+}) {
+  return (
+    <>
+      {props.unreadable ? (
+        <div
+          role="status"
+          data-testid="auto-policy-unreadable-warning"
+          className={BANNER_CLASSNAME}
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            Traycer can&apos;t read your saved policy right now, so saving is
+            turned off - a save from here would replace a policy nobody can
+            currently see. Reopen Settings to try again.
+          </span>
+        </div>
+      ) : null}
+
+      {props.readIsStale ? (
+        <div
+          role="status"
+          data-testid="auto-policy-stale-read-warning"
+          className={BANNER_CLASSNAME}
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            Traycer is showing a copy of your policy it couldn&apos;t refresh,
+            so saving is turned off - it can&apos;t tell whether another device
+            has changed it since. Reopen Settings to try again.
+          </span>
+        </div>
+      ) : null}
+
+      {props.cannotWrite ? (
+        <div
+          role="status"
+          data-testid="auto-policy-write-unsupported-warning"
+          className={BANNER_CLASSNAME}
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            This machine&apos;s host can&apos;t save a policy, so saving is
+            turned off. Update it and reopen Settings to make changes.
+          </span>
+        </div>
+      ) : null}
+
+      {props.checkFailed ? (
+        <div
+          role="status"
+          data-testid="auto-policy-opening-read-failed-warning"
+          className={BANNER_CLASSNAME}
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            Traycer couldn&apos;t check whether another device has changed this
+            policy, so saving is turned off - a save from here could replace a
+            newer version without warning. Reopen Settings to try again.
+          </span>
+        </div>
+      ) : null}
+
+      {props.stale ? (
+        <div
+          role="status"
+          data-testid="auto-policy-stale-warning"
+          className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-sm text-amber-700 dark:text-amber-300"
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            This policy was saved somewhere else since you opened it. Saving now
+            replaces that version.
+          </span>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 export function AutoPolicyEditorDialog(props: {
   readonly initialBody: string | null;
   /** `updatedAt` as it read when this editor opened; see the stale warning. */
@@ -59,6 +158,14 @@ export function AutoPolicyEditorDialog(props: {
    * always already lifted by the time it is reachable.
    */
   readonly openingRead: AutoPolicyOpeningRead;
+  /**
+   * Whether this host still advertises `autoPolicy.set`.
+   *
+   * Live rather than captured at open: the row gates both ways IN, and this is
+   * the same fact re-read for as long as the editor is up. See the row's own
+   * note on why an entry-point gate is not enough.
+   */
+  readonly canWrite: boolean;
   readonly saving: boolean;
   readonly onCancel: () => void;
   readonly onSave: (body: string) => void;
@@ -99,6 +206,7 @@ export function AutoPolicyEditorDialog(props: {
   // instructions.
   const checkingForChanges = props.openingRead === "pending";
   const checkFailed = props.openingRead === "failed";
+  const cannotWrite = !props.canWrite;
 
   return (
     <Dialog
@@ -129,65 +237,13 @@ export function AutoPolicyEditorDialog(props: {
           </DialogDescription>
         </DialogHeader>
 
-        {unreadable ? (
-          <div
-            role="status"
-            data-testid="auto-policy-unreadable-warning"
-            className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 text-ui-sm dark:text-amber-300"
-          >
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-            <span>
-              Traycer can&apos;t read your saved policy right now, so saving is
-              turned off - a save from here would replace a policy nobody can
-              currently see. Reopen Settings to try again.
-            </span>
-          </div>
-        ) : null}
-
-        {readIsStale ? (
-          <div
-            role="status"
-            data-testid="auto-policy-stale-read-warning"
-            className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 text-ui-sm dark:text-amber-300"
-          >
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-            <span>
-              Traycer is showing a copy of your policy it couldn&apos;t refresh,
-              so saving is turned off - it can&apos;t tell whether another
-              device has changed it since. Reopen Settings to try again.
-            </span>
-          </div>
-        ) : null}
-
-        {checkFailed ? (
-          <div
-            role="status"
-            data-testid="auto-policy-opening-read-failed-warning"
-            className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 text-ui-sm dark:text-amber-300"
-          >
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-            <span>
-              Traycer couldn&apos;t check whether another device has changed
-              this policy, so saving is turned off - a save from here could
-              replace a newer version without warning. Reopen Settings to try
-              again.
-            </span>
-          </div>
-        ) : null}
-
-        {stale ? (
-          <div
-            role="status"
-            data-testid="auto-policy-stale-warning"
-            className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-sm text-amber-700 dark:text-amber-300"
-          >
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-            <span>
-              This policy was saved somewhere else since you opened it. Saving
-              now replaces that version.
-            </span>
-          </div>
-        ) : null}
+        <AutoPolicyEditorBanners
+          unreadable={unreadable}
+          readIsStale={readIsStale}
+          cannotWrite={cannotWrite}
+          checkFailed={checkFailed}
+          stale={stale}
+        />
 
         {/* Locked once Save is pressed, which is the repo's pending rule
             (`disabled` while in flight, label untouched, inline spinner) applied
@@ -241,7 +297,8 @@ export function AutoPolicyEditorDialog(props: {
                 unreadable ||
                 readIsStale ||
                 checkingForChanges ||
-                checkFailed
+                checkFailed ||
+                cannotWrite
               }
               onClick={() => props.onSave(body)}
             >

@@ -78,12 +78,18 @@ export interface ProviderTabInputs {
   /** `nativeCapabilities.supportedTabs` as advertised by the host. */
   readonly advertised: readonly ProviderSettingsTab[];
   /**
-   * Whether the selected host supports auto mode at all (it advertises
-   * `autoJudge.get`) - the one fact that makes a Permissions tab worth
-   * drawing. A host that predates auto mode has no judge to name, so the tab
-   * would describe a reviewer that does not exist there. Whether the tab
-   * holds a switch or a read-only line is the section's own question, read
-   * from the harness catalog (`nativeAutoJudge`) where the host says it.
+   * Whether the selected host has Auto mode at all - the one fact that makes a
+   * Permissions tab worth drawing. A host that predates it has no judge to
+   * name, so the tab would describe a reviewer that does not exist there.
+   *
+   * The CALLER decides it, and what it reads has moved twice: first
+   * `autoJudge.get` (a different method's fact - that one names the HOST-WIDE
+   * judge, while this tab holds the per-provider classifier), then the harness
+   * catalog's mode union (which an unconstrained row contributes nothing to),
+   * and now the negotiated `agent.gui.listHarnesses` line via
+   * `catalogLineKnowsAutoMode`. Whether the tab then holds a switch, a
+   * read-only line or a can't-write panel is the section's own question,
+   * answered from `nativeAutoJudge` and `providers.setAutoJudge` support.
    */
   readonly autoModeSupported: boolean;
 }

@@ -15,6 +15,7 @@ import {
 } from "@/lib/auto-mode/auto-judge-billing";
 import { providersListReportsAutoJudge } from "@/lib/providers/provider-auto-judge";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { catalogLineKnowsAutoMode } from "@/components/home/data/landing-options";
 
 // Stable params identity so the host-scoped query key stays referentially
 // constant across renders.
@@ -69,6 +70,32 @@ export function useAutoJudgeBilling(
   const followingHostId = useReactiveHostReadiness(client).hostId;
   const resolvedHostId = hostId ?? followingHostId;
   const supported = useHostSupportsMethod(resolvedHostId, "autoJudge.get");
+  // TWO gates, because this hook answers with TWO independent facts and only
+  // one of them comes from `autoJudge.get`.
+  //
+  // `autoJudge.get` gates its own read and nothing else - per-method
+  // negotiation, the rule this file has applied one method over twice now. What
+  // it must NOT gate is the provider-native path: `autoJudgeBillingForRun`
+  // takes that arm FIRST and resolves it from the harness catalog and
+  // `providers.list` alone, with no host-wide selection involved. A host
+  // advertising `providers.list@9.1`, a native classifier and
+  // `providers.setAutoJudge` while omitting the host-wide getter is one
+  // per-method negotiation permits, and gating both reads on the getter left it
+  // with no "no extra cost" disclosure at all - for the one path that genuinely
+  // bypasses the judge the getter describes.
+  //
+  // So the catalog reads are gated on the host having Auto mode AT ALL, proven
+  // either way round: the getter it advertises, or the catalog line that can
+  // spell the mode. Same two-proof shape as
+  // `hostUnderstandsAutoPermissionMode`, and neither proof is evidence about
+  // the other's method.
+  //
+  // Read unconditionally - `||` would make the hook call conditional.
+  const listHarnessesLine = useHostMethodSchemaVersion(
+    resolvedHostId,
+    "agent.gui.listHarnesses",
+  );
+  const autoModeHost = supported || catalogLineKnowsAutoMode(listHarnessesLine);
   const query = useHostQuery<HostRpcRegistry, "autoJudge.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -77,8 +104,8 @@ export function useAutoJudgeBilling(
     options: { enabled: supported, refetchOnWindowFocus: false },
   });
   const providersQuery = useProvidersListForClient(client, {
-    enabled: supported,
-    subscribed: supported,
+    enabled: autoModeHost,
+    subscribed: autoModeHost,
   });
   const providers = providersQuery.data?.providers;
   // SETTLED, not "has data". `providerRunsItsOwnJudge` reads an absent catalog
@@ -107,8 +134,8 @@ export function useAutoJudgeBilling(
   // provider read is - classifying on an unanswered catalog would publish
   // "Uses your Traycer credits" and flip once the rows land.
   const harnessesQuery = useGuiHarnessesQueryForClient(client, {
-    enabled: supported,
-    subscribed: supported,
+    enabled: autoModeHost,
+    subscribed: autoModeHost,
   });
   const harnesses = harnessesQuery.data?.harnesses;
   // Success only, for the same reason and by the same sweep: this read is just
@@ -149,11 +176,16 @@ export function useAutoJudgeBilling(
   // (`provider-disabled`, `no-default`, `unsupported-harness`). Optional on the
   // wire, so an older host answers `undefined` and reads as "not blocked".
   const blocked = query.data?.blocked ?? null;
+  // The provider-native answer needs the two catalog reads and nothing else;
+  // every other answer needs the host-wide selection as well. Splitting them is
+  // what lets a host without `autoJudge.get` still publish "no extra cost" -
+  // and `isProviderNative` can only be true for a non-null `harnessId`
+  // (`providerRunsItsOwnJudge` returns `false` for a null one), so that arm is
+  // guaranteed to be the one `autoJudgeBillingForRun` takes.
+  const catalogsSettled =
+    providersSettled && harnessesSettled && !providerJudgeUnknown;
   const loaded =
-    query.data !== undefined &&
-    providersSettled &&
-    harnessesSettled &&
-    !providerJudgeUnknown;
+    catalogsSettled && (isProviderNative || query.data !== undefined);
   return useMemo(
     () =>
       loaded

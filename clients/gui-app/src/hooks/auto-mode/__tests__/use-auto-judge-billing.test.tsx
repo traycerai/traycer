@@ -81,11 +81,24 @@ const providersListVersion = vi.hoisted(() => ({
   current: { major: 9, minor: 1 } as { major: number; minor: number } | null,
 }));
 
+// The negotiated `agent.gui.listHarnesses` line - the JOB 3 proof that lets
+// the catalog reads run without `autoJudge.get`. Defaulted to the 9.1 line
+// (the one `catalogLineKnowsAutoMode` requires) so every pre-existing case
+// keeps meaning what it did: they are about the two settled reads and the
+// getter's own support flag, not about this line.
+const listHarnessesVersion = vi.hoisted(() => ({
+  current: { major: 9, minor: 1 } as { major: number; minor: number } | null,
+}));
+
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: (hostId: string | null, method: string) =>
     useHostSupportsMethodMock(hostId, method),
-  useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
-    method === "providers.list" ? providersListVersion.current : null,
+  useHostMethodSchemaVersion: (_hostId: string | null, method: string) => {
+    if (method === "providers.list") return providersListVersion.current;
+    if (method === "agent.gui.listHarnesses")
+      return listHarnessesVersion.current;
+    return null;
+  },
 }));
 
 let autoJudgeGetData: AutoJudgeGetResponse | undefined;
@@ -122,9 +135,16 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 // capable and settled so the cases below still turn on what they are about.
 let harnessesData: { harnesses: GuiHarnessOption[] } | undefined;
 let harnessesSettled = true;
+// Forwards its ARGUMENTS, like the `providers.list` mock beside it. The hook
+// decides which enablement to ask each catalog for, and a stub that swallows
+// that argument cannot tell "the gate moved" from "the mock answers whatever
+// happens" - which is exactly the hole the `autoModeHost` case below closes.
 const useGuiHarnessesQueryForClientMock = vi.hoisted(() =>
   vi.fn<
-    () => {
+    (
+      client: FakeClient | null,
+      activity: { readonly enabled: boolean; readonly subscribed: boolean },
+    ) => {
       data: { harnesses: GuiHarnessOption[] } | undefined;
       isSuccess: boolean;
       isError: boolean;
@@ -132,7 +152,10 @@ const useGuiHarnessesQueryForClientMock = vi.hoisted(() =>
   >(),
 );
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQueryForClient: () => useGuiHarnessesQueryForClientMock(),
+  useGuiHarnessesQueryForClient: (
+    client: FakeClient | null,
+    activity: { readonly enabled: boolean; readonly subscribed: boolean },
+  ) => useGuiHarnessesQueryForClientMock(client, activity),
 }));
 
 function harnessRow(nativeAutoJudge: boolean): GuiHarnessOption {
@@ -179,6 +202,7 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
 afterEach(() => {
   vi.clearAllMocks();
   providersListVersion.current = { major: 9, minor: 1 };
+  listHarnessesVersion.current = { major: 9, minor: 1 };
   autoJudgeGetData = undefined;
   providersListData = undefined;
   harnessesData = { harnesses: [harnessRow(true)] };
@@ -512,6 +536,71 @@ describe("useAutoJudgeBilling", () => {
       );
 
       expect(result.current).toEqual({ kind: "traycer" });
+    });
+  });
+
+  // JOB 3: the catalog reads must not wait on `autoJudge.get` at all - they
+  // are gated on the host having Auto mode AT ALL, proven either by the
+  // getter's own support flag OR the negotiated `agent.gui.listHarnesses`
+  // line. A host with `providers.list@9.1`, a native classifier and
+  // `providers.setAutoJudge` but no `autoJudge.get` used to resolve `null`
+  // here and omit the "no extra cost" disclosure for the one path that
+  // bypasses the host-wide judge entirely.
+  describe("resolves the provider-native path from the catalog alone, without autoJudge.get", () => {
+    it("resolves provider-native when autoJudge.get is unsupported but the negotiated listHarnesses line proves Auto mode", () => {
+      useHostSupportsMethodMock.mockImplementation(() => false);
+      providersListData = {
+        providers: [providerState({ autoJudge: "provider" })],
+      };
+      harnessesData = { harnesses: [harnessRow(true)] };
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toEqual({
+        kind: "provider-native",
+        harnessId: CLAUDE_HARNESS_ID,
+        harnessLabel: "Claude Code",
+      });
+      // And the reads were actually ASKED for. The assertion above passes on a
+      // mocked query whatever `enabled` the hook requested, so it alone cannot
+      // tell "the gate moved off `autoJudge.get`" from "the mock answers
+      // regardless" - re-gating the catalogs on the getter alone leaves it
+      // green. This observes the request the hook makes, which is the decision
+      // under test.
+      expect(useProvidersListForClientMock).toHaveBeenCalledWith(
+        expect.anything(),
+        { enabled: true, subscribed: true },
+      );
+      expect(useGuiHarnessesQueryForClientMock).toHaveBeenCalledWith(
+        expect.anything(),
+        { enabled: true, subscribed: true },
+      );
+    });
+
+    // The control: the same host, but the run harness has no native judge to
+    // delegate to - this answer genuinely needs the host-wide selection,
+    // which the host cannot report without `autoJudge.get`. Must stay null
+    // rather than guessing.
+    it("still answers null for a non-native harness when autoJudge.get is unsupported", () => {
+      useHostSupportsMethodMock.mockImplementation(() => false);
+      providersListData = {
+        providers: [providerState({ autoJudge: "provider" })],
+      };
+      harnessesData = { harnesses: [harnessRow(false)] };
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toBeNull();
+      // Null for the RIGHT reason: the catalogs were still read (this host has
+      // Auto mode), and what is missing is only the host-wide selection.
+      expect(useProvidersListForClientMock).toHaveBeenCalledWith(
+        expect.anything(),
+        { enabled: true, subscribed: true },
+      );
     });
   });
 });

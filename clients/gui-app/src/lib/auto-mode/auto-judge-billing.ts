@@ -262,8 +262,20 @@ export function autoJudgeSelfBillingWarning(
   if (billing.kind === "provider-native") return null;
   // Nothing is spent when nothing runs.
   if (billing.kind === "blocked") return null;
+  // NO PER-COMMAND CALL COUNT. Both sentences used to promise "one per command
+  // reviewed", and the host's judge is not one call: `AutoJudgeService.runStages`
+  // invokes the adapter for stage 1 and invokes it AGAIN for stage 2 whenever
+  // stage 1 answers `yes` or `unsure`, while a cache hit can skip the call
+  // altogether. A number a user can multiply is worse than no number when the
+  // pipeline can spend two or zero.
+  //
+  // The claim that survives is the one the warning exists for: this spends the
+  // user's own provider allowance rather than Traycer's, and it is spent on top
+  // of the chat itself. The Copilot line keeps its ORDER-OF-MAGNITUDE range,
+  // which was measured over real sessions rather than derived from one call per
+  // command, and now says so.
   if (billing.harnessId === COPILOT_JUDGE_HARNESS_ID) {
-    return "Judge calls are Copilot premium requests — one per command reviewed, so an hour of Auto mode can use 60–350 of your monthly allowance.";
+    return "Judge calls are Copilot premium requests, charged to your monthly allowance — an hour of Auto mode can use 60–350 of it.";
   }
-  return `Judge calls use your own ${billing.harnessLabel} account, once per command reviewed — on top of your chat replies.`;
+  return `Judge calls use your own ${billing.harnessLabel} account, on top of your chat replies — a reviewed command can take more than one call.`;
 }

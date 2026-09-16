@@ -18,6 +18,11 @@ interface RenderPickerOptions {
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
   readonly harnessLabel: string | null;
   readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+  // The host-capability VETO on the "needs a newer Traycer" sentence. Stated
+  // rather than omitted: an absent prop reads as `false`, which is the
+  // pre-veto behaviour, so every case here would keep passing while the veto
+  // itself went untested.
+  readonly hostKnowsAutoMode: boolean;
   readonly turnActive: boolean;
   readonly judgeBilling: AutoJudgeBilling | null;
 }
@@ -27,6 +32,7 @@ const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
   supportedPermissionModes: null,
   harnessLabel: "Claude Code",
   catalogSupportedModes: null,
+  hostKnowsAutoMode: false,
   turnActive: false,
   judgeBilling: null,
 };
@@ -48,6 +54,7 @@ function renderPicker(overrides: Partial<RenderPickerOptions>) {
       supportedPermissionModes={options.supportedPermissionModes}
       harnessLabel={options.harnessLabel}
       catalogSupportedModes={options.catalogSupportedModes}
+      hostKnowsAutoMode={options.hostKnowsAutoMode}
       turnActive={options.turnActive}
       judgeBilling={options.judgeBilling}
       closeFocus="trigger"
@@ -195,7 +202,7 @@ describe("<PermissionsPicker /> - C2 mid-turn notice", () => {
     expect(
       screen.getByTestId("permission-option-mid-turn-notice").textContent,
     ).toBe(
-      "This turn switches over now, but the judge only starts on your next message - so edits are approved without review until then.",
+      "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.",
     );
   });
 
@@ -206,7 +213,7 @@ describe("<PermissionsPicker /> - C2 mid-turn notice", () => {
     expect(
       screen.getByTestId("permission-option-mid-turn-notice").textContent,
     ).toBe(
-      "This turn switches over now, but the judge only starts on your next message - so edits are approved without review until then.",
+      "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.",
     );
   });
 
@@ -226,5 +233,40 @@ describe("<PermissionsPicker /> - C2 mid-turn notice", () => {
     expect(
       screen.queryByTestId("permission-option-mid-turn-notice"),
     ).toBeNull();
+  });
+});
+
+describe("<PermissionsPicker /> - C6 mid-turn notice copy tripwire", () => {
+  // This sentence is pinned to `authorizingPermissionMode` in the HOST's
+  // `traycer-host/src/domain/chat/chat-session-manager.ts` (not in this
+  // submodule, read-only reference):
+  //
+  //   function authorizingPermissionMode(execution: ActiveExecution): PermissionMode {
+  //     if (execution.permissionMode === "auto" && execution.autoJudge === null) {
+  //       return "supervised";
+  //     }
+  //     return execution.permissionMode;
+  //   }
+  //
+  // i.e. a turn that enters `auto` mid-run with no judge bound collapses to
+  // `supervised` on the host, and `AUTO_MID_TURN_NOTICE` (`landing-options.ts`)
+  // is the GUI's prose description of that fact, shown in this picker at the
+  // moment of the choice.
+  //
+  // This assertion is a COPY TRIPWIRE ONLY: it pins the exact wording so an
+  // accidental rewording here is caught. It is explicitly NOT proof that the
+  // described collapsing behaviour is correctly implemented end-to-end - no
+  // GUI-only test can actually execute `authorizingPermissionMode`, which
+  // lives in a different repository (the internal host monorepo) that this
+  // suite has no access to and never imports from.
+  it("pins the mid-turn notice's exact wording (does not, and cannot, exercise authorizingPermissionMode)", () => {
+    renderPicker({ turnActive: true, value: "full_access" });
+    openMenu();
+
+    expect(
+      screen.getByTestId("permission-option-mid-turn-notice").textContent,
+    ).toBe(
+      "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.",
+    );
   });
 });

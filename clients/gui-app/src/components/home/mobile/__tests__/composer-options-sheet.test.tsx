@@ -40,6 +40,7 @@ function renderSheet(overrides: {
       // covered against the desktop picker, which shares the two pure helpers
       // this sheet calls.
       catalogSupportedModes={null}
+      hostKnowsAutoMode={false}
       turnActive={overrides.turnActive}
       judgeBilling={null}
       settingsLocked={overrides.settingsLocked}

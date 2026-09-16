@@ -18,6 +18,11 @@ import type {
   HostRpcError,
   RequestOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -1455,6 +1460,14 @@ function railProviderRow(name: string | RegExp, hidden: boolean): HTMLElement {
 
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
+    // The Permissions tab reads the NEGOTIATED `agent.gui.listHarnesses` line
+    // (see `permissionsTab`), through the real manifest registry - only the
+    // scope's host id is mocked. `9.1` is the line `auto` became expressible
+    // on, so this is the ordinary auto-capable host; the cases about the gate
+    // record their own manifest over it.
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
     guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
     useProvidersFocusStore.setState({
       focusHarnessId: null,
@@ -1541,6 +1554,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // fake timers mid-test, and a leaked fake clock would strand every later
     // test's timers (and Testing Library's own unmount work).
     vi.useRealTimers();
+    resetNegotiatedManifests();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     cleanup();
     useProvidersFocusStore.setState({
@@ -6776,22 +6790,26 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
   });
 
-  // The Permissions tab is derived from `catalogSupportedPermissionModes`
-  // over the harness CATALOG now, not from the host-wide `autoJudge.get`
-  // method - a different question one method over (see the comment on
-  // `permissionsTab` in `providers-settings-panel.tsx`). `useHostSupportsMethod`
-  // is stubbed `() => true` for every method throughout this file, so these
-  // three cases are what proves the gate actually moved: if the tab still
-  // read the old method, all three would show the tab.
-  it("hides the Permissions tab when the catalog reports no harness supporting auto", () => {
-    guiHarnessesCatalogMock.data = {
-      harnesses: DEFAULT_CATALOG_HARNESSES.map((harness) => ({
-        ...harness,
-        supportedPermissionModes: harness.supportedPermissionModes.filter(
-          (mode) => mode !== "auto",
-        ),
-      })),
-    };
+  // The Permissions tab is derived from the NEGOTIATED
+  // `agent.gui.listHarnesses` line, which is the fact that says this machine
+  // has Auto mode at all. Two earlier gates are retired: the host-wide
+  // `autoJudge.get` method (a different question one method over) and the
+  // catalog's UNION of `supportedPermissionModes` (which an unconstrained row
+  // contributes nothing to - see `permissionsTab` in
+  // `providers-settings-panel.tsx`).
+  //
+  // `useHostSupportsMethod` is stubbed `() => true` for every method throughout
+  // this file, which is what makes these cases prove the gate moved off the
+  // method; and they hold the ROWS fixed while moving the line, which is what
+  // proves it moved off the union.
+  it("hides the Permissions tab when the negotiated catalog line predates auto, even though the rows name it", () => {
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, {
+      "agent.gui.listHarnesses": {
+        major: agentGuiListHarnessesV91.schemaVersion.major,
+        minor: agentGuiListHarnessesV91.schemaVersion.minor - 1,
+      },
+    });
+    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
 
     render(
       <TooltipProvider>
@@ -6802,8 +6820,17 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByRole("tab", { name: "Permissions" })).toBeNull();
   });
 
-  it("shows the Permissions tab when the catalog reports a harness supporting auto", () => {
-    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
+  // THE REGRESSION the line-based gate exists for: rows that constrain nothing
+  // are rows the host accepts every mode on, and they contribute nothing to the
+  // union the previous gate read - so a union test hid the tab on exactly the
+  // host that would run Auto.
+  it("shows the Permissions tab on an auto-capable line whose rows are all unconstrained", () => {
+    guiHarnessesCatalogMock.data = {
+      harnesses: DEFAULT_CATALOG_HARNESSES.map((harness) => ({
+        ...harness,
+        supportedPermissionModes: [],
+      })),
+    };
 
     render(
       <TooltipProvider>
@@ -6814,8 +6841,9 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByRole("tab", { name: "Permissions" })).toBeDefined();
   });
 
-  it("hides the Permissions tab while the harness catalog is still loading (undefined)", () => {
-    guiHarnessesCatalogMock.data = undefined;
+  it("hides the Permissions tab until a handshake with this host has been recorded", () => {
+    resetNegotiatedManifests();
+    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
 
     render(
       <TooltipProvider>
@@ -6925,6 +6953,12 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     hostScopeMocks.host = undefined;
     hostScopeMocks.status = undefined;
     hostScopeMocks.client = null;
+    // Same auto-capable line the desktop suite records: the Permissions section
+    // is drawn from the negotiated `agent.gui.listHarnesses` minor, and this
+    // describe asserts the phone picker offers EVERY supported section.
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
     // Default fixture for the "entering a provider" tests below: a single
     // provider advertising every hub section.
     providerMocks.listResult.data = {
@@ -6941,6 +6975,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
 
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     // Restore before the next file's tests (or the suite above, if test order
     // ever changes) see the default desktop width again.
     Object.defineProperty(window, "innerWidth", {

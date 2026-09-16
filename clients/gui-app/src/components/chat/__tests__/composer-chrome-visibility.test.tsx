@@ -215,6 +215,7 @@ function renderPermissionsPicker() {
       supportedPermissionModes={null}
       harnessLabel={null}
       catalogSupportedModes={null}
+      hostKnowsAutoMode={false}
       turnActive={false}
       judgeBilling={null}
       closeFocus="composer"

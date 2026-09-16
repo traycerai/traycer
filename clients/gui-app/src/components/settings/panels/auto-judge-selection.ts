@@ -10,6 +10,9 @@
  */
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import { profileCommitId } from "@/components/providers/provider-profile-model";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import type {
   AutoJudgeEffective,
   AutoJudgeSelection,
@@ -180,6 +183,17 @@ export interface AutoJudgeRecordHealth {
   /** The harness is fine but the stored MODEL has left the catalog. */
   readonly storedModelUnavailable: boolean;
   /**
+   * The harness is fine but the stored PROFILE is gone from it.
+   *
+   * The third member of the record, and the one whose display fallback is the
+   * quietest: `resolveActiveProfileForHarness` presents the harness's FIRST
+   * profile when neither the browsed nor the stored id matches, and under two
+   * profiles it presents no strip at all - so a deleted profile leaves a picker
+   * that looks entirely settled while the host still holds the removed id and
+   * fails the judge call on it.
+   */
+  readonly storedProfileUnavailable: boolean;
+  /**
    * Nothing will call a judge, so no billing line may be shown beside it. Two
    * adjacent status lines - "no judge will run" and "this will be charged to
    * your provider account" - contradict each other, and the contradiction is
@@ -192,16 +206,49 @@ export function autoJudgeRecordHealth(input: {
   readonly hasStoredSelection: boolean;
   readonly unrecognizedHarnessId: string | null;
   readonly isBlocked: boolean;
+  /**
+   * Whether a write is in flight for this record.
+   *
+   * The detector below is "presented differs from stored", which reads a
+   * DISPLAY FALLBACK - and during a write it reads something else entirely.
+   * The store adopts the user's pick the moment they click, while the stored
+   * prop waits for the response, so an ordinary valid pick makes the two differ
+   * for the width of the round trip. Without this, choosing a perfectly
+   * available model announced that the machine "no longer offers" it and
+   * suppressed the billing line while the save was still in the air.
+   */
+  readonly saving: boolean;
   readonly storedHarnessId: string;
   readonly presentedHarnessId: string;
   readonly storedModelSlug: string;
   readonly presentedModelSlug: string;
   readonly modelsLoaded: boolean;
+  /** `null` is the ambient account, which no provider can delete. */
+  readonly storedProfileId: string | null;
+  /**
+   * Commit ids the stored harness's provider currently offers, or `undefined`
+   * while `providers.list` has not answered.
+   *
+   * The COMMIT ids (`profileCommitId`), not the wire rows: the stored record
+   * speaks the same vocabulary the composer does, where ambient is `null` and
+   * never the `"ambient"` wire sentinel. Passed as ids rather than as profile
+   * objects to keep this module free of provider types, the way its two
+   * siblings take slugs rather than model rows.
+   */
+  readonly offeredProfileIds: ReadonlyArray<string | null> | undefined;
 }): AutoJudgeRecordHealth {
   // A record this build cannot read at all is `unrecognizedHarnessId`'s line to
   // report; every reroute below would be a consequence of it, not a finding.
+  // A record mid-WRITE is not a record to diagnose. Every flag below compares
+  // the presented tuple against the stored one, and during a save those differ
+  // because the user just chose - which is the one difference that means
+  // nothing is wrong. The write settles quickly and either updates `stored`
+  // (success, through the write-through) or rolls the picker back (refusal,
+  // through `resetNonce`), so nothing is withheld for long.
   const readable =
-    input.hasStoredSelection && input.unrecognizedHarnessId === null;
+    input.hasStoredSelection &&
+    input.unrecognizedHarnessId === null &&
+    !input.saving;
   const storedHarnessUnavailable =
     readable && input.presentedHarnessId !== input.storedHarnessId;
   const storedModelUnavailable =
@@ -212,9 +259,22 @@ export function autoJudgeRecordHealth(input: {
     // resolve it to the harness default, so a difference there is the feature.
     input.storedModelSlug.length > 0 &&
     input.presentedModelSlug !== input.storedModelSlug;
+  // Gated behind the harness for the same reason the model is: a vanished
+  // harness is the finding, and its profile list going with it is a
+  // consequence, not a second one to report.
+  //
+  // Ambient (`null`) is excluded outright - it is the account the CLI is
+  // already signed into, it has no row to delete, and every provider has one.
+  const storedProfileUnavailable =
+    readable &&
+    !storedHarnessUnavailable &&
+    input.storedProfileId !== null &&
+    input.offeredProfileIds !== undefined &&
+    !input.offeredProfileIds.includes(input.storedProfileId);
   return {
     storedHarnessUnavailable,
     storedModelUnavailable,
+    storedProfileUnavailable,
     // The missing-MODEL case belongs here too, and its absence was a miss in
     // the same change that introduced it: the row already tells the user "Auto
     // mode will ask you instead of judging" for a vanished model, which IS this
@@ -222,8 +282,45 @@ export function autoJudgeRecordHealth(input: {
     // their provider account would be charged. Same contradiction the blocked
     // and missing-harness cases are here to prevent.
     noJudgeWillRun:
-      input.isBlocked || storedHarnessUnavailable || storedModelUnavailable,
+      input.isBlocked ||
+      storedHarnessUnavailable ||
+      storedModelUnavailable ||
+      storedProfileUnavailable,
   };
+}
+
+/**
+ * The profile commit ids a harness's provider currently offers.
+ *
+ * `undefined` for every "cannot say" - the providers read has not answered, the
+ * harness maps to no provider, or the catalog has no row for it - which is the
+ * value {@link autoJudgeRecordHealth} treats as unknown rather than as "every
+ * stored profile is gone".
+ *
+ * Pure and here rather than in the picker for this module's usual reason: it is
+ * the half worth testing without rendering one, and the component it serves is
+ * already at the complexity ceiling gui-app lints at.
+ */
+export function offeredJudgeProfileIds(
+  providers: ReadonlyArray<ProviderCliState> | undefined,
+  harnessId: string,
+): ReadonlyArray<string | null> | undefined {
+  if (providers === undefined) return undefined;
+  // Projected provider -> harness, not harness -> provider, and the direction
+  // is load-bearing. `guiHarnessIdToProviderId` takes a `GuiHarnessId`, while
+  // what arrives here is `HarnessModelSelection.harnessId` - declared
+  // `ProviderId` and carrying a `GuiHarnessId` at runtime (`autoJudgeSeed`
+  // stores `row.id`). The two unions differ in exactly one member
+  // (`claude-code` / `claude`), so neither is assignable to the other and
+  // calling that way round is a type error `vitest` cannot see. Reading each
+  // provider's OWN id through the total `providerIdToGuiHarnessId` needs no
+  // narrowing at all, and it is the same projection `HarnessModelPicker`
+  // already keys its profile map by.
+  const provider = providers.find(
+    (candidate) => providerIdToGuiHarnessId(candidate.providerId) === harnessId,
+  );
+  if (provider === undefined) return undefined;
+  return provider.profiles.map(profileCommitId);
 }
 
 /**

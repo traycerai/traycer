@@ -59,6 +59,9 @@ interface PermissionsPickerProps {
    * yet in evidence. See `unsupportedPermissionModeCopy`.
    */
   catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+  /** Whether the host's catalog LINE can spell `auto` - vetoes the upgrade
+   *  sentence in `unsupportedPermissionModeCopy`. */
+  hostKnowsAutoMode: boolean;
   /**
    * Whether a turn is running on this composer's chat right now. Drives the
    * `auto` row's mid-turn notice only; `false` is every surface with no turn
@@ -92,6 +95,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
     supportedPermissionModes,
     harnessLabel,
     catalogSupportedModes,
+    hostKnowsAutoMode,
     turnActive,
     judgeBilling,
     closeFocus,
@@ -223,6 +227,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
                           mode: option.id,
                           harnessLabel,
                           catalogSupportedModes,
+                          hostKnowsAutoMode,
                         })
                   }
                   metaLine={

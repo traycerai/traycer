@@ -28,9 +28,11 @@ import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
-import { catalogSupportedPermissionModes } from "@/components/home/data/landing-options";
+import {
+  useHostMethodSchemaVersion,
+  useHostSupportsMethod,
+} from "@/hooks/host/use-host-supports-method";
+import { catalogLineKnowsAutoMode } from "@/components/home/data/landing-options";
 import {
   useProviderProfileEnablementPending,
   useProvidersSetProfileEnabledForClient,
@@ -700,28 +702,38 @@ function ProvidersRailLayout({
   // tab appears when the rows land; the active tab is re-resolved against the
   // live list on every render.
   //
-  // **Derived from the CATALOG, not from `autoJudge.get`.** It used to gate on
-  // that method, which is a different question one method over: `autoJudge.get`
-  // names the HOST-WIDE judge (which agent runs Traycer's judge on this
-  // machine), while the tab's own content is the PER-PROVIDER classifier choice
-  // behind `providers.setAutoJudge`. RPC support is negotiated per method, so a
-  // host answering the setter and a `nativeAutoJudge` row while not advertising
-  // the host-wide getter had the tab removed above the section that now handles
-  // exactly that case. `auto` in the catalog is the honest question - it is the
-  // one fact that says this machine has Auto mode at all, it is what the
-  // composer's own clamp reads, and a pre-auto host filters the mode out of
-  // every row it serves (`agent.gui.listHarnesses@9.1`).
-  const harnessesQuery = useGuiHarnessesQuery({
-    enabled: true,
-    subscribed: true,
-  });
-  const permissionsTab = useMemo(
-    () =>
-      (
-        catalogSupportedPermissionModes(harnessesQuery.data?.harnesses) ?? []
-      ).includes("auto"),
-    [harnessesQuery.data?.harnesses],
+  // **Derived from the negotiated catalog LINE, not from `autoJudge.get` and
+  // not from the rows.** Two corrections, in order.
+  //
+  // It first gated on `autoJudge.get`, which is a different question one method
+  // over: that method names the HOST-WIDE judge (which agent runs Traycer's
+  // judge on this machine), while the tab's own content is the PER-PROVIDER
+  // classifier choice behind `providers.setAutoJudge`. RPC support is
+  // negotiated per method, so a host answering the setter and a
+  // `nativeAutoJudge` row while not advertising the host-wide getter had the
+  // tab removed above the section that handles exactly that case.
+  //
+  // It then gated on `auto` appearing in the catalog's UNION of
+  // `supportedPermissionModes`, which is wrong for a reason the empty-array
+  // work made visible: an unconstrained row (`[]`) is one the host accepts
+  // every mode on, and it contributes nothing to a union - so a catalog of
+  // unconstrained rows names no modes and the union test hides the tab on
+  // precisely the host that would run Auto.
+  //
+  // The line is the fact that survives both. `auto` became expressible in
+  // `supportedPermissionModes` at `agent.gui.listHarnesses@9.1`, so the
+  // negotiated minor says whether this machine HAS Auto mode, independently of
+  // what any row chooses to constrain. Whether a given provider then declines
+  // the mode is a per-provider fact the tab's own content already answers -
+  // switch, read-only line, or can't-write panel.
+  //
+  // An unrecorded handshake reads `false` and the tab appears once the first
+  // RPC to this host lands, which is the same hold the previous two gates had.
+  const listHarnessesLine = useHostMethodSchemaVersion(
+    hostId,
+    "agent.gui.listHarnesses",
   );
+  const permissionsTab = catalogLineKnowsAutoMode(listHarnessesLine);
   const [activeTab, setActiveTab] = useState<ProviderTabKey>(() =>
     initialActiveTab(
       orderedProviders,

@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/schemas";
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
-import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
-import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
@@ -16,7 +14,6 @@ import {
   type SessionImportRunStartedPayload,
 } from "@traycer-clients/shared/host-transport/session-import-run-client";
 import { fallbackPermissionMode } from "@/components/home/data/landing-options";
-import type { HostRpcRegistry } from "@/lib/host";
 import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { hostQueryKeys, sessionImportQueryKeys } from "@/lib/query-keys";
 import {
@@ -53,13 +50,13 @@ function newChatPermissionModeFor(hostId: string): PermissionMode {
  * demoted (`auto` → `auto_accept_edits`) unless this host has SHOWN it knows
  * `auto`.
  *
- * `permissionMode` rides in the `sessionImport.run` OPEN request, and that
- * request's schema is shared by `1.0` through `1.2` byte for byte - the slot binds
- * the live enum, so `auto` became expressible on `1.0` the moment the enum
- * widened. A pre-`1.2` host therefore accepts the frame and rejects the VALUE, as
- * a validation error, after the user has picked their sessions. That failure
- * is the whole reason `sessionImportRunV12` exists, so the client owes the
- * check rather than the wire.
+ * `permissionMode` rides in the `sessionImport.run` OPEN request. `1.0` and
+ * `1.1` bind `sessionImportRunOpenRequestSchemaPreAuto` and only `1.2` binds the
+ * live enum, so a pre-`1.2` host REJECTS the value - after the user has picked
+ * their sessions, which is the cost this check exists to avoid. (An earlier
+ * version of this note said all three lines shared one live-enum request; they
+ * were separated when the frozen pre-Auto request was introduced, and the
+ * client-owes-the-check conclusion is unchanged either way.)
  *
  * Demotion is one-way and never elevates: `auto` is `auto_accept_edits` plus a
  * judge, so dropping the judge is the honest half-measure, while
@@ -68,7 +65,6 @@ function newChatPermissionModeFor(hostId: string): PermissionMode {
  * predates the split and passes through untouched.
  */
 function importPermissionModeFor(input: {
-  readonly queryClient: QueryClient;
   readonly hostId: string;
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
 }): PermissionMode {
@@ -80,50 +76,42 @@ function importPermissionModeFor(input: {
 }
 
 /**
- * Whether this host has PROVEN it understands `auto`. Two independent facts
- * can prove it and either is enough, because neither is readable at every
- * moment this question is asked:
+ * Whether this host has PROVEN it understands `auto`. Two independent facts can
+ * prove it, and **both are about `sessionImport.run` itself** - which is the
+ * correction that matters here:
  *
- *   - the negotiated `sessionImport.run` line is at or above the minor `auto`
- *     shipped on. Authoritative - it is this very method's handshake - but
- *     `getMethodSchemaVersion` reconciles from LIVE sessions of that method,
- *     and the first run of a window is asked before one exists (a remote
- *     transport answers `null` always, by design);
- *   - the host's cached `agent.gui.listHarnesses` rows offer `auto` in a
- *     `supportedPermissionModes` array. A host below the catalog's own auto
- *     minor filters `auto` out of every row it serves, so its presence is the
- *     same negotiated fact the composer's clamp already reads.
+ *   - the negotiated line of a LIVE `sessionImport.run` session. Authoritative,
+ *     but `getMethodSchemaVersion` reconciles from live sessions of that
+ *     method, and the first run of a window is asked before one exists (a
+ *     remote transport answers `null` always, by design);
+ *   - the line this host ADVERTISED for that method in its negotiated manifest.
+ *     `ws-rpc-client.ts` records the host's whole manifest on every unary
+ *     openAck, so any RPC to this host - the app-load prefetcher, or the import
+ *     wizard's own catalog warm-up for a remote target - publishes it without a
+ *     stream existing.
  *
- * The second proof is only as good as the cache behind it, and that cache is
- * filled for the app-wide default host by the app-load prefetcher and for
- * every OTHER host by the import wizard itself, which mounts a catalog query
- * for its target host while the user is still picking sessions (see the
- * warm-up in `session-import-wizard.tsx`). Without that, an import aimed at a
- * remote host answered `null` to the minor - by transport design - and read an
- * empty catalog slot, so a user whose default is `auto` was demoted on every
- * such import. Both proofs are read synchronously here because the mode rides
- * the stream's OPEN request; nothing on this path can await one.
+ * **What is deliberately NOT a proof any more: the harness catalog.** This used
+ * to fall through to `agent.gui.listHarnesses` rows offering `auto`, with a
+ * manifest-based veto in front of it. That is a different method's fact, and
+ * per-method negotiation is exactly the rule it breaks: a catalog at `9.1`
+ * says the host can spell `auto` in a catalog ROW and says nothing about which
+ * `sessionImport.run` line the eventual stream negotiates. A host advertising
+ * `run@1.1` would have had `auto` put into an open request that rejects it,
+ * losing the import the user had already picked sessions for. The manifest read
+ * above covers every case the catalog was introduced for - it is filled by the
+ * same warm-up, and it is CONNECTION-scoped, so a host that came back on an
+ * older build has already overwritten it - without inferring across methods.
  *
- * Neither provable is "not proven", not "old host", and it demotes: an `auto`
- * a pre-auto host cannot parse costs the user their whole import, while a
+ * Both reads are synchronous because the mode rides the stream's OPEN request;
+ * nothing on this path can await one.
+ *
+ * Neither provable is "not proven", not "old host", and it demotes: an `auto` a
+ * pre-auto host cannot parse costs the user their whole import, while a
  * demotion costs them the judge on one they can re-run. The minor is compared
- * against the exported contract, never a literal, so a rebase that renumbers
- * it moves this with it.
- *
- * The cache's weakness is that it is keyed by `hostId` ALONE
- * (`hostQueryKeys.method`), so a response captured from one host PROCESS is
- * still served after that id has been taken over by another - a host restarted
- * on an older build is the realistic one. A cached `auto` would then start an
- * import the host on the other end rejects as a validation error, with no
- * fallback anywhere on this path. So a third fact is consulted BEFORE the
- * cache, and it can only veto: {@link handshakeProvesPreAutoCatalog}. It reads
- * the negotiated manifest, which is a property of the CONNECTION rather than of
- * a query key - every unary RPC to a host re-records it - so a host that came
- * back older has already overwritten the entry by the time the wizard's own
- * catalog query lands.
+ * against the exported contract, never a literal, so a rebase that renumbers it
+ * moves this with it.
  */
 function hostUnderstandsAutoPermissionMode(input: {
-  readonly queryClient: QueryClient;
   readonly hostId: string;
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
 }): boolean {
@@ -137,59 +125,36 @@ function hostUnderstandsAutoPermissionMode(input: {
     ) {
       return true;
     }
-    // THIS method's own handshake is the authority on THIS method, in both
-    // directions - which is the half that was missing. RPC versions are
-    // negotiated per method (root AGENTS.md), so `agent.gui.listHarnesses`
-    // advertising `auto` is not evidence about `sessionImport.run`, and letting
-    // the catalog answer over a negotiated `1.1` sends `auto` into a
-    // `1.1` open request that rejects it - losing the import the user just
-    // picked sessions for. The catalog is consulted only where this method's
-    // version is genuinely UNKNOWN (`null`), which is the case the catalog
-    // proof was introduced for.
+    // A live session that names an OLDER line is a definitive no, and nothing
+    // below may overturn it: this is the method's own handshake, on the very
+    // connection the open request is about to ride.
     if (versionIsBelow(negotiated, required)) return false;
   }
-  if (handshakeProvesPreAutoCatalog(input.hostId)) return false;
-  const harnesses = input.queryClient.getQueryData<ListGuiHarnessesResponse>(
-    hostQueryKeys.method<HostRpcRegistry, "agent.gui.listHarnesses">(
-      input.hostId,
-      "agent.gui.listHarnesses",
-      {},
-    ),
-  );
-  return (
-    harnesses?.harnesses.some((harness) =>
-      harness.supportedPermissionModes.includes("auto"),
-    ) ?? false
-  );
-}
-
-/**
- * Whether the host's last handshake POSITIVELY PLACES it below the catalog line
- * that carries `auto`, `agent.gui.listHarnesses@9.1`.
- *
- * A veto and never a proof, and the asymmetry is the point. `true` means a
- * completed handshake named a strictly older line, which is evidence a cached
- * catalog row cannot outrank: the rows came from a query key that carries only
- * `hostId`, the manifest came from the connection this import is about to run
- * on. Everything else - no handshake recorded yet, the line itself, anything
- * ABOVE it including a future major - returns `false` and leaves the decision
- * where it was. That is deliberately NOT
- * `negotiatedVersionMeetsRequirement`, which fails closed on a higher major:
- * fail-closed is right for a floor that gates a dispatch, and wrong here, where
- * the same answer would silently demote every import on the first host to ship
- * `agent.gui.listHarnesses@10.0`.
- *
- * The line is read off the exported contract rather than written as a literal,
- * for the reason the `sessionImport.run` floor above is: a renumbering on a
- * merge moves this with it.
- */
-function handshakeProvesPreAutoCatalog(hostId: string): boolean {
+  // THE SAME METHOD, asked a second way. The live-session read above is `null`
+  // whenever this window has no open `sessionImport.run` (the first run of a
+  // window; a remote transport always), and the answer used to fall through to
+  // the harness CATALOG - which is a different method's fact, and exactly the
+  // cross-method inference the rest of this file refuses. A warm
+  // `listHarnesses@9.1` cache proves the host can spell `auto` in a catalog
+  // row; it proves nothing about which `sessionImport.run` line the eventual
+  // stream will negotiate, and `run@1.1` rejects the open payload outright -
+  // losing the import the user just picked sessions for.
+  //
+  // The negotiated MANIFEST answers the method itself without needing a live
+  // session: `ws-rpc-client.ts` records the host's whole advertised manifest on
+  // every unary openAck, so any RPC to this host - including the wizard's own
+  // catalog warm-up - publishes `sessionImport.run`'s advertised line. It is
+  // connection-scoped, so a host that came back on an older build has already
+  // overwritten the entry, which is the same property
+  // `handshakeProvesPreAutoCatalog` was relying on one method over.
   const advertised = getNegotiatedHostMethodVersion(
-    hostId,
-    "agent.gui.listHarnesses",
+    input.hostId,
+    "sessionImport.run",
   );
   if (advertised === null) return false;
-  return versionIsBelow(advertised, agentGuiListHarnessesV91.schemaVersion);
+  return (
+    advertised.major === required.major && advertised.minor >= required.minor
+  );
 }
 
 /**
@@ -340,7 +305,6 @@ export function SessionImportRunController(): null {
         wsStreamClient: input.target.binding.wsStreamClient,
         selections: input.selections,
         permissionMode: importPermissionModeFor({
-          queryClient,
           hostId: input.target.hostId,
           wsStreamClient: input.target.binding.wsStreamClient,
         }),
@@ -353,7 +317,11 @@ export function SessionImportRunController(): null {
       });
       return client;
     },
-    [queryClient],
+    // No dependencies: the permission-mode resolution reads the live session's
+    // negotiated version and the connection manifest, neither of which is a
+    // React value. It used to close over `queryClient` for a cached catalog
+    // read that is no longer consulted.
+    [],
   );
 
   const start = useCallback(

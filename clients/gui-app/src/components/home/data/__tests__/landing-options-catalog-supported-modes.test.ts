@@ -63,10 +63,17 @@ describe("catalogSupportedPermissionModes", () => {
   });
 });
 
+// Every case here passes `hostKnowsAutoMode: false`, which is the value that
+// leaves the upgrade sentence REACHABLE. That is deliberate: with the veto
+// disabled, each assertion below is carried by the branch it is actually about
+// (the mode guard, the union membership, the null union) rather than by the
+// veto short-circuiting ahead of it. The veto's own behaviour is pinned
+// separately in `landing-options-permission-clamp.test.ts`.
 describe("unsupportedPermissionModeCopy", () => {
-  it("blames a newer Traycer when the catalog lists modes but none includes auto", () => {
+  it("blames a newer Traycer when a host that cannot spell auto lists modes without it", () => {
     expect(
       unsupportedPermissionModeCopy({
+        hostKnowsAutoMode: false,
         mode: "auto",
         harnessLabel: "Claude Code",
         catalogSupportedModes: [
@@ -81,6 +88,7 @@ describe("unsupportedPermissionModeCopy", () => {
   it("blames the provider when the catalog carries auto elsewhere but not on this row", () => {
     expect(
       unsupportedPermissionModeCopy({
+        hostKnowsAutoMode: false,
         mode: "auto",
         harnessLabel: "Claude Code",
         catalogSupportedModes: [
@@ -96,6 +104,7 @@ describe("unsupportedPermissionModeCopy", () => {
   it("blames the provider when catalogSupportedModes is null - not known yet", () => {
     expect(
       unsupportedPermissionModeCopy({
+        hostKnowsAutoMode: false,
         mode: "auto",
         harnessLabel: "Claude Code",
         catalogSupportedModes: null,
@@ -106,6 +115,7 @@ describe("unsupportedPermissionModeCopy", () => {
   it("falls back to the generic 'this provider' when harnessLabel is null", () => {
     expect(
       unsupportedPermissionModeCopy({
+        hostKnowsAutoMode: false,
         mode: "auto",
         harnessLabel: null,
         catalogSupportedModes: null,
@@ -123,6 +133,7 @@ describe("unsupportedPermissionModeCopy", () => {
   it("blames the provider, not the machine, when a non-auto mode is absent from the catalog", () => {
     expect(
       unsupportedPermissionModeCopy({
+        hostKnowsAutoMode: false,
         mode: "supervised",
         harnessLabel: "Claude Code",
         catalogSupportedModes: ["auto_accept_edits", "full_access"],
@@ -133,6 +144,7 @@ describe("unsupportedPermissionModeCopy", () => {
   it("blames the provider, not the machine, when full_access is absent from the catalog", () => {
     expect(
       unsupportedPermissionModeCopy({
+        hostKnowsAutoMode: false,
         mode: "full_access",
         harnessLabel: "Claude Code",
         catalogSupportedModes: ["auto_accept_edits", "supervised"],

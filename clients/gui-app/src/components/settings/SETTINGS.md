@@ -2830,58 +2830,62 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
     tab. The tab is client-derived like `account` (`provider-settings-tabs.ts`:
     never on the wire enum), sits right after Env, and is drawn for EVERY
-    provider once the selected host advertises `autoJudge.get` - a host that
-    predates auto mode has no judge to name, so it shows no tab. After Env
-    rather than after CLI & Args so it cannot become a provider's default tab:
-    amp and cursor advertise `env` without `general`, and a tab every provider
-    gets must not displace the one the provider asked for. Inside, a provider
-    whose GUI harness catalog row
-    reports `nativeAutoJudge` gets the two-option select; every other provider
-    gets a read-only line naming Traycer's judge and pointing at Settings ▸
-    Permissions - "nothing to choose" is still the answer to the question the
-    tab is named for. Nothing renders until the catalog has answered, so the
-    line never flashes at a provider about to get the select. It used to be a
-    section at the bottom of CLI & Args, drawn for Claude Code alone, where
-    nobody looking for "permissions" would open. Labelled by provider rather
-    than "Auto mode judge" because the row
-    under Permissions carries that name too and THIS is the one that wins
-    (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
-    so both rows now name whose judge they are about; the provider name is
-    interpolated, which renders "Who reviews Claude Code's commands" today and
-    does not lie if a second provider ever reports `nativeAutoJudge`. Its
-    description ends with the precedence sentence - choosing the provider's
-    classifier means chats on this provider skip Traycer's judge AND the Auto
-    mode policy entirely - because this control is where that is decided and
-    a user who has written a policy under Permissions has no other way to
-    learn it.
-    A two-option `Select` - Traycer's judge, or this
-    provider's own classifier - written through `providers.setAutoJudge` and
-    persisted as `autoJudge` in `provider-overrides.json`, beside
-    `terminalAgentArgs`, so it takes that neighbour's scoping and invalidation
-    (`providers.list` only; a judge choice cannot change availability).
-    Rendered ONLY for a provider whose `useGuiHarnessesQuery` row reports
-    `nativeAutoJudge: true` - a switch with one option is not a switch, and
-    every other provider runs Traycer's judge with nothing to choose. **Claude
-    Code is the only provider that reports it**, so it is the only select
-    drawn; the flag also stands in for a method gate, because it rides the
-    same catalog minor as the setter, so a host too old to accept the write
-    reports it `false`. Drawing the select is not the same as the provider judging: the
-    host's own store answers `traycer` for a provider nobody has switched, and
-    `resolveAutoJudgeForTurn` resolves anything that is not exactly `provider`
-    to Traycer's judge.
-    The stored value is read back through `ProviderCliState.autoJudge`, which is
-    `.optional()` on the wire rather than defaulted (a host that predates auto
-    mode omits the key, and absent must stay distinguishable at the protocol
-    boundary), so `providerAutoJudgeFor`
-    (`lib/providers/provider-auto-judge.ts`) is the one place that spells the
-    `?? "traycer"` fallback - "never chosen" and "host too old to say" landing
-    on Traycer's judge alike, the same direction every failure mode in the
-    host's own reader takes. The section also holds a local echo of a fresh pick
-    so the control does not snap back for the width of the `providers.list`
-    round-trip (nor permanently, on a host that never reports the field); the
-    echo clears itself the moment the read agrees, which is what lets another
-    window's edit through, and the row is keyed by `providerId` so switching
-    providers discards it.
+    provider once the selected host's negotiated
+    `agent.gui.listHarnesses` line can spell `auto` (`catalogLineKnowsAutoMode`)
+    - a host that predates auto mode has no judge to name, so it shows no tab.
+      Two earlier gates were retired here: `autoJudge.get`, which names the
+      HOST-WIDE judge rather than this tab's per-provider classifier, and the
+      catalog's mode UNION, which an unconstrained row contributes nothing to. After Env
+      rather than after CLI & Args so it cannot become a provider's default tab:
+      amp and cursor advertise `env` without `general`, and a tab every provider
+      gets must not displace the one the provider asked for. Inside, a provider
+      whose GUI harness catalog row
+      reports `nativeAutoJudge` gets the two-option select; every other provider
+      gets a read-only line naming Traycer's judge and pointing at Settings ▸
+      Permissions - "nothing to choose" is still the answer to the question the
+      tab is named for. Nothing renders until the catalog has answered, so the
+      line never flashes at a provider about to get the select. It used to be a
+      section at the bottom of CLI & Args, drawn for Claude Code alone, where
+      nobody looking for "permissions" would open. Labelled by provider rather
+      than "Auto mode judge" because the row
+      under Permissions carries that name too and THIS is the one that wins
+      (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
+      so both rows now name whose judge they are about; the provider name is
+      interpolated, which renders "Who reviews Claude Code's commands" today and
+      does not lie if a second provider ever reports `nativeAutoJudge`. Its
+      description ends with the precedence sentence - choosing the provider's
+      classifier means chats on this provider skip Traycer's judge AND the Auto
+      mode policy entirely - because this control is where that is decided and
+      a user who has written a policy under Permissions has no other way to
+      learn it.
+      A two-option `Select` - Traycer's judge, or this
+      provider's own classifier - written through `providers.setAutoJudge` and
+      persisted as `autoJudge` in `provider-overrides.json`, beside
+      `terminalAgentArgs`, so it takes that neighbour's scoping and invalidation
+      (`providers.list` only; a judge choice cannot change availability).
+      Rendered ONLY for a provider whose `useGuiHarnessesQuery` row reports
+      `nativeAutoJudge: true` - a switch with one option is not a switch, and
+      every other provider runs Traycer's judge with nothing to choose. **Claude
+      Code is the only provider that reports it**, so it is the only select
+      drawn; the flag also stands in for a method gate, because it rides the
+      same catalog minor as the setter, so a host too old to accept the write
+      reports it `false`. Drawing the select is not the same as the provider judging: the
+      host's own store answers `traycer` for a provider nobody has switched, and
+      `resolveAutoJudgeForTurn` resolves anything that is not exactly `provider`
+      to Traycer's judge.
+      The stored value is read back through `ProviderCliState.autoJudge`, which is
+      `.optional()` on the wire rather than defaulted (a host that predates auto
+      mode omits the key, and absent must stay distinguishable at the protocol
+      boundary), so `providerAutoJudgeFor`
+      (`lib/providers/provider-auto-judge.ts`) is the one place that spells the
+      `?? "traycer"` fallback - "never chosen" and "host too old to say" landing
+      on Traycer's judge alike, the same direction every failure mode in the
+      host's own reader takes. The section also holds a local echo of a fresh pick
+      so the control does not snap back for the width of the `providers.list`
+      round-trip (nor permanently, on a host that never reports the field); the
+      echo clears itself the moment the read agrees, which is what lets another
+      window's edit through, and the row is keyed by `providerId` so switching
+      providers discards it.
   - **API-key providers (Cursor).** Cursor authenticates with an API key rather
     than a CLI login, so it renders an `ApiKeySection` (masked input +
     Save/Clear) when `state.apiKey.supported` — **as the whole body of the
@@ -3771,7 +3775,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     is the one place that decides. What VARIES is the severity: Copilot gets a
     number, because it is the only harness whose billing unit is a fixed
     monthly allotment of premium requests, and the sentence quotes TRAYCER'S
-    OWN call rate ("one per command reviewed, so an hour of Auto mode can use
+    OWN allowance ("an hour of Auto mode can use
     60-350 of your monthly allowance") rather than GitHub's allotment - the
     rate is a fact about our behaviour that we control and that cannot go stale
     when GitHub reprices. Every other non-`traycer` harness gets the generic
@@ -3793,8 +3797,13 @@ deny`, `Hard deny`) and nothing else - the guidance about what belongs under
     auto-saved is a keystroke racing another device. Two subtleties:
     `updatedAt: null` means "cannot tell" - the protocol sends it both for a
     policy never saved AND for one the host is serving from a cache it could
-    not refresh - so the stale-edit banner fires only on two DIFFERENT non-null
-    stamps, and the summary says "Set" rather than inventing a date; and the
+    not refresh - so the stale-edit banner fires on a
+    null-to-real transition as well as on two different non-null stamps (a
+    policy CREATED elsewhere while the editor was open is the case the
+    symmetric check swallowed), and the summary says "Set" rather than
+    inventing a date - except on a `stale` read with an empty body, where it
+    says it could not check rather than claiming "Not set" about an absence the
+    host merely had cached; and the
     64 KiB cap is checked in UTF-8 BYTES as a courtesy pre-flight only, the
     server being the enforcement (the authoritative constant lives in the
     closed-source service and reaches no client contract).

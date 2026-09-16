@@ -130,6 +130,23 @@ export function ProviderAutoJudgeSection({
     subscribed: false,
   });
   const providersUpdatedAt = providersQuery.dataUpdatedAt;
+  // LOCKED THROUGH THE AUTHORITATIVE REFRESH, not just through the write.
+  //
+  // `useHostScopedMutation` fires its invalidations as `void
+  // queryClient.invalidateQueries(...)`, so the mutation reports success while
+  // the `providers.list` refetch it triggered is still in flight. Unlocking
+  // there opens a window with a specific, reproducible failure: pick B in it,
+  // and the read belonging to write A lands first, advances `dataUpdatedAt`,
+  // retires B's echo by the rule below, and the control presents the SUPERSEDED
+  // A choice while B is still saving. (Measured on the real QueryClient:
+  // `mutation.status=success` with `query.fetchStatus=fetching`.)
+  //
+  // Holding the lock across the refresh removes the window rather than trying
+  // to date-order two reads against two writes - a second pick simply cannot be
+  // made until the value under the control has settled. The cost is that an
+  // unrelated `providers.list` refresh also disables it briefly, which is the
+  // honest reading of the same state: the value this control presents is moving.
+  const settling = setAutoJudge.isPending || providersQuery.isFetching;
   const value =
     echo !== null &&
     echo.against === stored &&
@@ -248,7 +265,7 @@ export function ProviderAutoJudgeSection({
           // control back to the SUPERSEDED choice until the second round trip
           // lands. A control presenting an older answer as current is the one
           // outcome this row cannot have.
-          disabled={setAutoJudge.isPending}
+          disabled={settling}
           onValueChange={(next) => {
             // Radix hands back a plain string; only the two members this
             // control renders may reach the wire.
@@ -279,7 +296,10 @@ export function ProviderAutoJudgeSection({
             </SelectItem>
           </SelectContent>
         </Select>
-        {setAutoJudge.isPending ? <MutedAgentSpinner /> : null}
+        {/* The spinner follows the same `settling` flag as the lock: a control
+            that is disabled with nothing beside it reads as broken, and the
+            refresh half of the wait is exactly as real as the write half. */}
+        {settling ? <MutedAgentSpinner /> : null}
       </div>
       {/* The appended sentence is the precedence one, and it is on THIS row
           because this is the switch that decides: a provider set to its own

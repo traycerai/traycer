@@ -33,6 +33,8 @@ interface ComposerOptionsSheetProps {
   readonly harnessLabel: string | null;
   /** See `PermissionsPicker`: the union across the host's whole catalog. */
   readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+  /** See `PermissionsPicker`'s prop of the same name. */
+  readonly hostKnowsAutoMode: boolean;
   /** See `PermissionsPicker`: drives the `auto` row's mid-turn notice. */
   readonly turnActive: boolean;
   /** See `PermissionsPicker`: which pocket this host's judge spends. */
@@ -105,6 +107,7 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                           mode: option.id,
                           harnessLabel: props.harnessLabel,
                           catalogSupportedModes: props.catalogSupportedModes,
+                          hostKnowsAutoMode: props.hostKnowsAutoMode,
                         })
                   }
                   // The same two `auto`-only lines the desktop dropdown adds,

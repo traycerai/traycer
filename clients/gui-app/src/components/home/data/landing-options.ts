@@ -10,6 +10,8 @@ import {
   type AgentReasoningEffortOption,
   type AgentServiceTierOption,
 } from "@traycer/protocol/host/index";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import {
   FileCheck2,
@@ -256,6 +258,43 @@ function findSafestSupportedPermissionMode(
 }
 
 /**
+ * Whether this host's negotiated harness-catalog line can SPELL `auto` at all.
+ *
+ * A HOST capability, which is a different question from every predicate around
+ * it. `harnessHonorsPermissionMode` asks whether one row would accept a mode;
+ * {@link catalogSupportedPermissionModes} asks which modes the rows collectively
+ * name. Neither can answer "does this machine have Auto mode", and the gap
+ * between them is exactly where a surface gets it wrong: a catalog of
+ * UNCONSTRAINED rows (`supportedPermissionModes: []`, which the host reads as
+ * accepting every mode) names no modes at all, so a union-based test concludes
+ * "no auto here" about a host that would run it.
+ *
+ * The honest evidence is the negotiated line. `auto` became expressible in
+ * `supportedPermissionModes` at `agent.gui.listHarnesses@9.1`, and a host below
+ * it filters the mode out of every row it serves - so the line, not the rows,
+ * is what says the capability exists. Same shape as
+ * `session-import-run-controller`'s `handshakeProvesPreAutoCatalog`, which
+ * reads the same manifest entry against the same contract; that one is a VETO
+ * and this is a PROOF, which is why they are two predicates rather than one
+ * (see `versionIsBelow`'s note on why the higher-major case has to answer
+ * differently for each).
+ *
+ * `null` - no handshake recorded for this host yet - is NOT proven, and that is
+ * the safe direction for every caller: a surface that appears a moment later is
+ * ordinary, one that claims a capability it has not seen evidence for is not.
+ * The version is compared against the CONTRACT rather than a literal, so a
+ * rebase that renumbers the line moves this with it.
+ */
+export function catalogLineKnowsAutoMode(
+  version: SchemaVersion | null,
+): boolean {
+  if (version === null) return false;
+  const line = agentGuiListHarnessesV91.schemaVersion;
+  if (version.major !== line.major) return false;
+  return version.minor >= line.minor;
+}
+
+/**
  * Every permission mode ANY harness on this host honors - the union across the
  * catalog, not one row's set.
  *
@@ -276,6 +315,18 @@ export function catalogSupportedPermissionModes(
   if (harnesses === undefined || harnesses.length === 0) return null;
   const union = new Set<PermissionMode>();
   for (const harness of harnesses) {
+    // An UNCONSTRAINED row makes the whole union unknowable, and skipping that
+    // is how `[[], ["full_access"]]` came out as "this host only does full
+    // access" while the first harness honours every mode. A union can only
+    // describe rows that constrain something; one that does not is a row whose
+    // modes are "all of them", and adding all of them would be a different
+    // lie - it would claim `auto` for a pre-auto host whose adapters simply
+    // declare nothing. `null` is the honest answer: nothing is known about
+    // this catalog's aggregate, which every caller already reads as "keep
+    // today's copy" (see `harnessHonorsPermissionMode` for the per-row rule
+    // this mirrors, and `catalogLineKnowsAutoMode` for the question a union
+    // was never able to answer).
+    if (harness.supportedPermissionModes.length === 0) return null;
     for (const mode of harness.supportedPermissionModes) union.add(mode);
   }
   if (union.size === 0) return null;
@@ -288,24 +339,30 @@ export function catalogSupportedPermissionModes(
  * What the `auto` row says when the user is mid-turn and about to switch INTO
  * it.
  *
- * **This used to say "This turn keeps running as it is", and that was false in
- * the one direction a permission notice must never be wrong.** A mid-turn mode
- * change is not deferred: `handleComposerSettingsChange` forwards
- * `activePermissionModeUpdate` the moment the mode moves while a run is in
- * progress, the host mutates `activeExecution.permissionMode` on arrival, and
- * the file-edit coordinator authorizes against that live value - its gate is
- * `authorizingMode !== "supervised"`, so a turn that was showing every edit for
- * approval starts auto-approving them on the next one. What does NOT arrive is
- * the judge: `autoJudge` is bound once, at turn start, so it stays `null` for
- * the rest of this turn. The user is left in neither mode - edits passing with
- * nothing reviewing them - and the old sentence told them nothing had changed.
+ * **This sentence has been wrong in BOTH directions, which is why it now claims
+ * as little as it can.** It first said "This turn keeps running as it is",
+ * which was false because a mid-turn change is not deferred:
+ * `handleComposerSettingsChange` forwards `activePermissionModeUpdate` the
+ * moment the mode moves while a run is in progress, and the host mutates
+ * `activeExecution.permissionMode` on arrival. It was then corrected to say
+ * edits are "approved without review until then" - true of the host at that
+ * moment, and false of the host today.
  *
- * One sentence for all three starting modes rather than three, because the
- * consequence is the same from each: under `auto` the coordinator's gate is not
- * `supervised`, so edits pass. (It overstates by exactly one narrow case - an
- * edit to a file a later action READS is still put to the user under `auto`,
- * which is the judged mode's own missing half - and overstating a permission
- * warning is the safe direction.)
+ * **The fact it is pinned to is `authorizingPermissionMode` in the host's
+ * `chat-session-manager.ts`:** `permissionMode === "auto" && autoJudge === null`
+ * returns `"supervised"`, and that is what `FileEditCoordinator` is handed
+ * (`getPermissionMode: () => authorizingPermissionMode(execution)`). So a turn
+ * that enters `auto` without a judge bound now FAILS CLOSED - every edit is put
+ * to the user - rather than passing unreviewed. If that function changes, this
+ * sentence moves with it; nothing in this repo can go red to tell you, because
+ * the behaviour it describes lives in another one.
+ *
+ * It also no longer says WHEN the judge starts, and that clause was the second
+ * error: `autoJudge` is bound once at turn start, so a turn that began in
+ * `auto`, left it and came back still has its judge - for that user the judge
+ * did not wait for the next message. The claim that survives both cases is the
+ * one that matters at the moment of the choice: the switch applies now, and
+ * nothing passes unchecked either way.
  *
  * It lives in the PICKER rather than as a chat notice deliberately: the user's
  * attention is in the menu at the moment of the choice, and this is a
@@ -313,7 +370,7 @@ export function catalogSupportedPermissionModes(
  * after the fact.
  */
 export const AUTO_MID_TURN_NOTICE =
-  "This turn switches over now, but the judge only starts on your next message - so edits are approved without review until then.";
+  "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.";
 
 /**
  * What a disabled option says, and WHO it blames.
@@ -342,10 +399,25 @@ export function unsupportedPermissionModeCopy(input: {
   readonly mode: PermissionMode;
   readonly harnessLabel: string | null;
   readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+  /**
+   * Whether the host's negotiated catalog line can spell `auto` at all
+   * ({@link catalogLineKnowsAutoMode}). `true` VETOES the upgrade sentence.
+   */
+  readonly hostKnowsAutoMode: boolean;
 }): string {
-  const { mode, harnessLabel, catalogSupportedModes } = input;
+  const { mode, harnessLabel, catalogSupportedModes, hostKnowsAutoMode } =
+    input;
+  // The upgrade sentence is a claim about the MACHINE, and the mode union
+  // cannot make it. `auto` missing from the union has two causes - a host that
+  // cannot spell it, and a 9.1 host whose available providers all decline it -
+  // and telling the second user to update Traycer sends them after a fix that
+  // changes nothing, which is the mirror of the bug this sentence was written
+  // to prevent. So the negotiated line gets a veto: if the host demonstrably
+  // knows `auto`, its absence here is the providers' doing and the provider
+  // sentence is the true one.
   if (
     mode === "auto" &&
+    !hostKnowsAutoMode &&
     catalogSupportedModes !== null &&
     !catalogSupportedModes.includes(mode)
   ) {

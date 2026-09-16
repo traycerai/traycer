@@ -71,8 +71,23 @@ export function useAutoPolicySetMutation(): UseMutationResult<
         hostId: client.getActiveHostId() ?? null,
         viewerUserId,
       }),
-      onSuccess: (data, variables, ctx) => {
+      // CANCEL, then write - see `use-auto-judge-set-mutation.ts` for the
+      // measurement. The policy read has an opening-read lock, but that covers
+      // only the read the EDITOR fires when it opens; a recovery sweep or a
+      // `refetchOnMount: "always"` remount behind the dialog is an equally old
+      // snapshot with nothing stopping it from landing after this write.
+      //
+      // Cancelling the VIEWER's entry alone, for the same reason the write
+      // below addresses it alone: another viewer's in-flight read is not this
+      // save's business, and cancelling on the method-scope prefix would reach
+      // every partition under the host.
+      onSuccess: async (data, variables, ctx) => {
         if (ctx.hostId === null) return;
+        const queryKey = hostQueryKeys.autoPolicyForViewer(
+          ctx.hostId,
+          ctx.viewerUserId,
+        );
+        await queryClient.cancelQueries({ queryKey });
         // The VIEWER's entry, not the method scope. The read cache is
         // partitioned by the authenticated user (`useAutoPolicyQuery`), and a
         // filter on the bare method scope prefix-matches every partition under
@@ -81,12 +96,7 @@ export function useAutoPolicySetMutation(): UseMutationResult<
         // switch. That is the cross-identity leak the read partition exists to
         // close, arriving through the write path.
         queryClient.setQueriesData<AutoPolicyGetResponse>(
-          {
-            queryKey: hostQueryKeys.autoPolicyForViewer(
-              ctx.hostId,
-              ctx.viewerUserId,
-            ),
-          },
+          { queryKey },
           (previous) => ({
             body: variables.body,
             updatedAt: data.updatedAt,

@@ -173,10 +173,14 @@ const FIXTURES = {
   // test stayed green while it silently absorbed `reasonix`. Only the tag-based
   // `protocol-compat` gate caught it.
   //
-  // These two rows are what make that class fail locally from now on: 1.0 is
-  // the frozen released line, 2.0 dumps LIVE so the next growth attempt goes
-  // red here first. The lesson generalizes - "the three id-carrying methods" was
-  // never the real boundary; grep RESPONSES for id enums.
+  // These THREE rows are what make that class fail locally from now on. `1.0`
+  // and `2.0` are both FROZEN released lines - `2.0` stopped being the live one
+  // when `auto` opened `3.0` - and `3.0` dumps LIVE, so the next growth attempt
+  // goes red here first. Regenerate the live row when a growth is intended;
+  // never regenerate a frozen one, which is the mistake this comment previously
+  // invited by naming `2.0` as the live dump. The lesson generalizes - "the
+  // three id-carrying methods" was never the real boundary; grep RESPONSES for
+  // id enums.
   "epic.getChatRunSettings@1.0": dump(getChatRunSettingsResponseSchemaV10),
   "epic.getChatRunSettings@2.0": dump(getChatRunSettingsResponseSchemaV20),
   "epic.getChatRunSettings@3.0": dump(getChatRunSettingsResponseSchema),

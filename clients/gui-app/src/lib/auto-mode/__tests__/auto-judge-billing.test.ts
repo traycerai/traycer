@@ -129,7 +129,7 @@ describe("autoJudgeSelfBillingWarning", () => {
         harnessLabel: "Copilot",
       }),
     ).toBe(
-      "Judge calls are Copilot premium requests — one per command reviewed, so an hour of Auto mode can use 60–350 of your monthly allowance.",
+      "Judge calls are Copilot premium requests, charged to your monthly allowance — an hour of Auto mode can use 60–350 of it.",
     );
   });
 
@@ -141,7 +141,7 @@ describe("autoJudgeSelfBillingWarning", () => {
         harnessLabel: "Claude Code",
       }),
     ).toBe(
-      "Judge calls use your own Claude Code account, once per command reviewed — on top of your chat replies.",
+      "Judge calls use your own Claude Code account, on top of your chat replies — a reviewed command can take more than one call.",
     );
   });
 });

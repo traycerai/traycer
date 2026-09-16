@@ -89,10 +89,16 @@ export function GeneralSettingsPanel() {
                 supportedPermissionModes={null}
                 harnessLabel={null}
                 // Install-wide and harness-agnostic, so there is no catalog to
-                // union, no turn to be mid-way through, and no one host whose
-                // judge this row could name: all three stay at the values that
-                // render exactly what this row rendered before them.
+                // union, no turn to be mid-way through, no one host whose judge
+                // this row could name, and no negotiated catalog line to read:
+                // all four stay at the values that render exactly what this row
+                // rendered before them. `hostKnowsAutoMode` is inert here
+                // either way - it only vetoes the upgrade sentence, which a
+                // `null` union already makes unreachable - so it withholds the
+                // claim rather than asserting one about a host this row has
+                // deliberately not scoped to.
                 catalogSupportedModes={null}
+                hostKnowsAutoMode={false}
                 turnActive={false}
                 judgeBilling={null}
                 closeFocus="trigger"

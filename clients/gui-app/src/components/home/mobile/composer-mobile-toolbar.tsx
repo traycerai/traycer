@@ -4,10 +4,12 @@ import { useStore } from "zustand";
 import { ComposerSendButton } from "@/components/home/composer/composer-send-button";
 import { ComposerOptionsSheet } from "@/components/home/mobile/composer-options-sheet";
 import {
+  catalogLineKnowsAutoMode,
   catalogSupportedPermissionModes,
   findPermissionOption,
   normalizePermissionMode,
 } from "@/components/home/data/landing-options";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import {
@@ -88,6 +90,14 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   const catalogSupportedModes = useMemo(
     () => catalogSupportedPermissionModes(harnesses),
     [harnesses],
+  );
+  // The HOST capability the union cannot express: a catalog of unconstrained
+  // rows names no modes at all, and even a fully constrained one cannot tell
+  // "this machine predates `auto`" from "every provider here declines it".
+  // The negotiated catalog line answers the first question directly, and the
+  // picker's unsupported copy uses it to decide who to blame.
+  const hostKnowsAutoMode = catalogLineKnowsAutoMode(
+    useHostMethodSchemaVersion(runTargetHostId, "agent.gui.listHarnesses"),
   );
   // Same two inputs as the desktop toolbar - see `ComposerToolbar`.
   const runHarnessId = useStore(store, (s) => s.selection.harnessId);
@@ -189,6 +199,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
         supportedPermissionModes={supportedPermissionModes}
         harnessLabel={harnessLabel}
         catalogSupportedModes={catalogSupportedModes}
+        hostKnowsAutoMode={hostKnowsAutoMode}
         turnActive={activeTurnStatus !== null && !settingsLocked}
         judgeBilling={judgeBilling}
         settingsLocked={settingsLocked}

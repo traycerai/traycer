@@ -88,6 +88,16 @@ vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
 // lazily, not a value it captures at declaration time.
 let policy: AutoPolicyGetResponse | undefined;
 
+// C1: the signed-in viewer, read through the same seam the section itself
+// uses (`useCloudChatViewerId`). `AutoModeRows` is keyed by
+// `JSON.stringify([viewerUserId, scope.hostId])`, and this suite otherwise has
+// no way to move the viewer half of that key - the real hook reads the auth
+// store, which nothing else here stands up.
+let viewerUserId = "viewer-a";
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatViewerId: () => viewerUserId,
+}));
+
 // The row's own regression guard for the stale-edit warning: `openEditor`
 // calls `query.refetch()` (never awaited) after capturing `loadedUpdatedAt`,
 // so a test that wants to prove the warning can actually fire needs a
@@ -139,6 +149,7 @@ beforeEach(() => {
   capabilityProbeMock.mockClear();
   policy = undefined;
   autoPolicyRefetchMock.mockReset();
+  viewerUserId = "viewer-a";
 });
 
 afterEach(() => {
@@ -266,6 +277,23 @@ describe("<AutoModeSettingsSection />", () => {
         "auto-policy-edit",
       ) as HTMLButtonElement;
       expect(editButton.disabled).toBe(true);
+    });
+
+    // C4: a stale read carrying `body: null` must not be read as "never saved".
+    // `readState: "stale"` is the host serving a copy it could not refresh, so
+    // an empty body there is the absence it cached, not proof the account has
+    // no policy - "Not set" is the wrong claim for a read that is stale.
+    it('on a stale read with a null body: shows "Couldn\'t check your policy", not "Not set"', () => {
+      policy = {
+        body: null,
+        updatedAt: null,
+        source: "account",
+        readState: "stale",
+      };
+      render(<AutoModeSettingsSection />);
+
+      expect(screen.getByText("Couldn't check your policy")).toBeTruthy();
+      expect(screen.queryByText("Not set")).toBeNull();
     });
 
     it("on a fresh read with a saved body: shows the saved summary and an enabled Edit policy button", () => {
@@ -498,6 +526,46 @@ describe("<AutoModeSettingsSection />", () => {
       rerender(<AutoModeSettingsSection />);
 
       expect(screen.getByTestId("auto-policy-stale-warning")).toBeTruthy();
+    });
+  });
+
+  // C1: `AutoModeRows` is keyed by
+  // `JSON.stringify([viewerUserId, scope.hostId])`. The host half already had
+  // coverage elsewhere; this is the viewer half - switching the signed-in
+  // account while the host stays put and the policy query answers from a
+  // warm/cached record must remount the row rather than let an already-open
+  // editor go on presenting the outgoing viewer's draft under the new one.
+  describe("viewer-keyed remount (AutoModeRows key)", () => {
+    beforeEach(() => {
+      supportsPolicy = true;
+    });
+
+    it("discards the in-progress policy draft when the signed-in viewer changes with the host unchanged", () => {
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: "2026-09-10T00:00:00.000Z",
+        source: "account",
+        readState: "fresh",
+      };
+      const { rerender } = render(<AutoModeSettingsSection />);
+
+      fireEvent.click(screen.getByTestId("auto-policy-edit"));
+      fireEvent.change(screen.getByTestId("auto-policy-input"), {
+        target: { value: "## Environment\nEdited draft for viewer A." },
+      });
+      const textarea = screen.getByTestId(
+        "auto-policy-input",
+      ) as HTMLTextAreaElement;
+      expect(textarea.value).toBe("## Environment\nEdited draft for viewer A.");
+
+      // Same host, and the policy record itself never changes underneath
+      // this rerender (a warm/cached read) - only the signed-in viewer moves.
+      viewerUserId = "viewer-b";
+      rerender(<AutoModeSettingsSection />);
+
+      // The remount discards the open editor and its draft outright, rather
+      // than letting viewer B's row go on showing viewer A's frozen draft.
+      expect(screen.queryByTestId("auto-policy-input")).toBeNull();
     });
   });
 

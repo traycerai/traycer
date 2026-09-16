@@ -65,8 +65,18 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 // A test that wants the echo retired advances this instead of changing the
 // value, which is exactly the case value-only expiry could not reach.
 const providersUpdatedAt = vi.hoisted(() => ({ current: 1_000 }));
+// `isFetching` is STATED, not omitted. The section now holds the selector
+// locked through the authoritative refresh as well as through the write, so a
+// mock without this field answers `undefined` and silently reduces the new flag
+// to the old one - the control would look correct in every case here while the
+// refresh half went untested. Defaults to settled; the case about the lock
+// moves it.
+const providersFetching = vi.hoisted(() => ({ current: false }));
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: () => ({ dataUpdatedAt: providersUpdatedAt.current }),
+  useProvidersList: () => ({
+    dataUpdatedAt: providersUpdatedAt.current,
+    isFetching: providersFetching.current,
+  }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
@@ -92,6 +102,7 @@ afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   providersUpdatedAt.current = 1_000;
+  providersFetching.current = false;
   vi.clearAllMocks();
   guiHarnessesQueryMock.data = undefined;
   setAutoJudgeMock.isPending = false;

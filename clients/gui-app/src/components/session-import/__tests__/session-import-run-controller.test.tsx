@@ -125,10 +125,8 @@ import {
   useSessionImportRunStore,
   type SessionImportRunState,
 } from "@/stores/session-import/session-import-run-store";
-import { hostQueryKeys, sessionImportQueryKeys } from "@/lib/query-keys";
-import type { HostRpcRegistry } from "@/lib/host";
+import { sessionImportQueryKeys } from "@/lib/query-keys";
 import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
-import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
 import {
   recordNegotiatedHostManifest,
@@ -884,31 +882,17 @@ describe("<SessionImportRunController />", () => {
       expect(requireInstance(1).permissionMode).toBe("auto");
     });
 
-    it("sends auto unchanged when the cached agent.gui.listHarnesses row advertises it", () => {
+    it("sends auto unchanged when the advertised sessionImport.run manifest proves the host knows it", () => {
       streamBinding.current = createStreamBinding("host-auto-cached");
       useSettingsStore.setState({ defaultPermission: "auto" });
-      const response: ListGuiHarnessesResponse = {
-        harnesses: [
-          {
-            id: "claude",
-            label: "Claude Code",
-            enabled: true,
-            available: true,
-            error: null,
-            modes: ["gui", "tui"],
-            requiresApiKey: false,
-            supportedPermissionModes: [
-              "supervised",
-              "auto_accept_edits",
-              "auto",
-              "full_access",
-            ],
-            nativeAutoJudge: false,
-            availabilityPending: false,
-          },
-        ],
-      };
-      queryDataHarness.value = response;
+      // The harness catalog (`agent.gui.listHarnesses`) is deliberately no
+      // longer evidence for this gate - a catalog row is a different
+      // method's fact. The proof is `sessionImport.run`'s OWN advertised
+      // line in this host's negotiated manifest, published by
+      // `recordNegotiatedHostManifest` on every unary openAck.
+      recordNegotiatedHostManifest("host-auto-cached", {
+        "sessionImport.run": sessionImportRunV12.schemaVersion,
+      });
       render(<SessionImportRunController />);
       const handle = getSessionImportStartHandle();
       if (handle === null) {
@@ -926,56 +910,25 @@ describe("<SessionImportRunController />", () => {
       });
 
       expect(requireInstance(1).permissionMode).toBe("auto");
-      // The seeded answer above is key-blind, so the slot the gate actually
-      // read is asserted separately. Reading the wrong one is not a loud
-      // failure - it finds nothing, demotes every `auto`, and leaves the rest
-      // of this file green - so it has to be pinned to the exact key
-      // `useHostQuery` writes for this method (`cacheKeyIdentity: undefined`
-      // and `params: {}`, hence the bare `{}`).
-      expect(queryDataHarness.keys).toContainEqual(
-        hostQueryKeys.method<HostRpcRegistry, "agent.gui.listHarnesses">(
-          "host-auto-cached",
-          "agent.gui.listHarnesses",
-          {},
-        ),
-      );
     });
 
-    // `session-import-wizard.tsx` mounts `useGuiHarnessesQueryForClient` for
-    // the import TARGET host, warming the `agent.gui.listHarnesses` cache slot
-    // this gate reads - specifically so a REMOTE host (one whose
-    // `sessionImport.run` schema version this window has never negotiated, so
-    // `getMethodSchemaVersion` answers `null`) can still prove it understands
-    // `auto` off that cached row instead of the schema-version fact. These two
-    // cases pin the read side of that fix: same gate, same mechanism as the
-    // "host-auto-cached" / "host-auto-unproven" cases above, but for a host
-    // shaped like the wizard's remote import target rather than the ambient
-    // one this controller otherwise runs against.
-    it("opens with permissionMode 'auto' for a remote-shaped host whose cached listHarnesses row advertises it", () => {
+    // A REMOTE host's `sessionImport.run` schema version is one this window
+    // has never negotiated over a live session, so `getMethodSchemaVersion`
+    // answers `null` and the gate falls to the advertised-manifest read
+    // below. That manifest does not need a live stream to exist - ANY RPC to
+    // this host (the app-load prefetcher, or the wizard's own catalog
+    // warm-up for a remote import target) records it via
+    // `recordNegotiatedHostManifest`. These two cases pin that: same gate,
+    // same mechanism as "host-auto-cached" / "host-auto-unproven" above, but
+    // for a host shaped like the wizard's remote import target rather than
+    // the ambient one this controller otherwise runs against. The harness
+    // catalog plays no part in either case any more.
+    it("opens with permissionMode 'auto' for a remote-shaped host whose advertised sessionImport.run manifest proves it", () => {
       streamBinding.current = createStreamBinding("host-remote-import-target");
       useSettingsStore.setState({ defaultPermission: "auto" });
-      const response: ListGuiHarnessesResponse = {
-        harnesses: [
-          {
-            id: "claude",
-            label: "Claude Code",
-            enabled: true,
-            available: true,
-            error: null,
-            modes: ["gui", "tui"],
-            requiresApiKey: false,
-            supportedPermissionModes: [
-              "supervised",
-              "auto_accept_edits",
-              "auto",
-              "full_access",
-            ],
-            nativeAutoJudge: false,
-            availabilityPending: false,
-          },
-        ],
-      };
-      queryDataHarness.value = response;
+      recordNegotiatedHostManifest("host-remote-import-target", {
+        "sessionImport.run": sessionImportRunV12.schemaVersion,
+      });
       render(<SessionImportRunController />);
       const handle = getSessionImportStartHandle();
       if (handle === null) {
@@ -995,13 +948,14 @@ describe("<SessionImportRunController />", () => {
       expect(requireInstance(1).permissionMode).toBe("auto");
     });
 
-    it("demotes to 'auto_accept_edits' for a remote-shaped host with an empty listHarnesses cache slot", () => {
+    it("demotes to 'auto_accept_edits' for a remote-shaped host with no sessionImport.run manifest recorded", () => {
       streamBinding.current = createStreamBinding(
         "host-remote-import-target-empty",
       );
       useSettingsStore.setState({ defaultPermission: "auto" });
-      // No `queryDataHarness.value` seeded - the warm-up query never landed a
-      // row for this host, the same as a host too old to answer it at all.
+      // Deliberately no `recordNegotiatedHostManifest` call - the warm-up RPC
+      // never reached this host (or never came back), the same as a host too
+      // old to report a manifest at all.
       render(<SessionImportRunController />);
       const handle = getSessionImportStartHandle();
       if (handle === null) {
@@ -1043,45 +997,35 @@ describe("<SessionImportRunController />", () => {
       expect(requireInstance(1).permissionMode).toBe("full_access");
     });
 
-    // `handshakeProvesPreAutoCatalog` is a VETO consulted before the cached
-    // `agent.gui.listHarnesses` row: the cache is keyed by hostId ALONE, so it
-    // survives a host restarting on an older build under the same id. Without
-    // the veto, a stale cached row that still advertises `auto` from before
-    // the restart would send `auto` to a host that now rejects it as a
-    // validation error.
-    describe("the pre-auto-catalog handshake veto", () => {
-      it("demotes a cached-auto row when the last handshake proves the host is below the auto catalog line", () => {
-        streamBinding.current = createStreamBinding("host-auto-stale-restart");
+    // The advertised manifest is the SECOND of the two proofs
+    // `hostUnderstandsAutoPermissionMode` can read off `sessionImport.run`
+    // itself - consulted whenever no live session's negotiated version
+    // settles the question (the first run of a window, or a remote
+    // transport, which always answers `null`). Its positive branch requires
+    // an EXACT major match with the required line, `minor >=` within that
+    // major - unlike `versionIsBelow`'s asymmetric comparison, a HIGHER
+    // major does NOT count as "at least" here and demotes just like a lower
+    // one.
+    //
+    // This replaces `handshakeProvesPreAutoCatalog`, a veto that used to sit
+    // in front of a cached `agent.gui.listHarnesses` row. That mechanism is
+    // gone, and so is the harness catalog as evidence for this gate
+    // altogether: a catalog fact is a different method's fact, and
+    // per-method negotiation is exactly the rule the catalog broke.
+    describe("the advertised sessionImport.run manifest is the second proof", () => {
+      it("sends auto for an advertised sessionImport.run manifest at or above the required minor", () => {
+        streamBinding.current = createStreamBinding(
+          "host-auto-manifest-at-line",
+        );
         useSettingsStore.setState({ defaultPermission: "auto" });
-        const response: ListGuiHarnessesResponse = {
-          harnesses: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              enabled: true,
-              available: true,
-              error: null,
-              modes: ["gui", "tui"],
-              requiresApiKey: false,
-              supportedPermissionModes: [
-                "supervised",
-                "auto_accept_edits",
-                "auto",
-                "full_access",
-              ],
-              nativeAutoJudge: false,
-              availabilityPending: false,
-            },
-          ],
-        };
-        queryDataHarness.value = response;
-        // The line itself is restated as a concrete older version (8.0)
-        // rather than derived from `agentGuiListHarnessesV91.schemaVersion`,
-        // so this case does not silently keep passing if that contract is
-        // ever renumbered without anyone noticing the test still exercises
-        // "below the line".
-        recordNegotiatedHostManifest("host-auto-stale-restart", {
-          "agent.gui.listHarnesses": { major: 8, minor: 0 },
+        // A higher minor within the same major, not the exact required
+        // version - proves the `>=` half of the comparison independently of
+        // the exact-match case covered by "host-auto-cached" above.
+        recordNegotiatedHostManifest("host-auto-manifest-at-line", {
+          "sessionImport.run": {
+            major: sessionImportRunV12.schemaVersion.major,
+            minor: sessionImportRunV12.schemaVersion.minor + 3,
+          },
         });
         render(<SessionImportRunController />);
         const handle = getSessionImportStartHandle();
@@ -1099,41 +1043,49 @@ describe("<SessionImportRunController />", () => {
           );
         });
 
-        // FALSIFICATION: delete the `handshakeProvesPreAutoCatalog` call from
-        // `hostUnderstandsAutoPermissionMode` and this goes green with
-        // 'auto' - the stale cached row alone would be enough to pass the
-        // gate.
+        // FALSIFICATION: change the advertised-manifest check's minor
+        // comparison from `>=` to `===` and this goes red - a host that has
+        // moved past the required minor within the same major still
+        // understands `auto`.
+        expect(requireInstance(1).permissionMode).toBe("auto");
+      });
+
+      it("demotes when the advertised sessionImport.run manifest is below the required minor", () => {
+        streamBinding.current = createStreamBinding("host-auto-manifest-below");
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        recordNegotiatedHostManifest("host-auto-manifest-below", {
+          "sessionImport.run": {
+            major: sessionImportRunV12.schemaVersion.major,
+            minor: sessionImportRunV12.schemaVersion.minor - 1,
+          },
+        });
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
         expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
       });
 
-      it("still sends auto for a cached-auto row when the handshake is at the auto catalog line", () => {
-        streamBinding.current = createStreamBinding("host-auto-at-line");
+      it("demotes when no sessionImport.run manifest has been recorded for this host", () => {
+        streamBinding.current = createStreamBinding(
+          "host-auto-manifest-missing",
+        );
         useSettingsStore.setState({ defaultPermission: "auto" });
-        const response: ListGuiHarnessesResponse = {
-          harnesses: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              enabled: true,
-              available: true,
-              error: null,
-              modes: ["gui", "tui"],
-              requiresApiKey: false,
-              supportedPermissionModes: [
-                "supervised",
-                "auto_accept_edits",
-                "auto",
-                "full_access",
-              ],
-              nativeAutoJudge: false,
-              availabilityPending: false,
-            },
-          ],
-        };
-        queryDataHarness.value = response;
-        recordNegotiatedHostManifest("host-auto-at-line", {
-          "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
-        });
+        // Deliberately no `recordNegotiatedHostManifest` call: neither proof
+        // exists for this host, so the gate must fail closed rather than
+        // assume support.
         render(<SessionImportRunController />);
         const handle = getSessionImportStartHandle();
         if (handle === null) {
@@ -1150,89 +1102,24 @@ describe("<SessionImportRunController />", () => {
           );
         });
 
-        expect(requireInstance(1).permissionMode).toBe("auto");
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
       });
 
-      it("still sends auto for a cached-auto row when no handshake was ever recorded for this host", () => {
-        streamBinding.current = createStreamBinding("host-auto-no-handshake");
+      // Mirrors `versionIsBelow`'s major-mismatch rule for the LIVE-session
+      // check by name only - the advertised-manifest check does NOT share
+      // its asymmetry. Its positive branch requires an EXACT major match, so
+      // a higher major is not "at least" the required line and demotes
+      // exactly like a lower one. This is the case a Codex reviewer flagged
+      // as easy to get wrong by assuming ">=" semantics apply to the major
+      // component too.
+      it("demotes when the advertised sessionImport.run manifest is on a higher major", () => {
+        streamBinding.current = createStreamBinding(
+          "host-auto-manifest-higher-major",
+        );
         useSettingsStore.setState({ defaultPermission: "auto" });
-        const response: ListGuiHarnessesResponse = {
-          harnesses: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              enabled: true,
-              available: true,
-              error: null,
-              modes: ["gui", "tui"],
-              requiresApiKey: false,
-              supportedPermissionModes: [
-                "supervised",
-                "auto_accept_edits",
-                "auto",
-                "full_access",
-              ],
-              nativeAutoJudge: false,
-              availabilityPending: false,
-            },
-          ],
-        };
-        queryDataHarness.value = response;
-        // Deliberately no `recordNegotiatedHostManifest` call: the veto is a
-        // veto and never a proof, so "not yet known" must leave the cached
-        // row's answer standing rather than blocking on it.
-        render(<SessionImportRunController />);
-        const handle = getSessionImportStartHandle();
-        if (handle === null) {
-          throw new Error("Expected a session import start handle.");
-        }
-
-        act(() => {
-          handle.start(
-            {
-              selections: [SELECTION],
-              titles: new Map([["claude:s1", "My session"]]),
-            },
-            startTarget(),
-          );
-        });
-
-        expect(requireInstance(1).permissionMode).toBe("auto");
-      });
-
-      // Deliberately the mirror of `negotiatedVersionMeetsRequirement`'s own
-      // fail-closed-on-higher-major rule: a HIGHER major is never proof of
-      // being below the line, so the veto stays silent and the cached row's
-      // 'auto' survives. Failing closed here would demote every import the
-      // instant a host shipped `agent.gui.listHarnesses@10.0`.
-      it("still sends auto for a cached-auto row when the handshake is on a higher major", () => {
-        streamBinding.current = createStreamBinding("host-auto-higher-major");
-        useSettingsStore.setState({ defaultPermission: "auto" });
-        const response: ListGuiHarnessesResponse = {
-          harnesses: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              enabled: true,
-              available: true,
-              error: null,
-              modes: ["gui", "tui"],
-              requiresApiKey: false,
-              supportedPermissionModes: [
-                "supervised",
-                "auto_accept_edits",
-                "auto",
-                "full_access",
-              ],
-              nativeAutoJudge: false,
-              availabilityPending: false,
-            },
-          ],
-        };
-        queryDataHarness.value = response;
-        recordNegotiatedHostManifest("host-auto-higher-major", {
-          "agent.gui.listHarnesses": {
-            major: agentGuiListHarnessesV91.schemaVersion.major + 1,
+        recordNegotiatedHostManifest("host-auto-manifest-higher-major", {
+          "sessionImport.run": {
+            major: sessionImportRunV12.schemaVersion.major + 1,
             minor: 0,
           },
         });
@@ -1252,7 +1139,10 @@ describe("<SessionImportRunController />", () => {
           );
         });
 
-        expect(requireInstance(1).permissionMode).toBe("auto");
+        // FALSIFICATION: change the advertised-manifest check's major
+        // comparison from `===` to `>=` and this goes green with 'auto' -
+        // the exact point a Codex reviewer flagged as easy to get wrong.
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
       });
     });
 
@@ -1331,37 +1221,19 @@ describe("<SessionImportRunController />", () => {
 
       // A HIGHER major on `sessionImport.run` itself is not evidence of being
       // below the line (mirrors `versionIsBelow`'s own major mismatch rule),
-      // so the gate must not fail closed here - a cached `auto` row still
-      // decides it. Failing closed would demote every import the instant a
-      // host negotiated the next major of `sessionImport.run`.
-      it("still sends auto for a cached-auto row when the negotiated sessionImport.run version is on a higher major", () => {
+      // so the gate must not fail closed here on the live-session check
+      // alone - execution falls through to the advertised-manifest check
+      // instead. The harness catalog is not consulted at any point on this
+      // path any more, so the manifest below is what has to carry the case.
+      it("still sends auto when the negotiated sessionImport.run version is on a higher major but the advertised manifest proves it", () => {
         streamBinding.current = createStreamBindingWithSchemaVersion(
           "host-auto-negotiated-higher-major",
           { major: sessionImportRunV12.schemaVersion.major + 1, minor: 0 },
         );
         useSettingsStore.setState({ defaultPermission: "auto" });
-        const response: ListGuiHarnessesResponse = {
-          harnesses: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              enabled: true,
-              available: true,
-              error: null,
-              modes: ["gui", "tui"],
-              requiresApiKey: false,
-              supportedPermissionModes: [
-                "supervised",
-                "auto_accept_edits",
-                "auto",
-                "full_access",
-              ],
-              nativeAutoJudge: false,
-              availabilityPending: false,
-            },
-          ],
-        };
-        queryDataHarness.value = response;
+        recordNegotiatedHostManifest("host-auto-negotiated-higher-major", {
+          "sessionImport.run": sessionImportRunV12.schemaVersion,
+        });
         render(<SessionImportRunController />);
         const handle = getSessionImportStartHandle();
         if (handle === null) {
@@ -1378,6 +1250,10 @@ describe("<SessionImportRunController />", () => {
           );
         });
 
+        // FALSIFICATION: delete the fallthrough (return `false` immediately
+        // whenever `negotiated !== null`) and this goes red with
+        // 'auto_accept_edits' - a live session on a higher major would then
+        // veto the advertised manifest instead of deferring to it.
         expect(requireInstance(1).permissionMode).toBe("auto");
       });
     });

@@ -23,6 +23,8 @@ interface ComposerToolbarLeftProps {
   harnessLabel: string | null;
   /** Union across the host's whole harness catalog - see `PermissionsPicker`. */
   readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+  /** See `PermissionsPicker`'s prop of the same name. */
+  readonly hostKnowsAutoMode: boolean;
   /** Whether a turn is running - see `PermissionsPicker`. */
   readonly turnActive: boolean;
   /** Which pocket the host's judge spends - see `PermissionsPicker`. */
@@ -38,6 +40,7 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
     supportedPermissionModes,
     harnessLabel,
     catalogSupportedModes,
+    hostKnowsAutoMode,
     turnActive,
     judgeBilling,
     settingsLocked,
@@ -53,6 +56,7 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
         supportedPermissionModes={supportedPermissionModes}
         harnessLabel={harnessLabel}
         catalogSupportedModes={catalogSupportedModes}
+        hostKnowsAutoMode={hostKnowsAutoMode}
         turnActive={turnActive}
         judgeBilling={judgeBilling}
         closeFocus="composer"

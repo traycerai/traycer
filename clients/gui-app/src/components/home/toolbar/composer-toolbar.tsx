@@ -1,7 +1,11 @@
 import { memo, useMemo } from "react";
 import { useStore } from "zustand";
 
-import { catalogSupportedPermissionModes } from "@/components/home/data/landing-options";
+import {
+  catalogLineKnowsAutoMode,
+  catalogSupportedPermissionModes,
+} from "@/components/home/data/landing-options";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { ComposerToolbarLeft } from "@/components/home/toolbar/composer-toolbar-left";
 import { ComposerToolbarRight } from "@/components/home/toolbar/composer-toolbar-right";
@@ -85,6 +89,14 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     () => catalogSupportedPermissionModes(harnesses),
     [harnesses],
   );
+  // The HOST capability the union cannot express: a catalog of unconstrained
+  // rows names no modes at all, and even a fully constrained one cannot tell
+  // "this machine predates `auto`" from "every provider here declines it".
+  // The negotiated catalog line answers the first question directly, and the
+  // picker's unsupported copy uses it to decide who to blame.
+  const hostKnowsAutoMode = catalogLineKnowsAutoMode(
+    useHostMethodSchemaVersion(runTargetHostId, "agent.gui.listHarnesses"),
+  );
   // The harness this composer will RUN, which decides the disclosure alongside
   // the host's stored judge: a provider set to its own classifier bypasses
   // Traycer's judge entirely. Read off the same store slice the picker shows,
@@ -120,6 +132,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             supportedPermissionModes={supportedPermissionModes}
             harnessLabel={harnessLabel}
             catalogSupportedModes={catalogSupportedModes}
+            hostKnowsAutoMode={hostKnowsAutoMode}
             // A turn the user can still switch a mode underneath - which the
             // host honours IMMEDIATELY for the running turn, not from the next
             // message; the picker's own mid-turn notice is what says so.

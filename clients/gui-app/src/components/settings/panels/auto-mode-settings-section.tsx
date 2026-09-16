@@ -23,6 +23,7 @@ import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useAutoJudgeQuery } from "@/hooks/auto-mode/use-auto-judge-query";
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import { AutoJudgePicker } from "@/components/settings/panels/auto-judge-picker";
@@ -87,6 +88,10 @@ export function AutoModeSettingsSection(): ReactNode {
   // showing. Same shape as `ShellSettingsPanel` / `DiagnosticsSettingsPanel`,
   // and it must sit above the branch because hooks may not be conditional.
   const supportUnknown = judgeSupport === null && policySupport === null;
+  // The account this window is signed in as, for the rows' key below. Read
+  // through the same seam every viewer-scoped surface uses, so the key and
+  // `useAutoPolicyQuery`'s `cacheKeyIdentity` can never name different people.
+  const viewerUserId = useCloudChatViewerId();
   useHostCapabilityProbe({
     client: scope.client,
     stale: !judgeSupported && !policySupported,
@@ -125,12 +130,38 @@ export function AutoModeSettingsSection(): ReactNode {
         dataTestId={undefined}
         fill={false}
       >
-        {/* Keyed by host: both rows read one machine's settings, and a draft
-            or an in-flight pick must never carry across a host switch. A
-            `null` host is a key in its own right - no `?? ""` fallback, since
-            the transition to and from a real id remounts on its own. */}
+        {/* Keyed by VIEWER and host, and both halves are load-bearing.
+
+            The host half is the older one: both rows read one machine's
+            settings, and a draft or an in-flight pick must never carry across
+            a host switch. A `null` host is a key in its own right - no
+            `?? ""` fallback, since the transition to and from a real id
+            remounts on its own.
+
+            The VIEWER half closes the case the query partition cannot reach.
+            `useAutoPolicyQuery` is keyed by viewer, so B never READS A's
+            policy - but partitioning the cache does nothing about a dialog
+            already mounted. Switch from A to B directly, on a host that stays
+            usable, with B's policy already cached: the query answers from B's
+            partition immediately, `data !== undefined` never goes false, the
+            editor never hits its unmount branch, and it goes on showing A's
+            frozen `body`/`openedWith` while `onSave` now closes over B's
+            mutation. The stale-stamp warning cannot help - it compares
+            timestamps, which say nothing about WHOSE account this is.
+
+            A remount is the whole fix: it discards the draft, the open state,
+            the opening-read generation, the shipped-rules view and the judge
+            picker's pending pick together, which is what "discard the outgoing
+            viewer's state" means in practice. `""` (no context metadata yet)
+            is its own key for the same reason the query's `cacheKeyIdentity`
+            treats it as its own bucket.
+
+            `JSON.stringify` rather than a joined string: neither id is
+            guaranteed free of whatever separator we would pick (host ids carry
+            `:`, which is why `worktreeStagingKeyString` percent-encodes them),
+            and a two-element array leaves nothing to reason about. */}
         <AutoModeRows
-          key={scope.hostId}
+          key={JSON.stringify([viewerUserId, scope.hostId])}
           hostId={scope.hostId}
           judgeSupported={judgeSupported}
           policySupported={policySupported}
@@ -243,6 +274,10 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
           // untouched, inline spinner.
           disabled={query.data === undefined || setJudge.isPending || !canWrite}
           saving={setJudge.isPending}
+          // SUCCESS, not "has data": a failed read leaves whatever an earlier
+          // one cached, and the status line must not describe a stored judge
+          // from a response this window never received.
+          recordLoaded={query.isSuccess}
           resetNonce={refusedWrites}
           onCommit={commit}
         />
@@ -393,6 +428,15 @@ function AutoPolicyRow(props: { readonly hostId: string | null }): ReactNode {
           readState={readState}
           saving={setPolicy.isPending}
           openingRead={openingRead}
+          // The SETTER support, live, not just at the moment the editor opened.
+          // Both entry points are gated on it, and the comment on the Edit
+          // button reasoned that opening is the only route to Save - true of
+          // the ROUTE, and silent about the window AFTER: capability is a
+          // property of the connection and is re-recorded on every unary ack,
+          // so a host that loses `autoPolicy.set` while keeping `autoPolicy.get`
+          // leaves an already-open editor able to issue a write the host will
+          // refuse. A gate on an entry point expires when the entry is used.
+          canWrite={canWrite}
           onCancel={() => setEditing(null)}
           onSave={(body) => {
             setPolicy.mutate({ body }, { onSuccess: () => setEditing(null) });
@@ -511,8 +555,26 @@ function AutoPolicySummary(props: {
       </span>
     );
   }
+  // A STALE read cannot say "Not set". `readState: "stale"` is the host serving
+  // a copy it could not refresh, so an empty body there is the ABSENCE IT
+  // CACHED, not the account's current state - another device may have saved a
+  // policy since. "Not set" is a confident claim about right now, and the row
+  // pairs it with a disabled Edit button, so a user is told they have no policy
+  // and given no way to look again. Naming the staleness is the honest version,
+  // and the wording matches the editor's own stale-read banner.
+  //
+  // A stale read WITH a body keeps its ordinary rendering below: the body is
+  // real, just possibly behind, and the stamp is withheld on that line anyway
+  // (`updatedAt` is null on a stale response), so it already falls through to
+  // the dateless "Set".
   if (body === null || body.length === 0) {
-    return <span className="text-ui-xs text-muted-foreground">Not set</span>;
+    return props.readState === "stale" ? (
+      <span className="font-medium text-amber-700 text-ui-xs dark:text-amber-300">
+        Couldn&apos;t check your policy
+      </span>
+    ) : (
+      <span className="text-ui-xs text-muted-foreground">Not set</span>
+    );
   }
   // Parsed HERE, and the unparseable case answered here too, so the component
   // below is only ever mounted with a real instant. `Date.parse` is pure - it

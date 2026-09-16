@@ -24,11 +24,14 @@ const AUTO_JUDGE_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> =
  * Chooses which classifier decides this provider's `auto`-mode approvals.
  *
  * An OPTIONAL host capability: a host that predates auto mode advertises no
- * `providers.setAutoJudge` at all. The row that calls this never reaches such a
- * host, and it does not need `useHostSupportsMethod` to know that - it renders
- * only for a catalog row carrying `nativeAutoJudge: true`, a field that rides
- * the same catalog minor as this method, so a host without the write reports
- * the flag `false` and draws no row. Scoped like every other provider
+ * `providers.setAutoJudge` at all. **The row that calls this gates on that
+ * exact method**, and the note that used to sit here - that `nativeAutoJudge`
+ * rides the same catalog minor, so the flag alone proves the write exists -
+ * was a cross-method inference the registry contradicts: the setter is
+ * registered `degrade: { kind: "unsupported" }`, so a host can answer the
+ * catalog and not the write. `ProviderAutoJudgeSection` now reads
+ * `useHostMethodSupport(hostId, "providers.setAutoJudge")` and draws a
+ * read-only panel for that host instead. Scoped like every other provider
  * mutation: it writes to the host the Providers panel is showing, never the
  * app-wide one.
  *

@@ -51,14 +51,25 @@ export function useAutoJudgeSetMutation(): UseMutationResult<
         mutationKey: autoModeMutationKeys.setJudge(),
         scope: autoJudgeWriteScope(client.getActiveHostId() ?? null),
         onMutate: () => ({ hostId: client.getActiveHostId() ?? null }),
-        onSuccess: (data, _variables, ctx) => {
+        // CANCEL, then write. A write-through is only authoritative if no
+        // older read can land on top of it, and one routinely can: the row
+        // sets `refetchOnMount: "always"`, so a read started before the save -
+        // by a remount, a recovery sweep, or the poll table - is still in
+        // flight when the response arrives, and TanStack resolves it into the
+        // same cache entry afterwards. Measured on the real QueryClient:
+        // `afterSave={SAVED}; afterRead={OLD}`.
+        //
+        // `await`ed, which is what keeps the mutation PENDING across it. The
+        // picker is disabled while pending, so the window in which a user could
+        // pick again against a cache about to be overwritten closes too.
+        onSuccess: async (data, _variables, ctx) => {
           if (ctx.hostId === null) return;
-          queryClient.setQueriesData<AutoJudgeGetResponse>(
-            {
-              queryKey: hostQueryKeys.methodScope(ctx.hostId, "autoJudge.get"),
-            },
-            data,
+          const queryKey = hostQueryKeys.methodScope(
+            ctx.hostId,
+            "autoJudge.get",
           );
+          await queryClient.cancelQueries({ queryKey });
+          queryClient.setQueriesData<AutoJudgeGetResponse>({ queryKey }, data);
         },
         onError: (error) =>
           toastFromHostError(error, "Couldn't save the Auto mode judge."),

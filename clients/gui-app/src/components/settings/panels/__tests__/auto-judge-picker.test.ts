@@ -8,10 +8,16 @@ import type {
   AutoJudgeEffective,
   AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
+import type {
+  ProviderCliState,
+  ProviderId,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   autoJudgeRecordHealth,
   autoJudgeSeed,
   autoJudgeSeedKeyForAttempt,
+  offeredJudgeProfileIds,
 } from "@/components/settings/panels/auto-judge-selection";
 import { AutoJudgePicker } from "@/components/settings/panels/auto-judge-picker";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
@@ -112,6 +118,18 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     },
   }),
 }));
+// The PROFILE half of the record health, which the picker reads through
+// `providers.list`. Stubbed like the catalogs above rather than stood up
+// behind a `QueryClientProvider`: these cases assert the picker's copy and its
+// commits, and `offeredJudgeProfileIds` - the projection this feeds - has its
+// own pure coverage. Defaults to the provider still offering the stored
+// profile, so every pre-existing case keeps meaning what it did.
+const mockedProviders = vi.hoisted(() => ({ current: [] as unknown[] }));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    data: { providers: mockedProviders.current },
+  }),
+}));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mockedOpenSettings }),
 }));
@@ -132,6 +150,73 @@ function harness(overrides: Partial<GuiHarnessOption>): GuiHarnessOption {
     requiresApiKey: false,
     ...overrides,
   });
+}
+
+// A real `ProviderCliState` fixture, built the way
+// `rate-limit-providers.test.ts` builds its own: every required field spelled
+// out once here rather than cast away, so `offeredJudgeProfileIds` (which
+// reads `providerId` and `profiles`) is exercised against the actual protocol
+// shape instead of a partial stand-in.
+function providerCliState(
+  overrides: Partial<ProviderCliState> & { readonly providerId: ProviderId },
+): ProviderCliState {
+  return {
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    profiles: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    ...overrides,
+  };
+}
+
+function providerProfile(
+  profileId: string,
+  kind: ProviderProfile["kind"],
+): ProviderProfile {
+  return {
+    profileId,
+    enabled: true,
+    kind,
+    authType: "oauth",
+    label: profileId,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
 }
 
 describe("autoJudgeSeed", () => {
@@ -276,11 +361,24 @@ describe("autoJudgeRecordHealth", () => {
     hasStoredSelection: true,
     unrecognizedHarnessId: null as string | null,
     isBlocked: false,
+    // STATED, not omitted: the health now withholds every diagnosis while a
+    // write is in flight, and an absent field reads as `false` - which would
+    // silently reduce the new rule to the old one across every case here.
+    saving: false,
     storedHarnessId: "claude",
     presentedHarnessId: "claude",
     storedModelSlug: "claude-sonnet",
     presentedModelSlug: "claude-sonnet",
     modelsLoaded: true,
+    // The PROFILE axis, defaulted to the settled healthy shape: an explicit
+    // profile the provider still offers. `null` (ambient) would make every case
+    // below pass the profile check for the wrong reason - it is excluded
+    // outright - so the base names a real one, and the cases about it move the
+    // offered list rather than the stored id.
+    storedProfileId: "profile-1" as string | null,
+    offeredProfileIds: ["profile-1", null] as
+      | ReadonlyArray<string | null>
+      | undefined,
   };
 
   it("no stored selection: everything false", () => {
@@ -292,6 +390,7 @@ describe("autoJudgeRecordHealth", () => {
     expect(health).toEqual({
       storedHarnessUnavailable: false,
       storedModelUnavailable: false,
+      storedProfileUnavailable: false,
       noJudgeWillRun: false,
     });
   });
@@ -310,6 +409,7 @@ describe("autoJudgeRecordHealth", () => {
     expect(health).toEqual({
       storedHarnessUnavailable: false,
       storedModelUnavailable: false,
+      storedProfileUnavailable: false,
       noJudgeWillRun: false,
     });
   });
@@ -324,6 +424,7 @@ describe("autoJudgeRecordHealth", () => {
     expect(health).toEqual({
       storedHarnessUnavailable: true,
       storedModelUnavailable: false,
+      storedProfileUnavailable: false,
       noJudgeWillRun: true,
     });
   });
@@ -345,6 +446,7 @@ describe("autoJudgeRecordHealth", () => {
     expect(health).toEqual({
       storedHarnessUnavailable: false,
       storedModelUnavailable: true,
+      storedProfileUnavailable: false,
       noJudgeWillRun: true,
     });
   });
@@ -384,8 +486,142 @@ describe("autoJudgeRecordHealth", () => {
     expect(health).toEqual({
       storedHarnessUnavailable: false,
       storedModelUnavailable: false,
+      storedProfileUnavailable: false,
       noJudgeWillRun: true,
     });
+  });
+
+  // JOB 2 (a): the PROFILE axis. A stored profile absent from the provider's
+  // currently-offered commit ids means the host still holds a removed id -
+  // `storedProfileUnavailable` must fire, and it must fold into
+  // `noJudgeWillRun` the same way the harness/model reroutes do.
+  it("stored profile absent from offeredProfileIds: storedProfileUnavailable AND noJudgeWillRun", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      offeredProfileIds: ["some-other-profile", null],
+    });
+
+    expect(health).toEqual({
+      storedHarnessUnavailable: false,
+      storedModelUnavailable: false,
+      storedProfileUnavailable: true,
+      noJudgeWillRun: true,
+    });
+  });
+
+  // `null` is the ambient account, which no provider can delete - excluded
+  // outright, even when the offered list happens to omit `null` itself (a
+  // provider whose profile list currently holds only managed rows).
+  it("storedProfileId null (ambient): storedProfileUnavailable stays false even when offeredProfileIds omits null", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      storedProfileId: null,
+      offeredProfileIds: ["profile-1"],
+    });
+
+    expect(health.storedProfileUnavailable).toBe(false);
+  });
+
+  // `undefined` means `providers.list` has not answered yet - not evidence
+  // that every stored profile is gone.
+  it("offeredProfileIds undefined (providers unanswered): storedProfileUnavailable stays false", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      offeredProfileIds: undefined,
+    });
+
+    expect(health.storedProfileUnavailable).toBe(false);
+  });
+
+  // The profile flag is gated behind the harness flag deliberately: a
+  // vanished harness took its accounts with it, and the harness line is the
+  // finding, not a second independent one.
+  it("harness unavailable ALSO suppresses storedProfileUnavailable, even with a profile mismatch present", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      presentedHarnessId: "codex",
+      presentedModelSlug: "",
+      offeredProfileIds: ["some-other-profile", null],
+    });
+
+    expect(health).toEqual({
+      storedHarnessUnavailable: true,
+      storedModelUnavailable: false,
+      storedProfileUnavailable: false,
+      noJudgeWillRun: true,
+    });
+  });
+
+  // C2(b): a write IN FLIGHT must withhold every diagnosis, even when the
+  // presented tuple diverges from the stored one on both the harness and the
+  // model axis at once - an in-flight valid pick must not be flagged as a
+  // "missing model/harness" state while its own request is still in the air.
+  it("saving: true suppresses storedHarnessUnavailable and storedModelUnavailable even with both mismatches present", () => {
+    const health = autoJudgeRecordHealth({
+      ...BASE,
+      saving: true,
+      presentedHarnessId: "codex",
+      presentedModelSlug: "claude-haiku",
+    });
+
+    expect(health).toEqual({
+      storedHarnessUnavailable: false,
+      storedModelUnavailable: false,
+      storedProfileUnavailable: false,
+      noJudgeWillRun: false,
+    });
+  });
+});
+
+describe("offeredJudgeProfileIds", () => {
+  it("maps a provider's profiles to commit ids, ambient as null", () => {
+    const providers: ReadonlyArray<ProviderCliState> = [
+      providerCliState({
+        providerId: "claude-code",
+        profiles: [
+          providerProfile("ambient", "ambient"),
+          providerProfile("profile-1", "managed"),
+        ],
+      }),
+    ];
+
+    expect(offeredJudgeProfileIds(providers, "claude")).toEqual([
+      null,
+      "profile-1",
+    ]);
+  });
+
+  it("returns undefined for undefined providers - providers.list has not answered", () => {
+    expect(offeredJudgeProfileIds(undefined, "claude")).toBeUndefined();
+  });
+
+  it("returns undefined for a harness with no provider row in the catalog", () => {
+    const providers: ReadonlyArray<ProviderCliState> = [
+      providerCliState({
+        providerId: "openrouter",
+        profiles: [providerProfile("profile-1", "managed")],
+      }),
+    ];
+
+    expect(offeredJudgeProfileIds(providers, "claude")).toBeUndefined();
+  });
+
+  // Reachable only because the function's own parameter is a plain `string`,
+  // not `GuiHarnessId` (every real GuiHarnessId is mapped to a provider 1:1 in
+  // `ORDERED_PROVIDERS`, so this branch is otherwise dead for a genuine
+  // harness id - see the report back for the type-safety finding this is
+  // evidence of).
+  it("returns undefined for a harness id string that maps to no provider at all", () => {
+    const providers: ReadonlyArray<ProviderCliState> = [
+      providerCliState({
+        providerId: "claude-code",
+        profiles: [providerProfile("profile-1", "managed")],
+      }),
+    ];
+
+    expect(
+      offeredJudgeProfileIds(providers, "not-a-real-harness"),
+    ).toBeUndefined();
   });
 });
 
@@ -409,6 +645,7 @@ describe("<AutoJudgePicker /> status", () => {
         blocked: null,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -417,6 +654,31 @@ describe("<AutoJudgePicker /> status", () => {
     expect(
       (await screen.findByTestId("auto-judge-effective")).textContent,
     ).toBe("Using Traycer's default judge · Claude Sonnet");
+  });
+
+  // C2(a): `recordLoaded: false` must render NO status line at all - not even
+  // the legacy-default sentence the `effective === undefined` branch would
+  // otherwise produce. Before the `recordLoaded` gate, that branch could not
+  // tell "a legacy host with no widened fields" from "the read has not
+  // landed (or failed) yet", and announced a stored judge from a response
+  // this window never actually received.
+  it("renders no status line at all when recordLoaded is false, even with selection and effective both absent", () => {
+    render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: null,
+        effective: undefined,
+        blocked: undefined,
+        disabled: false,
+        saving: false,
+        recordLoaded: false,
+        resetNonce: 0,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    expect(screen.queryByText("Using Traycer's default judge")).toBeNull();
+    expect(screen.queryByTestId("auto-judge-effective")).toBeNull();
   });
 
   it("shows the legacy default copy when the widened fields are absent", () => {
@@ -428,6 +690,7 @@ describe("<AutoJudgePicker /> status", () => {
         blocked: undefined,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -450,6 +713,7 @@ describe("<AutoJudgePicker /> status", () => {
         blocked: { reason: "provider-disabled" },
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -495,6 +759,7 @@ describe("<AutoJudgePicker /> suppresses self-billing when no judge will run", (
         blocked: { reason: "provider-disabled" },
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -541,6 +806,7 @@ describe("<AutoJudgePicker /> suppresses self-billing when no judge will run", (
           blocked: null,
           disabled: false,
           saving: false,
+          recordLoaded: true,
           resetNonce: 0,
           onCommit: vi.fn(),
         }),
@@ -551,6 +817,52 @@ describe("<AutoJudgePicker /> suppresses self-billing when no judge will run", (
     } finally {
       mockedHarnesses.length = 0;
       mockedHarnesses.push(...originalHarnesses);
+    }
+  });
+});
+
+// JOB 2 (c): the rendered half of the PROFILE health flag. A stored profile
+// deleted from the provider must show `auto-judge-profile-unavailable` AND
+// suppress `auto-judge-self-billing` - the same contradiction the model- and
+// harness-unavailable lines already guard against, one field over.
+describe("<AutoJudgePicker /> profile-unavailable line", () => {
+  const selectedWithProfile: AutoJudgeSelection = {
+    harnessId: "claude",
+    model: "claude-sonnet",
+    profileId: "profile-1",
+  };
+
+  it("renders auto-judge-profile-unavailable and suppresses auto-judge-self-billing when the stored profile is gone from the provider", () => {
+    mockedProviders.current = [
+      providerCliState({
+        providerId: "claude-code",
+        profiles: [providerProfile("profile-2", "managed")],
+      }),
+    ];
+
+    try {
+      render(
+        createElement(AutoJudgePicker, {
+          hostId: "host-a",
+          selection: selectedWithProfile,
+          effective: {
+            harnessId: "claude",
+            model: "claude-sonnet",
+            source: "selection",
+          },
+          blocked: null,
+          disabled: false,
+          saving: false,
+          recordLoaded: true,
+          resetNonce: 0,
+          onCommit: vi.fn(),
+        }),
+      );
+
+      expect(screen.getByTestId("auto-judge-profile-unavailable")).toBeTruthy();
+      expect(screen.queryByTestId("auto-judge-self-billing")).toBeNull();
+    } finally {
+      mockedProviders.current = [];
     }
   });
 });
@@ -582,6 +894,7 @@ describe("<AutoJudgePicker /> model-unavailable line", () => {
         blocked: null,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -620,6 +933,7 @@ describe("<AutoJudgePicker /> model-unavailable line", () => {
         blocked: null,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -651,6 +965,7 @@ describe("<AutoJudgePicker /> Use Traycer's default", () => {
         blocked: null,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit,
       }),
@@ -676,6 +991,7 @@ describe("<AutoJudgePicker /> Use Traycer's default", () => {
         blocked: undefined,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -697,6 +1013,7 @@ describe("<AutoJudgePicker /> Use Traycer's default", () => {
         blocked: null,
         disabled: true,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -759,6 +1076,7 @@ describe("<AutoJudgePicker /> saving spinner", () => {
         blocked: null,
         disabled: true,
         saving: true,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -783,6 +1101,7 @@ describe("<AutoJudgePicker /> saving spinner", () => {
         blocked: null,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -818,6 +1137,7 @@ describe("<AutoJudgePicker /> disabled reaches the trigger", () => {
         blocked: null,
         disabled: true,
         saving: true,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -845,6 +1165,7 @@ describe("<AutoJudgePicker /> disabled reaches the trigger", () => {
         blocked: null,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 0,
         onCommit: vi.fn(),
       }),
@@ -878,6 +1199,7 @@ describe("<AutoJudgePicker /> rollback on refused write", () => {
         blocked: null,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce,
         onCommit: vi.fn(),
       }),
@@ -928,6 +1250,7 @@ describe("<AutoJudgePicker /> rollback on refused write", () => {
         blocked: null,
         disabled: false,
         saving: false,
+        recordLoaded: true,
         resetNonce: 1,
         onCommit: vi.fn(),
       }),
