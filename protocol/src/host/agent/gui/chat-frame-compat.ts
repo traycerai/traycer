@@ -20,7 +20,9 @@
  * same code rather than two drifting copies.
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundation";
+import { autoJudgeUnattendedDenialRowSource } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
@@ -90,6 +92,102 @@ export function supportsAutoPermissionMode(
     negotiated !== null &&
     negotiated.major === 1 &&
     negotiated.minor >= CHAT_SUBSCRIBE_AUTO_MODE_MINOR
+  );
+}
+
+/**
+ * The minor a line must have negotiated to DRAW this event's transcript row.
+ *
+ * Zero for all but one: `auto-judge-unattended-denial`, which `1.11` added to
+ * `row-projection.ts`. Every other row kind predates the split and every
+ * supported line can materialize it.
+ *
+ * ## Why a row needs a floor at all, when the event that backs it does not
+ *
+ * The row is not backed by a new event KIND. It is an ordinary
+ * `approval.denied` carrying auto-judge metadata, so every line decodes the
+ * event itself perfectly well. What an older peer lacks is the CODE: it bundles
+ * a `row-order.ts` that predates `autoJudgeUnattendedDenialRowSource`, so its
+ * own projection produces no row where the host's produced one.
+ *
+ * On the windowed line that is not cosmetic. Ordinals ARE the address space -
+ * the skeleton carries one entry per row and `loadRange` is addressed by index
+ * - so a peer that materializes one fewer row than the host counted cannot fill
+ * the id it was answered for. The skeleton entry is opaque (`rowId`,
+ * `createdAt`, `role`, sizes - no source kind), so nothing fails loudly; the row
+ * is simply never drawn, and the range that would have filled it is asked for
+ * again.
+ *
+ * ## Why a FLOOR rather than projecting the row out
+ *
+ * The decisive reason is that a projection cannot REACH the peer this is about.
+ * On the windowed line the client runs `projectTranscriptRows` itself - to map
+ * the records a range served back onto the skeleton row ids it was answered for
+ * (`transcript-window.ts`'s `assistantTurnKeysForServedRows` /
+ * `namedLiveEventIds`) - and the copy it runs is the one it shipped with.
+ * Making TODAY's module version-aware changes what a new client does; it
+ * changes nothing about a released one, whose projection is already missing the
+ * row. The only lever that reaches a peer running stale code is refusing it.
+ *
+ * Three more reasons point the same way:
+ *
+ * - `row-projection.ts` is deliberately ONE enumeration, shared by the live
+ *   host, the renderer and the PUBLISHER writing a head's index section. The
+ *   publisher has no negotiated version to be version-aware against, and "a
+ *   published copy and a live chat that disagreed about ordinals would be the
+ *   same chat rendering differently depending on how it was opened".
+ * - The row records that Traycer REFUSED something without asking anyone. An
+ *   old peer silently served a transcript with that row removed is being shown
+ *   a permission-relevant omission, which is the harm the compatibility rules
+ *   put above preservation.
+ * - The precedent one file over is already termination, not dropping: stateful
+ *   frames (`snapshot`, `queueChanged`, `eventAppended`) are NOT droppable, and
+ *   the host evicts a below-floor subscriber with a typed
+ *   `CHAT_HARNESS_REQUIRES_NEWER_CLIENT` instead. Only transient
+ *   harness-bearing events are projected away.
+ *
+ * ## How the host uses it
+ *
+ * `requiredChatSubscribeMinorForChat` already walks `chat.events` for the
+ * sender floor; this folds into that same loop with one `Math.max`, so history
+ * containing the row keeps the chat above the floor even after its
+ * `permissionMode` has been switched back - which is exactly the hole, since
+ * the mode floor reads `chat.settings` and a durable row outlives the setting
+ * that produced it.
+ *
+ * Lives here rather than beside the row source because the MINOR is a
+ * `chat.subscribe` fact and `persistence/chat-transcript` does not own one; it
+ * reads the row predicate rather than restating its condition, so the two
+ * cannot drift.
+ */
+export function minimumChatSubscribeMinorForTranscriptEvent(
+  event: ChatEvent,
+): number {
+  return autoJudgeUnattendedDenialRowSource(event) === null
+    ? 0
+    : CHAT_SUBSCRIBE_AUTO_MODE_MINOR;
+}
+
+/**
+ * Whether this line can draw every transcript row these events produce.
+ *
+ * The whole-history form of {@link minimumChatSubscribeMinorForTranscriptEvent},
+ * for a caller holding a version rather than composing a floor.
+ */
+export function supportsTranscriptRowsFor(
+  negotiated: SchemaVersion | null,
+  events: ReadonlyArray<ChatEvent>,
+): boolean {
+  const required = events.reduce(
+    (floor, event) =>
+      Math.max(floor, minimumChatSubscribeMinorForTranscriptEvent(event)),
+    0,
+  );
+  if (required === 0) return true;
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= required
   );
 }
 

@@ -235,10 +235,7 @@ export function ComposerBody({
               {toolbarLayout === "collapsed" ? (
                 <ComposerMobileToolbar {...sharedToolbarProps} />
               ) : (
-                <ComposerToolbar
-                  {...sharedToolbarProps}
-                  showNextTurnPermissionNote={false}
-                />
+                <ComposerToolbar {...sharedToolbarProps} />
               )}
             </SurfaceActivityProvider>
           </div>

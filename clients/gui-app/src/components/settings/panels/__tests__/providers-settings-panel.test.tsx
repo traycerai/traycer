@@ -514,15 +514,59 @@ vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
   }),
 }));
 
+// NOTE: this is the SECOND `vi.mock` for this module in this file (see the
+// stub near the top) and the one that wins, so it is the shape the suite
+// actually runs against.
+//
+// `supportedPermissionModes` is stated rather than omitted because the panel
+// derives the Permissions TAB from it now, and the real row schema defaults the
+// field to every mode - a row without it is a shape the host cannot send.
+//
+// It includes `auto`, which is what makes this suite's "every supported
+// section" case true. That matches the stance the file already takes one mock
+// up: `useHostSupportsMethod` is stubbed `() => true` for every method, so this
+// is a host with everything, now expressed in the catalog because that is where
+// the tab's answer comes from.
+//
+// Held in a `vi.hoisted` holder, per-test mutable, so the Permissions-tab
+// visibility tests can swap the catalog's `supportedPermissionModes` (or drop
+// the catalog to `undefined` for "still loading") without a third `vi.mock`
+// racing this one - mirrors `providersUpdatedAt` in
+// `provider-auto-judge-section.test.tsx`.
+interface CatalogHarnessFixture {
+  readonly id: string;
+  readonly modes: ReadonlyArray<string>;
+  readonly supportedPermissionModes: ReadonlyArray<string>;
+}
+const DEFAULT_CATALOG_HARNESSES: ReadonlyArray<CatalogHarnessFixture> = [
+  {
+    id: "claude",
+    modes: ["gui", "tui"],
+    supportedPermissionModes: [
+      "supervised",
+      "auto_accept_edits",
+      "auto",
+      "full_access",
+    ],
+  },
+  {
+    id: "codex",
+    modes: ["gui", "tui"],
+    supportedPermissionModes: [
+      "supervised",
+      "auto_accept_edits",
+      "auto",
+      "full_access",
+    ],
+  },
+];
+const guiHarnessesCatalogMock = vi.hoisted(() => ({
+  data: undefined as
+    | { harnesses: ReadonlyArray<CatalogHarnessFixture> }
+    | undefined,
+}));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({
-    data: {
-      harnesses: [
-        { id: "claude", modes: ["gui", "tui"] },
-        { id: "codex", modes: ["gui", "tui"] },
-      ],
-    },
-  }),
+  useGuiHarnessesQuery: () => ({ data: guiHarnessesCatalogMock.data }),
 }));
 
 vi.mock("@/hooks/providers/use-refresh-providers", async () => {
@@ -1411,6 +1455,7 @@ function railProviderRow(name: string | RegExp, hidden: boolean): HTMLElement {
 
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
+    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
     useProvidersFocusStore.setState({
       focusHarnessId: null,
       focusTab: null,
@@ -6730,6 +6775,56 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
   });
+
+  // The Permissions tab is derived from `catalogSupportedPermissionModes`
+  // over the harness CATALOG now, not from the host-wide `autoJudge.get`
+  // method - a different question one method over (see the comment on
+  // `permissionsTab` in `providers-settings-panel.tsx`). `useHostSupportsMethod`
+  // is stubbed `() => true` for every method throughout this file, so these
+  // three cases are what proves the gate actually moved: if the tab still
+  // read the old method, all three would show the tab.
+  it("hides the Permissions tab when the catalog reports no harness supporting auto", () => {
+    guiHarnessesCatalogMock.data = {
+      harnesses: DEFAULT_CATALOG_HARNESSES.map((harness) => ({
+        ...harness,
+        supportedPermissionModes: harness.supportedPermissionModes.filter(
+          (mode) => mode !== "auto",
+        ),
+      })),
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole("tab", { name: "Permissions" })).toBeNull();
+  });
+
+  it("shows the Permissions tab when the catalog reports a harness supporting auto", () => {
+    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("tab", { name: "Permissions" })).toBeDefined();
+  });
+
+  it("hides the Permissions tab while the harness catalog is still loading (undefined)", () => {
+    guiHarnessesCatalogMock.data = undefined;
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole("tab", { name: "Permissions" })).toBeNull();
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -6804,6 +6899,11 @@ function pickerProviderState(input: {
 
 describe("<ProvidersSettingsPanel /> mobile section picker", () => {
   beforeEach(() => {
+    // The main desktop describe's last test can leave this at any value
+    // (including `undefined`, for its "still loading" case) - reset to the
+    // "everything supported" default here so this suite's Permissions-tab
+    // row is unaffected by test order.
+    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
     // `useIsMobileViewport` reads `window.innerWidth` directly (not
     // `matchMedia().matches`, which the global test shim always reports as
     // `false`), so setting it before render is enough to force the phone

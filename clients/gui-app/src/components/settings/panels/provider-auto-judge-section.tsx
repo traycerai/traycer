@@ -13,11 +13,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import {
+  useHostMethodSchemaVersion,
+  useHostMethodSupport,
+} from "@/hooks/host/use-host-supports-method";
 import { useProvidersSetAutoJudge } from "@/hooks/providers/use-providers-set-auto-judge-mutation";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
-import { providerAutoJudgeFor } from "@/lib/providers/provider-auto-judge";
+import {
+  providerAutoJudgeFor,
+  providersListReportsAutoJudge,
+} from "@/lib/providers/provider-auto-judge";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 
 /**
@@ -67,6 +73,16 @@ export function ProviderAutoJudgeSection({
   const setAutoJudgeSupported = useHostMethodSupport(
     hostId,
     "providers.setAutoJudge",
+  );
+  // The READ half, which is a different method's version. A host can advertise
+  // the setter while negotiating `providers.list@9.0`, and on that line the
+  // response never carries `autoJudge` - so the write lands, the invalidated
+  // refetch comes back without it, `providerAutoJudgeFor`'s `?? "traycer"`
+  // answers, and the control snaps to the opposite of what the host just
+  // stored. Writable-but-unreadable is its own state, not a variant of either
+  // neighbour.
+  const judgeReadable = providersListReportsAutoJudge(
+    useHostMethodSchemaVersion(hostId, "providers.list"),
   );
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: true,
@@ -130,6 +146,29 @@ export function ProviderAutoJudgeSection({
   );
 
   const providerName = PROVIDER_DISPLAY_NAMES[providerId];
+
+  // A host that can store the choice but cannot report it back. NO VALUE LINE
+  // here, unlike the branch below: on this line `providerAutoJudgeFor` answers
+  // `"traycer"` for every provider whatever is stored, so printing it would be
+  // stating a guess as the current setting - the same guess that made the
+  // selector snap back after a successful write.
+  if (hasNativeJudge && !judgeReadable) {
+    return (
+      <div
+        className="mt-3 flex flex-col gap-2 rounded-lg border border-border/60 p-3"
+        data-testid="provider-auto-judge-unreadable"
+      >
+        <p className="text-ui-sm font-medium text-foreground">
+          Who reviews {providerName}&apos;s commands
+        </p>
+        <p className="text-ui-xs text-muted-foreground">
+          This machine&apos;s host can&apos;t report which classifier is
+          selected for {providerName}, so Traycer won&apos;t guess. Update the
+          host to see and change this.
+        </p>
+      </div>
+    );
+  }
 
   // A host that answers the catalog and not the write. The provider DOES have
   // a classifier of its own here, so the "nothing to choose" line below would

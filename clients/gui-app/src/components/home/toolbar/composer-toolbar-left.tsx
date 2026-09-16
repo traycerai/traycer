@@ -27,7 +27,6 @@ interface ComposerToolbarLeftProps {
   readonly turnActive: boolean;
   /** Which pocket the host's judge spends - see `PermissionsPicker`. */
   readonly judgeBilling: AutoJudgeBilling | null;
-  showNextTurnPermissionNote: boolean;
   settingsLocked: boolean;
 }
 
@@ -41,7 +40,6 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
     catalogSupportedModes,
     turnActive,
     judgeBilling,
-    showNextTurnPermissionNote,
     settingsLocked,
   } = props;
 
@@ -59,15 +57,6 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
         judgeBilling={judgeBilling}
         closeFocus="composer"
       />
-      {showNextTurnPermissionNote ? (
-        <output
-          aria-live="polite"
-          aria-atomic="true"
-          className="max-w-[min(28vw,14rem)] truncate text-ui-xs text-muted-foreground"
-        >
-          New mode applies to the next turn
-        </output>
-      ) : null}
     </div>
   );
 }

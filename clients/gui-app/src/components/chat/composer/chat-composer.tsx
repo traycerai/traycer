@@ -795,7 +795,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     attachmentPending={attachmentPending}
                     onSubmit={handleSubmitFromButton}
                     activeTurnStatus={activeTurnStatus}
-                    hasPendingApprovals={hasPendingApprovals}
                     stopDisabled={stopDisabled}
                     onStopTurn={onStopTurn}
                     composerDisabledHint={sendBlockedHint}

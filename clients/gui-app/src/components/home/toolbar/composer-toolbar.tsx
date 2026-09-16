@@ -17,7 +17,6 @@ interface ComposerToolbarProps {
    *  left group renders, leaves stay presentational. */
   store: ComposerToolbarStore;
   onAttachImages: (files: ReadonlyArray<File>) => void;
-  showNextTurnPermissionNote: boolean;
   canSubmit: boolean;
   attachmentPending: boolean;
   onSubmit: () => void;
@@ -52,7 +51,6 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
   const {
     store,
     onAttachImages,
-    showNextTurnPermissionNote,
     canSubmit,
     attachmentPending,
     onSubmit,
@@ -122,14 +120,12 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             supportedPermissionModes={supportedPermissionModes}
             harnessLabel={harnessLabel}
             catalogSupportedModes={catalogSupportedModes}
-            // A turn the user can still switch a mode underneath. The flip is
-            // honoured from the NEXT message, which is exactly what the row's
-            // notice says; `settingsLocked` surfaces cannot flip at all.
+            // A turn the user can still switch a mode underneath - which the
+            // host honours IMMEDIATELY for the running turn, not from the next
+            // message; the picker's own mid-turn notice is what says so.
+            // `settingsLocked` surfaces cannot flip at all.
             turnActive={activeTurnStatus !== null && !settingsLocked}
             judgeBilling={judgeBilling}
-            showNextTurnPermissionNote={
-              showNextTurnPermissionNote ? !settingsLocked : false
-            }
             settingsLocked={settingsLocked}
           />
           <ComposerToolbarRight

@@ -75,7 +75,6 @@ describe("<ComposerToolbarLeft />", () => {
           catalogSupportedModes={null}
           turnActive={false}
           judgeBilling={null}
-          showNextTurnPermissionNote={false}
           settingsLocked={false}
         />
       </TooltipProvider>,
@@ -117,7 +116,6 @@ function renderToolbar(
         catalogSupportedModes={null}
         turnActive={false}
         judgeBilling={null}
-        showNextTurnPermissionNote={false}
         settingsLocked={settingsLocked}
       />
     </TooltipProvider>,

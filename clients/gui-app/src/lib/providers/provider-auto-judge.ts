@@ -1,3 +1,4 @@
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { AutoJudgeKind } from "@traycer/protocol/host/auto-mode/contracts";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 
@@ -21,4 +22,46 @@ import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
  */
 export function providerAutoJudgeFor(state: ProviderCliState): AutoJudgeKind {
   return state.autoJudge ?? "traycer";
+}
+
+/**
+ * The `providers.list` line that PUBLISHES `autoJudge`.
+ *
+ * `providers.setAutoJudge` writes the value and `providers.list@9.1` is its
+ * only carrier back ("nothing read it back, so the Providers > General switch
+ * could not show its own stored state after a reload"). A `9.0` response is a
+ * within-major re-parse that strips the key.
+ */
+const PROVIDERS_LIST_AUTO_JUDGE_MINOR = 1;
+const PROVIDERS_LIST_AUTO_JUDGE_MAJOR = 9;
+
+/**
+ * Whether this negotiated `providers.list` line can report the stored judge.
+ *
+ * The version half of {@link providerAutoJudgeFor}, and it lives beside it for
+ * the reason that function gives for existing at all: absent `autoJudge` means
+ * two different things, and only the negotiated line tells them apart. On `9.1`
+ * an absent key is "nothing was ever chosen" and `"traycer"` is the right
+ * answer. On `9.0` it is "this line cannot say", and `"traycer"` is a GUESS -
+ * one the host may contradict, because `providers.setAutoJudge` is a separate
+ * optional method a `9.0` host can still advertise. A caller that would act on
+ * the difference has to ask this first.
+ *
+ * The major is pinned rather than compared with `>`, the way every other
+ * version predicate in the tree pins its own: a `10.0` line is a new contract
+ * whose relationship to this field is not knowable from here, and reading it as
+ * "newer, therefore carries it" is the inference that gets version gates wrong.
+ * A `10.x` will need a line here.
+ *
+ * `null` - no handshake yet - reads as NOT reporting, the safe direction: it
+ * withholds a claim rather than making one from a line nobody has negotiated.
+ */
+export function providersListReportsAutoJudge(
+  version: SchemaVersion | null,
+): boolean {
+  return (
+    version !== null &&
+    version.major === PROVIDERS_LIST_AUTO_JUDGE_MAJOR &&
+    version.minor >= PROVIDERS_LIST_AUTO_JUDGE_MINOR
+  );
 }

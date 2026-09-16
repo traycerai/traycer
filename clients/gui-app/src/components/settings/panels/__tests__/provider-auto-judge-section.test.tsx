@@ -79,6 +79,12 @@ vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
 beforeEach(() => {
   recordNegotiatedHostManifest(HOST_ID, {
     "providers.setAutoJudge": { major: 1, minor: 0 },
+    // The READ half. `providers.list@9.1` is the only line that publishes
+    // `autoJudge`, and the section refuses to present a stored value it cannot
+    // actually read - so a manifest naming only the setter now lands on the
+    // unreadable panel rather than the switch. Both halves are the supported
+    // case; the cases about either gate record their own manifest.
+    "providers.list": { major: 9, minor: 1 },
   });
 });
 
@@ -405,8 +411,12 @@ describe("<ProviderAutoJudgeSection />", () => {
   // predates the write looks like - `getNegotiatedHostMethods` then returns a
   // set not containing it, i.e. `false`, not `null`.
   it("renders the read-only 'can't change' panel (not the select) when the host answers the catalog but not the write, stored: Traycer's judge", () => {
+    // The read half present, the WRITE half absent - which is what this case is
+    // about. Without `providers.list@9.1` the section lands on the unreadable
+    // panel instead, since it will not present a stored value it cannot read.
     recordNegotiatedHostManifest(HOST_ID, {
       "agent.gui.listHarnesses": { major: 9, minor: 1 },
+      "providers.list": { major: 9, minor: 1 },
     });
     guiHarnessesQueryMock.data = {
       harnesses: [harnessRow({ nativeAutoJudge: true })],
@@ -428,8 +438,12 @@ describe("<ProviderAutoJudgeSection />", () => {
   });
 
   it("shows the provider's own classifier as the stored value on the same unsupported panel", () => {
+    // The read half present, the WRITE half absent - which is what this case is
+    // about. Without `providers.list@9.1` the section lands on the unreadable
+    // panel instead, since it will not present a stored value it cannot read.
     recordNegotiatedHostManifest(HOST_ID, {
       "agent.gui.listHarnesses": { major: 9, minor: 1 },
+      "providers.list": { major: 9, minor: 1 },
     });
     guiHarnessesQueryMock.data = {
       harnesses: [harnessRow({ nativeAutoJudge: true })],
@@ -444,6 +458,66 @@ describe("<ProviderAutoJudgeSection />", () => {
     const unsupported = screen.getByTestId("provider-auto-judge-unsupported");
     expect(unsupported.textContent).toContain("Claude Code's classifier");
     expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  // JOB 4: the WRITE half present but the READ half stuck at `providers.list@9.0`
+  // - the setter is registered, so `useHostMethodSupport` answers `true`, but
+  // that line never carries `autoJudge` back. This is the "writable but
+  // unreadable" state `providersListReportsAutoJudge` exists to name: showing
+  // EITHER label here would be a fabricated echo of a value the section
+  // cannot actually read (see `providerAutoJudgeFor`'s `?? "traycer"` guess).
+  it("renders the unreadable panel, with no select and no stored-value guess, when the setter is supported but providers.list is stuck at 9.0", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": { major: 9, minor: 1 },
+      "providers.setAutoJudge": { major: 1, minor: 0 },
+      "providers.list": { major: 9, minor: 0 },
+    });
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: "provider" })}
+      />,
+    );
+
+    const unreadable = screen.getByTestId("provider-auto-judge-unreadable");
+    expect(unreadable.textContent).toContain(
+      "Who reviews Claude Code's commands",
+    );
+    expect(unreadable.textContent).toContain("can't report which classifier");
+    expect(screen.queryByRole("combobox")).toBeNull();
+    // The important part: no fabricated echo of either possible value,
+    // anywhere in the document - not just absent from this panel's own text.
+    expect(screen.queryByText("Traycer's judge")).toBeNull();
+    expect(screen.queryByText("Claude Code's classifier")).toBeNull();
+  });
+
+  // JOB 4: at 9.1 instead, the switch renders as before - existing coverage
+  // ("renders the row when nativeAutoJudge is true" and the selected-value
+  // cases above), restated here only to pin the boundary against the 9.0 case
+  // right beside it.
+  it("renders the select (not the unreadable panel) once providers.list reaches 9.1", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": { major: 9, minor: 1 },
+      "providers.setAutoJudge": { major: 1, minor: 0 },
+      "providers.list": { major: 9, minor: 1 },
+    });
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: "provider" })}
+      />,
+    );
+
+    expect(screen.queryByTestId("provider-auto-judge-unreadable")).toBeNull();
+    expect(screen.getByRole("combobox").textContent).toMatch(
+      "Claude Code's classifier",
+    );
   });
 
   // JOB 4: the "no handshake yet" case must NOT fall back to the read-only

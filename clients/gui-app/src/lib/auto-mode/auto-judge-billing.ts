@@ -186,8 +186,7 @@ export function providerRunsItsOwnJudge(input: {
   // `nativeAutoJudge`, so such a provider shows the read-only "Traycer's judge"
   // line there while the composer claimed its classifier reviews for free.
   // Absent capability reads `false`, matching every other unknown on this path.
-  const row = harnesses.find((candidate) => candidate.id === harnessId);
-  if (row === undefined || !row.nativeAutoJudge) return false;
+  if (!harnessHasNativeAutoJudge(harnessId, harnesses)) return false;
   const providerId = guiHarnessIdToProviderId(harnessId);
   if (providerId === null) return false;
   const state = providers.find(
@@ -195,6 +194,26 @@ export function providerRunsItsOwnJudge(input: {
   );
   if (state === undefined) return false;
   return providerAutoJudgeFor(state) === "provider";
+}
+
+/**
+ * Whether this harness currently has a classifier of its own to delegate to.
+ *
+ * Extracted from {@link providerRunsItsOwnJudge} rather than restated, because
+ * a second caller now needs the SAME question for a different purpose: it is
+ * the condition under which the stored preference matters at all, and therefore
+ * the condition under which a `providers.list` line too old to report that
+ * preference makes the answer UNKNOWN rather than `false`. Two copies of it
+ * would let the disclosure and its own unknown-check disagree about which
+ * harnesses they are talking about.
+ */
+export function harnessHasNativeAutoJudge(
+  harnessId: GuiHarnessId | null,
+  harnesses: ReadonlyArray<GuiHarnessOption> | undefined,
+): boolean {
+  if (harnessId === null || harnesses === undefined) return false;
+  const row = harnesses.find((candidate) => candidate.id === harnessId);
+  return row !== undefined && row.nativeAutoJudge;
 }
 
 function judgeHarnessLabel(harnessId: string): string {

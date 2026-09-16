@@ -9,9 +9,12 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   autoJudgeBillingForRun,
+  harnessHasNativeAutoJudge,
   providerRunsItsOwnJudge,
   type AutoJudgeBilling,
 } from "@/lib/auto-mode/auto-judge-billing";
+import { providersListReportsAutoJudge } from "@/lib/providers/provider-auto-judge";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 
 // Stable params identity so the host-scoped query key stays referentially
 // constant across renders.
@@ -116,6 +119,30 @@ export function useAutoJudgeBilling(
     () => providerRunsItsOwnJudge({ harnessId, providers, harnesses }),
     [harnessId, providers, harnesses],
   );
+  // A THIRD unknown, alongside the two settled reads above, and it is a version
+  // rather than a status. `autoJudge` rides `providers.list@9.1`; a `9.0`
+  // response strips the key, so `providerAutoJudgeFor`'s `?? "traycer"` answers
+  // for every provider and `providerRunsItsOwnJudge` says `false` whatever the
+  // host has stored. That default is right for a host with no notion of the
+  // setting - and wrong for one that advertises `providers.setAutoJudge` on an
+  // older list line, which per-method negotiation permits: there the user's own
+  // choice of the provider's classifier reads back as Traycer's judge, and this
+  // row would bill their Traycer credits for a review the provider is doing.
+  //
+  // It only bites where the preference is CONSULTED, which is a harness with a
+  // classifier to delegate to. Everywhere else `false` is settled by the
+  // catalog alone and the list line is irrelevant - so the gate is the pair,
+  // not the version on its own, and the common host is unaffected.
+  //
+  // Read unconditionally - `&&` would make the hook call conditional - and
+  // folded with the catalog answer below.
+  const providersListVersion = useHostMethodSchemaVersion(
+    resolvedHostId,
+    "providers.list",
+  );
+  const providerJudgeUnknown =
+    harnessHasNativeAutoJudge(harnessId, harnesses) &&
+    !providersListReportsAutoJudge(providersListVersion);
   const selection = query.data?.selection ?? null;
   const judgeHarnessId = selection === null ? null : selection.harnessId;
   // The host's own verdict that it CANNOT run the judge it has stored
@@ -123,7 +150,10 @@ export function useAutoJudgeBilling(
   // wire, so an older host answers `undefined` and reads as "not blocked".
   const blocked = query.data?.blocked ?? null;
   const loaded =
-    query.data !== undefined && providersSettled && harnessesSettled;
+    query.data !== undefined &&
+    providersSettled &&
+    harnessesSettled &&
+    !providerJudgeUnknown;
   return useMemo(
     () =>
       loaded

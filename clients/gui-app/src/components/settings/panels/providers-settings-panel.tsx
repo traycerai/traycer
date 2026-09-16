@@ -29,6 +29,8 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { catalogSupportedPermissionModes } from "@/components/home/data/landing-options";
 import {
   useProviderProfileEnablementPending,
   useProvidersSetProfileEnabledForClient,
@@ -692,11 +694,34 @@ function ProvidersRailLayout({
   // this stays the rail's first provider.
   // Whether the Permissions tab is drawn at all: only a host that supports
   // auto mode has a judge to name. Every provider gets the tab then - the
-  // section inside decides between a switch and a read-only line - so the
-  // flag is one boolean for the whole rail, not a per-provider lookup. A
-  // host still handshaking reads `false` and the tab appears when it answers;
-  // the active tab is re-resolved against the live list on every render.
-  const permissionsTab = useHostSupportsMethod(hostId, "autoJudge.get");
+  // section inside decides between a switch, a read-only line and the
+  // can't-write panel - so the flag is one boolean for the whole rail, not a
+  // per-provider lookup. While the catalog is loading it reads `false` and the
+  // tab appears when the rows land; the active tab is re-resolved against the
+  // live list on every render.
+  //
+  // **Derived from the CATALOG, not from `autoJudge.get`.** It used to gate on
+  // that method, which is a different question one method over: `autoJudge.get`
+  // names the HOST-WIDE judge (which agent runs Traycer's judge on this
+  // machine), while the tab's own content is the PER-PROVIDER classifier choice
+  // behind `providers.setAutoJudge`. RPC support is negotiated per method, so a
+  // host answering the setter and a `nativeAutoJudge` row while not advertising
+  // the host-wide getter had the tab removed above the section that now handles
+  // exactly that case. `auto` in the catalog is the honest question - it is the
+  // one fact that says this machine has Auto mode at all, it is what the
+  // composer's own clamp reads, and a pre-auto host filters the mode out of
+  // every row it serves (`agent.gui.listHarnesses@9.1`).
+  const harnessesQuery = useGuiHarnessesQuery({
+    enabled: true,
+    subscribed: true,
+  });
+  const permissionsTab = useMemo(
+    () =>
+      (
+        catalogSupportedPermissionModes(harnessesQuery.data?.harnesses) ?? []
+      ).includes("auto"),
+    [harnessesQuery.data?.harnesses],
+  );
   const [activeTab, setActiveTab] = useState<ProviderTabKey>(() =>
     initialActiveTab(
       orderedProviders,

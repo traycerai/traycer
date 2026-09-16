@@ -1203,6 +1203,28 @@ function getButtonContainingText(text: string): HTMLButtonElement {
   return button;
 }
 
+/**
+ * The toolbar's left group (`ComposerToolbarLeft`) has no test id of its own,
+ * so this locates it structurally: the smallest ancestor containing both the
+ * attach-image button and the permission picker's trigger, which are the two
+ * controls that div renders. Scoping matters here because an unrelated
+ * `output[aria-live="polite"]` already exists elsewhere in the composer (the
+ * unsupported-images message), so a document-wide query would prove nothing
+ * about the retired "New mode applies to the next turn" note.
+ */
+function getComposerToolbarLeftGroup(): HTMLElement {
+  const attachButton = getButtonByAriaLabel("Attach image");
+  const permissionButton = getButtonByAriaLabel("Full access");
+  let node: HTMLElement | null = attachButton.parentElement;
+  while (node !== null && !node.contains(permissionButton)) {
+    node = node.parentElement;
+  }
+  if (node === null) {
+    throw new Error("expected a common ancestor for the toolbar left group");
+  }
+  return node;
+}
+
 function registerWaitingChatHandoff(): void {
   const scope = {
     hostId: HOST_ID,
@@ -1886,13 +1908,16 @@ describe("<ChatTile />", () => {
       });
     });
 
-    // The toolbar stays editable mid-turn; the note only appears once the user
-    // actually changes permission (live-mirror + steer reconcile the change).
+    // The toolbar stays editable mid-turn: a queued message live-mirrors the
+    // settings and steering reconciles the turn-start-baked ones.
+    //
+    // This used to also assert the absence of a "New mode applies to the next
+    // turn" note, which the toolbar no longer renders at all - the host honours
+    // a mid-turn permission change immediately, so that sentence was false.
+    // A `queryByText` for retired copy passes whatever the toolbar does, so it
+    // is dropped rather than kept as coverage it no longer provides.
     await waitFor(() => {
       expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
-      expect(
-        screen.queryByText("New mode applies to the next turn"),
-      ).toBeNull();
     });
 
     act(() => {
@@ -1908,9 +1933,6 @@ describe("<ChatTile />", () => {
 
     await waitFor(() => {
       expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
-      expect(
-        screen.queryByText("New mode applies to the next turn"),
-      ).toBeNull();
     });
   });
 
@@ -2025,9 +2047,6 @@ describe("<ChatTile />", () => {
     // Approval-pending is still turn-in-progress, but the toolbar stays editable.
     await waitFor(() => {
       expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
-      expect(
-        screen.queryByText("New mode applies to the next turn"),
-      ).toBeNull();
     });
 
     act(() => {
@@ -2042,11 +2061,79 @@ describe("<ChatTile />", () => {
       });
     });
 
+    // And stays editable once the approval resolves - the state this case used
+    // to describe through the retired note's absence.
     await waitFor(() => {
-      expect(
-        screen.queryByText("New mode applies to the next turn"),
-      ).toBeNull();
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
     });
+  });
+
+  it("renders no next-turn note in the toolbar's left group, mid-turn or with an approval pending", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: "codex",
+          model: "gpt-live",
+          profileId: null,
+          userMessageId: "message-1",
+          startedAt: 2,
+          updatedAt: 2,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
+    });
+
+    // The retired "New mode applies to the next turn" note used to be an
+    // `output[aria-live="polite"]` in this exact group. Assert its structural
+    // absence rather than `queryByText` for the deleted copy, which would
+    // pass trivially regardless of what the toolbar renders.
+    expect(
+      getComposerToolbarLeftGroup().querySelector('output[aria-live="polite"]'),
+    ).toBeNull();
+
+    act(() => {
+      chatHarness.callbacks().onApprovalRequested({
+        kind: "approvalRequested",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approval: {
+          kind: "tool",
+          approvalId: "approval-note-check",
+          toolName: "edit",
+          description: "Apply change",
+          input: null,
+          planId: null,
+          actions: [],
+          requestedAt: 2,
+          reason: null,
+          reviewing: null,
+        },
+      });
+    });
+
+    expect(screen.getByTestId("approval-prompt")).not.toBeNull();
+    expect(
+      getComposerToolbarLeftGroup().querySelector('output[aria-live="polite"]'),
+    ).toBeNull();
   });
 
   it("renders file-edit approvals before generic approvals in the composer slot", async () => {

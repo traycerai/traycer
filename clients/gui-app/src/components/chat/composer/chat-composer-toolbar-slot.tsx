@@ -1,15 +1,10 @@
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
-import { memo, useState } from "react";
-import { useStore } from "zustand";
+import { memo } from "react";
 
 import type { ComposerDictationControl } from "@/components/home/toolbar/composer-mic-button";
 import { ComposerToolbar } from "@/components/home/toolbar/composer-toolbar";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
-import type {
-  ComposerToolbarStore,
-  ComposerToolbarStoreState,
-} from "@/stores/composer/composer-toolbar-store";
-import type { PermissionMode } from "@/components/home/data/landing-options";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 
 interface ChatComposerToolbarSlotProps {
@@ -19,7 +14,6 @@ interface ChatComposerToolbarSlotProps {
   readonly attachmentPending: boolean;
   readonly onSubmit: () => void;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
-  readonly hasPendingApprovals: boolean;
   readonly stopDisabled: boolean;
   readonly onStopTurn: (() => void) | null;
   readonly composerDisabledHint: string | null;
@@ -35,48 +29,34 @@ interface ChatComposerToolbarSlotProps {
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
 }
 
-interface ChatComposerToolbarSlotViewProps extends ChatComposerToolbarSlotProps {
-  readonly showNextTurnPermissionNote: boolean;
-}
-
-function selectPermission(state: ComposerToolbarStoreState): PermissionMode {
-  return state.permission;
-}
-
+/**
+ * The toolbar stays fully editable during a turn: a queued message live-mirrors
+ * these settings, and steering reconciles any turn-start-baked change through
+ * the restart dialog.
+ *
+ * **There used to be a second component here** - a `PendingChatComposerToolbarSlot`
+ * that froze the permission at the moment a turn became pending and rendered
+ * "New mode applies to the next turn" once it differed. The sentence was false:
+ * `handleComposerSettingsChange` forwards `activePermissionModeUpdate` the
+ * moment the mode moves while a run is in progress, the host mutates the
+ * running execution's mode on arrival, and `FileEditCoordinator` authorizes
+ * against that live value - so a `supervised` turn that was putting every file
+ * edit to the user starts auto-approving them, and `full_access` resolves the
+ * approvals already on screen. It was also the opposite of what the picker's
+ * own mid-turn notice now says, which is the contradiction that retired it.
+ *
+ * It is not replaced by a corrected sentence, because this surface cannot make
+ * one true: the note rendered whenever `activeTurnStatus !== null ||
+ * hasPendingApprovals`, while the forward is gated on `runStatus` being
+ * `running`/`stopping` - so the same words would be right in one window and
+ * wrong in the other. The honest carrier is the PICKER, which speaks at the
+ * moment of the choice and knows the mode being chosen (`AUTO_MID_TURN_NOTICE`).
+ */
 function ChatComposerToolbarSlotImpl(props: ChatComposerToolbarSlotProps) {
-  // The toolbar stays fully editable during a turn: a queued message
-  // live-mirrors these settings and steering reconciles any turn-start-baked
-  // change via the restart dialog. Only this soft permission note signals a
-  // pending turn - tracked here (not in ChatComposer) so the host composer
-  // never subscribes to permission changes.
-  if (props.activeTurnStatus !== null || props.hasPendingApprovals) {
-    return <PendingChatComposerToolbarSlot {...props} />;
-  }
-  return (
-    <ChatComposerToolbarSlotView
-      {...props}
-      showNextTurnPermissionNote={false}
-    />
-  );
-}
-
-function PendingChatComposerToolbarSlot(props: ChatComposerToolbarSlotProps) {
-  const permission = useStore(props.store, selectPermission);
-  const [permissionAtPendingStart] = useState(permission);
-  return (
-    <ChatComposerToolbarSlotView
-      {...props}
-      showNextTurnPermissionNote={permissionAtPendingStart !== permission}
-    />
-  );
-}
-
-function ChatComposerToolbarSlotView(props: ChatComposerToolbarSlotViewProps) {
   return (
     <ComposerToolbar
       store={props.store}
       onAttachImages={props.onAttachImages}
-      showNextTurnPermissionNote={props.showNextTurnPermissionNote}
       canSubmit={props.canSubmit}
       attachmentPending={props.attachmentPending}
       onSubmit={props.onSubmit}

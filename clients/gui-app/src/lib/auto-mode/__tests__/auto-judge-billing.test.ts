@@ -15,6 +15,7 @@ import {
   autoJudgeBillingForRun,
   autoJudgeMetaLine,
   autoJudgeSelfBillingWarning,
+  harnessHasNativeAutoJudge,
   providerRunsItsOwnJudge,
 } from "@/lib/auto-mode/auto-judge-billing";
 
@@ -289,6 +290,47 @@ describe("providerRunsItsOwnJudge", () => {
         ],
       }),
     ).toBe(false);
+  });
+});
+
+// Extracted from `providerRunsItsOwnJudge` because a second caller
+// (`useAutoJudgeBilling`'s `providerJudgeUnknown`) now needs the same
+// question for a different purpose - see the doc on the function.
+describe("harnessHasNativeAutoJudge", () => {
+  it("is true for a matching row with nativeAutoJudge: true", () => {
+    expect(
+      harnessHasNativeAutoJudge(CLAUDE_HARNESS_ID, CAPABLE_HARNESSES),
+    ).toBe(true);
+  });
+
+  it("is false when no row matches the harness id", () => {
+    expect(
+      harnessHasNativeAutoJudge(CLAUDE_HARNESS_ID, [
+        guiHarnessOptionSchema.parse({
+          id: "codex",
+          label: "Codex",
+          available: true,
+          error: null,
+          modes: ["gui"],
+          requiresApiKey: false,
+          nativeAutoJudge: true,
+        }),
+      ]),
+    ).toBe(false);
+  });
+
+  it("is false for a matching row with nativeAutoJudge: false", () => {
+    expect(
+      harnessHasNativeAutoJudge(CLAUDE_HARNESS_ID, INCAPABLE_HARNESSES),
+    ).toBe(false);
+  });
+
+  it("is false when harnessId is null", () => {
+    expect(harnessHasNativeAutoJudge(null, CAPABLE_HARNESSES)).toBe(false);
+  });
+
+  it("is false when the harness catalog has not loaded yet (undefined)", () => {
+    expect(harnessHasNativeAutoJudge(CLAUDE_HARNESS_ID, undefined)).toBe(false);
   });
 });
 

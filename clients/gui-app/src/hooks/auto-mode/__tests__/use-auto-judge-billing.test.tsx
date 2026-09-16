@@ -72,9 +72,20 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
 const useHostSupportsMethodMock = vi.hoisted(() =>
   vi.fn((_hostId: string | null, _method: string): boolean => true),
 );
+// The negotiated `providers.list` line, which decides whether the stored
+// per-provider judge is READABLE at all (`autoJudge` rides `9.1`). `9.1` is the
+// default here so every pre-existing case keeps meaning what it did - they are
+// about the two settled reads, not about the version - and the case that is
+// about it sets its own.
+const providersListVersion = vi.hoisted(() => ({
+  current: { major: 9, minor: 1 } as { major: number; minor: number } | null,
+}));
+
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: (hostId: string | null, method: string) =>
     useHostSupportsMethodMock(hostId, method),
+  useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
+    method === "providers.list" ? providersListVersion.current : null,
 }));
 
 let autoJudgeGetData: AutoJudgeGetResponse | undefined;
@@ -167,6 +178,7 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
 
 afterEach(() => {
   vi.clearAllMocks();
+  providersListVersion.current = { major: 9, minor: 1 };
   autoJudgeGetData = undefined;
   providersListData = undefined;
   harnessesData = { harnesses: [harnessRow(true)] };
@@ -458,6 +470,48 @@ describe("useAutoJudgeBilling", () => {
       );
 
       expect(result.current).toBeNull();
+    });
+  });
+
+  // JOB 4: the THIRD unknown, `providerJudgeUnknown` - a version rather than a
+  // read status. The catalog says this harness has a native judge to delegate
+  // to, but `providers.list` is stuck at 9.0, which never carries `autoJudge`
+  // back - so `providerAutoJudgeFor`'s `?? "traycer"` would answer for every
+  // provider whatever the host actually has stored. The hook must publish
+  // nothing rather than a possibly-wrong billing claim.
+  describe("the writable-but-unreadable provider judge (providers.list stuck at 9.0)", () => {
+    it("returns null when the harness has a native judge but providers.list cannot report it", () => {
+      autoJudgeGetData = { selection: null };
+      providersListData = {
+        providers: [providerState({ autoJudge: "provider" })],
+      };
+      harnessesData = { harnesses: [harnessRow(true)] };
+      providersListVersion.current = { major: 9, minor: 0 };
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toBeNull();
+    });
+
+    // Proves the gate is the PAIR ({nativeAutoJudge, list-version}), not the
+    // list version alone: the same stuck-at-9.0 line is irrelevant when this
+    // harness has no native judge to delegate to in the first place, since
+    // `providerRunsItsOwnJudge` never consults `providerAutoJudgeFor` for it.
+    it("is unaffected by the same stuck providers.list when the harness has no native judge", () => {
+      autoJudgeGetData = { selection: null };
+      providersListData = {
+        providers: [providerState({ autoJudge: "provider" })],
+      };
+      harnessesData = { harnesses: [harnessRow(false)] };
+      providersListVersion.current = { major: 9, minor: 0 };
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toEqual({ kind: "traycer" });
     });
   });
 });
