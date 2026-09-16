@@ -3,6 +3,7 @@ import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/con
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 
 // Stable params identity so the host-scoped query key stays referentially
 // constant across renders.
@@ -41,8 +42,39 @@ export function useAutoPolicyQuery(): UseQueryResult<
   HostRpcError
 > {
   const client = useHostClient();
+  // ACCOUNT-OWNED DATA UNDER A HOST KEY IS A CROSS-IDENTITY LEAK.
+  //
+  // `["host", hostId, method, params]` says nothing about WHO asked, and an
+  // auth identity transition "marks stale WITHOUT refetching"
+  // (`createHostQueryInvalidator`) - so the cached body survives the switch and
+  // the next observer is served it SYNCHRONOUSLY. After A signs out and B signs
+  // in on the same instance, Permissions opened as B with A's policy on screen,
+  // Edit enabled, until the mandatory refetch landed; a save inside that window
+  // would have written A's prose into B's account.
+  //
+  // The viewer id closes it by construction: B's first render looks up a key
+  // that has never held data, so there is nothing to serve. `""` (no context
+  // metadata yet) is its own bucket for the same reason, which is the safe
+  // direction. Same read every other viewer-scoped surface uses rather than a
+  // second spelling of the same field.
+  //
+  // `autoJudge.get` deliberately does NOT take this: it answers from a file
+  // only this GUI writes ON THAT MACHINE, so it is host-owned and the host key
+  // already says everything about who owns it. The distinction is ownership,
+  // not caution - adding a user segment there would fragment a per-machine
+  // cache for nothing.
+  //
+  // Appended AFTER the method key (`use-host-query.ts` spreads
+  // `cacheKeyIdentity` last), so the method scope stays a valid PREFIX and
+  // every INVALIDATION keyed on it still reaches this entry. The write-through
+  // in `use-auto-policy-set-mutation.ts` deliberately does NOT use that prefix
+  // any more: a prefix write lands on every viewer's partition at once, which
+  // is this same leak through the other door. It addresses one entry through
+  // `hostQueryKeys.autoPolicyForViewer`, which restates the key shape built
+  // here - move one and move the other.
+  const viewerUserId = useCloudChatViewerId();
   return useHostQuery({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [viewerUserId],
     client,
     method: "autoPolicy.get",
     params: AUTO_POLICY_GET_PARAMS,

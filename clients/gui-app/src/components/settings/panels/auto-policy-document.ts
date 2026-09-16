@@ -33,6 +33,19 @@ export function autoPolicyReadStateFor(
 }
 
 /**
+ * Where the editor's OPEN-time authoritative read has got to.
+ *
+ * `pending` and `failed` collapse to the same answer for Save - "this window
+ * cannot yet tell whether another device has moved the policy" - but they are
+ * different sentences on screen, so the third state is not a boolean.
+ *
+ * It lives in this module rather than beside either component because BOTH the
+ * row that drives the read and the dialog that gates on it need the name, and a
+ * module exporting a component may export nothing else (see the header).
+ */
+export type AutoPolicyOpeningRead = "pending" | "settled" | "failed";
+
+/**
  * The four headings the judge's prompt builder reads a policy under. Prefilled
  * for an empty policy and nothing more: the guidance about what belongs under
  * each one is the dialog's copy, not the document's, because every byte of the

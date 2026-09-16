@@ -375,10 +375,22 @@ describe("useAutoJudgeBilling", () => {
       });
     });
 
-    // An ERROR still counts as settled: a host that cannot answer the
-    // providers read is what the `false` (non-native) default is for, not a
-    // reason to keep withholding billing copy forever.
-    it("classifies rather than hanging when the providers read errors, falling back to the non-native reading", () => {
+    // A FAILED read is not settled. This case previously asserted the
+    // opposite - "an error still counts as settled, because a host that cannot
+    // answer is what the `false` default is for" - and that rationale
+    // conflated two hosts. The `false` (non-native) default exists for a host
+    // that ANSWERS without the data: one predating `providers.list@9.1`, whose
+    // successful response simply omits `autoJudge`. A transport failure says
+    // nothing about the provider's classifier, and turning it into `false`
+    // publishes "Uses your Traycer credits" for a run the host may well review
+    // natively at no cost - a claim about the user's money, made from a read
+    // that failed.
+    //
+    // "Hanging" was the wrong worry: the disclosure is ADDITIVE, so withholding
+    // it renders the row exactly as it rendered before auto mode existed. There
+    // is no spinner to hang and nothing is blocked - the honest answer to a
+    // question we could not ask is to say nothing.
+    it("keeps the disclosure hidden when the providers read fails", () => {
       autoJudgeGetData = { selection: null };
       useProvidersListForClientMock.mockImplementation(() => ({
         data: undefined,
@@ -390,7 +402,7 @@ describe("useAutoJudgeBilling", () => {
         useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
       );
 
-      expect(result.current).toEqual({ kind: "traycer" });
+      expect(result.current).toBeNull();
     });
   });
 
@@ -410,6 +422,35 @@ describe("useAutoJudgeBilling", () => {
         data: undefined,
         isSuccess: false,
         isError: false,
+      }));
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toBeNull();
+    });
+
+    // JOB 4 (Codex, P1): the sibling of the `providers.list` failure case
+    // above, and the SAME reasoning applies one field over. The `false`
+    // (non-native) default `providerRunsItsOwnJudge` falls back to exists for
+    // a host that ANSWERS without the data (one predating a catalog field),
+    // not for a transport failure - so treating a failed harness-catalog read
+    // as settled would publish "Uses your Traycer credits" for a run the host
+    // may review natively at no cost, a claim about the user's money made
+    // from a read that failed. `autoJudge.get` and `providers.list` both
+    // succeed here, isolating the harness catalog as the one read that failed.
+    it("keeps the disclosure hidden when the harness-catalog read fails, even though autoJudge.get and providers.list both succeeded", () => {
+      autoJudgeGetData = { selection: null };
+      providersListData = {
+        providers: [providerState({ autoJudge: "provider" })],
+      };
+      harnessesData = undefined;
+      harnessesSettled = false;
+      useGuiHarnessesQueryForClientMock.mockImplementation(() => ({
+        data: undefined,
+        isSuccess: false,
+        isError: true,
       }));
 
       const { result } = renderHook(() =>

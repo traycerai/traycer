@@ -22,6 +22,7 @@ import {
   providerAutoJudgeWriteScope,
 } from "@/lib/query-keys/auto-mode-write-scopes";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { UseHostMutationOptions } from "@/hooks/host/use-host-query";
 
 // ─── shared boundary mocks ──────────────────────────────────────────────
@@ -213,13 +214,26 @@ describe("useAutoPolicySetMutation - client-side write ordering", () => {
     mocks.request.mockImplementationOnce(() => first.promise);
     mocks.request.mockImplementationOnce(() => second.promise);
 
+    // The policy read cache is partitioned by the authenticated viewer, and
+    // the mutation folds its response into THAT viewer's entry - never the
+    // bare method scope, which would prefix-match every viewer's partition.
+    // So the test signs a viewer in and seeds and reads that partition.
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "user-1", email: "user-1@example.com" },
+        { userId: "user-1", username: "user-1" },
+        [],
+      );
+    const policyKey = hostQueryKeys.autoPolicyForViewer("host-1", "user-1");
     const queryClient = new QueryClient();
     // Same reason as the judge test above: `setQueriesData` only folds into
     // an EXISTING cache entry.
-    queryClient.setQueryData(
-      hostQueryKeys.methodScope("host-1", "autoPolicy.get"),
-      { body: null, updatedAt: null, source: "account" },
-    );
+    queryClient.setQueryData(policyKey, {
+      body: null,
+      updatedAt: null,
+      source: "account",
+    });
     const { result } = renderHook(() => useAutoPolicySetMutation(), {
       wrapper: wrapperWith(queryClient),
     });
@@ -247,10 +261,11 @@ describe("useAutoPolicySetMutation - client-side write ordering", () => {
 
     await waitFor(() => {
       const cached = queryClient.getQueryData<{ readonly body?: string }>(
-        hostQueryKeys.methodScope("host-1", "autoPolicy.get"),
+        policyKey,
       );
       expect(cached?.body).toBe("policy draft two");
     });
+    useAuthStore.getState().setSignedOut();
   });
 
   // Weak-half fallback per the assignment: the judge and policy writes must

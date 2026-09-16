@@ -65,6 +65,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -88,6 +89,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -112,6 +114,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -136,6 +139,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={onSave}
@@ -156,6 +160,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         loadedUpdatedAt="2026-09-10T00:00:00.000Z"
         currentUpdatedAt="2026-09-10T00:05:00.000Z"
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -174,6 +179,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         loadedUpdatedAt="2026-09-10T00:00:00.000Z"
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -193,6 +199,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt="2026-09-10T00:05:00.000Z"
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -211,6 +218,7 @@ describe('<AutoPolicyEditorDialog /> readState="unreadable"', () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="unreadable"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -233,6 +241,7 @@ describe('<AutoPolicyEditorDialog /> readState="unreadable"', () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="unreadable"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -256,6 +265,7 @@ describe("<AutoPolicyEditorDialog /> saving", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -284,6 +294,7 @@ describe("<AutoPolicyEditorDialog /> saving", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving
         onCancel={onCancel}
         onSave={vi.fn()}
@@ -308,6 +319,7 @@ describe("<AutoPolicyEditorDialog /> saving", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving
         onCancel={onCancel}
         onSave={vi.fn()}
@@ -329,6 +341,7 @@ describe("<AutoPolicyEditorDialog /> saving", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={onCancel}
         onSave={vi.fn()}
@@ -363,6 +376,7 @@ describe("<AutoPolicyEditorDialog /> readable read states", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -395,6 +409,7 @@ describe("<AutoPolicyEditorDialog /> readable read states", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="stale"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -447,6 +462,7 @@ describe("<AutoPolicyEditorDialog /> readable read states", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="fresh"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -468,6 +484,7 @@ describe("<AutoPolicyEditorDialog /> readable read states", () => {
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
         readState="stale"
+        openingRead="settled"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -482,5 +499,109 @@ describe("<AutoPolicyEditorDialog /> readable read states", () => {
       "auto-policy-input",
     ) as HTMLTextAreaElement;
     expect(textarea.value).toBe("short and edited");
+  });
+});
+
+// JOB 3 (Codex, P1): the row's open-time refetch lands BEHIND the dialog, and
+// for that one round trip `currentUpdatedAt` still equals the cached
+// `loadedUpdatedAt` the stale-edit warning was seeded from - so the warning
+// cannot fire and Save would last-write-win over a newer policy from another
+// device. `openingRead` names where that read has got to; Save must stay
+// gated for the two states where this window cannot yet answer "has anyone
+// else saved since?" (`pending`, `failed`), and the sibling `readState`
+// gates it does not touch either half.
+describe("<AutoPolicyEditorDialog /> openingRead", () => {
+  it("disables Save and shows the inline spinner while the opening read is pending, even with a dirty edit", () => {
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        openingRead="pending"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("auto-policy-input"), {
+      target: { value: "short and edited" },
+    });
+
+    const saveButton = screen.getByTestId(
+      "auto-policy-save",
+    ) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+    // The repo's pending affordance (disabled, label untouched, inline
+    // spinner) applies to this wait exactly as it does to `saving` - the
+    // dialog reuses the same test id because it is the same claim to the
+    // user, "busy, not broken".
+    expect(screen.getByTestId("auto-policy-saving-spinner")).toBeTruthy();
+    expect(screen.getByText("Save policy")).toBeTruthy();
+  });
+
+  it("disables Save and shows the opening-read-failed warning when the opening read failed, even with a dirty edit", () => {
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        openingRead="failed"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("auto-policy-input"), {
+      target: { value: "short and edited" },
+    });
+
+    const saveButton = screen.getByTestId(
+      "auto-policy-save",
+    ) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+    expect(
+      screen.getByTestId("auto-policy-opening-read-failed-warning"),
+    ).toBeTruthy();
+    // No spinner here. "We could not check" and "wait a moment" are
+    // different instructions, and a spinner beside the failure would claim a
+    // wait that is over - the two states gate Save identically and must not
+    // look identical.
+    expect(screen.queryByTestId("auto-policy-saving-spinner")).toBeNull();
+  });
+
+  // The control for the two cases above: `openingRead="settled"` is what
+  // every other case in this file already renders, so this pins that a dirty
+  // edit against a settled opening read enables Save normally - the gate
+  // does not stick once the read has landed.
+  it("enables Save once the opening read has settled, with a dirty edit", () => {
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        openingRead="settled"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("auto-policy-input"), {
+      target: { value: "short and edited" },
+    });
+
+    const saveButton = screen.getByTestId(
+      "auto-policy-save",
+    ) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(false);
+    expect(
+      screen.queryByTestId("auto-policy-opening-read-failed-warning"),
+    ).toBeNull();
+    expect(screen.queryByTestId("auto-policy-saving-spinner")).toBeNull();
   });
 });

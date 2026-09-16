@@ -85,9 +85,18 @@ export function useAutoJudgeBilling(
   // routinely resolves first and the row would publish "Uses your Traycer
   // credits" for a provider-native run, then flip to "no extra cost" when the
   // rows land. A user choosing Auto in that window chose on copy that was
-  // wrong. An ERROR counts as settled: it is a host that cannot answer, which
-  // is the case the `false` default is actually for.
-  const providersSettled = providersQuery.isSuccess || providersQuery.isError;
+  // wrong.
+  //
+  // SUCCESS ONLY - an earlier round counted `isError` as settled, on the
+  // reasoning that "a host that cannot answer is what the `false` default is
+  // for". That conflated two different things. The `false` default is for a
+  // host that ANSWERS without the data (one predating `providers.list@9.1`,
+  // whose successful response simply omits `autoJudge`); a transport failure is
+  // an UNKNOWN, and turning it into `false` publishes "Uses your Traycer
+  // credits" for a run the host may well review natively at no cost. The
+  // disclosure is additive, so saying nothing is always available and is the
+  // honest answer to a read that failed.
+  const providersSettled = providersQuery.isSuccess;
   // The harness catalog is the second half of the native-judge question: the
   // persisted `autoJudge: "provider"` is a preference, and `nativeAutoJudge` is
   // whether there is still a classifier to delegate to. Same key the picker
@@ -99,7 +108,10 @@ export function useAutoJudgeBilling(
     subscribed: supported,
   });
   const harnesses = harnessesQuery.data?.harnesses;
-  const harnessesSettled = harnessesQuery.isSuccess || harnessesQuery.isError;
+  // Success only, for the same reason and by the same sweep: this read is just
+  // as REQUIRED for the native-judge decision, so a failed one is equally an
+  // unknown rather than a `false`.
+  const harnessesSettled = harnessesQuery.isSuccess;
   const isProviderNative = useMemo(
     () => providerRunsItsOwnJudge({ harnessId, providers, harnesses }),
     [harnessId, providers, harnesses],

@@ -7,6 +7,7 @@ import type {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
   autoModeMutationKeys,
   autoPolicyWriteScope,
@@ -16,6 +17,12 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 
 type SetAutoPolicyContext = {
   readonly hostId: string | null;
+  /**
+   * The viewer this save was made BY, captured at `onMutate` for the same
+   * reason `hostId` is: an identity that moves mid-flight must not redirect the
+   * write-through onto whoever is signed in when the response lands.
+   */
+  readonly viewerUserId: string;
 };
 
 /**
@@ -45,6 +52,7 @@ export function useAutoPolicySetMutation(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
+  const viewerUserId = useCloudChatViewerId();
   return useHostMutation<
     HostRpcRegistry,
     "autoPolicy.set",
@@ -59,12 +67,25 @@ export function useAutoPolicySetMutation(): UseMutationResult<
       // account-wide record, and a save routed through host A must still be
       // ordered against a later save routed through host B.
       scope: autoPolicyWriteScope(),
-      onMutate: () => ({ hostId: client.getActiveHostId() ?? null }),
+      onMutate: () => ({
+        hostId: client.getActiveHostId() ?? null,
+        viewerUserId,
+      }),
       onSuccess: (data, variables, ctx) => {
         if (ctx.hostId === null) return;
+        // The VIEWER's entry, not the method scope. The read cache is
+        // partitioned by the authenticated user (`useAutoPolicyQuery`), and a
+        // filter on the bare method scope prefix-matches every partition under
+        // this host - so a save by B would write B's policy body into A's
+        // cached entry, which A is served synchronously on the next identity
+        // switch. That is the cross-identity leak the read partition exists to
+        // close, arriving through the write path.
         queryClient.setQueriesData<AutoPolicyGetResponse>(
           {
-            queryKey: hostQueryKeys.methodScope(ctx.hostId, "autoPolicy.get"),
+            queryKey: hostQueryKeys.autoPolicyForViewer(
+              ctx.hostId,
+              ctx.viewerUserId,
+            ),
           },
           (previous) => ({
             body: variables.body,

@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import { AutoModeSettingsSection } from "@/components/settings/panels/auto-mode-settings-section";
@@ -394,6 +400,68 @@ describe("<AutoModeSettingsSection />", () => {
       fireEvent.click(screen.getByTestId("auto-policy-edit"));
 
       expect(autoPolicyRefetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    // JOB 3 (Codex, P1): the SAVE-side half of the same defect the two cases
+    // above already guard the WARNING side of. `openEditor` opens the dialog
+    // on the click and only THEN fires `refetchPolicy()` - so for the one
+    // round trip between the click and that read settling, `currentUpdatedAt`
+    // still equals the cached `loadedUpdatedAt` and a save would last-write-
+    // win over a newer policy from another device. Left unresolved
+    // deliberately (`new Promise(() => {})`), so the opening read never
+    // settles during this test - the window this case exists to close.
+    it("leaves Save disabled while the opening-editor refetch is still in flight", () => {
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: "A",
+        source: "account",
+        readState: "fresh",
+      };
+      autoPolicyRefetchMock.mockImplementation(() => new Promise(() => {}));
+      render(<AutoModeSettingsSection />);
+
+      fireEvent.click(screen.getByTestId("auto-policy-edit"));
+      // A typed edit, so `!dirty` alone cannot be what is holding Save down -
+      // the opening-read gate has to be doing the work this test is about.
+      fireEvent.change(screen.getByTestId("auto-policy-input"), {
+        target: { value: "## Environment\nEdited while the read was pending." },
+      });
+
+      const saveButton = screen.getByTestId(
+        "auto-policy-save",
+      ) as HTMLButtonElement;
+      expect(saveButton.disabled).toBe(true);
+    });
+
+    // The case that proves the gate and the stale-edit warning are the SAME
+    // mechanism: once the opening-editor refetch settles with a NEWER
+    // `updatedAt`, the dialog both lifts the opening-read gate and reveals
+    // the "saved somewhere else" warning - both downstream of the one read
+    // `openEditor` fires.
+    it("shows the stale warning once the opening-editor refetch resolves with a newer updatedAt", async () => {
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: "A",
+        source: "account",
+        readState: "fresh",
+      };
+      autoPolicyRefetchMock.mockImplementation(() => {
+        policy =
+          policy === undefined ? undefined : { ...policy, updatedAt: "B" };
+        return Promise.resolve({ isError: false });
+      });
+      const { rerender } = render(<AutoModeSettingsSection />);
+
+      fireEvent.click(screen.getByTestId("auto-policy-edit"));
+      // Let the mocked refetch's promise settle before observing its effect -
+      // `openEditor` never awaits it either, so this only flushes the
+      // microtask the click already scheduled.
+      await waitFor(() => {
+        expect(autoPolicyRefetchMock).toHaveBeenCalledTimes(1);
+      });
+      rerender(<AutoModeSettingsSection />);
+
+      expect(screen.getByTestId("auto-policy-stale-warning")).toBeTruthy();
     });
   });
 });

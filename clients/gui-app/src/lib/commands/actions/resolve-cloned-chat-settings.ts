@@ -134,13 +134,15 @@ export async function resolveClonedChatSettings(input: {
  * which is the one path where the whole operation is lost rather than degraded.
  *
  * **Demotes only on POSITIVE evidence**, and that asymmetry is deliberate.
- * A catalog that answers and offers no `auto` anywhere is proof; a catalog read
- * that FAILS is not, and guessing from it would silently change a durable
- * setting on a transient blip. This function's neighbour takes the same line
- * one field over - a failed `providers.list` becomes the explicit, retryable
- * `catalog-unavailable` rather than an assumed ambient profile - so a failed
- * harness read leaves the mode alone and lets the create surface the error the
- * user can retry.
+ * Proof is one row answering: the TARGET row named by `settings.harnessId`,
+ * present in the catalog and not listing `auto`. Two other shapes are not
+ * proof and leave the mode alone - a catalog read that FAILS (guessing from a
+ * transient blip would silently change a durable setting), and a catalog with
+ * no row for that harness at all (which says the target lacks the harness, a
+ * different and honest failure the create will surface itself). This
+ * function's neighbour takes the same line one field over - a failed
+ * `providers.list` becomes the explicit, retryable `catalog-unavailable`
+ * rather than an assumed ambient profile.
  *
  * `fallbackPermissionMode` is the shared one-way demotion (`auto` ->
  * `auto_accept_edits`): dropping the judge is the honest half-measure, where a
@@ -159,10 +161,21 @@ async function permissionModeForTarget(
       () => null,
     );
   if (harnesses === null) return settings;
-  const targetOffersAuto = harnesses.some((harness) =>
-    harness.supportedPermissionModes.includes("auto"),
+  // The row this chat will actually RUN on, not the catalog as a whole. A
+  // catalog-wide `some()` preserves `auto` whenever ANY target harness offers
+  // it, which is the wrong question on a mixed target: the create carries one
+  // `harnessId`, and `assertPermissionModeSupported` on the host judges the
+  // tuple against that harness alone. A chat on a harness without `auto`
+  // cloned onto a host where some other harness has it would still be rejected.
+  const targetRow = harnesses.find(
+    (harness) => harness.id === settings.harnessId,
   );
-  if (targetOffersAuto) return settings;
+  // No row is not positive evidence about the MODE - it says the target has no
+  // such harness at all, which fails the create for a different and honest
+  // reason. Clamping here would quietly rewrite the mode on the way to an
+  // error about something else.
+  if (targetRow === undefined) return settings;
+  if (targetRow.supportedPermissionModes.includes("auto")) return settings;
   return {
     ...settings,
     permissionMode: fallbackPermissionMode(settings.permissionMode),

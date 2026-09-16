@@ -2,7 +2,7 @@
  * Docs: see ../SETTINGS.md (Permissions → Auto mode).
  * Update that file whenever this settings surface changes.
  */
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   AutoJudgeSelection,
   AutoPolicyGetResponse,
@@ -25,7 +25,10 @@ import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.d
 import { AutoJudgePicker } from "@/components/settings/panels/auto-judge-picker";
 import { AutoPolicyEditorDialog } from "@/components/settings/panels/auto-policy-editor-dialog";
 import { AutoPolicyShippedDialog } from "@/components/settings/panels/auto-policy-shipped-dialog";
-import { autoPolicyReadStateFor } from "@/components/settings/panels/auto-policy-document";
+import {
+  autoPolicyReadStateFor,
+  type AutoPolicyOpeningRead,
+} from "@/components/settings/panels/auto-policy-document";
 import {
   hasShippedAutoPolicySections,
   parseShippedAutoPolicy,
@@ -267,17 +270,51 @@ function AutoPolicyRow(): ReactNode {
   // at mount, so a newer body cannot overwrite what the user is typing. What
   // moves is `currentUpdatedAt`, which is exactly the signal.
   //
-  // Not awaited: the editor must open on the click, and the warning appearing a
-  // round trip later is the honest rendering of when the answer arrived. A save
-  // committed inside that window still races - `autoPolicy.set` is
-  // last-write-wins by design - and narrowing that gap further would mean
-  // blocking Save on an in-flight read, which trades a rare silent overwrite
-  // for a permanent delay on every save.
+  // The editor still OPENS on the click - the read is not awaited before the
+  // dialog appears - but SAVE now waits for it, which is the half an earlier
+  // round got wrong. That round wrote off the gap as "a rare silent overwrite"
+  // against "a permanent delay on every save", and the second figure was
+  // simply not true: this gate covers one round trip immediately after opening,
+  // and Save is unreachable until the user has typed an edit, which takes
+  // longer than the read in almost every case. What it buys is the whole point
+  // of the refetch - a save committed before the authoritative answer lands
+  // compares `currentUpdatedAt` against the cached baseline it was seeded from,
+  // finds them equal, shows no warning, and last-write-wins over the newer
+  // policy.
+  //
+  // A FAILED opening read keeps Save disabled too, with its own sentence. The
+  // alternative - allowing the save because we could not check - is exactly the
+  // blind overwrite this exists to stop, and it is the same direction the row's
+  // own `unreadable` and `stale` gates already take.
   const refetchPolicy = query.refetch;
+  const [openingRead, setOpeningRead] =
+    useState<AutoPolicyOpeningRead>("settled");
+  // Which opening read the answer belongs to. Close-and-reopen is one gesture
+  // away here (the shipped-rules dialog reopens the editor through this same
+  // function), and without the generation the FIRST read's late `settled` would
+  // unlock Save while the second is still in flight - re-opening the exact hole
+  // this closes. Touched only from the handler and the promise arms, never
+  // during render.
+  const openingReadGeneration = useRef(0);
   const openEditor = (): void => {
     setViewingShipped(false);
     setEditing({ loadedUpdatedAt: data?.updatedAt ?? null });
-    void refetchPolicy();
+    const generation = openingReadGeneration.current + 1;
+    openingReadGeneration.current = generation;
+    setOpeningRead("pending");
+    // `refetch()` resolves with an error RESULT rather than rejecting unless
+    // the query throws on error, so the first arm is the one that runs; the
+    // rejection arm is there because that is a query option, not a contract.
+    void refetchPolicy().then(
+      (result) => {
+        if (openingReadGeneration.current !== generation) return;
+        setOpeningRead(result.isError ? "failed" : "settled");
+      },
+      () => {
+        if (openingReadGeneration.current !== generation) return;
+        setOpeningRead("failed");
+      },
+    );
   };
 
   return (
@@ -320,6 +357,7 @@ function AutoPolicyRow(): ReactNode {
           currentUpdatedAt={data.updatedAt}
           readState={readState}
           saving={setPolicy.isPending}
+          openingRead={openingRead}
           onCancel={() => setEditing(null)}
           onSave={(body) => {
             setPolicy.mutate({ body }, { onSuccess: () => setEditing(null) });

@@ -17,6 +17,7 @@ import {
   AUTO_POLICY_TEMPLATE,
   autoPolicyByteLength,
   autoPolicyChangedSinceLoad,
+  type AutoPolicyOpeningRead,
 } from "@/components/settings/panels/auto-policy-document";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +47,18 @@ export function AutoPolicyEditorDialog(props: {
    * about, because the loss it prevents is unrecoverable.
    */
   readonly readState: AutoPolicyReadState;
+  /**
+   * How far the refetch the ROW fires when it opens this editor has got.
+   *
+   * The editor opens on the click and that read lands behind it, so for one
+   * round trip `currentUpdatedAt` is still the cached value `loadedUpdatedAt`
+   * was seeded from - equal by construction, so the stale warning cannot fire
+   * whatever another device did. Save waits for the answer rather than the
+   * dialog waiting to appear: the user reads the policy in that window, and
+   * cannot have typed an edit yet (Save needs `dirty`), so the gate is almost
+   * always already lifted by the time it is reachable.
+   */
+  readonly openingRead: AutoPolicyOpeningRead;
   readonly saving: boolean;
   readonly onCancel: () => void;
   readonly onSave: (body: string) => void;
@@ -80,6 +93,12 @@ export function AutoPolicyEditorDialog(props: {
   // else saved since you opened this", and conflating the two would make the
   // wrong sentence appear.
   const readIsStale = props.readState === "stale";
+  // The two ways the opening read leaves this window unable to answer "has
+  // anyone else saved since?". They gate Save identically and say different
+  // things, because "wait a moment" and "we could not check" are different
+  // instructions.
+  const checkingForChanges = props.openingRead === "pending";
+  const checkFailed = props.openingRead === "failed";
 
   return (
     <Dialog
@@ -136,6 +155,22 @@ export function AutoPolicyEditorDialog(props: {
               Traycer is showing a copy of your policy it couldn&apos;t refresh,
               so saving is turned off - it can&apos;t tell whether another
               device has changed it since. Reopen Settings to try again.
+            </span>
+          </div>
+        ) : null}
+
+        {checkFailed ? (
+          <div
+            role="status"
+            data-testid="auto-policy-opening-read-failed-warning"
+            className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 text-ui-sm dark:text-amber-300"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <span>
+              Traycer couldn&apos;t check whether another device has changed
+              this policy, so saving is turned off - a save from here could
+              replace a newer version without warning. Reopen Settings to try
+              again.
             </span>
           </div>
         ) : null}
@@ -200,11 +235,20 @@ export function AutoPolicyEditorDialog(props: {
               size="sm"
               data-testid="auto-policy-save"
               disabled={
-                props.saving || overCap || !dirty || unreadable || readIsStale
+                props.saving ||
+                overCap ||
+                !dirty ||
+                unreadable ||
+                readIsStale ||
+                checkingForChanges ||
+                checkFailed
               }
               onClick={() => props.onSave(body)}
             >
-              {props.saving ? (
+              {/* The repo's pending affordance serves both waits: disabled,
+                  label untouched, inline spinner. Same test id, because it is
+                  the same claim to the user - Save is busy, not broken. */}
+              {props.saving || checkingForChanges ? (
                 <AgentSpinningDots
                   className={undefined}
                   testId="auto-policy-saving-spinner"

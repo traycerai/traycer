@@ -3814,6 +3814,28 @@ deny`, `Hard deny`) and nothing else - the guidance about what belongs under
     `autoPolicyReadStateFor` (`auto-policy-document.ts`) resolves that to
     `fresh` - the behaviour this row had before the field existed - in the one
     place the fallback is spelled.
+  - **Opening the editor asks the server again, and Save waits for the
+    answer.** The stale-edit banner compares the stamp the editor opened on
+    against the live one, and both used to be read off the same cache entry -
+    equal by construction, so the banner could never fire. Opening now fires a
+    refetch; the dialog still appears on the click, but Save is disabled with
+    the usual inline spinner until that read settles, and stays disabled with
+    its own banner if it FAILS. The cost is one round trip at a moment when
+    Save is unreachable anyway (it needs a typed edit), and what it buys is
+    that "nobody else has saved since you opened this" is an answer rather than
+    an assumption. A close-and-reopen is generation-guarded so the first read's
+    late answer cannot unlock Save while the second is in flight.
+  - **The policy cache is partitioned by SIGNED-IN USER.** The record is
+    account-owned while the query is host-shaped, and an auth transition marks
+    host queries stale WITHOUT dropping their data - so a host-only key served
+    the previous user's policy, synchronously, to whoever signed in next, with
+    Edit live. `useAutoPolicyQuery` puts the viewer id in `cacheKeyIdentity`
+    and the save's write-through addresses that one partition
+    (`hostQueryKeys.autoPolicyForViewer`) rather than the method-scope prefix,
+    which would land the new body in every viewer's entry and re-open the same
+    leak from the write side. `autoJudge.get` deliberately takes neither: it
+    answers from a file only this GUI writes on that machine, so the host key
+    already names its owner.
   - **What the judge already blocks** (`auto-policy-shipped-dialog.tsx`) is a
     read-only view of the rules the judge applies before any policy of the
     user's, rendered from `shippedDefaults` - the host's whole bundled

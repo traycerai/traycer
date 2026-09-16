@@ -399,18 +399,28 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     });
   });
 
-  it("keeps auto when at least one target harness supports it", async () => {
+  // The question is about ONE row - the one `settings.harnessId` names. This
+  // case used to hold a MIXED catalog (claude without `auto`, codex with it)
+  // and assert that `auto` survived, on the reading that "at least one target
+  // harness supports it". That reading was wrong, and it was wrong in the
+  // direction the whole function exists to prevent: the clone runs `claude`,
+  // the host judges the tuple against `claude` alone, and the create it would
+  // have produced fails on the target for exactly the mode this clamp is
+  // supposed to have already settled. The sibling case below covers the mixed
+  // catalog under the correct assertion; this one keeps the POSITIVE path
+  // honest by letting the target row itself offer `auto`.
+  it("keeps auto when the target row named by settings.harnessId supports it", async () => {
     const sourceClient = buildClient([], []);
     const targetClient = buildClient(
       [profile("ambient", "ambient", "Terminal account", "acct-9")],
       [
         harnessOption({
           id: "claude",
-          supportedPermissionModes: ["supervised", "auto_accept_edits"],
+          supportedPermissionModes: ["supervised", "auto", "full_access"],
         }),
         harnessOption({
           id: "codex",
-          supportedPermissionModes: ["auto", "full_access"],
+          supportedPermissionModes: ["supervised", "auto_accept_edits"],
         }),
       ],
     );
@@ -439,6 +449,74 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     const targetClient = buildClient(
       [profile("ambient", "ambient", "Terminal account", "acct-9")],
       null,
+    );
+    const result = await resolveClonedChatSettings({
+      sourceSettings: autoSourceSettings,
+      sourceClient,
+      targetClient,
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toEqual({
+      status: "ready",
+      settings: autoSourceSettings,
+      fallenBackToAmbient: false,
+    });
+  });
+
+  // JOB 2 (Codex, P1): the sibling of the case above, under the MIXED
+  // catalog that used to be asserted the other way. `settings.harnessId` is
+  // `claude`, and the target's `claude` row offers no `auto` - the presence
+  // of `codex`'s `auto` elsewhere in the catalog is not evidence about the
+  // row this chat will actually run on. `assertPermissionModeSupported` on
+  // the host judges the tuple `(harnessId: "claude", permissionMode: "auto")`
+  // against the `claude` row alone, so surviving this clamp on the strength
+  // of `codex`'s row would still fail the create on the target - the exact
+  // failure this function exists to pre-empt.
+  it("demotes auto when settings.harnessId's own row lacks it, even though another target harness offers it", async () => {
+    const sourceClient = buildClient([], []);
+    const targetClient = buildClient(
+      [profile("ambient", "ambient", "Terminal account", "acct-9")],
+      [
+        harnessOption({
+          id: "claude",
+          supportedPermissionModes: ["supervised", "auto_accept_edits"],
+        }),
+        harnessOption({
+          id: "codex",
+          supportedPermissionModes: ["supervised", "auto"],
+        }),
+      ],
+    );
+    const result = await resolveClonedChatSettings({
+      sourceSettings: autoSourceSettings,
+      sourceClient,
+      targetClient,
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toEqual({
+      status: "ready",
+      settings: { ...autoSourceSettings, permissionMode: "auto_accept_edits" },
+      fallenBackToAmbient: false,
+    });
+  });
+
+  // The target catalog has no row at all for `settings.harnessId`. No row is
+  // not positive evidence about the MODE - clamping here would rewrite a
+  // durable setting on the way to a create that fails for the honest,
+  // different reason that the target lacks the harness entirely. Settings
+  // must pass through unchanged so the create's own error names that reason.
+  it("leaves settings unchanged when the target catalog has no row for settings.harnessId at all", async () => {
+    const sourceClient = buildClient([], []);
+    const targetClient = buildClient(
+      [profile("ambient", "ambient", "Terminal account", "acct-9")],
+      [
+        harnessOption({
+          id: "codex",
+          supportedPermissionModes: ["supervised", "auto"],
+        }),
+      ],
     );
     const result = await resolveClonedChatSettings({
       sourceSettings: autoSourceSettings,
