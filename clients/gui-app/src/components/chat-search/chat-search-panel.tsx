@@ -8,8 +8,12 @@
  */
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { SearchIcon } from "lucide-react";
-import type { ChatSearchRoleFilter } from "@traycer/protocol/host/chat-search/schemas";
+import {
+  CHAT_SEARCH_MAX_QUERY_CHARS,
+  type ChatSearchRoleFilter,
+} from "@traycer/protocol/host/chat-search/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -32,6 +36,7 @@ import {
 } from "@/components/chat-search/chat-search-results-view";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
   useChatSearchResults,
   type ChatSearchBaseRequest,
@@ -44,7 +49,7 @@ import {
   chatSearchDateRange,
 } from "@/lib/chat-search/chat-search-results";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useActiveEpicId } from "@/stores/epics/canvas/canvas-selectors";
 import {
   useChatSearchStore,
@@ -82,11 +87,35 @@ interface Paging {
   readonly messageCursors: ReadonlyArray<string>;
 }
 
+/**
+ * Whether a request can be sent to the effective host at all. A query on a
+ * host with no dialable row, or before its handshake has named its methods, is
+ * disabled by `useHostQueries` and never answers - so it must not read as
+ * "loading". `methodUnsupported` is a host that answered the handshake without
+ * the method; the other unsupported signal (an `E_HOST_UNSUPPORTED` answer) is
+ * read off the search status, after the request it came from.
+ */
+function useChatSearchHost(
+  hostId: string | null,
+  client: HostClient<HostRpcRegistry> | null,
+): { readonly hostReachable: boolean; readonly methodUnsupported: boolean } {
+  const methodSupport = useHostMethodSupport(hostId, "chat.search");
+  const readiness = useReactiveHostReadiness(client);
+  return {
+    hostReachable:
+      hostId !== null && readiness.canExecute && methodSupport !== null,
+    methodUnsupported: methodSupport === false,
+  };
+}
+
 export function ChatSearchPanel(props: { readonly onClose: () => void }) {
   const { onClose } = props;
   const hostId = useEffectiveHostId();
   const client = useHostClient();
-  const methodSupport = useHostMethodSupport(hostId, "chat.search");
+  const { hostReachable, methodUnsupported } = useChatSearchHost(
+    hostId,
+    client,
+  );
   const activeEpicId = useActiveEpicId();
   const taskTitles = useChatSearchTaskTitles();
   const scope = useChatSearchStore((state) => state.scope);
@@ -98,8 +127,10 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
   const setDatePreset = useChatSearchStore((state) => state.setDatePreset);
 
   const [query, setQuery] = useState("");
+  // Capped at the protocol's limit as well as on the input: a pasted block
+  // past it would otherwise make every request an invalid-argument error.
   const debouncedQuery = useDebouncedValue(
-    query.trim(),
+    query.trim().slice(0, CHAT_SEARCH_MAX_QUERY_CHARS),
     CHAT_SEARCH_DEBOUNCE_MS,
   );
   // "This task" needs a task; outside one the toggle falls back to every task
@@ -107,7 +138,9 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
   const currentTaskScoped = scope === "current-task" && activeEpicId !== null;
 
   const base = useMemo<ChatSearchBaseRequest | null>(() => {
-    if (debouncedQuery.length === 0 || methodSupport === false) return null;
+    if (debouncedQuery.length === 0 || !hostReachable || methodUnsupported) {
+      return null;
+    }
     return {
       query: debouncedQuery,
       scope: currentTaskScoped
@@ -125,7 +158,8 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
     dateAnchorMs,
     datePreset,
     debouncedQuery,
-    methodSupport,
+    hostReachable,
+    methodUnsupported,
     roleFilter,
   ]);
   const baseKey = base === null ? "" : JSON.stringify(base);
@@ -150,7 +184,9 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
     chatCursors: currentPaging.chatCursors,
     messageCursors: currentPaging.messageCursors,
   });
-  const unsupported = methodSupport === false || status.kind === "unsupported";
+  const unsupported = methodUnsupported || status.kind === "unsupported";
+  const awaitingHost =
+    !unsupported && debouncedQuery.length > 0 && !hostReachable;
 
   const navigate = useNavigate();
   const openTarget = useCallback(
@@ -226,6 +262,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
           // is where the dialog puts focus on open.
           value={query}
           disabled={unsupported}
+          maxLength={CHAT_SEARCH_MAX_QUERY_CHARS}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={onInputKeyDown}
           placeholder="Search chats…"
@@ -311,6 +348,14 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
             to search your chats.
           </p>
         ) : null}
+        {awaitingHost ? (
+          <p
+            role="status"
+            className="px-3 py-6 text-center text-ui-sm text-muted-foreground"
+          >
+            Waiting for the host to connect…
+          </p>
+        ) : null}
         {!unsupported && status.kind === "error" ? (
           <p
             role="alert"
@@ -321,7 +366,11 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
         ) : null}
         {!unsupported && status.kind === "ready" ? (
           <ChatSearchNavProvider value={onResultKeyDown}>
+            {/* Keyed by the request: a new search starts with every group
+                collapsed, so no expansion carries the previous request's
+                cursors into this one. */}
             <ChatSearchResultsView
+              key={baseKey}
               results={status.results}
               loadingMore={status.loadingMore}
               loadMoreError={status.loadMoreError}
