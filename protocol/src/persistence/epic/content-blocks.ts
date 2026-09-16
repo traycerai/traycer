@@ -1111,6 +1111,45 @@ export const autonomousResumeTriggerSchema = z.object({
   // still `kind`, whose value strips on parse): a trigger that cannot say
   // whether its shell was watching renders as a plain shell rather than failing
   // the whole chat.
+  //
+  // `hostId` is the host the shell RUNS on, for a shell created on another
+  // host than the chat's: its log is there, so the door opens the output
+  // window on that host. `null` - and absence, the same way - means the
+  // chat's own host, which is what every shell before cross-host creation
+  // was. Added on `chat.subscribe@1.11`; every line through `1.10` binds
+  // `autonomousResumeTriggerSchemaPreShellHost` below.
+  managedCommand: z
+    .object({
+      commandId: z.string(),
+      monitoring: z.boolean().default(false),
+      hostId: z.string().nullable().default(null),
+    })
+    .nullable()
+    .default(null),
+});
+export type AutonomousResumeTrigger = z.infer<
+  typeof autonomousResumeTriggerSchema
+>;
+
+// Wire-freeze copy of the trigger as every `chat.subscribe` line through
+// `1.10` ships it: the same fields, with `managedCommand` lacking the shell's
+// `hostId` that `1.11` added. Bound - through the frozen block codecs below
+// and the frozen content-block unions - to every one of those lines, so the
+// key cannot reach a peer whose decoder has never declared it. Hand-frozen
+// field-for-field, NOT `.omit()` off the live shape, for the reason every
+// freeze in this file is: a copy that tracks the live schema is not a freeze.
+export const autonomousResumeTriggerSchemaPreShellHost = z.object({
+  kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
+  title: z.string(),
+  status: z.enum(["completed", "failed", "stopped"]),
+  summary: z.string(),
+  blockId: z.string().default(""),
+  outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+  mcp: z
+    .object({ serverName: z.string(), toolName: z.string() })
+    .nullable()
+    .default(null),
+  live: z.boolean().default(false),
   managedCommand: z
     .object({
       commandId: z.string(),
@@ -1119,8 +1158,8 @@ export const autonomousResumeTriggerSchema = z.object({
     .nullable()
     .default(null),
 });
-export type AutonomousResumeTrigger = z.infer<
-  typeof autonomousResumeTriggerSchema
+export type AutonomousResumeTriggerPreShellHost = z.infer<
+  typeof autonomousResumeTriggerSchemaPreShellHost
 >;
 
 // A fired ScheduleWakeup that woke the agent, stored SEPARATELY from
@@ -1174,13 +1213,18 @@ export type AutonomousResumeDeliveryPlacement = z.infer<
 // Checkpoint for chat.subscribe 1.8 (also reused by older wire lines).
 // V18 names in this file refer to that RPC version, not the independent
 // chat-sync storage version. The current schema extends this checkpoint.
+//
+// `triggers` binds the pre-shell-host trigger freeze: every line through
+// `1.10` reaches this block's triggers either here or through the placed
+// `PreShellHost` codec below, and `1.11` is where a trigger first names the
+// host its shell runs on.
 const domainAutonomousResumeBlockSchemaV18 = z.object({
   blockId: z.string(),
   status: z.enum(["streaming", "completed", "errored"]),
   timestamp: z.number(),
   parentBlockId: z.string().nullish(),
   type: z.literal("autonomous_resume"),
-  triggers: z.array(autonomousResumeTriggerSchema),
+  triggers: z.array(autonomousResumeTriggerSchemaPreShellHost),
 });
 const persistedAutonomousResumeBlockSchemaV18 =
   domainAutonomousResumeBlockSchemaV18.extend({
@@ -1199,14 +1243,46 @@ type RawStoredAutonomousResumeBlockV18 = Omit<
   wakeTriggers: AutonomousResumeWakeTrigger[] | undefined;
 };
 
-// Reinsert the trigger fields after placement to retain the existing JSON
-// Schema property/required order as well as its meaning.
-const persistedAutonomousResumeBlockSchema =
+// Checkpoint for chat.subscribe 1.9 and 1.10: the 1.8 fields plus delivery
+// placement, still on the pre-shell-host trigger. Reinsert the trigger fields
+// after placement to retain the existing JSON Schema property/required order
+// as well as its meaning.
+const persistedAutonomousResumeBlockSchemaPreShellHost =
   persistedAutonomousResumeBlockSchemaV18
     .omit({ triggers: true, wakeTriggers: true })
     .extend({
       deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
       triggers: persistedAutonomousResumeBlockSchemaV18.shape.triggers,
+      wakeTriggers: persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
+    });
+const domainAutonomousResumeBlockSchemaPreShellHost =
+  domainAutonomousResumeBlockSchemaV18.omit({ triggers: true }).extend({
+    deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
+    triggers: domainAutonomousResumeBlockSchemaV18.shape.triggers,
+  });
+type AutonomousResumeBlockPreShellHost = z.infer<
+  typeof domainAutonomousResumeBlockSchemaPreShellHost
+>;
+type PersistedAutonomousResumeBlockPreShellHost = z.infer<
+  typeof persistedAutonomousResumeBlockSchemaPreShellHost
+>;
+type RawStoredAutonomousResumeBlockPreShellHost = Omit<
+  PersistedAutonomousResumeBlockPreShellHost,
+  "wakeTriggers" | "deliveryPlacement"
+> & {
+  wakeTriggers: AutonomousResumeWakeTrigger[] | undefined;
+  deliveryPlacement?: AutonomousResumeDeliveryPlacement;
+};
+
+// The live shape: the 1.9/1.10 checkpoint with `triggers` swapped for the
+// live trigger, whose `managedCommand` names the shell's host. Same key
+// order as the checkpoint for the same reason.
+const persistedAutonomousResumeBlockSchema =
+  persistedAutonomousResumeBlockSchemaV18
+    .omit({ triggers: true, wakeTriggers: true })
+    .extend({
+      deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
+      triggers: z.array(autonomousResumeTriggerSchema),
       wakeTriggers: persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
     });
 export type PersistedAutonomousResumeBlock = z.infer<
@@ -1217,7 +1293,7 @@ const domainAutonomousResumeBlockSchema = domainAutonomousResumeBlockSchemaV18
   .omit({ triggers: true })
   .extend({
     deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
-    triggers: domainAutonomousResumeBlockSchemaV18.shape.triggers,
+    triggers: z.array(autonomousResumeTriggerSchema),
   });
 export type AutonomousResumeBlock = z.infer<
   typeof domainAutonomousResumeBlockSchema
@@ -1238,9 +1314,70 @@ export type RawStoredAutonomousResumeBlock = Omit<
   deliveryPlacement?: AutonomousResumeDeliveryPlacement;
 };
 
+// A fired wake as a trigger row: terminal by construction (it happened, then
+// it was over - nothing about a schedule keeps producing), never an MCP call,
+// and never a managed command. `managedCommand` is null, so the row belongs
+// to BOTH the live trigger and the pre-shell-host freeze - the one field the
+// two differ on - which is what lets the merge and split below serve every
+// codec here without a per-shape copy.
+type WakeupTrigger = AutonomousResumeTrigger &
+  AutonomousResumeTriggerPreShellHost;
+function wakeupTrigger(wake: AutonomousResumeWakeTrigger): WakeupTrigger {
+  return {
+    ...wake,
+    kind: "wakeup",
+    mcp: null,
+    managedCommand: null,
+    live: false,
+  };
+}
+
 // Merges `wakeTriggers` into `triggers` (wakeup entries last, matching
 // construction order in `buildAutonomousResumeBlock`) and accepts legacy
 // stored `kind: "wakeup"` entries already inline in `triggers` unchanged.
+function withWakeTriggers<Trigger extends AutonomousResumeTriggerPreShellHost>(
+  triggers: readonly Trigger[],
+  wakeTriggers: readonly AutonomousResumeWakeTrigger[],
+): (Trigger | WakeupTrigger)[] {
+  return [...triggers, ...wakeTriggers.map(wakeupTrigger)];
+}
+
+// Splits wakeup triggers out of `triggers` into `wakeTriggers`. Must run
+// before every raw storage write (see `toStoredBlock` in
+// `chat-message-collections.ts`) - writing a domain-shaped block verbatim
+// re-introduces `kind: "wakeup"` into persisted `triggers` and breaks v1.1.x
+// hosts again.
+function isWakeupTrigger<Trigger extends AutonomousResumeTriggerPreShellHost>(
+  trigger: Trigger,
+): trigger is Trigger & { kind: "wakeup" } {
+  return trigger.kind === "wakeup";
+}
+
+function splitWakeTriggers<Trigger extends AutonomousResumeTriggerPreShellHost>(
+  triggers: readonly Trigger[],
+): { triggers: Trigger[]; wakeTriggers: AutonomousResumeWakeTrigger[] } {
+  return {
+    triggers: triggers.filter((trigger) => !isWakeupTrigger(trigger)),
+    wakeTriggers: triggers
+      .filter(isWakeupTrigger)
+      .map(
+        ({
+          title,
+          status,
+          summary,
+          blockId,
+          outputFile,
+        }): AutonomousResumeWakeTrigger => ({
+          title,
+          status,
+          summary,
+          blockId,
+          outputFile,
+        }),
+      ),
+  };
+}
+
 // Total over every shape ever persisted: a pre-`wakeTriggers` block (absent
 // key) and an already-domain-shaped block are both returned unchanged - the
 // function itself tolerates the missing key rather than relying on a schema
@@ -1248,9 +1385,13 @@ export type RawStoredAutonomousResumeBlock = Omit<
 export function decodeAutonomousResumeBlock(
   stored: RawStoredAutonomousResumeBlock,
 ): AutonomousResumeBlock {
-  const { deliveryPlacement, ...historical } = stored;
+  const { deliveryPlacement, wakeTriggers, ...rest } = stored;
   return {
-    ...decodeAutonomousResumeBlockV18(historical),
+    ...rest,
+    triggers:
+      wakeTriggers === undefined || wakeTriggers.length === 0
+        ? rest.triggers
+        : withWakeTriggers(rest.triggers, wakeTriggers),
     deliveryPlacement: deliveryPlacement ?? null,
   };
 }
@@ -1262,62 +1403,39 @@ function decodeAutonomousResumeBlockV18(
 ): AutonomousResumeBlockV18 {
   const { wakeTriggers, ...rest } = stored;
   if (wakeTriggers === undefined || wakeTriggers.length === 0) return rest;
-  return {
-    ...rest,
-    triggers: [
-      ...rest.triggers,
-      ...wakeTriggers.map((wake): AutonomousResumeTrigger => ({
-        ...wake,
-        kind: "wakeup",
-        mcp: null,
-        // A fired schedule is not a managed command and never had one.
-        managedCommand: null,
-        // A fired wake is terminal by construction: it happened, then it was
-        // over. Nothing about a schedule keeps producing.
-        live: false,
-      })),
-    ],
-  };
+  return { ...rest, triggers: withWakeTriggers(rest.triggers, wakeTriggers) };
 }
 
-// Splits wakeup triggers out of `triggers` into `wakeTriggers`. Must run
-// before every raw storage write (see `toStoredBlock` in
-// `chat-message-collections.ts`) - writing a domain-shaped block verbatim
-// re-introduces `kind: "wakeup"` into persisted `triggers` and breaks v1.1.x
-// hosts again.
-function isWakeupTrigger(
-  trigger: AutonomousResumeTrigger,
-): trigger is AutonomousResumeTrigger & { kind: "wakeup" } {
-  return trigger.kind === "wakeup";
+function decodeAutonomousResumeBlockPreShellHost(
+  stored: RawStoredAutonomousResumeBlockPreShellHost,
+): AutonomousResumeBlockPreShellHost {
+  const { deliveryPlacement, wakeTriggers, ...rest } = stored;
+  return {
+    ...rest,
+    triggers:
+      wakeTriggers === undefined || wakeTriggers.length === 0
+        ? rest.triggers
+        : withWakeTriggers(rest.triggers, wakeTriggers),
+    deliveryPlacement: deliveryPlacement ?? null,
+  };
 }
 
 export function encodeAutonomousResumeBlock(
   domain: AutonomousResumeBlock,
 ): PersistedAutonomousResumeBlock {
-  return {
-    ...encodeAutonomousResumeBlockV18(domain),
-    deliveryPlacement: domain.deliveryPlacement,
-  };
+  return { ...domain, ...splitWakeTriggers(domain.triggers) };
 }
 
 function encodeAutonomousResumeBlockV18(
   domain: AutonomousResumeBlockV18,
 ): PersistedAutonomousResumeBlockV18 {
-  const triggers = domain.triggers.filter(
-    (trigger) => !isWakeupTrigger(trigger),
-  );
-  const wakeTriggers = domain.triggers
-    .filter(isWakeupTrigger)
-    .map(
-      ({
-        kind: _kind,
-        mcp: _mcp,
-        live: _live,
-        managedCommand: _managedCommand,
-        ...wake
-      }): AutonomousResumeWakeTrigger => wake,
-    );
-  return { ...domain, triggers, wakeTriggers };
+  return { ...domain, ...splitWakeTriggers(domain.triggers) };
+}
+
+function encodeAutonomousResumeBlockPreShellHost(
+  domain: AutonomousResumeBlockPreShellHost,
+): PersistedAutonomousResumeBlockPreShellHost {
+  return { ...domain, ...splitWakeTriggers(domain.triggers) };
 }
 
 export const autonomousResumeBlockSchema = z.codec(
@@ -1348,6 +1466,21 @@ export const autonomousResumeBlockSchemaV18 = z.codec(
     encode: (domain) =>
       encodeAutonomousResumeBlockV18(
         domainAutonomousResumeBlockSchemaV18.parse(domain),
+      ),
+  },
+);
+
+// Frozen wire shape for chat.subscribe 1.9 and 1.10: delivery placement, no
+// shell host on the triggers. Bound through `contentBlockSchemaPreFallback`
+// (1.9) and `contentBlockSchemaPreShellHost` (1.10).
+export const autonomousResumeBlockSchemaPreShellHost = z.codec(
+  persistedAutonomousResumeBlockSchemaPreShellHost,
+  domainAutonomousResumeBlockSchemaPreShellHost,
+  {
+    decode: decodeAutonomousResumeBlockPreShellHost,
+    encode: (domain) =>
+      encodeAutonomousResumeBlockPreShellHost(
+        domainAutonomousResumeBlockSchemaPreShellHost.parse(domain),
       ),
   },
 );
@@ -1955,12 +2088,14 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
 // ids, interview settlement, images, the lot - so unlike every freeze above
 // these hold back only the provider-fallback growth of `1.10`: the
 // fallback-attribution notice KINDS (here) and the error block's `failure`
-// (`errorBlockSchemaPreFallback`). `contentBlockSchemaPreFallback` is the
-// frozen `1.9` union; `1.7` and `1.8` reach the same two members through
-// `contentBlockSchemaV18` below, which also holds back `1.9`'s delivery
-// placement. Field-for-field hand copies, not `.extend()` off the live shape,
-// for the reason every freeze in this file is: a future field must not
-// silently leak onto a line that has shipped peers.
+// (`errorBlockSchemaPreFallback`) - and, since `1.11`, the shell host on a
+// resume trigger (`autonomousResumeBlockSchemaPreShellHost`).
+// `contentBlockSchemaPreFallback` is the frozen `1.9` union; `1.7` and `1.8`
+// reach the same members through `contentBlockSchemaV18` below, which also
+// holds back `1.9`'s delivery placement. Field-for-field hand copies, not
+// `.extend()` off the live shape, for the reason every freeze in this file
+// is: a future field must not silently leak onto a line that has shipped
+// peers.
 export const providerNoticeMetadataSchemaPreFallback = z
   .object({
     harnessId: harnessIdSchema,
@@ -2005,7 +2140,33 @@ export const contentBlockSchemaPreFallback = z.discriminatedUnion("type", [
   planBlockSchema,
   errorBlockSchemaPreFallback,
   compactionBlockSchema,
-  autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaPreShellHost,
+  steerBlockSchema,
+  interviewBlockSchema,
+  artifactOperationBlockSchema,
+]);
+
+// ── Wire-freeze variant (pre-shell-host, `chat.subscribe@1.10`) ─────────────
+//
+// `1.10` ships the full live vocabulary of its day - provider fallback
+// included - and holds back exactly one thing `1.11` added: the host a resume
+// trigger's shell runs on (`autonomousResumeTriggerSchemaPreShellHost`, bound
+// through `autonomousResumeBlockSchemaPreShellHost`). Every other member binds
+// its live schema, so a field added to one of them later reaches this line
+// too: freeze the member here before adding it.
+export const contentBlockSchemaPreShellHost = z.discriminatedUnion("type", [
+  textBlockSchema,
+  reasoningBlockSchema,
+  toolCallBlockSchema,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchema,
+  errorBlockSchema,
+  compactionBlockSchema,
+  autonomousResumeBlockSchemaPreShellHost,
   steerBlockSchema,
   interviewBlockSchema,
   artifactOperationBlockSchema,
@@ -2028,11 +2189,12 @@ export type PersistedContentBlock =
 
 /**
  * chat.subscribe 1.8 checkpoint, also bound by 1.7's chat tree. 1.9 adds
- * notification placement, and 1.10 adds the fallback notice kinds and the error
- * block's `failure` - so `text` and `error` here are the pre-fallback copies,
- * not the live members. Every other member still binds its live schema: a field
- * added to one of them later reaches this line too, so freeze the member here
- * before adding it.
+ * notification placement, 1.10 adds the fallback notice kinds and the error
+ * block's `failure`, and 1.11 adds the shell host on a resume trigger - so
+ * `text` and `error` here are the pre-fallback copies and `autonomous_resume`
+ * is the 1.8 codec on the pre-shell-host trigger, not the live members. Every
+ * other member still binds its live schema: a field added to one of them
+ * later reaches this line too, so freeze the member here before adding it.
  */
 export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
   textBlockSchemaPreFallback,
