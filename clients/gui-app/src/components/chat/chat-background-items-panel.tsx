@@ -26,7 +26,10 @@ import {
   useManagedCommandStopAllIsPending,
 } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
-import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
+import {
+  localManagedCommandDoor,
+  useManagedCommandDoor,
+} from "@/lib/managed-commands/use-managed-command-door";
 import {
   MANAGED_COMMAND_OUTPUT_DND_TYPE,
   getManagedCommandOutputDragId,
@@ -710,7 +713,9 @@ export function BackgroundItemsPanel(props: {
   const deliverHeldPending = useManagedCommandDeliverHeldIsPending(
     props.chatId,
   );
-  const openManagedCommand = useManagedCommandDoor();
+  // The panel lists the shells this host runs for the chat, never a
+  // remote one, so its doors open on the tab's host.
+  const openManagedCommand = localManagedCommandDoor(useManagedCommandDoor());
   const stopAllManagedCommands = useManagedCommandStopAll(props.chatId);
   // Cross-instance: the same chat can be open in two tiles, and each panel
   // owns its own mutation observer - the shared read is what keeps the second

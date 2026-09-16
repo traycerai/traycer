@@ -66,6 +66,11 @@ import { z } from "zod";
 // released reader will meet. Defaulted `null`, so an older record parses
 // unchanged and residual capture (§3) carries it through an older publisher
 // losslessly; the minimum reader does not change.
+//
+// 1.4 also carries `autonomous_resume.triggers[].managedCommand.hostId` (the
+// host a resume trigger's shell runs on - a `chat.subscribe@1.11` field that
+// lands in a publication), on the same still-unreleased-minor rule. Defaulted
+// `null`; the minimum reader does not change.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 4 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
