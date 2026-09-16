@@ -615,9 +615,9 @@ function LinkPreview(props: LinkPreviewProps) {
             <Button
               type="button"
               size="xs"
-              variant="ghost"
+              variant="muted"
               aria-label={`Open link: ${props.href}`}
-              className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
+              className="min-w-0 max-w-[min(55vw,16rem)] justify-start font-normal"
               disabled={props.href.trim().length === 0}
               onClick={props.onOpen}
             >
@@ -661,13 +661,7 @@ function LinkPreview(props: LinkPreviewProps) {
         </span>
       </TooltipWrapper>
       {props.editable ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          className="px-1.5 text-muted-foreground hover:text-foreground"
-          onClick={props.onEdit}
-        >
+        <Button type="button" size="xs" variant="muted" onClick={props.onEdit}>
           Edit
         </Button>
       ) : null}
@@ -1518,8 +1512,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
               <Button
                 type="button"
                 size="sm"
-                variant="ghost"
-                className="-ml-1.5 text-muted-foreground hover:text-destructive"
+                variant="muted-destructive"
+                className="-ml-1.5"
                 onClick={remove}
               >
                 <Link2Off aria-hidden="true" />

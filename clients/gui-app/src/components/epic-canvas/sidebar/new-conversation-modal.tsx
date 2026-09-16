@@ -254,16 +254,12 @@ export function NewConversationModalAction(
   const trigger = (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size={props.size}
       aria-label={props.triggerLabel}
       aria-disabled={ariaDisabled ? true : undefined}
       data-testid={props.triggerTestId}
-      className={cn(
-        "text-muted-foreground hover:text-foreground",
-        ARIA_DISABLED_TRIGGER_CLASS,
-        props.actionRevealClassName,
-      )}
+      className={cn(ARIA_DISABLED_TRIGGER_CLASS, props.actionRevealClassName)}
       disabled={nativeDisabled}
       onClick={handleOpen}
     >
@@ -405,7 +401,7 @@ function NewConversationModalDialog(props: {
         // popovers portal into THIS node (see `DialogOverlayBoundaryContext`)
         // and an overflow container that is also their containing block - this
         // one is, it carries a transform - would clip them.
-        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
+        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
         // Same portal rule as the worktree pickers: the host switcher's list
@@ -427,10 +423,10 @@ function NewConversationModalDialog(props: {
         <DialogClose asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="Close"
-            className="absolute right-0 top-0 z-10 size-6 -translate-y-1/2 translate-x-1/2 rounded-full border border-border/70 bg-popover text-muted-foreground opacity-70 shadow-sm transition-opacity hover:opacity-100 focus-visible:opacity-100"
+            className="absolute right-0 top-0 z-10 size-6 -translate-y-1/2 translate-x-1/2 rounded-full border-border/70 bg-popover opacity-70 shadow-sm transition-opacity hover:opacity-100 focus-visible:opacity-100"
           >
             <XIcon className="size-3.5" />
           </Button>

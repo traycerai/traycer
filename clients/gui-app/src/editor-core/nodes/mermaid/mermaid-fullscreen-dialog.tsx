@@ -52,11 +52,12 @@ export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(95vw,80rem)] sm:max-w-none max-w-[95vw] h-[min(90vh,60rem)] max-h-[90vh] p-0 gap-0 overflow-hidden flex flex-col"
+        className="w-[min(95vw,80rem)] sm:max-w-none max-w-[95vw] h-[min(90vh,60rem)] max-h-[90vh] overflow-hidden flex flex-col"
       >
-        <DialogHeader className="flex flex-row items-center justify-between gap-2 px-4 py-2 border-b shrink-0">
-          <DialogTitle className="text-ui-sm font-medium truncate">
+        <DialogHeader className="flex flex-row items-center justify-between gap-2 shrink-0">
+          <DialogTitle size="sm" className="truncate">
             {title}
           </DialogTitle>
           <div className="flex items-center gap-1">

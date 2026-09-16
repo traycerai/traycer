@@ -602,11 +602,8 @@ function EditorRow(props: {
         <Button
           type="button"
           size="icon-sm"
-          variant="ghost"
-          className={cn(
-            "mt-1 text-muted-foreground",
-            "hover:bg-destructive/10 hover:text-destructive",
-          )}
+          variant="muted-destructive"
+          className="mt-1"
           disabled={props.removeDisabled}
           onClick={props.onRemove}
           aria-label={props.removeLabel}

@@ -15,7 +15,6 @@ import {
 } from "@/lib/worktree/task-merge-rollup";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { StatusRowChromeBoundary } from "@/components/epic-canvas/panels/status-row-chrome-boundary";
-import { cn } from "@/lib/utils";
 
 const EMPTY_ENTRIES: readonly WorktreeHostEntryV12[] = [];
 
@@ -108,7 +107,7 @@ function EpicSweepActionBody(props: {
       >
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-xs"
           aria-disabled={canSweep ? undefined : true}
           aria-label={canSweep ? "Sweep worktrees" : "No worktrees to sweep"}
@@ -116,12 +115,7 @@ function EpicSweepActionBody(props: {
           // announcing a popup that cannot appear misdescribes it to AT.
           aria-haspopup={canSweep ? "dialog" : undefined}
           data-testid="epic-sweep-action"
-          className={cn(
-            "text-muted-foreground",
-            canSweep
-              ? "hover:text-foreground"
-              : "cursor-not-allowed text-muted-foreground/50 hover:text-muted-foreground/50",
-          )}
+          className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
           onClick={() => {
             if (!canSweep) return;
             setSweepOpen(true);

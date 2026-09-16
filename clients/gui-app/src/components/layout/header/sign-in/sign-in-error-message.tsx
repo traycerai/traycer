@@ -72,7 +72,7 @@ export function SignInErrorMessage(props: {
           source: "Sign in",
         })}
         presentation="link"
-        className="h-auto p-0 text-current"
+        className={undefined}
       />
     </div>
   );

@@ -40,7 +40,7 @@ export function GitStatusBadge(props: GitStatusBadgeProps): ReactNode {
     >
       <span
         className={cn(
-          "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded px-1 text-[10px] font-bold",
+          "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded px-1 text-micro font-bold",
           toneClass[props.tone],
           className,
         )}

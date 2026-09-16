@@ -26,15 +26,15 @@ export function ComposerSlotFileEditApprovalQueue(
   const showBulk = count >= 2;
   return (
     <div
-      className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-ui-sm"
+      className="flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2.5 text-ui-sm"
       data-testid="file-edit-approval-prompt"
     >
       <div className="flex flex-wrap items-center gap-2">
         <FilePenLine
-          className="size-3.5 shrink-0 text-amber-700 dark:text-amber-300"
+          className="size-3.5 shrink-0 text-warning-foreground"
           aria-hidden
         />
-        <span className="select-none font-medium uppercase text-amber-800 text-overline dark:text-amber-200">
+        <span className="select-none font-medium uppercase text-warning-foreground text-overline">
           File edit approval
         </span>
         {showBulk ? (
@@ -139,9 +139,10 @@ function FileEditApprovalRow(props: FileEditApprovalRowProps) {
         <Badge
           variant="outline"
           className={cn(
-            "h-4 px-1 text-overline",
+            "h-4",
             operationBadgeClassName(props.approval.operation),
           )}
+          size="sm"
         >
           {operationLabel(props.approval.operation)}
         </Badge>

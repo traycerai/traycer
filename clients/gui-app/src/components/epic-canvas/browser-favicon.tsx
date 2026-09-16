@@ -22,7 +22,7 @@ export function BrowserFavicon(props: {
         // of its own `display`, so this is a no-op there.
         "relative inline-block shrink-0",
         props.className,
-        props.isolated && "rounded-sm ring-1 ring-amber-500/80",
+        props.isolated && "rounded-sm ring-1 ring-warning/80",
       )}
     >
       {showImage ? null : (

@@ -257,8 +257,8 @@ describe("OfficeViewPicker", () => {
     // The shadcn DropdownMenuContent base pins `w` to the trigger. A
     // `max-w-[min(90vw,22rem)]` on the picker never displaced that, so
     // every description wrapped to four or five lines. `w-[90vw]` is the
-    // explicit width that DOES displace the trigger pin (tailwind-merge
-    // keeps the last `w-*` and drops the base var); `max-w-sm` is the
+    // explicit width that DOES displace the trigger pin (`cn` keeps the
+    // last `w-*` and drops the base var); `max-w-sm` is the
     // tokenized ceiling the fluid-sizing rule asks for on a wide screen -
     // layout itself is not asserted here because jsdom does not compute it.
     renderPicker({

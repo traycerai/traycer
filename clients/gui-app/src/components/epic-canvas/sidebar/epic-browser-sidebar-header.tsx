@@ -39,7 +39,6 @@ import {
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { cn } from "@/lib/utils";
 import {
   useEpicLeftPanelStore,
   useLeftPanelSectionCollapsed,
@@ -114,11 +113,10 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
       {searchOpen ? null : (
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label="Search browsers"
           data-testid="epic-browsers-panel-search"
-          className="text-muted-foreground hover:text-foreground"
           onClick={handleSearch}
         >
           <Search className="size-4" aria-hidden />
@@ -126,11 +124,10 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
       )}
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label="Add browser"
         data-testid="epic-browsers-panel-add"
-        className="text-muted-foreground hover:text-foreground"
         disabled={isAdding}
         onClick={handleAdd}
       >
@@ -146,20 +143,17 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
           <DropdownMenuTrigger asChild>
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               aria-label={filterLabel}
               data-testid="epic-browsers-panel-filter"
-              className={cn(
-                "relative text-muted-foreground transition-colors hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground",
-                hostPin.isPinned && "bg-accent text-accent-foreground",
-              )}
+              className="relative"
             >
               <ListFilter className="size-4" aria-hidden />
               {hostPin.isPinned ? (
                 <span
                   aria-hidden
-                  className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-[9px] leading-none font-semibold text-background ring-1 ring-background"
+                  className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
                 >
                   1
                 </span>
@@ -175,13 +169,11 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
           className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto"
           data-testid="epic-browsers-panel-filter-menu"
         >
-          <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
-            Filters
-          </DropdownMenuLabel>
+          <DropdownMenuLabel className="mt-1">Filters</DropdownMenuLabel>
           <DropdownMenuSub open={hostMenuOpen} onOpenChange={setHostMenuOpen}>
             <DropdownMenuSubTrigger
               aria-label={`Host, ${hostSummary}`}
-              className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
+              className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
               onClick={() => setHostMenuOpen(true)}
             >
               <span className="min-w-0 truncate">Host</span>
@@ -264,9 +256,10 @@ export function BrowserHostFilterChoices(props: {
       {options.isLoading ? (
         <DropdownMenuItem disabled>
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId={undefined}
             variant={undefined}
+            tone="muted"
           />
           {options.hosts.length === 0
             ? "Loading hosts…"

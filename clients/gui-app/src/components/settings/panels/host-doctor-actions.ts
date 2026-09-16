@@ -247,15 +247,16 @@ export function parseFreePortInput(
 export function severityBorderClass(
   severity: HostDoctorIssue["severity"],
 ): string {
-  if (severity === "error" || severity === "fatal") return "border-rose-700/40";
-  if (severity === "warning") return "border-amber-700/40";
+  if (severity === "error" || severity === "fatal")
+    return "border-destructive/40";
+  if (severity === "warning") return "border-warning/40";
   return "border-border/60";
 }
 
 export function severityBadgeClass(
   severity: HostDoctorIssue["severity"],
 ): string {
-  if (severity === "error" || severity === "fatal") return "bg-rose-500";
-  if (severity === "warning") return "bg-amber-400";
-  return "bg-sky-500";
+  if (severity === "error" || severity === "fatal") return "bg-destructive";
+  if (severity === "warning") return "bg-warning";
+  return "bg-info";
 }

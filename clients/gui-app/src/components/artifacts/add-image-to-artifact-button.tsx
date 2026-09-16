@@ -128,7 +128,7 @@ export function AddImageToArtifactButton(props: {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="w-[min(85vw,20rem)] p-2"
+        className="w-[min(85vw,20rem)]"
         onClick={stopImageClick}
       >
         <p className="px-2 pb-2 text-ui-sm font-medium">Add to artifact</p>
@@ -150,9 +150,10 @@ export function AddImageToArtifactButton(props: {
                 {addMutation.isPending &&
                 addMutation.variables === artifact.id ? (
                   <AgentSpinningDots
-                    className="ml-auto text-muted-foreground"
+                    className="ml-auto"
                     testId={undefined}
                     variant={undefined}
+                    tone="muted"
                   />
                 ) : null}
               </button>

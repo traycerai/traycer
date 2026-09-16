@@ -29,22 +29,19 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,30rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="w-[min(92vw,30rem)] overflow-hidden sm:max-w-md"
         data-testid="install-guidance-dialog"
       >
         <div className="flex min-w-0 items-start gap-3 p-5">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sky-500/10 text-sky-600 dark:text-sky-400">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-info/10 text-info-foreground">
             <Terminal className="size-4" aria-hidden />
           </div>
           <div className="min-w-0 flex-1 space-y-3">
             <div className="space-y-1.5">
-              <DialogTitle className="text-ui font-semibold leading-snug">
-                Finish updating Traycer
-              </DialogTitle>
-              <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-                {guidance.summary}
-              </DialogDescription>
+              <DialogTitle>Finish updating Traycer</DialogTitle>
+              <DialogDescription>{guidance.summary}</DialogDescription>
             </div>
 
             <ol className="list-decimal space-y-1 pl-4 text-ui-sm text-foreground">
@@ -75,9 +72,8 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
         <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
-            variant="link"
-            size="sm"
-            className="h-auto px-0 text-muted-foreground"
+            variant="muted"
+            size="inline"
             onClick={() => {
               void openLink(guidance.releaseUrl, "docs", null);
             }}

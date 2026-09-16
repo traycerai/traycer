@@ -210,9 +210,9 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
         data-chat-find-unit={summaryFindUnitId}
         aria-label={group.label}
         className={cn(
-          "group/activity flex max-w-full items-center gap-2 overflow-hidden rounded-sm py-1 pr-1 text-left text-muted-foreground transition-colors",
-          "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          "group/activity flex max-w-full items-center overflow-hidden text-left",
         )}
+        variant="quiet"
       >
         <Box className="size-3.5 shrink-0 transition-colors" aria-hidden />
         {group.isActive ? (

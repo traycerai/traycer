@@ -125,7 +125,7 @@ export function BridgeLogEntry(props: {
         >
           {revealMutation.isPending ? (
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId={undefined}
               variant={undefined}
             />

@@ -79,11 +79,9 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
       className="p-2.5"
       data-testid="worktree-folder-list"
     >
-      <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
-        Workspaces
-      </DropdownMenuLabel>
+      <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
       <FilePathRevealProvider>
-        <Command className="rounded-none bg-transparent p-0">
+        <Command variant="embedded" selection="flat">
           <CommandInput
             ref={searchInputRef}
             placeholder="Search repo, branch, or path…"
@@ -110,10 +108,7 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
                       if (disabled) return;
                       props.onSelect(row);
                     }}
-                    className={cn(
-                      !disabled &&
-                        "cursor-pointer hover:bg-accent/60 hover:text-foreground data-[selected=true]:border-transparent data-[selected=true]:bg-accent/60 data-[selected=true]:text-foreground data-[selected=true]:shadow-none",
-                    )}
+                    className={cn(!disabled && "cursor-pointer")}
                   >
                     <div
                       ref={selected ? selectedRowContentRef : null}

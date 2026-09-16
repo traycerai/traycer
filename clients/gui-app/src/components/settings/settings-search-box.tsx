@@ -176,7 +176,6 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
           }
           autoComplete="off"
           spellCheck={false}
-          className="text-ui-sm"
         />
         {query.length > 0 ? (
           <InputGroupAddon align="inline-end">
