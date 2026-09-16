@@ -3883,10 +3883,16 @@ unavailable`, `account policy could not be read`, all of which the first
 - `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers) Editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
-  to decide which child agents to spawn (coding agent / model / reasoning
-  effort) for a task. The section is named for _selection_ because it configures
-  how an agent is chosen, not the Agents that live inside a Task; the panel
-  description says so. A full-height CodeMirror Markdown source editor provides syntax
+  to choose harnesses, models, and reasoning effort when creating or
+  reconfiguring Traycer agents. The guide does not automatically configure
+  provider-native subagents, which follow the provider's configuration and have
+  no separate Traycer agent IDs. OpenCode's native task uses the named agent's
+  configured model, or inherits the parent model when none is configured. The
+  panel description explains this scope; the shared guide output and host prompt
+  carry the same distinction. The host prompt also describes the existing
+  `traycer_list_harness_models` → `traycer_create_agent` (explicit `harnessId`
+  and `model`) → `traycer_send_message` path for routing to a Traycer child.
+  A full-height CodeMirror Markdown source editor provides syntax
   highlighting and line numbers, including for Mermaid and wireframe fences.
   It debounce-auto-saves (and flushes on blur) via
   `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status sits in the

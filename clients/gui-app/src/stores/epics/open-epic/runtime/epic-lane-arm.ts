@@ -101,10 +101,9 @@ export interface EpicLaneArmSources {
    */
   readonly getWorkspaceContext: () => Promise<EarlyMetaEpic>;
   /**
-   * Where a workspace context lands. The runtime routes it into the SAME
-   * early-meta projection path the `@1` arm's `earlyMeta` frame takes, which is
-   * the point: this payload is that frame, and a second projection route for it
-   * would be a second answer to what `snapshotMeta` holds before a snapshot.
+   * Where a workspace context lands. The runtime reuses @1's record metadata
+   * projection for `snapshotMeta`, but leaves permission projection to the
+   * status lane. A cached workspace response is not a role update.
    */
   readonly onWorkspaceContext: (context: EarlyMetaEpic) => void;
   /**

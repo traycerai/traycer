@@ -15,6 +15,9 @@ const MULTI_WORKSPACE_WITH_GLOBAL_PARAGRAPH = `Workspace instructions apply only
 
 const MULTI_WORKSPACE_PARAGRAPH = `Multiple workspaces provide instructions below. For each file you touch, use the instructions for the workspace that contains it. If more than one workspace contains the file, use the most specific workspace.`;
 
+export const AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION =
+  "The agent selection guide provides instructions for choosing Traycer agents' harnesses, models, and reasoning effort when creating or reconfiguring them. It does not automatically configure provider-native subagents. Those follow their provider's settings: OpenCode's native task uses the named agent's configured model, or inherits the parent model when no model is configured. Native subagents do not have their own Traycer agent IDs.";
+
 // Byte-parity-locked to the host's copy in
 // `traycer-host/src/domain/agent/a2a-tool-catalog.ts`, which a host test
 // asserts against this constant. This side moves FIRST; the host copy follows
@@ -22,8 +25,8 @@ const MULTI_WORKSPACE_PARAGRAPH = `Multiple workspaces provide instructions belo
 export const A2A_PERMISSION_MODE_INSTRUCTION =
   "Use `full_access` unless the user's agent selection guide explicitly instructs you to use `supervised`, `auto_accept_edits` or `auto`; never infer a more restrictive permission mode from the task, the current or parent agent's mode, or a general safety preference.";
 
-function withPermissionModeInstruction(content: string): string {
-  return `${content}\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`;
+function withGuideInstructions(content: string): string {
+  return `${AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION}\n\n${content}\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`;
 }
 
 /**
@@ -31,21 +34,21 @@ function withPermissionModeInstruction(content: string): string {
  * the CLI command and the GUI A2A tool hand to an agent.
  *
  * The host returns the contributing guide files unjoined. This formatter owns
- * their precedence framing and layout. A lone global guide is plain attributed
- * content. Workspace guides retain their path scope, and multiple guides are
- * ordered by priority and explain how workspace instructions refine the global
- * guide. The permission invariant is always appended so silence about
- * permissions cannot authorize a restrictive mode.
+ * their routing scope, precedence framing, and layout. A lone global guide is
+ * plain attributed content. Workspace guides retain their path scope, and
+ * multiple guides are ordered by priority and explain how workspace
+ * instructions refine the global guide. The permission invariant is always
+ * appended so silence about permissions cannot authorize a restrictive mode.
  */
 export function formatAgentSelectionGuideResponse(
   response: AgentSelectionGuideResponse,
 ): string {
   if (response.status === "not_found") {
-    return withPermissionModeInstruction(response.message);
+    return withGuideInstructions(response.message);
   }
 
   if (response.sources.length === 0) {
-    return withPermissionModeInstruction("No agent selection guide found.");
+    return withGuideInstructions("No agent selection guide found.");
   }
 
   // Most specific first. Do not rely on the order sent by the host.
@@ -55,7 +58,7 @@ export function formatAgentSelectionGuideResponse(
 
   if (sources.length === 1) {
     const only = sources[0];
-    return withPermissionModeInstruction(
+    return withGuideInstructions(
       `Agent selection instructions from ${only.path}:\n\n${only.content.trimEnd()}`,
     );
   }
@@ -63,9 +66,7 @@ export function formatAgentSelectionGuideResponse(
   const blocks = sources
     .map((source) => `${sectionHeader(source)}\n${source.content.trimEnd()}`)
     .join("\n\n");
-  return withPermissionModeInstruction(
-    `${TITLE}\n\n${opener(sources)}\n\n${blocks}`,
-  );
+  return withGuideInstructions(`${TITLE}\n\n${opener(sources)}\n\n${blocks}`);
 }
 
 function opener(sources: readonly AgentSelectionGuideResponseSource[]): string {
