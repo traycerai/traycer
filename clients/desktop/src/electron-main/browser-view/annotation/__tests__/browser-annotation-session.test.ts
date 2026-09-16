@@ -270,6 +270,10 @@ class FakeWebContents {
     this.debugger = new FakeDebugger(attached);
   }
 
+  isDestroyed(): boolean {
+    return false;
+  }
+
   capturePage(): Promise<BrowserViewCapturedImage> {
     this.captureCount += 1;
     this.expressionsAtCapture = evaluateExpressions(this.debugger);
