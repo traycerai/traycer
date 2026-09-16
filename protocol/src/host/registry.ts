@@ -415,11 +415,11 @@ import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-ca
 import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import {
-  draftsClaimV10,
   draftsDeleteV10,
   draftsListV10,
   draftsPutBlobV10,
   draftsReadBlobV10,
+  draftsRetractV10,
   draftsSubscribeV10,
   draftsUpsertV10,
 } from "@traycer/protocol/host/drafts/contracts";
@@ -10310,13 +10310,13 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  "drafts.claim": {
+  "drafts.retract": {
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
       versions: {
         0: {
-          contract: draftsClaimV10,
+          contract: draftsRetractV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -1254,6 +1254,7 @@ describe("<ChatTile />", () => {
           ownerHostId: null,
           origin: null,
           publication: null,
+          supersedes: null,
         },
       },
     });
