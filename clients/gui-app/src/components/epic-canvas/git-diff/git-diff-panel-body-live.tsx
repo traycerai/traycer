@@ -156,7 +156,6 @@ export function GitDiffPanelBodyLive(
 ): ReactNode {
   const surfaceKey = useGitDiffPanelSurfaceKey(props.tabId);
   const pin = useSurfaceHostPin(surfaceKey);
-  const { latchOnFirstUse } = pin;
   const client = useSurfaceHostClient(pin.resolvedHostId);
   // The value to PROVIDE: ambient while following, the pin's own binding once
   // built, null while pending - never the ambient socket for a pinned host.
@@ -287,7 +286,8 @@ export function GitDiffPanelBodyLive(
   // Clear the probed-unavailable set and re-probe every root's capability, so a
   // fully-degraded panel can recover once a broken worktree is restored. The
   // retry also re-picks a root so the freshly invalidated capability query runs
-  // against a candidate again.
+  // against a candidate again. This automatic choice stays unpinned so late
+  // task records can still correct the host after recovery.
   const retryUnavailableRoots = useCallback(() => {
     const cleared = unavailableGitRootKeys.reset();
     void queryClient.invalidateQueries({
@@ -300,9 +300,6 @@ export function GitDiffPanelBodyLive(
       cleared,
       ignoreWhitespace,
     );
-    if (next !== null) {
-      latchOnFirstUse();
-    }
     setSelectedRepo(
       props.epicId,
       next === null
@@ -320,7 +317,6 @@ export function GitDiffPanelBodyLive(
     queryClient,
     setSelectedRepo,
     unavailableGitRootKeys,
-    latchOnFirstUse,
   ]);
 
   // The pin moves the STREAM too, not just the unary reads above.

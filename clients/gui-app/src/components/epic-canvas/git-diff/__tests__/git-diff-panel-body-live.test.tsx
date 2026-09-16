@@ -1338,6 +1338,66 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
         expect(pinTestState.lastClientHostId).toBe("host-a");
       });
     });
+
+    it("recovers via retry without latching, so a late sole task host can still redirect it", async () => {
+      nodeHostIdsState.current = new Set();
+      pinTestState.activeHostId = "host-a";
+      pinTestState.directory = [{ hostId: "host-a", label: "Host A" }];
+      testState.rows = [hostRow("host-a", "/repo-a")];
+      testState.capabilities.set("/repo-a", {
+        available: false,
+        gitVersion: null,
+        reason: "git unavailable",
+      });
+      const { rerender } = renderPanelWithControls({
+        hostId: "unresolved",
+        rootRunningDir: "/none",
+        repoRoot: "/none",
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("git-roots-unavailable")).toBeDefined(),
+      );
+
+      // The worktree recovers; retry re-picks host-a without latching it.
+      testState.capabilities.set("/repo-a", testState.availableCapability);
+      fireEvent.click(screen.getByTestId("git-roots-unavailable-retry"));
+
+      await waitFor(() => {
+        expect(pinTestState.lastClientHostId).toBe("host-a");
+      });
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          gitDiffPanelSurfaceKey(TAB_ID)
+        ],
+      ).toBeUndefined();
+
+      // A sole task host now names host-b - nothing the retry left behind
+      // blocks the redirect.
+      nodeHostIdsState.current = new Set(["host-b"]);
+      pinTestState.directory = [
+        { hostId: "host-a", label: "Host A" },
+        { hostId: "host-b", label: "Host B" },
+      ];
+      testState.rows = [hostRow("host-b", "/repo-b")];
+      rerender();
+
+      await waitFor(() => {
+        expect(pinTestState.lastClientHostId).toBe("host-b");
+      });
+      expect(
+        useGitPanelStore.getState().stateByEpicId[EPIC_ID]?.selectedRepo,
+      ).toEqual({
+        hostId: "host-b",
+        rootRunningDir: "/repo-b",
+        repoRoot: "/repo-b",
+      });
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          gitDiffPanelSurfaceKey(TAB_ID)
+        ],
+      ).toBeUndefined();
+    });
   });
 
   it("auto-follows to the effective host and renders normal content when the pinned host is dead (D6 sticky return, no dead-state screen)", async () => {
