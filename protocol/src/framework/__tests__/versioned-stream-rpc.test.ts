@@ -121,8 +121,9 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // provider fallback took @1.10 above it.
     expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(10);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+    // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
-      2,
+      3,
     );
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
