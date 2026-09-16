@@ -207,6 +207,11 @@ export function snapshotOwnerTeardown(
         ownerRef: input.ownerRef,
         holdKind: "chat-turn",
         activity: "working",
+        // `hasActiveTurn` is the NARROW signal (a running/activating turn,
+        // not background work outliving one), so this holder is a turn by
+        // construction - say so, rather than falling back to the
+        // tier-unknown wording a pre-tier host gets.
+        chatTier: "turn",
         label: chatTurnHolderLabel(input, agentStopClearsOwner),
       },
       undefined,
