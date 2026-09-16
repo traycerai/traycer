@@ -11,7 +11,6 @@ import {
   inviteKey,
   type QueuedInvite,
 } from "@/lib/epic-invites";
-import { cn } from "@/lib/utils";
 
 export interface InviteCardProps {
   readonly inviteInput: string;
@@ -68,24 +67,21 @@ export function InviteCard(props: InviteCardProps) {
           }}
           onKeyDown={handleKeyDown}
           placeholder="Enter email or GitHub handle"
-          className={cn(
-            "h-9 w-full min-w-0 pr-14",
-            inputError !== null && "border-destructive",
-          )}
+          className="h-9 w-full min-w-0 pr-14"
+          aria-invalid={inputError !== null}
           aria-label="Email or GitHub handle"
           aria-describedby={inputError !== null ? errorId : undefined}
-          aria-invalid={inputError !== null}
           disabled={isPending}
           data-testid="invite-identifier-input"
         />
         <Button
           type="button"
-          variant="ghost"
-          size="xs"
+          variant="muted"
+          size="sm"
           onClick={onAddToQueue}
           disabled={!canAddInvite}
           data-testid="invite-add-button"
-          className="absolute top-1/2 right-2 -translate-y-1/2 text-ui-sm text-muted-foreground disabled:opacity-40"
+          className="absolute top-1/2 right-2 -translate-y-1/2 disabled:opacity-40 h-6"
         >
           Add
         </Button>
@@ -127,7 +123,9 @@ export function InviteCard(props: InviteCardProps) {
           onChange={onRoleChange}
           disabled={isPending}
           isPending={false}
-          className="h-9 min-w-0 rounded-md border border-input bg-background px-3"
+          variant="outline"
+          size="lg"
+          className="min-w-0"
           aria-label="Role for new invites"
           data-testid="invite-role-select"
         />
@@ -175,11 +173,11 @@ function InviteChip(props: {
       <span className="min-w-0 truncate">{label}</span>
       <Button
         type="button"
-        variant="ghost"
+        variant="muted-destructive"
         size="icon-xs"
         onClick={onRemove}
         disabled={isPending}
-        className="size-5 rounded-full text-muted-foreground hover:text-destructive"
+        className="size-5 rounded-full"
         aria-label={`Remove ${label} from queue`}
         data-testid="invite-queue-remove"
       >
@@ -213,9 +211,9 @@ function GithubHandleInviteInfo() {
       >
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
-          className="size-7 rounded-full text-muted-foreground"
+          className="size-7 rounded-full"
           aria-label="GitHub handle invite email notification note"
           data-testid="github-handle-invite-info"
         >

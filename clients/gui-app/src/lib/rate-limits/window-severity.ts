@@ -15,11 +15,11 @@ export function rateLimitWindowSeverityBarClassName(
 ): string {
   switch (severity) {
     case "limited":
-      return "bg-red-500 dark:bg-red-400";
+      return "bg-destructive";
     case "running_low":
-      return "bg-amber-500 dark:bg-amber-400";
+      return "bg-warning";
     case "healthy":
-      return "bg-blue-500 dark:bg-blue-400";
+      return "bg-info";
   }
 }
 
@@ -32,33 +32,36 @@ export function rateLimitWindowSeverityBarClassName(
  * that changed color only while a bar happened to be drawn would make severity
  * a property of how wide the window is.
  *
- * Text weights differ from fills, and per tier rather than uniformly: a fill is
- * judged by area, a 12px numeral by contrast. The 500 shades the bar uses miss
- * the 4.5:1 floor on a light canvas, so each light tier steps to the first
- * shade that clears it - red and blue at 600, and amber only at 700, which is
- * the darkest of the three because yellow is the brightest. Amber going one
- * further than its neighbours is the point rather than an inconsistency; it is
- * also the tier that means act on this limit now.
+ * Text uses the `-foreground` half of each status role and the bar uses the
+ * base, which is the same split the rest of the app makes: the base is a fill
+ * judged by area, the foreground is text judged by contrast and is verified
+ * >=3:1 against every preset surface. Before the status tokens existed this
+ * function hand-picked a shade per tier to clear 4.5:1 on a light canvas
+ * (amber a step darker than the others, because yellow is the brightest); the
+ * tokens carry that guarantee now, and they carry it in every preset rather
+ * than in the default light one.
  */
 export function rateLimitWindowSeverityTextClassName(
   severity: RateLimitWindowSeverity,
 ): string {
   switch (severity) {
     case "limited":
-      return "text-red-600 dark:text-red-400";
+      return "text-destructive";
     case "running_low":
       return RUNNING_LOW_TEXT_CLASS_NAME;
     case "healthy":
-      return "text-blue-600 dark:text-blue-400";
+      return "text-info-foreground";
   }
 }
 
 /**
  * Shared with the status bar's degraded glyph, which sits inches from a
- * `running_low` percentage on the same row: two ambers a shade apart read as a
- * rendering fault rather than as two ideas.
+ * `running_low` percentage on the same row. Both now name the same token, so
+ * the drift this constant existed to prevent - two ambers a shade apart,
+ * reading as a rendering fault rather than as two ideas - is no longer
+ * expressible; it stays as the one name both surfaces import.
  */
-export const RUNNING_LOW_TEXT_CLASS_NAME = "text-amber-700 dark:text-amber-400";
+export const RUNNING_LOW_TEXT_CLASS_NAME = "text-warning-foreground";
 
 /**
  * The width (0-100) a severity-colored window bar should fill. This tracks the

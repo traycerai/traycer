@@ -80,6 +80,11 @@ export function HostBootCard(props: {
   return (
     <Card
       {...props.dataset}
+      // The roomy size, because this card is a calm centred surface with one
+      // short line in it - `default`'s 16px vertical inset reads as cramped
+      // here. It replaces the `py-6` the content used to add on top of that,
+      // which was the same request made as a restyle.
+      size="lg"
       {...testIdProps}
       data-surface={HOST_BOOT_CARD_SURFACE}
       role="status"
@@ -102,7 +107,7 @@ export function HostBootCard(props: {
           boot card is not a dialog: when a face of it does carry a title (a
           settled failure), the title centres with everything else, the way an
           alert card reads. */}
-      <CardContent className="flex flex-col items-center gap-4 py-6 text-center">
+      <CardContent className="flex flex-col items-center gap-4 text-center">
         {props.children}
       </CardContent>
     </Card>
@@ -126,13 +131,18 @@ export function HostBootHeadline(props: {
   readonly spinnerTestId: string | null;
   readonly messageTestId: string | null;
 }): ReactNode {
+  // The type step lives on the PAIR, not on the spinner: it is a text spinner
+  // sized by font-size, and the card's own `text-ui-sm` would leave it a step
+  // under the line it belongs to. A size class on the primitive would be a
+  // restyle; on the pair it is the same fact stated where it is true.
   return (
-    <div className="flex flex-col items-center gap-3">
+    <div className="flex flex-col items-center gap-3 text-ui">
       {props.spinnerVariant === null ? null : (
         <AgentSpinningDots
           testId={props.spinnerTestId ?? undefined}
           variant={props.spinnerVariant}
-          className="text-ui text-muted-foreground"
+          className={undefined}
+          tone="muted"
         />
       )}
       <p

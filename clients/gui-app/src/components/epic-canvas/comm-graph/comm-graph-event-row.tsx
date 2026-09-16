@@ -130,10 +130,8 @@ function CommGraphKindChip(props: {
     <Badge
       variant="outline"
       data-testid={props.testId}
-      className={cn(
-        "h-4 rounded-sm px-1 py-0 text-micro font-medium",
-        KIND_CHIP_CLASSES[props.kind],
-      )}
+      className={cn("h-4", KIND_CHIP_CLASSES[props.kind])}
+      size="xs"
     >
       {KIND_CHIP_LABELS[props.kind]}
     </Badge>

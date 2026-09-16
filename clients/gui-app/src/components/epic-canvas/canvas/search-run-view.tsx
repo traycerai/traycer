@@ -138,8 +138,7 @@ function HighlightedText({
         <span
           key={segment.key}
           className={cn(
-            segment.highlighted &&
-              "rounded-[2px] bg-primary/20 text-foreground",
+            segment.highlighted && "rounded-xs bg-primary/20 text-foreground",
           )}
         >
           {segment.text}

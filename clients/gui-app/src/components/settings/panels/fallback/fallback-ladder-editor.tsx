@@ -454,9 +454,9 @@ function FixedStepControl(props: {
   }
   return (
     <Button
+      size="inline"
       type="button"
       variant="link"
-      className="h-auto p-0 text-ui-sm"
       aria-label={`${label} - add this step back`}
       onClick={() => {
         onToggle(true);
@@ -478,9 +478,9 @@ function ReorderButton(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon"
-      className="size-6 text-muted-foreground/70"
+      className="size-6 opacity-70"
       disabled={disabled}
       onClick={onClick}
       aria-label={`Move ${label} ${direction}`}

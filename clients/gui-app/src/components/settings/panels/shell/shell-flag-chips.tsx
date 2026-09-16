@@ -68,7 +68,7 @@ export function ShellFlagChips(props: {
           placeholder="-i"
           spellCheck={false}
           aria-label="New shell flag"
-          className="h-7 w-24 font-mono text-code-xs"
+          className="h-7 w-24"
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -80,6 +80,8 @@ export function ShellFlagChips(props: {
             }
           }}
           onBlur={commit}
+          font="mono"
+          size="xs"
         />
       ) : (
         <button

@@ -461,9 +461,10 @@ function SnapshotsSize(props: {
     return (
       <span className="inline-flex items-center gap-1.5">
         <AgentSpinningDots
-          className="text-muted-foreground"
+          className={undefined}
           testId="settings-local-snapshots-size-spinner"
           variant={undefined}
+          tone="muted"
         />
         Calculating
       </span>

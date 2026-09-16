@@ -107,17 +107,15 @@ export function DeviceCodeProgress(props: {
 
         <Button
           type="button"
-          size={props.isHero ? "default" : "sm"}
+          size={props.isHero ? "inline" : "inline-xs"}
           variant="link"
           data-testid="signin-retry-link"
           onClick={() => {
             signInMutation.mutate();
           }}
           className={cn(
-            "h-auto self-center px-0 py-0",
-            props.isHero
-              ? "text-ui-sm text-white/[0.72] hover:text-white"
-              : "text-ui-xs",
+            "self-center",
+            props.isHero ? "text-white/[0.72] hover:text-white" : null,
           )}
         >
           Taking too long? Start over

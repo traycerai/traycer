@@ -616,10 +616,9 @@ function ShowMoreToggle({
     <div className="mt-1 flex justify-center">
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="xs"
         aria-expanded={expanded}
-        className="text-muted-foreground hover:text-foreground"
         onMouseDown={(event) => {
           event.preventDefault();
         }}
@@ -875,11 +874,11 @@ function InlineUserMessageEditor({
         />
         <MessageActionButton
           label="Attach image"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           tooltip
           disabled={editing.pending}
-          className="mr-auto text-muted-foreground hover:text-foreground"
+          className="mr-auto"
           onClick={openImagePicker}
         >
           <ImagePlus className="size-4" aria-hidden />
@@ -906,7 +905,7 @@ function InlineUserMessageEditor({
         >
           {attachmentPending ? (
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId="edit-attachment-pending"
               variant={undefined}
             />
@@ -952,22 +951,22 @@ function MessageActionBar({
       <>
         <MessageActionButton
           label="Confirm delete"
-          variant="ghost"
+          variant="success-ghost"
           size="icon-sm"
           tooltip={false}
           disabled={!actions.enabled}
-          className="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300"
+          className={undefined}
           onClick={actions.onDeleteConfirm}
         >
           <Check className="size-3.5" aria-hidden />
         </MessageActionButton>
         <MessageActionButton
           label="Cancel delete"
-          variant="ghost"
+          variant="destructive-ghost"
           size="icon-sm"
           tooltip={false}
           disabled={!actions.enabled}
-          className="text-destructive hover:text-destructive"
+          className={undefined}
           onClick={actions.onDeleteCancel}
         >
           <X className="size-3.5" aria-hidden />
@@ -991,11 +990,11 @@ function MessageActionBar({
       </MessageActionButton>
       <MessageActionButton
         label="Delete message"
-        variant="ghost"
+        variant="destructive-ghost"
         size="icon-sm"
         tooltip={false}
         disabled={!actions.enabled}
-        className="text-destructive hover:text-destructive"
+        className={undefined}
         onClick={actions.onDeleteRequest}
       >
         <Trash2 className="size-3.5" aria-hidden />
@@ -1006,7 +1005,13 @@ function MessageActionBar({
 
 function MessageActionButton(props: {
   readonly label: string;
-  readonly variant: "default" | "ghost" | "secondary";
+  readonly variant:
+    | "default"
+    | "ghost"
+    | "muted"
+    | "secondary"
+    | "destructive-ghost"
+    | "success-ghost";
   readonly size: "default" | "icon-sm";
   readonly tooltip: boolean;
   readonly disabled: boolean;
@@ -1249,7 +1254,7 @@ function UserMessageTouchMenu({
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-xs"
             aria-label="Message actions"
             // Resting bg-muted matches ghost's aria-expanded open surface,
@@ -1258,7 +1263,7 @@ function UserMessageTouchMenu({
             // 44px touch-target guideline without painting anything (Button
             // renders no ::after of its own, so nothing merges with it).
             // muted-fill-ok: transcript row renders on bg-background/canvas
-            className="relative bg-muted text-muted-foreground/70 hover:text-foreground after:absolute after:-inset-2.5 after:content-['']"
+            className="relative bg-muted after:absolute after:-inset-2.5 after:content-[''] opacity-70"
           >
             <MoreHorizontal className="size-3.5" aria-hidden />
           </Button>

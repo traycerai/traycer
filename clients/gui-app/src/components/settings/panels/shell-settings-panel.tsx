@@ -926,9 +926,10 @@ function TransientSaveIndicator(props: {
   if (props.pending) {
     indicator = (
       <AgentSpinningDots
-        className="text-muted-foreground"
+        className={undefined}
         testId={props.testId}
         variant={undefined}
+        tone="muted"
       />
     );
   } else if (props.saved) {

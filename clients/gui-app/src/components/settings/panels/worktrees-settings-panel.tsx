@@ -787,7 +787,7 @@ function WorktreesPartialListingBanner(props: {
     <div
       role="status"
       aria-live="polite"
-      className="flex items-center gap-2 border-b border-border/60 bg-amber-500/10 px-4 py-2 text-ui-sm text-amber-700 dark:text-amber-300"
+      className="flex items-center gap-2 border-b border-border/60 bg-warning/10 px-4 py-2 text-ui-sm text-warning-foreground"
     >
       <AlertTriangle className="size-4 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1 wrap-anywhere">
@@ -796,9 +796,9 @@ function WorktreesPartialListingBanner(props: {
         incomplete.
       </span>
       <Button
-        variant="ghost"
+        variant="warning-ghost"
         size="sm"
-        className="h-7 shrink-0 px-2 text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+        className="h-7 shrink-0"
         onClick={() => void props.onRetry()}
       >
         Retry
@@ -811,7 +811,7 @@ function WorktreesPartialListingBanner(props: {
           source: "Worktrees",
         })}
         presentation="link"
-        className="h-auto shrink-0 p-0 text-current"
+        className="shrink-0"
       />
     </div>
   );
@@ -2176,8 +2176,9 @@ function WorktreeBulkDeleteDialog(props: {
   return (
     <Dialog open={summary !== null} onOpenChange={props.onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,32rem)] gap-0 overflow-hidden p-0 sm:max-w-lg"
+        className="w-[min(92vw,32rem)] overflow-hidden sm:max-w-lg"
         data-testid="worktree-bulk-delete-dialog"
       >
         {summary !== null ? (
@@ -2187,16 +2188,16 @@ function WorktreeBulkDeleteDialog(props: {
                 <AlertTriangle className="size-4" aria-hidden />
               </div>
               <div className="min-w-0 flex-1 space-y-2">
-                <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
+                <DialogTitle className="wrap-anywhere">
                   {summary.title}
                 </DialogTitle>
-                <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+                <DialogDescription className="wrap-anywhere">
                   Deleting {summary.classSummary}. Traycer runs each repo's
                   teardown script, then removes the worktree.
                 </DialogDescription>
                 {summary.dirtyLoss !== null ? (
                   <p
-                    className="text-ui-sm leading-relaxed text-amber-700 dark:text-amber-400"
+                    className="text-ui-sm leading-relaxed text-warning-foreground"
                     data-testid="worktree-bulk-delete-dirty-loss"
                   >
                     {summary.dirtyLoss}
@@ -2212,7 +2213,7 @@ function WorktreeBulkDeleteDialog(props: {
                 ) : null}
                 {summary.unknownRiskCaveat !== null ? (
                   <p
-                    className="text-ui-sm leading-relaxed text-amber-700 dark:text-amber-400"
+                    className="text-ui-sm leading-relaxed text-warning-foreground"
                     data-testid="worktree-bulk-delete-unknown-caveat"
                   >
                     {summary.unknownRiskCaveat}
@@ -2573,7 +2574,7 @@ function WorktreeTierPill(props: {
       >
         <Badge
           variant="outline"
-          className="gap-1 font-medium border-dashed border-border bg-foreground/5 text-foreground"
+          className="border-dashed border-border bg-foreground/5 text-foreground"
           data-testid="worktree-tier-pill"
           data-tier="pending"
         >
@@ -2604,7 +2605,7 @@ function WorktreeTierPill(props: {
       >
         <Badge
           variant="outline"
-          className="gap-1 font-medium border-dashed border-amber-600/40 bg-amber-500/5 text-amber-700 dark:border-amber-400/40 dark:text-amber-300/90"
+          className="border-dashed border-warning/40 bg-warning/5 text-warning-foreground"
           data-testid="worktree-tier-pill"
           data-tier="unknown"
         >
@@ -2644,7 +2645,7 @@ function WorktreeTierPill(props: {
     >
       <Badge
         variant="outline"
-        className={cn("gap-1 font-medium", style.className)}
+        className={cn(style.className)}
         data-testid="worktree-tier-pill"
         data-tier={props.tier}
         data-status={unavailable ? "unavailable" : "ready"}
@@ -2869,11 +2870,7 @@ function WorktreePrChip(props: {
 }): ReactNode {
   const style = WORKTREE_PR_PILL_STYLE[props.chip.prState];
   return (
-    <Badge
-      asChild
-      variant="outline"
-      className={cn("gap-1 font-medium", style.className)}
-    >
+    <Badge asChild variant="outline" className={cn(style.className)}>
       <WorktreePrAnchor
         href={props.chip.prUrl}
         ariaLabel={props.chip.ariaLabel}
@@ -2926,8 +2923,8 @@ function WorktreeMutedPrChip(props: {
       align="center"
     >
       <Badge
-        variant="outline"
-        className="gap-1 border-border/40 bg-foreground/3 font-medium text-muted-foreground"
+        variant="muted"
+        className="border-border/40 bg-foreground/3"
         data-testid="worktree-pr-chip"
         data-pr-state="unmerged"
       >
@@ -3009,7 +3006,7 @@ function WorktreeTaskAssociation(props: {
           <Badge
             asChild
             variant="outline"
-            className="max-w-[min(60vw,16rem)] cursor-pointer font-normal hover:bg-foreground/5 hover:text-muted-foreground"
+            className="max-w-[min(60vw,16rem)] cursor-pointer hover:bg-foreground/5 hover:text-muted-foreground"
           >
             <TooltipWrapper
               label={item.title}
@@ -3115,11 +3112,10 @@ function WorktreesRepoExpansionControl(props: {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label={label}
         data-testid="worktrees-toggle-all-repos"
-        className="text-muted-foreground hover:text-foreground"
         onClick={props.onToggle}
       >
         {props.allCollapsed ? (
@@ -3228,24 +3224,23 @@ function WorktreeRowActions(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={props.triggerLabel}
             data-testid="worktree-row-actions-trigger"
-            className="text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
           >
             <MoreHorizontal className="size-4" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
-          className="w-max min-w-32 max-w-[min(80vw,14rem)] p-1.5"
+          className="w-max min-w-32 max-w-[min(80vw,14rem)]"
           data-testid="worktree-row-actions-menu"
         >
           <DropdownMenuItem
             data-testid="worktree-row-copy-path"
             onSelect={props.onCopyPath}
-            className="gap-2 px-2 py-2"
+            className="gap-2"
           >
             <Copy className="size-3.5" aria-hidden />
             Copy path
@@ -3254,7 +3249,7 @@ function WorktreeRowActions(props: {
             data-testid="worktree-row-manage-scripts"
             aria-haspopup="dialog"
             onSelect={props.onManageScripts}
-            className="items-start gap-2 whitespace-normal px-2 py-2 text-left leading-snug"
+            className="items-start gap-2 whitespace-normal text-left"
           >
             <FileSliders className="size-3.5" aria-hidden />
             {props.scriptsLabel}
@@ -3275,7 +3270,7 @@ function WorktreeRowActions(props: {
                 aria-label={deleteLabel}
                 disabled={deleteDisabled}
                 onSelect={props.onDelete}
-                className="gap-2 px-2 py-2"
+                className="gap-2"
               >
                 <Trash2 className="size-3.5" aria-hidden />
                 Delete worktree
@@ -3360,7 +3355,7 @@ function WorktreesStateMessage(props: {
             source: "Worktrees",
           })}
           presentation="icon"
-          className="text-current"
+          className={undefined}
         />
       ) : null}
     </div>
@@ -3499,7 +3494,7 @@ function worktreeSearchHaystack(
   return [
     entry.repoLabel,
     entry.branch ?? "",
-    gitUnreadableOf(entry) ? "unreadable" : "",
+    gitUnreadableOf(entry) ? "unreadable" : null,
     entry.worktreePath,
     ...titles,
   ]

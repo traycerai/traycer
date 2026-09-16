@@ -416,7 +416,7 @@ describe("BrowsersPanelBody", () => {
         .className.split(/\s+/),
     ).toContain("cursor-pointer");
     const isoRow = screen.getByTestId("epic-browser-sidebar-row-tab-iso");
-    expect(isoRow.innerHTML).toContain("ring-amber-500/80");
+    expect(isoRow.innerHTML).toContain("ring-warning/80");
   });
 
   it("scrolls to and flash-highlights a requested browser row", async () => {

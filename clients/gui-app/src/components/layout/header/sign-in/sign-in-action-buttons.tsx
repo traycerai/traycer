@@ -77,16 +77,13 @@ export function RetrySignInButton(props: {
     // surface - so this gives an immediate escape hatch.
     <Button
       type="button"
-      size={props.isHero ? "default" : "sm"}
+      size={props.isHero ? "inline" : "sm"}
       variant="link"
       data-testid="signin-retry-link"
       disabled={signInMutation.isPending}
       onClick={() => {
         signInMutation.mutate();
       }}
-      className={cn(
-        props.isHero ? "h-auto justify-center px-0 py-0 text-ui-sm" : null,
-      )}
     >
       Taking too long? Retry
     </Button>

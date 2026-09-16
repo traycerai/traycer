@@ -326,14 +326,17 @@ function OwnerMetadataRefreshFooter(props: {
         >
           {props.refreshing ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId="owner-workspace-refresh-spinner"
               variant={undefined}
+              tone="muted"
             />
           ) : null}
           Refresh
           <ShortcutHint>
-            <Kbd className="ml-0.5 font-mono">R</Kbd>
+            <Kbd className="ml-0.5" variant="mono">
+              R
+            </Kbd>
           </ShortcutHint>
         </Button>
       </span>

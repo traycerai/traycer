@@ -20,12 +20,36 @@ function PopoverTrigger({
   return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
 }
 
+/**
+ * What the popover's own box contributes, which is a fact about what the
+ * caller put inside it rather than about the popover.
+ *
+ * All three were being assembled by hand, and the copies disagreed: 19 sites
+ * wrote `p-0`, 15 of them `gap-0`, and the four largest added `rounded-xl
+ * overflow-hidden` on top. Three sites also restated `p-2.5` / `gap-2.5`,
+ * which is what the default already sets.
+ *
+ * - `padded` — the popover IS the surface: a sentence, a small form, a few
+ *   controls, laid out on the popover's own gutter and rhythm.
+ * - `bare` — the content draws its own edges (a command list, a picker whose
+ *   rows run to the plate's inner edge, a scroll region).
+ * - `panel` — `bare` on a bigger plate: a wide surface with its own header and
+ *   footer bands, which needs the larger radius to stay concentric with them
+ *   and clips them to it.
+ */
+const POPOVER_CONTENT_LAYOUTS = {
+  padded: "gap-2.5 rounded-lg p-2.5",
+  bare: "gap-0 rounded-lg p-0",
+  panel: "gap-0 overflow-hidden rounded-xl p-0",
+} as const;
+
 type PopoverContentProps = React.ComponentProps<
   typeof PopoverPrimitive.Content
 > & {
   readonly container?: React.ComponentProps<
     typeof PopoverPrimitive.Portal
   >["container"];
+  readonly layout?: keyof typeof POPOVER_CONTENT_LAYOUTS;
 };
 
 function PopoverContent({
@@ -35,6 +59,7 @@ function PopoverContent({
   sideOffset = 4,
   collisionPadding,
   container,
+  layout = "padded",
   onCloseAutoFocus,
   ...props
 }: PopoverContentProps) {
@@ -59,11 +84,13 @@ function PopoverContent({
       <PopoverPrimitive.Content
         ref={ref}
         data-slot="popover-content"
+        data-layout={layout}
         align={align}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 flex w-72 max-w-safe-dvw origin-(--radix-popover-content-transform-origin) flex-col gap-2.5 rounded-lg bg-popover p-2.5 text-ui-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 flex w-72 max-w-safe-dvw origin-(--radix-popover-content-transform-origin) flex-col bg-popover text-ui-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          POPOVER_CONTENT_LAYOUTS[layout],
           className,
         )}
         onCloseAutoFocus={handleCloseAutoFocus}
