@@ -327,9 +327,8 @@ export function AutoJudgePicker(props: {
       {props.selection !== null ? (
         <Button
           type="button"
-          variant="ghost"
-          size="sm"
-          className="h-auto px-2 py-0.5 text-ui-xs text-muted-foreground"
+          variant="muted"
+          size="xs"
           data-testid="auto-judge-use-default"
           disabled={props.disabled}
           onClick={() => props.onCommit(null)}
@@ -340,7 +339,7 @@ export function AutoJudgePicker(props: {
       {selfBilling !== null ? (
         <span
           data-testid="auto-judge-self-billing"
-          className="max-w-full text-pretty text-right text-ui-xs text-amber-700 dark:text-amber-300"
+          className="max-w-full text-pretty text-right text-ui-xs text-warning-foreground"
         >
           {selfBilling}
         </span>
@@ -357,7 +356,7 @@ export function AutoJudgePicker(props: {
 }
 
 const RECORD_WARNING_CLASSNAME =
-  "max-w-full text-pretty text-right text-ui-xs text-amber-700 dark:text-amber-300";
+  "max-w-full text-pretty text-right text-ui-xs text-warning-foreground";
 
 /**
  * What is wrong with the stored judge record, as the user reads it.
@@ -505,7 +504,8 @@ function AutoJudgeBlockedStatus(props: {
           <Button
             type="button"
             variant="link"
-            className="h-auto p-0 text-inherit text-ui-xs underline"
+            size="inline-xs"
+            className="text-current underline"
             onClick={() =>
               openSettings({ section: "providers", resetToGeneral: false })
             }
@@ -527,7 +527,7 @@ function AutoJudgeBlockedStatus(props: {
   return (
     <span
       data-testid="auto-judge-blocked"
-      className="max-w-full text-pretty text-right text-ui-xs text-amber-700 dark:text-amber-300"
+      className="max-w-full text-pretty text-right text-ui-xs text-warning-foreground"
     >
       {message}
     </span>

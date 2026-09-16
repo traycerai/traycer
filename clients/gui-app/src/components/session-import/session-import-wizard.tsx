@@ -48,8 +48,6 @@ import {
   startSessionImportRun,
 } from "@/components/session-import/session-import-run-handle";
 import { useSessionImportCheckStatus } from "@/hooks/session-import/use-session-import-check-status-query";
-import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
-import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   sessionImportTone,
@@ -101,30 +99,19 @@ export function SessionImportWizard(props: {
   const hostId = streamBinding?.hostId ?? null;
   const runStatus = useSessionImportRun(hostId).status;
   const runIdle = runStatus === "idle";
-  // Warms the TARGET host's harness catalog while the user is still choosing
-  // sessions, and it is the reason an `auto` default survives an import.
+  // No catalog warm-up here, deliberately, and the reason is worth keeping.
   //
-  // `importPermissionModeFor` demotes `auto` unless this host has PROVEN it
-  // knows the mode, and both proofs are unreadable at exactly the moment the
-  // Import button is pressed on a REMOTE host: `getMethodSchemaVersion`
-  // reconciles from live sessions of `sessionImport.run` (a remote transport
-  // answers `null` by design, and there is no live session before the first
-  // run anyway), leaving the cached `agent.gui.listHarnesses` rows as the only
-  // evidence - and nothing prefetches those for a host that is not the
-  // app-wide default. The user's own default would then be silently downgraded
-  // on every import to another machine.
+  // This used to prefetch the target host's `agent.gui.listHarnesses` rows
+  // because `importPermissionModeFor` fell back to them to decide whether the
+  // host knew `auto`. That fallback is gone - a catalog row is a different
+  // method's fact - so the warm-up was paying an RPC to fill a slot nothing
+  // reads. The gate now asks `sessionImport.run`'s own line and nothing else.
   //
-  // This fills the exact cache slot that gate reads, on the host the run will
-  // open on, several seconds before the click. Deliberately here rather than
-  // inside the gate: that path is synchronous (the mode rides the stream's
-  // OPEN request), so the fact has to be warm BEFORE it is asked for, and a
-  // wizard the user has opened is the natural place to pay one catalog RPC.
-  // A cold answer still demotes rather than failing the whole import.
-  const importHostClient = useHostClientForHostId(hostId);
-  useGuiHarnessesQueryForClient(importHostClient, {
-    enabled: hostId !== null,
-    subscribed: hostId !== null,
-  });
+  // What warms THAT line is already on screen: `useSessionImportScan` opens a
+  // `sessionImport.scan` subscription on this same binding's client while the
+  // user is still picking rows, and a stream handshake caches a declarable
+  // version for every method in the peer's manifest - `sessionImport.run`
+  // included - so the line is warm before the Import button exists to click.
   const statusQuery = useSessionImportCheckStatus(streamBinding, runIdle);
   const activeRun = statusQuery.isSuccess ? statusQuery.data.active : null;
   const canSubmit = sessionImportHostIsIdle(statusQuery);

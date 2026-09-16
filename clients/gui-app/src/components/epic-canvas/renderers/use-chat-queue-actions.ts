@@ -37,6 +37,23 @@ export interface ChatQueueActionsInput {
   ) => void;
   readonly clearDraftContent: (nodeId: string) => void;
   readonly currentComposerSettings: ChatRunSettings;
+  /**
+   * The same tuple after the tile's permission clamp - what may go ON THE WIRE.
+   *
+   * Separate from `currentComposerSettings` because the two are asked different
+   * questions here and only one of them is a frame. Steer sends a
+   * `newSettings` tuple that `carriesAutoPermissionMode` inspects, so it takes
+   * the clamped value; `handleComposerSettingsChange` compares an incoming edit
+   * against what the user is PRESENTED, so it keeps the raw one - comparing
+   * against a clamped value would read "no change" for an edit to the very mode
+   * the clamp had substituted.
+   *
+   * Safe to substitute here because `decideSteerSettings` compares harness,
+   * model, reasoning effort, service tier and profile - never `permissionMode`
+   * - so the clamp cannot move its verdict, and `newSettings` is the tuple it
+   * was handed, which is how `confirmSteerRestart` inherits the clamp too.
+   */
+  readonly nextStepSettings: ChatRunSettings;
   readonly currentEpicId: string;
   readonly editingQueueItemId: string | null;
   readonly activeEditingQueueItemId: string | null;
@@ -94,6 +111,7 @@ export function useChatQueueActions(
     replaceDraftContent,
     clearDraftContent,
     currentComposerSettings,
+    nextStepSettings,
     currentEpicId,
     editingQueueItemId,
     activeEditingQueueItemId,
@@ -209,20 +227,27 @@ export function useChatQueueActions(
       // churn -> composer re-render).
       const decision = decideSteerSettings(
         handle.store.getState().activeTurn,
-        currentComposerSettings,
+        nextStepSettings,
       );
       if (decision.kind === "silent_inject") {
         // No turn-start-baked setting changed: fold into the running turn at the
-        // next safe point. Pass the live toolbar settings explicitly (they match
-        // the running turn) so the host's mode decision can't race a lagging
-        // restamp of this item.
-        chatActions.queueSteerNow(item.queueItemId, currentComposerSettings);
+        // next safe point. Pass the settings explicitly so the host's mode
+        // decision can't race a lagging restamp of this item.
+        //
+        // They match WHAT THE COMPOSER WOULD SEND, not necessarily the running
+        // turn - and the difference is real rather than pedantic. The clamp is
+        // computed from this tab's evidence, so a tab with no recorded harness
+        // line demotes a mode a turn may genuinely be running at. That is the
+        // direction this whole gate is built to fail in: a steer the host
+        // refuses outright kills the button for the session, while a demoted
+        // one still lands and costs the judge on a turn the user can re-run.
+        chatActions.queueSteerNow(item.queueItemId, nextStepSettings);
         return;
       }
       // A change the running turn can't absorb: confirm ending the turn first.
       setPendingSteerRestart({ item, decision });
     },
-    [chatActions, currentComposerSettings, handle.store],
+    [chatActions, nextStepSettings, handle.store],
   );
 
   const confirmSteerRestart = useCallback((): void => {

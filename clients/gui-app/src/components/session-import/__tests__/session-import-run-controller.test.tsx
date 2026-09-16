@@ -130,10 +130,7 @@ import {
 import { sessionImportQueryKeys } from "@/lib/query-keys";
 import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
 import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
-import {
-  recordNegotiatedHostManifest,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const SELECTION: SessionImportSelection = {
   harness: "claude",
@@ -190,11 +187,14 @@ function createStreamBinding(hostId: string): StreamBindingRecord {
 }
 
 /**
- * A stream binding whose `sessionImport.run` negotiated version is
- * `version` rather than the honest-stub's always-`null` - one of the two
- * facts `hostUnderstandsAutoPermissionMode` reads, the other being the
- * advertised manifest (`recordNegotiatedHostManifest`). Both are
- * `sessionImport.run`'s own line; the harness catalog is not consulted.
+ * A stream binding whose `sessionImport.run` version is `version` rather than
+ * the honest-stub's always-`null`.
+ *
+ * This is the ONLY seam the gate reads. Both of its facts - a live session's
+ * negotiated line, and the line the host advertised in its stream handshake -
+ * arrive through `getMethodSchemaVersion`, so a fixture cannot tell them
+ * apart and does not need to. The unary negotiated manifest is deliberately
+ * not used: `sessionImport.run` is a stream method and never appears in it.
  */
 function createStreamBindingWithSchemaVersion(
   hostId: string,
@@ -920,17 +920,18 @@ describe("<SessionImportRunController />", () => {
       expect(requireInstance(1).permissionMode).toBe("auto");
     });
 
-    // A REMOTE host's `sessionImport.run` schema version is one this window
-    // has never negotiated over a live session, so `getMethodSchemaVersion`
-    // answers `null` and the gate falls to the advertised-manifest read
-    // below. That manifest does not need a live stream to exist - ANY RPC to
-    // this host (the app-load prefetcher, or the wizard's own catalog
-    // warm-up for a remote import target) records it via
-    // the stream handshake's cached line. These two cases pin that: same gate,
-    // same mechanism as "host-auto-cached" / "host-auto-unproven" above, but
-    // for a host shaped like the wizard's remote import target rather than
-    // the ambient one this controller otherwise runs against. The harness
-    // catalog plays no part in either case any more.
+    // A remote host needs no live `sessionImport.run` session for this to
+    // answer: `getMethodSchemaVersion` reports the line the host ADVERTISED
+    // in its stream handshake when no session has negotiated one, and both
+    // transports supply that - `WsStreamClient` caches a declarable version
+    // for every method in the peer manifest, and `RemoteSession` installs the
+    // peer manifest from its own `openAck`. What opens a stream here before
+    // any import is the wizard's `sessionImport.scan` subscription, on this
+    // same binding's client.
+    //
+    // These two cases pin that for a host shaped like the wizard's remote
+    // import target rather than the ambient one this controller otherwise
+    // runs against. No RPC, no catalog and no unary manifest is involved.
     it("opens with permissionMode 'auto' for a remote-shaped host whose advertised sessionImport.run line proves it", () => {
       streamBinding.current = createStreamBindingWithSchemaVersion(
         "host-remote-import-target",
@@ -962,9 +963,9 @@ describe("<SessionImportRunController />", () => {
         "host-remote-import-target-empty",
       );
       useSettingsStore.setState({ defaultPermission: "auto" });
-      // Deliberately no `recordNegotiatedHostManifest` call - the warm-up RPC
-      // never reached this host (or never came back), the same as a host too
-      // old to report a manifest at all.
+      // `createStreamBinding`'s stub answers `null` for every method, which is
+      // a host whose stream handshake has not happened or did not come back -
+      // the same answer as a host too old to advertise the line at all.
       render(<SessionImportRunController />);
       const handle = getSessionImportStartHandle();
       if (handle === null) {
@@ -1006,22 +1007,21 @@ describe("<SessionImportRunController />", () => {
       expect(requireInstance(1).permissionMode).toBe("full_access");
     });
 
-    // The advertised manifest is the SECOND of the two proofs
-    // `hostUnderstandsAutoPermissionMode` can read off `sessionImport.run`
-    // itself - consulted whenever no live session's negotiated version
-    // settles the question (the first run of a window, or a remote
-    // transport, which always answers `null`). Its positive branch requires
-    // an EXACT major match with the required line, `minor >=` within that
-    // major - unlike `versionIsBelow`'s asymmetric comparison, a HIGHER
-    // major does NOT count as "at least" here and demotes just like a lower
-    // one.
+    // `hostUnderstandsAutoPermissionMode` reads ONE accessor,
+    // `getMethodSchemaVersion`, which answers from a live session's negotiated
+    // line when one exists and from the host's advertised line otherwise. The
+    // cases below vary that single answer: at the required line, above it,
+    // below it, on a higher major, and absent.
     //
-    // This replaces `handshakeProvesPreAutoCatalog`, a veto that used to sit
-    // in front of a cached `agent.gui.listHarnesses` row. That mechanism is
-    // gone, and so is the harness catalog as evidence for this gate
-    // altogether: a catalog fact is a different method's fact, and
-    // per-method negotiation is exactly the rule the catalog broke.
-    describe("the advertised sessionImport.run manifest is the second proof", () => {
+    // The comparison requires an EXACT major match with `minor >=` inside it,
+    // so a HIGHER major demotes exactly like a lower one - it is a line this
+    // build cannot reason about, not evidence of support.
+    //
+    // This is what replaced `handshakeProvesPreAutoCatalog`, a veto that sat
+    // in front of a cached `agent.gui.listHarnesses` row. Both are gone: a
+    // catalog fact is a different method's fact, which is the rule the
+    // catalog broke.
+    describe("the sessionImport.run line the gate reads", () => {
       it("sends auto for an advertised sessionImport.run manifest at or above the required minor", () => {
         // A higher minor within the same major, not the exact required
         // version - proves the `>=` half of the comparison independently of
@@ -1050,10 +1050,9 @@ describe("<SessionImportRunController />", () => {
           );
         });
 
-        // FALSIFICATION: change the advertised-manifest check's minor
-        // comparison from `>=` to `===` and this goes red - a host that has
-        // moved past the required minor within the same major still
-        // understands `auto`.
+        // FALSIFICATION: change the version check's minor comparison from
+        // `>=` to `===` and this goes red - a host that has moved past the
+        // required minor within the same major still understands `auto`.
         expect(requireInstance(1).permissionMode).toBe("auto");
         // The cache tripwire on the FALL-THROUGH path. Its sibling in "never
         // reads the query cache to decide it" cannot cover this: that case's
@@ -1097,8 +1096,8 @@ describe("<SessionImportRunController />", () => {
           "host-auto-manifest-missing",
         );
         useSettingsStore.setState({ defaultPermission: "auto" });
-        // Deliberately no `recordNegotiatedHostManifest` call: neither proof
-        // exists for this host, so the gate must fail closed rather than
+        // The stub answers `null`, so neither a live session nor an advertised
+        // line proves anything here and the gate must fail closed rather than
         // assume support.
         render(<SessionImportRunController />);
         const handle = getSessionImportStartHandle();
@@ -1116,52 +1115,6 @@ describe("<SessionImportRunController />", () => {
           );
         });
 
-        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
-      });
-
-      // Mirrors `versionIsBelow`'s major-mismatch rule for the LIVE-session
-      // check by name only - the advertised-manifest check does NOT share
-      // its asymmetry. Its positive branch requires an EXACT major match, so
-      // a higher major is not "at least" the required line and demotes
-      // exactly like a lower one. This is the case a Codex reviewer flagged
-      // as easy to get wrong by assuming ">=" semantics apply to the major
-      // component too.
-      it("demotes when the advertised sessionImport.run manifest is on a higher major", () => {
-        streamBinding.current = createStreamBinding(
-          "host-auto-manifest-higher-major",
-        );
-        useSettingsStore.setState({ defaultPermission: "auto" });
-        recordNegotiatedHostManifest("host-auto-manifest-higher-major", {
-          "sessionImport.run": {
-            major: sessionImportRunV12.schemaVersion.major + 1,
-            // The minor must CLEAR the required floor, or this case cannot
-            // tell the two implementations apart: with `minor: 0` a relaxed
-            // `major >= required.major` still fails on the minor comparison
-            // and demotes anyway, so the test passes against `>=` and `===`
-            // alike and pins nothing. Measured - relaxing the major to `>=`
-            // left all 28 cases green until this fixture cleared the floor.
-            minor: sessionImportRunV12.schemaVersion.minor + 1,
-          },
-        });
-        render(<SessionImportRunController />);
-        const handle = getSessionImportStartHandle();
-        if (handle === null) {
-          throw new Error("Expected a session import start handle.");
-        }
-
-        act(() => {
-          handle.start(
-            {
-              selections: [SELECTION],
-              titles: new Map([["claude:s1", "My session"]]),
-            },
-            startTarget(),
-          );
-        });
-
-        // FALSIFICATION: change the advertised-manifest check's major
-        // comparison from `===` to `>=` and this goes green with 'auto' -
-        // the exact point a Codex reviewer flagged as easy to get wrong.
         expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
       });
     });
@@ -1230,8 +1183,8 @@ describe("<SessionImportRunController />", () => {
         expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
         // The catalog row seeded above is answered to EVERY `getQueryData`
         // key, so if the gate read the cache at all it would find an `auto`
-        // row. It reads nothing: per-method negotiation is decided from the
-        // negotiated line and the advertised manifest, both `sessionImport.run`.
+        // row. It reads nothing: the decision comes from `sessionImport.run`'s
+        // own line, through `getMethodSchemaVersion` and nothing else.
         //
         // FALSIFICATION: restore any `queryClient.getQueryData(...)` read to
         // `hostUnderstandsAutoPermissionMode` and this goes red even if the
@@ -1247,24 +1200,14 @@ describe("<SessionImportRunController />", () => {
       // it" above (negotiated === sessionImportRunV12.schemaVersion, i.e.
       // {major:1,minor:2}) - not duplicated here.
 
-      // Control: negotiated `null` still falls through to the catalog, which
-      // is the case the catalog proof exists for. Already covered by "sends
-      // auto unchanged when the cached agent.gui.listHarnesses row advertises
-      // it" above (default stub's `getMethodSchemaVersion` answers `null`) -
-      // not duplicated here.
-
-      // A HIGHER major on `sessionImport.run` itself is not evidence of being
-      // below the line (mirrors `versionIsBelow`'s own major mismatch rule),
-      // so the gate must not fail closed here on the live-session check
-      // alone - execution falls through to the advertised-manifest check
-      // instead. The harness catalog is not consulted at any point on this
-      // path any more, so the manifest below is what has to carry the case.
-      // Reframed. This used to assert that a live session on a HIGHER major
-      // fell through to an advertised manifest pinned at the required major,
-      // and still sent `auto`. That state cannot exist: both facts describe
-      // one host's one `sessionImport.run` line, so a host on major 2 does
-      // not simultaneously advertise major 1 - the fixture could only build
-      // it because the second fact came from a registry no host writes.
+      // A HIGHER major on `sessionImport.run` is not evidence of support.
+      //
+      // This case used to assert the opposite: that a live session on a higher
+      // major fell through to an advertised manifest pinned at the required
+      // major, and still sent `auto`. That state cannot exist. Both facts
+      // describe one host's one `sessionImport.run` line, so a host on major 2
+      // does not simultaneously advertise major 1 - the fixture could only
+      // build it because its second fact came from a registry no host writes.
       //
       // With both facts arriving through the same accessor, a higher major is
       // simply a line this build cannot reason about, and the gate demotes.

@@ -82,12 +82,21 @@ function importPermissionModeFor(input: {
  *   - the negotiated line of a LIVE `sessionImport.run` session, which
  *     `getMethodSchemaVersion` reports first when one exists;
  *   - failing that, the line this host ADVERTISED for the method in its STREAM
- *     handshake. `WsStreamClient.applyHostManifest` walks every method in the
- *     peer manifest, not just the subscribed one, and caches what a subscribe
- *     would declare - so any stream handshake with this host (a chat tile, an
- *     epic subscription) answers for `sessionImport.run` without one ever
- *     having been opened. `getMethodSchemaVersion` already falls through to
- *     that cache, which is why both facts come from the SAME call.
+ *     handshake - which BOTH transports supply, by different routes:
+ *     `WsStreamClient.applyHostManifest` walks every method in the peer
+ *     manifest, not just the subscribed one, and caches what a subscribe would
+ *     declare; `RemoteSession` installs the peer manifest from its own
+ *     `openAck` and answers from that (it reports `null` only until that ack
+ *     settles, which is a window, not a design). `getMethodSchemaVersion`
+ *     resolves both, which is why the two facts come from the SAME call.
+ *
+ * **What warms it before the first import is the SCAN, not the run.**
+ * `useSessionImportScan` opens a `sessionImport.scan` subscription on this
+ * same binding's client while the user is still picking sessions, and that
+ * handshake's manifest covers `sessionImport.run` too. So the line is warm by
+ * the time the Import button exists, on a remote host as much as a local one -
+ * which is why the wizard no longer prefetches a harness catalog to stand in
+ * for it (see `session-import-wizard.tsx`).
  *
  * **The unary manifest is not one of them, and used to be.** This fell back to
  * `getNegotiatedHostMethodVersion(hostId, "sessionImport.run")` on the stated

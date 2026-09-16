@@ -2828,6 +2828,291 @@ describe("<ChatTile />", () => {
     expect(frame.settings.permissionMode).toBe("auto");
   });
 
+  it("clamps a queued steer-now send off the harness row when it does not list auto", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings(
+      "owner",
+      [
+        {
+          kind: "prompt" as const,
+          queueItemId: "queue-next-turn",
+          messageId: "message-next-turn",
+          message: {
+            kind: "user",
+            content: QUEUED_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: { type: "user", userId: "owner-1" },
+          settings: AUTO_SESSION_SETTINGS,
+          accountContext: { type: "PERSONAL" as const },
+          delivery: "next_turn",
+          status: "fallback",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: "This input cannot be safely steered.",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      AUTO_SESSION_SETTINGS,
+    );
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    // Matches `AUTO_SESSION_SETTINGS` on every field `decideSteerSettings`
+    // compares, so the decision is `silent_inject` and the send fires on one
+    // click - `permissionMode` is deliberately excluded from that comparison
+    // (it applies live, no restart needed), which is exactly why an
+    // unclamped `"auto"` on this frame would be the queue-steer regression.
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: AUTO_SESSION_SETTINGS.harnessId,
+          model: AUTO_SESSION_SETTINGS.model,
+          profileId: AUTO_SESSION_SETTINGS.profileId,
+          userMessageId: "message-active",
+          startedAt: 4,
+          updatedAt: 4,
+          reasoningEffort: AUTO_SESSION_SETTINGS.reasoningEffort,
+          serviceTier: AUTO_SESSION_SETTINGS.serviceTier,
+        },
+      });
+    });
+
+    const row = screen.getAllByTestId("queued-message-row").at(0);
+    if (row === undefined) throw new Error("Expected a queued row");
+    const steerButton = row.querySelector(
+      'button[aria-label="Steer queued message now"]',
+    );
+    if (!(steerButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected steer action to render as a button");
+    }
+    expect(steerButton.disabled).toBe(false);
+
+    fireEvent.click(steerButton);
+
+    const frame = chatHarness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "queueSteerNow") {
+      throw new Error("expected queueSteerNow frame");
+    }
+    expect(frame.newSettings?.permissionMode).toBe("auto_accept_edits");
+  });
+
+  it("passes auto through a queued steer-now send when the harness row lists it", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "auto",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings(
+      "owner",
+      [
+        {
+          kind: "prompt" as const,
+          queueItemId: "queue-next-turn",
+          messageId: "message-next-turn",
+          message: {
+            kind: "user",
+            content: QUEUED_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: { type: "user", userId: "owner-1" },
+          settings: AUTO_SESSION_SETTINGS,
+          accountContext: { type: "PERSONAL" as const },
+          delivery: "next_turn",
+          status: "fallback",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: "This input cannot be safely steered.",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      AUTO_SESSION_SETTINGS,
+    );
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: AUTO_SESSION_SETTINGS.harnessId,
+          model: AUTO_SESSION_SETTINGS.model,
+          profileId: AUTO_SESSION_SETTINGS.profileId,
+          userMessageId: "message-active",
+          startedAt: 4,
+          updatedAt: 4,
+          reasoningEffort: AUTO_SESSION_SETTINGS.reasoningEffort,
+          serviceTier: AUTO_SESSION_SETTINGS.serviceTier,
+        },
+      });
+    });
+
+    const row = screen.getAllByTestId("queued-message-row").at(0);
+    if (row === undefined) throw new Error("Expected a queued row");
+    const steerButton = row.querySelector(
+      'button[aria-label="Steer queued message now"]',
+    );
+    if (!(steerButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected steer action to render as a button");
+    }
+    expect(steerButton.disabled).toBe(false);
+
+    fireEvent.click(steerButton);
+
+    const frame = chatHarness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "queueSteerNow") {
+      throw new Error("expected queueSteerNow frame");
+    }
+    expect(frame.newSettings?.permissionMode).toBe("auto");
+  });
+
+  it("clamps a queued steer-now send confirmed through the restart dialog", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings(
+      "owner",
+      [
+        {
+          kind: "prompt" as const,
+          queueItemId: "queue-next-turn",
+          messageId: "message-next-turn",
+          message: {
+            kind: "user",
+            content: QUEUED_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: { type: "user", userId: "owner-1" },
+          settings: AUTO_SESSION_SETTINGS,
+          accountContext: { type: "PERSONAL" as const },
+          delivery: "next_turn",
+          status: "fallback",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: "This input cannot be safely steered.",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      AUTO_SESSION_SETTINGS,
+    );
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    // Differs from `AUTO_SESSION_SETTINGS` only on `reasoningEffort` - a
+    // field `decideSteerSettings` DOES compare - so the decision is
+    // `interrupt_restart` instead of `silent_inject`: the click opens the
+    // confirm dialog rather than sending immediately.
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: AUTO_SESSION_SETTINGS.harnessId,
+          model: AUTO_SESSION_SETTINGS.model,
+          profileId: AUTO_SESSION_SETTINGS.profileId,
+          userMessageId: "message-active",
+          startedAt: 4,
+          updatedAt: 4,
+          reasoningEffort: "high",
+          serviceTier: AUTO_SESSION_SETTINGS.serviceTier,
+        },
+      });
+    });
+
+    const row = screen.getAllByTestId("queued-message-row").at(0);
+    if (row === undefined) throw new Error("Expected a queued row");
+    const steerButton = row.querySelector(
+      'button[aria-label="Steer queued message now"]',
+    );
+    if (!(steerButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected steer action to render as a button");
+    }
+    expect(steerButton.disabled).toBe(false);
+
+    fireEvent.click(steerButton);
+
+    expect(chatHarness.sent).toHaveLength(0);
+    const dialog = screen.getByTestId("steer-settings-conflict-dialog");
+    const confirmButton = within(dialog).getByTestId(
+      "steer-settings-conflict-confirm",
+    );
+
+    fireEvent.click(confirmButton);
+
+    const frame = chatHarness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "queueSteerNow") {
+      throw new Error("expected queueSteerNow frame");
+    }
+    expect(frame.newSettings?.permissionMode).toBe("auto_accept_edits");
+  });
+
   // A next-step click never touches the composer, so the chip has to come out of
   // `buildSubmittedChatJSONContent`. When that converter was `/`-only the `$`
   // prompt stayed prose, which cost more than the pill: with neither a

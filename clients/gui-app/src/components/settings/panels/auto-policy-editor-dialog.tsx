@@ -31,7 +31,7 @@ import { cn } from "@/lib/utils";
  * every keystroke auto-saved is a keystroke racing another device.
  */
 const BANNER_CLASSNAME =
-  "flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 text-ui-sm dark:text-amber-300";
+  "flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground";
 
 /**
  * Everything the editor has to say about the RECORD, above the textarea.
@@ -116,7 +116,7 @@ function AutoPolicyEditorBanners(props: {
         <div
           role="status"
           data-testid="auto-policy-stale-warning"
-          className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-sm text-amber-700 dark:text-amber-300"
+          className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
         >
           <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
           <span>
@@ -268,7 +268,16 @@ export function AutoPolicyEditorDialog(props: {
           aria-label="Auto mode policy"
           data-testid="auto-policy-input"
           spellCheck={false}
-          className="min-h-[min(46vh,24rem)] w-full font-mono text-code-sm"
+          className="min-h-[min(46vh,24rem)] w-full"
+          font="mono"
+          // The code scale, not a `ui` one: this is a long-form mono document
+          // and it must follow Appearance ▸ Code font size, as the markdown
+          // editor beside it does. `size="xs"` here was a regression twice
+          // over - it pinned 12px at every width AND stopped tracking the
+          // preference, while the class actually in effect before was
+          // `md:text-ui-sm` (the caller's unmodified `text-code-sm` never
+          // displaced a `md:`-modified one).
+          size="code"
         />
 
         <DialogFooter className="items-center sm:justify-between">

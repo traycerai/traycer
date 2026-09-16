@@ -3121,6 +3121,7 @@ function useChatTileSessionViewModel(
     replaceDraftContent,
     clearDraftContent,
     currentComposerSettings,
+    nextStepSettings,
     currentEpicId,
     editingQueueItemId: uiState.editingQueueItemId,
     activeEditingQueueItemId,

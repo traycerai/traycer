@@ -561,7 +561,7 @@ function AutoPolicySummary(props: {
   const { body, updatedAt } = props;
   if (props.readState === "unreadable") {
     return (
-      <span className="font-medium text-amber-700 text-ui-xs dark:text-amber-300">
+      <span className="font-medium text-ui-xs text-warning-foreground">
         Couldn&apos;t read your policy
       </span>
     );
@@ -580,7 +580,7 @@ function AutoPolicySummary(props: {
   // the dateless "Set".
   if (body === null || body.length === 0) {
     return props.readState === "stale" ? (
-      <span className="font-medium text-amber-700 text-ui-xs dark:text-amber-300">
+      <span className="font-medium text-ui-xs text-warning-foreground">
         Couldn&apos;t check your policy
       </span>
     ) : (

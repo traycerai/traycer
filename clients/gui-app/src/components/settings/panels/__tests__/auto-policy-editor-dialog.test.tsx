@@ -215,6 +215,33 @@ describe("<AutoPolicyEditorDialog />", () => {
 
     expect(screen.getByTestId("auto-policy-stale-warning")).toBeTruthy();
   });
+
+  // The class IS the behaviour under test here: it is the only thing tying
+  // this control to Appearance ▸ Code font size, and the regression this
+  // pins was invisible to every other kind of assertion. `size="xs"` here
+  // was wrong twice over - it pinned 12px at every width AND stopped
+  // tracking the preference, while the class actually in effect BEFORE was
+  // `md:text-ui-sm` (a caller's unmodified `text-code-sm` never displaced a
+  // `md:`-modified class).
+  it("keeps the policy textarea on the code font scale, not a ui text size", () => {
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        openingRead="settled"
+        canWrite
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const textarea = screen.getByTestId("auto-policy-input");
+    expect(textarea.className.split(/\s+/)).toContain("text-code-sm");
+    expect(textarea.className).not.toMatch(/\btext-ui-\w+\b/);
+  });
 });
 
 describe('<AutoPolicyEditorDialog /> readState="unreadable"', () => {

@@ -337,9 +337,10 @@ function JudgeReviewingLine(props: {
     >
       <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
         <AgentSpinningDots
-          className="text-muted-foreground"
+          className={undefined}
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
         <span role="status" data-testid="approval-reviewing-stage">
           {JUDGE_REVIEWING_LABEL[props.stage]}
