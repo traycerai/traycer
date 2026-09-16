@@ -165,6 +165,17 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
  * hand to a follow-up pass rather than a vague "check providers/ sometime".
  */
 const UNVERIFIED_NO_GATE_FOUND: Readonly<Record<string, string>> = {
+  // The four below surfaced only once `gateCandidateFiles` stopped walking UP
+  // out of the `use-host-query` hub; the old symmetric BFS reached an
+  // unrelated gate for each and vouched for them silently.
+  "host.restart":
+    "components/settings/panels/host-doctor-rpc-card.tsx:150 - the card early-returns on `props.degrade !== null`, but that prop is the `host.doctor` capability computed two importer hops up (host-settings-doctor-sheet.tsx), so it is a SIBLING-method proxy, not this method's own gate - the D1 shape this scan exists to catch",
+  "diagnostics.logs.tail":
+    "components/settings/panels/host-doctor-rpc-card.tsx:165 - same `props.degrade` proxy as host.restart above",
+  "providers.refreshProfileStatus":
+    "hooks/providers/use-providers-refresh-profile-status-mutation.ts:35 - neither caller (settings/panels/provider-rate-limit-section.tsx:112, layout/header/rate-limit-popover.tsx:2312) gates it",
+  "workspace.writeFile":
+    "hooks/workspace/use-workspace-write-file-mutation.ts:19 - its only caller (hooks/workspace/use-file-edit-session.ts:59) does not gate it",
   "epic.getChatRunSettings":
     "components/session-import/session-import-open-task-button.tsx:36 - no gate found",
   "host.notifications.markRead":
@@ -503,37 +514,42 @@ function scan(
 }
 
 /**
- * Bounded (depth-2) BFS over two edge kinds from the call site's own file:
- * "imported by" (go UP to the owning component) and "calls" (go INTO a
- * locally-called support hook). Depth 2 is what the real pattern needs: the
- * mutation-hook file -> its owning component (`importedBy`, depth 1) -> the
- * component calling a wrapped support hook (`calls`, depth 2) -> the support
- * hook's own file, which holds the direct gate call
- * (`hooks/agent/use-validate-tui-fork-profile-mutation.ts` ->
- * `hooks/agent/use-create-tui-agent.ts` -> `hooks/agent/use-tui-fork-profile-support.ts`
- * is the concrete case this was built against).
+ * The files a gate for this call site may legitimately live in. The walk is
+ * DIRECTIONAL, not a symmetric BFS over the union of both edge kinds:
+ *
+ *   the call site's own file
+ *     + the files that import it          (UP: its owning components)
+ *     + the support hooks it calls        (INTO: its own helpers)
+ *     + the support hooks THOSE COMPONENTS call
+ *
+ * which is exactly the real pattern:
+ * `hooks/agent/use-validate-tui-fork-profile-mutation.ts` ->
+ * `hooks/agent/use-create-tui-agent.ts` (imports it) ->
+ * `hooks/agent/use-tui-fork-profile-support.ts` (which it calls, and which
+ * holds the gate).
+ *
+ * What it must NEVER do is go UP from a file it went INTO. Every
+ * `useHostMutation` call site imports `hooks/host/use-host-query.ts`, so one
+ * `importedBy` step off that hub reaches every other mutation hook in the app.
+ * A symmetric depth-2 BFS did exactly that: measured from a deliberately
+ * ungated `host.restart` fixture that nothing imports, the candidate set was
+ * 391 files and included `settings/panels/host-overview-panel.tsx` - the one
+ * unrelated file that gates `host.restart` - so the fixture passed. That made
+ * the scan vacuous for every method gated anywhere, which is most of them.
  */
 function gateCandidateFiles(
   file: string,
   result: ScanResult,
 ): ReadonlySet<string> {
   const visited = new Set<string>([file]);
-  let frontier = [file];
-  for (let depth = 0; depth < 2; depth++) {
-    const next: string[] = [];
-    for (const node of frontier) {
-      const neighbors = [
-        ...(result.importedBy.get(node) ?? []),
-        ...(result.callsGraph.get(node) ?? []),
-      ];
-      for (const neighbor of neighbors) {
-        if (!visited.has(neighbor)) {
-          visited.add(neighbor);
-          next.push(neighbor);
-        }
-      }
+  // INTO: helpers this file calls directly.
+  for (const target of result.callsGraph.get(file) ?? []) visited.add(target);
+  // UP: the components that own this hook, and the helpers THEY call.
+  for (const importer of result.importedBy.get(file) ?? []) {
+    visited.add(importer);
+    for (const target of result.callsGraph.get(importer) ?? []) {
+      visited.add(target);
     }
-    frontier = next;
   }
   return visited;
 }

@@ -88,16 +88,18 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 
 const invalidateQueriesMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 /**
- * Stands in for the query cache's `getQueryData` read the `auto` gate makes
- * (`hostUnderstandsAutoPermissionMode`). The real module is mocked wholesale
- * below for `invalidateQueries` already, so this is a second mocked member on
- * the same seam rather than a real `QueryClient`.
+ * A `getQueryData` seam that the `auto` gate no longer uses, kept deliberately
+ * as a TRIPWIRE rather than deleted with the read it once served. The real
+ * module is mocked wholesale below for `invalidateQueries` already, so this is
+ * a second mocked member on the same seam rather than a real `QueryClient`.
  *
- * `value` is answered to EVERY read regardless of key, which on its own would
- * make the one failure that matters invisible: a gate reading the wrong cache
- * slot finds nothing, demotes every `auto`, and leaves every assertion in this
- * file green. So each key is recorded too, and the cached-row test asserts the
- * exact slot `useHostQuery` writes for `agent.gui.listHarnesses`.
+ * `value` is answered to EVERY read regardless of key, so a gate that consults
+ * the cache for anything finds a catalog row saying `auto`. `keys` records
+ * what was asked for, and "demotes auto when the negotiated version is below
+ * the auto line, and never reads the query cache to decide it" asserts it
+ * stays EMPTY - which is how the removal of the cross-method catalog read
+ * stays removed. Without that assertion this harness would be inert: nothing
+ * reads it, and re-adding a cache read would redden nothing.
  */
 const queryDataHarness = vi.hoisted(() => ({
   value: undefined as ListGuiHarnessesResponse | undefined,
@@ -189,9 +191,10 @@ function createStreamBinding(hostId: string): StreamBindingRecord {
 
 /**
  * A stream binding whose `sessionImport.run` negotiated version is
- * `version` rather than the honest-stub's always-`null` - the OTHER of the
- * two facts `hostUnderstandsAutoPermissionMode` can read off, alongside the
- * cached `agent.gui.listHarnesses` row `queryDataHarness` stands in for.
+ * `version` rather than the honest-stub's always-`null` - one of the two
+ * facts `hostUnderstandsAutoPermissionMode` reads, the other being the
+ * advertised manifest (`recordNegotiatedHostManifest`). Both are
+ * `sessionImport.run`'s own line; the harness catalog is not consulted.
  */
 function createStreamBindingWithSchemaVersion(
   hostId: string,
@@ -1048,6 +1051,13 @@ describe("<SessionImportRunController />", () => {
         // moved past the required minor within the same major still
         // understands `auto`.
         expect(requireInstance(1).permissionMode).toBe("auto");
+        // The cache tripwire on the FALL-THROUGH path. Its sibling in "never
+        // reads the query cache to decide it" cannot cover this: that case's
+        // negotiated version is below the line, so the gate returns before it
+        // ever reaches the manifest branch - which is precisely where the
+        // removed `agent.gui.listHarnesses` read used to sit. This case has a
+        // `null` negotiated version, so it runs the whole function.
+        expect(queryDataHarness.keys).toEqual([]);
       });
 
       it("demotes when the advertised sessionImport.run manifest is below the required minor", () => {
@@ -1120,7 +1130,13 @@ describe("<SessionImportRunController />", () => {
         recordNegotiatedHostManifest("host-auto-manifest-higher-major", {
           "sessionImport.run": {
             major: sessionImportRunV12.schemaVersion.major + 1,
-            minor: 0,
+            // The minor must CLEAR the required floor, or this case cannot
+            // tell the two implementations apart: with `minor: 0` a relaxed
+            // `major >= required.major` still fails on the minor comparison
+            // and demotes anyway, so the test passes against `>=` and `===`
+            // alike and pins nothing. Measured - relaxing the major to `>=`
+            // left all 28 cases green until this fixture cleared the floor.
+            minor: sessionImportRunV12.schemaVersion.minor + 1,
           },
         });
         render(<SessionImportRunController />);
@@ -1148,14 +1164,18 @@ describe("<SessionImportRunController />", () => {
 
     // RPC versions are negotiated PER METHOD (root AGENTS.md): a completed
     // `sessionImport.run` handshake is authoritative on `sessionImport.run`
-    // in both directions, and a cached `agent.gui.listHarnesses` catalog row
-    // must never override it. Before this fix a non-null negotiated version
-    // was only a POSITIVE proof - when it was below the `auto` line the code
-    // fell through to the catalog anyway, which could still say `auto` and
-    // send it into an OPEN request the negotiated version had just shown this
-    // method rejects.
+    // in both directions, and no other method's fact may override it.
+    //
+    // This started as "a cached `agent.gui.listHarnesses` row must not
+    // override the negotiated version". That framing is now obsolete in the
+    // strongest possible way: the gate does not consult the catalog - or the
+    // query cache at all - on this path any more, so there is no override
+    // left to lose to. The catalog row below is therefore a NEGATIVE control,
+    // seeded to say `auto` precisely so it can be shown to change nothing,
+    // and the recorded-keys assertion is what turns "the catalog is not
+    // evidence" from a comment into something that can fail.
     describe("the negotiated sessionImport.run version is authoritative", () => {
-      it("demotes auto when the negotiated version is below the auto line, even with a cached-auto catalog row", () => {
+      it("demotes auto when the negotiated version is below the auto line, and never reads the query cache to decide it", () => {
         streamBinding.current = createStreamBindingWithSchemaVersion(
           "host-auto-negotiated-below-cached-auto",
           { major: 1, minor: 1 },
@@ -1201,10 +1221,20 @@ describe("<SessionImportRunController />", () => {
 
         // FALSIFICATION: delete the
         // `if (versionIsBelow(negotiated, required)) return false;` line and
-        // this goes green with 'auto' - the cached catalog row alone would be
-        // enough to pass the gate over a negotiated `1.1` that cannot parse
-        // it.
+        // this goes red - a negotiated `1.1` that cannot parse `auto` would
+        // fall through to the manifest and send it anyway.
         expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+        // The catalog row seeded above is answered to EVERY `getQueryData`
+        // key, so if the gate read the cache at all it would find an `auto`
+        // row. It reads nothing: per-method negotiation is decided from the
+        // negotiated line and the advertised manifest, both `sessionImport.run`.
+        //
+        // FALSIFICATION: restore any `queryClient.getQueryData(...)` read to
+        // `hostUnderstandsAutoPermissionMode` and this goes red even if the
+        // demotion above still holds - which is the point, since that is the
+        // cross-method inference the round removed and nothing else notices
+        // its return.
+        expect(queryDataHarness.keys).toEqual([]);
       });
 
       // Control for the case above: at the `auto` line itself, negotiated
@@ -1255,6 +1285,48 @@ describe("<SessionImportRunController />", () => {
         // 'auto_accept_edits' - a live session on a higher major would then
         // veto the advertised manifest instead of deferring to it.
         expect(requireInstance(1).permissionMode).toBe("auto");
+      });
+
+      // The LIVE-session half of the exact-major rule, which the case above
+      // cannot pin: there the manifest answers `true` regardless, so relaxing
+      // `negotiated.major === required.major` to `>=` changes nothing. Here
+      // there is no manifest at all, so the negotiated read is the only thing
+      // that could return `true` - and it must not, because a higher major is
+      // a DIFFERENT wire contract, not a newer one.
+      //
+      // The minor deliberately clears the required floor. With `minor: 0` a
+      // relaxed `>=` would still fail the minor comparison and demote anyway,
+      // so the case would assert against its own input and pin nothing - the
+      // same trap the higher-major manifest fixture fell into.
+      it("demotes when the negotiated sessionImport.run version is on a higher major and no manifest proves it", () => {
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-negotiated-higher-major-unproven",
+          {
+            major: sessionImportRunV12.schemaVersion.major + 1,
+            minor: sessionImportRunV12.schemaVersion.minor + 1,
+          },
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        // FALSIFICATION: relax the live-session check to
+        // `negotiated.major >= required.major` and this goes red with 'auto' -
+        // the import would ride a major this client has never negotiated.
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
       });
     });
   });
