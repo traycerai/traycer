@@ -28,6 +28,7 @@ import {
 } from "@/lib/composer/landing-image-store";
 import { queryClient } from "@/lib/query-client";
 import { prepareSavedDraft } from "@/lib/tab-recovery/saved-draft";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { ClosedHeaderTab } from "@/lib/tab-recovery/history";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import {
@@ -278,6 +279,15 @@ let originalCreateObjectURLDescriptor: PropertyDescriptor | undefined;
 
 describe("prepareSavedDraft", () => {
   beforeEach(async () => {
+    // Signed in, as production is whenever a saved draft can reach a host:
+    // `resolveNamedHostClient` answers only for an established account, and
+    // the blob transport's write-back fence requires an auth state allowed to
+    // serve the read. Without this the fixture modelled a recovery no signed
+    // -out window could perform.
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "owner-1", username: "owner-1" },
+    });
     for (const hash of await imageHashKeys()) {
       await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
