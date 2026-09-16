@@ -16,6 +16,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   useCachedWorktreeEnrichment,
+  useRevalidateStaleWorktreeActivity,
   useWorktreeActivityEnrichment,
 } from "@/components/settings/panels/worktrees-enrichment";
 import {
@@ -601,6 +602,46 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       await vi.advanceTimersByTimeAsync(10_000);
     });
     expect(requests).toHaveLength(2);
+  });
+
+  it("does not poll intentionally omitted PR probes for local, detached, or at-base rows", async () => {
+    vi.useFakeTimers();
+    const entries: WorktreeHostEntryV16[] = [
+      { ...enrichedEntry("/wt/local", "local"), repoIdentifier: null },
+      { ...enrichedEntry("/wt/detached", "detached"), branch: null },
+      { ...enrichedEntry("/wt/base", "base"), atBaseCommit: true },
+    ];
+    const paths = entries.map((entry) => entry.worktreePath);
+    const requests: string[] = [];
+    const fixture = createFixture(
+      new Map(entries.map((entry) => [entry.worktreePath, entry])),
+      (path) => requests.push(path),
+      null,
+      new QueryClient(),
+    );
+    const { result } = renderHook(
+      () =>
+        useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          NO_SWEEP_PATHS,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      result.current.reportVisiblePaths(paths);
+      await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+    });
+    expect(requests).toEqual(paths);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+    expect(requests).toEqual(paths);
+    expect(result.current.erroredPaths.size).toBe(0);
   });
 
   it("stops cold PR refetching after the bounded retry budget", async () => {
@@ -1234,6 +1275,103 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         );
       });
     });
+  });
+
+  it("re-probes warm activity when the inventory advances, without looping on an unchanged response", async () => {
+    const cached = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      prState: "none" as const,
+    };
+    const rows = new Map([[cached.worktreePath, cached]]);
+    const requests: string[] = [];
+    const fixture = createFixture(
+      rows,
+      (path) => requests.push(path),
+      null,
+      createAppQueryClient(),
+    );
+    seedEnriched(fixture.queryClient, cached);
+    const { result, rerender } = renderHook(
+      ({ base }) => {
+        const activity = useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          [cached.worktreePath],
+        );
+        useRevalidateStaleWorktreeActivity(
+          HOST_ID,
+          true,
+          [base],
+          activity.enrichedByPath,
+        );
+        return activity;
+      },
+      { initialProps: { base: cached }, wrapper: fixture.Wrapper },
+    );
+    expect(requests).toEqual([]);
+    const newer = { ...cached, resolvedAt: 2 };
+    rerender({ base: newer });
+    await waitFor(() => expect(requests).toEqual([cached.worktreePath]));
+    await waitFor(() =>
+      expect(
+        fixture.queryClient.getQueryState(perPathKey(cached.worktreePath))
+          ?.fetchStatus,
+      ).toBe("idle"),
+    );
+    // The host returned the older revision again. It remains gated for delete,
+    // but neither a new Map identity nor another render may retry endlessly.
+    rerender({ base: { ...newer } });
+    expect(requests).toEqual([cached.worktreePath]);
+    expect(
+      result.current.enrichedByPath.get(cached.worktreePath)?.resolvedAt,
+    ).toBe(1);
+    const latest = { ...cached, resolvedAt: 3 };
+    rows.set(cached.worktreePath, latest);
+    rerender({ base: latest });
+    await waitFor(() =>
+      expect(
+        result.current.enrichedByPath.get(cached.worktreePath)?.resolvedAt,
+      ).toBe(3),
+    );
+    expect(requests).toEqual([cached.worktreePath, cached.worktreePath]);
+  });
+
+  it("keeps stale-activity invalidation scoped to a reachable host", () => {
+    const qc = new QueryClient();
+    const cached = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      prState: "none" as const,
+    };
+    const newer = { ...cached, resolvedAt: 2 };
+    const overlay = new Map([[cached.worktreePath, cached]]);
+    seedEnriched(qc, cached);
+    const otherHostKey = [...perPathKey(cached.worktreePath)];
+    otherHostKey[1] = "other-host";
+    qc.setQueryData(otherHostKey, { worktrees: [cached], nextCursor: null });
+    const { rerender } = renderHook(
+      ({ reachable }) =>
+        useRevalidateStaleWorktreeActivity(
+          HOST_ID,
+          reachable,
+          [newer],
+          overlay,
+        ),
+      {
+        initialProps: { reachable: false },
+        wrapper: ({ children }: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        ),
+      },
+    );
+    expect(
+      qc.getQueryState(perPathKey(cached.worktreePath))?.isInvalidated,
+    ).toBe(false);
+    rerender({ reachable: true });
+    expect(
+      qc.getQueryState(perPathKey(cached.worktreePath))?.isInvalidated,
+    ).toBe(true);
+    expect(qc.getQueryState(otherHostKey)?.isInvalidated).toBe(false);
   });
 
   describe("overlay identity stability (render-churn regression)", () => {

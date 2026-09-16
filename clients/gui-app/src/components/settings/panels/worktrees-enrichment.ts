@@ -64,9 +64,9 @@ const WORKTREE_ENRICH_DEBOUNCE_MS = 80;
 // refetch picks up - and on a busy fleet those probes take tens of seconds to
 // drain (field-observed enrichment settles of 45-80s), so a short budget
 // abandons rows as permanently "Checking…" long before the host ever answers.
-// `null` always means probe-pending (a settled no-PR answer is `"none"`), so
-// patience is what converges; the cap + budget still bound a pathological
-// host, and a refresh re-grants one budget as before.
+// Null is pending only when the host schedules a PR probe for that row (see
+// worktreeHasColdPrState). The cap and budget bound a pathological host, and
+// a refresh re-grants one budget as before.
 const WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS = 10;
 const WORKTREE_COLD_PR_REFETCH_BASE_MS = 750;
 const WORKTREE_COLD_PR_REFETCH_MAX_DELAY_MS = 20_000;
@@ -92,6 +92,61 @@ const WORKTREE_SWEEP_CHUNK_SIZE = 8;
 // for a quiet window instead of serializing the fleet once per chunk while
 // the sweep converges.
 const WORKTREE_ACTIVITY_PERSIST_DEBOUNCE_MS = 1_500;
+
+/** Revalidate activity when a newer inventory row makes it unsafe to use. */
+export function useRevalidateStaleWorktreeActivity(
+  hostId: string | null,
+  reachable: boolean,
+  worktrees: readonly WorktreeHostEntryV14[],
+  enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>,
+): void {
+  const queryClient = useQueryClient();
+  const requestedRef = useRef<{
+    hostId: string | null;
+    resolvedAtByPath: Map<string, number>;
+  }>({ hostId, resolvedAtByPath: new Map() });
+  useEffect(() => {
+    if (requestedRef.current.hostId !== hostId) {
+      requestedRef.current = { hostId, resolvedAtByPath: new Map() };
+    }
+    if (hostId === null || !reachable) return;
+    const requested = requestedRef.current.resolvedAtByPath;
+    const listedPaths = new Set(worktrees.map((entry) => entry.worktreePath));
+    for (const path of requested.keys()) {
+      if (!listedPaths.has(path)) requested.delete(path);
+    }
+    const stalePaths = new Set<string>();
+    for (const entry of worktrees) {
+      const enriched = enrichedByPath.get(entry.worktreePath);
+      if (
+        entry.resolvedAt === null ||
+        enriched === undefined ||
+        enriched.resolvedAt === null ||
+        // Cold PR facts already have a bounded retry ledger. Re-invalidating
+        // them on each inventory revision would continually renew its budget.
+        worktreeHasColdPrState(enriched) ||
+        enriched.resolvedAt >= entry.resolvedAt ||
+        (requested.get(entry.worktreePath) ?? -Infinity) >= entry.resolvedAt
+      ) {
+        continue;
+      }
+      // One request per inventory revision. A failed or unchanged response
+      // must not trigger an effect/refetch loop; normal retry budgets apply.
+      requested.set(entry.worktreePath, entry.resolvedAt);
+      stalePaths.add(entry.worktreePath);
+    }
+    if (stalePaths.size === 0) return;
+    // Visible observers refetch in their existing batcher. Off-screen paths
+    // are marked stale for the bounded sweep, never fetched all at once.
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
+      predicate: (query) => {
+        const path = perPathEnrichmentQueryPath(query.queryKey);
+        return path !== null && stalePaths.has(path);
+      },
+    });
+  }, [hostId, reachable, worktrees, enrichedByPath, queryClient]);
+}
 
 interface ColdPrRefetchState {
   readonly attempts: number;
@@ -164,8 +219,8 @@ interface SweepExhaustionState {
   readonly paths: ReadonlySet<string>;
 }
 
-// `prState === null` = "not yet probed" (distinct from `"none"` = probed, no
-// PR): the host served a stale/cold row and scheduled a background `gh` probe
+// For rows eligible for PR discovery, null means "not yet probed" (distinct
+// from "none" = probed, no PR). The host schedules a background `gh` probe
 // whose result never re-emits; only a refetch picks the warmed fact up. A
 // SUBMODULE leg counts too - a superproject can be proven `merged` while an
 // owned submodule's PR fact is still warming (the detached-submodule shape),
@@ -173,10 +228,19 @@ interface SweepExhaustionState {
 function responseHasColdPrState(
   response: WorktreeListAllForHostResponseV14,
 ): boolean {
-  return response.worktrees.some(
-    (entry) =>
-      entry.prState === null ||
-      entry.submodules.some((submodule) => submodule.prState === null),
+  return response.worktrees.some(worktreeHasColdPrState);
+}
+
+function worktreeHasColdPrState(entry: WorktreeHostEntryV14): boolean {
+  // The host deliberately skips the superproject PR probe for at-base rows,
+  // local repositories, and detached HEADs. Their null is not a pending probe.
+  // Owned submodules still need their independent checks in every case.
+  return (
+    (entry.prState === null &&
+      entry.repoIdentifier !== null &&
+      entry.branch !== null &&
+      !entry.atBaseCommit) ||
+    entry.submodules.some((submodule) => submodule.prState === null)
   );
 }
 
