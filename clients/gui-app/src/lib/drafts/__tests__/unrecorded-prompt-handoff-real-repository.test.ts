@@ -237,7 +237,12 @@ describe("unrecorded prompt handoff - real repository round trip (R5F1)", () => 
     // The words survive, and the entry states the loss rather than hiding it.
     const rendered = contentText(snapshot.entry.content);
     expect(rendered).toContain(text);
-    expect(rendered).toContain("A browser annotation was not saved with it");
+    expect(rendered).toContain("A browser annotation was not saved with it.");
+    // And it states NO cause: `prepareSidecarCrop` drops a record for an
+    // unreadable resolver, a failed signature check, or a decode/hashing
+    // failure alike, and `droppedAnnotations` is a count rather than a
+    // diagnosis. Naming one would be a guess printed as a fact.
+    expect(rendered).not.toContain("could not be read");
   });
 
   it("a hash-only prompt whose bytes are NOT resolvable survives save -> restore as text-only, with a qualification saying the image was dropped", async () => {

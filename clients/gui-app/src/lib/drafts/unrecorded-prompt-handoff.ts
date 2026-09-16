@@ -269,8 +269,24 @@ function teardownQualification(args: {
       args.droppedAnnotations === 1
         ? "A browser annotation was"
         : `${args.droppedAnnotations} browser annotations were`;
-    const crops = args.droppedAnnotations === 1 ? "its crop" : "their crops";
-    clauses.push(`${subject} not saved with it: ${crops} could not be read.`);
+    // NO reason, on either path, because neither one has the annotation's.
+    //
+    // The capture reports a COUNT: `prepareSidecarCrop` drops a record when
+    // the resolver returns nothing, when the signature check fails, and from
+    // a bare catch around preparation, decoding and hashing alike.
+    //
+    // The text-only path looks like it knows - it has a `DroppedImageCause` -
+    // but that cause belongs to the DOCUMENT image, and reusing it blames the
+    // crop for something that did not happen to it. Two measured cases: a
+    // capacity refusal, where the crop had already decoded successfully; and
+    // a missing document image, where the resolver aborts before annotation
+    // capture is ever reached, so the crop is not merely readable but
+    // untouched. Records are dropped there because this path carries no blobs
+    // at all - a structural decision, not a failure of these bytes.
+    //
+    // A wrong reason is worse than none: it points the reader at a remedy
+    // that does not apply.
+    clauses.push(`${subject} not saved with it.`);
   }
   return [`Unsent — ${args.reason}`, ...clauses].join(" ");
 }
