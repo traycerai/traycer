@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAgentSendCommand } from "../agent-send";
 import { runMonitor } from "../monitor";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { callHostRpc } from "../../internal/host-rpc";
+import { createOutput } from "../../runner/output";
+import type { CommandContext } from "../../runner/runner";
+import { resolveRuntimeContext } from "../../runner/runtime";
 
 // Drive the monitor's recovery state machine with a mocked WsStreamClient and a
 // mocked revalidator: each `subscribe()` returns a fake session whose
@@ -123,6 +127,24 @@ vi.mock("../../host/pid-metadata", async (importOriginal) => {
 const resolveAuthMock = vi.mocked(resolveHostAuth);
 const pidMock = vi.mocked(readHostPidMetadata);
 const callHostRpcMock = vi.mocked(callHostRpc);
+
+function makeCommandContext(): CommandContext {
+  const runtime = resolveRuntimeContext(
+    {
+      json: false,
+      quiet: false,
+      noProgress: false,
+      noBootstrap: false,
+    },
+    {},
+  );
+  const output = createOutput(runtime);
+  return {
+    runtime,
+    output,
+    progress: (info) => output.progress(info),
+  };
+}
 
 function unauthorizedFatal() {
   return {
@@ -431,10 +453,119 @@ describe("stop initiator notices (negotiated @1.3)", () => {
 
     const output = stdoutSpy.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("was stopped by the user");
+    expect(output).not.toContain("traycer agent send --to");
 
     stdoutSpy.mockRestore();
     void result;
   });
+});
+
+describe("follow-up inactivity notices (negotiated @1.3)", () => {
+  const nonCancellationReasons = [
+    { reason: "turn-ended", detail: null },
+    { reason: "exited", detail: null },
+    { reason: "quiet", detail: null },
+    { reason: "user-stopped", detail: null },
+    { reason: "errored", detail: "rate limited" },
+    { reason: "awaiting-input", detail: "needs approval" },
+  ] as const;
+
+  it.each(nonCancellationReasons)(
+    "emits a runnable expected-reply command for $reason",
+    async ({ reason, detail }) => {
+      const stdoutSpy = vi
+        .spyOn(process.stdout, "write")
+        .mockImplementation(() => true);
+      const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch(
+        (e) => e,
+      );
+      try {
+        await flush(0);
+
+        sessions[0].serverFrame?.({
+          kind: "notice",
+          hasBinaryPayload: false,
+          notice: {
+            kind: "inactivity",
+            senderAgentId: "a1",
+            responseId: "response-1",
+            receiverAgentId: "receiver-1",
+            receiverTitle: "Worker",
+            receiverHarnessId: "codex",
+            epicId: "e1",
+            reason,
+            detail,
+            droppedReceivers: null,
+            stopInitiator: null,
+            noticedAt: 123,
+          },
+        });
+
+        const output = stdoutSpy.mock.calls
+          .map((call) => String(call[0]))
+          .join("");
+        const sendLine = output
+          .split("\n")
+          .find((line) => line.includes("traycer agent send --to"));
+        expect(sendLine).toBeDefined();
+        if (sendLine === undefined) {
+          throw new Error("expected inactivity notice follow-up command");
+        }
+        const commandMatch =
+          /^\[traycer inbox\] the request is still open; a follow-up can be sent with: traycer agent send --to ([^\s]+)( --expect-reply)? --message "([^"]+)"(?: --response-id ([^\s]+))?$/.exec(
+            sendLine,
+          );
+        expect(commandMatch).not.toBeNull();
+        if (commandMatch === null) {
+          throw new Error("expected parseable inactivity follow-up command");
+        }
+        const receiverId = commandMatch[1];
+        const expectReply = commandMatch[2] === " --expect-reply";
+        const prompt = commandMatch[3];
+        const responseId = commandMatch[4] ?? null;
+        if (receiverId === undefined || prompt === undefined) {
+          throw new Error(
+            "inactivity follow-up command was missing an argument",
+          );
+        }
+        expect(receiverId).toBe("receiver-1");
+        expect(expectReply).toBe(true);
+        expect(responseId).toBeNull();
+        expect(sendLine).not.toContain("--response-id");
+
+        callHostRpcMock.mockResolvedValue({ responseId });
+        const command = buildAgentSendCommand({
+          epicId: "e1",
+          senderAgentId: "a1",
+          to: receiverId,
+          message: prompt,
+          expectReply,
+          responseId,
+        });
+        const commandResult = await command(makeCommandContext());
+
+        expect(commandResult.data).toEqual({ responseId });
+        expect(callHostRpcMock).toHaveBeenCalledWith(
+          "agent.sendMessage",
+          expect.objectContaining({
+            senderAgentId: "a1",
+            epicId: "e1",
+            receiverAgentId: receiverId,
+            prompt,
+            expectReply,
+            responseId,
+          }),
+        );
+        expect(output).toContain("omit --response-id for this follow-up");
+        expect(output).toContain(
+          "Repeated --expect-reply sends from you to the same recipient reuse its still-open thread",
+        );
+      } finally {
+        stdoutSpy.mockRestore();
+        void result;
+      }
+    },
+  );
 });
 
 describe("mixed-version inbox message frames", () => {
