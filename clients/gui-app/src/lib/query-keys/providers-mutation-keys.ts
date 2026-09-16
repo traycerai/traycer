@@ -34,7 +34,8 @@ export const providersMutationKeys = {
   recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,
   refresh: () => ["providers.refresh"] as const,
-  mcpMutate: () => ["providers.mcpMutate"] as const,
+  mcpMutate: (hostId: string | null) =>
+    ["providers.mcpMutate", hostId] as const,
   mcpDiscover: () => ["providers.mcpDiscover"] as const,
   mcpAuth: () => ["providers.mcpAuth"] as const,
   modelProviderAuth: () => ["providers.modelProviderAuth"] as const,

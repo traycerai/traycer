@@ -28,6 +28,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
 import type { McpListData } from "@/hooks/providers/native-response-map";
 import { useProvidersMcpDiscover } from "@/hooks/providers/use-providers-mcp-discover-mutation";
+import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
@@ -239,6 +240,7 @@ interface Fixture {
   readonly discoverRequestCount: () => number;
   readonly listRequestCount: () => number;
   readonly mutateRequestCount: () => number;
+  readonly mutateRequestHosts: () => readonly string[];
   readonly enqueue: (key: ListKey, outcome: ListOutcome) => void;
   readonly enqueueMutate: (outcome: MutationOutcome) => void;
   readonly enqueueDiscover: (outcome: DiscoverOutcome) => void;
@@ -274,6 +276,7 @@ function createFixture(): Fixture {
   let discoverRequestCount = 0;
   let listRequestCount = 0;
   let mutateRequestCount = 0;
+  const mutateRequestHosts: string[] = [];
 
   const enqueue = (key: ListKey, outcome: ListOutcome): void => {
     const current = outcomes.get(listKey(key)) ?? [];
@@ -338,6 +341,7 @@ function createFixture(): Fixture {
           },
           "providers.nativeMutate": () => {
             mutateRequestCount += 1;
+            mutateRequestHosts.push(hostId);
             const outcome = mutateOutcomes.shift() ?? {
               kind: "success" as const,
               servers: [],
@@ -370,6 +374,7 @@ function createFixture(): Fixture {
     discoverRequestCount: () => discoverRequestCount,
     listRequestCount: () => listRequestCount,
     mutateRequestCount: () => mutateRequestCount,
+    mutateRequestHosts: () => mutateRequestHosts,
     enqueue,
     enqueueMutate,
     enqueueDiscover,
@@ -813,6 +818,211 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     expect(
       screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("applies concurrent mutations for both rows before a failed list refresh", async () => {
+    const fixture = createFixture();
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [server("server-a"), server("server-b")],
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "error",
+      error: new Error("list refresh failed after mutations"),
+    });
+    let resolveFirst:
+      | ((response: ProvidersNativeMutateResponse) => void)
+      | null = null;
+    let resolveSecond:
+      | ((response: ProvidersNativeMutateResponse) => void)
+      | null = null;
+    fixture.enqueueMutate({
+      kind: "pending",
+      promise: new Promise<ProvidersNativeMutateResponse>((resolve) => {
+        resolveFirst = resolve;
+      }),
+    });
+    fixture.enqueueMutate({
+      kind: "pending",
+      promise: new Promise<ProvidersNativeMutateResponse>((resolve) => {
+        resolveSecond = resolve;
+      }),
+    });
+    renderTab(fixture, "codex");
+    await screen.findByText("server-a");
+    await screen.findByText("server-b");
+
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+      wrapper: fixture.Wrapper,
+    });
+    let firstPromise: Promise<unknown> | null = null;
+    let secondPromise: Promise<unknown> | null = null;
+    act(() => {
+      firstPromise = mutateRendered.result.current.mutateAsync({
+        providerId: "codex",
+        scope: GLOBAL,
+        workspaceRoot: null,
+        mutation: { action: "toggleServer", name: "server-a", enabled: false },
+        suppressToast: undefined,
+      });
+      secondPromise = mutateRendered.result.current.mutateAsync({
+        providerId: "codex",
+        scope: GLOBAL,
+        workspaceRoot: null,
+        mutation: { action: "toggleServer", name: "server-b", enabled: false },
+        suppressToast: undefined,
+      });
+    });
+    await waitFor(() =>
+      expect(fixture.mutateRequestCount()).toBeGreaterThanOrEqual(1),
+    );
+
+    await act(async () => {
+      resolveFirst?.(
+        mutateResponse([
+          { ...server("server-a"), enabled: false },
+          server("server-b"),
+        ]),
+      );
+      await firstPromise;
+    });
+    await waitFor(() => expect(fixture.mutateRequestCount()).toBe(2));
+    await act(async () => {
+      resolveSecond?.(
+        mutateResponse([
+          { ...server("server-a"), enabled: false },
+          { ...server("server-b"), enabled: false },
+        ]),
+      );
+      await secondPromise;
+    });
+
+    expect(fixture.mutateRequestHosts()).toEqual([HOST_A, HOST_A]);
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("switch", { name: "Enable server-a" })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+      expect(
+        screen
+          .getByRole("switch", { name: "Enable server-b" })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+    });
+
+    await refetchMcpList(fixture);
+    await screen.findByText("Couldn't refresh MCP servers");
+    await screen.findByText("list refresh failed after mutations");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    expect(screen.getByText("server-a")).toBeDefined();
+    expect(screen.getByText("server-b")).toBeDefined();
+    expect(
+      screen
+        .getByRole("switch", { name: "Enable server-a" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("switch", { name: "Enable server-b" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
+  it("runs a queued mutation on its original host after the hook switches hosts", async () => {
+    const fixture = createFixture();
+    const aKey = providersNativeQueryKeys.mcpList(HOST_A, {
+      providerId: "codex",
+      scope: GLOBAL,
+      workspaceRoot: null,
+    });
+    // Keep the seeded A cache alive after unmounting the viewer under test.
+    fixture.queryClient.setQueryDefaults(aKey, { gcTime: Infinity });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [server("server-a")],
+    });
+    let resolveFirst:
+      | ((response: ProvidersNativeMutateResponse) => void)
+      | null = null;
+    fixture.enqueueMutate({
+      kind: "pending",
+      promise: new Promise<ProvidersNativeMutateResponse>((resolve) => {
+        resolveFirst = resolve;
+      }),
+    });
+    let resolveSecond:
+      | ((response: ProvidersNativeMutateResponse) => void)
+      | null = null;
+    fixture.enqueueMutate({
+      kind: "pending",
+      promise: new Promise<ProvidersNativeMutateResponse>((resolve) => {
+        resolveSecond = resolve;
+      }),
+    });
+    const seedTab = renderTab(fixture, "codex");
+    await screen.findByText("server-a");
+    seedTab.unmount();
+
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+      wrapper: fixture.Wrapper,
+    });
+    let firstPromise: Promise<unknown> | null = null;
+    let secondPromise: Promise<unknown> | null = null;
+    act(() => {
+      firstPromise = mutateRendered.result.current.mutateAsync({
+        providerId: "codex",
+        scope: GLOBAL,
+        workspaceRoot: null,
+        mutation: { action: "toggleServer", name: "server-a", enabled: false },
+        suppressToast: undefined,
+      });
+      secondPromise = mutateRendered.result.current.mutateAsync({
+        providerId: "codex",
+        scope: GLOBAL,
+        workspaceRoot: null,
+        mutation: { action: "toggleServer", name: "server-a", enabled: false },
+        suppressToast: undefined,
+      });
+    });
+    await waitFor(() => expect(fixture.mutateRequestCount()).toBe(1));
+
+    const hostBClient = fixture.clients.get(HOST_B);
+    if (hostBClient === undefined) throw new Error("missing host-b client");
+    runtimeMocks.client = hostBClient;
+    mutateRendered.rerender();
+    expect(fixture.mutateRequestCount()).toBe(1);
+
+    await act(() => {
+      resolveFirst?.(mutateResponse([server("server-a")]));
+      return Promise.resolve();
+    });
+    await waitFor(() => expect(fixture.mutateRequestCount()).toBe(2));
+    await act(() => {
+      resolveSecond?.(
+        mutateResponse([{ ...server("server-a"), enabled: false }]),
+      );
+      return Promise.resolve();
+    });
+    await act(async () => {
+      await firstPromise;
+      await secondPromise;
+    });
+
+    expect(fixture.mutateRequestHosts()).toEqual([HOST_A, HOST_A]);
+    expect(
+      fixture.queryClient.getQueryData<McpListData>(aKey)?.servers[0]?.enabled,
+    ).toBe(false);
+    const bKey = providersNativeQueryKeys.mcpList(HOST_B, {
+      providerId: "codex",
+      scope: GLOBAL,
+      workspaceRoot: null,
+    });
+    expect(fixture.queryClient.getQueryData<McpListData>(bKey)).toBeUndefined();
   });
 
   it("does not let an older discovery overwrite a newer complete list with identical contents", async () => {
