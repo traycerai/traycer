@@ -125,7 +125,10 @@ import { WorktreeAutoCleanupChip } from "@/components/settings/panels/worktree-a
 import { WorktreeCleanupHistory } from "@/components/settings/panels/worktree-cleanup-history";
 import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
-import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
+import {
+  useRevalidateStaleWorktreeActivity,
+  useWorktreeActivityEnrichment,
+} from "@/components/settings/panels/worktrees-enrichment";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import {
   navigateToTabIntent,
@@ -330,7 +333,7 @@ function WorktreesToolbar(props: {
   });
 
   return (
-    <div className="flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
+    <div className="@container/worktrees-toolbar flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
       {/* The slot on the left held first a host `<Select>`, then a readout of
           the scoped host. Both are gone - the sidebar names that host one row
           away and never scrolls - and it now carries the automatic-cleanup
@@ -338,13 +341,19 @@ function WorktreesToolbar(props: {
       <div className="flex flex-wrap items-center gap-2">
         {cleanup}
         <div
-          className="ml-auto flex shrink-0 items-center gap-2"
+          className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2"
           data-testid="worktrees-toolbar-actions"
         >
           {selectionControls}
-          {refresh.refreshing ? null : (
+          <span
+            aria-hidden={refresh.refreshing}
+            className={cn(
+              "hidden @sm/worktrees-toolbar:inline",
+              refresh.refreshing && "invisible",
+            )}
+          >
             <WorktreesUpdatedAgoLabel updatedAt={lastUpdatedAt} />
-          )}
+          </span>
           <Button
             type="button"
             variant="outline"
@@ -405,8 +414,8 @@ function WorktreesFilterControls(props: {
   readonly onSortModeChange: (mode: WorktreeSortMode) => void;
 }): ReactNode {
   return (
-    <div className="flex items-center gap-2">
-      <div className="relative min-w-0 flex-1">
+    <div className="grid min-w-0 grid-cols-1 items-center gap-2 @xs/worktrees-toolbar:grid-cols-2 @lg/worktrees-toolbar:grid-cols-[minmax(0,1fr)_auto_auto]">
+      <div className="relative min-w-0 @xs/worktrees-toolbar:col-span-2 @lg/worktrees-toolbar:col-span-1">
         <Search
           className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
           aria-hidden
@@ -474,12 +483,23 @@ function WorktreeFilterMenu(props: {
           type="button"
           variant="outline"
           size="sm"
-          className="shrink-0"
+          className="min-w-0"
           data-testid="worktrees-filter-trigger"
           aria-label={`Filter: ${label}`}
         >
           <ListFilter className="size-4" />
-          <span>{label}</span>
+          <span className="grid min-w-0">
+            {/* Reserve every label's intrinsic width without fixed sizing. */}
+            {WORKTREE_TIER_ORDER.map((tier) => (
+              <span
+                key={tier}
+                aria-hidden
+                data-label={WORKTREE_TIER_LABEL[tier]}
+                className="invisible col-start-1 row-start-1 truncate after:content-[attr(data-label)]"
+              />
+            ))}
+            <span className="col-start-1 row-start-1 truncate">{label}</span>
+          </span>
           <ChevronDown className="size-4 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
@@ -532,12 +552,24 @@ function WorktreeSortMenu(props: {
           type="button"
           variant="outline"
           size="sm"
-          className="shrink-0"
+          className="min-w-0"
           data-testid="worktrees-sort-trigger"
           aria-label={`Sort: ${WORKTREE_SORT_LABEL[props.sortMode]}`}
         >
           <ArrowDownWideNarrow className="size-4" />
-          <span>{WORKTREE_SORT_LABEL[props.sortMode]}</span>
+          <span className="grid min-w-0">
+            {Object.entries(WORKTREE_SORT_LABEL).map(([mode, label]) => (
+              <span
+                key={mode}
+                aria-hidden
+                data-label={label}
+                className="invisible col-start-1 row-start-1 truncate after:content-[attr(data-label)]"
+              />
+            ))}
+            <span className="col-start-1 row-start-1 truncate">
+              {WORKTREE_SORT_LABEL[props.sortMode]}
+            </span>
+          </span>
           <ChevronDown className="size-4 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
@@ -614,6 +646,12 @@ function WorktreesBody(props: {
     reachable,
     hostId,
     worktreePaths,
+  );
+  useRevalidateStaleWorktreeActivity(
+    hostId,
+    reachable,
+    listing.worktrees,
+    enrichment.enrichedByPath,
   );
   // Owning-Task titles: tier 1 scans free cloud listTasks caches; tier 2 batches
   // still-unresolved ids through epic.getTaskContexts on this host - a cloud
@@ -1331,18 +1369,11 @@ export function WorktreesList(props: {
     () => new Map(mergedWorktrees.map((entry) => [entry.worktreePath, entry])),
     [mergedWorktrees],
   );
-  // Re-resolve the pending targets against the freshest listing and split into
-  // the rows still eligible to delete vs. the ones dropped (gone from the list,
-  // mid-delete, or regressed to `Checking`). In-use rows stay eligible: the
-  // busy refusal with typed holders opens the force-delete confirm. All
-  // selection is user-driven now, so the remaining confirm-time gates are
-  // "still selectable" and "not Checking"; a hand-picked dirty / ahead row
-  // proceeds with its FRESHEST loss copy (per-row opt-in is intentional). Both
-  // the dialog copy and the confirm action read from this, so what the user
-  // sees is what gets deleted - a row that opened confirmation while
-  // ready/unknown but becomes `Checking` before confirm (e.g. a refresh
-  // re-arms its enrichment) must not delete, matching the rule that
-  // `Checking` rows are never deletable.
+  // Re-resolve execution targets against the freshest listing. Gone,
+  // mid-delete, and checking rows cannot run; in-use rows stay eligible so
+  // the host can return typed holders for force-delete confirmation. Dirty
+  // and ahead rows keep their freshest loss warning. The display resolution
+  // below preserves checking targets while blocking the whole confirmation.
   const pendingResolution = useMemo(() => {
     if (pendingDeleteTargets === null) return null;
     const kept: WorktreeHostEntryV14[] = [];
@@ -1366,23 +1397,52 @@ export function WorktreesList(props: {
     worktreesByPath,
     deleteEnrichmentStateFor,
   ]);
-  const { singleDialog, bulkDeleteSummary } = deriveWorktreeDeleteDialogs(
+  const pendingConfirmation = useMemo(() => {
+    if (pendingResolution === null || pendingDeleteTargets === null) {
+      return { resolution: null, checkingCount: 0 };
+    }
+    const checkingTargets = pendingDeleteTargets.filter(
+      (entry) =>
+        worktreesByPath.has(entry.worktreePath) &&
+        deleteEnrichmentStateFor(entry.worktreePath) === "pending",
+    );
+    const checkingPaths = new Set(
+      checkingTargets.map((entry) => entry.worktreePath),
+    );
+    // Preserve the reviewed cohort while its status refreshes. This copy is
+    // display-only: confirmation stays blocked and execution still re-resolves
+    // every target through pendingResolution below.
+    return {
+      resolution: {
+        kept: [...pendingResolution.kept, ...checkingTargets],
+        dropped: pendingResolution.dropped.filter(
+          (entry) => !checkingPaths.has(entry.worktreePath),
+        ),
+      },
+      checkingCount: checkingTargets.length,
+    };
+  }, [
     pendingResolution,
+    pendingDeleteTargets,
+    worktreesByPath,
+    deleteEnrichmentStateFor,
+  ]);
+  const confirmationBlockedReason =
+    pendingConfirmation.checkingCount > 0
+      ? "Checking worktree status. You can delete once the check finishes."
+      : null;
+  const { singleDialog, bulkDeleteSummary } = deriveWorktreeDeleteDialogs(
+    pendingConfirmation.resolution,
     deleteEnrichmentStateFor,
     visibleWorktrees,
     erroredPaths,
   );
-  // A non-null resolution that drops EVERY pending target (most commonly
-  // because they all regressed to `Checking`) never renders a dialog -
-  // `singleDialogCopy` and `bulkDeleteSummary` are both null for zero kept
-  // targets - so nothing else clears `pendingDeleteTargets`. Left alone, that
-  // stale intent would silently reopen the old confirmation once the rows
-  // settle back to ready/unknown, without the user choosing Delete again.
-  // Clear it and tell the user why, using the same skipped-row message the
-  // confirm-time drop path uses.
+  // A vanished/ineligible cohort closes the confirmation permanently. A
+  // transient status check keeps it visible and blocked instead of flashing a
+  // blank dialog and silently discarding the user's intent.
   useEffect(() => {
-    if (pendingResolution === null) return;
-    const { kept, dropped } = pendingResolution;
+    if (pendingConfirmation.resolution === null) return;
+    const { kept, dropped } = pendingConfirmation.resolution;
     if (kept.length > 0 || dropped.length === 0) return;
     toast.message(
       worktreeDropMessage(
@@ -1391,7 +1451,7 @@ export function WorktreesList(props: {
       ),
     );
     setPendingDeleteTargets(null);
-  }, [pendingResolution, deleteEnrichmentStateFor]);
+  }, [pendingConfirmation.resolution, deleteEnrichmentStateFor]);
   const progressSummary = useMemo(
     () => summarizeWorktreeDeleteRuns(runs),
     [runs],
@@ -1500,6 +1560,7 @@ export function WorktreesList(props: {
 
   const handleConfirm = (): void => {
     if (pendingResolution === null || pendingDeleteTargets === null) return;
+    if (confirmationBlockedReason !== null) return;
     // `pendingResolution` already re-resolved each pending path to its freshest
     // entry and split kept vs. dropped (gone from the list, mid-delete, or
     // regressed to Checking). Start the run on the FRESHEST kept entries, and
@@ -1854,7 +1915,7 @@ export function WorktreesList(props: {
         </div>
 
         <ConfirmDestructiveDialog
-          blockedReason={null}
+          blockedReason={confirmationBlockedReason}
           open={singleDialog.open}
           onOpenChange={(open) => {
             if (!open) setPendingDeleteTargets(null);
@@ -1868,6 +1929,7 @@ export function WorktreesList(props: {
         />
         <WorktreeBulkDeleteDialog
           summary={bulkDeleteSummary}
+          blockedReason={confirmationBlockedReason}
           onOpenChange={(open) => {
             if (!open) setPendingDeleteTargets(null);
           }}
@@ -2169,6 +2231,7 @@ function shouldShowWorktreeFilterResolutionStatus(
  */
 function WorktreeBulkDeleteDialog(props: {
   readonly summary: WorktreeBulkDeleteSummary | null;
+  readonly blockedReason: string | null;
   readonly onOpenChange: (open: boolean) => void;
   readonly onConfirm: () => void;
 }): ReactNode {
@@ -2224,6 +2287,11 @@ function WorktreeBulkDeleteDialog(props: {
                     {summary.exclusions}
                   </p>
                 ) : null}
+                {props.blockedReason !== null ? (
+                  <p role="status" className="text-ui-sm text-muted-foreground">
+                    {props.blockedReason}
+                  </p>
+                ) : null}
               </div>
             </div>
             <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
@@ -2255,6 +2323,7 @@ function WorktreeBulkDeleteDialog(props: {
                 type="button"
                 variant="destructive"
                 size="sm"
+                disabled={props.blockedReason !== null}
                 onClick={props.onConfirm}
                 data-testid="confirm-action"
               >
