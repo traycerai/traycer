@@ -12,6 +12,13 @@ import { ManagedCommandOpenInTabButton } from "@/components/managed-commands/man
  */
 export function ManagedCommandTranscriptDoor(props: {
   readonly commandId: string;
+  /**
+   * The host the shell RUNS on when that is not the tab's own - see
+   * `ManagedCommandDoor`. A click already opens there through `onOpen`; this
+   * is what a DRAG out of the door lands the tile on, so the two gestures
+   * name the same host. `null` is the tab's host.
+   */
+  readonly hostId: string | null;
   /** The host no longer has this shell. */
   readonly gone: boolean;
   /** `null` outside a tile, where there is nowhere to open a tab. */
@@ -48,6 +55,7 @@ export function ManagedCommandTranscriptDoor(props: {
   return (
     <ManagedCommandOpenInTabButton
       commandId={commandId}
+      hostId={props.hostId}
       testId={props.testId}
       onOpen={() => {
         onOpen(commandId);

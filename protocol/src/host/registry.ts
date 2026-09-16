@@ -267,6 +267,7 @@ import {
   chatSubscribeV18,
   chatSubscribeV19,
   chatSubscribeV110,
+  chatSubscribeV111,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -11407,7 +11408,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 10,
+      latestMinor: 11,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11448,8 +11449,16 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         9: {
           contract: chatSubscribeV19,
         },
+        // @1.10 is itself frozen as the staging builds shipped it (provider
+        // fallback, no shell host). The shell host on a resume trigger and on
+        // the queued managed-command item re-minted ABOVE it at @1.11; both
+        // keys are defaulted, so a @1.10 peer drops them on parse and nothing
+        // is withheld.
         10: {
           contract: chatSubscribeV110,
+        },
+        11: {
+          contract: chatSubscribeV111,
         },
       },
     },
