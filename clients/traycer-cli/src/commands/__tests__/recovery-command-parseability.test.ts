@@ -1,8 +1,11 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Command } from "commander";
 import { buildProgramWithAgentRoles } from "../../index";
+import {
+  neuterActions,
+  parseCommand as parseCommandWithProgram,
+} from "./command-parse-harness";
 
 // CLI-006 (recovery command parseability audit): every recovery instruction
 // this CLI prints - `terminalCommand` literals Desktop renders as a
@@ -189,47 +192,6 @@ function tokenize(normalized: string): string[] {
   return normalized.split(/\s+/).filter((t) => t.length > 0);
 }
 
-function neuterActions(command: Command): void {
-  command.action(() => undefined);
-  for (const sub of command.commands) neuterActions(sub);
-}
-
-function findSubcommand(parent: Command, name: string): Command | null {
-  for (const child of parent.commands) {
-    if (child.name() === name) return child;
-  }
-  return null;
-}
-
-// Mirrors commander's own greedy subcommand resolution: walk down while the
-// next token names a registered subcommand of the current cursor.
-function resolveCommandPath(
-  program: Command,
-  tokens: readonly string[],
-): Command[] {
-  const path: Command[] = [program];
-  let cursor: Command = program;
-  for (const token of tokens) {
-    const next = findSubcommand(cursor, token);
-    if (next === null) break;
-    path.push(next);
-    cursor = next;
-  }
-  return path;
-}
-
-// Bypasses "required option/argument missing" for level-1 validation, so
-// only unknown options and excess positionals can fail it. Applied along
-// the WHOLE resolved path: `_checkForMissingMandatoryOptions` walks command
-// ancestors, so a required option on an intermediate command would
-// otherwise still trip a level-1-only check.
-function relaxRequiredness(path: readonly Command[]): void {
-  for (const cmd of path) {
-    for (const option of cmd.options) option.mandatory = false;
-    for (const argument of cmd.registeredArguments) argument.required = false;
-  }
-}
-
 async function parseCommand(
   tokens: readonly string[],
   opts: { readonly strict: boolean },
@@ -246,15 +208,7 @@ async function parseCommand(
     writeErr: () => undefined,
     writeOut: () => undefined,
   });
-  if (!opts.strict) {
-    relaxRequiredness(resolveCommandPath(program, tokens));
-  }
-  try {
-    await program.parseAsync(tokens, { from: "user" });
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error };
-  }
+  return parseCommandWithProgram(program, tokens, opts);
 }
 
 function collectCandidates(): FoundCommand[] {
