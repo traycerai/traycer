@@ -7,6 +7,7 @@ import {
 import type { HarnessOption } from "@/components/home/data/landing-options";
 import {
   createComposerToolbarStore,
+  type ComposerToolbarCatalog,
   type ComposerToolbarStore,
 } from "@/stores/composer/composer-toolbar-store";
 
@@ -102,5 +103,55 @@ describe("composer-toolbar-store: the sticky clamp consults BOTH the catalog lin
     const store = createStickyAutoStore(null);
 
     expect(store.getState().permission).toBe("auto");
+  });
+
+  // The clamp above only runs when `setCatalog` decides the catalog CHANGED,
+  // and `sameCatalog` used to compare six fields without this one. A chat whose
+  // line proof flips `true` -> `false` - the host answering later, or the tab
+  // rebinding - therefore hit the early return with `permission` still `auto`,
+  // and the ordinary composer's submit path copies that into `ChatRunSettings`
+  // with no further clamp, so the send died at the projection cliff.
+  //
+  // The second catalog must be a SPREAD of the first: `sameCatalog` compares
+  // `harnesses` and `models` by reference, so rebuilding either array makes the
+  // catalogs differ, re-derives for the wrong reason, and passes with the bug
+  // still present.
+  it("re-derives the clamp when the chat line is the ONLY field that changed", () => {
+    const catalog: ComposerToolbarCatalog = {
+      hostId: HOST_ID,
+      chatLineCarriesAutoMode: true,
+      harnesses: [AUTO_HONORING_CLAUDE],
+      modelsHarnessId: "claude",
+      models: [],
+      modelsLoaded: true,
+      tuiOnly: false,
+    };
+    const store = createComposerToolbarStore({
+      seedKey: "seed-sticky-auto-same-catalog",
+      values: {
+        permission: "auto",
+        selection: {
+          harnessId: "claude",
+          modelSlug: "sonnet-4.5",
+          profileId: null,
+        },
+        reasoning: "",
+        serviceTier: "",
+      },
+      onSettingsChange: null,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: true,
+      hostId: HOST_ID,
+    });
+    store.getState().setCatalog(catalog);
+    expect(store.getState().permission).toBe("auto");
+
+    store.getState().setCatalog({
+      ...catalog,
+      chatLineCarriesAutoMode: false,
+    });
+
+    expect(store.getState().permission).toBe("auto_accept_edits");
+    expect(store.getState().values.permission).toBe("auto");
   });
 });

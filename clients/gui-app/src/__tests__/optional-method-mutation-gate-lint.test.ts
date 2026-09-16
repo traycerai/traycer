@@ -574,11 +574,46 @@ function fileHasGateFor(file: string, method: string): boolean {
   return found;
 }
 
-describe("optional-method mutation gate", () => {
-  it("every useHostMutation-family call targeting an unsupported-degrade method resolves its method statically", () => {
+interface SharedScan {
+  readonly optionalMethods: ReadonlySet<string>;
+  readonly result: ScanResult;
+}
+
+/**
+ * One scan for every case below.
+ *
+ * `parsedFiles` already stops the reparsing, but each `scan` still walked every
+ * cached `SourceFile` twice - once for call sites, once for `callsGraph` - so
+ * three cases deriving it independently paid six whole-tree traversals of the
+ * production graph, plus three registry parses and three directory walks. The
+ * assertions stay separate, which is the part that matters: a failure still
+ * names which property broke. Only the traversal is shared.
+ */
+let memoisedScan: SharedScan | null = null;
+
+function scanOnce(): SharedScan {
+  if (memoisedScan === null) {
     const optionalMethods = findOptionalMethods();
-    const files = collectProductionFiles(SRC_DIR);
-    const { unresolved } = scan(files, optionalMethods);
+    memoisedScan = {
+      optionalMethods,
+      result: scan(collectProductionFiles(SRC_DIR), optionalMethods),
+    };
+  }
+  return memoisedScan;
+}
+
+describe("optional-method mutation gate", () => {
+  // Sharing one scan means one empty scan would make every case below pass
+  // while checking nothing - the population has to be asserted, not assumed.
+  it("scans a non-empty production graph for a non-empty optional-method set", () => {
+    const { optionalMethods, result } = scanOnce();
+
+    expect(optionalMethods.size).toBeGreaterThan(0);
+    expect(result.callSites.length).toBeGreaterThan(0);
+  });
+
+  it("every useHostMutation-family call targeting an unsupported-degrade method resolves its method statically", () => {
+    const { unresolved } = scanOnce().result;
 
     expect(
       unresolved.map(
@@ -588,9 +623,7 @@ describe("optional-method mutation gate", () => {
   });
 
   it("every such call site has a reachable exact-method gate, a verified alternate mechanism, or is an honestly-flagged open question", () => {
-    const optionalMethods = findOptionalMethods();
-    const files = collectProductionFiles(SRC_DIR);
-    const result = scan(files, optionalMethods);
+    const { result } = scanOnce();
 
     const offences = result.callSites
       .filter((site) => !(site.method in VERIFIED_ALTERNATE_GATE))
@@ -619,9 +652,7 @@ describe("optional-method mutation gate", () => {
    * deleted, and should be re-verified or dropped).
    */
   it("every VERIFIED_ALTERNATE_GATE and UNVERIFIED_NO_GATE_FOUND entry names a real optional method with a live call site", () => {
-    const optionalMethods = findOptionalMethods();
-    const files = collectProductionFiles(SRC_DIR);
-    const result = scan(files, optionalMethods);
+    const { optionalMethods, result } = scanOnce();
     const calledMethods = new Set(result.callSites.map((site) => site.method));
 
     for (const method of Object.keys(VERIFIED_ALTERNATE_GATE)) {

@@ -78,9 +78,15 @@ import { z } from "zod";
 // (`open-harness.ts`). Widening a leaf from enum to string is additive for a
 // reader: every value a 1.4 record can carry still parses, and the reverse
 // direction is what the reopening exists to survive.
-// `CHAT_SYNC_1_1_READER_FLOOR` is NOT raised and a 1.5 head still stamps
-// `minReaderVersion: null`; §2/§3's `raw` re-emission and residual capture keep
-// an older reader's re-publication lossless.
+// `CHAT_SYNC_1_1_READER_FLOOR` is NOT raised, and this reopening on its own
+// stamps no floor: §2/§3's `raw` re-emission and residual capture keep an older
+// reader's re-publication lossless. Scoped to the reopening deliberately - a
+// 1.5 head CAN carry `minReaderVersion`, for a reason unrelated to this leaf.
+// `chatSyncReaderFloorForTranscriptEvents` in `head.ts` returns
+// `CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR` for any publication whose events
+// hold an unattended auto-judge denial row, so a publisher must still ask it
+// rather than reading "1.5 stamps null" here and hard-coding the null; skipping
+// the call ships a head an older reader projects with the refusal row missing.
 //
 // **It protects readers from 1.5 ONWARD, and `auto` is on the wrong side of
 // that line.** `host-v1.3.x` ships chat-sync 1.3, whose

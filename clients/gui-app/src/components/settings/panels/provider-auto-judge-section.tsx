@@ -122,12 +122,23 @@ export function ProviderAutoJudgeSection({
     readonly seenAt: number;
   } | null>(null);
   // A second observer on the key the Providers panel already holds, so this
-  // costs a subscription and no request. `subscribed: false` for the same
-  // reason: the panel above owns the refresh, this only needs to read when it
-  // lands.
+  // costs a subscription and no request.
+  //
+  // SUBSCRIBED, and the reason is the whole point of this observer. This used
+  // to pass `subscribed: false` on the theory that "the panel above owns the
+  // refresh, this only needs to read when it lands" - but what this component
+  // reads is `isFetching` and `dataUpdatedAt`, which is exactly the LANDING
+  // itself, and an unsubscribed observer is never notified of it. The only
+  // subscribed ancestor (`ProvidersScopedContent`) reads `isPending` and
+  // `isError`, and an identical-data refetch moves neither while structural
+  // sharing preserves `data`, so nothing above re-rendered this section when a
+  // refresh finished. `ProvidersGlobalStatus` does read `isFetching`, but it is
+  // a sibling, so its re-render never reaches here. The observable cost was a
+  // control stuck disabled on a stale `isFetching: true` after the refetch had
+  // already completed.
   const providersQuery = useProvidersList({
     enabled: true,
-    subscribed: false,
+    subscribed: true,
   });
   const providersUpdatedAt = providersQuery.dataUpdatedAt;
   // LOCKED THROUGH THE AUTHORITATIVE REFRESH, not just through the write.

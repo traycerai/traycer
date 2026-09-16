@@ -285,6 +285,11 @@ afterEach(() => {
   vi.clearAllMocks();
   providersListVersion.current = { major: 9, minor: 1 };
   listHarnessesVersion.current = { major: 9, minor: 1 };
+  // `clearAllMocks` drops call history and KEEPS implementations, so the two
+  // cases that pin this to `false` would otherwise hand `false` to every test
+  // after them. The rest of this block restates each mock implementation for
+  // the same reason; this one was the omission.
+  useHostSupportsMethodMock.mockImplementation(() => true);
   autoJudgeGetData = undefined;
   providersListData = undefined;
   harnessesData = { harnesses: [harnessRow(true)] };

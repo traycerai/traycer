@@ -931,8 +931,10 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       with (`composer-run-settings-store`, bucketed per host) - so the copy
       says "what a fresh one opens on". Session import reads the same ladder
       (`newChatPermissionModeFor`), which is what makes this row the thing that
-      can put `auto` into an import; see `session-import-wizard.tsx`'s catalog
-      warm-up for why that no longer silently demotes on a remote host.
+      can put `auto` into an import; see `session-import-wizard.tsx`'s note on
+      why the gate now reads `sessionImport.run`'s own negotiated line rather
+      than a catalog row, so an import no longer silently demotes on a remote
+      host.
   - **Browser**: the in-app browser has no toggle - it is always on, and the
     group carries no master switch. What is left of the group is the
     conditional **Detected dev origins** row (terminal URLs with local hosts

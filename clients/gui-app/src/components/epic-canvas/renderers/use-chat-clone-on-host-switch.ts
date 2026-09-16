@@ -12,6 +12,8 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { PERMISSION_OPTIONS } from "@/components/home/data/landing-options";
+import { harnessLabel } from "@/components/settings/panels/fallback/fallback-harness-label";
 
 /**
  * Lifted out of `chat-tile.tsx` (P1.2 fixup F5) so the host it targets is
@@ -155,8 +157,19 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
           // Named modes, not a generic failure: the user picked Auto and the
           // target cannot run it OR its fallback, so the honest message says
           // which host and what was tried rather than leaving them to guess.
+          //
+          // Named in the PICKER's words, though. This sentence is read right
+          // after the user chose "Auto" from the Permissions picker, and the
+          // raw enum spells that `auto_accept_edits` - a token they have never
+          // been shown. `harnessLabel` does the same for the vendor, and falls
+          // back to the id for a harness this surface cannot spell.
+          const attempted = resolution.attemptedModes.map(
+            (mode) =>
+              PERMISSION_OPTIONS.find((option) => option.id === mode)?.label ??
+              mode,
+          );
           toast(
-            `${targetHostLabel} can't run this chat's permission mode - ${resolution.attemptedModes.join(" or ")} aren't available for ${resolution.harnessId} there.`,
+            `${targetHostLabel} can't run this chat's permission mode - ${attempted.join(" or ")} ${attempted.length === 1 ? "isn't" : "aren't"} available for ${harnessLabel(resolution.harnessId)} there.`,
           );
         },
         onProfileSelectionRequired: (resolution) => {

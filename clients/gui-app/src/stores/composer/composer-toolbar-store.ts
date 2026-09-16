@@ -565,7 +565,17 @@ function sameCatalog(
     // catalog that loads empty, where `models` stays the same `[]`) would
     // otherwise be skipped here, stranding a deferred emit that never flushes.
     a.modelsLoaded === b.modelsLoaded &&
-    a.tuiOnly === b.tuiOnly
+    a.tuiOnly === b.tuiOnly &&
+    // The third field to belong here for the same reason as the two above, and
+    // the costliest to omit: `deriveToolbarState` reads this one as the CLAMP
+    // that decides the permission mode the composer actually sends. Left out,
+    // a catalog whose only change is `true` -> `false` returned early, the
+    // toolbar kept `permission: "auto"`, and the ordinary composer's submit
+    // path copied it into `ChatRunSettings` with no further live-session
+    // clamp - so `projectChatClientFrameForVersion` refused the send outright.
+    // The tile-owned next-step, compact and inline-edit paths clamp
+    // separately and do not cover this one.
+    a.chatLineCarriesAutoMode === b.chatLineCarriesAutoMode
   );
 }
 

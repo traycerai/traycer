@@ -115,6 +115,12 @@ function deferred<T>(): {
 
 afterEach(() => {
   cleanup();
+  // `useAuthStore` is a real global store, so a signed-in viewer set by one
+  // test outlives it. Resetting here rather than at the end of the test body
+  // is the difference between one failure and a cascade: a body-final reset is
+  // skipped whenever an earlier assertion or `waitFor` throws, and the leaked
+  // viewer then reaches every later test in this file and in the worker.
+  useAuthStore.getState().setSignedOut();
   mocks.getActiveHostId.mockReset();
   mocks.getActiveHostId.mockReturnValue("host-1");
   mocks.request.mockReset();
@@ -265,7 +271,6 @@ describe("useAutoPolicySetMutation - client-side write ordering", () => {
       );
       expect(cached?.body).toBe("policy draft two");
     });
-    useAuthStore.getState().setSignedOut();
   });
 
   // Weak-half fallback per the assignment: the judge and policy writes must

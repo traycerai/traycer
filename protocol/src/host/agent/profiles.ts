@@ -1840,8 +1840,20 @@ export const agentConfigureDowngradeV60ToV30 = defineDowngradePath<
  *
  * The answer comes from parsing `mode` against the very schema the downgrade
  * will use, so a line that later widens its enum starts answering `true` here
- * with no edit - and a new frozen line added below without a row in this table
- * is a compile error, not a silent `true`.
+ * with no edit.
+ *
+ * ## The table's completeness is MANUAL
+ *
+ * `AGENT_CONFIGURE_SETTINGS_SCHEMA_BY_MAJOR` is keyed `Record<number, ...>`, so
+ * TypeScript does not require a row per declared major, and the miss is silent
+ * in the unsafe direction: a new frozen major added without a row looks up
+ * `undefined`, takes the branch below, and returns `true`, letting the
+ * pre-flight admit a mode that major's downgrade schema cannot carry.
+ * `profile-selection-compat.test.ts` exercises majors 1 through 6 but asserts
+ * nothing about coverage - its unknown-major case deliberately expects the
+ * `undefined` lookup to answer `true` - so nothing catches the omission today.
+ * Add the row when you freeze a major; a literal-union key would enforce it,
+ * at the cost of a cast at the `number`-typed call site.
  */
 export function agentConfigureResponseCanCarryPermissionMode(
   negotiatedMajor: number,
