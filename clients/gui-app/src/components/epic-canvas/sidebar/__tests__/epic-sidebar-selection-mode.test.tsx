@@ -1007,13 +1007,23 @@ function fakeEpicStoreState() {
       ];
     },
   );
+  const chatRecords = testState.records.filter(
+    (record) => record.type === "chat",
+  );
   return {
     snapshotLoaded: testState.snapshotLoaded,
-    // The list's sort-clock override reads the record heads and the chat
-    // projection; these fixtures publish no heads, so the override is
-    // empty and every row sorts by the stamp on its node.
+    // The list's sort-clock override reads the record heads, which these
+    // fixtures still publish none of, so the override stays empty and every
+    // row sorts by the stamp on its node; `chats` itself is populated below
+    // so the real `useEpicNodeHostIds`/`useSurfaceHostPin` selector can see
+    // this task's GUI hosts alongside `tuiAgents`' TUI ones.
     chatRecordHeads: {},
-    chats: { byId: {}, allIds: [] },
+    chats: {
+      allIds: chatRecords.map((record) => record.id),
+      byId: Object.fromEntries(
+        chatRecords.map((record) => [record.id, { hostId: record.hostId }]),
+      ),
+    },
     // The tree index, because the row-level tree reads subscribe HERE now
     // rather than through `useEpicTreeIndex`. A row that used to take the
     // whole slice re-rendered on every record change; it now selects its own
