@@ -40,7 +40,7 @@ export function OnboardingBrowserPreview() {
         </div>
       </div>
       <div className="diorama-browser-page relative min-h-0 flex-1 overflow-hidden bg-background text-foreground">
-        <div className="diorama-browser-page-content grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-5 p-6">
+        <div className="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-5 p-6">
           <div className="flex items-center gap-5 text-ui-xs">
             <span className="mr-auto text-sm font-semibold tracking-tight">
               Fieldwork

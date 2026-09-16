@@ -1383,7 +1383,7 @@ describe("<SessionImportWizard />", () => {
     // selection without an explicit ask.
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
-    ).toBe("1 task selected");
+    ).toBe("1 of 1 selected");
 
     fireEvent.click(screen.getByTestId("session-import-submit"));
 
@@ -1478,7 +1478,7 @@ describe("<SessionImportWizard />", () => {
     );
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
-    ).toBe("1 task selected");
+    ).toBe("1 of 2 selected");
     fireEvent.click(
       screen.getByRole("checkbox", {
         name: "Select all available tasks shown",
@@ -1486,7 +1486,7 @@ describe("<SessionImportWizard />", () => {
     );
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
-    ).toBe("2 tasks selected");
+    ).toBe("2 of 2 selected");
 
     fireEvent.click(screen.getByTestId("session-import-submit"));
     expect(startSessionImportRunMock.mock.calls[0][0].selections).toEqual([
@@ -1553,7 +1553,7 @@ describe("<SessionImportWizard />", () => {
     );
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
-    ).toBe("2 tasks selected");
+    ).toBe("2 of 3 selected");
 
     fireEvent.click(screen.getByRole("radio", { name: "By project" }));
 

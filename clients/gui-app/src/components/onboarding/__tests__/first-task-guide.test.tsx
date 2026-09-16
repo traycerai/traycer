@@ -61,7 +61,9 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     act(() => toastState.invokeDismiss());
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
 
-    void act(() => useOnboardingStore.setState({ setupReminderDismissed: false }));
+    void act(() =>
+      useOnboardingStore.setState({ setupReminderDismissed: false }),
+    );
     expect(toastState).toHaveBeenCalledTimes(2);
     view.unmount();
     expect(toastState.dismiss).toHaveBeenCalledWith("traycer-getting-started");

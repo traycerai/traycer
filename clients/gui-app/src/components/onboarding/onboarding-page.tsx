@@ -1,5 +1,6 @@
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import {
+  Fragment,
   use,
   useCallback,
   useEffect,
@@ -10,10 +11,15 @@ import {
   useState,
 } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
+import {
+  AnimatePresence,
+  useReducedMotion,
+  type TargetAndTransition,
+  type Transition,
+} from "motion/react";
+import * as m from "motion/react-m";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import onboardingBackdropUrl from "@/assets/brand/gradient-bg.jpg?url";
 import { BrandMark } from "@/components/auth/cinematic-backdrop";
-import { BrandEntrance } from "@/components/auth/brand-entrance";
 import {
   onboardingStepsFor,
   type OnboardingStep,
@@ -59,7 +65,67 @@ import {
 } from "@/stores/session-import/session-import-run-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import "@/styles/auth-arrival.css";
 import "./onboarding.css";
+
+type CubicBezier = [number, number, number, number];
+
+/** The stage's strong ease-out, as motion's cubic-bezier control points. */
+const ONBOARDING_EASE: CubicBezier = [0.23, 1, 0.32, 1];
+/** Both halves of an act swap carry this, so they read as one movement. */
+const STEP_ENTER_SECONDS = 0.26;
+const STEP_EXIT_SECONDS = 0.16;
+const STEP_TRAVEL_PX = 8;
+
+interface StepMotion {
+  readonly initial: TargetAndTransition;
+  readonly animate: TargetAndTransition;
+  readonly exit: TargetAndTransition;
+  readonly transition: Transition;
+}
+
+/**
+ * The act → act swap, shared by the copy block and the panel's contents.
+ *
+ * `direction` is the vertical sign: forward enters from below and leaves
+ * upward, Back mirrors it. Keyboard navigation (`animated: false`) keeps the
+ * page's long-standing no-motion behaviour, and reduced motion keeps the
+ * crossfade while dropping the travel, the scale and the blur.
+ */
+function stepMotion(
+  direction: number,
+  animated: boolean,
+  reduced: boolean,
+): StepMotion {
+  const travel = reduced ? 0 : STEP_TRAVEL_PX * direction;
+  const scale = reduced ? 1 : 0.985;
+  const blur = reduced ? "blur(0px)" : "blur(2px)";
+  return {
+    initial: {
+      opacity: 0,
+      transform: `translateY(${travel}px) scale(${scale})`,
+      filter: blur,
+    },
+    animate: {
+      opacity: 1,
+      transform: "translateY(0px) scale(1)",
+      filter: "blur(0px)",
+    },
+    exit: {
+      opacity: 0,
+      transform: `translateY(${-travel}px) scale(1)`,
+      filter: blur,
+      transition: {
+        duration: animated ? STEP_EXIT_SECONDS : 0,
+        ease: ONBOARDING_EASE,
+      },
+    },
+    transition: {
+      duration: animated ? STEP_ENTER_SECONDS : 0,
+      ease: ONBOARDING_EASE,
+    },
+  };
+}
 
 export function OnboardingPage(props: { readonly replay: boolean }) {
   const [scopedHostId, setScopedHostId] = useState<string | null>(null);
@@ -98,16 +164,18 @@ function OnboardingTour(props: {
 }) {
   const { steps, scope, scopedHostId, setScopedHostId, replay } = props;
   const [animateChanges, setAnimateChanges] = useState(true);
+  const [stepDirection, setStepDirection] = useState(1);
+  const reducedMotion = useReducedMotion() === true;
   const pointerNavigationRef = useRef(true);
   const [welcomePhase, setWelcomePhase] = useState<
     "welcome" | "leaving" | "ready"
   >("welcome");
   useEffect(() => {
     if (welcomePhase === "ready") return;
-    const reducedMotion = window.matchMedia(
+    const reducedMotionQuery = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
-    const duration = reducedMotion
+    const duration = reducedMotionQuery
       ? { welcome: 300, leaving: 150 }[welcomePhase]
       : { welcome: 1800, leaving: 320 }[welcomePhase];
     const timer = window.setTimeout(
@@ -201,6 +269,7 @@ function OnboardingTour(props: {
   const back = useCallback((): void => {
     if (index === 0) return;
     setAnimateChanges(pointerNavigationRef.current);
+    setStepDirection(-1);
     retreat(steps.length);
     Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
       direction: "back",
@@ -214,6 +283,7 @@ function OnboardingTour(props: {
       return;
     }
     setAnimateChanges(pointerNavigationRef.current);
+    setStepDirection(1);
     advanceStep(steps.length);
     Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
       direction: "continue",
@@ -264,6 +334,8 @@ function OnboardingTour(props: {
     },
   );
 
+  const motionProps = stepMotion(stepDirection, animateChanges, reducedMotion);
+
   return (
     <main
       data-motion={animateChanges}
@@ -277,12 +349,15 @@ function OnboardingTour(props: {
     >
       <div
         aria-hidden="true"
-        className="onboarding-atmosphere pointer-events-none absolute inset-0"
+        className="onboarding-glow pointer-events-none absolute"
       />
       <div
         aria-hidden="true"
-        className="onboarding-backdrop pointer-events-none absolute inset-0 bg-cover bg-center"
-        style={{ backgroundImage: `url(${onboardingBackdropUrl})` }}
+        className="onboarding-dot-grid pointer-events-none absolute inset-0"
+      />
+      <div
+        aria-hidden="true"
+        className="onboarding-grain pointer-events-none absolute inset-0"
       />
       {step.id !== "providers" && onboardingHostIsUsable(hostPicker) ? (
         <OnboardingProviderPrefetch key={scope.hostId} />
@@ -291,13 +366,14 @@ function OnboardingTour(props: {
         <section
           aria-label="Welcome to Traycer"
           data-leaving={welcomePhase === "leaving"}
-          className="onboarding-welcome absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 pt-safe-top pr-safe-right pb-safe-bottom pl-safe-left"
+          className="onboarding-welcome absolute inset-0 z-20 flex flex-col items-center justify-center gap-[clamp(1.2rem,2.8vh,2rem)] pt-safe-top pr-safe-right pb-safe-bottom pl-safe-left"
         >
-          <BrandEntrance size="welcome">
-            <h1 className="brand-entrance-copy text-3xl font-medium tracking-tight">
-              Welcome to Traycer.
-            </h1>
-          </BrandEntrance>
+          <m.div layoutId={reducedMotion ? undefined : "onboarding-brand-mark"}>
+            <BrandMark className="brand-entrance-mark h-auto w-[clamp(3.75rem,8vw,5.4rem)] text-foreground [&_g>path]:fill-current" />
+          </m.div>
+          <h1 className="brand-entrance-copy text-3xl font-medium tracking-tight">
+            Welcome to Traycer.
+          </h1>
           <button
             type="button"
             data-testid="onboarding-welcome-skip"
@@ -311,98 +387,135 @@ function OnboardingTour(props: {
       <div
         inert={welcomePhase !== "ready"}
         aria-hidden={welcomePhase !== "ready"}
-        data-welcoming={welcomePhase === "welcome"}
+        data-welcoming={welcomePhase !== "ready"}
         className="onboarding-tour-layer relative z-10 flex h-full min-h-0 w-full flex-col pt-safe-top pr-safe-right pb-safe-bottom pl-safe-left"
       >
         <header className="onboarding-header flex shrink-0 items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <BrandMark className="h-6 w-auto text-foreground [&_g>path]:fill-current" />
-            <span className="text-xl font-medium tracking-tight">traycer</span>
+          <div className="onboarding-brand flex items-center gap-2.5">
+            {welcomePhase === "ready" ? (
+              <m.div
+                layoutId={reducedMotion ? undefined : "onboarding-brand-mark"}
+                transition={{ type: "spring", duration: 0.55, bounce: 0 }}
+                className="flex"
+              >
+                <BrandMark className="h-6 w-auto text-foreground [&_g>path]:fill-current" />
+              </m.div>
+            ) : null}
+            <span className="onboarding-wordmark text-xl font-medium tracking-tight">
+              traycer
+            </span>
           </div>
-          <ProgressRail steps={steps} activeIndex={index} />
-          <button
-            type="button"
-            data-testid="onboarding-skip"
-            onClick={() => finish("skipped")}
-            className="onboarding-button onboarding-button--quiet"
-          >
-            Skip intro
-          </button>
+          <div className="onboarding-header-aside flex items-center gap-4">
+            <ProgressRail steps={steps} activeIndex={index} />
+            <button
+              type="button"
+              data-testid="onboarding-skip"
+              onClick={() => finish("skipped")}
+              className="onboarding-button onboarding-button--quiet"
+            >
+              Skip intro
+            </button>
+          </div>
         </header>
         <section
           aria-label="Welcome to Traycer"
-          className="onboarding-stage relative mx-auto flex min-h-0 w-full flex-1 flex-col overflow-hidden"
+          className="onboarding-stage relative flex min-h-0 w-full flex-1 flex-col"
         >
-          <div
-            ref={stageRef}
-            className="onboarding-stage-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain"
-          >
-            <div
+          <AnimatePresence mode="wait" initial={false}>
+            <m.div
               key={step.id}
-              className="onboarding-content"
-              data-step={step.id}
+              data-testid="onboarding-step"
+              data-step-id={step.id}
+              initial={motionProps.initial}
+              animate={motionProps.animate}
+              exit={motionProps.exit}
+              transition={motionProps.transition}
+              className="onboarding-copy min-w-0 shrink-0"
             >
-              <div
-                data-testid="onboarding-step"
-                data-step-id={step.id}
-                className="onboarding-copy min-w-0"
+              <p className="onboarding-eyebrow text-muted-foreground">
+                {step.label} · {index + 1} of {steps.length}
+              </p>
+              <h1
+                ref={headingRef}
+                tabIndex={-1}
+                className="onboarding-title outline-none"
               >
-                <h1
-                  ref={headingRef}
-                  tabIndex={-1}
-                  className="onboarding-title font-medium outline-none"
+                {step.title.split(" ").map((word, wordIndex) => (
+                  // Titles are curated copy; a word is unique within one.
+                  <Fragment key={word}>
+                    {wordIndex === 0 ? null : " "}
+                    <span
+                      className="onboarding-title-word"
+                      style={{ animationDelay: `${wordIndex * 30}ms` }}
+                    >
+                      {word}
+                    </span>
+                  </Fragment>
+                ))}
+              </h1>
+              <p className="onboarding-subtitle text-muted-foreground">
+                {step.subtitle}
+              </p>
+            </m.div>
+          </AnimatePresence>
+          <div data-step={step.id} className="onboarding-panel flex min-h-0">
+            <div
+              ref={stageRef}
+              className="onboarding-stage-scroll flex min-h-0 w-full flex-1 flex-col overflow-y-auto overscroll-contain"
+            >
+              <AnimatePresence mode="wait" initial={false}>
+                <m.div
+                  key={step.id}
+                  initial={motionProps.initial}
+                  animate={motionProps.animate}
+                  exit={motionProps.exit}
+                  transition={motionProps.transition}
+                  className="onboarding-panel-content flex min-h-0 w-full min-w-0 flex-1 flex-col"
                 >
-                  {step.title}
-                </h1>
-                {step.body !== null ? (
-                  <p className="onboarding-description text-muted-foreground">
-                    {step.body}
-                  </p>
-                ) : null}
-              </div>
-              <div className="onboarding-visual min-w-0">
-                {step.id === "task-tabs" && welcomePhase !== "welcome" ? (
-                  <OnboardingWorkspaceIllustration mobile={mobileApp} />
-                ) : null}
-                {step.id === "providers" ? (
-                  <div className="onboarding-provider-panel flex h-full min-h-0 w-full flex-col">
-                    <OnboardingHostPickerBar
-                      picker={hostPicker}
-                      className="onboarding-device-picker"
-                    />
-                    {onboardingHostIsUsable(hostPicker) ? (
-                      <OnboardingDetectedAgents key={scope.hostId} />
-                    ) : (
-                      <OnboardingHostUnavailableNotice
+                  {step.id === "task-tabs" && welcomePhase !== "welcome" ? (
+                    <OnboardingWorkspaceIllustration mobile={mobileApp} />
+                  ) : null}
+                  {step.id === "providers" ? (
+                    <div className="onboarding-provider-panel flex h-full min-h-0 w-full flex-col">
+                      <OnboardingHostPickerBar
                         picker={hostPicker}
-                        refusal={null}
+                        className="onboarding-device-picker"
                       />
-                    )}
-                  </div>
-                ) : null}
-                {step.id === "session-import" ? (
-                  <OnboardingSessionImportStage
-                    scan={sessionImportScan}
-                    hostPicker={hostPicker}
-                    onImportStarted={() => {
-                      if (!replay && streamHostId !== null)
-                        useFirstTaskGuideStore
-                          .getState()
-                          .rememberImport(streamHostId);
-                    }}
-                    onBeforeTaskOpen={() => {
-                      Analytics.getInstance().track(
-                        AnalyticsEvent.OnboardingCompleted,
-                        { last_step: step.id },
-                      );
-                      // Mount AppShell before the import wizard requests its task tab.
-                      if (!replay) useFirstTaskGuideStore.getState().activate();
-                      complete();
-                      return Promise.resolve(true);
-                    }}
-                  />
-                ) : null}
-              </div>
+                      {onboardingHostIsUsable(hostPicker) ? (
+                        <OnboardingDetectedAgents key={scope.hostId} />
+                      ) : (
+                        <OnboardingHostUnavailableNotice
+                          picker={hostPicker}
+                          refusal={null}
+                        />
+                      )}
+                    </div>
+                  ) : null}
+                  {step.id === "session-import" ? (
+                    <OnboardingSessionImportStage
+                      scan={sessionImportScan}
+                      hostPicker={hostPicker}
+                      onImportStarted={() => {
+                        if (!replay && streamHostId !== null)
+                          useFirstTaskGuideStore
+                            .getState()
+                            .rememberImport(streamHostId);
+                      }}
+                      onBeforeTaskOpen={() => {
+                        Analytics.getInstance().track(
+                          AnalyticsEvent.OnboardingCompleted,
+                          { last_step: step.id },
+                        );
+                        // Mount AppShell before the import wizard requests its task tab.
+                        if (!replay)
+                          useFirstTaskGuideStore.getState().activate();
+                        complete();
+                        return Promise.resolve(true);
+                      }}
+                    />
+                  ) : null}
+                </m.div>
+              </AnimatePresence>
             </div>
           </div>
           <OnboardingActions
@@ -416,6 +529,14 @@ function OnboardingTour(props: {
       </div>
     </main>
   );
+}
+
+function segmentState(
+  index: number,
+  activeIndex: number,
+): "active" | "done" | "todo" {
+  if (index === activeIndex) return "active";
+  return index < activeIndex ? "done" : "todo";
 }
 
 function ProgressRail(props: {
@@ -432,12 +553,11 @@ function ProgressRail(props: {
           >
             <span
               aria-hidden="true"
-              className={cn(
-                "onboarding-progress-segment block h-1 w-6 rounded-full bg-foreground/15",
-                index < props.activeIndex && "bg-foreground/50",
-                index === props.activeIndex && "bg-foreground",
-              )}
-            />
+              data-state={segmentState(index, props.activeIndex)}
+              className="onboarding-progress-segment block"
+            >
+              <span className="onboarding-progress-fill block" />
+            </span>
             <span className="sr-only">{step.label}</span>
           </li>
         ))}
@@ -462,7 +582,7 @@ function OnboardingActions(props: {
 }) {
   const lastStepLabel = props.skipImport ? "Skip for now" : "Start building";
   return (
-    <footer className="onboarding-actions flex shrink-0 items-center justify-end gap-3">
+    <footer className="onboarding-actions flex shrink-0 items-center justify-end gap-2">
       {props.canGoBack ? (
         <button
           type="button"

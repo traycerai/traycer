@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, type CSSProperties, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
@@ -35,16 +35,25 @@ export function ProviderList(props: {
     variant === "onboarding" ? rows : sortProviderStatesByProviderOrder(rows);
   return (
     <ul aria-label={ariaLabel} className={cn("flex flex-col", className)}>
-      {orderedRows.map((row) => (
-        <ProviderListItem key={row.providerId} row={row} variant={variant} />
+      {orderedRows.map((row, index) => (
+        <ProviderListItem
+          key={row.providerId}
+          row={row}
+          variant={variant}
+          index={index}
+        />
       ))}
     </ul>
   );
 }
 
+/** Entry-stagger cap: past a dozen cards the last one would land a beat late. */
+const ONBOARDING_STAGGER_CAP = 12;
+
 function ProviderListItem(props: {
   readonly row: ProviderListRow;
   readonly variant: ProviderListVariant;
+  readonly index: number;
 }) {
   const { row, variant } = props;
   const descriptionId = useId();
@@ -60,6 +69,16 @@ function ProviderListItem(props: {
         <li
           className="onboarding-provider-card relative flex min-w-0 flex-col"
           data-enabled={row.enabled === true}
+          // `dimmed` is the onboarding act's INSTALL channel, not its
+          // enablement one: a card the user has nothing to do with recedes,
+          // while an installed provider that is merely off stays fully legible
+          // so its one affordance reads as the thing to press.
+          data-recessive={row.dimmed}
+          style={
+            {
+              "--i": Math.min(props.index, ONBOARDING_STAGGER_CAP),
+            } as CSSProperties
+          }
         >
           <button
             type="button"
@@ -68,36 +87,38 @@ function ProviderListItem(props: {
             aria-describedby={descriptionId}
             disabled={onSelect === null}
             onClick={() => onSelect?.(row.providerId)}
-            className="onboarding-provider-toggle flex min-w-0 flex-1 flex-col gap-2 rounded-xl p-4 text-left"
+            className="onboarding-provider-toggle flex min-w-0 flex-1 flex-col items-start gap-1.5 p-4 text-left"
           >
             <span className="flex w-full min-w-0 items-center gap-2.5">
               <HarnessIcon
                 harnessId={providerIdToGuiHarnessId(row.providerId)}
-                className={cn(
-                  "size-6 shrink-0 transition-opacity",
-                  row.dimmed && "opacity-50",
-                )}
+                className="size-6 shrink-0"
               />
-              <span className={labelClassName(variant, row.dimmed)}>
+              <span className={labelClassName(variant)}>
                 {providerDisplayName(row.providerId)}
               </span>
               <span
                 aria-hidden="true"
-                className="onboarding-provider-check ml-auto flex size-4 shrink-0 items-center justify-center rounded-full"
+                className="onboarding-provider-check ml-auto flex size-[1.125rem] shrink-0 items-center justify-center rounded-full"
               >
-                <Check className="size-3" />
+                <Check className="size-3" strokeWidth={3} />
               </span>
             </span>
-            <span id={descriptionId} className="min-h-4 text-ui-sm">
+            <span
+              id={descriptionId}
+              className="onboarding-provider-status-line flex min-h-4 w-full min-w-0 items-center gap-2"
+            >
               {row.description ?? row.badge}
               {row.disabledReason !== null ? (
                 <span className="sr-only"> {row.disabledReason}</span>
               ) : null}
             </span>
           </button>
-          {row.trailing !== null ? (
-            <div className="relative mt-auto px-4 pb-3">{row.trailing}</div>
-          ) : null}
+          {/* Hidden by CSS when the act supplies no footer content - a
+              not-installed card is one line and nothing else. */}
+          <div className="onboarding-provider-footer relative mt-auto flex min-w-0 flex-col items-stretch gap-2 px-4 pb-3.5">
+            {row.trailing}
+          </div>
         </li>
       </TooltipWrapper>
     );
@@ -109,7 +130,7 @@ function ProviderListItem(props: {
           harnessId={providerIdToGuiHarnessId(row.providerId)}
           className={variant === "diorama" ? "size-3.5 shrink-0" : ""}
         />
-        <span className={labelClassName(variant, row.dimmed)}>
+        <span className={labelClassName(variant)}>
           {providerDisplayName(row.providerId)}
         </span>
         {row.badge}
@@ -173,11 +194,11 @@ function rowClassName(variant: ProviderListVariant, active: boolean): string {
   return "flex h-full min-w-0 flex-col";
 }
 
-function labelClassName(variant: ProviderListVariant, dimmed: boolean): string {
+function labelClassName(variant: ProviderListVariant): string {
   if (variant === "settings") return "min-w-0 flex-1 truncate";
   if (variant === "diorama") return "min-w-0 flex-1 truncate";
-  return cn(
-    "min-w-0 truncate text-sm font-medium",
-    dimmed ? "text-muted-foreground" : "text-foreground",
-  );
+  // Onboarding: the name is the card's first line of hierarchy and never
+  // recedes on its own - the whole card dims together (`data-recessive`), so
+  // this no longer forks on the row's dimmed flag.
+  return "min-w-0 truncate text-sm font-medium text-foreground";
 }

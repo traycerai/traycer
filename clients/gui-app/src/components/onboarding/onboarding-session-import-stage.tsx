@@ -10,6 +10,7 @@ import { SessionImportWizard } from "@/components/session-import/session-import-
 import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
 import { useSessionImportAvailableFor } from "@/hooks/session-import/use-session-import-available";
 import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
+import "./onboarding-import.css";
 
 /** The live import wizard uses the tour's early scan and selected host. */
 export function OnboardingSessionImportStage(props: {

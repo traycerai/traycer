@@ -1,0 +1,652 @@
+/* Act 1 — the workspace diorama.
+   A real DOM window on a tilted stage, four timed chapters, one numbered
+   callout per chapter. The shell owns the easing tokens; the fallbacks here
+   only matter if this ever renders outside `.onboarding-shell`. */
+
+.onboarding-workspace {
+  --diorama-ease: var(--onboarding-ease, cubic-bezier(0.23, 1, 0.32, 1));
+  --diorama-ease-in-out: var(
+    --onboarding-ease-in-out,
+    cubic-bezier(0.77, 0, 0.175, 1)
+  );
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.5rem, 1.4vh, 1rem);
+  color: var(--foreground);
+}
+
+.diorama-scene {
+  container: diorama-scene / inline-size;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  justify-content: center;
+}
+
+/* The stage reserves the gutters the outside label cards live in. */
+.diorama-stage {
+  position: relative;
+  display: grid;
+  /* Explicit tracks, not auto: the frame's `max-height: 100%` only resolves
+     against a grid area whose size does not come from the frame itself. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  /* Top room for the chapter-1 label, which sits above the window: the card
+     (two lines) plus its connector needs ~6rem, and the panel clips anything
+     shorter on a 949px-tall window. */
+  padding: clamp(6rem, 11vh, 6.5rem) clamp(0rem, 15vw, 13.5rem) 0;
+  perspective: 1600px;
+}
+
+/* The frame is the window's box without its clipping, so the callouts can
+   anchor to the window edges and still draw outside it. */
+.diorama-frame {
+  position: relative;
+  width: min(100%, 72rem);
+  /* ponytail: when the panel is shorter than the ratio wants, the window goes
+     wide-and-short rather than shrinking. A JS fit would keep the ratio. */
+  max-height: 100%;
+  aspect-ratio: 16 / 9.4;
+}
+
+.diorama-window {
+  container: diorama-window / size;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 0.875rem;
+  background: var(--background);
+  box-shadow:
+    0 40px 80px -40px #000c,
+    0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 10%, transparent);
+  animation: diorama-window-in 700ms var(--diorama-ease) both;
+  will-change: transform;
+}
+.diorama-window[data-entered="true"] {
+  will-change: auto;
+}
+
+@keyframes diorama-window-in {
+  from {
+    opacity: 0;
+    transform: rotateX(10deg) translateY(24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ------------------------------------------------------------- spotlight */
+
+.diorama-window [data-region] {
+  transition:
+    opacity 220ms var(--diorama-ease),
+    box-shadow 220ms var(--diorama-ease);
+}
+.diorama-window [data-dim="true"] {
+  opacity: 0.6;
+}
+.diorama-window [data-ring="true"] {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+/* Regions that touch the window's own edge wear the ring inside, where the
+   window's overflow clip cannot eat half of it. */
+.diorama-window [data-ring="true"][data-region="canvas"],
+.diorama-window [data-ring="true"][data-region="browser"] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent),
+    inset 0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+/* --------------------------------------------------------- pins + labels */
+
+.diorama-callout {
+  position: absolute;
+  left: var(--diorama-pin-x);
+  top: var(--diorama-pin-y);
+  z-index: 5;
+  opacity: 0;
+  transform: translate(var(--diorama-enter-x, 0), var(--diorama-enter-y, 0));
+  transition:
+    opacity 120ms var(--diorama-ease),
+    transform 120ms var(--diorama-ease);
+  pointer-events: none;
+}
+.diorama-callout[data-active="true"] {
+  opacity: 1;
+  transform: none;
+  transition-duration: 200ms;
+}
+.diorama-callout[data-place="top"] {
+  --diorama-enter-y: 6px;
+}
+.diorama-callout[data-place="left"] {
+  --diorama-enter-x: 6px;
+}
+.diorama-callout[data-place="right"] {
+  --diorama-enter-x: -6px;
+}
+
+.diorama-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  translate: -50% -50%;
+  display: inline-flex;
+  width: 1.375rem;
+  height: 1.375rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.diorama-connector {
+  position: absolute;
+  background: color-mix(in srgb, var(--foreground) 25%, transparent);
+}
+.diorama-callout[data-place="top"] .diorama-connector {
+  left: 0;
+  bottom: 0.6875rem;
+  width: 1px;
+  height: 1.3125rem;
+}
+.diorama-callout[data-place="left"] .diorama-connector {
+  top: 0;
+  right: 0.6875rem;
+  height: 1px;
+  width: 1.75rem;
+}
+.diorama-callout[data-place="right"] .diorama-connector {
+  top: 0;
+  left: 0.6875rem;
+  height: 1px;
+  width: 1.75rem;
+}
+
+.diorama-label {
+  position: absolute;
+  display: flex;
+  width: max-content;
+  max-width: 10.5rem;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.75rem;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent),
+    0 12px 32px -20px #000a;
+  text-align: start;
+}
+.diorama-label-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.diorama-label-line {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--muted-foreground);
+}
+.diorama-callout[data-place="top"] .diorama-label {
+  left: 0;
+  bottom: 2rem;
+  translate: -50% 0;
+  max-width: 22rem;
+}
+.diorama-callout[data-place="left"] .diorama-label {
+  top: 0;
+  right: 2.4375rem;
+  translate: 0 -50%;
+}
+.diorama-callout[data-place="right"] .diorama-label {
+  top: 0;
+  left: 2.4375rem;
+  translate: 0 -50%;
+}
+
+/* Narrow panel: no room outside the window, so the card moves in beside the
+   pin and stops being a floating white tooltip. */
+@container diorama-scene (width < 1100px) {
+  .diorama-stage {
+    padding: 0;
+  }
+  .diorama-connector {
+    display: none;
+  }
+  .diorama-label {
+    background: color-mix(in srgb, var(--background) 86%, transparent);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+  }
+  .diorama-callout[data-place="top"] .diorama-label {
+    bottom: auto;
+    top: 1.375rem;
+    left: 0.75rem;
+    translate: 0 0;
+    max-width: 15rem;
+  }
+  .diorama-callout[data-place="left"] .diorama-label {
+    right: auto;
+    left: 1.375rem;
+  }
+  .diorama-callout[data-place="right"] .diorama-label {
+    left: auto;
+    right: 1.375rem;
+  }
+}
+
+/* ---------------------------------------------------------- chapter dots */
+
+.diorama-chapters {
+  display: flex;
+  align-items: center;
+  gap: clamp(0.25rem, 1.2vw, 1rem);
+}
+.diorama-chapter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  padding: 0.25rem 0.5rem 0.4375rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: none;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 200ms var(--diorama-ease);
+}
+.diorama-chapter::before {
+  content: "";
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 25%, transparent);
+  transition: background 200ms var(--diorama-ease);
+}
+.diorama-chapter[data-active="true"] {
+  color: var(--foreground);
+}
+.diorama-chapter[data-active="true"]::before {
+  background: var(--primary);
+}
+.diorama-chapter:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .diorama-chapter:hover {
+    color: var(--foreground);
+  }
+}
+.diorama-chapter-track {
+  position: absolute;
+  inset-inline: 0.5rem;
+  bottom: 0.125rem;
+  height: 1px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+.diorama-chapter-line {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  transform-origin: left center;
+  animation: diorama-chapter-progress var(--diorama-chapter-duration) linear
+    both;
+}
+@keyframes diorama-chapter-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* ------------------------------------------------------------ mockup bits */
+
+.diorama-sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+}
+.diorama-task-tabs {
+  position: relative;
+}
+
+.diorama-tiled {
+  opacity: 0;
+}
+.diorama-drop-target,
+.diorama-browser,
+.diorama-drag,
+.diorama-cursor {
+  opacity: 0;
+}
+
+.diorama-drag {
+  left: 8cqw;
+  top: 68cqh;
+}
+.diorama-cursor--open {
+  left: 16cqw;
+  top: 41cqh;
+}
+
+/* ---------------------------------------------------- chapter 1 — tabs */
+
+.diorama-scene[data-chapter="1"] .diorama-active-tab {
+  animation: diorama-tab-pulse 420ms var(--diorama-ease) 260ms both;
+}
+@keyframes diorama-tab-pulse {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  45% {
+    transform: translateY(-2px);
+  }
+}
+
+/* ---------------------------------------------------- chapter 2 — tile */
+
+.diorama-scene[data-chapter="2"] .diorama-drag {
+  animation: diorama-drag-travel 2400ms var(--diorama-ease-in-out) 300ms both;
+}
+.diorama-scene[data-chapter="2"] .diorama-drag-card {
+  animation: diorama-fade-in 120ms var(--diorama-ease) 1200ms both;
+}
+.diorama-scene[data-chapter="2"] .diorama-source-row {
+  animation: diorama-press 240ms var(--diorama-ease) 1200ms both;
+}
+.diorama-scene[data-chapter="2"] .diorama-drop-target {
+  animation: diorama-target 1100ms linear 1400ms both;
+}
+.diorama-scene[data-chapter="2"] .diorama-tiled {
+  animation: diorama-fade-in 250ms var(--diorama-ease) 2350ms both;
+}
+.diorama-scene[data-chapter="2"] .diorama-tiled-drop {
+  animation: diorama-settle 420ms var(--diorama-ease) 2350ms both;
+}
+.diorama-scene[data-chapter="2"] .diorama-unsplit {
+  animation: diorama-hide 1ms step-end 2350ms both;
+}
+
+@keyframes diorama-drag-travel {
+  0% {
+    opacity: 0;
+    transform: translate(-5cqw, 7cqh);
+  }
+  10% {
+    opacity: 1;
+  }
+  25%,
+  37% {
+    transform: translate(0, 0);
+  }
+  /* a 2cqw overshoot on a 64cqw travel — bounce well under .15 */
+  78% {
+    transform: translate(66cqw, -23cqh);
+  }
+  88% {
+    opacity: 1;
+    transform: translate(64cqw, -21cqh);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(64cqw, -21cqh);
+  }
+}
+@keyframes diorama-press {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.98);
+  }
+}
+@keyframes diorama-target {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  20%,
+  85% {
+    opacity: 1;
+  }
+}
+@keyframes diorama-settle {
+  from {
+    transform: translateY(6px) scale(0.985);
+  }
+  62% {
+    transform: translateY(-1px) scale(1.004);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------- chapter 3 — open */
+
+.diorama-scene[data-chapter="3"] .diorama-tiled,
+.diorama-scene[data-chapter="4"] .diorama-tiled {
+  opacity: 1;
+}
+.diorama-scene[data-chapter="3"] .diorama-unsplit,
+.diorama-scene[data-chapter="4"] .diorama-unsplit {
+  opacity: 0;
+  visibility: hidden;
+}
+.diorama-scene[data-chapter="3"] .diorama-cursor--open {
+  animation: diorama-cursor-in 1500ms var(--diorama-ease-in-out) 300ms both;
+}
+.diorama-scene[data-chapter="3"] .diorama-browser-row {
+  animation: diorama-row-select 160ms var(--diorama-ease) 1000ms both;
+}
+.diorama-scene[data-chapter="3"] .diorama-browser {
+  animation: diorama-fade-in 220ms var(--diorama-ease) 1100ms both;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser,
+.diorama-scene[data-chapter="4"] .diorama-browser-row {
+  opacity: 1;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser-row {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+@keyframes diorama-cursor-in {
+  0% {
+    opacity: 0;
+    transform: translate(5cqw, 6cqh);
+  }
+  12%,
+  40% {
+    opacity: 1;
+  }
+  40% {
+    transform: translate(0, 0);
+  }
+  46% {
+    transform: translate(0, 0) scale(0.86);
+  }
+  54% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+}
+@keyframes diorama-row-select {
+  from {
+    background: transparent;
+  }
+  to {
+    background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  }
+}
+
+/* -------------------------------------------------- chapter 4 — browse */
+
+.diorama-browser-page {
+  --background: #f5f2eb;
+  --foreground: #25352c;
+  --muted-foreground: #5d6b62;
+  --primary: #426b55;
+  --primary-foreground: #fff;
+}
+.diorama-browser-cursor {
+  opacity: 0;
+}
+.diorama-browser-cursor--claude {
+  left: calc(100% - 11cqw);
+  top: 6cqh;
+}
+.diorama-browser-cursor--codex {
+  left: calc(100% - 14cqw);
+  top: auto;
+  bottom: 7cqh;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser-cursor--claude {
+  animation: diorama-browser-cursor 3200ms var(--diorama-ease) 200ms both;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser-cursor--codex {
+  animation: diorama-browser-cursor 3200ms var(--diorama-ease) 500ms both;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser-work {
+  animation: diorama-row-select 180ms var(--diorama-ease) 1700ms both;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser-project {
+  animation: diorama-press 240ms var(--diorama-ease) 2100ms both;
+}
+@keyframes diorama-browser-cursor {
+  0% {
+    opacity: 0;
+    transform: translate(-7cqw, 5cqh);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-7cqw, 5cqh);
+  }
+  40%,
+  92% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-1cqw, 2cqh);
+  }
+}
+
+/* ------------------------------------------------------------- shared */
+
+@keyframes diorama-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes diorama-hide {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+/* ------------------------------------------------------------- mobile */
+
+.onboarding-workspace--mobile {
+  justify-content: center;
+}
+.diorama-mobile {
+  width: min(100%, 24rem);
+  max-height: 100%;
+  aspect-ratio: 390 / 620;
+  margin-inline: auto;
+}
+.diorama-mobile .diorama-pane-tabs {
+  display: none;
+}
+.diorama-mobile-sheet {
+  animation: diorama-sheet 350ms var(--diorama-ease) 900ms both;
+}
+@keyframes diorama-sheet {
+  from {
+    opacity: 0;
+    transform: translateY(12%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------------------------------------------------- reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  .diorama-stage {
+    perspective: none;
+  }
+  /* Chapters still advance and the callouts still swap; only travel goes. */
+  .diorama-window {
+    animation-name: diorama-fade-in;
+    will-change: auto;
+  }
+  .diorama-callout {
+    transform: none;
+  }
+  .diorama-drag,
+  .diorama-cursor,
+  .diorama-drop-target,
+  .diorama-browser-cursor {
+    display: none;
+  }
+  .diorama-scene[data-chapter="1"] .diorama-active-tab,
+  .diorama-scene[data-chapter="2"] .diorama-source-row,
+  .diorama-scene[data-chapter="4"] .diorama-browser-project {
+    animation: none;
+  }
+  .diorama-scene[data-chapter="2"] .diorama-tiled-drop {
+    animation-name: diorama-fade-in;
+  }
+  .diorama-mobile-sheet {
+    animation-name: diorama-fade-in;
+  }
+}

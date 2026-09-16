@@ -22,10 +22,10 @@ describe("onboardingStepsFor", () => {
       "Choose your agents.",
       "Pick up where you left off.",
     ]);
-    expect(ONBOARDING_STEPS.map((step) => step.body)).toEqual([
-      null,
-      "Keep your accounts, skills, and plugins.",
-      "Import conversations from Claude Code, Codex, and OpenCode.",
+    expect(ONBOARDING_STEPS.map((step) => step.subtitle)).toEqual([
+      "Tasks, agents, browsers and artifacts, side by side.",
+      "Keep your accounts, skills and plugins.",
+      "Bring your Claude Code, Codex and OpenCode conversations.",
     ]);
   });
 
@@ -56,7 +56,7 @@ describe("onboardingStepsFor", () => {
 
     const mobileTaskTabs = onboardingStepsFor(true)[0];
     expect(mobileTaskTabs.id).toBe("task-tabs");
-    expect(mobileTaskTabs.body).toBe(
+    expect(mobileTaskTabs.subtitle).toBe(
       "Find tasks in the menu. Use the tab switcher for chats, browsers, and files.",
     );
     expect(mobileTaskTabs).not.toEqual(desktopTaskTabs);

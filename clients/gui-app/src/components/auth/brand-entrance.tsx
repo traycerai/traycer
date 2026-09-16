@@ -13,15 +13,14 @@ import "@/styles/auth-arrival.css";
  * progress stay what the eye lands on - and its mark carries a slow highlight
  * sweep for as long as the card is up (see {@link BootMarkShimmer}).
  *
- * `welcome` uses the hero size on the onboarding's themed background.
  * The hero mark is white by construction: it only ever sits on the cinematic
- * dark backdrop. The boot and welcome marks use their surface's foreground
- * colour - a white mark on the light theme's white card is no mark
- * at all. The SVG's own `<mask>` keeps its white fill (white is "show" there),
- * which is why the rule targets the drawn paths and not every `<path>`.
+ * dark backdrop. The boot mark uses its surface's foreground colour - a white
+ * mark on the light theme's white card is no mark at all. The SVG's own
+ * `<mask>` keeps its white fill (white is "show" there), which is why the rule
+ * targets the drawn paths and not every `<path>`.
  */
 export function BrandEntrance(props: {
-  readonly size: "hero" | "boot" | "welcome";
+  readonly size: "hero" | "boot";
   readonly children: ReactNode;
 }): ReactNode {
   const mark = (

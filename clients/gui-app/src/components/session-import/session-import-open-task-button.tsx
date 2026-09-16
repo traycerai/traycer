@@ -11,7 +11,6 @@ import { activateTabIntent, resourceEpicTabIntent } from "@/lib/tab-navigation";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { cn } from "@/lib/utils";
 
 type ImportedTask = Extract<
   SessionImportCandidateState,
@@ -116,13 +115,9 @@ export function SessionImportOpenTaskButton(props: {
       align={undefined}
     >
       <Button
-        variant={props.presentation === "card" ? "outline" : "ghost"}
-        size={props.presentation === "card" ? "default" : "icon-sm"}
-        className={cn(
-          "shrink-0",
-          props.presentation === "card" &&
-            "h-auto min-w-0 justify-start gap-3 rounded-xl bg-background/60 px-4 py-3 text-left",
-        )}
+        variant={props.presentation === "card" ? "card-row" : "ghost"}
+        size={props.presentation === "card" ? "card-row" : "icon-sm"}
+        className="shrink-0"
         disabled={hostId === null || openTask.isPending}
         aria-label={`Open task: ${props.title}`}
         onClick={() => {

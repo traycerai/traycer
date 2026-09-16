@@ -14,7 +14,11 @@ export interface FirstTaskImport {
 }
 
 export type FirstTaskHint =
-  "folder" | "workspace" | "prompt" | "imported" | "continue";
+  | "folder"
+  | "workspace"
+  | "prompt"
+  | "imported"
+  | "continue";
 
 interface FirstTaskGuideState {
   readonly acknowledgedHints: ReadonlySet<FirstTaskHint>;

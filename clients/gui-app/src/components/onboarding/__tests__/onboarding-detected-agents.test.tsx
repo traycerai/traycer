@@ -1208,17 +1208,24 @@ describe("SignInToEnableButton already-authenticated with sign-in unavailable", 
     expect(fixtures.startLoginMutate).not.toHaveBeenCalled();
   });
 
-  it("still shows the unavailable hint when the account is NOT signed in", () => {
+  it("still states the unavailable hint when the account is NOT signed in", () => {
     // The gate is skipped only for an authenticated account. Without this
     // control the fix above would read as "the hint never renders", which
     // would be a different bug wearing the same green.
+    //
+    // The hint is no longer a visible caption row - it would have been a third
+    // line of grey text on most of the board - so this asserts what a screen
+    // reader gets from the status line, which is where the redesign moved it.
     fixtures.providers = [
       { ...fixtures.signInProvider, loginCapability: null },
     ];
     render(<OnboardingDetectedAgents />);
 
     expect(screen.getByText("Not signed in")).toBeTruthy();
-    expect(screen.getByText("Sign-in unavailable here")).toBeTruthy();
+    expect(screen.queryByText("Sign-in unavailable here")).toBeNull();
+    expect(
+      screen.getByText(/Codex does not support browser sign-in\./),
+    ).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: /sign in & enable/i }),
     ).toBeNull();

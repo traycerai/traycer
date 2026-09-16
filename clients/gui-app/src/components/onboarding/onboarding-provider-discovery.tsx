@@ -104,18 +104,29 @@ function DiscoveryPopover(props: {
           type="button"
           onPointerDown={() => setPointerMotion(true)}
           onKeyDown={() => setPointerMotion(false)}
-          className="onboarding-discovery-trigger flex min-h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-xs text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="onboarding-discovery-trigger -mx-1.5 flex min-h-7 items-center gap-2 rounded-md px-1.5 text-left text-ui-xs tabular-nums text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           aria-label={`Discoveries for ${providerName}`}
           aria-describedby={descriptionId}
         >
-          <span id={descriptionId} className="tabular-nums">
-            {summary}
+          {/* One trailing slot, never two. While either list is still in
+              flight the summary would read a HALF answer ("1 skill", with the
+              plugins query unresolved) and the spinner sat straight after it,
+              which renders as a stray glyph tacked onto the count. Pending
+              says so and nothing else; settled shows the counts and the
+              chevron. */}
+          <span
+            id={descriptionId}
+            className="min-w-0 flex-1 truncate tabular-nums"
+          >
+            {pending ? "Finding your setup…" : summary}
           </span>
-          {pending ? (
-            <MutedAgentSpinner />
-          ) : (
-            <ChevronRight aria-hidden="true" className="ml-auto size-3.5" />
-          )}
+          <span className="flex size-3.5 shrink-0 items-center justify-center">
+            {pending ? (
+              <MutedAgentSpinner />
+            ) : (
+              <ChevronRight aria-hidden="true" className="size-3.5" />
+            )}
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -132,7 +143,8 @@ function DiscoveryPopover(props: {
         data-motion={pointerMotion}
         data-visible={open}
         onKeyDownCapture={() => setPointerMotion(false)}
-        className="onboarding-discovery-popover w-[min(20rem,var(--radix-popover-content-available-width))] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-2xl p-0 ring-0"
+        layout="panel"
+        className="onboarding-discovery-popover w-[min(20rem,var(--radix-popover-content-available-width))] max-h-[var(--radix-popover-content-available-height)] ring-0"
         aria-label={`${providerName} skills and plugins`}
       >
         <div className="flex shrink-0 items-center gap-2.5 px-4 pb-2 pt-3">

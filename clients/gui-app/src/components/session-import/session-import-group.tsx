@@ -115,7 +115,9 @@ export function SessionImportTaskRow(props: {
           onTaskOpened={onTaskOpened}
           onBeforeTaskOpen={props.onBeforeTaskOpen}
         />
-        <SessionRowTimestamp updatedAt={candidate.updatedAt} tone={tone} />
+        {onboarding ? null : (
+          <SessionRowTimestamp updatedAt={candidate.updatedAt} tone={tone} />
+        )}
       </div>
     );
   }
@@ -148,9 +150,12 @@ export function SessionImportTaskRow(props: {
         }}
         className={cn(
           "flex w-full min-w-0 items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+          // The tour's rows own their hover in `onboarding-import.css`, where
+          // the selected state's stronger tint can beat it.
           onboarding && "onboarding-import-task",
-          row.selectable ? tone.rowHover : "cursor-default",
-          !row.selectable && "opacity-55",
+          !row.selectable && "cursor-default",
+          row.selectable && !onboarding && tone.rowHover,
+          !row.selectable && (onboarding ? "opacity-50" : "opacity-55"),
         )}
       >
         <SelectionBox
@@ -168,7 +173,9 @@ export function SessionImportTaskRow(props: {
             {row.unavailableLabel}
           </span>
         ) : null}
-        <SessionRowTimestamp updatedAt={candidate.updatedAt} tone={tone} />
+        {onboarding ? null : (
+          <SessionRowTimestamp updatedAt={candidate.updatedAt} tone={tone} />
+        )}
       </button>
     </TooltipWrapper>
   );
@@ -183,30 +190,47 @@ function SessionImportTaskLabel(props: {
   const onboarding = tone.surface === "onboarding";
   const folderLabel = onboarding ? getBasename(row.folderPath) : row.folderPath;
   const titleClass = cn(
-    "min-w-0 text-ui-sm",
-    onboarding
-      ? "line-clamp-2 break-words font-medium leading-relaxed"
-      : "truncate",
+    "min-w-0 truncate text-ui-sm",
+    onboarding && "font-medium",
     tone.strong,
   );
+  const folder = showFolder ? (
+    <TooltipWrapper
+      label={onboarding ? row.folderPath : null}
+      side="top"
+      sideOffset={6}
+      align="start"
+    >
+      <span
+        data-testid="session-import-row-folder"
+        className={cn("min-w-0 truncate text-ui-xs", tone.faint)}
+      >
+        {folderLabel}
+      </span>
+    </TooltipWrapper>
+  ) : null;
   return (
     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
       <span className={titleClass}>{row.title}</span>
-      {showFolder ? (
-        <TooltipWrapper
-          label={onboarding ? row.folderPath : null}
-          side="top"
-          sideOffset={6}
-          align="start"
-        >
-          <span
-            data-testid="session-import-row-folder"
-            className={cn("min-w-0 truncate text-ui-xs", tone.faint)}
-          >
-            {folderLabel}
-          </span>
-        </TooltipWrapper>
-      ) : null}
+      {/* One 12px line under the title carries every scrap of context the tour's
+          card has room for: which folder it ran in, and how long ago. The
+          dialog keeps the timestamp in its own right-hand column. */}
+      {onboarding ? (
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          {folder}
+          {folder === null ? null : (
+            <span aria-hidden className={tone.faint}>
+              ·
+            </span>
+          )}
+          <SessionRowTimestamp
+            updatedAt={row.candidate.updatedAt}
+            tone={tone}
+          />
+        </span>
+      ) : (
+        folder
+      )}
     </span>
   );
 }
@@ -245,9 +269,9 @@ export function SessionImportGroupItem(props: {
       <section
         data-testid="session-import-group"
         data-group-key={group.groupKey}
-        className="min-w-0 pb-3"
+        className="min-w-0"
       >
-        <div className="mb-3 flex items-center gap-3">
+        <div className="onboarding-import-group-header flex items-center gap-2">
           <button
             type="button"
             role="checkbox"
@@ -264,7 +288,7 @@ export function SessionImportGroupItem(props: {
                 group.selectionState !== "all",
               )
             }
-            className="flex size-9 shrink-0 items-center justify-center rounded-md hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50"
+            className="flex size-7 shrink-0 items-center justify-center rounded-md hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50"
           >
             <SelectionBox
               state={group.selectionState}
@@ -274,7 +298,7 @@ export function SessionImportGroupItem(props: {
           </button>
           <Folder
             aria-hidden
-            className="size-4 shrink-0 text-muted-foreground"
+            className="size-3.5 shrink-0 text-muted-foreground"
           />
           <TooltipWrapper
             label={group.path}
@@ -282,17 +306,17 @@ export function SessionImportGroupItem(props: {
             sideOffset={undefined}
             align={undefined}
           >
-            <h2 className="min-w-0 truncate text-sm font-medium">
+            <h2 className="min-w-0 truncate text-ui-sm font-medium">
               {group.name}
             </h2>
           </TooltipWrapper>
-          <span className="text-xs tabular-nums text-muted-foreground">
+          <span className="text-ui-xs tabular-nums text-muted-foreground">
             {group.selectableCount > 0
               ? `${group.selectedCount} of ${group.selectableCount} selected`
               : `${group.totalCount} ${group.totalCount === 1 ? "task" : "tasks"}`}
           </span>
         </div>
-        <div className="onboarding-import-task-grid">{rows}</div>
+        <div className="onboarding-import-list">{rows}</div>
       </section>
     );
   }

@@ -8,6 +8,7 @@ import {
 } from "@/components/onboarding/onboarding-host-picker-model";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { cn } from "@/lib/utils";
+import "./onboarding-host-picker.css";
 
 /** A device picker for live panels; a single device needs only its name. */
 export function OnboardingHostPickerBar(props: {
@@ -36,18 +37,18 @@ export function OnboardingHostPickerBar(props: {
     <header
       data-testid="onboarding-host-picker-bar"
       className={cn(
-        "onboarding-host-control flex min-h-11 min-w-0 shrink-0 items-center rounded-xl bg-foreground/4 text-foreground",
+        "onboarding-host-control flex min-w-0 shrink-0 items-center text-foreground",
         props.className,
       )}
     >
       <Monitor
         aria-hidden="true"
-        className="pointer-events-none absolute left-3 size-4 shrink-0 text-muted-foreground"
+        className="pointer-events-none absolute left-2.5 size-3.5 shrink-0 text-muted-foreground"
       />
       {scope.hosts.length === 1 && scope.hosts[0]?.hostId === scope.hostId ? (
         <span
           data-testid="onboarding-host-name"
-          className="min-w-0 break-words py-2 pl-10 pr-3 text-sm"
+          className="min-w-0 break-words py-1.5 pl-8 pr-2.5 text-[0.8125rem]"
         >
           {scope.hostLabel}
         </span>

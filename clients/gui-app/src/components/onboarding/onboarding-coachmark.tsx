@@ -228,10 +228,10 @@ function CoachmarkTooltip({ step, tooltipProps }: TooltipRenderProps) {
         </h2>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label="Dismiss getting started guide"
-          className="-mr-1.5 -mt-1.5 shrink-0 text-muted-foreground"
+          className="-mr-1.5 -mt-1.5 shrink-0"
           onClick={() => {
             focusGuideTarget(context.target);
             context.onClose();
@@ -274,8 +274,7 @@ function CoachmarkTooltip({ step, tooltipProps }: TooltipRenderProps) {
           ) : null}
           <Button
             type="button"
-            size="sm"
-            className="min-h-9 rounded-lg bg-foreground px-3 text-background hover:bg-foreground/90"
+            size="lg"
             onClick={(event) => {
               context.setKeyboardNavigation(event.detail === 0);
               next();
@@ -368,7 +367,8 @@ function CoachmarkArrow({ placement, base, size }: ArrowRenderProps) {
       <path
         d={path}
         fill="none"
-        stroke="color-mix(in srgb, var(--foreground) 10%, transparent)"
+        className="text-foreground/10"
+        stroke="currentColor"
         strokeLinejoin="round"
       />
     </svg>

@@ -1,0 +1,66 @@
+/* The tour's device pill.
+   Imported by `onboarding-host-picker.tsx` rather than by either act's
+   stylesheet: the providers act and the import act both render this bar, so
+   neither may depend on the other's sheet being in the module graph. */
+
+.onboarding-host-control {
+  position: relative;
+  min-height: 2.25rem;
+  border-radius: 0.625rem;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 8%, transparent);
+  transition:
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+.onboarding-host-control > div {
+  border-radius: inherit;
+}
+.onboarding-host-control [data-testid="settings-host-switcher"] {
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.375rem 0.625rem 0.375rem 2rem;
+  border-radius: inherit;
+  color: var(--foreground);
+}
+.onboarding-host-control
+  [data-testid="settings-host-switcher"]
+  > span:first-child {
+  color: inherit;
+  font-size: 0.8125rem;
+}
+.onboarding-host-control
+  [data-testid="settings-host-switcher"][data-state="open"] {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+@media (hover: hover) and (pointer: fine) {
+  .onboarding-host-control:has(
+    [data-testid="settings-host-switcher"]:not([aria-disabled="true"]):hover
+  ) {
+    background: color-mix(in srgb, var(--foreground) 6%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 16%, transparent);
+  }
+}
+
+/* Placement inside the providers act's toolbar row. The track it names is
+   declared by `.onboarding-provider-panel` in `onboarding-agents.css`; this
+   rule is inert anywhere else the bar is rendered. */
+.onboarding-provider-panel > .onboarding-device-picker {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  justify-self: start;
+  width: max-content;
+  max-width: 100%;
+}
+@media (max-width: 640px) {
+  .onboarding-provider-panel > .onboarding-device-picker {
+    max-width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-host-control {
+    transition: none;
+  }
+}
