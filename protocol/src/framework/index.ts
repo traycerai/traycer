@@ -55,6 +55,7 @@ export { RPC_ERROR_CODES, isRpcErrorCode } from "./versioned-rpc-types";
 
 export type {
   WorktreeBusyErrorDetails,
+  WorktreeBusyChatTier,
   WorktreeBusyHoldKind,
   WorktreeBusyHolder,
   WorktreeBusyHolderActivity,
