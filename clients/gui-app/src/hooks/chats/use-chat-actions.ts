@@ -2,34 +2,28 @@ import { useMemo } from "react";
 import type {
   ChatRunSettings,
   ChatActiveTurn,
-  ChatQueueDeliveryPolicy,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundation";
-import type {
-  InterviewAnswer,
-  UserMessageSender,
-} from "@traycer/protocol/persistence/epic/schemas";
+import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
 import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type {
-  ChatSendRestore,
   ChatSessionStoreHandle,
   EditUserMessageInput,
   InterviewDeliveryRetryIdentity,
+  SendChatSessionMessageInput,
   SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import type { Attachment } from "@/lib/composer/types";
 
-interface SendChatMessageInput {
-  readonly content: JsonContent;
-  readonly sender: UserMessageSender;
-  readonly settings: ChatRunSettings;
-  readonly attachments: ReadonlyArray<Attachment>;
-  readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-  readonly restore: ChatSendRestore;
-}
+/**
+ * The store's own input, not a copy of it. A hand-typed restatement here drifts
+ * silently: `tsc` only ever sees the proxy forwarding an object literal, so a
+ * field added to the store's parameter and never added here type-checks clean
+ * and loses that field at the boundary.
+ */
+type SendChatMessageInput = SendChatSessionMessageInput;
 
 /**
  * Memoised stable callbacks bound to a `ChatSessionStoreHandle`.

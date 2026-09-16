@@ -120,6 +120,10 @@ import {
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useEpicParked } from "@/lib/epics/epic-parking";
 import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
+import {
+  holdComposerContentImageRoots,
+  releaseComposerContentImageRoots,
+} from "@/lib/composer/composer-content-image-roots";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -1548,13 +1552,9 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                       {/*
                        * Above the dock and outside the lower surfaces: this row
                        * is a turn-tail status line, not composer chrome, and it
-                       * belongs to the transcript side of the seam. Mounted
-                       * here rather than inside `ChatLowerInteractionSurfaces`
-                       * because it resolves the tab's routed host client, and
-                       * that surface is deliberately renderable without one
-                       * (see its `hostId` prop). It renders `null` for every
-                       * traversal state but `retrying`, so it is mounted
-                       * unconditionally and the component owns the predicate.
+                       * belongs to the transcript side of the seam. It renders
+                       * `null` for every traversal state but `retrying`, so it
+                       * is mounted unconditionally and owns the predicate.
                        */}
                       <FallbackRetryRow
                         pending={view.lower.fallback.pending}
@@ -1834,6 +1834,7 @@ function useChatTileSessionViewModel(
       steerProtocolSupported: s.steerProtocolSupported,
       autoPermissionModeProtocolSupported:
         s.autoPermissionModeProtocolSupported,
+      draftBlobBridgeSupported: s.draftBlobBridgeSupported,
       interviewDeliveryRetryProtocolSupported:
         s.interviewDeliveryRetryProtocolSupported,
       turnInProgress: s.turnInProgress,
@@ -2374,6 +2375,30 @@ function useChatTileSessionViewModel(
   // `currentContent` from the saved message, so a pristine edit loses nothing
   // and must not hold the epic resident.
   useEpicDraftGuard(currentEpicId, activeInlineEdit?.dirty ?? false);
+  // The byte-custody twin of that veto. `landing-image-gc.reconcile` deletes
+  // every stored hash outside the live roots, and an inline edit's images are
+  // named by nothing else - not a composer-draft row, not a chat session slice -
+  // so without this a reconcile while an edit is open reaps the bytes the
+  // submit is about to inline. Not gated on `dirty`: a pristine edit still
+  // REFERENCES those hashes, and only the park question cares whether the user
+  // has typed.
+  //
+  // Keyed by the mounted TILE, not the chat. `contentByHolder` is
+  // process-wide and the same chat can be open in several tiles, each with its
+  // own `activeInlineEdit` in its own reducer - so a chat-keyed holder had them
+  // share one slot. Unmounting a tile that never opened an edit then released
+  // the slot belonging to the tile that had one, and the next reconcile reaped
+  // bytes the surviving editor still names. Same reason the queue-edit
+  // saved-draft holder is keyed by `instanceId`.
+  useEffect(() => {
+    const holderId = `inline-edit:${node.instanceId}`;
+    if (activeInlineEdit !== null) {
+      holdComposerContentImageRoots(holderId, activeInlineEdit.currentContent);
+    }
+    return () => {
+      releaseComposerContentImageRoots(holderId);
+    };
+  }, [activeInlineEdit, node.instanceId]);
 
   const displayedMessages = useMemo(() => {
     if (activeInlineEdit === null) return renderedMessages;
@@ -3118,6 +3143,7 @@ function useChatTileSessionViewModel(
     chatActions,
     handle,
     nodeId: node.id,
+    tileInstanceId: node.instanceId,
     replaceDraftContent,
     clearDraftContent,
     currentComposerSettings,
@@ -3261,12 +3287,24 @@ function useChatTileSessionViewModel(
     () => handle.store.getState().activeTurn,
     [handle.store],
   );
+  // Read from the STORE at submit time, not from the projected boolean below.
+  // The projection is a value from the last committed render and a ref of it is
+  // the last committed effect; a stream transition to a non-bridging session
+  // can be queued in the store while an image preparation is mid-flight, and
+  // neither copy knows it yet. The send gate's whole job is to answer "can this
+  // session resolve a bare hash", and only the store can answer it at the
+  // moment it is asked.
+  const getDraftBlobBridgeSupported = useCallback(
+    () => handle.store.getState().draftBlobBridgeSupported,
+    [handle.store],
+  );
   const lowerTurn = useMemo(
     () => ({
       activeTurnStatus: composerActiveTurnStatus,
       steerCapable,
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
+      getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
@@ -3276,6 +3314,7 @@ function useChatTileSessionViewModel(
       steerCapable,
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
+      getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
       stopDisabled,
       chatActions.stopTurn,

@@ -19,6 +19,7 @@ import {
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2277,7 +2278,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 11 as chatSubscribeV111", () => {
+  it("registers chat.subscribe major 1 latestMinor 13 as chatSubscribeV113", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2293,19 +2294,22 @@ describe("chat.subscribe registry membership", () => {
     // full-snapshot contract above windowed `1.9` would silently un-window
     // every peer already capable of it. `11` carries the shell host on a resume
     // trigger and on the queued managed-command item, and is windowed for the
-    // same reason. That is what these assertions together protect - the
-    // ceiling, and the line shape at the ceiling.
+    // same reason. `12` adds the draft-blob bridge capability and the typed
+    // missing-attachment rejection cause, windowed for the same reason again.
+    // That is what these assertions together protect - the ceiling, and the
+    // line shape at the ceiling.
     //
-    // `12` does not switch anything either: it is the auto-mode line, and
-    // what it switches is the host's willingness to SERVE an `auto` chat at
-    // all.
-    expect(entry[1].latestMinor).toBe(12);
+    // `13` does not switch anything either: it is the auto-mode line, and what
+    // it switches is the host's willingness to SERVE an `auto` chat at all.
+    expect(entry[1].latestMinor).toBe(13);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
     expect(entry[1].versions[9].contract).toBe(chatSubscribeV19);
     expect(entry[1].versions[10].contract).toBe(chatSubscribeV110);
     expect(entry[1].versions[11].contract).toBe(chatSubscribeV111);
+    expect(entry[1].versions[12].contract).toBe(chatSubscribeV112);
+    expect(entry[1].versions[13].contract).toBe(chatSubscribeV113);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2317,12 +2321,20 @@ describe("chat.subscribe registry membership", () => {
       major: 1,
       minor: 11,
     });
+    expect(chatSubscribeV112.schemaVersion).toEqual({
+      major: 1,
+      minor: 12,
+    });
+    expect(chatSubscribeV113.schemaVersion).toEqual({
+      major: 1,
+      minor: 13,
+    });
   });
 
   it("keeps the FULL-SNAPSHOT schema version pinned at 1.7 while the ceiling moves", () => {
     // `chatSubscribeFullSnapshotSchemaVersion` names the newest NON-windowed
     // line, and it must not drift upward with the registry ceiling. `1.8`
-    // through `1.12` are all windowed, so the last full-snapshot line is
+    // through `1.13` are all windowed, so the last full-snapshot line is
     // still `1.7`; moving this to the ceiling would hand a full-snapshot
     // consumer a contract whose snapshot frame carries a bounded `tail`
     // instead of a whole chat.
@@ -2452,9 +2464,10 @@ describe("chat.subscribe registry membership", () => {
 // this merge: it carries the shell's `hostId` on the queued managed-command
 // item (main's addition, `chatQueueStateSchemaPreAuto`) while the permission
 // mode everywhere is still pre-`auto` (`auto` re-minted a minor above it, at
-// `1.12`). That combination existed on neither side before the merge - `1.10`
-// lacks the shell host entirely, `1.12` no longer holds `auto` back - so it
-// gets its own coverage rather than inheriting either neighbour's.
+// `1.13`). That combination existed on neither side before the merge - `1.10`
+// lacks the shell host entirely, `1.12` adds main's rejected-attachment cause,
+// and `1.13` no longer holds `auto` back - so it gets its own coverage rather
+// than inheriting any neighbour's.
 describe("chat.subscribe@1.11 (the shell-host tier, pre-`auto`)", () => {
   function activePermissionModeUpdateFrame(
     permissionMode: string,
@@ -2469,7 +2482,7 @@ describe("chat.subscribe@1.11 (the shell-host tier, pre-`auto`)", () => {
     };
   }
 
-  it('client frames reject an "auto" settings write - 1.12 is where auto becomes settable', () => {
+  it('client frames reject an "auto" settings write - 1.13 is where auto becomes settable', () => {
     // `chatSubscribeWindowedClientFrameSchemaPreAuto` binds `1.11`
     // deliberately: a settings write accepted here would mint a chat that
     // very line is then refused (`chatSubscribeSupportsPermissionMode`).
@@ -2484,9 +2497,9 @@ describe("chat.subscribe@1.11 (the shell-host tier, pre-`auto`)", () => {
         activePermissionModeUpdateFrame("full_access"),
       ).success,
     ).toBe(true);
-    // `1.12` is the first line whose client may say `auto`.
+    // `1.13` is the first line whose client may say `auto`.
     expect(
-      chatSubscribeV112.clientFrameSchema.safeParse(
+      chatSubscribeV113.clientFrameSchema.safeParse(
         activePermissionModeUpdateFrame("auto"),
       ).success,
     ).toBe(true);
@@ -2554,9 +2567,9 @@ describe("chat.subscribe@1.11 (the shell-host tier, pre-`auto`)", () => {
     }
     expect(onV111.queue.items[0]).toMatchObject({ hostId: "cross-host-1" });
 
-    // `1.12` carries `auto` on a queued turn's settings.
+    // `1.13` carries `auto` on a queued turn's settings.
     expect(
-      chatSubscribeV112.serverFrameSchema.safeParse(
+      chatSubscribeV113.serverFrameSchema.safeParse(
         queueChangedFrame([autoQueuedPrompt]),
       ).success,
     ).toBe(true);

@@ -160,6 +160,7 @@ describe("usePromptStash restore destination races", () => {
   describe("delayed-materialize destination acknowledgement", () => {
     it("does not insert or consume when destination becomes stale mid-materialize", async () => {
       const entry: PromptStashEntry = {
+        annotations: [],
         id: "entry-stale-mid",
         createdAt: 1,
         content: textDoc("stashed while switching"),
@@ -211,6 +212,7 @@ describe("usePromptStash restore destination races", () => {
 
     it("does not insert or consume when ready editor incarnation remounts under same owner id", async () => {
       const entry: PromptStashEntry = {
+        annotations: [],
         id: "entry-remount-gen",
         createdAt: 1,
         content: textDoc("stashed while remounting"),
@@ -262,6 +264,7 @@ describe("usePromptStash restore destination races", () => {
 
     it("does not insert or consume when destination adapter returns stale", async () => {
       const entry: PromptStashEntry = {
+        annotations: [],
         id: "entry-stale-result",
         createdAt: 1,
         content: textDoc("gone"),
@@ -294,6 +297,7 @@ describe("usePromptStash restore destination races", () => {
 
     it("appends against latest destination content mutated during blob reads", async () => {
       const entry: PromptStashEntry = {
+        annotations: [],
         id: "entry-mutate-during",
         createdAt: 1,
         content: textDoc("restored chunk"),
@@ -350,6 +354,7 @@ describe("usePromptStash restore destination races", () => {
       // started materialize. Owner-2 receives the originally captured identity
       // and must refuse it.
       const entry: PromptStashEntry = {
+        annotations: [],
         id: "entry-dest-swap",
         createdAt: 1,
         content: textDoc("for owner-1 only"),
@@ -421,6 +426,7 @@ describe("usePromptStash restore destination races", () => {
       // Drive this with a custom destination.materialize that delays, and an
       // importAndInsert that reads `let currentKey` from test scope.
       const entry: PromptStashEntry = {
+        annotations: [],
         id: "entry-live-key",
         createdAt: 1,
         content: textDoc("race me"),
@@ -495,6 +501,7 @@ describe("usePromptStash restore destination races", () => {
 
     it("allows two destinations to both insert the same snapshot without corrupting either", async () => {
       const entry: PromptStashEntry = {
+        annotations: [],
         id: "entry-dup-windows",
         createdAt: 1,
         content: textDoc("shared snapshot"),

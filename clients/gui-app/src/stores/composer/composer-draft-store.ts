@@ -19,6 +19,7 @@ import {
 } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 
 export interface DraftSelection {
@@ -698,6 +699,7 @@ export function composerDraftRememberSynced(
   draftId: string,
   hostRevision: number,
   collectedGeneration: number,
+  ownerHostId: string | null,
 ): void {
   const found = findComposerChatIdByDraftId(draftId);
   if (found === null) return;
@@ -705,12 +707,41 @@ export function composerDraftRememberSynced(
     const current = state.drafts[found];
     if (current === undefined) return state;
     const clearDirty = collectedGeneration >= current.generation;
+    // The lookup above matched on `draftId`, so this row is the same draft
+    // line the ACK names; clamping is safe within it and only within it. A
+    // different owner is a different numbering and replaces rather than
+    // clamps, exactly as landing does, and a null on either side is
+    // "not known to be different" - which clamps, the safe half.
+    const sameLine =
+      ownerHostId === null ||
+      current.ownerHostId === null ||
+      current.ownerHostId === ownerHostId;
     return {
       drafts: {
         ...state.drafts,
         [found]: {
           ...current,
-          hostRevision,
+          // Never backward within a line. This field IS the frontier
+          // `applyComposerHostDocument` fences on, so whatever lowers it
+          // re-opens the door that fence closes - and the store cannot check
+          // the ordering itself. Revisions arrive here from an upsert ACK, a
+          // subscribe-frame acknowledgement and the bootstrap list, and the
+          // session's held revision is not monotonic across a reconnect: a
+          // stale `drafts.list` can reset it below what is already installed,
+          // after which an acknowledgement carries that lower number through.
+          // The session guards its OWN `held` map with `>` on the ACK path;
+          // this is the store half of the same invariant, enforced where the
+          // value is read rather than at each of the callers.
+          hostRevision: sameLine
+            ? Math.max(current.hostRevision, hostRevision)
+            : hostRevision,
+          // Record whose revision it is: this is the ONLY thing that ever
+          // sets an owner on a draft that was published but never sent a
+          // host document, and the fence is keyed on owner equality.
+          ownerHostId:
+            hostRevision > 0 && ownerHostId !== null
+              ? ownerHostId
+              : current.ownerHostId,
           syncedGeneration: clearDirty
             ? current.generation
             : current.syncedGeneration,
@@ -748,6 +779,25 @@ export function applyComposerHostDocument(document: DraftDocument): boolean {
   // An id fenced by a submit is on its way to a tombstone; its late echo
   // must not put the sent content back into the cleared composer.
   if (composerSubmittedDraftDeleteIsPending(document.draftId)) return false;
+  // Revision frontier, the same one `applyLandingHostDocument` keeps and for
+  // the same reason: image reads finish OUT OF ORDER after subscribe-frame
+  // admission. The stream handler admits a frame against the revision it
+  // holds and records the new one synchronously, then awaits the blob
+  // prefetch - so two upserts for this row can both be admitted, and the
+  // slower one lands last. Without this the older continuation overwrites
+  // the newer text, and nothing downstream can restore it.
+  //
+  // Only comparable revisions: the same draft line on the same host. A
+  // re-mint (handled above) and a cloud head's synthetic revision 0 are
+  // different numbering, not an older position in this one.
+  if (
+    before.draftId === document.draftId &&
+    before.ownerHostId === document.ownerHostId &&
+    document.revision > 0 &&
+    before.hostRevision > document.revision
+  ) {
+    return false;
+  }
   useComposerDraftStore.setState((state) => {
     const current = ensureDraft(state.drafts, chatId);
     if (current.generation > current.syncedGeneration) {
@@ -830,6 +880,14 @@ export function collectComposerDirtyWrites(): ReadonlyArray<{
     // whose content the fresh id already carries.
     if (draft.origin === "replica") continue;
     if (isNeverTypedEmptyComposerDraft(draft)) continue;
+    // A pending inline image node means its hash rewrite has not landed yet.
+    // Publishing NOW would put the whole base64 snapshot on the wire - the
+    // upsert, the host row, every subscribe frame and the cloud head - which is
+    // the exact payload this work exists to remove. The rewrite's own document
+    // change bumps `generation` again and schedules the small write moments
+    // later; a failed ingest removes the node and does the same. Either way
+    // this draft is collectable on the next pass.
+    if (containsPendingInlineImageNode(draft.content)) continue;
     out.push({ chatId, draft });
   }
   return out;

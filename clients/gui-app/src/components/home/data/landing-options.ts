@@ -368,7 +368,7 @@ export function catalogLineKnowsAutoMode(
  * - {@link catalogLineKnowsAutoMode} on `agent.gui.listHarnesses@9.1` says
  *   this host can OFFER the mode - a host below it filters `auto` out of every
  *   catalog row it serves;
- * - `chatLineCarriesAutoMode` on `chat.subscribe@1.12` says this chat can
+ * - `chatLineCarriesAutoMode` on `chat.subscribe@1.13` says this chat can
  *   CARRY the value on a client frame. Below it,
  *   `projectChatClientFrameForVersion` THROWS rather than stripping the field,
  *   so an offer the send cannot honour is a crash at the stream boundary and

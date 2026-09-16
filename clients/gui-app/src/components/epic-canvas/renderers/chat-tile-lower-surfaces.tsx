@@ -45,6 +45,7 @@ import {
   type AgentRow,
 } from "@/hooks/agent/use-agent-stop-controls";
 import { useAgentStop } from "@/hooks/agent/use-stop-agent-mutation";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { StopChildrenDialog } from "@/components/chat/chat-stop-children-dialog";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
@@ -88,10 +89,8 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly viewTabId: string;
   readonly chatId: string;
   /**
-   * The tile's bound host. A prop rather than a `useTabHostId()` read so this
-   * surface stays renderable on its own (several suites mount it directly),
-   * and so the host it resolves chat-session state under is visible at the
-   * boundary like `epicId` and `chatId` already are.
+   * The tile's bound host, made explicit for chat-session state lookups.
+   * Must match the surrounding TabHostProvider used for stop requests.
    */
   readonly hostId: string;
   readonly runtime: ChatLowerRuntimeState;
@@ -170,6 +169,8 @@ export interface ChatLowerTurnState {
    * scope - and it gates whether the toolbar may OFFER Auto at all.
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
+  /** Own live stream's draft-blob bridge capability. */
+  readonly getDraftBlobBridgeSupported: () => boolean;
   /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly stopDisabled: boolean;
@@ -322,7 +323,8 @@ export function ChatLowerInteractionSurfaces(
     rootAgentId: props.chatId,
   });
   const activeAgents = stopControls.descendants;
-  const agentStop = useAgentStop();
+  const tabHostClient = useTabHostClient();
+  const agentStop = useAgentStop(tabHostClient);
   const [stopChildrenOpen, setStopChildrenOpen] = useState(false);
 
   // Destructure the turn prop for stable use in callbacks
@@ -333,6 +335,8 @@ export function ChatLowerInteractionSurfaces(
   const turnSteerProtocolSupported = props.turn.steerProtocolSupported;
   const turnAutoPermissionModeProtocolSupported =
     props.turn.autoPermissionModeProtocolSupported;
+  const turnGetDraftBlobBridgeSupported =
+    props.turn.getDraftBlobBridgeSupported;
   const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
 
   // Intercept the composer Stop button: when this chat has active
@@ -353,6 +357,7 @@ export function ChatLowerInteractionSurfaces(
       steerProtocolSupported: turnSteerProtocolSupported,
       autoPermissionModeProtocolSupported:
         turnAutoPermissionModeProtocolSupported,
+      getDraftBlobBridgeSupported: turnGetDraftBlobBridgeSupported,
       getActiveTurnForSteer: turnGetActiveTurnForSteer,
       stopDisabled: turnStopDisabled,
       onStopTurn: requestStopTurn,
@@ -362,6 +367,7 @@ export function ChatLowerInteractionSurfaces(
       turnSteerCapable,
       turnSteerProtocolSupported,
       turnAutoPermissionModeProtocolSupported,
+      turnGetDraftBlobBridgeSupported,
       turnGetActiveTurnForSteer,
       turnStopDisabled,
       requestStopTurn,
@@ -1114,6 +1120,7 @@ function LiveChatComposer(props: {
       autoPermissionModeProtocolSupported={
         model.turn.autoPermissionModeProtocolSupported
       }
+      getDraftBlobBridgeSupported={model.turn.getDraftBlobBridgeSupported}
       getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}

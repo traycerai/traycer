@@ -131,10 +131,32 @@ export class ChatSessionRegistry {
         // Every chat session is worth keeping warm; this plane has no
         // unreattachable state.
         retainWhenIdle: () => true,
-        hasActiveWork: hasActiveChatWork,
-        // Nothing a chat session holds is lost by disposing it: the transcript
-        // is the host's, and a re-open re-subscribes.
+        hasActiveWork: (handle) =>
+          hasActiveChatWork(handle) || holdsUnrecordedPrompt(handle),
+        // NOTHING is gated here, and that is the correction rather than an
+        // omission. This read `!holdsUnrecordedPrompt(handle)`, on the premise
+        // that the two eviction routes do not share a gate - the warm-cap walk
+        // asking `isEvictable` and idle expiry asking only `hasActiveWork`.
+        // The first half is false. `enforceWarmCap` filters its candidates
+        // `hasActiveWork` FIRST and `isEvictable` second (shared registry,
+        // `session-registry.ts`), so once the hold is in `hasActiveWork` - and
+        // it must be, because that is the only thing idle expiry reads - every
+        // case this clause would have refused was already skipped one line
+        // above it. It was unreachable.
+        //
+        // An unreachable guard is worse than an absent one: four tests were
+        // written against it and passed, each for a reason other than the one
+        // its name claimed. So the hold lives in exactly one predicate,
+        // `hasActiveWork`, which both routes reach. Narrowing that predicate
+        // now loses the warm-cap hold too - which is the honest coupling, and
+        // is why it is written down here.
         isEvictable: () => true,
+        // Left as an unconditional dispose ON PURPOSE. `"retain"` means "the
+        // plane has taken ownership", and the shared registry removes the
+        // entry from its map either way - so returning it here would leave the
+        // prompt in a store nothing can reacquire, which is the same loss by a
+        // quieter route. The idle path is held off in `hasActiveWork` instead,
+        // where the deferral is bounded by `MAX_ACTIVE_CHAT_IDLE_DEFER_MS`.
         onBeforeDispose: () => "dispose",
         dispose: (handle) => {
           handle.dispose();
@@ -384,6 +406,12 @@ function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
   // Held until the slot is consumed, which is what `ackFailedSendRestoration`
   // marks.
   if (state.failedSendRestoration !== null) return true;
+  // A recovery is the same kind of hold, one step earlier. Its action has left
+  // `pendingActions` (the host answered it) and its prompt has not reached
+  // `failedSendRestoration` yet, so between those two it is invisible to both
+  // checks above - and for a QUEUED send there is no optimistic echo either.
+  // Parking an otherwise-idle recovering chat disposes the only copy.
+  if (Object.keys(state.hashOnlyRecoveries).length > 0) return true;
   // An accepted action is not finished at its ACK - but what "finished" means
   // is the action's own, so `acceptedActionIsUnsettled` decides per kind
   // against the live queue (a `restoreCheckpoint` record is retired by its
@@ -426,6 +454,62 @@ function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Whether this chat still holds a prompt that exists NOWHERE ELSE - not in the
+ * host's transcript, not in a draft row, not in any other store.
+ *
+ * The registry's default answer is that a chat holds nothing to lose, because
+ * a re-open re-subscribes and the host is the source of truth. The hash-only
+ * refusal path breaks that premise, and it breaks it in three consecutive
+ * states, not one:
+ *
+ *  1. **Recovering.** The settled action is gone and the retry has not been
+ *     built; the recovery record is the only copy.
+ *  2. **Retry dispatched, not acknowledged.** The record is gone the moment
+ *     `sendAction` returns, but the host has not confirmed anything, and the
+ *     original send it replaces was REFUSED - so there is nothing to replay.
+ *     Only a `hashOnlyRetry` action counts here: an ordinary unacknowledged
+ *     send is the pre-existing retention policy's business, and widening this
+ *     to every pending action would change the idle TTL for every chat.
+ *  4. **An undelivered last-copy notice.** The slot was displaced, so the
+ *     prompt now lives only in a `SEND_NOT_RECORDED` notice the user has not
+ *     seen yet.
+ *  3. **Handed back, not consumed.** `failedSendRestoration` is the only copy
+ *     until a mounted tile's driver writes it into the composer draft store -
+ *     which is exactly the reasoning `hasUnsettledChatWork` already gives for
+ *     holding a PARK on the same slot.
+ *
+ * Covering only (1) - the first version - meant the hold expired at the
+ * instant custody moved to (2) or (3), and warm overflow then destroyed the
+ * only copy a few milliseconds later.
+ *
+ * Bounded, not indefinite: (1) has its own 30-second deadline, and the idle
+ * deferral this feeds is capped by `MAX_ACTIVE_CHAT_IDLE_DEFER_MS`.
+ */
+function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
+  const state = handle.store.getState();
+  if (Object.keys(state.hashOnlyRecoveries).length > 0) return true;
+  if (state.failedSendRestoration !== null) return true;
+  if (
+    Object.values(state.pendingActions).some((action) => action.hashOnlyRetry)
+  ) {
+    return true;
+  }
+  // 4. The prompt has become an UNDELIVERED last-copy notice. A restoration
+  //    displaced by the user's newer draft ends up here, and so does a
+  //    recovery abandoned into an occupied slot - and once the slot is
+  //    cleared, the notice is the only copy. `hasUnsettledChatWork` already
+  //    protects exactly this state through `deliveredLastCopyActionIds`;
+  //    omitting it here meant warm overflow could discard the notice before
+  //    the pane ever showed it.
+  return state.errorNotices.some(
+    (notice) =>
+      noticeCarriesOnlyCopy(notice) &&
+      notice.clientActionId !== null &&
+      !state.deliveredLastCopyActionIds.has(notice.clientActionId),
+  );
 }
 
 function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {

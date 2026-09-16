@@ -13,7 +13,7 @@
  *   builds shipped it;
  * - `1.11` is the shell host on a resume trigger and on the queued
  *   managed-command item, minted above that;
- * - `1.12` is the `auto` permission mode, minted above THAT. It carries the
+ * - `1.13` is the `auto` permission mode, minted above THAT. It carries the
  *   whole fallback and shell-host surface too - what it holds back from `1.11`
  *   is the queue and approval-card shape, pinned in `chat-subscribe.test.ts`.
  *
@@ -33,9 +33,15 @@ import {
 import { providerNoticeKindSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
+// The minor each surface was minted on. A line carries a surface from its own
+// minor UPWARD - `1.13` is not "not the shell-host line", it is a later one
+// that inherits it - so these are thresholds, not equalities. Written as `===`
+// they assert that the newest line has LOST the surface below it.
 const FALLBACK_MINOR = 10;
 const SHELL_HOST_MINOR = 11;
-const LIVE_MINOR = 12;
+const DRAFT_IMAGE_CAUSE_MINOR = 12;
+const AUTO_MINOR = 13;
+const LIVE_MINOR = AUTO_MINOR;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -151,8 +157,11 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.12 (a line added later cannot drop out)", () => {
-    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  it("covers chat.subscribe@1.0 through @1.13 (a line added later cannot drop out)", () => {
+    // RESTATED on purpose: this is the change-detector for the line SET, so a
+    // derived list would assert the registry against itself. When a new minor
+    // lands, extending this by hand is the acknowledgement.
+    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
 
@@ -170,8 +179,9 @@ describe("chat.subscribe line surfaces", () => {
       const { contract } = chatSubscribeLine.versions[minor];
       const carriesFallback = minor >= FALLBACK_MINOR;
       const carriesShellHost = minor >= SHELL_HOST_MINOR;
-      const carriesAuto = minor === LIVE_MINOR;
+      const carriesAuto = minor >= AUTO_MINOR;
       const carriesPlacement = minor >= 9;
+      const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
 
       it(`server frames ${carriesFallback ? "carry" : "hold back"} every provider-fallback surface`, () => {
         const text = schemaText(contract.serverFrameSchema);
@@ -199,6 +209,12 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           actionAckPropertyNames(contract.serverFrameSchema).includes("token"),
         ).toBe(carriesFallback);
+      });
+
+      it(`actionAck ${carriesRefusalCause ? "carries" : "has no"} the draft-image refusal cause`, () => {
+        expect(
+          actionAckPropertyNames(contract.serverFrameSchema).includes("cause"),
+        ).toBe(carriesRefusalCause);
       });
 
       it(`server frames ${carriesShellHost ? "carry" : "hold back"} the shell host on every shell shape`, () => {

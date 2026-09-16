@@ -37,6 +37,7 @@ describe("prompt-stash-repository blob corruption", () => {
     const ha = await sha256Hex(a);
     const hb = await sha256Hex(b);
     const stashEntry: PromptStashEntry = {
+      annotations: [],
       id: "e",
       createdAt: 1,
       blobHashes: [ha, hb],
@@ -123,6 +124,7 @@ describe("prompt-stash-repository blob corruption", () => {
     const ha = await sha256Hex(a);
     const hb = await sha256Hex(b);
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "partial",
       createdAt: 10,
       blobHashes: [ha, hb],

@@ -69,7 +69,7 @@ export interface ComposerToolbarCatalog {
   readonly hostId: string | null;
   /**
    * Whether the chat this composer sends on has negotiated a `chat.subscribe`
-   * line that can CARRY `permissionMode: "auto"` (`@1.12`), or `null` when no
+   * line that can CARRY `permissionMode: "auto"` (`@1.13`), or `null` when no
    * chat session is in scope - the landing composer, and Settings' judge
    * picker, neither of which has one.
    *

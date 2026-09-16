@@ -14,6 +14,7 @@ import {
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   sessionImportRunV10,
@@ -175,10 +176,12 @@ const CHAT_SUBSCRIBE_LINES = [
   { label: "1.10", contract: chatSubscribeV110 },
   { label: "1.11", contract: chatSubscribeV111 },
   { label: "1.12", contract: chatSubscribeV112 },
+  { label: "1.13", contract: chatSubscribeV113 },
 ] as const;
 
 // The boundary is read off the live line, never restated as a literal - that
-// minor has now been renumbered TWICE (see `chatSubscribeV112`'s doc comment).
+// minor has now been renumbered FOUR times (see `chatSubscribeV113`'s doc
+// comment).
 //
 // Read from the REGISTRY rather than from a `chatSubscribeV1NN` symbol, and
 // that distinction is the whole lesson of the second renumber. This line used
@@ -191,7 +194,35 @@ const CHAT_SUBSCRIBE_LINES = [
 const CHAT_SUBSCRIBE_AUTO_MINOR =
   hostStreamRpcRegistry["chat.subscribe"][1].latestMinor;
 
-describe("chat.subscribe: the auto permission mode is pinned below 1.12, everywhere it can ride", () => {
+// Deriving the boundary is only half of it: the TABLE above is still a hand
+// written list, and the fourth renumber moved the boundary to a minor the list
+// did not yet have. Every row's `acceptsAuto` then read false, so the suite
+// went on asserting that thirteen lines refuse `auto` and quietly stopped
+// asserting that any line accepts it - green, and no longer testing the thing
+// it is named for. A derived boundary over a restated population is vacuous
+// unless the two are checked against each other, so check them.
+describe("chat.subscribe: the auto line is in the table under test", () => {
+  it(`has exactly one line at the derived auto minor (${CHAT_SUBSCRIBE_AUTO_MINOR})`, () => {
+    const atAutoMinor = CHAT_SUBSCRIBE_LINES.filter(
+      (line) => line.contract.schemaVersion.minor === CHAT_SUBSCRIBE_AUTO_MINOR,
+    );
+
+    expect(atAutoMinor.map((line) => line.label)).toHaveLength(1);
+  });
+
+  it("covers every minor from 1.0 up to the auto line with no gaps", () => {
+    expect(
+      CHAT_SUBSCRIBE_LINES.map((line) => line.contract.schemaVersion.minor),
+    ).toEqual(
+      Array.from(
+        { length: CHAT_SUBSCRIBE_AUTO_MINOR + 1 },
+        (_, minor) => minor,
+      ),
+    );
+  });
+});
+
+describe("chat.subscribe: the auto permission mode is pinned below the auto line, everywhere it can ride", () => {
   for (const line of CHAT_SUBSCRIBE_LINES) {
     const acceptsAuto =
       line.contract.schemaVersion.minor === CHAT_SUBSCRIBE_AUTO_MINOR;

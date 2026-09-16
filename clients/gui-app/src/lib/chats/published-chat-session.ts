@@ -333,6 +333,7 @@ export function publishedChatSessionState(
     // A published transcript has no live session at all, so it cannot say -
     // and nothing here offers a permission mode to gate in the first place.
     autoPermissionModeProtocolSupported: null,
+    draftBlobBridgeSupported: false,
     interviewDeliveryRetryProtocolSupported: false,
     turnInProgress: false,
     pendingApprovals: [],
@@ -387,11 +388,13 @@ export function publishedChatSessionState(
     errorNotices: [],
     deliveredNoticeActionIds: new Set<string>(),
     deliveredLastCopyActionIds: new Set<string>(),
+    lastCopyPrompts: {},
     // Nothing streams into a published copy, so no card is ever opened here -
     // but the field is part of the state shape and a second construction site
     // that forgets one is how these two drift.
     openedSubagentCardBlockIds: new Set<string>(),
     failedSendRestoration: null,
+    hashOnlyRecoveries: {},
     currentComposerSettings: null,
     liveAssistantMessage: null,
     liveTurnUsage: null,

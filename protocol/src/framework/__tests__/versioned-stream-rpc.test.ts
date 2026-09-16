@@ -119,9 +119,14 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // The same re-mint rule on the chat line: mainline's @1.9 (Antigravity
     // anchors and delivery placement) stays frozen as staging shipped it,
     // provider fallback took @1.10 above it, the shell host on a resume
-    // trigger and the queued managed-command item took @1.11 above that, and
-    // this branch's auto-mode line re-minted above THAT at @1.12.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(12);
+    // trigger and the queued managed-command item took @1.11 above that,
+    // draft-image bridging took @1.12, and this branch's auto-mode line
+    // re-minted above THAT at @1.13 - its fourth renumber.
+    //
+    // RESTATED rather than derived, deliberately: this file is the
+    // change-detector for the line set, so deriving it from the registry would
+    // assert the registry against itself.
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(13);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(

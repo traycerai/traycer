@@ -8,6 +8,7 @@ import {
   permissionModeSchema,
   permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   projectChatClientFrameForVersion,
   supportsAutoPermissionMode,
@@ -61,7 +62,7 @@ function parseLiveClientFrame(
 }
 
 // The six client-frame kinds `subscribe.ts` re-binds to the live permission
-// mode enum on `1.12` (see `chatSubscribeClientFrameSchemaMiddleOptionsLive`
+// mode enum on the auto line (see `chatSubscribeClientFrameSchemaMiddleOptionsLive`
 // and the two `.extend({ settings: chatRunSettingsSchema })` spots at the top
 // of `chatSubscribeClientFrameSchemaOptions`): `send` and `editUserMessage`
 // through their `settings` tuple, `queueSteerNow` through the nullable
@@ -139,49 +140,60 @@ const MODE_BEARING_FRAME_KINDS: ReadonlyArray<{
   },
 ];
 
-const V110: SchemaVersion = { major: 1, minor: 10 };
-// `1.11` is main's shell-host tier, which the merge to main slotted BELOW the
-// auto line. It is pre-`auto` like `1.10`, so it belongs on the refusing side
-// of the cliff - a line can gain a server surface and keep an older client
-// enum, and this is the case that proves the two freezes are separate.
-const V111: SchemaVersion = { major: 1, minor: 11 };
-const V112: SchemaVersion = { major: 1, minor: 12 };
+// DERIVED, never restated. The auto line has been renumbered four times - to
+// `1.10`, `1.11`, `1.12` and now `1.13`, each time because main took the minor
+// first - and every one of those moves broke a file that had written the
+// number down. `latestMinor` cannot be redirected by a rename or a re-mint.
+const AUTO_MINOR = hostStreamRpcRegistry["chat.subscribe"][1].latestMinor;
+const AUTO_LINE: SchemaVersion = { major: 1, minor: AUTO_MINOR };
 
-describe("projectChatClientFrameForVersion: the auto cliff at chat.subscribe@1.12", () => {
+// The two tiers immediately below the cliff, expressed as offsets so they move
+// with it. `AUTO_MINOR - 1` is main's draft-image line (it gained a server
+// surface and kept the older client enum) and `- 2` is the shell-host line.
+// Both are pre-`auto`, which is the case that proves those freezes are
+// separate axes from this one.
+const BELOW_AUTO: SchemaVersion = { major: 1, minor: AUTO_MINOR - 1 };
+const TWO_BELOW_AUTO: SchemaVersion = { major: 1, minor: AUTO_MINOR - 2 };
+
+describe("projectChatClientFrameForVersion: the auto cliff at the live chat.subscribe line", () => {
   for (const frameKind of MODE_BEARING_FRAME_KINDS) {
-    it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" on 1.10`, () => {
+    it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" two minors below the auto line`, () => {
       const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
 
-      expect(() => projectChatClientFrameForVersion(frame, V110)).toThrow(
-        'permissionMode "auto" requires chat.subscribe@1.12 or newer',
+      expect(() =>
+        projectChatClientFrameForVersion(frame, TWO_BELOW_AUTO),
+      ).toThrow(
+        `permissionMode "auto" requires chat.subscribe@1.${AUTO_MINOR} or newer`,
       );
     });
 
-    it(`leaves ${frameKind.kind} carrying "${PRE_AUTO_SAMPLE_MODE}" unaffected on 1.10`, () => {
+    it(`leaves ${frameKind.kind} carrying "${PRE_AUTO_SAMPLE_MODE}" unaffected two minors below the auto line`, () => {
       const frame = parseLiveClientFrame(frameKind.build(PRE_AUTO_SAMPLE_MODE));
 
-      expect(projectChatClientFrameForVersion(frame, V110)).toBe(frame);
-    });
-
-    it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" on 1.11 - the shell-host tier is still pre-auto`, () => {
-      const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
-
-      expect(() => projectChatClientFrameForVersion(frame, V111)).toThrow(
-        'permissionMode "auto" requires chat.subscribe@1.12 or newer',
+      expect(projectChatClientFrameForVersion(frame, TWO_BELOW_AUTO)).toBe(
+        frame,
       );
     });
 
-    it(`passes ${frameKind.kind} carrying "${AUTO_MODE}" through unchanged on 1.12`, () => {
+    it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" one minor below the auto line - still pre-auto`, () => {
       const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
 
-      expect(projectChatClientFrameForVersion(frame, V112)).toBe(frame);
+      expect(() => projectChatClientFrameForVersion(frame, BELOW_AUTO)).toThrow(
+        `permissionMode "auto" requires chat.subscribe@1.${AUTO_MINOR} or newer`,
+      );
+    });
+
+    it(`passes ${frameKind.kind} carrying "${AUTO_MODE}" through unchanged on the auto line`, () => {
+      const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
+
+      expect(projectChatClientFrameForVersion(frame, AUTO_LINE)).toBe(frame);
     });
 
     it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" when the handshake has not resolved (null)`, () => {
       const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
 
       expect(() => projectChatClientFrameForVersion(frame, null)).toThrow(
-        'permissionMode "auto" requires chat.subscribe@1.12 or newer',
+        `permissionMode "auto" requires chat.subscribe@1.${AUTO_MINOR} or newer`,
       );
     });
   }
@@ -194,20 +206,36 @@ describe("projectChatClientFrameForVersion: the auto cliff at chat.subscribe@1.1
       newSettings: null,
     });
 
-    expect(projectChatClientFrameForVersion(frame, V110)).toBe(frame);
+    expect(projectChatClientFrameForVersion(frame, TWO_BELOW_AUTO)).toBe(frame);
   });
 });
 
 describe("supportsAutoPermissionMode", () => {
-  it("is false below 1.12, the shell-host tier at 1.11 included", () => {
-    expect(supportsAutoPermissionMode({ major: 1, minor: 11 })).toBe(false);
-    expect(supportsAutoPermissionMode({ major: 1, minor: 10 })).toBe(false);
+  // Derived, because these literals were `11`/`10` when the auto line was
+  // `1.12` and stayed compiling and passing when it moved to `1.13` - at which
+  // point they tested two tiers that are no longer the adjacent ones and
+  // stopped covering `1.12`, the line that had just inherited the pre-auto
+  // union. An adjacent-tier assertion has to move with the tier.
+  it("is false below the auto line, the two tiers beneath it included", () => {
+    expect(
+      supportsAutoPermissionMode({ major: 1, minor: AUTO_MINOR - 1 }),
+    ).toBe(false);
+    expect(
+      supportsAutoPermissionMode({ major: 1, minor: AUTO_MINOR - 2 }),
+    ).toBe(false);
     expect(supportsAutoPermissionMode({ major: 1, minor: 0 })).toBe(false);
   });
 
-  it("is true at and above 1.12", () => {
-    expect(supportsAutoPermissionMode({ major: 1, minor: 12 })).toBe(true);
-    expect(supportsAutoPermissionMode({ major: 1, minor: 13 })).toBe(true);
+  it("is true at and above the auto line", () => {
+    expect(supportsAutoPermissionMode({ major: 1, minor: AUTO_MINOR })).toBe(
+      true,
+    );
+    // `AUTO_MINOR + 1`, not a literal equal to `AUTO_MINOR`: this arm is the
+    // only one asserting ABOVE, and a literal that happens to match the line
+    // makes it a duplicate of the arm above while reading as coverage.
+    expect(
+      supportsAutoPermissionMode({ major: 1, minor: AUTO_MINOR + 1 }),
+    ).toBe(true);
   });
 
   it("is false when the handshake has not resolved (null)", () => {

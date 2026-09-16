@@ -654,7 +654,7 @@ const chatQueuedManagedCommandItemSchemaPreShellHost = z.object({
 // NOTE: main's `chatQueuedItemSchemaPreShellHost` /
 // `chatQueueStateSchemaPreShellHost` (pre-shell-host item + LIVE prompt item)
 // are deliberately NOT carried through this merge. They described the lines
-// below `1.11` when `auto` did not exist; now that `auto` sits at `1.12`,
+// below `1.11` when `auto` did not exist; now that `auto` sits at `1.13`,
 // every line below `1.11` is pre-`auto` as well, so that pairing describes no
 // line that exists. `chatQueueStateSchemaPreShellHostPreAuto` below replaced
 // all six of its bindings. The managed-command item above survives - `1.6`'s
@@ -1600,7 +1600,7 @@ export type LastFallbackOutcome = z.infer<typeof lastFallbackOutcomeSchema>;
 const chatSnapshotSchemaV17 = z.object({
   chat: chatSchemaV18,
   access: chatAccessSchema,
-  // Neither the shell host (`1.11`) nor `auto` (`1.12`).
+  // Neither the shell host (`1.11`) nor `auto` (`1.13`).
   queue: chatQueueStateSchemaPreShellHostPreAuto,
   // Authoritative in-progress state (see `chatRunStatusSchema`). The GUI's
   // in-progress indicators read this, not `activeTurn`.
@@ -1978,7 +1978,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   ApprovalSchema extends z.ZodType,
   InterviewAnsweredSchema extends z.ZodType,
   InterviewErroredSchema extends z.ZodType,
-  LeaseFields extends z.ZodRawShape,
+  ExtraActionAckFields extends z.ZodRawShape,
 >(schemas: {
   readonly message: MessageSchema;
   readonly queue: QueueSchema;
@@ -2001,7 +2001,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
    * each released host→client slot - correctly, since a released host never
    * emits it and a consumer that assumes it is populated reads undefined.
    */
-  readonly lease: LeaseFields;
+  readonly extraActionAckFields: ExtraActionAckFields;
 }) {
   return [
     z.object({
@@ -2021,7 +2021,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
       backgroundStopTaskIds: z.array(z.string()).default([]),
       // `token` on the lines that mint a lease - see `lease` on the parameter
       // object above for why it arrives that way and not as a member here.
-      ...schemas.lease,
+      ...schemas.extraActionAckFields,
     }),
     z.object({
       kind: z.literal("messageAccepted"),
@@ -2123,12 +2123,11 @@ function buildChatSubscribeCommonServerFrameSchemas<
 }
 
 // Frozen common frames bound to `chat.subscribe@1.7`-`1.9`: the pre-fallback
-// Frozen common frames bound to `chat.subscribe@1.7`-`1.9`: the pre-fallback
 // action set, no grace-hold lease on `actionAck`, the pre-shell-host queue
 // item, and pre-`auto` on both leaves the permission mode reaches - the queued
 // turn's settings and the approval card's judge fields. `1.10` added the first
-// two, `1.11` the shell host and `1.12` the last, so no list below aliases
-// this one.
+// two, `1.11` the shell host, `1.12` the rejected-attachment cause and `1.13`
+// the last, so no list below aliases this one.
 const chatSubscribeCommonServerFrameSchemasV18 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
@@ -2138,7 +2137,7 @@ const chatSubscribeCommonServerFrameSchemasV18 =
     approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
-    lease: {},
+    extraActionAckFields: {},
   });
 
 // The grace-hold LEASE minted by an accepted `fallback.holdForChoice`, and the
@@ -2150,15 +2149,28 @@ const chatSubscribeCommonServerFrameSchemasV18 =
 // It rides the ACK rather than a frame of its own so the lease and the
 // acceptance are one message: a token delivered separately could arrive after
 // the client had already given up on the hold. Bound by `1.10` and up.
-const fallbackLeaseAckFields = {
+const fallbackGraceHoldLeaseFields = {
   token: z.string().nullable().default(null),
+};
+
+// Why the host could not bridge a hash-only draft image. Meaningful only for a
+// `rejected` ack with code `MISSING_ATTACHMENT_BYTES`; hosts omit it otherwise,
+// and `projectChatActionAckForVersion` strips it below `1.12`.
+//
+// Main's `1.12` addition, and it rides a DIFFERENT axis from `auto`: a line can
+// carry the cause without carrying `auto` - that is exactly what `1.12` is - so
+// the two freezes compose rather than nesting. Optional rather than nullable
+// for the same reason `pendingFallback` is on `1.10`: a stripped optional
+// member and an absent one are the same frame.
+const draftImageAckCauseFields = {
+  cause: z.enum(["unsupported-format", "too-large", "not-on-host"]).optional(),
 };
 
 // Frozen common frames bound to `chat.subscribe@1.10`: provider fallback's
 // action set and lease token, on the pre-shell-host queue item and still
-// pre-`auto` on the queue and the approval card. `1.11` added the shell host
-// and `1.12` re-widened the permission mode, so neither list below aliases
-// this one.
+// pre-`auto` on the queue and the approval card. `1.11` added the shell host,
+// `1.12` the rejected-attachment cause and `1.13` re-widened the permission
+// mode, so no list below aliases this one.
 const chatSubscribeCommonServerFrameSchemasV110 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
@@ -2168,7 +2180,7 @@ const chatSubscribeCommonServerFrameSchemasV110 =
     approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
-    lease: fallbackLeaseAckFields,
+    extraActionAckFields: fallbackGraceHoldLeaseFields,
   });
 
 // Frozen common frames bound to `chat.subscribe@1.11` - the tier this merge
@@ -2186,10 +2198,35 @@ const chatSubscribeCommonServerFrameSchemasV111 =
     approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
-    lease: fallbackLeaseAckFields,
+    extraActionAckFields: fallbackGraceHoldLeaseFields,
   });
 
-// The live common frames (`chat.subscribe@1.12`).
+// Frozen common frames bound to `chat.subscribe@1.12` - the tier THIS merge
+// created, for the same reason the merge before it minted `1.11`.
+//
+// `1.12` is main's draft-image line: a rejected attachment ack may carry the
+// typed `cause`, so it is NOT the `1.11` freeze - and the permission mode is
+// still pre-`auto`, because `auto` only arrives at `1.13`. Neither side had
+// that combination: ours had pre-auto without the cause, main's had the cause
+// on a line that knows nothing of `auto`. Aliasing either neighbour would hand
+// a `1.12` peer a frame it cannot parse, in one direction or the other.
+const chatSubscribeCommonServerFrameSchemasV112 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchemaPreAuto,
+    event: chatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchemaPreAuto,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.13`): `auto` on the queue and the
+// approval card, over main's draft-image ack cause.
 const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
@@ -2199,7 +2236,10 @@ const chatSubscribeCommonServerFrameSchemas =
     approval: chatApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
-    lease: fallbackLeaseAckFields,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
   });
 
 // Frozen common frames bound to `chat.subscribe@1.0–1.3` (pre-`inReplyTo`).
@@ -2212,7 +2252,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
-    lease: {},
+    extraActionAckFields: {},
   });
 
 // Frozen common frames bound to `chat.subscribe@1.4–1.5`: `inReplyTo` shipped
@@ -2232,7 +2272,7 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
     approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
-    lease: {},
+    extraActionAckFields: {},
   });
 
 // Frozen for `chat.subscribe@1.2` and earlier.
@@ -2260,6 +2300,13 @@ const chatSubscribeSharedServerFrameSchemasV110 = [
 // shell-host-but-pre-`auto` common set.
 const chatSubscribeSharedServerFrameSchemasV111 = [
   ...chatSubscribeCommonServerFrameSchemasV111,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
+];
+
+// `chat.subscribe@1.12`'s shared frames: the same live `blockDelta`, over the
+// pre-`auto`-with-draft-cause common set.
+const chatSubscribeSharedServerFrameSchemasV112 = [
+  ...chatSubscribeCommonServerFrameSchemasV112,
   blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
@@ -2377,7 +2424,7 @@ const activeProfileUpdateClientFrameSchema = z.object({
 // it, so there is no honest sender to keep permissive - and unlike an unknown
 // harness id, a mode accepted on one of these lines mints durable state the
 // SAME line cannot then be served (`chatSubscribeSupportsPermissionMode`
-// refuses an `auto` chat below `1.12`). So the mode axis is pinned here and
+// refuses an `auto` chat below `1.13`). So the mode axis is pinned here and
 // only `1.12` re-widens it, in `chatSubscribeClientFrameSchemaOptions` below.
 // `1.11` does NOT: main's shell-host tier widened the server direction only.
 const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
@@ -2679,7 +2726,7 @@ const [, , , ...chatSubscribeClientFrameSchemaMiddleOptions] =
 // A mis-counted position here is silent in the SHAPE - the live list re-lists
 // the same handles in the same order, so the union's `kind` list does not move;
 // what moves is which frame got the widening. What catches it is
-// `chat-subscribe-auto-mode-lines.test.ts` asserting `1.12` accepts `auto` on
+// `chat-subscribe-auto-mode-lines.test.ts` asserting `1.13` accepts `auto` on
 // each of the six mode-bearing kinds BY KIND, which goes red on whichever frame
 // lost its rebind.
 const [
@@ -3670,7 +3717,7 @@ const chatSubscribeCommonServerFrameSchemasV16 =
     approval: chatApprovalStateSchemaPreAuto,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
-    lease: {},
+    extraActionAckFields: {},
   });
 
 const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
@@ -4022,7 +4069,7 @@ const chatWindowedSnapshotSchemaV110 = z.object({
   lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
   lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
 });
-// The live windowed snapshot (`chat.subscribe@1.12`): the `auto` permission
+// The live windowed snapshot (`chat.subscribe@1.13`): the `auto` permission
 // mode on the chat record's and the queued turn's settings, and the judge
 // fields on the approval card.
 // Frozen windowed snapshot bound to `chat.subscribe@1.11` - main's shell-host
@@ -4252,12 +4299,12 @@ const chatSubscribeServerFrameSchemaV19 = z.discriminatedUnion("kind", [
 // ─── Frozen `chat.subscribe@1.10` shape (pre-`auto`) ──────────────────────
 //
 // `1.10` is provider fallback as mainline minted it. It bound the live windowed
-// frames by reference until the shell host took `1.11` and the `auto`
-// permission mode took `1.12` above it, and it holds back what `1.12` adds:
-// the `auto` member on a queued
-// turn's settings and the judge fields on the approval card. Every other arm is
-// the live one - the fallback DTOs, the live `range` and `turnStateChanged`,
-// the live `blockDelta`.
+// frames by reference until the shell host took `1.11`, draft-image bridging
+// took `1.12`, and the `auto` permission mode took `1.13` above them. It holds
+// back what `1.13` adds: the `auto` member on a queued turn's settings and the
+// judge fields on the approval card. Every other arm is the live one - the
+// fallback DTOs, the live `range` and `turnStateChanged`, the live
+// `blockDelta`.
 const chatSubscribeServerFrameSchemaV110 = z.discriminatedUnion("kind", [
   chatSubscribeWindowedSnapshotServerFrameSchema.extend({
     snapshot: chatWindowedSnapshotSchemaV110,
@@ -4288,6 +4335,23 @@ const chatSubscribeServerFrameSchemaV111 = z.discriminatedUnion("kind", [
   chatSubscribeManagedCommandsChangedServerFrameSchema,
   chatSubscribeHeldUpdatesChangedServerFrameSchema,
   ...chatSubscribeSharedServerFrameSchemasV111,
+]);
+
+// `1.12` differs from `1.11` on ONE axis: the ack may carry the draft-image
+// cause. Everything else - the windowed snapshot, the pre-`auto` turn state -
+// is `1.11`'s, which is why only the shared list is swapped.
+const chatSubscribeServerFrameSchemaV112 = z.discriminatedUnion("kind", [
+  chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+    snapshot: chatWindowedSnapshotSchemaV111,
+  }),
+  chatSubscribeSkeletonChunkServerFrameSchema,
+  chatSubscribeAccumulatedChangesServerFrameSchema,
+  chatSubscribeIndexChangedServerFrameSchema,
+  chatSubscribeRangeServerFrameSchema,
+  chatSubscribeTurnStateChangedServerFrameSchemaPreAuto,
+  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  chatSubscribeHeldUpdatesChangedServerFrameSchema,
+  ...chatSubscribeSharedServerFrameSchemasV112,
 ]);
 
 /**
@@ -4569,9 +4633,42 @@ export const chatSubscribeV111 = defineStreamRpcContract({
 });
 
 /**
+ * Main's draft-image line.
+ *
+ * `1.11` plus draft-image bridging. Two facts ride this one minor, and only the
+ * second is a wire change:
+ *
+ *   - the host materializes hash-only draft images into epic attachments at
+ *     send, so a client may send content naming an image by hash with no bytes
+ *     attached. Nothing on the wire says so; the MINOR is the signal, which is
+ *     why the client gates on its OWN session's negotiated version
+ *     (`ChatStreamClient.draftBlobBridgeSupported`) rather than on any frame;
+ *   - a rejected `MISSING_ATTACHMENT_BYTES` acknowledgement may carry a typed
+ *     `cause` - `unsupported-format`, `too-large` or `not-on-host` - so the
+ *     client can act on the refusal instead of parsing the human `reason`.
+ *
+ * Streams have no registry downgrade bridge, so the `cause` is held back by the
+ * host's own projection: `projectChatServerFrameForVersion` applies
+ * `projectChatActionAckForVersion`, which strips the key below `1.12`.
+ *
+ * **Still pre-`auto`.** Main shipped this line knowing nothing of the
+ * permission mode, so it binds the pre-`auto` client frame and a server frame
+ * that is `1.11`'s with the cause added. That combination is this merge's own
+ * tier (`chatSubscribeServerFrameSchemaV112`) - it existed on neither side, and
+ * aliasing either neighbour would hand a `1.12` peer a frame it cannot parse.
+ */
+export const chatSubscribeV112 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 12 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV112,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreAuto,
+});
+
+/**
  * The `auto` permission-mode line.
  *
- * `1.12` is the first minor a host may serve an `auto` chat on, and the version
+ * `1.13` is the first minor a host may serve an `auto` chat on, and the version
  * the host's floor gate keys off: a chat whose run settings say `auto` is
  * REFUSED to a subscriber below this minor, exactly as an Antigravity chat is
  * refused below `1.9` (`HARNESS_MINIMUM_CHAT_SUBSCRIBE_MINOR` /
@@ -4582,16 +4679,22 @@ export const chatSubscribeV111 = defineStreamRpcContract({
  *
  * Unlike `1.9`, whose delta is one anchor arm, this line's delta is spread
  * across every frame that carries run settings or an approval card - so `1.8`
- * through `1.11` bind a `PreAuto` queue and approval card and only this line
+ * through `1.12` bind a `PreAuto` queue and approval card and only this line
  * binds live. The freezes compose: `1.8` is pre-Antigravity, pre-fallback,
- * pre-shell-host AND pre-auto; `1.9` is pre-fallback, pre-shell-host and
- * pre-auto; `1.10` is pre-shell-host and pre-auto; `1.11` is pre-auto alone.
- * (Renumbered twice: from `1.10` when main took that minor for provider
- * fallback, and from `1.11` when main took THAT one for the shell host.)
+ * pre-shell-host, pre-draft-cause AND pre-auto; `1.9` drops pre-Antigravity;
+ * `1.10` is pre-shell-host, pre-draft-cause and pre-auto; `1.11` is
+ * pre-draft-cause and pre-auto; `1.12` is pre-auto alone.
+ *
+ * **Renumbered four times** - from `1.10` when main took that minor for
+ * provider fallback, from `1.11` when main took THAT one for the shell host,
+ * and from `1.12` when main took it for draft-image bridging. The lesson is in
+ * the pattern rather than any one move: a long-lived branch does not own an
+ * unreleased minor, so nothing may derive this number by counting. Read it off
+ * the contract.
  */
-export const chatSubscribeV112 = defineStreamRpcContract({
+export const chatSubscribeV113 = defineStreamRpcContract({
   method: "chat.subscribe",
-  schemaVersion: { major: 1, minor: 12 } as const,
+  schemaVersion: { major: 1, minor: 13 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

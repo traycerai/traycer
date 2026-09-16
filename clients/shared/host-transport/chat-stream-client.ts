@@ -292,6 +292,12 @@ export class ChatStreamClient {
     return version !== null && version.major === 1 && version.minor >= 5;
   }
 
+  /** Whether THIS session's host can materialize hash-only draft images at send. */
+  draftBlobBridgeSupported(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return version !== null && version.major === 1 && version.minor >= 12;
+  }
+
   /**
    * Whether THIS session's negotiated line can CARRY `permissionMode: "auto"`
    * on a client frame.

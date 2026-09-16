@@ -271,6 +271,7 @@ import {
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeV113,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -11589,7 +11590,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 12,
+      latestMinor: 13,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11647,9 +11648,19 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         11: {
           contract: chatSubscribeV111,
         },
-        // @1.12 is the `auto` line, and the live one.
+        // @1.11 is frozen without the draft-image refusal cause: it is the
+        // shell-host line, and a host that serves it need not be able to
+        // materialize a hash-only draft image at all.
+        // @1.12 signals draft-blob materialization at send and adds the
+        // optional typed cause to MISSING_ATTACHMENT_BYTES acknowledgements.
+        // The host uses projectChatActionAckForVersion to strip it below 1.12.
+        // It is still PRE-`auto`: main shipped it before this branch merged.
         12: {
           contract: chatSubscribeV112,
+        },
+        // @1.13 is the `auto` line, and the live one.
+        13: {
+          contract: chatSubscribeV113,
         },
       },
     },
