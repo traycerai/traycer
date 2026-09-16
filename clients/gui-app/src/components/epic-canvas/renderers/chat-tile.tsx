@@ -1543,13 +1543,9 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                       {/*
                        * Above the dock and outside the lower surfaces: this row
                        * is a turn-tail status line, not composer chrome, and it
-                       * belongs to the transcript side of the seam. Mounted
-                       * here rather than inside `ChatLowerInteractionSurfaces`
-                       * because it resolves the tab's routed host client, and
-                       * that surface is deliberately renderable without one
-                       * (see its `hostId` prop). It renders `null` for every
-                       * traversal state but `retrying`, so it is mounted
-                       * unconditionally and the component owns the predicate.
+                       * belongs to the transcript side of the seam. It renders
+                       * `null` for every traversal state but `retrying`, so it
+                       * is mounted unconditionally and owns the predicate.
                        */}
                       <FallbackRetryRow
                         pending={view.lower.fallback.pending}
