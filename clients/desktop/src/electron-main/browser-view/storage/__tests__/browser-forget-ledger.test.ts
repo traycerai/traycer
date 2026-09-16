@@ -1406,6 +1406,7 @@ describe("in-flight observation across a local clear", () => {
         isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
         isHeadlessOriginKey: isHeadlessOriginCookieKey,
         claimHeadlessOriginKeys: recordHeadlessOriginCookieKeys,
+        noteAppliedKeys: (_key) => undefined,
         releaseHeadlessOriginKeys: releaseHeadlessOriginCookieKeys,
         getTargetJar: () => ({ session: { cookies: jar }, durableJar: true }),
         serializeOnDomain: (domain, action) =>
