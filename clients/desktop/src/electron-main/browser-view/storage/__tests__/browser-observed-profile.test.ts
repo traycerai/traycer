@@ -11,6 +11,7 @@ import {
   applyBrowserObservedProfile,
   BrowserObservedConnectionGovernor,
   traceBrowserObservedProfile,
+  type BrowserObservedProfileDependencies,
   type BrowserObservedProfileResult,
 } from "../browser-observed-profile";
 import { BrowserJarSerializer } from "../browser-jar-serializer";
@@ -142,19 +143,13 @@ class ObservedApplyHarness {
     flushStore: (): Promise<void> => this.jar.flushStore(),
   };
 
-  apply(input: {
-    readonly domain: string;
-    readonly cookies: readonly BrowserStorageCookie[];
-    readonly connectionId: string;
-  }): Promise<BrowserObservedProfileResult> {
-    const observed = {
-      source: "observed" as const,
-      connectionId: input.connectionId,
-      hostId: "host-1",
-      domain: input.domain,
-      cookies: input.cookies,
-    };
-    return applyBrowserObservedProfile(observed, {
+  /**
+   * Both doors below merge through the same dependencies; `source` on the
+   * frame is the only thing that differs. Kept in one place so a change to
+   * one door cannot silently leave the other on the old behaviour.
+   */
+  private dependencies(): BrowserObservedProfileDependencies {
+    return {
       now: () => Date.now(),
       isForgottenPendingAck: (gate) =>
         this.forgottenPendingAck.has(`${gate.connectionId} ${gate.domain}`),
@@ -183,15 +178,32 @@ class ObservedApplyHarness {
       serializeOnDomain: (domain, action) =>
         this.serializer.runOnDomain(domain, action),
       governor: this.governor,
-    }).then((result) => {
-      traceBrowserObservedProfile(result, {
-        source: observed.source,
-        hostId: observed.hostId,
-        connectionId: observed.connectionId,
-        governor: this.governor,
-      });
-      return result;
-    });
+    };
+  }
+
+  apply(input: {
+    readonly domain: string;
+    readonly cookies: readonly BrowserStorageCookie[];
+    readonly connectionId: string;
+  }): Promise<BrowserObservedProfileResult> {
+    const observed = {
+      source: "observed" as const,
+      connectionId: input.connectionId,
+      hostId: "host-1",
+      domain: input.domain,
+      cookies: input.cookies,
+    };
+    return applyBrowserObservedProfile(observed, this.dependencies()).then(
+      (result) => {
+        traceBrowserObservedProfile(result, {
+          source: observed.source,
+          hostId: observed.hostId,
+          connectionId: observed.connectionId,
+          governor: this.governor,
+        });
+        return result;
+      },
+    );
   }
 
   /** One frame for `example.com` on this harness's default connection. */
@@ -222,36 +234,7 @@ class ObservedApplyHarness {
       domain: input.domain,
       cookies: input.cookies,
     };
-    return applyBrowserObservedProfile(observed, {
-      now: () => Date.now(),
-      isForgottenPendingAck: (gate) =>
-        this.forgottenPendingAck.has(`${gate.connectionId} ${gate.domain}`),
-      isHeadlessOriginKey: (keyId) =>
-        !this.ownershipRuleEnabled || this.headlessOriginKeyIds.has(keyId),
-      claimHeadlessOriginKeys: (keys) => {
-        for (const key of keys) {
-          this.headlessOriginKeyIds.add(cookieKeyId(key));
-        }
-        return Promise.resolve();
-      },
-      noteAppliedKeys: (keys) => {
-        this.announcedKeys.push(...keys);
-      },
-      releaseHeadlessOriginKeys: (keys) => {
-        for (const key of keys) {
-          this.releasedKeys.push(key);
-          this.headlessOriginKeyIds.delete(cookieKeyId(key));
-        }
-        return Promise.resolve();
-      },
-      getTargetJar: () => ({
-        session: { cookies: this.gatedJar },
-        durableJar: this.durableJar,
-      }),
-      serializeOnDomain: (domain, action) =>
-        this.serializer.runOnDomain(domain, action),
-      governor: this.governor,
-    });
+    return applyBrowserObservedProfile(observed, this.dependencies());
   }
 }
 
