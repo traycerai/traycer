@@ -3256,39 +3256,52 @@ describe("ChatMessages scroll policy", () => {
       });
       await settleLegendList();
 
-      rerenderWith({
-        scrollRequest: {
-          kind: "message",
-          messageId: target.id,
-          blockId: null,
-          requestId: 58,
-        },
-      });
-      rerenderWith({
-        scrollRequest: { kind: "end", requestId: 59 },
-      });
+      const list = legendListRefHolder.current;
+      if (list === null) {
+        throw new Error("LegendList ref is not mounted");
+      }
+      const scrollToOffset = vi.spyOn(list, "scrollToOffset");
 
-      await waitForNavigationSettle();
-      await waitForNavigationSettle();
+      try {
+        rerenderWith({
+          scrollRequest: {
+            kind: "message",
+            messageId: target.id,
+            blockId: null,
+            requestId: 58,
+          },
+        });
+        rerenderWith({
+          scrollRequest: { kind: "end", requestId: 59 },
+        });
 
-      expect(onScrollRequestSettled).toHaveBeenCalledWith(58, "cancelled");
-      const scrollTopAfterCancel = getScrollNode().scrollTop;
-      onScrollRequestSettled.mockClear();
+        await waitForNavigationSettle();
+        await waitForNavigationSettle();
 
-      // The cleared pending landing must NOT come back on the next
-      // hidden->visible transition - a re-issue there would be scrolling
-      // toward a request that already reached a terminal outcome.
-      rerenderWith({ visible: false });
-      rerenderWith({ visible: true });
+        expect(onScrollRequestSettled).toHaveBeenCalledWith(58, "cancelled");
+        const offsetCallsAfterCancel = scrollToOffset.mock.calls.length;
+        onScrollRequestSettled.mockClear();
 
-      await waitForNavigationSettle();
-      await waitForNavigationSettle();
+        // The cleared pending landing must NOT come back on the next
+        // hidden->visible transition - a re-issue there would issue another
+        // message landing toward a request that already reached a terminal
+        // outcome. The end replay on visibility is allowed to settle its own
+        // scroll; assert the message-specific command did not recur instead
+        // of coupling this test to LegendList's eventual spacer geometry.
+        rerenderWith({ visible: false });
+        rerenderWith({ visible: true });
 
-      expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
-        58,
-        expect.anything(),
-      );
-      expect(getScrollNode().scrollTop).toBe(scrollTopAfterCancel);
+        await waitForNavigationSettle();
+        await waitForNavigationSettle();
+
+        expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+          58,
+          expect.anything(),
+        );
+        expect(scrollToOffset.mock.calls.length).toBe(offsetCallsAfterCancel);
+      } finally {
+        scrollToOffset.mockRestore();
+      }
     });
 
     it("does not report an outcome for end requests", async () => {
