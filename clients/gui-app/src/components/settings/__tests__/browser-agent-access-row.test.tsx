@@ -27,9 +27,14 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * reads through: the active host's id and that host's client.
  */
 const active = vi.hoisted((): { hostId: string | null } => ({ hostId: null }));
-const support = vi.hoisted((): { current: boolean | null } => ({
-  current: true,
-}));
+// `current` answers the getter, `set` the setter: the two methods negotiate
+// independently, and the row needs both.
+const support = vi.hoisted(
+  (): { current: boolean | null; set: boolean | null } => ({
+    current: true,
+    set: true,
+  }),
+);
 const tracked = vi.hoisted(() => vi.fn());
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -49,7 +54,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => support.current,
+  useHostMethodSupport: (_hostId: string | null, method: string) =>
+    method === "config.browser.set" ? support.set : support.current,
   useHostSupportsMethod: () => support.current === true,
 }));
 
@@ -169,6 +175,7 @@ function row(): HTMLElement {
 afterEach(() => {
   cleanup();
   support.current = true;
+  support.set = true;
   active.hostId = null;
   client.current = null;
   tracked.mockClear();
@@ -184,6 +191,20 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByText("Browser")).toBeNull();
     // Hidden means not asked, not asked-and-ignored.
+    await waitFor(() => {
+      expect(fixture.gets()).toEqual([]);
+    });
+  });
+
+  it("hides the row on a host that can read but not write the setting", async () => {
+    // A switch whose every flip would fail is worse than no switch: the two
+    // methods degrade independently, so the gate demands both.
+    support.set = false;
+    const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
+    render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
+
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByText("Browser")).toBeNull();
     await waitFor(() => {
       expect(fixture.gets()).toEqual([]);
     });

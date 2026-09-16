@@ -300,20 +300,10 @@ describe("cli config store", () => {
     );
   });
 
-  it("fails OPEN for malformed, future-version and unreadable browser reads", async () => {
+  it("fails OPEN for malformed and unreadable browser reads", async () => {
     // The opposite of the feature-gate reader: agents already have browser
     // access, so a config we cannot read must not revoke it.
     await writeRaw("{ not json");
-    expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
-
-    await writeRaw(
-      JSON.stringify({
-        version: 999,
-        shell: { path: null, args: null },
-        envOverrides: {},
-        browser: { agentAccess: false },
-      }),
-    );
     expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
 
     await writeRaw(
@@ -325,6 +315,45 @@ describe("cli config store", () => {
       }),
     );
     expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
+
+    // A readable block with no `agentAccess` is the pre-switch shape, not a
+    // revocation.
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        browser: {},
+      }),
+    );
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
+  });
+
+  it("honours an explicit agentAccess:false the whole document cannot validate", async () => {
+    // Failing open is for a block we cannot read. A `version` this binary
+    // predates - or any unrelated block a newer writer reshaped - fails
+    // `cliConfigSchema` while the `browser` block is perfectly readable, and
+    // re-granting the capability there would undo a deliberate choice.
+    await writeRaw(
+      JSON.stringify({
+        version: 999,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        browser: { agentAccess: false },
+      }),
+    );
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: false });
+
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        logs: { cliLogLevel: "shouty" },
+        browser: { agentAccess: false },
+      }),
+    );
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: false });
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

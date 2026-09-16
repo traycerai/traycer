@@ -57,6 +57,20 @@ export const browserConfigSchema = z
   .default({ agentAccess: true });
 export type BrowserConfig = z.infer<typeof browserConfigSchema>;
 
+/**
+ * The `browser` block read on its own, ignoring every other key.
+ *
+ * `readBrowserConfigSync` validates with THIS rather than `cliConfigSchema`
+ * because whole-document validation makes an unrelated defect revoke a
+ * deliberate setting: a `version` this binary predates, or a block a newer
+ * writer reshaped, fails the document and would send the gate to its
+ * permissive default while the file plainly says `agentAccess: false`. Failing
+ * open is for a block we cannot read, never for one we can.
+ */
+export const browserOnlyConfigSchema = z.object({
+  browser: browserConfigSchema,
+});
+
 export const featureSettingsSchema = z
   .object({
     agentRoles: z.boolean().default(false),

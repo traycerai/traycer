@@ -64,8 +64,16 @@ export function BrowserSettingsSection(): ReactNode {
   const hostId = useAddressableHostId();
   // `null` (no handshake yet) hides the row exactly as `false` does - the row
   // reappears on its own once the host advertises the method, no reload.
-  const agentAccessSupported =
-    useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_GET) === true;
+  //
+  // BOTH methods, because they negotiate independently: the row is an
+  // interactive switch, so a host that could answer `get` but not `set` would
+  // render a control whose every flip fails. They ship together today, which is
+  // exactly why `degrade` is declared per method rather than per namespace.
+  // Two statements, not one `&&`: short-circuiting a hook call is a
+  // rules-of-hooks violation.
+  const getSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_GET);
+  const setSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_SET);
+  const agentAccessSupported = getSupported === true && setSupported === true;
 
   return (
     <>
@@ -102,6 +110,7 @@ export function BrowserSettingsSection(): ReactNode {
 }
 
 const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
+const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
 
 /**
  * The host-wide "let agents use the in-app browser" switch (plan B08).
@@ -113,8 +122,9 @@ const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
  * host picker, and this is the one place on the page where "which machine"
  * is not obvious from the copy.
  *
- * Rendered ONLY under a positive `useHostMethodSupport`, which is what makes
- * `useHostClient()` safe here: a host that advertised the method has a binding.
+ * Rendered ONLY under a positive `useHostMethodSupport` for both the getter and
+ * the setter, which is what makes `useHostClient()` safe here: a host that
+ * advertised the methods has a binding.
  */
 function AgentBrowserAccessRow(props: {
   readonly hostId: string | null;
@@ -130,10 +140,10 @@ function AgentBrowserAccessRow(props: {
     options: { enabled: true },
   });
   const setAccess = useHostScopedMutationForClient(client, {
-    method: "config.browser.set",
+    method: AGENT_BROWSER_ACCESS_SET,
     mutationKey: configMutationKeys.browserSet(),
     errorMessage: "Couldn't update agent browser access",
-    invalidateMethods: ["config.browser.get"],
+    invalidateMethods: [AGENT_BROWSER_ACCESS_GET],
   });
 
   return (

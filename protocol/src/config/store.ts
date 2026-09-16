@@ -14,6 +14,7 @@ import { platform as osPlatform, userInfo } from "node:os";
 import * as nodePath from "node:path";
 import { cliConfigDir, cliConfigPath } from "./paths";
 import {
+  browserOnlyConfigSchema,
   cliConfigSchema,
   CLI_CONFIG_VERSION,
   EMPTY_CLI_CONFIG,
@@ -994,19 +995,27 @@ export async function readBrowserConfig(): Promise<BrowserConfig> {
 
 /**
  * Best-effort synchronous browser read, for the per-call gate on agent browser
- * tools. Fails OPEN - any missing, unreadable, or invalid config resolves to
- * `{ agentAccess: true }` - which is the opposite of `readFeatureSettingsSync`
- * and deliberate: this is not an experimental capability being unlocked, it is
- * a capability agents already have that the user may switch OFF. A corrupt
- * config that silently disabled it would read as "the browser tools are
- * broken", with nothing in the UI to explain why; failing open keeps the
- * default behaviour and leaves the config error to surface where it is
- * actionable (`readBrowserConfig`, which throws like `readLogLevels`).
+ * tools. Fails OPEN - a missing, unreadable, or invalid `browser` block
+ * resolves to `{ agentAccess: true }` - which is the opposite of
+ * `readFeatureSettingsSync` and deliberate: this is not an experimental
+ * capability being unlocked, it is a capability agents already have that the
+ * user may switch OFF. A corrupt config that silently disabled it would read as
+ * "the browser tools are broken", with nothing in the UI to explain why;
+ * failing open keeps the default behaviour and leaves the config error to
+ * surface where it is actionable (`readBrowserConfig`, which throws like
+ * `readLogLevels`).
+ *
+ * It validates `browserOnlyConfigSchema`, NOT the whole document: failing open
+ * is for a block we cannot read, and an explicit `agentAccess: false` beside a
+ * future `version` or a block some newer writer reshaped is one we can. Reading
+ * the document whole would let an unrelated defect re-grant a capability the
+ * user deliberately revoked, which is the one direction this gate must not
+ * move on its own.
  */
 export function readBrowserConfigSync(): BrowserConfig {
   try {
     const raw = readFileSync(cliConfigPath(), "utf8");
-    const result = parseCliConfig(JSON.parse(raw));
+    const result = browserOnlyConfigSchema.safeParse(JSON.parse(raw));
     if (result.success) return result.data.browser;
   } catch {
     // An unreadable config must not revoke a capability the user never
