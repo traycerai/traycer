@@ -4,6 +4,7 @@
  */
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import {
+  OFFICE_CIVIC_GROUND_ALPHA,
   OFFICE_LABEL_GAP,
   OFFICE_TILE,
 } from "@/lib/comm-graph/office/office-types";
@@ -14,6 +15,10 @@ import {
   seatingWidth,
   TIERS_ORIGIN_ROW,
 } from "@/lib/comm-graph/office/views/mission-control/mission-control-plan";
+import {
+  officeMonitorAlphaFor,
+  OFFICE_UNCLAIMED_FURNITURE_ALPHA,
+} from "@/lib/comm-graph/office/views/office-seat-alpha";
 import type {
   OfficeDeskState,
   OfficePainter,
@@ -34,19 +39,6 @@ import type {
 
 const NAMEPLATE_Y_OFFSET = 4;
 const LOGO_Y_OFFSET = 1;
-/**
- * How solid an unclaimed console is.
- *
- * Raised from `0.55` with the oblique views' `EMPTY_FURNITURE_ALPHA`, which it
- * is the same decision as and is now kept at the same number: below about 0.7
- * a sprite's near-black OUTLINE stops reading as a line over a dark floor, and
- * the furniture goes from dimmed to translucent. Feedback round 1 named that
- * on Building ("these transparent desks look weird") and Mission control's
- * empty consoles were the same thing one view over.
- */
-const RESERVE_ALPHA = 0.72;
-const IDLE_MONITOR_ALPHA = 0.6;
-const ARCHIVED_ALPHA = 0.45;
 
 interface ScreenArt {
   readonly on: OfficeSpriteName;
@@ -322,6 +314,9 @@ function paintFloor(
 ): ReadonlyArray<OfficeDrawable> {
   if (lod === 0) return blockMap(layout, tiles);
   const drawables: OfficeDrawable[] = [];
+  // GROUND FIRST. The hall's tiles and its fixed props are both emitted below,
+  // and a civic room's tint belongs under both of them.
+  drawables.push(...civicGround(layout, tiles));
   const lookups = floorLookups(layout);
   const lastCol = tiles.col + tiles.cols;
   const lastRow = tiles.row + tiles.rows;
@@ -344,7 +339,6 @@ function paintFloor(
     }
   }
   drawables.push(...paintUnownedProps(layout, tiles));
-  drawables.push(...civicGround(layout, tiles));
   return drawables;
 }
 
@@ -359,12 +353,14 @@ function paintFloor(
  * plan one view over, and fixing only the view somebody happened to screenshot
  * is how the next round gets the same complaint about a different office.
  *
- * Pushed after the tiles AND after the unowned props, which is the position
- * both floor paths draw over the tiles from - see the oblique painter for the
- * one place they disagree and why it does not matter.
+ * Pushed FIRST, before the hall's tiles and its fixed props, because it is the
+ * ground they stand on. `ground: true` is what makes that ordering survive the
+ * static bake; without it the tint is composited over the medbay's own
+ * furniture on every host that can make an offscreen surface. See
+ * `officeBakesIntoStaticFloor`.
+ *
+ * The alpha is {@link OFFICE_CIVIC_GROUND_ALPHA}, shared by all six views.
  */
-const CIVIC_GROUND_ALPHA = 0.3;
-
 function civicGround(
   layout: OfficeLayout,
   tiles: OfficeTileRect,
@@ -380,7 +376,8 @@ function civicGround(
         width: room.bounds.cols * OFFICE_TILE,
         height: room.bounds.rows * OFFICE_TILE,
         fill: "civic",
-        alpha: CIVIC_GROUND_ALPHA,
+        alpha: OFFICE_CIVIC_GROUND_ALPHA,
+        ground: true,
       });
     }
   }
@@ -395,12 +392,6 @@ function monitorSpriteFor(state: OfficeDeskState): OfficeSpriteName {
     return art.on;
   }
   return art.off;
-}
-
-function monitorAlphaFor(state: OfficeDeskState): number | undefined {
-  if (state.status === "archived") return ARCHIVED_ALPHA;
-  if (state.status === "idle") return IDLE_MONITOR_ALPHA;
-  return undefined;
 }
 
 function envelopeStackFor(openRequests: number): EnvelopeStackArt | null {
@@ -482,7 +473,7 @@ function paintSeat(
             sprite: { name: furniture },
             x: deskX,
             y: deskY,
-            alpha: RESERVE_ALPHA,
+            alpha: OFFICE_UNCLAIMED_FURNITURE_ALPHA,
           }
         : {
             kind: "sprite",
@@ -569,7 +560,7 @@ function paintSeat(
   const art = SCREEN_ART[state.modelTier];
   const screen = monitorSpriteFor(state);
   const crashed = screen === "monitor-crash";
-  const alpha = monitorAlphaFor(state);
+  const alpha = officeMonitorAlphaFor(state);
   out.push(
     worldOf(
       {

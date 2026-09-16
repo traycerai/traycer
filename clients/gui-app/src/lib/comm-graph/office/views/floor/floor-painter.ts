@@ -28,11 +28,18 @@
  * is drawn by the renderer, which is the only place the visible set is known.
  */
 import {
+  officeTruncateLabel,
+  OFFICE_MAX_LABEL_CHARS,
+} from "@/lib/comm-graph/office/office-label-text";
+import {
   officeSpriteFootY,
   officeSpriteSize,
 } from "@/lib/comm-graph/office/office-pixel-art";
+import { officeMonitorAlphaFor } from "@/lib/comm-graph/office/views/office-seat-alpha";
 import {
   OFFICE_CHARACTER_WIDTH,
+  OFFICE_CIVIC_GROUND_ALPHA,
+  OFFICE_LABEL_GAP,
   OFFICE_TILE,
   type OfficeDrawable,
   type OfficeErrandSpot,
@@ -84,13 +91,9 @@ const POD_FLOOR_ART: Readonly<
   warm: ["floor-pod-warm-a", "floor-pod-warm-b"],
 };
 
-const IDLE_MONITOR_ALPHA = 0.6;
-const ARCHIVED_ALPHA = 0.45;
 /** The plate on the desk's right half, and the logo standing on top of it. */
 const NAMEPLATE_Y_OFFSET = 4;
 const LOGO_Y_OFFSET = 1;
-const MAX_LABEL_CHARS = 14;
-const LABEL_GAP = 8;
 /**
  * How far a prop's art may reach ABOVE its own tile: a tree is two tiles tall.
  * A chunk therefore draws the rows just under it too, or a plant standing on
@@ -177,11 +180,6 @@ const SCREEN_ART: Readonly<Record<OfficeModelTier, OfficeScreenArt>> = {
     logoXOffset: 26,
   },
 };
-
-function truncate(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars - 1)}…`;
-}
 
 function propDrawY(prop: OfficeProp): number {
   return officeSpriteFootY(prop.sprite, prop.tile.row);
@@ -630,6 +628,10 @@ function floorChunk(
 ): ReadonlyArray<OfficeDrawable> {
   if (lod === 0) return blockMap(layout, tiles);
   const out: OfficeDrawable[] = [];
+  // GROUND FIRST, before the tiles themselves and everything standing on them:
+  // `ground: true` bakes it with the sprites, so the painter's order is the
+  // order both floor paths draw in. See `officeBakesIntoStaticFloor`.
+  pushCivicGround(out, layout, tiles);
   pushGroundTiles(out, layout, tiles);
   for (const room of layout.rooms) pushCabinWalls(out, room, tiles);
   for (const room of layout.rooms) pushPodFloors(out, room, tiles);
@@ -670,6 +672,42 @@ function floorChunk(
   return out;
 }
 
+/**
+ * THE GROUND A CIVIC ROOM STANDS ON, tinted so the room has an edge.
+ *
+ * The Floor view rings a civic room only where the plan says `walled`, which is
+ * the right call for structure - an "open" room's bounds are furniture, not
+ * walls - and it leaves the open ones with nothing but their sign to say where
+ * they stop. That is the reading feedback round 1 filed against Building
+ * ("some agents are working from the waiting room?"), and this floor has the
+ * same plazas on it. All six views tint at {@link OFFICE_CIVIC_GROUND_ALPHA}.
+ *
+ * Every civic room, not only the open ones: inside a walled room the tint is
+ * the floor that room is finished in, which is what the overview block map has
+ * always shown at lod 0 and what a reader zooming in should keep seeing.
+ */
+function pushCivicGround(
+  out: OfficeDrawable[],
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): void {
+  for (const floorPlan of layout.floors) {
+    for (const room of floorPlan.civic) {
+      if (!tileRectsOverlap(room.bounds, tiles)) continue;
+      out.push({
+        kind: "block",
+        x: room.bounds.col * OFFICE_TILE,
+        y: room.bounds.row * OFFICE_TILE,
+        width: room.bounds.cols * OFFICE_TILE,
+        height: room.bounds.rows * OFFICE_TILE,
+        fill: "civic",
+        alpha: OFFICE_CIVIC_GROUND_ALPHA,
+        ground: true,
+      });
+    }
+  }
+}
+
 // ---- Desks ------------------------------------------------------------ //
 
 /** Shared, so a seat or a spot with no art of its own allocates nothing. */
@@ -690,14 +728,6 @@ function monitorSpriteFor(state: OfficeDeskState): OfficeSpriteName {
     return state.screenFrame === 1 ? (art.onB ?? art.on) : art.on;
   }
   return art.on;
-}
-
-function monitorAlphaFor(state: OfficeDeskState): number | undefined {
-  // Idle keeps a LIT monitor, merely dimmed: the screen is on, nobody is at
-  // it. Only an archived record actually powers down.
-  if (state.status === "idle") return IDLE_MONITOR_ALPHA;
-  if (state.status === "archived") return ARCHIVED_ALPHA;
-  return undefined;
 }
 
 function envelopeStackFor(state: OfficeDeskState): OfficeEnvelopeStack | null {
@@ -764,12 +794,12 @@ function sheetedDesk(
   out.push({
     drawable: {
       kind: "label",
-      text: truncate(state.name, MAX_LABEL_CHARS),
+      text: officeTruncateLabel(state.name, OFFICE_MAX_LABEL_CHARS),
       // Exactly where the seated character's own label was, so the desk does
       // not appear to shift when its owner leaves: a character's tag hangs a
       // gap below its FEET, and its feet are the bottom of its chair tile.
       x: chairX + OFFICE_CHARACTER_WIDTH / 2,
-      y: chairY + OFFICE_TILE + LABEL_GAP,
+      y: chairY + OFFICE_TILE + OFFICE_LABEL_GAP,
       tone: "muted",
       ownerAgentId: owner,
       // A DESK PLATE, not a tag on a person: the owner is away, and this is
@@ -863,7 +893,7 @@ function seatPropsOf(
       sprite: { name: screen },
       x: deskX + (crashed ? art.crashXOffset : art.xOffset),
       y: deskY + (crashed ? art.crashYOffset : art.yOffset),
-      alpha: monitorAlphaFor(state),
+      alpha: officeMonitorAlphaFor(state),
     },
     depth: deskY,
     ownerAgentId: owner,

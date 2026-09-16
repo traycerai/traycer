@@ -3,6 +3,7 @@ import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
 import {
+  OFFICE_CIVIC_GROUND_ALPHA,
   OFFICE_LABEL_GAP,
   OFFICE_TILE,
 } from "@/lib/comm-graph/office/office-types";
@@ -25,6 +26,8 @@ import type {
   OfficeProjector,
 } from "../office-view";
 
+import { OFFICE_UNCLAIMED_FURNITURE_ALPHA } from "../office-seat-alpha";
+
 import {
   obliqueIsPlaza,
   obliquePropsIn,
@@ -40,18 +43,14 @@ import {
 const DESK_FRONT_Y_OFFSET = 24;
 
 /**
- * How solid an unclaimed desk is.
+ * A COLD AGENT'S SILHOUETTE in a cubby, below close-up.
  *
- * `0.45` was transparent enough to take the sprite's OUTLINE with it - a
- * near-black line at 45% over a dark floor is barely a line - so an empty desk
- * read as a brown bar painted onto the floor rather than as furniture nobody
- * is sitting at. Feedback round 1: "these transparent desks look weird".
- *
- * The dimming itself stays: it is what says the desk is unclaimed on a storey
- * whose occupied desks look otherwise identical. What changes is that the
- * furniture survives it.
+ * Not {@link OFFICE_UNCLAIMED_FURNITURE_ALPHA}: that number is about furniture
+ * keeping its outline, and this is a stand-in for a PERSON who is present but
+ * not working. It is drawn instead of the character rather than over it, so it
+ * is dimmer on purpose - the slot is occupied, quietly.
  */
-const EMPTY_FURNITURE_ALPHA = 0.72;
+const COLD_SILHOUETTE_ALPHA = 0.55;
 
 const STATIC_PROPS: ReadonlySet<OfficeSpriteName> = new Set([
   "face",
@@ -190,21 +189,17 @@ function overviewBlocks(
 /**
  * THE GROUND A CIVIC ROOM STANDS ON, tinted so the room has an edge.
  *
- * Every plaza room is `enclosure: "open"` - the waiting room IS a row of
- * chairs on the walk row, the front desk IS a counter and the tile in front of
- * it - so until now the only thing saying where one ended was its sign. A
- * reader seeing seated agents a row below the `WAITING ROOM` plate had no way
- * to tell they were at cubbies on the plaza, and feedback round 1 asked
- * exactly that: "some agents are working from the waiting room?".
+ * The same `civic` fill the overview block map already uses, at
+ * {@link OFFICE_CIVIC_GROUND_ALPHA} - the one number all six views tint with,
+ * and where the reasoning for it lives.
  *
- * The same `civic` fill the overview block map already uses, at an alpha that
- * reads as floor rather than as a panel. Emitted into the FLOOR stream, which
- * puts it under every prop and character - it is ground, not a highlight - and
- * it costs one filled rect per room per frame because a block does not bake
- * into the static layer (only sprites do).
+ * `ground: true`, which is doing real work: it admits the block to the static
+ * bake, and the bake is the only way this lands UNDER the plaza's fixtures.
+ * The static path blits every baked sprite and only then draws what did not
+ * bake, so an unbaked tint is composited over the reception counter, the glass
+ * screens, the cross and the records door however early it is emitted -
+ * recolouring the fixtures instead of the floor they stand on.
  */
-const CIVIC_GROUND_ALPHA = 0.3;
-
 function civicGround(
   layout: OfficeLayout,
   tiles: OfficeTileRect,
@@ -213,7 +208,8 @@ function civicGround(
     storey.civic.flatMap((room) =>
       clippedBlock({ ...room.bounds, fill: "civic" }, tiles).map((block) => ({
         ...block,
-        alpha: CIVIC_GROUND_ALPHA,
+        alpha: OFFICE_CIVIC_GROUND_ALPHA,
+        ground: true,
       })),
     ),
   );
@@ -233,18 +229,13 @@ function floor(
       x: prop.tile.col * OFFICE_TILE,
       y: prop.tile.row * OFFICE_TILE,
     }));
-  // LAST, because a block put before the floor TILES is painted over by them
-  // on the host that walks this list in order - the fallback path, where no
-  // offscreen surface exists - and invisible there while working everywhere
-  // else. Last is the position both paths draw over the tiles from.
-  //
-  // The two paths do differ on the plaza's fixed PROPS, which are sprites in
-  // this same stream: a baking host blits every sprite and then draws this
-  // block, so the tint passes over the reception counter and the glass screens;
-  // an unbaked host draws them after it. At 0.3 alpha over a counter that is a
-  // difference nothing can see, and it is the price of a tint that bakes
-  // nowhere - only sprites bake (`officeBakesIntoStaticFloor`).
-  return [...props, ...civicGround(layout, tiles)];
+  // FIRST, because it is GROUND: the floor tiles and the plaza's fixtures are
+  // both in `props` below, and the tint belongs under both. That ordering is
+  // only honoured because `civicGround` marks its blocks `ground: true` and so
+  // bakes alongside the sprites - see `officeBakesIntoStaticFloor`. Emitted
+  // last, or emitted first without the mark, it would be painted OVER the
+  // counter and the screens on the static path.
+  return [...civicGround(layout, tiles), ...props];
 }
 interface PropPaint {
   readonly ownerAgentId: string | null;
@@ -350,7 +341,7 @@ function cubbySeatProps(
     cubby.push(
       entry({ name: "silhouette" }, point, foot, {
         ownerAgentId: owner,
-        alpha: 0.55,
+        alpha: COLD_SILHOUETTE_ALPHA,
       }),
     );
   // The scene supplies the dimmed, front-facing character at close-up.
@@ -385,7 +376,7 @@ function seatProps(
       foot + 0.1,
       {
         ownerAgentId: owner,
-        alpha: owner === null ? EMPTY_FURNITURE_ALPHA : 1,
+        alpha: owner === null ? OFFICE_UNCLAIMED_FURNITURE_ALPHA : 1,
       },
     ),
   ];

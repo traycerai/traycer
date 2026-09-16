@@ -19,7 +19,9 @@
  */
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
+import { OFFICE_UNCLAIMED_FURNITURE_ALPHA } from "@/lib/comm-graph/office/views/office-seat-alpha";
 import {
+  OFFICE_CIVIC_GROUND_ALPHA,
   OFFICE_FLOOR_PASS_DEPTH,
   OFFICE_TILE,
   type OfficeAgentStatus,
@@ -468,6 +470,13 @@ function quadOf(
   projector: OfficeProjector,
   bounds: OfficeTileRect,
   fill: OfficeBlockFill,
+  /**
+   * The civic ground tint's own two fields, or `null` for the solid quads a
+   * block map emits. They travel together because they are one thing: the only
+   * quad that is tinted is the one that is ground, and `ground` is what bakes
+   * it under the district instead of over it.
+   */
+  ground: { readonly alpha: number } | null,
 ): OfficeDrawable {
   const endCol = bounds.col + bounds.cols;
   const endRow = bounds.row + bounds.rows;
@@ -480,6 +489,7 @@ function quadOf(
       projector.project(bounds.col, endRow),
     ],
     fill,
+    ...(ground === null ? {} : { alpha: ground.alpha, ground: true }),
   };
 }
 
@@ -523,7 +533,7 @@ function blockMap(
   const blocks: OfficeDrawable[] = [];
   const push = (bounds: OfficeTileRect, fill: OfficeBlockFill): void => {
     if (!tileRectsOverlap(bounds, tiles)) return;
-    blocks.push(quadOf(projector, bounds, fill));
+    blocks.push(quadOf(projector, bounds, fill, null));
   };
   for (const floor of layout.floors) push(floor.bounds, "storey");
   for (const floor of layout.floors) {
@@ -578,7 +588,39 @@ function paintFloor(
   // the floor never occludes anything, and the standing pieces occlude each
   // other exactly as the world stream orders them.
   standing.sort((left, right) => left.y - right.y);
-  return [...ground, ...standing];
+  // THE TINT SITS BETWEEN THEM: over the ground diamonds it colours, under
+  // everything standing on that ground. `ground: true` on the quad is what
+  // holds that position through the static bake - without it the district's
+  // walls, doors and props would be composited under a wash on every host that
+  // can make an offscreen surface. See `officeBakesIntoStaticFloor`.
+  return [...ground, ...civicGround(layout, tiles, projector), ...standing];
+}
+
+/**
+ * THE GROUND A CIVIC ROOM STANDS ON, tinted so the room has an edge.
+ *
+ * A QUAD RATHER THAN A BLOCK, because this projector shears: an axis-aligned
+ * rectangle standing in for a civic room would tint ground the room does not
+ * cover and leave ground it does cover bare, which is the whole reason
+ * {@link quadOf} exists for the block map.
+ *
+ * Campus's waiting room IS the courtyard's bench row and City's is a quarter of
+ * a district - `enclosure: "open"` in both - so without this the only thing
+ * saying where one stopped was its sign, at every zoom above overview.
+ * `pushCivicWalls` draws the WALLED ones' edges and by construction says
+ * nothing about the open ones. All six views tint at
+ * {@link OFFICE_CIVIC_GROUND_ALPHA}.
+ */
+function civicGround(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+  projector: OfficeProjector,
+): ReadonlyArray<OfficeDrawable> {
+  return isoCivicIn(layout, tiles).map((room) =>
+    quadOf(projector, room.bounds, "civic", {
+      alpha: OFFICE_CIVIC_GROUND_ALPHA,
+    }),
+  );
 }
 
 // ---- Seats ------------------------------------------------------------ //
@@ -700,6 +742,20 @@ function campusSeatProps(
         sprite: { name: state.sheeted ? "dust-sheet" : "desk-iso" },
         x: corner.x - DESK_ISO_WIDTH / 2,
         y: corner.y + ISO_HALF_HEIGHT - DESK_ISO_HEIGHT,
+        // DIMMED WHERE NOBODY HAS IT, like every other view that plans a spare
+        // seat. Campus drew an unclaimed slab at full strength, so a desk
+        // waiting for an arrival was the same object as one whose owner had
+        // simply walked off - and the two oblique views and Mission control had
+        // all been saying the difference with alpha since they were written.
+        // The Floor is not in this comparison and its own `seatPropsOf` says
+        // why: it plans no reserves, so it has no unclaimed desk to draw.
+        //
+        // A SHEETED desk keeps full strength on purpose: the dust sheet IS the
+        // statement, and dimming it would say "unclaimed" over the top of
+        // "archived", which are different facts.
+        ...(state.agentId === null && !state.sheeted
+          ? { alpha: OFFICE_UNCLAIMED_FURNITURE_ALPHA }
+          : {}),
       },
       depth,
       ownerAgentId: state.agentId,

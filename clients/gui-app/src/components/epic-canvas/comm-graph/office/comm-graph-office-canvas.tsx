@@ -1581,8 +1581,21 @@ function drawStaticFloor(
   floor: ReadonlyArray<OfficeDrawable>,
   theme: OfficeTheme,
 ): void {
+  // IN THE PAINTER'S OWN ORDER, which is what admitting ground blocks to the
+  // bake buys: a civic room's tint emitted before the plaza's fixtures is
+  // painted before them here, so the counter and the screens stand ON it
+  // exactly as they do on the fallback path.
+  const palette = officePalette(theme);
   for (const drawable of floor) {
     if (!officeBakesIntoStaticFloor(drawable)) continue;
+    if (drawable.kind === "block") {
+      drawBlock({ ctx, block: drawable, palette });
+      continue;
+    }
+    if (drawable.kind === "quad") {
+      drawQuad({ ctx, quad: drawable, palette });
+      continue;
+    }
     drawAnchoredSprite(ctx, drawable, "top-left", theme);
   }
 }
@@ -1992,6 +2005,8 @@ function drawQuad(args: {
   // rest element would allocate a second array for three points every time.
   const points = quad.points;
   ctx.save();
+  // As `drawBlock`: the one quad that sets this is a civic room's ground tint.
+  ctx.globalAlpha = quad.alpha ?? 1;
   ctx.fillStyle = blockColor(quad.fill, palette);
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);

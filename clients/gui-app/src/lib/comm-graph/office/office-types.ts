@@ -50,6 +50,29 @@ export const OFFICE_CHARACTER_HEIGHT = 20;
  */
 export const OFFICE_LABEL_GAP = 8;
 
+/**
+ * HOW STRONGLY A CIVIC ROOM'S GROUND IS TINTED, at every lettered zoom.
+ *
+ * Every view's civic rooms are `enclosure: "open"` unless the plan says
+ * otherwise - a waiting room IS a row of chairs on the walk row, a front desk
+ * IS a counter and the tile in front of it - so with nothing under them the
+ * only thing saying where one ended was its sign. Feedback round 1 asked
+ * exactly that, of Building: "some agents are working from the waiting room?".
+ * They were not; they were at cubbies a row below it.
+ *
+ * ONE NUMBER FOR ALL SIX VIEWS, because it is one decision. Each painter still
+ * emits the tint in its own idiom - an axis-aligned `block` where the projector
+ * is the identity, a projected `quad` where it shears - but a plaza that reads
+ * as a room on Building and as loose props on Campus is the inconsistency this
+ * constant exists to prevent.
+ *
+ * Low enough to read as FLOOR rather than as a panel laid over it: the tint
+ * goes into the floor stream, under every prop and character, and a civic room
+ * with furniture in it should look like ground somebody tiled differently, not
+ * like a highlight somebody switched on.
+ */
+export const OFFICE_CIVIC_GROUND_ALPHA = 0.3;
+
 export type OfficeTheme = "light" | "dark";
 
 export type OfficeFacing = "down" | "up" | "left" | "right";
@@ -1232,6 +1255,24 @@ export type OfficeDrawable =
       readonly height: number;
       readonly fill: OfficeBlockFill;
       readonly alpha?: number;
+      /**
+       * GROUND, not an overlay: this block belongs UNDER the floor's own props
+       * rather than over them, and it bakes into the static layer with them.
+       *
+       * Without it a tint is unpaintable in the right place. The static path
+       * blits every baked sprite and only then draws the non-sprites, so a
+       * plain block lands on top of the reception counter and the glass screens
+       * however early the painter emitted it; array order fixes it on the
+       * fallback path and nowhere else. Admitting the block to the bake is what
+       * puts both paths back on one order, which is the whole point of
+       * `officeBakesIntoStaticFloor` being ONE predicate.
+       *
+       * Only a drawable that is genuinely static per layout may set it. A
+       * lod-0 block map does NOT: at overview the floor is nothing but blocks
+       * covering the whole world, and baking them would allocate the bitmap
+       * the block map exists to avoid.
+       */
+      readonly ground?: boolean;
     }
   | {
       /**
@@ -1259,6 +1300,15 @@ export type OfficeDrawable =
         OfficePoint,
       ];
       readonly fill: OfficeBlockFill;
+      /**
+       * As `block`'s, and for the same one caller: a civic room's ground tint
+       * ({@link OFFICE_CIVIC_GROUND_ALPHA}), which the isometric views emit as
+       * a quad because their projector shears. A block map's own quads leave
+       * this unset and fill solid.
+       */
+      readonly alpha?: number;
+      /** As `block`'s. The isometric civic tint is the one quad that sets it. */
+      readonly ground?: boolean;
     };
 
 /** What a lod-0 block STANDS FOR; the renderer maps each to a theme colour. */
