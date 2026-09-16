@@ -684,7 +684,7 @@ function CustomPathForm({
       <div className="flex items-center gap-2">
         <Input
           ref={focusDraftInput}
-          className="w-full font-mono text-ui-sm"
+          className="w-full"
           placeholder="/absolute/path/to/binary"
           value={draftPath}
           onChange={(event) => onDraftPathChange(event.target.value)}
@@ -693,6 +693,8 @@ function CustomPathForm({
             if (event.key === "Enter") onSave();
             if (event.key === "Escape") onCancel();
           }}
+          font="mono"
+          size="sm"
         />
         <Button
           size="sm"
@@ -787,7 +789,7 @@ function CandidateRow({
       className={cn(
         TABLE_ROW,
         "border-b border-border/40 py-2.5 last:border-b-0 hover:bg-foreground/3",
-        presentation.unavailable ? "opacity-60" : "",
+        presentation.unavailable ? "opacity-60" : null,
       )}
     >
       <CandidateSelectionControl
@@ -1070,6 +1072,7 @@ function VersionMenuTrigger({
         </button>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         align="end"
         container={dialogContainer ?? undefined}
         collisionBoundary={dialogContainer ?? undefined}
@@ -1083,7 +1086,7 @@ function VersionMenuTrigger({
         // auto-download footer stay put. This cap is now the outer of two -
         // the list carries its own, tighter one - and remains the binding
         // constraint only when the banners and a long notice are all present.
-        className="flex max-h-[min(70vh,32rem)] w-[min(90vw,26rem)] flex-col overflow-hidden p-0"
+        className="flex max-h-[min(70vh,32rem)] w-[min(90vw,26rem)] flex-col overflow-hidden"
       >
         {data.kind === "unavailable" ? (
           <div className="px-4 py-3" data-testid="version-manager-unavailable">
@@ -1398,7 +1401,7 @@ function RowStatusLine({
           <span
             className={cn(
               "block h-full rounded-full bg-primary",
-              percent === null ? "w-1/3 animate-pulse" : "",
+              percent === null ? "w-1/3 animate-pulse" : null,
             )}
             style={
               percent === null ? undefined : { width: `${String(percent)}%` }

@@ -48,7 +48,7 @@ export function SwitcherListRow(props: {
         onClick={onSelect}
         data-testid={selectTestId}
         aria-current={active ? "true" : undefined}
-        className="flex min-h-11 min-w-0 flex-1 items-center justify-start gap-2 rounded-md px-2 text-left font-normal"
+        className="flex min-h-11 min-w-0 flex-1 items-center justify-start text-left font-normal"
       >
         <span className="flex size-4 shrink-0 items-center justify-center">
           {icon}
@@ -90,10 +90,10 @@ export function SwitcherNewItemRow(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       onClick={onSelect}
       data-testid={testId}
-      className="flex min-h-11 w-full items-center justify-start gap-2 rounded-md px-2 text-left font-normal text-muted-foreground"
+      className="flex min-h-11 w-full items-center justify-start text-left font-normal"
     >
       <span className="flex size-4 shrink-0 items-center justify-center">
         <Plus className="size-4" />

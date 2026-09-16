@@ -109,10 +109,10 @@ function PrOpenDiffButton(props: {
     <Button
       type="button"
       variant="outline"
-      size="sm"
+      size="xs"
       onClick={openDiff}
       data-testid="pr-detail-open-diff"
-      className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+      className="h-7 shrink-0"
     >
       <FileDiff className="size-3.5 shrink-0" aria-hidden />
       Open diff

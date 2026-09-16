@@ -10,18 +10,18 @@ interface EpicsFilterTriggerProps extends ComponentPropsWithoutRef<
   readonly ref?: Ref<HTMLButtonElement>;
 }
 
-export function EpicsFilterTrigger(props: EpicsFilterTriggerProps) {
-  const { selectedCount, className, ...buttonProps } = props;
+export function EpicsFilterTrigger({
+  selectedCount,
+  className,
+  ...buttonProps
+}: EpicsFilterTriggerProps) {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="sm"
       {...buttonProps}
-      className={cn(
-        "gap-1.5 overflow-visible text-ui-sm text-muted-foreground hover:text-foreground",
-        className,
-      )}
+      className={cn("overflow-visible", className)}
     >
       <SlidersHorizontal className="size-4" />
       Filter

@@ -47,7 +47,7 @@ export function PhaseMigrationSurface(
               <span className="text-ui-sm font-semibold">!</span>
             ) : (
               <AgentSpinningDots
-                className="text-foreground"
+                className={undefined}
                 testId="phase-to-epic-migration-spinner"
                 variant="dots"
               />

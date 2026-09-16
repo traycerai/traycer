@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { resolveProfileAccentColor } from "@/lib/providers/profile-accent-color";
 import { cn } from "@/lib/utils";
 
@@ -28,9 +29,9 @@ export function AccentDot(props: AccentDotProps) {
   return (
     <span
       aria-hidden="true"
-      style={{ backgroundColor: color }}
+      style={{ "--swatch": color } as CSSProperties}
       className={cn(
-        "shrink-0 rounded-full text-[0.5rem] leading-none font-semibold text-black",
+        "shrink-0 rounded-full bg-[var(--swatch)] text-[0.5rem] leading-none font-semibold text-black",
         cornerDotClassName(variant, size),
         className,
       )}

@@ -58,6 +58,7 @@ function createPendingAction(
 ): PendingChatAction {
   const isSendOrEdit = action === "send" || action === "editUserMessage";
   return {
+    wireContent: null,
     clientActionId,
     action,
     queueItemId: null,
@@ -74,6 +75,7 @@ function createPendingAction(
     messageConfirmedByHost: false,
     accountContext: null,
     deliveryPolicy: null,
+    hashOnlyRetry: false,
     createdAt: 1000,
     connectionEpoch: 0,
   };
@@ -247,6 +249,7 @@ describe("chat-queue-reconciler", () => {
     it("filters pending user messages when their actions are queued", () => {
       const action1 = createPendingAction("action-1", "msg-1", "send");
       const action2: PendingChatAction = {
+        wireContent: null,
         clientActionId: "action-2",
         action: "send",
         queueItemId: null,
@@ -263,6 +266,7 @@ describe("chat-queue-reconciler", () => {
         messageConfirmedByHost: false,
         accountContext: null,
         deliveryPolicy: null,
+        hashOnlyRetry: false,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -319,6 +323,7 @@ describe("chat-queue-reconciler", () => {
     it("handles multiple pending actions with one queued", () => {
       const action1 = createPendingAction("action-1", "msg-1", "send");
       const action2: PendingChatAction = {
+        wireContent: null,
         clientActionId: "action-2",
         action: "send",
         queueItemId: null,
@@ -335,6 +340,7 @@ describe("chat-queue-reconciler", () => {
         messageConfirmedByHost: false,
         accountContext: null,
         deliveryPolicy: null,
+        hashOnlyRetry: false,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -674,6 +680,7 @@ describe("chat-queue-reconciler", () => {
     it("handles mixed pending and confirmed messages", () => {
       const action1 = createPendingAction("action-1", "msg-1", "send");
       const action2: PendingChatAction = {
+        wireContent: null,
         clientActionId: "action-2",
         action: "send",
         queueItemId: null,
@@ -690,6 +697,7 @@ describe("chat-queue-reconciler", () => {
         messageConfirmedByHost: false,
         accountContext: null,
         deliveryPolicy: null,
+        hashOnlyRetry: false,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -783,6 +791,7 @@ describe("chat-queue-reconciler", () => {
 
     it("does not restore send with a null restore slot, keeps as pending", () => {
       const pendingAction: PendingChatAction = {
+        wireContent: null,
         clientActionId: "action-1",
         action: "send",
         queueItemId: null,
@@ -799,6 +808,7 @@ describe("chat-queue-reconciler", () => {
         messageConfirmedByHost: false,
         accountContext: null,
         deliveryPolicy: null,
+        hashOnlyRetry: false,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -1213,6 +1223,7 @@ describe("chat-queue-reconciler", () => {
     ): ReconcileTurnSettledInput {
       return {
         pendingActions: {},
+        recoveringActionIds: new Set<string>(),
         pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
         messages: [],
         queue: { status: "idle", items: [] },
@@ -1500,6 +1511,7 @@ describe("chat-queue-reconciler", () => {
       return unrecoverableSendNotice({
         clientActionId: "action-1",
         content,
+        browserAnnotations: [],
         circumstance: "A message was not recorded",
         account: {
           worktree: NO_WORKTREE_SWEEP,
@@ -1551,6 +1563,7 @@ describe("chat-queue-reconciler", () => {
       };
       const result = reconcileTurnSettled(true, {
         pendingActions: {},
+        recoveringActionIds: new Set<string>(),
         pendingUserMessages: [restorable],
         messages: [],
         queue: { status: "idle", items: [] },
@@ -1583,6 +1596,7 @@ describe("chat-queue-reconciler", () => {
       const message = unrecoverableSendNotice({
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         circumstance: "A message was not recorded",
         account: {
           worktree: NO_WORKTREE_SWEEP,
@@ -1604,6 +1618,7 @@ describe("chat-queue-reconciler", () => {
       const message = unrecoverableSendNotice({
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         circumstance: "A message was not recorded",
         account: {
           worktree: NO_WORKTREE_SWEEP,

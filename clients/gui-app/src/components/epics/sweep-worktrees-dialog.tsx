@@ -495,8 +495,9 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   return (
     <Dialog open={taskCount > 0} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="flex max-h-[min(90dvh,42rem)] w-[min(92vw,45rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
+        className="flex max-h-[min(90dvh,42rem)] w-[min(92vw,45rem)] min-w-0 flex-col overflow-hidden sm:max-w-2xl"
         data-testid="sweep-worktrees-dialog"
       >
         {hostChoice === null ? (
@@ -1139,8 +1140,8 @@ function SweepAutoCleanupDiscoveryLine(props: {
       <Button
         type="button"
         variant="link"
-        size="xs"
-        className="h-auto p-0 align-baseline"
+        size="inline-xs"
+        className="align-baseline"
         onClick={() => {
           props.onCloseDialog();
           openWorktreeAutoCleanupSettings(navigate, props.hostId);
@@ -1169,10 +1170,10 @@ function SweepChooseHeader(props: {
         <Paintbrush className="size-4" aria-hidden />
       </div>
       <div className="min-h-0 min-w-0 flex-1 space-y-1.5">
-        <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
+        <DialogTitle className="wrap-anywhere">
           {sweepDialogTitle(props.taskCount, props.taskTitle)}
         </DialogTitle>
-        <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+        <DialogDescription className="wrap-anywhere">
           Choose the worktrees to remove from this host. Proven-safe worktrees
           are selected for you.
         </DialogDescription>
@@ -1209,13 +1210,16 @@ function SweepWorktreesRefreshFooter(props: {
       >
         {props.refreshing ? (
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId="sweep-worktrees-refresh-spinner"
             variant={undefined}
+            tone="muted"
           />
         ) : null}
         Refresh
-        <Kbd className="ml-0.5 font-mono">R</Kbd>
+        <Kbd className="ml-0.5" variant="mono">
+          R
+        </Kbd>
       </Button>
     </div>
   );
@@ -1374,8 +1378,9 @@ function SweepRowList(props: {
       <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
         <AgentSpinningDots
           variant="dots"
-          className="text-muted-foreground"
+          className={undefined}
           testId="sweep-worktrees-fleet-pending-spinner"
+          tone="muted"
         />
         <span data-testid="sweep-worktrees-fleet-pending">
           Checking which hosts are available…
@@ -1408,8 +1413,9 @@ function SweepRowList(props: {
       <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
         <AgentSpinningDots
           variant="dots"
-          className="text-muted-foreground"
+          className={undefined}
           testId={undefined}
+          tone="muted"
         />
         Checking worktrees…
       </div>
@@ -1636,7 +1642,7 @@ function sessionOutcomeHint(
   if (outcome.kind === "uncertain") {
     return (
       <span
-        className="mt-0.5 flex items-start gap-1 text-ui-xs text-amber-600 dark:text-amber-400"
+        className="mt-0.5 flex items-start gap-1 text-ui-xs text-warning-foreground"
         data-testid="sweep-worktrees-row-outcome"
       >
         <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden />
@@ -1688,9 +1694,7 @@ function SweepRowHint(props: {
     <span
       className={cn(
         "mt-0.5 flex items-start gap-1 text-ui-xs",
-        cautious
-          ? "text-amber-600 dark:text-amber-400"
-          : "text-muted-foreground",
+        cautious ? "text-warning-foreground" : "text-muted-foreground",
       )}
       data-testid="sweep-worktrees-hint"
     >

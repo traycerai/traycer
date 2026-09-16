@@ -1063,7 +1063,7 @@ describe("session/write plane: fork carries supersedes", () => {
       useLandingDraftStore
         .getState()
         .drafts.find((draft) => draft.id === nextId)?.generation ?? 0;
-    landingDraftRememberSynced(nextId, 1, generationAfterFork);
+    landingDraftRememberSynced(nextId, 1, generationAfterFork, HOST_ID);
     expect(
       useLandingDraftStore
         .getState()
@@ -1178,6 +1178,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     const document = landingCloudDocument(id, "host-b", "cloud body");
     await ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary: landingCloudSummary(document),
       document,
     });
@@ -1325,6 +1326,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     const document = landingCloudDocument("seq-check", "host-b", "cloud body");
     await ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary: landingCloudSummary(document),
       document,
     });
@@ -1356,6 +1358,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     const document = landingCloudDocument(id, "host-b", "cloud body");
     const ingest = ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary: landingCloudSummary(document),
       document,
     });

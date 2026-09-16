@@ -181,6 +181,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
     materializeMocks.impl = () => Promise.resolve(materializedContent);
 
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-restore",
       createdAt: 9,
       content: imageDoc({
@@ -232,6 +233,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
     materializeMocks.impl = () =>
       Promise.reject(new PromptStashMissingBlobError());
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-missing-bytes",
       createdAt: 1,
       content: imageDoc({
@@ -288,6 +290,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
     materializeMocks.impl = () =>
       Promise.reject(new PromptStashCorruptBlobError());
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-corrupt",
       createdAt: 2,
       content: textDoc("damaged image entry"),
@@ -318,6 +321,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
   });
   it("keeps the stash when destination materialization fails", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-dest-failed",
       createdAt: 1,
       content: textDoc("ok bytes"),
@@ -356,6 +360,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
     // otherwise landing's measured-budget reservation leaks for the session.
     const release = vi.fn();
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-release-on-throw",
       createdAt: 1,
       content: textDoc("will throw on insert"),
@@ -398,6 +403,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
   it("releases materialize reservation exactly once on accepted import", async () => {
     const release = vi.fn();
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-release-on-accept",
       createdAt: 1,
       content: textDoc("accepted"),
@@ -433,6 +439,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
   });
   it("warns but still reports success when consume fails after accepted insert", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-delete-fail",
       createdAt: 1,
       content: textDoc("restored text"),
@@ -470,6 +477,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
 
   it("appends into a non-empty destination and places the caret at the end", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-append",
       createdAt: 1,
       content: textDoc("stashed"),

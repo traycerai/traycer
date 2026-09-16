@@ -190,6 +190,6 @@ export const DESTRUCTIVE_PERCENT_LEFT = 10;
  */
 export function contextUsageTone(percent: number): string {
   if (percent <= DESTRUCTIVE_PERCENT_LEFT) return "text-destructive";
-  if (percent <= 25) return "text-amber-500 dark:text-amber-400";
+  if (percent <= 25) return "text-warning-foreground";
   return "text-muted-foreground";
 }

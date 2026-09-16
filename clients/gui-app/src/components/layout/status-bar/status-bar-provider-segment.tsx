@@ -190,7 +190,7 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
         <span
           data-testid="status-bar-provider-cold-track"
           aria-hidden="true"
-          className="h-1 w-8 shrink-0 rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+          className="h-1 w-8 shrink-0 rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40"
         />
       </>
     );

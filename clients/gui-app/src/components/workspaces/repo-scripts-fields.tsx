@@ -85,15 +85,12 @@ function ScriptField(props: {
         className="gap-0 overflow-hidden rounded-lg border border-foreground/15 bg-foreground/3 focus-within:border-ring"
       >
         <TabsList
+          size="sm"
           aria-label={`${label} platform`}
           className="w-full justify-start rounded-none border-b border-foreground/10 bg-foreground/5 p-1 group-data-[orientation=horizontal]/tabs:h-auto"
         >
           {OS_TABS.map((tab) => (
-            <TabsTrigger
-              key={tab.key}
-              value={tab.key}
-              className="min-h-8 px-2 text-ui-xs"
-            >
+            <TabsTrigger key={tab.key} value={tab.key} className="min-h-8">
               <span>{tab.label}</span>
               {tab.key !== "default" && form[tab.key].trim().length > 0 ? (
                 <span
@@ -115,10 +112,13 @@ function ScriptField(props: {
               }
               aria-label={`${label} (${tab.label})`}
               aria-describedby={descriptionId}
-              className="field-sizing-fixed resize-y rounded-none border-0 bg-transparent px-3 py-3 font-mono text-code-xs leading-relaxed placeholder:text-muted-foreground/50 focus-visible:ring-inset dark:bg-transparent"
+              className="field-sizing-fixed resize-y px-3 py-3 leading-relaxed placeholder:text-muted-foreground/50 focus-visible:ring-inset"
               onChange={(event) =>
                 onChange({ ...form, [tab.key]: event.target.value })
               }
+              variant="bare"
+              font="mono"
+              size="xs"
             />
           </TabsContent>
         ))}

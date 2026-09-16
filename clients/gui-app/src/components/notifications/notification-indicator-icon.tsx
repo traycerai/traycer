@@ -91,7 +91,7 @@ export function NotificationIndicatorIcon(
     return (
       <IndicatorSpan indicatorProps={props} tooltip={props.runningTitle}>
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
           variant={undefined}
         />

@@ -940,11 +940,24 @@ function printInboxNotice(notice: AgentInboxNotice): void {
     printReceiverCancelledNotice(notice, receiverLabel, harnessSuffix);
     return;
   }
+  if (notice.reason === "awaiting-input") {
+    const lines = [
+      "",
+      `[traycer inbox] inactivity notice — ${inactivityHeadline(notice, receiverLabel)}${harnessSuffix} (responseId ${notice.responseId})`,
+      `[traycer inbox] Sending a follow-up now would queue behind the user's input and re-trigger this notice. Wait for the receiver's reply or the user's answer to wake you. If you are working for another agent, tell it you're blocked.`,
+      `[traycer inbox] Omit --response-id for your own follow-ups; the displayed responseId is not an incoming reply ID from this receiver.`,
+      `[traycer inbox] you may read its transcript: traycer agent transcript --agent-id ${notice.receiverAgentId}`,
+      "",
+    ];
+    writeStdout(`${lines.join("\n")}\n`);
+    return;
+  }
   const lines = [
     "",
     `[traycer inbox] inactivity notice — ${inactivityHeadline(notice, receiverLabel)}${harnessSuffix} (responseId ${notice.responseId})`,
     `[traycer inbox] check what it is doing: traycer agent transcript --agent-id ${notice.receiverAgentId}`,
-    `[traycer inbox] the request is still open; a follow-up on the same thread can be sent with: traycer agent send --to ${notice.receiverAgentId} --response-id ${notice.responseId} --message "<follow-up>"`,
+    `[traycer inbox] the request is still open; a follow-up can be sent with: traycer agent send --to ${notice.receiverAgentId} --expect-reply --message "<follow-up>"`,
+    `[traycer inbox] omit --response-id for this follow-up. Repeated --expect-reply sends from you to the same recipient reuse its still-open thread; --response-id is for answering a request you received from that recipient.`,
     `[traycer inbox] based on your judgment decide how to proceed — read transcript, follow up, launch a new agent, etc.`,
     "",
   ];

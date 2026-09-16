@@ -437,7 +437,8 @@ function SessionImportFilters(props: {
           placeholder="Search work or folders"
           data-testid="session-import-search"
           onChange={(event) => onQueryChange(event.target.value)}
-          className="h-8 pl-8 text-ui-sm"
+          className="h-8 pl-8"
+          size="sm"
         />
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">

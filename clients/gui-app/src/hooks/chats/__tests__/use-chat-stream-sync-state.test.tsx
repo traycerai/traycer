@@ -48,6 +48,7 @@ function seedSession(chatId: string): SeededSession {
           return {
             sendAction: () => undefined,
             sameTurnSteeringProtocolSupported: () => true,
+            draftBlobBridgeSupported: () => true,
             requestTranscriptRange: () => undefined,
             requestResnapshot: () => undefined,
             close: () => undefined,

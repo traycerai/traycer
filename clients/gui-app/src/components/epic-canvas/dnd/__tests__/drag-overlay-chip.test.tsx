@@ -476,9 +476,13 @@ describe("<EpicRootDragOverlayContent />", () => {
 
       const overlay = screen.getByTestId("header-tab-drag-overlay");
       expect(within(overlay).getByText("🚀")).toBeTruthy();
+      // `--swatch-border`, not `borderTopColor` - see the note in
+      // `tab-strip-drag-overlay.test.tsx`.
       expect(
-        within(overlay).getByTestId("tab-chrome-center").style.borderTopColor,
-      ).toBe("rgb(101, 67, 33)");
+        within(overlay)
+          .getByTestId("tab-chrome-center")
+          .style.getPropertyValue("--swatch-border"),
+      ).toBe("#654321");
       expect(
         within(overlay).getByTestId("header-tab-approval-epic-left"),
       ).toBeTruthy();

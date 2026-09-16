@@ -176,7 +176,7 @@ export function SplitSlotChooserContent(
                 key={choice.id}
                 type="button"
                 variant="ghost"
-                className="h-11 w-full justify-start rounded-md px-3"
+                className="h-11 w-full justify-start"
                 onClick={() => openDestination(choice.destination)}
               >
                 {choice.label}
@@ -199,7 +199,7 @@ export function SplitSlotChooserContent(
           <Button
             type="button"
             variant="ghost"
-            className="h-11 w-full justify-start rounded-md px-3"
+            className="h-11 w-full justify-start"
             onClick={() => openDestination({ kind: "new-draft" })}
           >
             <FilePlus2 />

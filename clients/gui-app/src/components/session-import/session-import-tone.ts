@@ -43,8 +43,7 @@ const THEME_COLOURS = {
   border: "border-border/60",
   rowHover: "hover:bg-foreground/6",
   groupSurface: "bg-foreground/[0.04]",
-  warningSurface:
-    "bg-amber-500/10 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300",
+  warningSurface: "bg-warning/10 text-warning-foreground",
   pillOn: "border-transparent bg-foreground/10 text-foreground",
   pillOff:
     "border-border/60 text-muted-foreground/70 hover:bg-foreground/6 hover:text-muted-foreground",

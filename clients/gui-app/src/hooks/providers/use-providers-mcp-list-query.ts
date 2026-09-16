@@ -63,7 +63,9 @@ export function useProvidersMcpList(args: {
   useEffect(() => {
     if (!needsPoll) return;
     const timer = setInterval(() => {
-      void refetch();
+      // Join a pending read instead of restarting it every polling tick.
+      // In particular, a manual Retry must be allowed to finish.
+      void refetch({ cancelRefetch: false });
     }, MCP_LIST_PENDING_REFRESH_MS);
     return () => clearInterval(timer);
   }, [needsPoll, refetch]);

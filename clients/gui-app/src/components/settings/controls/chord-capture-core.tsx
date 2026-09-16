@@ -170,7 +170,9 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
     buttonContent = "Press chord…";
   } else if (value !== null) {
     buttonContent = (
-      <Kbd className="font-mono text-code-xs tabular-nums">{display}</Kbd>
+      <Kbd className="text-code-xs tabular-nums" variant="mono">
+        {display}
+      </Kbd>
     );
   } else {
     buttonContent = display;
@@ -204,7 +206,7 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
             "text-ui-xs",
             captureState.conflict.severity === "duplicate"
               ? "text-destructive"
-              : "text-amber-600 dark:text-amber-400",
+              : "text-warning-foreground",
           )}
         >
           {captureState.conflict.message}

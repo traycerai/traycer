@@ -174,7 +174,8 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-background p-0 text-foreground [&>button]:hidden"
+          showCloseButton={false}
+          className="w-(--sidebar-width) bg-background text-foreground"
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
@@ -282,7 +283,7 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
         tabIndex={-1}
         onClick={toggleSidebar}
         className={cn(
-          "absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:start-1/2 after:w-[2px] hover:after:bg-border sm:flex ltr:-translate-x-1/2 rtl:-translate-x-1/2",
+          "absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:start-1/2 after:w-0.5 hover:after:bg-border sm:flex ltr:-translate-x-1/2 rtl:-translate-x-1/2",
           "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
           "[[data-side=left][data-state=collapsed]_&]:cursor-e-resize [[data-side=right][data-state=collapsed]_&]:cursor-w-resize",
           "group-data-[collapsible=offcanvas]:translate-x-0 group-data-[collapsible=offcanvas]:after:left-full hover:group-data-[collapsible=offcanvas]:bg-background",
@@ -317,7 +318,7 @@ function SidebarInput({
     <Input
       data-slot="sidebar-input"
       data-sidebar="input"
-      className={cn("h-8 w-full bg-background shadow-none", className)}
+      className={cn("h-8 w-full bg-background", className)}
       {...props}
     />
   );
@@ -353,7 +354,7 @@ function SidebarSeparator({
     <Separator
       data-slot="sidebar-separator"
       data-sidebar="separator"
-      className={cn("mx-2 w-auto bg-border", className)}
+      className={cn("mx-2 w-auto", className)}
       {...props}
     />
   );
@@ -378,7 +379,15 @@ function SidebarGroup({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="sidebar-group"
       data-sidebar="group"
-      className={cn("relative flex w-full min-w-0 flex-col p-2", className)}
+      // `px-2 py-1`, not `p-2`: a group holds ROWS that carry their own vertical
+      // padding, so the band only needs to keep them off the panel's edges.
+      // Every one of the app's four real panels wrote this out; their four
+      // skeletons did not, which is why a panel used to shift 4px when it
+      // finished loading.
+      className={cn(
+        "relative flex w-full min-w-0 flex-col px-2 py-1",
+        className,
+      )}
       {...props}
     />
   );

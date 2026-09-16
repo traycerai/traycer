@@ -106,7 +106,8 @@ export function GitDiffRepoSwitcher(
         role="dialog"
         aria-label="Git workspace selector"
         align="start"
-        className={cn("w-[min(90vw,30rem)] gap-0 p-0", props.contentClassName)}
+        layout="bare"
+        className={cn("w-[min(90vw,30rem)]", props.contentClassName)}
         data-testid={props.contentTestId}
         // The host picker's list is a nested Radix popover: it portals OUTSIDE
         // this content, so every click in it arrives here as an interaction
@@ -189,7 +190,7 @@ export function GitDiffRepoSwitcherDropdown(
         Workspaces
       </div>
       <div className="pt-2 pb-2">
-        <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+        <InputGroup className="h-8!" variant="search">
           <InputGroupInput
             ref={searchInputRef}
             value={props.searchQuery}
@@ -391,7 +392,7 @@ function GitDiffCountBadges(props: {
         >
           <Badge
             variant="secondary"
-            className="gap-1 px-1.5 tabular-nums"
+            className="tabular-nums"
             aria-label={moduleLabel}
           >
             <FolderGit2 className="size-3" aria-hidden />
@@ -408,7 +409,7 @@ function GitDiffCountBadges(props: {
         >
           <Badge
             variant="secondary"
-            className="gap-1 px-1.5 tabular-nums"
+            className="tabular-nums"
             aria-label={fileLabel}
           >
             <FileText className="size-3" aria-hidden />

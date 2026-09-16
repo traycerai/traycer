@@ -302,6 +302,7 @@ export function ProviderMcpTab(props: {
   });
 
   const listData = listQuery.data;
+  const listError = listQuery.error ?? listData?.refreshError ?? null;
   const servers = listData?.servers ?? EMPTY_MCP_SERVERS;
   const filteredServers = useMemo(
     () => filterProviderMcpServers(servers, searchQuery),
@@ -753,10 +754,17 @@ export function ProviderMcpTab(props: {
         multiWorkspace={multiWorkspace}
         workspacesLoading={workspacesLoading}
         listPending={listQuery.isPending}
-        listError={listQuery.isError}
-        errorMessage={listQuery.isError ? listQuery.error.message : null}
-        onRetryList={() => {
-          void listQuery.refetch();
+        listHasData={listData !== undefined}
+        listIdentity={JSON.stringify([
+          hostId,
+          providerId,
+          effectiveScope,
+          listWorkspaceRoot,
+        ])}
+        listError={listError !== null}
+        errorMessage={listError?.message ?? null}
+        onRetryList={async () => {
+          await listQuery.refetch();
         }}
         servers={filteredServers}
         unfilteredServerCount={servers.length}
@@ -933,9 +941,11 @@ function McpServerList(props: {
   readonly multiWorkspace: boolean;
   readonly workspacesLoading: boolean;
   readonly listPending: boolean;
+  readonly listHasData: boolean;
+  readonly listIdentity: string;
   readonly listError: boolean;
   readonly errorMessage: string | null;
-  readonly onRetryList: () => void;
+  readonly onRetryList: () => Promise<void>;
   readonly servers: readonly ProviderMcpServer[];
   readonly unfilteredServerCount: number;
   readonly searchQuery: string;
@@ -1006,17 +1016,19 @@ function McpServerList(props: {
       </div>
     );
   }
-  if (props.listError) {
+  if (props.listError && !props.listHasData) {
     return (
       <EmptyState
         title="Couldn't load MCP servers"
         description={props.errorMessage ?? "Try refreshing or check the host."}
         actionLabel="Retry"
-        onAction={props.onRetryList}
+        onAction={() => {
+          void props.onRetryList();
+        }}
       />
     );
   }
-  if (props.unfilteredServerCount === 0) {
+  if (props.unfilteredServerCount === 0 && !props.listError) {
     return (
       <EmptyState
         title="No MCP servers"
@@ -1026,60 +1038,119 @@ function McpServerList(props: {
       />
     );
   }
-  if (props.searchActive && props.servers.length === 0) {
-    return (
-      <ProviderListSearchEmptyState
-        query={props.searchQuery}
-        resourceLabel="servers"
-      />
-    );
-  }
   return (
-    <ul className="flex flex-col gap-2">
-      {props.servers.map((server) => (
-        <McpServerRow
-          key={server.name}
-          server={server}
-          capabilities={props.capabilities}
-          shadowed={props.shadowedNames.has(server.name)}
-          pending={
-            props.pendingServerNames.has(server.name) ||
-            server.discoveryPending ||
-            server.status === "connecting"
-          }
-          rowError={props.rowErrors.get(server.name) ?? null}
-          canRemove={props.canRemove}
-          canToggleServer={props.canToggleServer}
-          canDiscover={props.canDiscover}
-          canAuth={props.canAuth}
-          toolsReadOnly={props.toolsReadOnly}
-          onRefresh={() => {
-            props.onRefresh(server.name);
-          }}
-          onToggleServer={(enabled) => {
-            props.onToggleServer(server, enabled);
-          }}
-          onToggleTool={(toolName, enabled) => {
-            props.onToggleTool(server.name, toolName, enabled);
-          }}
-          onToggleAllTools={(enabled) => {
-            void props.onToggleAllTools(server, enabled);
-          }}
-          onLogin={() => {
-            props.onAuth(server.name, "login");
-          }}
-          onLogout={() => {
-            props.onAuth(server.name, "logout");
-          }}
-          onForceReauth={() => {
-            props.onAuth(server.name, "forceReauth");
-          }}
-          onDelete={() => {
-            props.onDelete(server.name);
-          }}
+    <>
+      {props.listError ? (
+        <McpListRefreshError
+          key={props.listIdentity}
+          empty={props.unfilteredServerCount === 0}
+          errorMessage={props.errorMessage}
+          onRetry={props.onRetryList}
         />
-      ))}
-    </ul>
+      ) : null}
+      {props.unfilteredServerCount > 0 &&
+        (props.searchActive && props.servers.length === 0 ? (
+          <ProviderListSearchEmptyState
+            query={props.searchQuery}
+            resourceLabel="servers"
+          />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {props.servers.map((server) => (
+              <McpServerRow
+                key={server.name}
+                server={server}
+                capabilities={props.capabilities}
+                shadowed={props.shadowedNames.has(server.name)}
+                pending={
+                  props.pendingServerNames.has(server.name) ||
+                  server.discoveryPending ||
+                  server.status === "connecting"
+                }
+                rowError={props.rowErrors.get(server.name) ?? null}
+                canRemove={props.canRemove}
+                canToggleServer={props.canToggleServer}
+                canDiscover={props.canDiscover}
+                canAuth={props.canAuth}
+                toolsReadOnly={props.toolsReadOnly}
+                onRefresh={() => {
+                  props.onRefresh(server.name);
+                }}
+                onToggleServer={(enabled) => {
+                  props.onToggleServer(server, enabled);
+                }}
+                onToggleTool={(toolName, enabled) => {
+                  props.onToggleTool(server.name, toolName, enabled);
+                }}
+                onToggleAllTools={(enabled) => {
+                  void props.onToggleAllTools(server, enabled);
+                }}
+                onLogin={() => {
+                  props.onAuth(server.name, "login");
+                }}
+                onLogout={() => {
+                  props.onAuth(server.name, "logout");
+                }}
+                onForceReauth={() => {
+                  props.onAuth(server.name, "forceReauth");
+                }}
+                onDelete={() => {
+                  props.onDelete(server.name);
+                }}
+              />
+            ))}
+          </ul>
+        ))}
+    </>
+  );
+}
+
+function McpListRefreshError(props: {
+  readonly empty: boolean;
+  readonly errorMessage: string | null;
+  readonly onRetry: () => Promise<void>;
+}): ReactNode {
+  // This tracks only the person's Retry action, not background polling. The
+  // catalog key remounts this notice so an old retry cannot affect a new list.
+  const [retryPending, setRetryPending] = useState(false);
+  const retry = () => {
+    setRetryPending(true);
+    return props.onRetry().finally(() => {
+      setRetryPending(false);
+    });
+  };
+  return (
+    <div
+      role="status"
+      className="flex flex-col gap-1 rounded-lg border border-border/60 p-4"
+    >
+      <p className="text-ui-sm font-medium text-foreground">
+        Couldn't refresh MCP servers
+      </p>
+      <p className="text-ui-xs text-muted-foreground">
+        {props.empty
+          ? "The last successful list had no MCP servers. Retry to check for changes."
+          : "Showing the last known servers. Their status and tools may be out of date."}
+      </p>
+      {props.errorMessage !== null ? (
+        <p className="break-words text-ui-xs text-muted-foreground">
+          {props.errorMessage}
+        </p>
+      ) : null}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="mt-2 self-start"
+        disabled={retryPending}
+        onClick={() => {
+          void retry();
+        }}
+      >
+        {retryPending ? <MutedAgentSpinner /> : null}
+        Retry
+      </Button>
+    </div>
   );
 }
 
@@ -1296,34 +1367,22 @@ function ServerRowBadges(props: {
   return (
     <>
       {shadowed ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           shadowed by project
         </Badge>
       ) : null}
       {server.statusSource === "probe" ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal text-muted-foreground"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           connectivity check
         </Badge>
       ) : null}
       {server.configOnly ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           config only
         </Badge>
       ) : null}
       {server.stdioDegraded ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           stdio degraded
         </Badge>
       ) : null}
@@ -1457,14 +1516,10 @@ function ServerToolsPanel(props: {
       }}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <TabsList className="h-auto">
-          <TabsTrigger value="tools" className="text-ui-xs">
-            Tools ({server.tools.length})
-          </TabsTrigger>
+        <TabsList size="sm" className="h-auto">
+          <TabsTrigger value="tools">Tools ({server.tools.length})</TabsTrigger>
           {capabilities.instructionsSource !== "none" ? (
-            <TabsTrigger value="instructions" className="text-ui-xs">
-              Instructions
-            </TabsTrigger>
+            <TabsTrigger value="instructions">Instructions</TabsTrigger>
           ) : null}
         </TabsList>
         {!toolsReadOnly && server.tools.length > 0 ? (

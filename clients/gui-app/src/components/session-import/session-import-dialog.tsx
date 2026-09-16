@@ -105,7 +105,7 @@ function SessionImportDialogBody(props: {
     >
       <DialogContent
         data-testid="session-import-dialog"
-        className="flex h-[min(80dvh,calc(100dvh-2rem))] w-[min(92vw,48rem)] flex-col gap-4 sm:max-w-[min(92vw,48rem)]"
+        className="flex h-[min(80dvh,calc(100dvh-2rem))] w-[min(92vw,48rem)] flex-col sm:max-w-[min(92vw,48rem)]"
       >
         <DialogHeader>
           <DialogTitle>Import your work</DialogTitle>

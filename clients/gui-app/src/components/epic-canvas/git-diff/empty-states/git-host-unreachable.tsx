@@ -21,8 +21,8 @@ const GIT_HOST_RETRY_TIMEOUT_MS = 10_000;
  * a user cannot tell "you have nothing here" from "we could not ask".
  *
  * Both actions are the panel's own, and NEITHER waits on the selection
- * authority. Retry re-dials; "Use active host" clears the surface pin so the
- * panel falls back to `effective`. That second one is the load-bearing half:
+ * authority. Retry re-dials; "Use default host" clears the surface pin so the
+ * panel falls back to its task default. That second one is the load-bearing half:
  * the pin's designed recovery is auto-follow on lease death, which needs
  * `CONFIRMED_DEATH_REFUSAL_STREAK` transport-confirmed refusals to land before
  * the pin is deposed - a condition this panel can neither observe nor force,
@@ -42,11 +42,11 @@ export function GitHostUnreachable(props: {
    */
   readonly onRetry: () => Promise<void>;
   /**
-   * Clears this surface's pin so the panel resolves to the effective host.
-   * `null` when the panel is not pinned (or is pinned to the effective host),
+   * Clears this surface's pin so the panel resolves to its default host.
+   * `null` when the panel is not pinned (or is pinned to the default host),
    * where the action would move nothing and must not be offered.
    */
-  readonly onUseActiveHost: (() => void) | null;
+  readonly onUseDefaultHost: (() => void) | null;
 }): ReactNode {
   const onRetry = props.onRetry;
   const handleRefresh = useCallback((): Promise<void> => onRetry(), [onRetry]);
@@ -94,15 +94,15 @@ export function GitHostUnreachable(props: {
           ) : null}
           Retry
         </Button>
-        {props.onUseActiveHost === null ? null : (
+        {props.onUseDefaultHost === null ? null : (
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            onClick={props.onUseActiveHost}
+            onClick={props.onUseDefaultHost}
             data-testid="git-host-unreachable-use-active"
           >
-            Use active host
+            Use default host
           </Button>
         )}
         <ReportIssueAction

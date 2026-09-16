@@ -280,7 +280,7 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
               section.label,
             )}
             testId={`settings-section-digit-${digit}`}
-            className="text-muted-foreground"
+            className={undefined}
           />
         )}
       </AnimatePresence>
