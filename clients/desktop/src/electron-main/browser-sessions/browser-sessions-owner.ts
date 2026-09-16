@@ -271,6 +271,10 @@ export class BrowserSessionsRegistry {
     });
   }
 
+  notifySystemResumed(): void {
+    for (const stream of this.streams.values()) stream.notifySystemResumed();
+  }
+
   open(windowId: string, key: BrowserSessionsStreamKey): void {
     if (this.disposed) return;
     const id = streamKeyId(windowId, key);
@@ -778,6 +782,13 @@ class BrowserSessionsStream {
   /** Re-drives the attach burst once this machine has a host id to declare. */
   retryLifecycleReady(): void {
     this.sendLifecycleReadyIfReady();
+  }
+
+  notifySystemResumed(): void {
+    this.transport?.wsStreamClient.reconnectAll("system-resume", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
   }
 
   /**

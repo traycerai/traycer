@@ -930,6 +930,44 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(harness.directoryResets.count).toBe(1);
   });
 
+  it("probes every open stream's transport once on system resume, and skips a stream that has none", async () => {
+    registry.open("window-1", OPEN_REQUEST);
+    await Promise.resolve();
+    await Promise.resolve();
+    registry.open("window-2", OPEN_REQUEST);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.clients).toHaveLength(2);
+    const [firstClient, secondClient] = harness.clients;
+    if (firstClient === undefined || secondClient === undefined) {
+      throw new Error("expected two dialed clients");
+    }
+    const firstReconnect = vi.spyOn(firstClient, "reconnectAll");
+    const secondReconnect = vi.spyOn(secondClient, "reconnectAll");
+
+    // Signed out, so this stream never reaches a transport - it must not be
+    // dialed, and it must not make the resume signal throw.
+    harness.userId = null;
+    registry.open("window-3", OPEN_REQUEST);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.clients).toHaveLength(2);
+
+    expect(() => registry.notifySystemResumed()).not.toThrow();
+
+    expect(firstReconnect).toHaveBeenCalledTimes(1);
+    expect(firstReconnect).toHaveBeenCalledWith("system-resume", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
+    expect(secondReconnect).toHaveBeenCalledTimes(1);
+    expect(secondReconnect).toHaveBeenCalledWith("system-resume", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
+    expect(harness.clients).toHaveLength(2);
+  });
+
   it("closes its streams itself when the user signs out", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
