@@ -281,12 +281,9 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
             : state.foregroundKey,
       };
     }),
-  // Drop a host's successfully-deleted backgrounded runs when nothing for that
-  // host is still in flight. The mounted list prunes these via
-  // `clearCompletedDeletedMissingFromList`, but a host the user has navigated
-  // away from has no mounted list, so without this its successes linger in the
-  // app-wide toast forever. Gated on quiescence so it never drops the deleted
-  // tally of a batch that is still running.
+  // Clear successful actions as a whole. A mixed result must retain its
+  // successes alongside its failures until the user acknowledges it, including
+  // when Settings closes or changes hosts.
   clearSettledSuccessesForHostIfQuiescent: (hostId) =>
     set((state) => {
       const hostBackgrounded = state.runs.filter(
@@ -296,13 +293,13 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
         (record) => !worktreeRunIsTerminal(record.run),
       );
       if (anyActive) return state;
+      const successfulGroups = successfulProgressGroupKeys(hostBackgrounded);
       const runs = state.runs.filter(
         (record) =>
           !(
             record.hostId === hostId &&
             record.backgrounded &&
-            record.run.status === "complete" &&
-            record.run.deleted
+            successfulGroups.has(progressGroupKey(record))
           ),
       );
       if (runs.length === state.runs.length) return state;
@@ -317,15 +314,24 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
     }),
   clearCompletedDeletedMissingFromList: (hostId, visibleWorktreePaths) =>
     set((state) => {
-      const runs = state.runs.filter((record) => {
-        const shouldKeep =
+      const hostBackgrounded = state.runs.filter(
+        (record) => record.hostId === hostId && record.backgrounded,
+      );
+      const successfulGroups = successfulProgressGroupKeys(hostBackgrounded);
+      // Listing updates arrive after each removal. Keep the entire action's
+      // tally until every target succeeds and disappears from the inventory;
+      // pruning individual successes makes 1/3 fall back to 0/2 mid-delete.
+      for (const record of hostBackgrounded) {
+        if (visibleWorktreePaths.has(record.target.worktreePath)) {
+          successfulGroups.delete(progressGroupKey(record));
+        }
+      }
+      const runs = state.runs.filter(
+        (record) =>
           record.hostId !== hostId ||
           !record.backgrounded ||
-          record.run.status !== "complete" ||
-          !record.run.deleted ||
-          visibleWorktreePaths.has(record.target.worktreePath);
-        return shouldKeep;
-      });
+          !successfulGroups.has(progressGroupKey(record)),
+      );
       if (runs.length === state.runs.length) return state;
       return {
         runs,
@@ -1170,6 +1176,20 @@ function progressGroups(
 
 function progressGroupKey(record: WorktreeDeleteRunRecord): string {
   return record.batchKey ?? record.key;
+}
+
+function successfulProgressGroupKeys(
+  runs: readonly WorktreeDeleteRunRecord[],
+): Set<string> {
+  return new Set(
+    progressGroups(runs)
+      .filter((group) =>
+        group.every(
+          (record) => record.run.status === "complete" && record.run.deleted,
+        ),
+      )
+      .map((group) => progressGroupKey(group[0])),
+  );
 }
 
 function flushSettledCallbacksIfIdle(): void {
