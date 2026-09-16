@@ -91,25 +91,8 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
   }, []);
 
   const { chatMatches, messageMatches } = results;
-  // A section is drawn whenever it has rows OR a cursor. Since access is
-  // resolved after ranking and paging, a page whose every match was in a task
-  // the requester cannot read comes back EMPTY with a cursor still set, and the
-  // accessible match sits on the next page - so a section gated on rows alone
-  // buries a reachable result permanently.
-  const chatsError = loadMoreError?.section === "chats" ? loadMoreError : null;
-  const messagesError =
-    loadMoreError?.section === "messages" ? loadMoreError : null;
-  const chatsShown =
-    chatMatches.length > 0 ||
-    results.chatNextCursor !== null ||
-    chatsError !== null;
-  const messagesShown =
-    messageMatches.length > 0 ||
-    results.messageNextCursor !== null ||
-    messagesError !== null;
-  // The terminal answer, and only then: nothing on screen and nowhere left to
-  // page to.
-  const exhausted = !chatsShown && !messagesShown;
+  const { chatsError, chatsShown, exhausted, messagesError, messagesShown } =
+    sectionsOf(results, loadMoreError);
 
   return (
     <div className="flex flex-col pb-2">
@@ -149,19 +132,13 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
             })}
           </ul>
           {chatMatches.length === 0 ? <EmptyPageNote /> : null}
-          {chatsError !== null ? (
-            <LoadMoreFailure error={chatsError} />
-          ) : results.chatNextCursor !== null ? (
-            <ShowMoreButton
-              label="Show more chats"
-              disabled={loadingMore}
-              onClick={() => {
-                if (results.chatNextCursor !== null) {
-                  onShowMoreChats(results.chatNextCursor);
-                }
-              }}
-            />
-          ) : null}
+          <SectionContinuation
+            error={chatsError}
+            nextCursor={results.chatNextCursor}
+            label="Show more chats"
+            disabled={loadingMore}
+            onShowMore={onShowMoreChats}
+          />
         </section>
       ) : null}
 
@@ -191,19 +168,13 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
             })}
           </ul>
           {messageMatches.length === 0 ? <EmptyPageNote /> : null}
-          {messagesError !== null ? (
-            <LoadMoreFailure error={messagesError} />
-          ) : results.messageNextCursor !== null ? (
-            <ShowMoreButton
-              label="Show more message matches"
-              disabled={loadingMore}
-              onClick={() => {
-                if (results.messageNextCursor !== null) {
-                  onShowMoreMessages(results.messageNextCursor);
-                }
-              }}
-            />
-          ) : null}
+          <SectionContinuation
+            error={messagesError}
+            nextCursor={results.messageNextCursor}
+            label="Show more message matches"
+            disabled={loadingMore}
+            onShowMore={onShowMoreMessages}
+          />
         </section>
       ) : null}
 
@@ -392,21 +363,75 @@ function EmptyPageNote() {
 }
 
 /**
- * A failed show-more page, in the place its continuation would sit: the rows
- * above it stay, and the retry refetches only that page.
+ * Which sections are drawn. A section is drawn whenever it has rows OR a
+ * cursor OR a failed page. Since access is resolved after ranking and paging,
+ * a page whose every match was in a task the requester cannot read comes back
+ * EMPTY with a cursor still set, and the accessible match sits on the next
+ * page - so a section gated on rows alone buries a reachable result
+ * permanently. `exhausted` is the terminal answer, and only then: nothing on
+ * screen and nowhere left to page to.
  */
-function LoadMoreFailure(props: { readonly error: ChatSearchLoadMoreError }) {
+function sectionsOf(
+  results: ChatSearchMergedResults,
+  loadMoreError: ChatSearchLoadMoreError | null,
+): {
+  readonly chatsError: ChatSearchLoadMoreError | null;
+  readonly messagesError: ChatSearchLoadMoreError | null;
+  readonly chatsShown: boolean;
+  readonly messagesShown: boolean;
+  readonly exhausted: boolean;
+} {
+  const chatsError = loadMoreError?.section === "chats" ? loadMoreError : null;
+  const messagesError =
+    loadMoreError?.section === "messages" ? loadMoreError : null;
+  const chatsShown =
+    results.chatMatches.length > 0 ||
+    results.chatNextCursor !== null ||
+    chatsError !== null;
+  const messagesShown =
+    results.messageMatches.length > 0 ||
+    results.messageNextCursor !== null ||
+    messagesError !== null;
+  return {
+    chatsError,
+    messagesError,
+    chatsShown,
+    messagesShown,
+    exhausted: !chatsShown && !messagesShown,
+  };
+}
+
+/**
+ * What follows a section's rows: nothing when it is out of pages, its show-more
+ * control when there is a cursor, or - when its last page failed - the failure
+ * in that control's place, with a retry that refetches only that page. The rows
+ * above stay either way.
+ */
+function SectionContinuation(props: {
+  readonly error: ChatSearchLoadMoreError | null;
+  readonly nextCursor: string | null;
+  readonly label: string;
+  readonly disabled: boolean;
+  readonly onShowMore: (cursor: string) => void;
+}) {
+  const { error, nextCursor, onShowMore } = props;
+  if (error !== null) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-1 px-1.5 pt-0.5">
+        <p role="alert" className="px-1.5 text-ui-xs text-destructive">
+          {error.message}
+        </p>
+        <ShowMoreButton label="Retry" disabled={false} onClick={error.retry} />
+      </div>
+    );
+  }
+  if (nextCursor === null) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-1 px-1.5 pt-0.5">
-      <p role="alert" className="px-1.5 text-ui-xs text-destructive">
-        {props.error.message}
-      </p>
-      <ShowMoreButton
-        label="Retry"
-        disabled={false}
-        onClick={props.error.retry}
-      />
-    </div>
+    <ShowMoreButton
+      label={props.label}
+      disabled={props.disabled}
+      onClick={() => onShowMore(nextCursor)}
+    />
   );
 }
 
