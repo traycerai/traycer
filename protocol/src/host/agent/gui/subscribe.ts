@@ -1763,7 +1763,7 @@ const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
   lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
 });
 
-// The same frame as every line below `1.12` ships it. It broadcasts the
+// The same frame as every line below `1.13` ships it. It broadcasts the
 // fallback traversal state, and all three of those keys carry run-settings
 // TUPLES that name a permission mode - so on a pre-`auto` line they must be
 // the frozen tuples, exactly as the snapshot's copies are. This frame is
@@ -1989,8 +1989,8 @@ function buildChatSubscribeCommonServerFrameSchemas<
   readonly interviewErrored: InterviewErroredSchema;
   /**
    * Extra `actionAck` members that exist only on the lines that mint them -
-   * `{}` on every released family, the fallback grace-hold `token` on the live
-   * one.
+   * `{}` on every released family, the fallback grace-hold `token` from `1.10`,
+   * and the draft-image refusal `cause` from `1.12`.
    *
    * Parameterized rather than defaulted onto the shared shape, which is the
    * mistake this parameter exists to prevent. `backgroundStopTaskIds` above
@@ -2019,8 +2019,8 @@ function buildChatSubscribeCommonServerFrameSchemas<
       // parses - it never emits a background-stop ack, so `[]` is the correct
       // reading, not a lossy fallback.
       backgroundStopTaskIds: z.array(z.string()).default([]),
-      // `token` on the lines that mint a lease - see `lease` on the parameter
-      // object above for why it arrives that way and not as a member here.
+      // The per-line members - see `extraActionAckFields` on the parameter
+      // object above for why they arrive that way and not as members here.
       ...schemas.extraActionAckFields,
     }),
     z.object({
@@ -2186,7 +2186,7 @@ const chatSubscribeCommonServerFrameSchemasV110 =
 // Frozen common frames bound to `chat.subscribe@1.11` - the tier this merge
 // created. `1.11` is main's shell-host line: the queued managed-command item
 // carries `hostId`, so the queue is NOT the pre-shell-host freeze, but the
-// permission mode is still pre-`auto` because `auto` only arrives at `1.12`.
+// permission mode is still pre-`auto` because `auto` only arrives at `1.13`.
 // That combination existed on neither side before the merge, which is exactly
 // why it needs its own list rather than an alias of either neighbour.
 const chatSubscribeCommonServerFrameSchemasV111 =
@@ -2425,7 +2425,7 @@ const activeProfileUpdateClientFrameSchema = z.object({
 // harness id, a mode accepted on one of these lines mints durable state the
 // SAME line cannot then be served (`chatSubscribeSupportsPermissionMode`
 // refuses an `auto` chat below `1.13`). So the mode axis is pinned here and
-// only `1.12` re-widens it, in `chatSubscribeClientFrameSchemaOptions` below.
+// only `1.13` re-widens it, in `chatSubscribeClientFrameSchemaOptions` below.
 // `1.11` does NOT: main's shell-host tier widened the server direction only.
 const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
   z.object({
@@ -2718,7 +2718,7 @@ const [, , , ...chatSubscribeClientFrameSchemaMiddleOptions] =
 
 // The middle segment again, this time by name. Four of these carry the
 // permission mode - three through the settings tuple and one directly - and
-// `1.12` re-widens exactly those four to the live enum
+// `1.13` re-widens exactly those four to the live enum
 // (`chatSubscribeClientFrameSchemaMiddleOptionsLive` below). Destructured from
 // the pre-auto list rather than re-declared, so the two lists can never come to
 // describe different frames.
@@ -4038,7 +4038,7 @@ const chatRecordSchemaPreAuto = chatSchemaV18.omit({
 // below re-widens exactly those three.
 const chatWindowedSnapshotSchemaV110 = z.object({
   // Field-for-field hand copy of the live windowed snapshot in the LIVE KEY
-  // ORDER, from main, with every key `1.11` or `1.12` widened swapped for its
+  // ORDER, from main, with every key `1.11`, `1.12` or `1.13` widened swapped
   // freeze. Deliberately not `chatWindowedSnapshotSchemaV18.extend(...)`: an
   // `.extend` appends keys the base lacks, which reorders the shape and moves
   // the digest `chat-schema-checkpoints.test.ts` pins for this line. That pin
@@ -4083,10 +4083,10 @@ const chatWindowedSnapshotSchemaV111 = chatWindowedSnapshotSchemaV110.extend({
   tail: chatTranscriptWindowSchema,
   // `pendingFallback` / `pendingReturn` / `lastFailedAttempt` are deliberately
   // NOT re-widened here: `1.11` is pre-`auto` as well, so it inherits V110's
-  // frozen fallback tuples. Only `1.12` re-widens them.
+  // frozen fallback tuples. Only `1.13` re-widens them.
 });
 
-// The live shape (`1.12`) is built on the `1.11` tier, not on `1.10`: basing it
+// The live shape (`1.13`) is built on the `1.12` tier, not on `1.10`: basing it
 // on `1.10` would silently inherit that line's pre-shell-host `tail` and strip
 // the shell host from every up-to-date peer.
 export const chatWindowedSnapshotSchema = chatWindowedSnapshotSchemaV111.extend(
@@ -4095,7 +4095,7 @@ export const chatWindowedSnapshotSchema = chatWindowedSnapshotSchemaV111.extend(
     queue: chatQueueStateSchema,
     pendingApprovals: z.array(chatApprovalStateSchema),
     // Re-widened here and only here: `1.10` froze the fallback tuples pre-`auto`
-    // and `1.11` inherited that freeze, so `1.12` is where a tuple may name the
+    // and `1.11` inherited that freeze, so `1.13` is where a tuple may name the
     // mode again.
     pendingFallback: pendingFallbackSchema.optional(),
     pendingReturn: pendingReturnSchema.optional(),
@@ -4249,7 +4249,7 @@ export type ChatSubscribeWindowedServerFrame = z.infer<
 //
 // `chat`, `queue` and `pendingApprovals` are the pre-`auto` freezes for the
 // same reason the V18 base carries them: `1.9` is pre-auto, and the `auto`
-// line (`1.12`) re-widens all three. See `chatSubscribeV112`. Byte-stability
+// line (`1.13`) re-widens all three. See `chatSubscribeV113`. Byte-stability
 // against what staging shipped is pinned by `chat-schema-checkpoints.test.ts`.
 const chatWindowedSnapshotSchemaV19 = z.object({
   chat: chatRecordSchemaPreAuto,
@@ -4437,28 +4437,36 @@ export type ChatSubscribeWindowedClientFrame = z.infer<
 >;
 
 /**
- * The frozen windowed client union for every line below `auto` - `1.10` AND
- * `1.11`.
+ * The frozen windowed client union for EVERY windowed line below `auto` -
+ * today `1.10`, `1.11` and `1.12`.
  *
- * Those two and `1.12` shared `chatSubscribeWindowedClientFrameSchema` until
- * the permission mode split them, and the split is one-directional: every
- * frame here is a strict subset of the live union above, so the resolver's
+ * Stated as "every line below" rather than as a list, because the list is the
+ * part that has been wrong. Each of those three shared
+ * `chatSubscribeWindowedClientFrameSchema` until the permission mode arrived
+ * above it and split them off, and the split is one-directional: every frame
+ * here is a strict subset of the live union above, so the resolver's
  * re-parse-through-live normalization stays the no-op its own comment claims.
  *
- * `1.11` binds it for the same reason `1.10` does, and the reason is about the
- * CLIENT direction only: main's shell-host line widened the server frames, not
- * the permission enum, so a settings write or an `activePermissionModeUpdate`
- * saying `auto` accepted at `1.11` would mint a chat that very line is then
- * refused (`chatSubscribeSupportsPermissionMode`). A line can carry a newer
- * server surface and an older client one; they are separate freezes.
+ * They bind it for one reason, and it is about the CLIENT direction only.
+ * `1.11` (main's shell host) widened the server frames; `1.12` (main's
+ * hash-only draft images) widened the `actionAck` with a typed refusal
+ * `cause`. Neither touched the permission enum. So a settings write or an
+ * `activePermissionModeUpdate` saying `auto` accepted on any of them would
+ * mint a chat that very line is then refused
+ * (`chatSubscribeSupportsPermissionMode`). A line can carry a newer server
+ * surface and an older client one; they are separate freezes.
  *
- * Enforcement is two repos wide: the registry binds this union to `1.10` and
- * `1.11`, and the host selects it for those peers in
- * `windowedClientFrameSchemaForVersion` (`chat-stream-resolver.ts`), the same
- * place `1.8`/`1.9` are held to their own frozen union. A host that fell
- * through to live there would parse such a peer against the union above and
- * accept a mode the line's own server frames cannot represent - which is the
- * gap that selector exists to close.
+ * Enforcement is two repos wide, and only one side of it can be stated as a
+ * list safely. The registry binds this union to each of those minors
+ * explicitly. The host used to match them the same way, and that is precisely
+ * where it broke: `windowedClientFrameSchemaForVersion`
+ * (`chat-stream-resolver.ts`) enumerated `1.10 || 1.11`, so when `auto` moved
+ * to `1.13` the newly-pre-auto `1.12` fell through to live and a peer on
+ * main's own released line was accepted into a mode its server frames cannot
+ * represent - the exact gap that selector exists to close. It now compares
+ * against the auto floor instead, so the next line minted below `auto`
+ * arrives here with no edit. `1.8`/`1.9` keep their own frozen union ahead of
+ * that comparison; those two numbers are released history and cannot move.
  */
 export const chatSubscribeWindowedClientFrameSchemaPreAuto =
   z.discriminatedUnion("kind", [
@@ -4543,7 +4551,7 @@ export const chatSubscribeV19 = defineStreamRpcContract({
 // `1.7`, exactly as its own doc says it must.
 //
 // Frozen pre-`auto` since the `auto` permission mode re-minted above it at
-// `1.12` - on BOTH directions. The server frames are
+// `1.13` - on BOTH directions. The server frames are
 // `chatSubscribeServerFrameSchemaV110`; the client frames are
 // `chatSubscribeWindowedClientFrameSchemaPreAuto`, because a settings write or
 // an `activePermissionModeUpdate` accepted here would mint a chat this very
@@ -4618,7 +4626,7 @@ export const chatSubscribeV110 = defineStreamRpcContract({
  * tolerance, not stripping.
  *
  * It became an INTERVENING FROZEN TIER on the merge. It is not the live line
- * any more - `1.12` is - and it is not a pre-shell-host line either, so it
+ * any more - `1.13` is - and it is not a pre-shell-host line either, so it
  * aliases neither neighbour: its queue carries the shell host while its
  * permission mode is still pre-`auto`, and its client frames stay
  * `PreAuto` because a settings write accepted here would mint a chat this very

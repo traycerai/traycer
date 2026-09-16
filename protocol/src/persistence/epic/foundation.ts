@@ -324,14 +324,14 @@ export type ChatRunSettingsPreReasonix = z.infer<
  * Wire-freeze copy of the LIVE settings tuple with `permissionMode` pinned
  * pre-`auto`, and ONLY `permissionMode`.
  *
- * Bound by every `chat.subscribe` line from `1.7` through `1.10` - directly as
+ * Bound by every `chat.subscribe` line from `1.7` through `1.12` - directly as
  * `chatSchemaV18.settings`, and through `chatQueueStateSchemaPreAuto` on the
- * queued prompts each of those lines carries. `1.11` is the first that binds
+ * queued prompts each of those lines carries. `1.13` is the first that binds
  * the live tuple. Hand-frozen field-for-field rather than `.extend()`ed, so a
  * later required field on the live tuple cannot leak onto those lines.
  *
  * It reaches FURTHER than the server frames that named it. The same tuple is
- * bound by the `chat.subscribe` CLIENT frames of `1.1` through `1.10` - `send`,
+ * bound by the `chat.subscribe` CLIENT frames of `1.1` through `1.12` - `send`,
  * `editUserMessage`, `queueSteerNow`, `queueSettingsUpdate` and
  * `queueSettingsRestamp` - so a settings write on one of those lines cannot say
  * `auto` either. That direction is deliberately narrowed where the harness axis

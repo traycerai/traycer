@@ -28,7 +28,6 @@ import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundati
 import { autoJudgeUnattendedDenialRowSource } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 
-/** Strip draft-image refusal causes before emitting to a pre-1.11 session. */
 /**
  * The minor that added the typed draft-image refusal `cause` to a rejected
  * `MISSING_ATTACHMENT_BYTES` acknowledgement.

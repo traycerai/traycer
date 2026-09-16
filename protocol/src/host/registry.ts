@@ -11642,7 +11642,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // @1.11 is main's shell-host line. It is an INTERVENING FROZEN TIER
         // after the merge: the queued managed-command item and a resume
         // trigger carry the shell's `hostId` here, but the permission mode is
-        // still pre-`auto`, because `auto` re-minted ABOVE it at @1.12 and the
+        // still pre-`auto`, because `auto` re-minted ABOVE it at @1.13 and the
         // host refuses to serve an `auto` chat below that minor at all
         // (`MINIMUM_CHAT_SUBSCRIBE_MINOR_FOR_AUTO_MODE`).
         11: {
