@@ -944,7 +944,8 @@ function printInboxNotice(notice: AgentInboxNotice): void {
     const lines = [
       "",
       `[traycer inbox] inactivity notice — ${inactivityHeadline(notice, receiverLabel)}${harnessSuffix} (responseId ${notice.responseId})`,
-      `[traycer inbox] Sending a follow-up now would queue behind the user's input and re-trigger this notice. Wait for the receiver's reply.`,
+      `[traycer inbox] Sending a follow-up now would queue behind the user's input and re-trigger this notice. Wait for the receiver's reply or the user's answer to wake you. If you are working for another agent, tell it you're blocked.`,
+      `[traycer inbox] Omit --response-id for your own follow-ups; the displayed responseId is not an incoming reply ID from this receiver.`,
       `[traycer inbox] you may read its transcript: traycer agent transcript --agent-id ${notice.receiverAgentId}`,
       "",
     ];
