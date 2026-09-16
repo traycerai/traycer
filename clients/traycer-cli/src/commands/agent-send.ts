@@ -16,11 +16,12 @@ import type { CommandFn } from "../runner/runner";
  * (`agent.sendMessage`).
  *
  *   - `--expect-reply` opens (or reuses) a thread keyed on the
- *     (sender, receiver) pair; the host returns a `responseId` the
- *     receiver echoes back on its final reply.
- *   - `--response-id <id>` on a send with `--expect-reply` omitted is
- *     the final reply that closes that thread; omit both for a
- *     one-shot, no-reply message.
+ *     (sender, receiver) pair; the host returns a `responseId` identifying
+ *     that outgoing thread for follow-ups from this sender.
+ *   - `--response-id <id>` on a send with `--expect-reply` omitted answers a
+ *     request received from that recipient. It is not the outgoing thread ID
+ *     returned by your own `--expect-reply` send; omit it on your own
+ *     follow-ups. Omit both for a one-shot, no-reply message.
  */
 export function buildAgentSendCommand(opts: {
   readonly epicId: string | null;
