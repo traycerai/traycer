@@ -19,6 +19,7 @@ import {
   resetDraftMirrorCoordinatorForTests,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 
 const INGESTING_HOST = "host-a";
 const OWNER_HOST = "host-b"; // never mirrored on this window
@@ -127,6 +128,16 @@ function bytesA(): Uint8Array<ArrayBuffer> {
 }
 
 /**
+ * A DIFFERENT payload, so its digest cannot collide with `bytesA`'s. The
+ * landing image store's in-memory session cache outlives
+ * `installFreshIndexedDb()`, so a test asserting that bytes are ABSENT has to
+ * use a hash no earlier test in this file stored.
+ */
+function bytesRefused(): Uint8Array<ArrayBuffer> {
+  return new Uint8Array([55, 66, 77, 88, 99]);
+}
+
+/**
  * Mounts a draft-mirror session for `INGESTING_HOST` whose `request` answers
  * `drafts.list` (session bootstrap) plus whatever `handleOther` supplies, and
  * records every call.
@@ -172,6 +183,9 @@ beforeEach(() => {
 afterEach(() => {
   resetDraftMirrorCoordinatorForTests();
   usePromptStashStore.setState({ rows: [] });
+  // A dirty new-chat row makes every later apply keep its local content, so
+  // leaving one behind silently disarms the tests that follow.
+  useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
@@ -217,6 +231,55 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     // There is no mirror for the owner host, so `drafts.readBlob` - which
     // only ever targets `document.ownerHostId` - must never be requested.
     expect(calls.some((call) => call.method === "drafts.readBlob")).toBe(false);
+  });
+
+  it("does not recover images for a document the store refused (DRIVE RED)", async () => {
+    // `applyHostDocument` abandons for several reasons that have nothing to do
+    // with identity - a retired draft, a pending delete, a newer apply, an
+    // older revision, and this one: a DIRTY local row, which keeps its own
+    // text and takes only the identity. The document's hashes are not rooted
+    // in any of those cases, yet recovery used to run anyway - and
+    // `putImageBytesAtHash` seeds a session entry that is itself a GC root, so
+    // the bytes stay resident with nothing left to release them.
+    const bytes = bytesRefused();
+    const hash = await sha256HexOf(bytes);
+    const calls = mountIngestingHostSession((method, params) => {
+      if (method === "epic.readCloudChatPayload") {
+        return Promise.resolve({
+          outcome: {
+            status: "ok" as const,
+            bytesBase64: toBase64(bytes),
+            byteLength: bytes.byteLength,
+          },
+        });
+      }
+      throw new Error(`unexpected ${String(method)} ${JSON.stringify(params)}`);
+    });
+    await Promise.resolve();
+
+    // The user is typing in this epic's new-conversation modal: generation is
+    // ahead of syncedGeneration, so the incoming document takes the identity
+    // and leaves the local text alone.
+    useNewConversationModalStore.getState().setContent("epic-1", {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "mine" }] },
+      ],
+    });
+
+    const cloudSummary = summary();
+    await ingestCloudDraftSummary({
+      hostId: INGESTING_HOST,
+      readOwner: OWNER,
+      summary: cloudSummary,
+      document: newChatDocument(cloudSummary, [hash]),
+    });
+
+    // Nothing fetched, and nothing resident.
+    expect(
+      calls.some((call) => call.method === "epic.readCloudChatPayload"),
+    ).toBe(false);
+    expect(await getImageBytes(hash)).toBeUndefined();
   });
 
   it("excludes stash-entry documents from cloud image recovery, with a new-chat positive control (case K)", async () => {

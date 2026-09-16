@@ -216,6 +216,47 @@ describe("draft blob transport", () => {
     expect(images.size).toBe(0);
   });
 
+  it("a SIGN-IN ATTEMPT during the write is retired too, though the owner id never moves (DRIVE RED)", async () => {
+    // The owner id is not sufficient on its own. `setSigningIn` moves the
+    // status and leaves `contextMetadata` alone, so this window keeps
+    // reporting user-a for the whole attempt and an id-only fence sees nothing
+    // happen. If the attempt settles as user-b, a's bytes are already in b's
+    // partition and rooted there by the session entry the write seeds.
+    //
+    // Switched inside `store`, like the test above and for the same reason: a
+    // switch before the pre-write check would pass even with the post-write
+    // fence deleted.
+    const bytes = new Uint8Array([...pngBytes(), 0x7a, 0x7b, 0x7c]);
+    const hash = await sha256HexOfBytes(bytes);
+    signedInAs("user-a");
+
+    const passthrough = localReadMocks.realPut;
+    if (passthrough === null) throw new Error("no passthrough captured");
+    localReadMocks.putImageBytesAtHash.mockImplementationOnce(
+      async (writtenHash, writtenBytes) => {
+        const stored = await passthrough(writtenHash, writtenBytes);
+        useAuthStore.getState().setSigningIn("device");
+        return stored;
+      },
+    );
+
+    const client: DraftBlobClient = {
+      request: ((_method, _params) =>
+        Promise.resolve({
+          ok: true as const,
+          bytesBase64: bytesToBase64(bytes),
+        })) as HostRequester<HostRpcRegistry>["request"],
+    };
+
+    const images = await readDraftBlobsIntoLocalStore(HOST, client, [hash]);
+
+    // The owner id is still user-a - the control that makes this test about
+    // the STATUS and nothing else.
+    expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-a");
+    expect(images.size).toBe(0);
+    expect(sessionImageBytes(hash)).toBeNull();
+  });
+
   it("a switch DURING the write is retired, not kept (DRIVE RED)", async () => {
     // The switch lands inside `store`, which is the only window the POST-write
     // fence covers. An earlier version of this test switched inside

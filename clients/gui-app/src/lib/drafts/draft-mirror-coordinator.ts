@@ -437,8 +437,12 @@ const sink: DraftMirrorSink = {
     settleLandingDeleteOutcome(draftId, hostId, outcome);
     useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
   },
-  applyUpsert(document) {
-    return applyHostDocument(document);
+  async applyUpsert(document) {
+    // The sink contract is `void`: a stream frame has nobody to report an
+    // abandonment to, and `rememberIncomingSynced` already re-derives what it
+    // needs from `held`. The boolean exists for the CLOUD ingest caller, which
+    // writes bytes on the strength of the apply.
+    await applyHostDocument(document);
   },
   applyDelete(draftId) {
     rememberInheritableLandingTab(draftId);
@@ -707,7 +711,18 @@ async function prefetchDocumentBlobs(
   }
 }
 
-async function applyHostDocument(document: DraftDocument): Promise<void> {
+/**
+ * @returns whether a row actually took this document, and therefore whether
+ * its hashes are now ROOTED. Every abandonment path answers `false`: a retired
+ * draft, a pending submitted delete, a newer apply, an identity change, and -
+ * since the revision fences landed - an older revision the store refuses.
+ *
+ * Callers that write bytes on the strength of this apply need that answer.
+ * `putImageBytesAtHash` seeds a session entry which is itself a GC root, so
+ * recovering images for a document no row took leaves them resident with
+ * nothing to release them.
+ */
+async function applyHostDocument(document: DraftDocument): Promise<boolean> {
   if (document.kind === "landing") {
     knownLandingDraftIds.add(document.draftId);
     // The absence-sweep fence is reserved here, synchronously at the start
@@ -737,42 +752,45 @@ async function applyHostDocument(document: DraftDocument): Promise<void> {
   // every side effect below rather than once here, because each of them is
   // past a different set of awaits.
   const applyOwner = currentDraftBlobOwnerId();
-  if (rejectRetiredLandingDocument(document)) return;
+  if (rejectRetiredLandingDocument(document)) return false;
   if (composerSubmittedDraftDeleteIsPending(document.draftId)) {
     await retrySubmittedDraftDelete(document.draftId);
-    return;
+    return false;
   }
   const prefetched = await prefetchDocumentBlobs(
     document,
     applySeq,
     applyOwner,
   );
-  if (prefetched === "abandoned") return;
-  if (prefetched === "ingested") return;
-  if (!applyStillOwned(applyOwner, document)) return;
+  if (prefetched === "abandoned") return false;
+  // A stash row WAS installed by the ingest, so its hashes are rooted.
+  if (prefetched === "ingested") return true;
+  if (!applyStillOwned(applyOwner, document)) return false;
   if (document.kind === "stash-entry") {
     await ingestStashDocument(document, new Map(), applyOwner);
-    return;
+    return true;
   }
   if (document.kind === "interview") {
     applyInterviewHostDocument(document);
-    return;
+    return true;
   }
   if (document.kind === "landing") {
     // Re-checked after the blob reads: a delete routed meanwhile retired it.
-    if (rejectRetiredLandingDocument(document)) return;
-    if (!applyStillOwned(applyOwner, document)) return;
-    if (rekeyLandingTabInPlace(document)) return;
-    if (applyLandingHostDocument(document, document.portable.content)) {
-      inheritLandingTab(document);
+    if (rejectRetiredLandingDocument(document)) return false;
+    if (!applyStillOwned(applyOwner, document)) return false;
+    // A re-key moves the row to this document's id; the row is live and its
+    // hashes are rooted under the new identity.
+    if (rekeyLandingTabInPlace(document)) return true;
+    if (!applyLandingHostDocument(document, document.portable.content)) {
+      return false;
     }
-    return;
+    inheritLandingTab(document);
+    return true;
   }
   if (document.kind === "chat-composer") {
-    applyComposerHostDocument(document);
-    return;
+    return applyComposerHostDocument(document);
   }
-  applyNewChatHostDocument(document);
+  return applyNewChatHostDocument(document);
 }
 
 function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
@@ -1343,7 +1361,13 @@ export async function ingestCloudDraftSummary(input: {
   // every check agreeing.
   const ingestOwner = input.readOwner;
   if (currentDraftBlobOwnerId() !== ingestOwner) return;
-  await applyHostDocument(input.document);
+  const installed = await applyHostDocument(input.document);
+  // No row took it, so this document roots nothing and there is nothing for
+  // recovery to fetch FOR - whether it was retired, fenced by a pending
+  // delete, beaten by a newer apply, refused as an older revision, or kept out
+  // by a dirty local row. The owner re-check below covers only the last of
+  // those, which is why it is not enough on its own.
+  if (!installed) return;
   // An apply that abandoned installed no row, so this document roots nothing
   // and there is nothing for recovery to fetch FOR. Running it anyway is not
   // merely wasted: recording its sources spends slots in a shared, per-digest

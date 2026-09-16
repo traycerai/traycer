@@ -5,6 +5,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { getImageBytes, putImage } from "@/lib/composer/landing-image-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   NO_DRAFT_IMAGE_BYTE_TARGET,
   resolveDraftImageBytes,
@@ -41,10 +42,19 @@ function targetWithClient(request: FakeRequest): DraftImageByteTarget {
 
 beforeEach(() => {
   installFreshIndexedDb();
+  // Signed in, as production always is when a host blob read can happen: a
+  // host client exists only for an established account, and the transport's
+  // write-back fence now requires an auth state allowed to serve the read.
+  // Leaving this out modelled a state production cannot produce.
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "owner-1", username: "owner-1" },
+  });
 });
 
 afterEach(() => {
   resetDraftBlobTransportForTests();
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
 describe("resolveDraftImageBytes", () => {

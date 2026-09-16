@@ -14,7 +14,10 @@ import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature"
 import { readPromptStashRestoreBlobs } from "@/lib/composer/prompt-stash-repository";
 import type { PromptStashImageBlob } from "@/lib/composer/prompt-stash-codec";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { blobHashesOfWrite } from "./draft-write-codec";
 import { isDraftsCapabilityMissing } from "./draft-capability";
 
@@ -119,6 +122,31 @@ export function resetDraftBlobTransportForTests(): void {
  */
 export function currentDraftBlobOwnerId(): string | null {
   return useAuthStore.getState().contextMetadata?.userId ?? null;
+}
+
+/**
+ * Whether a read that began under `owner` may still write into this window's
+ * partition.
+ *
+ * The owner id ALONE is not enough, and the gap is not theoretical:
+ * `setSigningIn` moves the status to `signing-in` without clearing
+ * `contextMetadata`, so throughout a fresh sign-in attempt this window keeps
+ * reporting the previous account's id. A read that started under A therefore
+ * passes an id-only check for the whole attempt, and if that attempt settles
+ * as B, A's bytes are already in B's partition - and rooted there by the
+ * session entry `putImageBytesAtHash` seeds on its way through.
+ *
+ * The cloud leg has always paired the two, checking `authorizesCloudCapability`
+ * beside its owner comparison. This is the host leg catching up to it.
+ *
+ * A false negative costs one wasted fetch, which is the trade the call sites
+ * were already written around.
+ */
+function stillServingBlobIdentity(owner: string | null): boolean {
+  return (
+    currentDraftBlobOwnerId() === owner &&
+    authorizesCloudCapability(useAuthStore.getState().status)
+  );
 }
 
 function blobEpochOf(hostId: string): number {
@@ -550,10 +578,10 @@ async function readDraftBlobs(
       // other half of that window open. Losing this race costs one wasted
       // fetch; winning it wrongly costs an image in the wrong account's
       // partition.
-      if (currentDraftBlobOwnerId() !== owner) return images;
+      if (!stillServingBlobIdentity(owner)) return images;
       const stored = await store(sha256, bytes);
       if (!stored) continue;
-      if (currentDraftBlobOwnerId() !== owner) {
+      if (!stillServingBlobIdentity(owner)) {
         retireCrossedBlobWrite(sha256);
         return images;
       }

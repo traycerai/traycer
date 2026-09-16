@@ -17,6 +17,7 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostRpcRegistry } from "@/lib/host";
 
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   resolveDraftImageBytes,
   type DraftImageByteTarget,
@@ -46,6 +47,14 @@ beforeEach(() => {
   storeMocks.getImageBytes.mockRejectedValue(
     new Error("IndexedDB unavailable"),
   );
+  // Signed in, as production always is when a host blob read can happen: a
+  // host client exists only for an established account, and the transport's
+  // write-back fence now requires an auth state allowed to serve the read.
+  // Leaving this out modelled a state production cannot produce.
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "owner-1", username: "owner-1" },
+  });
 });
 
 afterEach(() => {

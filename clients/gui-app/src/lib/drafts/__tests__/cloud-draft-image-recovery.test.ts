@@ -21,6 +21,24 @@ import {
 } from "@/lib/drafts/cloud-draft-image-recovery";
 import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
 
+// Passthrough, with the SCHEDULER observable. A recovery write that outlives
+// its draft has to hand the reclaim to the root-aware sweep, and nothing else
+// this module returns reports whether it did. The tests that exercise the
+// sweep call `reconcile()` directly, so stubbing the scheduler changes nothing
+// for them.
+const imageGcMocks = vi.hoisted(() => ({
+  scheduleLandingImageReconcile: vi.fn(),
+}));
+
+vi.mock("@/lib/composer/landing-image-gc", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/composer/landing-image-gc")>();
+  return {
+    ...actual,
+    scheduleLandingImageReconcile: imageGcMocks.scheduleLandingImageReconcile,
+  };
+});
+
 // Passthrough by default; one test below wraps `putImageBytesAtHash` so an
 // account switch can land INSIDE the write, which is the only way to reach the
 // post-write identity fence. Same shape the pending-ingest suite uses.
@@ -179,6 +197,30 @@ describe("cloud-draft-image-recovery", () => {
       ...IDENTITY,
       ref: { kind: "image-attachment", sha256: hash },
     });
+  });
+
+  it("hands a successful recovery write to the root-aware sweep (DRIVE RED)", async () => {
+    // The payload request and the IndexedDB write are both non-cancellable, so
+    // this write can land after its draft was deleted and after that removal's
+    // reconciliation has already run. It seeds bytes AND a session entry -
+    // itself a GC root - with nothing scheduled to look again, so repeated
+    // late transfers accumulate outside the live-root budget rather than
+    // against it. The sweep re-reads the live roots, so a write whose row IS
+    // still live costs nothing: it finds the hash rooted and leaves it.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+    imageGcMocks.scheduleLandingImageReconcile.mockClear();
+
+    expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
+    expect(imageGcMocks.scheduleLandingImageReconcile).toHaveBeenCalled();
   });
 
   it("refuses a digest mismatch: stores nothing and answers null, with a matching-bytes positive control", async () => {

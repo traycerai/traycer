@@ -730,6 +730,19 @@ async function readAndStoreCloudDraftImage(
       retireCrossedWrite(hash);
       return null;
     }
+    // This write can outlive the row it was fetched FOR. The payload request
+    // and the IndexedDB write are both non-cancellable, so a draft deleted or
+    // replaced while they were in flight has already had its reconciliation
+    // run - and this write then seeds bytes AND a session entry (itself a GC
+    // root) after the last sweep looked, with nothing scheduled to look again.
+    // Repeated late transfers accumulate that way, outside the live-root
+    // budget rather than against it.
+    //
+    // The sweep is root-aware and re-reads the live roots when it runs, so a
+    // write whose row IS still live costs nothing here: it finds the hash
+    // rooted and leaves it. Same call the paste and migration paths make
+    // after their own writes.
+    scheduleLandingImageReconcile();
     return bytes;
   } catch (error: unknown) {
     if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED") {

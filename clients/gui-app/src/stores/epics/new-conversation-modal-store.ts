@@ -316,10 +316,11 @@ export function newChatDraftRememberSynced(
   });
 }
 
-export function applyNewChatHostDocument(document: DraftDocument): void {
-  if (document.kind !== "new-chat") return;
+/** @returns whether the patch took this document; see `applyHostDocument`. */
+export function applyNewChatHostDocument(document: DraftDocument): boolean {
+  if (document.kind !== "new-chat") return false;
   const epicId = document.target.epicId;
-  if (epicId === null) return;
+  if (epicId === null) return false;
   // Revision frontier, matching `applyLandingHostDocument` and the composer
   // store: image reads finish out of order after subscribe-frame admission,
   // so two upserts for this row can both be admitted and the slower one land
@@ -334,8 +335,15 @@ export function applyNewChatHostDocument(document: DraftDocument): void {
     document.revision > 0 &&
     held.hostRevision > document.revision
   ) {
-    return;
+    return false;
   }
+  // Whether the document's CONTENT lands, which is the question a caller
+  // writing bytes for it has to ask. A dirty row keeps the local text and
+  // takes only the identity, so the document's hashes stay unrooted and
+  // recovering them would leave bytes resident with nothing to release them.
+  // Read before the updater so it is this decision, not a later one.
+  const contentLands =
+    held === undefined || held.generation <= held.syncedGeneration;
   useNewConversationModalStore.setState((state) => {
     const current = state.draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
     if (current.generation > current.syncedGeneration) {
@@ -370,6 +378,7 @@ export function applyNewChatHostDocument(document: DraftDocument): void {
       },
     };
   });
+  return contentLands;
 }
 
 export function applyNewChatHostDelete(draftId: string): void {
