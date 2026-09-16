@@ -277,10 +277,25 @@ export async function consumeStashOnHost(
       await client.request("drafts.retract", { draftId: entryId });
       stashHostById.delete(entryId);
       return;
-    } catch {
-      // An older host without `drafts.retract`: fall through to the
-      // idempotent delete, which answers `deleted: false` there and leaves
-      // the publisher's row (lossy, not broken).
+    } catch (error: unknown) {
+      // ONLY a missing capability falls through. An older host without
+      // `drafts.retract` answers the idempotent delete with `deleted: false`
+      // and keeps the publisher's row - lossy, not broken.
+      //
+      // Any other rejection is transient, and falling through would be worse
+      // than doing nothing: the delete goes to `bound`, which is NOT the
+      // owner, so that host truthfully answers `absent` - and `deleteOnHost`
+      // counts `absent` as answered, so the binding is dropped. The owner's
+      // cloud row is still there and still restorable, and the one record
+      // that said which host could retract it has just been thrown away, so
+      // the consumed entry can come back with nothing able to retract it.
+      // Keep the binding and let a later consume retry the retract.
+      if (!isDraftsCapabilityMissing(error)) {
+        appLogger.warn("[draft-mirror] drafts.retract failed", {
+          error: describeLogError(error),
+        });
+        return;
+      }
     }
   }
   await deleteStashEntryOnHost(bound, entryId);

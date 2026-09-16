@@ -871,6 +871,17 @@ describe("useChatComposerSubmit draft images - F5 live capability", () => {
     const atoms = collectImageAtoms(submit.mock.calls[0][0].content);
     expect(atoms[0]?.hash).toBeNull();
     expect(typeof atoms[0]?.b64content).toBe("string");
+    // Attachments are DERIVED from the content, so the re-inline has to
+    // rebuild them too. Left as staged they still name a hash this document
+    // no longer carries, and the optimistic pending message keeps them for
+    // its gallery - which then shows an unavailable image beside the very
+    // bytes that were just put back.
+    const images = submit.mock.calls[0][0].attachments.filter(
+      (attachment) => attachment.kind === "image",
+    );
+    expect(images.length).toBe(1);
+    expect(images[0]?.hash).toBeNull();
+    expect(images[0]?.dataUrl).toContain("base64,");
   });
 });
 

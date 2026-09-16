@@ -941,7 +941,21 @@ export function useChatComposerSubmit(
             setPendingConflict(null);
             return;
           }
-          restartStagedConflict({ ...staged, content });
+          // Attachments are DERIVED from the content, so re-inlining above
+          // invalidates the staged ones: they still name hashes this document
+          // no longer carries, and the optimistic pending message keeps them
+          // for its gallery - which then renders an unavailable image beside
+          // the very bytes that were just put back. Rebuilt the same way the
+          // ordinary submit path builds them, sidecar records included, since
+          // those are attachments too and are not derivable from content.
+          restartStagedConflict({
+            ...staged,
+            content,
+            attachments: [
+              ...buildAttachmentsFromJSONContent(content),
+              ...staged.restore.browserAnnotations,
+            ],
+          });
         })
         .finally(() => {
           conflictInliningFlight.current = false;
