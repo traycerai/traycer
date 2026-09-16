@@ -687,15 +687,21 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     const chip = screen.getByTestId("chat-dock-chip-background");
     expect(chipText("background")).toBe("1");
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 running.");
-    // Something is running, so the kind's icon pulses - it is not replaced.
+    // Something is running, so the section's mark pulses - it is not replaced,
+    // and it is not the row's own `square-terminal`: one kind of row does not
+    // change what the chip is.
     expect(chipWorking("background")).toBe(true);
-    expect(chip.querySelector("svg.lucide-square-terminal")).not.toBeNull();
+    expect(
+      chip.querySelector("svg.lucide-message-square-clock"),
+    ).not.toBeNull();
+    expect(chip.querySelector("svg.lucide-square-terminal")).toBeNull();
+    expect(chip.querySelector("svg.lucide-layers")).toBeNull();
   });
 
-  // Running and mixed at once: the neutral stack is still the glyph, and the
+  // Running and mixed at once: the section's mark is still the glyph, and the
   // blink rides on it. The two axes are independent, and this is the case that
   // would have been hidden while a working chip swapped its icon out.
-  it("keeps the neutral stack on a background chip whose mixed rows are running", () => {
+  it("keeps the section's mark on a background chip whose mixed rows are running", () => {
     useLayoutStore.setState({
       composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
     });
@@ -717,12 +723,16 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
       "Background. 1 running · 1 waiting.",
     );
     expect(chipWorking("background")).toBe(true);
-    expect(chip.querySelector("svg.lucide-layers")).not.toBeNull();
+    expect(
+      chip.querySelector("svg.lucide-message-square-clock"),
+    ).not.toBeNull();
+    expect(chip.querySelector("svg.lucide-layers")).toBeNull();
   });
 
-  // A pending wake is not running, so the chip rests - and rests on the wake's
-  // own icon, the one the panel row would draw, rather than a generic one.
-  it("rests the background chip on the one kind present, and on the neutral stack when kinds differ", () => {
+  // A pending wake is not running, so the chip rests - on the same mark. The
+  // rows' kinds are the panel's to draw; the chip never borrowed the wake's
+  // clock for one kind or a neutral stack for two.
+  it("rests the background chip on the section's mark, one kind or mixed", () => {
     useLayoutStore.setState({
       composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
     });
@@ -737,10 +747,13 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     const chip = screen.getByTestId("chat-dock-chip-background");
     expect(chipText("background")).toBe("0");
     expect(chipWorking("background")).toBe(false);
-    expect(chip.querySelector("svg.lucide-alarm-clock")).not.toBeNull();
+    expect(
+      chip.querySelector("svg.lucide-message-square-clock"),
+    ).not.toBeNull();
+    expect(chip.querySelector("svg.lucide-alarm-clock")).toBeNull();
 
-    // A held shell joins the wake: two kinds, so neither icon may stand for
-    // both. Held output is not running, so the chip still rests.
+    // A held shell joins the wake: two kinds, and the mark does not change.
+    // Held output is not running, so the chip still rests.
     act(() => {
       managedCommandSession.setHeldUpdates([
         { commandId: "cmd-1", description: "deploy watcher", heldAtMs: 1 },
@@ -749,7 +762,10 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
 
     expect(chipText("background")).toBe("0");
     expect(chipWorking("background")).toBe(false);
-    expect(chip.querySelector("svg.lucide-layers")).not.toBeNull();
+    expect(
+      chip.querySelector("svg.lucide-message-square-clock"),
+    ).not.toBeNull();
+    expect(chip.querySelector("svg.lucide-layers")).toBeNull();
   });
 
   // The report that started this: a Traycer shell following a PR drew `⏸ 1` -
@@ -759,7 +775,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   //
   // `monitoring: true` is the case that was reported, and it must be
   // indistinguishable from any other live shell here.
-  it("draws a running monitor shell as a lit terminal that says it is running", () => {
+  it("draws a running monitor shell as the lit section mark that says it is running", () => {
     useLayoutStore.setState({
       composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
     });
@@ -787,7 +803,9 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     expect(chipWorking("background")).toBe(true);
     // "running" is said in the sentence and nowhere in the chip's own text.
     expect(chipText("background")).toBe("1");
-    expect(chip.querySelector("svg.lucide-terminal")).not.toBeNull();
+    expect(
+      chip.querySelector("svg.lucide-message-square-clock"),
+    ).not.toBeNull();
     expect(chip.querySelector("svg.lucide-circle-pause")).toBeNull();
   });
 
@@ -795,7 +813,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
   // its last output is the one thing on the chip that is genuinely NOT running,
   // and it is told apart by the sentence and the tone - never by a second
   // glyph, which is what made a live watcher read as paused.
-  it("rests a shells-only background chip on the same terminal, and says held", () => {
+  it("rests a shells-only background chip on the same mark, and says held", () => {
     useLayoutStore.setState({
       composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
     });
@@ -817,7 +835,9 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 held.");
     expect(chipWorking("background")).toBe(false);
     expect(chipText("background")).toBe("0");
-    expect(chip.querySelector("svg.lucide-terminal")).not.toBeNull();
+    expect(
+      chip.querySelector("svg.lucide-message-square-clock"),
+    ).not.toBeNull();
     expect(chip.querySelector("svg.lucide-circle-pause")).toBeNull();
   });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
+  retainDisplayedPrPanel,
   resolveActiveVisibleGroupIndex,
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
@@ -168,6 +169,42 @@ describe("epic left panel registry", () => {
 
     it("reports nothing visible", () => {
       expect(resolveActiveVisibleGroupIndex([], "chats")).toBeNull();
+    });
+  });
+
+  describe("retainDisplayedPrPanel", () => {
+    it("retains PRs in the fallback group when the active panel is hidden", () => {
+      const retained = retainDisplayedPrPanel(
+        [{ panelIds: ["chats", "pull-requests"] }, { panelIds: ["terminals"] }],
+        "terminals",
+        context({ visibilityOverrideById: { terminals: false } }),
+      );
+
+      expect(retained.hasPullRequests).toBe(true);
+    });
+
+    it("retains PRs in the first visible group when Chats is hidden too", () => {
+      const retained = retainDisplayedPrPanel(
+        [{ panelIds: ["chats", "pull-requests"] }, { panelIds: ["terminals"] }],
+        "terminals",
+        context({
+          visibilityOverrideById: { chats: false, terminals: false },
+        }),
+      );
+
+      expect(retained.hasPullRequests).toBe(true);
+    });
+
+    it("does not bypass an explicit Pull Requests hide", () => {
+      const retained = retainDisplayedPrPanel(
+        [{ panelIds: ["chats", "pull-requests"] }],
+        "chats",
+        context({
+          visibilityOverrideById: { "pull-requests": false },
+        }),
+      );
+
+      expect(retained.hasPullRequests).toBe(false);
     });
   });
 });
