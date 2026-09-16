@@ -789,8 +789,9 @@ export function createEpicControlReplica(
       observedAtMs = environment.clock.now();
       switch (event.kind) {
         case "early-meta":
-          // Metadata-only frame - the caller populates snapshot metadata on the
-          // records plane. Here it moves only the DISPLAY role and mirrors the
+          // Legacy @1 metadata-only frame; lanes never apply this event.
+          // The caller populates snapshot metadata on the records plane.
+          // Here it moves only the DISPLAY role and mirrors the
           // snapshot's accessLost-clear semantics, so a role-restored reconnect
           // doesn't leave the renderer in a self-contradicting state (sidebar
           // shows editor while the session is still flagged access-lost for the
@@ -822,6 +823,10 @@ export function createEpicControlReplica(
           // write", which is the one question this replica exists to answer
           // once.
           adoptSnapshotRole(event.role);
+          // A real re-grant restores access; a workspace-context response
+          // cannot. Leave the displayed role for the following permission
+          // event so its downgrade comparison still sees the previous role.
+          if (event.role !== null) publish({ accessLost: false });
           break;
         case "cloud-sync-status":
           applyCloudSyncStatus(event.status, event.durability);

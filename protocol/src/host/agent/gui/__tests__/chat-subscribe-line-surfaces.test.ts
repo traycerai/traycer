@@ -9,9 +9,10 @@
  *
  * - `1.9` is mainline's windowed line as the `v1.3.x` staging builds shipped
  *   it (delivery placement, Antigravity anchors), frozen;
- * - `1.10` is provider fallback, minted above it;
- * - `1.11` is the draft-image bridge, minted above that. It inherits every
- *   fallback surface and adds one `actionAck` member of its own.
+ * - `1.10` is provider fallback, minted above it, frozen as the staging
+ *   builds shipped it;
+ * - `1.11` is the shell host on a resume trigger and on the queued
+ *   managed-command item, minted above that.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -30,11 +31,12 @@ import { providerNoticeKindSchema } from "@traycer/protocol/persistence/epic/con
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
 // The minor each surface was minted on. A line carries a surface from its own
-// minor UPWARD - `1.11` is not "not the fallback line", it is a later one that
-// inherits it - so these are thresholds, not equalities. Written as `===` they
-// asserted that the newest line had LOST provider fallback.
+// minor UPWARD - `1.12` is not "not the shell-host line", it is a later one
+// that inherits it - so these are thresholds, not equalities. Written as `===`
+// they assert that the newest line has LOST the surface below it.
 const FALLBACK_MINOR = 10;
-const DRAFT_IMAGE_CAUSE_MINOR = 11;
+const SHELL_HOST_MINOR = 11;
+const DRAFT_IMAGE_CAUSE_MINOR = 12;
 const LIVE_MINOR = DRAFT_IMAGE_CAUSE_MINOR;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
@@ -80,6 +82,45 @@ const FALLBACK_CLIENT_NEEDLES = fallbackActions.map((action) =>
 );
 const PLACEMENT_NEEDLE = '"deliveryPlacement":';
 
+// The two shapes the shell host rides, found structurally rather than by a
+// `"hostId":` needle - the chat record's own `hostId` is on every line. A
+// resume trigger's `managedCommand` is the object carrying `commandId` and
+// `monitoring` with no `description` (the tool-call identity has one); the
+// queued managed-command item is the object carrying `queueItemId` beside
+// `commandId`.
+function shellShapes(schema: z.ZodType): {
+  shapes: number;
+  withHost: number;
+} {
+  const tally = { shapes: 0, withHost: 0 };
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    const record = node as Record<string, unknown>;
+    const properties = record.properties;
+    if (properties !== null && typeof properties === "object") {
+      const keys = new Set(Object.keys(properties));
+      const isTriggerShell =
+        keys.has("commandId") &&
+        keys.has("monitoring") &&
+        !keys.has("description");
+      const isQueuedShell = keys.has("queueItemId") && keys.has("commandId");
+      if (isTriggerShell || isQueuedShell) {
+        tally.shapes += 1;
+        if (keys.has("hostId")) tally.withHost += 1;
+      }
+    }
+    for (const value of Object.values(record)) visit(value);
+  };
+  for (const io of ["input", "output"] as const) {
+    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+  }
+  return tally;
+}
+
 const unionArmsSchema = z.object({
   oneOf: z
     .array(z.object({ properties: z.record(z.string(), z.unknown()) }))
@@ -108,8 +149,8 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.11 (a line added later cannot drop out)", () => {
-    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  it("covers chat.subscribe@1.0 through @1.12 (a line added later cannot drop out)", () => {
+    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
 
@@ -127,6 +168,7 @@ describe("chat.subscribe line surfaces", () => {
       const { contract } = chatSubscribeLine.versions[minor];
       const carriesFallback = minor >= FALLBACK_MINOR;
       const carriesPlacement = minor >= 9;
+      const carriesShellHost = minor >= SHELL_HOST_MINOR;
       const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
 
       it(`server frames ${carriesFallback ? "carry" : "hold back"} every provider-fallback surface`, () => {
@@ -161,6 +203,15 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           actionAckPropertyNames(contract.serverFrameSchema).includes("cause"),
         ).toBe(carriesRefusalCause);
+      });
+
+      it(`server frames ${carriesShellHost ? "carry" : "hold back"} the shell host on every shell shape`, () => {
+        const { shapes, withHost } = shellShapes(contract.serverFrameSchema);
+        // Every line reaches a resume trigger through its chat tree, so the
+        // walk must find something - a zero here means the finder is wrong,
+        // not that the line is clean.
+        expect(shapes).toBeGreaterThan(0);
+        expect(withHost).toBe(carriesShellHost ? shapes : 0);
       });
     });
   }

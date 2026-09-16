@@ -12,6 +12,7 @@ import {
   chatSubscribeV19,
   chatSubscribeV110,
   chatSubscribeV111,
+  chatSubscribeV112,
   chatSubscribeSnapshotServerFrameShallowSchemaV16,
   chatSubscribeSnapshotServerFrameShallowSchema,
   chatSubscribeServerFrameSchema,
@@ -270,10 +271,10 @@ describe("projectChatClientFrameForVersion", () => {
 
 describe("projectChatActionAckForVersion", () => {
   // The ADJACENT pair, not a comfortable gap: `1.10` is the highest line that
-  // must never see the key, `1.11` the first that may. A test written against
+  // must never see the key, `1.12` the first that may. A test written against
   // `1.9` would still pass with the threshold left at the wrong minor.
   const preBridge: SchemaVersion = { major: 1, minor: 10 };
-  const bridge: SchemaVersion = { major: 1, minor: 11 };
+  const bridge: SchemaVersion = { major: 1, minor: 12 };
 
   it("strips a typed draft-image refusal cause for a 1.10 session", () => {
     const frame = actionAckFrame("too-large");
@@ -302,10 +303,10 @@ describe("projectChatActionAckForVersion", () => {
     ).toBe(false);
   });
 
-  it("passes a typed draft-image refusal cause through on 1.11", () => {
+  it("passes a typed draft-image refusal cause through on 1.12", () => {
     const frame = actionAckFrame("not-on-host");
     expect(projectChatActionAckForVersion(frame, bridge)).toBe(frame);
-    expect(chatSubscribeV111.serverFrameSchema.parse(frame)).toMatchObject({
+    expect(chatSubscribeV112.serverFrameSchema.parse(frame)).toMatchObject({
       cause: "not-on-host",
     });
   });
@@ -316,14 +317,19 @@ describe("projectChatActionAckForVersion", () => {
     expect(projectChatActionAckForVersion(frame, bridge)).toBe(frame);
   });
 
-  it("rejects an unknown cause and keeps the frozen 1.10 schema unchanged", () => {
+  it("rejects an unknown cause, and the frozen lines below drop it", () => {
     const invalid = { ...actionAckFrame(undefined), cause: "unknown-cause" };
-    expect(chatSubscribeV111.serverFrameSchema.safeParse(invalid).success).toBe(
+    expect(chatSubscribeV112.serverFrameSchema.safeParse(invalid).success).toBe(
       false,
     );
-    const parsed = chatSubscribeV110.serverFrameSchema.parse(invalid);
-    expect(parsed.kind).toBe("actionAck");
-    expect(Object.hasOwn(parsed, "cause")).toBe(false);
+    // Both lines below the mint drop the key rather than carrying it: `1.11`
+    // is the shell-host line, `1.10` the fallback one, and neither knows this
+    // member at all.
+    for (const contract of [chatSubscribeV111, chatSubscribeV110]) {
+      const parsed = contract.serverFrameSchema.parse(invalid);
+      expect(parsed.kind).toBe("actionAck");
+      expect(Object.hasOwn(parsed, "cause")).toBe(false);
+    }
   });
 });
 
@@ -1732,7 +1738,7 @@ describe("projectChatServerFrameForVersion", () => {
       projectChatServerFrameForVersion(frame, { major: 1, minor: 10 }),
     ).not.toBe(frame);
     expect(
-      projectChatServerFrameForVersion(frame, { major: 1, minor: 11 }),
+      projectChatServerFrameForVersion(frame, { major: 1, minor: 12 }),
     ).toBe(frame);
   });
 

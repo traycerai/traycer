@@ -16,6 +16,13 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * signed in, and presents as a partial-height sheet where the browser
  * supports it (Chrome 107+; older ones show it full screen).
  *
+ * The tab is started FOR A RESULT on purpose. Chrome honours the initial
+ * height only when it can tell which activity to resize over: the launch
+ * must either carry a CustomTabsSession or come through
+ * startActivityForResult. A plain launchUrl ignores the height and opens
+ * full screen. The result itself is unused: BridgeActivity drops a request
+ * code no plugin claims.
+ *
  * The tab is a separate activity the app does not own, so there is no
  * completion to report: `open` resolves once the tab is launched. The
  * approval page's return link brings the singleTask MainActivity forward,
@@ -26,6 +33,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 public class AuthSessionPlugin extends Plugin {
     /** Initial sheet height as a share of the screen; the user can drag it to full height. */
     private static final float INITIAL_HEIGHT_FRACTION = 0.85f;
+    /** Request code for the tab's (unused) activity result; no Capacitor plugin claims it. */
+    static final int SIGN_IN_TAB_REQUEST_CODE = 0x5A17;
 
     @PluginMethod
     public void open(PluginCall call) {
@@ -38,8 +47,9 @@ public class AuthSessionPlugin extends Plugin {
         CustomTabsIntent tab = new CustomTabsIntent.Builder()
             .setInitialActivityHeightPx(Math.round(screenHeight * INITIAL_HEIGHT_FRACTION))
             .build();
+        tab.intent.setData(Uri.parse(url));
         try {
-            tab.launchUrl(getActivity(), Uri.parse(url));
+            getActivity().startActivityForResult(tab.intent, SIGN_IN_TAB_REQUEST_CODE);
         } catch (ActivityNotFoundException error) {
             call.reject("No browser can present the sign-in sheet");
             return;

@@ -10406,7 +10406,7 @@ function hashOnlyRetryForRejection(
   };
 }
 
-/** The 1.11 typed cause, or `null` on a session that strips it. */
+/** The 1.12 typed cause, or `null` on a session that strips it. */
 function refusalCauseOf(
   frame: ChatActionAckFrame,
 ): DraftImageRefusalCause | null {

@@ -1416,7 +1416,7 @@ describe("createChatSessionStore", () => {
     harness.handle.dispose();
   });
 
-  it("keeps draftBlobBridgeSupported false on a pre-1.11 session and every non-open status", () => {
+  it("keeps draftBlobBridgeSupported false on a pre-1.12 session and every non-open status", () => {
     // `1.10` is the ADJACENT line - the fallback minor, which says nothing
     // about draft blobs. A harness at `1.9` would pass with the threshold left
     // one minor low.
@@ -1442,8 +1442,8 @@ describe("createChatSessionStore", () => {
     harness.handle.dispose();
   });
 
-  it("projects draftBlobBridgeSupported true only when this session is open at 1.11", () => {
-    const harness = createProtocolChainHarness({ major: 1, minor: 11 });
+  it("projects draftBlobBridgeSupported true only when this session is open at 1.12", () => {
+    const harness = createProtocolChainHarness({ major: 1, minor: 12 });
     expect(harness.chatStreamClient.draftBlobBridgeSupported()).toBe(true);
     expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(
       false,
@@ -7359,6 +7359,7 @@ describe("createChatSessionStore", () => {
       kind: "managed-command" as const,
       queueItemId: "queue-command-1",
       commandId: "command-1",
+      hostId: null,
       description: "bun test --watch",
       monitoring: true,
       delivery: "next_turn" as const,
@@ -7431,6 +7432,7 @@ describe("createChatSessionStore", () => {
       kind: "managed-command" as const,
       queueItemId: "queue-command-cap",
       commandId: "command-cap",
+      hostId: null,
       description: "bun test --watch",
       monitoring: true,
       delivery: "next_turn" as const,
@@ -7499,6 +7501,7 @@ describe("createChatSessionStore", () => {
       kind: "managed-command" as const,
       queueItemId: "queue-command-snapshot",
       commandId: "command-snapshot",
+      hostId: null,
       description: "bun test --watch",
       monitoring: true,
       delivery: "next_turn" as const,
@@ -7550,6 +7553,7 @@ describe("createChatSessionStore", () => {
       kind: "managed-command" as const,
       queueItemId: "queue-command-snapshot-keep",
       commandId: "command-snapshot-keep",
+      hostId: null,
       description: "bun test --watch",
       monitoring: true,
       delivery: "next_turn" as const,

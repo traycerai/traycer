@@ -1,7 +1,7 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
-  worktreeDeleteByPathServerFrameSchemaV12,
-  type WorktreeDeleteByPathServerFrameV12,
+  worktreeDeleteByPathServerFrameSchemaV13,
+  type WorktreeDeleteByPathServerFrameV13,
   type WorktreeDeleteOutputChannel,
   type WorktreeDeletePhase,
 } from "@traycer/protocol/host/worktree-delete-stream";
@@ -111,11 +111,13 @@ export class WorktreeDeleteStreamClient {
     envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    const parsed = worktreeDeleteByPathServerFrameSchemaV12.safeParse(envelope);
+    // Newest frame shape, so a `chatTier` on a failed-frame holder reaches
+    // the caller; an older host never sends the key.
+    const parsed = worktreeDeleteByPathServerFrameSchemaV13.safeParse(envelope);
     if (!parsed.success) {
       return;
     }
-    const frame: WorktreeDeleteByPathServerFrameV12 = parsed.data;
+    const frame: WorktreeDeleteByPathServerFrameV13 = parsed.data;
     switch (frame.kind) {
       case "started": {
         this.callbacks.onStarted(frame.hasTeardown);

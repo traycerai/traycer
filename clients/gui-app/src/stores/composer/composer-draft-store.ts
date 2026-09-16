@@ -5,7 +5,11 @@ import type { PendingHostDelete } from "@/lib/drafts/draft-mirror-session";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
-import { legacyComposerDraftId, mintDraftId } from "@/lib/drafts/draft-ids";
+import {
+  legacyComposerDraftId,
+  migratedLegacyComposerDraftId,
+  mintDraftId,
+} from "@/lib/drafts/draft-ids";
 import { notifyDraftLocalEdit } from "@/lib/drafts/draft-local-edits";
 import {
   collectDraftAnnotationImageHashes,
@@ -523,15 +527,20 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             ),
             resetEpoch: normalizedLegacyResetEpoch(value) + 1,
             revision: normalizedLegacyRevision(value),
-            // Deterministic, not minted: this merged state is never persisted
-            // back, so a second window hydrating the same legacy draft must
-            // arrive at the same id or both would publish. Only an ABSENT
-            // field is legacy - an explicit null is `detachSubmittedDraft`'s
-            // "mint fresh on the next edit", and re-deriving the old id here
-            // would publish new content under a row being tombstoned.
+            // Deterministic, not minted: this merged state is not persisted
+            // back by the hydration itself, so a second window hydrating the
+            // same legacy draft must arrive at the same id or both would
+            // publish. Only an ABSENT field is legacy - an explicit null is
+            // `detachSubmittedDraft`'s "mint fresh on the next edit", and
+            // re-deriving the old id here would publish new content under a
+            // row being tombstoned. An explicit id in the retired prefixed
+            // form IS persisted (the next edit or ACK writes the whole row),
+            // so it is mapped forward here to the id the host re-keyed its
+            // row to; left as is, the row would reject that document as
+            // foreign and re-send the long id.
             draftId:
               "draftId" in value
-                ? normalizedDraftId(value)
+                ? migratedNullableId(normalizedDraftId(value))
                 : legacyComposerDraftId(taskId),
             hostRevision: normalizedNonNegative(value.hostRevision),
             targetEpicId: normalizedNullableId(value.targetEpicId),
@@ -540,7 +549,9 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             syncedGeneration: 0,
             ownerHostId: normalizedNullableId(value.ownerHostId),
             origin: normalizedOrigin(value.origin),
-            supersedes: normalizedNullableId(value.supersedes),
+            supersedes: migratedNullableId(
+              normalizedNullableId(value.supersedes),
+            ),
             publication: null,
           };
         }
@@ -554,7 +565,11 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             if (!isRecord(value)) continue;
             const hostId = normalizedNullableId(value.hostId);
             if (draftId.length === 0 || hostId === null) continue;
-            pendingSubmittedDraftDeletes[draftId] = {
+            // A fence keyed by the retired prefixed id guards the same row
+            // the host now holds under the derived id.
+            const fencedId = migratedLegacyComposerDraftId(draftId);
+            if (pendingSubmittedDraftDeletes[fencedId] !== undefined) continue;
+            pendingSubmittedDraftDeletes[fencedId] = {
               hostId,
               retract: value.retract === true,
             };
@@ -927,6 +942,10 @@ function normalizedDraftId(raw: Record<string, unknown>): string | null {
 
 function normalizedNullableId(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function migratedNullableId(value: string | null): string | null {
+  return value === null ? null : migratedLegacyComposerDraftId(value);
 }
 
 function normalizedOrigin(value: unknown): "own" | "replica" | null {

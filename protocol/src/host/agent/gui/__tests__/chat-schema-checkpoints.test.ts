@@ -16,6 +16,7 @@ import {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -43,6 +44,9 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // historical 1.0–1.8 surfaces must not follow the current message schema.
 // 1.9 was captured from main commit 68125d26d, the line as the v1.3.x
 // staging builds shipped it, when provider fallback took 1.10 above it.
+// 1.10 was captured from main commit 320fc0bac, the line as the staging
+// builds shipped it, when the shell host on a resume trigger and on the
+// queued managed-command item took 1.11 above it.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -84,6 +88,10 @@ const SERVER_FRAME_DIGESTS = {
     "118098db22304e8db4d261437b15535cd17bdfba5884142b743cbe3151749e9f",
     "6eb5cbdc0a7814e35a38490dbc7259b25d21cf0ae414c6c2688a08ea160fe5ee",
   ],
+  10: [
+    "6ece105c4aa97932c5c9d9b3fc5ae079ac4935dd330405a1fc7554ed8bacc502",
+    "6e6ccab1ec5ed64063b61acdd6179657c672894083fcb2aa0da6ff533ff1c775",
+  ],
 } as const;
 
 const contracts = [
@@ -97,10 +105,11 @@ const contracts = [
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.9 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.10 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

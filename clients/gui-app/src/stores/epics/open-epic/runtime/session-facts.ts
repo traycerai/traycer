@@ -102,9 +102,10 @@ export interface EpicSessionFacts {
    * snapshot role because sending one as a viewer hits the host's guarded
    * `applyCollabUpdate`, which refuses the mutate AND evicts the warm slot,
    * tearing the room down mid-open. Root writes and optimistic stamps fall back
-   * to the displayed role because they happen in the ~8s before the snapshot
-   * lands, where refusing everything would silently drop a legitimate owner's
-   * edits.
+   * to the displayed role on @1 because they happen in the ~8s before its
+   * snapshot lands, where refusing everything would silently drop a legitimate
+   * owner's edits. On lanes, both roles come from the status stream; workspace
+   * context never supplies a provisional role.
    */
   writeGateRole(): PermissionRole | null;
   isWritableRole(): boolean;

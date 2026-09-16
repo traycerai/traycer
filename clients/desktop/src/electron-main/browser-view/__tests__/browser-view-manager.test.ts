@@ -6,6 +6,8 @@ import type { Mock } from "vitest";
 import { log } from "../../app/logger";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { BrowserViewManager } from "../browser-view-manager";
+import { BrowserSessionsRegistry } from "../../browser-sessions/browser-sessions-owner";
+import { createRegistryHarness } from "../../browser-sessions/__tests__/browser-sessions-stream-fixture";
 import { MAX_BROWSER_VIEW_POPUPS } from "../manager/browser-view-popups";
 import type {
   BrowserViewCapturedImage,
@@ -315,7 +317,12 @@ class FakeDebugger implements BrowserViewDebugger {
 
 class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   readonly lifecycle: string[] = [];
-  readonly debugger: FakeDebugger;
+  private readonly debuggerImpl: FakeDebugger;
+  /** Electron's native getter throws once the WebContents is destroyed. */
+  get debugger(): FakeDebugger {
+    if (this.destroyed) throw new Error("Object has been destroyed");
+    return this.debuggerImpl;
+  }
   readonly session = {
     cookies: {
       get: () => Promise.resolve([]),
@@ -383,7 +390,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
     requireLoadedTargetForPageCommands: boolean,
   ) {
     super();
-    this.debugger = new FakeDebugger(
+    this.debuggerImpl = new FakeDebugger(
       this.lifecycle,
       requireLoadedTargetForPageCommands,
     );
@@ -672,6 +679,7 @@ interface Harness {
 }
 
 type HarnessOptions = {
+  readonly onRendererReset?: (windowId: string) => void;
   readonly hostPlatform?: "darwin" | "other";
   readonly requireLoadedTargetForPageCommands?: boolean;
   /** This desktop's local host id; tabs default to owner "host-1" (co-located). */
@@ -835,6 +843,7 @@ function createHarnessWithOptions(
     },
     notifyHostWindowRendererReset: (windowId) => {
       rendererResetWindowIds.push(windowId);
+      harnessOptions?.onRendererReset?.(windowId);
     },
     createPopupWindowOptions: () => ({ width: 900 }),
     createPopupWindow: (input) => {
@@ -2020,7 +2029,11 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const firstEnsure = harness.manager.ensureTab("window-1", ensureInput);
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
-    view.debugger.deferCommands = true;
+    // Captured before the supersede closes the guest: Electron's `debugger`
+    // getter throws once the WebContents is destroyed, so a reference taken
+    // beforehand is what lets the still-outstanding commands be resolved.
+    const debug = view.debugger;
+    debug.deferCommands = true;
     await flushCloseEntry();
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
 
@@ -2030,7 +2043,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       "native tab ensure superseded by another window",
     );
     expect(view.closeCalls).toBe(1);
-    for (const resolve of view.debugger.commandResolvers.splice(0)) {
+    for (const resolve of debug.commandResolvers.splice(0)) {
       resolve(null);
     }
     const reclaimedReady = await reclaimedEnsure;
@@ -2111,7 +2124,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.releasedRendererGuests.at(-1)).toBe(
       window2Ready.registrationId,
     );
-    expect(hostResetListenerCount(harness, "window-2")).toBe(0);
+    expect(hostResetListenerCount(harness, "window-2")).toBe(2);
   });
 
   it("joins a same-window duplicate mint into one in-flight incarnation", async () => {
@@ -2318,12 +2331,12 @@ describe("BrowserViewManager native tab lifecycle", () => {
       harness.windows
         .get("window-1")
         ?.webContents.listenerCount("did-start-navigation"),
-    ).toBe(0);
+    ).toBe(1);
     expect(
       harness.windows
         .get("window-2")
         ?.webContents.listenerCount("did-start-navigation"),
-    ).toBe(0);
+    ).toBe(1);
   });
 
   it("gives a re-ensure of a released identity a fresh incarnation, never the destroyed guest", async () => {
@@ -2864,6 +2877,61 @@ describe("BrowserViewManager host window renderer reset", () => {
     expect(view.closeCalls).toBe(0);
     expect(harness.releasedRendererGuests).toEqual([]);
   });
+
+  it("closes streams on reload after the window's last tile closes", async () => {
+    const streamHarness = createRegistryHarness();
+    const registry = new BrowserSessionsRegistry(streamHarness.deps);
+    const harness = createHarnessWithOptions({
+      onRendererReset: (windowId) => registry.closeWindow(windowId),
+    });
+    const key = {
+      scope: { kind: "epic", epicId: "epic-1" } as const,
+      hostId: "host-1",
+      identityKey: "identity-1",
+    };
+    try {
+      registry.open("window-1", key);
+      await Promise.resolve();
+      const { capability, view } = await attachNativeTab(
+        harness,
+        "window-1",
+        BASE_KEY,
+        "https://example.com",
+      );
+      expect(streamHarness.clients).toHaveLength(1);
+      await expect(harness.manager.releaseTab(capability)).resolves.toBe(true);
+      expect(view.closeCalls).toBe(1);
+      expect(streamHarness.closedTransports).toEqual([]);
+
+      emitHostReset(harness);
+      expect(streamHarness.closedTransports).toEqual([0]);
+      registry.open("window-1", key);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(streamHarness.clients).toHaveLength(2);
+    } finally {
+      registry.dispose();
+    }
+  });
+
+  it("disposes the reset listener when the window itself goes away", async () => {
+    const harness = createHarness();
+    await attachNativeTab(harness, "window-1", BASE_KEY, "https://example.com");
+    const webContents = harness.windows.get("window-1")?.webContents;
+    if (webContents === undefined) throw new Error("expected host window");
+    expect(
+      webContents.listenerCount("did-start-navigation") +
+        webContents.listenerCount("render-process-gone"),
+    ).toBeGreaterThan(0);
+
+    harness.windows.delete("window-1");
+    harness.emitWindowChange();
+
+    expect(
+      webContents.listenerCount("did-start-navigation") +
+        webContents.listenerCount("render-process-gone"),
+    ).toBe(0);
+  });
 });
 
 describe("BrowserViewManager annotation session", () => {
@@ -2931,6 +2999,10 @@ describe("BrowserViewManager annotation session", () => {
   it("keeps the agent's attachment when the overlay ends, and drops it with the tab", async () => {
     const harness = createHarness();
     const { capability, view } = await attachAnnotationTab(harness);
+    // Captured before `releaseTab` destroys the guest: Electron's `debugger`
+    // getter throws once the WebContents is gone, so the final assertion
+    // reads through this reference instead of the live getter.
+    const debug = view.debugger;
     await expect(
       harness.manager.dispatchElectronTabCdp({
         hostId: "host-1",
@@ -2941,7 +3013,7 @@ describe("BrowserViewManager annotation session", () => {
         command: { kind: "cdpGetFrameTree" },
       }),
     ).resolves.toMatchObject({ ok: true });
-    expect(view.debugger.attached).toBe(true);
+    expect(debug.attached).toBe(true);
 
     await expect(
       harness.manager.annotations.start("window-1", BASE_KEY),
@@ -2950,13 +3022,13 @@ describe("BrowserViewManager annotation session", () => {
 
     // Two holders, and the overlay's is the one that ended. The agent's lease
     // is still out, so its frame routes must survive the overlay's release.
-    expect(view.debugger.attached).toBe(true);
-    expect(view.debugger.detached).toBe(false);
+    expect(debug.attached).toBe(true);
+    expect(debug.detached).toBe(false);
 
     await expect(harness.manager.releaseTab(capability)).resolves.toBe(true);
     await flushCloseEntry();
 
-    expect(view.debugger.attached).toBe(false);
+    expect(debug.attached).toBe(false);
   });
 
   it("replaces an active session on a second startAnnotation", async () => {
@@ -3020,11 +3092,21 @@ describe("BrowserViewManager annotation session", () => {
     const crashHarness = createHarness();
     const { view: crashView } = await attachAnnotationTab(crashHarness);
     await crashHarness.manager.annotations.start("window-1", BASE_KEY);
+    // Captured before the emit: a crash closes the entry (and the guest)
+    // synchronously, and Electron's `debugger` getter throws once the
+    // WebContents is destroyed.
+    const crashDebug = crashView.debugger;
     crashView.emit("render-process-gone", {}, { reason: "crashed" });
-    expect(annotationBindingCommands(crashView)).toEqual([
-      "Runtime.addBinding",
-      "Runtime.removeBinding",
-    ]);
+    expect(
+      crashDebug.commands
+        .filter(
+          (command) =>
+            (command.method === "Runtime.addBinding" ||
+              command.method === "Runtime.removeBinding") &&
+            command.params.name === "__traycerAnnotation",
+        )
+        .map((command) => command.method),
+    ).toEqual(["Runtime.addBinding", "Runtime.removeBinding"]);
     expect(annotationEventTypes(crashHarness)).toEqual([
       { type: "ended", reason: "crash" },
     ]);
@@ -4687,6 +4769,58 @@ describe("BrowserViewManager renderer guest capability", () => {
     expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
     expect(guest.closeCalls).toBe(1);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expectRendererGuestMint(harness);
+  });
+
+  it("unregisters a guest that was already destroyed when its destroyed event fires, and lets the same tab be ensured again", async () => {
+    const harness = createHarness();
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const guest = requireGuest(harness);
+
+    // Give the tab a debugger attachment so the destroyed-WebContents teardown
+    // actually has a native getter to trip over: `dispatchElectronTabCdp`
+    // acquires the agent's CDP lease for the rest of the incarnation (see
+    // "attaches on the first agent dispatch and keeps that attachment for the
+    // incarnation" above), which is exactly the kind of live debug session
+    // `destroyEntry` has to dispose of.
+    await harness.manager.dispatchElectronTabCdp({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpGetFrameTree" },
+    });
+    expect(guest.debugger.isAttached()).toBe(true);
+
+    // Electron's `destroyed` event fires AFTER the WebContents is destroyed,
+    // so `guest.debugger` already throws by the time the handler runs.
+    guest.destroyed = true;
+    guest.emit("destroyed");
+    await flushCloseEntry();
+
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
+    // The guest was already gone, so releaseRendererGuest must not try to
+    // close() an object that no longer exists.
+    expect(guest.closeCalls).toBe(0);
+
+    const again = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+
+    expect(again.registrationId).not.toBe(ready.registrationId);
+    expect(harness.attachMints).toHaveLength(2);
+    expect(harness.guests).toHaveLength(2);
     expectRendererGuestMint(harness);
   });
 });

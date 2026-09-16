@@ -31,7 +31,7 @@ export function projectChatActionAckForVersion(
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
   if (frame.kind !== "actionAck") return frame;
-  if (negotiated !== null && negotiated.major === 1 && negotiated.minor >= 11) {
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor >= 12) {
     return frame;
   }
   if (!("cause" in frame)) return frame;

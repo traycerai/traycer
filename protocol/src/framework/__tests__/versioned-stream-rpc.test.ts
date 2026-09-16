@@ -118,13 +118,13 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(6);
     // The same re-mint rule on the chat line: mainline's @1.9 (Antigravity
     // anchors and delivery placement) stays frozen as staging shipped it,
-    // provider fallback took @1.10 above it, and the draft-blob bridge - the
-    // capability plus the typed cause on missing-attachment send rejections -
-    // took @1.11 above that.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(11);
+    // provider fallback took @1.10 above it, and the shell host on a resume
+    // trigger and the queued managed-command item took @1.11 above that.
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(12);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+    // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
-      2,
+      3,
     );
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,

@@ -5,6 +5,7 @@ import type {
 } from "@traycer/protocol/host";
 import {
   A2A_PERMISSION_MODE_INSTRUCTION,
+  AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION,
   formatAgentSelectionGuideResponse,
 } from "../agent-selection-guide-format";
 
@@ -19,7 +20,7 @@ describe("formatAgentSelectionGuideResponse", () => {
       message: "No agent selection guide found.",
     };
     expect(formatAgentSelectionGuideResponse(response)).toBe(
-      `No agent selection guide found.\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
+      `${AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION}\n\nNo agent selection guide found.\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
     );
   });
 
@@ -28,7 +29,7 @@ describe("formatAgentSelectionGuideResponse", () => {
       found([globalSource("global body", 1)]),
     );
     expect(text).toBe(
-      `Agent selection instructions from ${GLOBAL_PATH}:\n\nglobal body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
+      `${AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION}\n\nAgent selection instructions from ${GLOBAL_PATH}:\n\nglobal body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
     );
   });
 
@@ -39,6 +40,9 @@ describe("formatAgentSelectionGuideResponse", () => {
         workspaceSource(APP_DIR, "app body", 2),
       ]),
     );
+    expect(
+      text.startsWith(`${AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION}\n\n`),
+    ).toBe(true);
     expect(text).toContain("take precedence and override global");
     expect(text).toContain("apply only to files under the workspace path");
     expect(text).not.toContain("Multiple workspaces provide instructions");
@@ -108,7 +112,7 @@ describe("formatAgentSelectionGuideResponse", () => {
       found([workspaceSource(APP_DIR, "app body", 2)]),
     );
     expect(text).toBe(
-      `Agent selection instructions from ${APP_DIR}/.traycer/agent-selection-guide.md:\n\napp body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
+      `${AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION}\n\nAgent selection instructions from ${APP_DIR}/.traycer/agent-selection-guide.md:\n\napp body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
     );
   });
 

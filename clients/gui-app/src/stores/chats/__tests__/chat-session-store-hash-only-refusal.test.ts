@@ -340,6 +340,9 @@ function seedManagedCommandItem(
     commandId: `${queueItemId}-command`,
     description: "bun test --watch",
     monitoring: true,
+    // `1.11` added the host a cross-host shell runs on; `null` is the chat's
+    // own host, which is what this fixture models.
+    hostId: null,
     delivery: "next_turn",
     targetTurnId: null,
     status: "pending",

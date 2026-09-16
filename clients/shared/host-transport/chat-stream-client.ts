@@ -294,7 +294,7 @@ export class ChatStreamClient {
   /** Whether THIS session's host can materialize hash-only draft images at send. */
   draftBlobBridgeSupported(): boolean {
     const version = this.session.getNegotiatedSchemaVersion();
-    return version !== null && version.major === 1 && version.minor >= 11;
+    return version !== null && version.major === 1 && version.minor >= 12;
   }
 
   /**

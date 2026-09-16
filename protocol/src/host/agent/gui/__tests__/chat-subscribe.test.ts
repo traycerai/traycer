@@ -18,6 +18,7 @@ import {
   chatSubscribeV19,
   chatSubscribeV110,
   chatSubscribeV111,
+  chatSubscribeV112,
   createImageResolutionUpdatedFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -2274,7 +2275,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 11 as chatSubscribeV111", () => {
+  it("registers chat.subscribe major 1 latestMinor 12 as chatSubscribeV112", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2288,18 +2289,20 @@ describe("chat.subscribe registry membership", () => {
     // DTOs, and the fallback provider-notice kinds), and it is WINDOWED for
     // that reason: this registry is the negotiation ceiling, so registering a
     // full-snapshot contract above windowed `1.9` would silently un-window
-    // every peer already capable of it. That is what these assertions together
-    // protect - the ceiling, and the line shape at the ceiling.
-    //
-    // `11` is windowed for the same reason. It adds the draft-blob bridge
-    // capability and the typed missing-attachment rejection cause.
-    expect(entry[1].latestMinor).toBe(11);
+    // every peer already capable of it. `11` carries the shell host on a resume
+    // trigger and on the queued managed-command item, and is windowed for the
+    // same reason. `12` adds the draft-blob bridge capability and the typed
+    // missing-attachment rejection cause, windowed for the same reason again.
+    // That is what these assertions together protect - the ceiling, and the
+    // line shape at the ceiling.
+    expect(entry[1].latestMinor).toBe(12);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
     expect(entry[1].versions[9].contract).toBe(chatSubscribeV19);
     expect(entry[1].versions[10].contract).toBe(chatSubscribeV110);
     expect(entry[1].versions[11].contract).toBe(chatSubscribeV111);
+    expect(entry[1].versions[12].contract).toBe(chatSubscribeV112);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2311,13 +2314,18 @@ describe("chat.subscribe registry membership", () => {
       major: 1,
       minor: 11,
     });
+    expect(chatSubscribeV112.schemaVersion).toEqual({
+      major: 1,
+      minor: 12,
+    });
   });
 
   it("keeps the FULL-SNAPSHOT schema version pinned at 1.7 while the ceiling moves", () => {
     // `chatSubscribeFullSnapshotSchemaVersion` names the newest NON-windowed
     // line, and it must not drift upward with the registry ceiling. `1.8`,
-    // `1.9`, `1.10` and `1.11` are all windowed, so the last full-snapshot line
-    // is still `1.7`; moving this to `11` would hand a full-snapshot consumer a
+    // `1.9`, `1.10`, `1.11` and `1.12` are all windowed, so the last
+    // full-snapshot line is still `1.7`; moving this up would hand a
+    // full-snapshot consumer a
     // contract whose snapshot frame carries a bounded `tail` instead of a
     // whole chat.
     expect(chatSubscribeFullSnapshotSchemaVersion).toEqual({

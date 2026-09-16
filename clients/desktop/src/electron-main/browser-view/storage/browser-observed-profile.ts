@@ -7,7 +7,7 @@ import {
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
 import { log, sanitizeLogFields } from "../../app/logger";
 import {
-  browserJarCookieKeys,
+  browserJarCookies,
   cookieKeyId,
   mergeObservedProfileCookies,
   type BrowserObservedCookieMergeResult,
@@ -25,7 +25,7 @@ import {
  * NAME the desktop's own browsing owns in that domain is refused outright,
  * which is what keeps this an ADD-ONLY channel; the volume and the rate are bounded; a site the
  * user forgot is refused until the sending connection has acked pruning it;
- * and what survives goes through Chromium's own `cookies.set`, which is what
+ * and changed survivors go through Chromium's own `cookies.set`, which
  * normalises the attributes away from anything the sender chose.
  *
  * The sending host's identity is NOT read from the frame - it comes from the
@@ -170,13 +170,8 @@ export interface BrowserObservedProfileDependencies {
    */
   readonly isHeadlessOriginKey: (keyId: string) => boolean;
   /**
-   * These keys are about to be written by this applier: they become the
-   * contributing host's to update, and the desktop's own cookie observer is
-   * told not to read their insert events as local writes.
-   *
-   * Awaited before the merge, deliberately. Both halves must be in place
-   * before the first `cookies.set` fires, or the observer sees an insert it
-   * cannot attribute and hands the key straight back.
+   * Records durable ownership before the merge. An unchanged survivor keeps
+   * this claim without arming an observer mark for a write that will not occur.
    *
    * Called only for a write bound for the DURABLE jar - see
    * {@link BrowserObservedProfileTarget.durableJar}.
@@ -184,6 +179,8 @@ export interface BrowserObservedProfileDependencies {
   readonly claimHeadlessOriginKeys: (
     keys: readonly BrowserCookieKey[],
   ) => Promise<void>;
+  /** One observer insert mark per actual set attempt, for the durable jar. */
+  readonly noteAppliedKeys: (keys: readonly BrowserCookieKey[]) => void;
   /**
    * The jar refused these keys, so the claim taken over them is worthless and
    * has to go back: the desktop owns them again, and the user's own next
@@ -395,13 +392,17 @@ export async function applyBrowserObservedProfile(
       return dropped(scope, "ledger-unacked");
     }
     const target = dependencies.getTargetJar();
+    // Read inside the serialized section for both ownership and comparison.
+    const jarCookies = await browserJarCookies(scope, target.session);
     const classified = classifyObservedCookies({
       scope,
       cookies: observed.cookies,
       now: dependencies.now(),
-      // Read inside the serialized section, so what the jar holds cannot
-      // change between the ownership test and the merge that test authorises.
-      jarKeys: await browserJarCookieKeys(scope, target.session),
+      jarKeys: jarCookies.map(({ domain, name, path }) => ({
+        domain,
+        name,
+        path,
+      })),
       isHeadlessOriginKey: dependencies.isHeadlessOriginKey,
     });
     let merged: BrowserObservedCookieMergeResult = { applied: 0, refused: [] };
@@ -418,6 +419,10 @@ export async function applyBrowserObservedProfile(
       merged = await mergeObservedProfileCookies(
         classified.survivors,
         target.session,
+        jarCookies,
+        (key) => {
+          if (target.durableJar) dependencies.noteAppliedKeys([key]);
+        },
       );
       // Still inside the serialized section: the claim was taken over what
       // this applier was ABOUT to write, and a cookie the jar refused makes

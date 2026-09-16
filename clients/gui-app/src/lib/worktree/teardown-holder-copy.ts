@@ -105,9 +105,10 @@ export function formatHolderSentence(
 ): string {
   const name = resolveAgentName(holder, agentNames);
   if (holder.holdKind === "chat-turn") {
-    return holder.activity === "working"
-      ? `Agent “${name}” is working on a turn — will be stopped`
-      : `Agent “${name}” has an idle session here — will be closed`;
+    if (holder.activity !== "working") {
+      return `Agent “${name}” has an idle session here — will be closed`;
+    }
+    return formatWorkingChatSentence(name, holder.chatTier);
   }
   if (holder.holdKind === "terminal-agent-pty") {
     return holder.activity === "working"
@@ -123,6 +124,31 @@ export function formatHolderSentence(
   return holder.activity === "working"
     ? `Agent “${name}” is still running from this worktree — will be stopped`
     : `Agent “${name}” is still running from this worktree — will be closed`;
+}
+
+/**
+ * A busy chat's sentence, by WHY the host says it is busy. The tier is the
+ * difference between "a turn is about to be interrupted" and "nothing is
+ * mid-flight; a shell is what keeps this agent awake" - the one reading a
+ * sweep dialog exists to give. Absent tier = a host that reports only the
+ * boolean; say so without inventing a turn.
+ */
+function formatWorkingChatSentence(
+  name: string,
+  chatTier: WorktreeBusyHolder["chatTier"],
+): string {
+  switch (chatTier) {
+    case "turn":
+      return `Agent “${name}” is mid-turn — the turn will be stopped`;
+    case "queue":
+      return `Agent “${name}” has queued prompts — they will be dropped`;
+    case "native-agent":
+      return `Agent “${name}” has subagents running — they will be stopped`;
+    case "background":
+      return `Agent “${name}” is idle, kept awake by background work — that work will be stopped`;
+    case undefined:
+      return `Agent “${name}” has work in progress — will be stopped`;
+  }
 }
 
 function resolveAgentName(

@@ -3,7 +3,7 @@
  *
  * The host materializes a hash-only draft image into an epic attachment at
  * send. When it cannot, it rejects with this code and — from `chat.subscribe`
- * 1.11 — a typed `cause` saying why. The three causes want three different
+ * 1.12 — a typed `cause` saying why. The three causes want three different
  * things, and getting them the same way round matters: two of them are the
  * user's problem and one of them is ours.
  *
@@ -36,7 +36,7 @@
  * would loop. `alreadyRetried` is the caller's record on the pending action.
  */
 /**
- * The 1.11 `cause` values, named here rather than imported: the protocol
+ * The 1.12 `cause` values, named here rather than imported: the protocol
  * declares them inline on the acknowledgement schema's `.extend({...})` and
  * exports no type for them. Restated deliberately, and this is the case where
  * restating is right - an independent decision table should go red when the
