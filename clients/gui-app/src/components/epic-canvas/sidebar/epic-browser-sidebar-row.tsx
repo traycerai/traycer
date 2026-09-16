@@ -29,8 +29,7 @@ import {
 } from "@/lib/browser-view/browser-tab-display";
 import { cn } from "@/lib/utils";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { findPaneById } from "@/stores/epics/canvas/tile-tree";
+import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { SIDEBAR_REVEAL_HIGHLIGHT_CLASS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 interface BrowserTabRowProps {
@@ -120,20 +119,7 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
       }),
     [session.hostId, session.sessionId, tab.tabId],
   );
-  const isActive = useEpicCanvasStore((state) => {
-    const canvas = state.canvasByTabId[viewTabId];
-    if (canvas === undefined || canvas.activePaneId === null) return false;
-    const activeInstanceId =
-      findPaneById(canvas.root, canvas.activePaneId)?.activeTabId ?? null;
-    if (activeInstanceId === null) return false;
-    const active = canvas.tilesByInstanceId[activeInstanceId];
-    if (active?.hostId !== session.hostId) return false;
-    return (
-      active.type === "browser-session" &&
-      active.sessionId === session.sessionId &&
-      active.tabId === tab.tabId
-    );
-  });
+  const isActive = useIsActiveTile(viewTabId, tile.id, session.hostId);
   const dragTile = tile;
   const dragData = useMemo<EpicCanvasBrowserTileDragData>(
     () => ({
