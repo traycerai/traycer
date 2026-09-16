@@ -2,6 +2,7 @@ import "../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -172,6 +173,23 @@ function row(): HTMLElement {
   });
 }
 
+/**
+ * Flush the mount effects and the task a `useHostQuery` request would land on.
+ *
+ * The gate tests assert a NEGATIVE - that a hidden row sends no
+ * `config.browser.get` - and `waitFor` cannot carry one: it succeeds on its
+ * first check, which runs before any request could have been recorded, so it
+ * would pass just as happily for a query that goes out a tick later. Settling
+ * for real is what makes the assertion mean anything.
+ */
+async function settleQueries(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  });
+}
+
 afterEach(() => {
   cleanup();
   support.current = true;
@@ -190,10 +208,12 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
 
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByText("Browser")).toBeNull();
-    // Hidden means not asked, not asked-and-ignored.
-    await waitFor(() => {
-      expect(fixture.gets()).toEqual([]);
-    });
+    // Hidden means not asked, not asked-and-ignored. NOT `waitFor`: it passes
+    // on its first check, before anything could have fired, so it would hold
+    // for a query that goes out a tick later just as happily. Settle the
+    // effects and the task the request would land on, THEN assert.
+    await settleQueries();
+    expect(fixture.gets()).toEqual([]);
   });
 
   it("hides the row on a host that can read but not write the setting", async () => {
@@ -205,9 +225,8 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
 
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByText("Browser")).toBeNull();
-    await waitFor(() => {
-      expect(fixture.gets()).toEqual([]);
-    });
+    await settleQueries();
+    expect(fixture.gets()).toEqual([]);
   });
 
   it("hides the row while no handshake has answered yet", () => {
