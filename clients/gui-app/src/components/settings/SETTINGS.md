@@ -1400,17 +1400,17 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       defaults" assertion with it. `DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN` was
       added to `settings-store` for the one value that had no constant.
 
-      |                     | Default              | Compact                                                              | Detailed                    |
-      | ------------------- | -------------------- | -------------------------------------------------------------------- | --------------------------- |
-      | Mode word/bar/timer | on                   | all off                                                              | all on                      |
-      | Percent mode        | Used                 | Used                                                                 | Used                        |
-      | Providers           | tightest limit       | tightest limit, none hidden                                          | tightest limit, none hidden |
-      | Resource metrics    | CPU/Memory/Processes | CPU                                                                  | all four (adds RAM share)   |
-      | Composer rows       | visible              | three docks + access compact, mic & compaction hidden, image VISIBLE | all visible                 |
-      | Reasoning           | Text                 | Bars                                                                 | Bars + text                 |
-      | Pin breakdown       | off                  | off                                                                  | on, all fields              |
-      | Context indicator   | Text                 | Ring only                                                            | Text                        |
-      | Sidebar chips       | none                 | none                                                                 | CPU/Memory/Processes        |
+      |                     | Default        | Compact                                                              | Detailed                    |
+      | ------------------- | -------------- | -------------------------------------------------------------------- | --------------------------- |
+      | Mode word/bar/timer | on             | all off                                                              | all on                      |
+      | Percent mode        | Used           | Used                                                                 | Used                        |
+      | Providers           | tightest limit | tightest limit, none hidden                                          | tightest limit, none hidden |
+      | Resource metrics    | CPU/Processes  | CPU                                                                  | all four (adds RAM share)   |
+      | Composer rows       | visible        | three docks + access compact, mic & compaction hidden, image VISIBLE | all visible                 |
+      | Reasoning           | Text           | Bars                                                                 | Bars + text                 |
+      | Pin breakdown       | off            | off                                                                  | on, all fields              |
+      | Context indicator   | Text           | Ring only                                                            | Text                        |
+      | Sidebar chips       | none           | none                                                                 | CPU/Memory/Processes        |
 
       **Compact hides a composer button only where the verb survives without
       it**: the dictation chord starts voice input, and the command palette

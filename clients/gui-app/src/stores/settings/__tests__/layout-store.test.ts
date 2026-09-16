@@ -45,7 +45,7 @@ describe("useLayoutStore", () => {
         },
         resources: {
           enabled: true,
-          metrics: ["cpu", "memory", "processes"],
+          metrics: ["cpu", "processes"],
           scope: "host-tree",
         },
       });
@@ -206,7 +206,7 @@ describe("useLayoutStore", () => {
         },
         resources: {
           enabled: true,
-          metrics: ["cpu", "memory", "processes"],
+          metrics: ["cpu", "processes"],
           scope: "host-tree",
         },
       });
@@ -613,14 +613,15 @@ describe("useLayoutStore", () => {
       const { toggleStatusBarResourceMetric } = useLayoutStore.getState();
 
       toggleStatusBarResourceMetric("cpu");
-      toggleStatusBarResourceMetric("memory");
       toggleStatusBarResourceMetric("processes");
       expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([]);
 
       toggleStatusBarResourceMetric("ramShare");
+      toggleStatusBarResourceMetric("memory");
       toggleStatusBarResourceMetric("cpu");
       expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
         "cpu",
+        "memory",
         "ramShare",
       ]);
     });

@@ -1,3 +1,3 @@
 export const draftsMutationKeys = {
-  claim: () => ["drafts.claim"] as const,
+  retract: () => ["drafts.retract"] as const,
 };

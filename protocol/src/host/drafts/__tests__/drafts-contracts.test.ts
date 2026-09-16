@@ -13,8 +13,6 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 import {
   draftDialectKindOf,
   draftDocumentSchema,
-  draftsClaimResponseSchema,
-  draftsClaimV10,
   draftsDeleteV10,
   draftsListRequestSchema,
   draftsListResponseSchema,
@@ -25,6 +23,9 @@ import {
   draftsReadBlobRequestSchema,
   draftsReadBlobResponseSchema,
   draftsReadBlobV10,
+  draftsRetractRequestSchema,
+  draftsRetractResponseSchema,
+  draftsRetractV10,
   draftsSubscribeClientFrameSchemaV10,
   draftsSubscribeOpenRequestSchemaV10,
   draftsSubscribeServerFrameSchemaV10,
@@ -40,7 +41,7 @@ const UNARY_METHODS = [
   "drafts.upsert",
   "drafts.delete",
   "drafts.list",
-  "drafts.claim",
+  "drafts.retract",
   "drafts.putBlob",
   "drafts.readBlob",
 ] as const;
@@ -82,6 +83,7 @@ const LANDING_WRITE = {
   revision: 0,
   lastTouchedAt: 1_753_000_000_000,
   workspace: WORKSPACE,
+  supersedes: null,
   portable: {
     content: EMPTY_DOC,
     selection: { from: 1, to: 1 },
@@ -113,6 +115,7 @@ const INTERVIEW_DOCUMENT = {
   revision: 3,
   lastTouchedAt: 1_753_000_100_000,
   workspace: null,
+  supersedes: null,
   portable: {
     pageIndex: 1,
     answers: [{ selected: ["yes"], otherText: "", otherSelected: false }],
@@ -135,6 +138,7 @@ const STASH_DOCUMENT = {
   revision: 1,
   lastTouchedAt: 1_753_000_000_000,
   workspace: null,
+  supersedes: null,
   portable: {
     content: EMPTY_DOC,
     blobHashes: ["cd".repeat(32)],
@@ -156,7 +160,7 @@ describe("drafts unary contracts", () => {
     expect(draftsUpsertV10.method).toBe("drafts.upsert");
     expect(draftsDeleteV10.method).toBe("drafts.delete");
     expect(draftsListV10.method).toBe("drafts.list");
-    expect(draftsClaimV10.method).toBe("drafts.claim");
+    expect(draftsRetractV10.method).toBe("drafts.retract");
     expect(draftsPutBlobV10.method).toBe("drafts.putBlob");
     expect(draftsReadBlobV10.method).toBe("drafts.readBlob");
     expect(hostRpcRegistry["drafts.upsert"][1].versions[0].contract).toBe(
@@ -168,8 +172,8 @@ describe("drafts unary contracts", () => {
     expect(hostRpcRegistry["drafts.list"][1].versions[0].contract).toBe(
       draftsListV10,
     );
-    expect(hostRpcRegistry["drafts.claim"][1].versions[0].contract).toBe(
-      draftsClaimV10,
+    expect(hostRpcRegistry["drafts.retract"][1].versions[0].contract).toBe(
+      draftsRetractV10,
     );
     expect(hostRpcRegistry["drafts.putBlob"][1].versions[0].contract).toBe(
       draftsPutBlobV10,
@@ -309,27 +313,40 @@ describe("drafts wire documents", () => {
     expect(draftSurfaceKindOf("stash-entry")).toBeNull();
   });
 
-  it("accepts a typed claim unavailable arm for a host without publication", () => {
+  it("defaults `supersedes` to null on a write and round-trips it on a document", () => {
+    const { supersedes: _omitted, ...writeWithoutSupersedes } = LANDING_WRITE;
+    expect(draftWriteSchema.parse(writeWithoutSupersedes)).toEqual(
+      LANDING_WRITE,
+    );
+    const forkWrite = { ...LANDING_WRITE, supersedes: "draft-ancestor" };
+    expect(draftWriteSchema.parse(forkWrite)).toEqual(forkWrite);
     expect(
-      draftsClaimResponseSchema.parse({
-        status: "unavailable",
-        reason: "publication-not-ready",
-      }),
-    ).toEqual({
-      status: "unavailable",
-      reason: "publication-not-ready",
-    });
+      draftWriteSchema.safeParse({ ...LANDING_WRITE, supersedes: "" }).success,
+    ).toBe(false);
+
+    const reminted = { ...LANDING_DOCUMENT, supersedes: "draft-ancestor" };
+    expect(draftDocumentSchema.parse(reminted)).toEqual(reminted);
+    expect(draftDocumentSchema.parse(LANDING_DOCUMENT).supersedes).toBeNull();
   });
 
-  it("accepts unsupported-version when a 1.0 host cannot decode a newer head", () => {
-    expect(
-      draftsClaimResponseSchema.parse({
-        status: "unavailable",
-        reason: "unsupported-version",
-      }),
-    ).toEqual({
-      status: "unavailable",
-      reason: "unsupported-version",
+  it("defaults a document's `supersedes` to null for a host that predates it", () => {
+    const { supersedes: _omitted, ...legacy } = LANDING_DOCUMENT;
+    expect(draftDocumentSchema.parse(legacy)).toEqual(LANDING_DOCUMENT);
+  });
+
+  it("keeps the claim method out of the registry and shapes retract as a boolean", () => {
+    expect("drafts.claim" in hostRpcRegistry).toBe(false);
+    expect(draftsRetractRequestSchema.parse({ draftId: "draft-1" })).toEqual({
+      draftId: "draft-1",
+    });
+    expect(draftsRetractRequestSchema.safeParse({ draftId: "" }).success).toBe(
+      false,
+    );
+    expect(draftsRetractResponseSchema.parse({ retracted: true })).toEqual({
+      retracted: true,
+    });
+    expect(draftsRetractResponseSchema.parse({ retracted: false })).toEqual({
+      retracted: false,
     });
   });
 

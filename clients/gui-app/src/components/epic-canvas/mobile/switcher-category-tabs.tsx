@@ -62,11 +62,6 @@ function fadeClassForEdges(edges: ScrollEdges): string | null {
   return null;
 }
 
-interface SwitcherCategoryTabsProps {
-  /** PR presence, which decides whether the Pull requests tab is on the bar. */
-  readonly hasPullRequests: boolean;
-}
-
 /**
  * The category tab bar for the mobile "Switch tab" sheet: a `line`-variant
  * `TabsList` whose triggers take natural width and scroll horizontally when the
@@ -74,7 +69,7 @@ interface SwitcherCategoryTabsProps {
  * root so selection flows through Radix. Identity comes from
  * {@link visibleSwitcherCategoryDefs} (the desktop left-panel registry).
  */
-export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
+export function SwitcherCategoryTabs() {
   const listRef = useRef<HTMLDivElement>(null);
   const edges = useHorizontalScrollEdges(listRef);
   return (
@@ -111,7 +106,7 @@ export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
       )}
       aria-label="Tab categories"
     >
-      {visibleSwitcherCategoryDefs(props.hasPullRequests).map((definition) => {
+      {visibleSwitcherCategoryDefs().map((definition) => {
         const Icon = definition.icon;
         return (
           <TabsTrigger

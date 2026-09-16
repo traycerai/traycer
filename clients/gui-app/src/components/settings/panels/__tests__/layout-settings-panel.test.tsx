@@ -998,7 +998,6 @@ describe("<LayoutSettingsPanel />", () => {
 
     expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
       "cpu",
-      "memory",
       "processes",
     ]);
 
@@ -1007,7 +1006,6 @@ describe("<LayoutSettingsPanel />", () => {
     );
 
     expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
-      "memory",
       "processes",
     ]);
     expect(trackSettingChanged).toHaveBeenCalledWith(

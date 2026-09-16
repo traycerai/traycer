@@ -138,6 +138,27 @@ export interface ReplaceDraftWithEpicCommand {
   readonly epicName: string | undefined;
 }
 
+export interface ReplaceDraftWithDraftCommand {
+  readonly previousDraftId: string;
+  readonly nextDraftId: string;
+}
+
+export interface ReplaceDraftWithDocumentCommand {
+  readonly previousDraftId: string;
+  readonly nextDraftId: string;
+  /**
+   * Installs the successor row (`nextDraftId`) in the landing store, open.
+   * Runs inside the transaction, after the strip item has been re-keyed
+   * and before the previous row is retired.
+   */
+  /**
+   * Puts the successor row in the landing store. Returns whether it did: a
+   * `false` aborts the transaction before the layout moves, so the strip
+   * item is never re-keyed onto a row that does not exist.
+   */
+  readonly installNext: () => boolean;
+}
+
 export interface CompletePhaseMigrationCommand {
   readonly tabId: string;
   readonly phaseId: string;
@@ -1303,6 +1324,127 @@ export class TabCommandCoordinator {
       applyRemovals: () => {
         this.applyExpectedSourceMutation(() => {
           useLandingDraftStore.getState().deleteDraft(command.draftId);
+        });
+      },
+    });
+    return nextRef;
+  }
+
+  /**
+   * Re-key the strip item of `previousDraftId` onto a successor row that a
+   * HOST document supplies (a re-mint, or a fork made on another device,
+   * whose `supersedes` names the row open here), keeping the item's strip
+   * position and group. Order inside the transaction: `installNext` runs
+   * FIRST, putting the successor in the store (a `false` aborts before
+   * anything moves); the strip item is then re-keyed onto it; the previous
+   * row is retired locally last, so the host's following `delete` frame
+   * finds nothing to remove from the layout. Null when the previous draft
+   * has no strip item, its row is gone, or the successor already exists or
+   * is retired; throws when the successor could not be installed.
+   */
+  replaceDraftWithDocument(
+    command: ReplaceDraftWithDocumentCommand,
+  ): TabRef | null {
+    const previous: TabRef = { kind: "draft", id: command.previousDraftId };
+    const nextRef: TabRef = { kind: "draft", id: command.nextDraftId };
+    const layout = currentLayout();
+    if (findStripItemForRef(layout, previous) === null) return null;
+    const drafts = useLandingDraftStore.getState().drafts;
+    if (
+      !drafts.some((draft) => draft.id === command.previousDraftId) ||
+      drafts.some((draft) => draft.id === command.nextDraftId) ||
+      landingDraftIsRetired(command.nextDraftId)
+    ) {
+      return null;
+    }
+    const next = replaceLayoutRef(layout, { previous, next: nextRef });
+    if (next === layout) return null;
+    this.execute({
+      layout: next,
+      reservedAdditions: [nextRef],
+      pendingRemovals: [previous],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        this.applyExpectedSourceMutation(() => {
+          // A successor that did not materialise must not have the strip
+          // item re-keyed onto it: throwing here rides `execute`'s
+          // catch/record/rethrow path before `replaceLayoutForTransaction`
+          // runs, so the layout and the previous draft stay untouched.
+          if (!command.installNext()) {
+            throw new Error(
+              "Tab command draft re-key could not install the successor",
+            );
+          }
+        });
+      },
+      applyRemovals: () => {
+        this.applyExpectedSourceMutation(() => {
+          useLandingDraftStore
+            .getState()
+            .applyHostDelete(command.previousDraftId);
+        });
+      },
+    });
+    return nextRef;
+  }
+
+  /**
+   * Re-key a draft tab in place onto a fresh copy of its draft: the copy is
+   * forked in the store first, the strip item then keeps its position,
+   * split side and focus while the copy becomes the source it renders, and
+   * the previous draft is retired locally last without a host delete (its
+   * owner is another host, or a row this host could not reclaim). `null`
+   * when the previous draft has no strip item, its row is gone, or the
+   * successor id is taken; throws when the store refuses the fork
+   * mid-transaction.
+   */
+  replaceDraftWithDraft(command: ReplaceDraftWithDraftCommand): TabRef | null {
+    const previous: TabRef = { kind: "draft", id: command.previousDraftId };
+    const nextRef: TabRef = { kind: "draft", id: command.nextDraftId };
+    const layout = currentLayout();
+    if (findStripItemForRef(layout, previous) === null) return null;
+    // The fork must be able to succeed before the layout moves off the
+    // source: a re-keyed item whose source never materialises is reconciled
+    // away, and the source would already be retired underneath it.
+    const drafts = useLandingDraftStore.getState().drafts;
+    if (
+      !drafts.some((draft) => draft.id === command.previousDraftId) ||
+      drafts.some((draft) => draft.id === command.nextDraftId) ||
+      landingDraftIsRetired(command.nextDraftId)
+    ) {
+      return null;
+    }
+    const next = replaceLayoutRef(layout, { previous, next: nextRef });
+    if (next === layout) return null;
+    this.execute({
+      layout: next,
+      reservedAdditions: [nextRef],
+      pendingRemovals: [previous],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        this.applyExpectedSourceMutation(() => {
+          // The pre-checks above ran before `execute`'s first `notify()`; a
+          // synchronous listener re-entering during it can still make the
+          // fork refuse (source removed, successor id taken). A silent
+          // `false` here would re-key the layout onto a row that does not
+          // exist and retire the source underneath it, so the refusal
+          // throws, riding `execute`'s catch/record/rethrow path before
+          // `replaceLayoutForTransaction` runs: layout and source untouched.
+          const forked = useLandingDraftStore
+            .getState()
+            .forkDraft(command.previousDraftId, command.nextDraftId);
+          if (!forked) {
+            throw new Error(
+              "Tab command draft fork was refused by the landing store",
+            );
+          }
+        });
+      },
+      applyRemovals: () => {
+        this.applyExpectedSourceMutation(() => {
+          useLandingDraftStore
+            .getState()
+            .applyHostDelete(command.previousDraftId);
         });
       },
     });

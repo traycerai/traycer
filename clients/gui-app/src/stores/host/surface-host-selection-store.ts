@@ -26,6 +26,7 @@ export type SurfaceHostSelection = string | null;
  */
 export type SurfaceKind =
   | "git-diff"
+  | "pull-requests"
   | "file-tree"
   | "new-terminal"
   | "browsers"
@@ -50,7 +51,7 @@ export function surfaceHostKey(kind: SurfaceKind, instanceId: string): string {
 export function tabSurfaceKey(
   kind: Extract<
     SurfaceKind,
-    "git-diff" | "file-tree" | "new-terminal" | "browsers"
+    "git-diff" | "pull-requests" | "file-tree" | "new-terminal" | "browsers"
   >,
   tabId: string,
 ): string {
