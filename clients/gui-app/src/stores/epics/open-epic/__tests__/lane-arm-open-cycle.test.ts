@@ -122,12 +122,13 @@ function statusSnapshot(
   // role would refuse the write for the other reason and pass for the wrong
   // one.
   role: PermissionRole,
+  securityEpoch: number,
 ): EpicStatusSnapshotFrame {
   const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
-    securityEpoch: 1,
+    securityEpoch,
     permissionRole: role,
     cloudSyncStatus: "connected",
     dirty: false,
@@ -167,6 +168,8 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
   let statusCallbacks: EpicStatusStreamCallbacks | null = null;
   let stateCallbacks: EpicStateStreamCallbacks | null = null;
   const received: { commandId: string; intent: EpicWriteCommandIntent }[] = [];
+  // Keep revocation and regrant epochs ahead of the initial snapshot.
+  let currentSecurityEpoch = 1;
 
   const statusFactory: EpicStatusStreamClientFactory = (_epicId, callbacks) => {
     statusCallbacks = callbacks;
@@ -227,8 +230,14 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     statusCallbacks.onSnapshot(
       // `statusRole` is optional on `LaneRigOptions` (defaults the pre-existing
       // suites did not have to change); the fallback moves here since
-      // `statusSnapshot` itself may not default its own parameter.
-      statusSnapshot(options.migration, options.statusRole ?? "editor"),
+      // `statusSnapshot` itself may not default its own parameter. The
+      // initial snapshot establishes the rig's starting epoch (1) without
+      // advancing it.
+      statusSnapshot(
+        options.migration,
+        options.statusRole ?? "editor",
+        currentSecurityEpoch,
+      ),
       true,
     );
     stateCallbacks.onSnapshot(stateSnapshot());
@@ -245,7 +254,12 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (statusCallbacks === null) {
       throw new Error("the status lane factory was not invoked");
     }
-    statusCallbacks.onSnapshot(statusSnapshot(options.migration, role), true);
+    // This helper models a regrant learned after the preceding status frame.
+    currentSecurityEpoch += 1;
+    statusCallbacks.onSnapshot(
+      statusSnapshot(options.migration, role, currentSecurityEpoch),
+      true,
+    );
   }
 
   function reconnectControlLane(): void {
@@ -276,7 +290,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
       kind: "migrationProgress",
       hasBinaryPayload: false,
       authorityEpoch: EPOCH,
-      securityEpoch: 1,
+      securityEpoch: currentSecurityEpoch,
       ...progress,
     });
     // Narrowed POSITIVELY. Excluding `snapshot` still leaves `ping`/`pong`,
@@ -291,11 +305,12 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (statusCallbacks === null) {
       throw new Error("the status lane factory was not invoked");
     }
+    currentSecurityEpoch += 1;
     const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
       kind: "permissionChanged",
       hasBinaryPayload: false,
       authorityEpoch: EPOCH,
-      securityEpoch: 2,
+      securityEpoch: currentSecurityEpoch,
       permissionRole: role,
     });
     if (parsed.kind !== "permissionChanged") {
