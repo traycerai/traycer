@@ -124,9 +124,9 @@ export function statusColorClass(
 ): string {
   switch (state) {
     case "running":
-      return "text-emerald-500";
+      return "text-success-foreground";
     case "stopped":
-      return "text-amber-500";
+      return "text-warning-foreground";
     case "not-installed":
       return "text-muted-foreground";
   }

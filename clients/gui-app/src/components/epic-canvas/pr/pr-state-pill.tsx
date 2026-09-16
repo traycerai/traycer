@@ -31,7 +31,7 @@ export function PrStatePill(props: {
     <Badge
       variant="outline"
       className={cn(
-        "shrink-0 font-medium",
+        "shrink-0",
         PR_PILL_CLASS[props.state],
         props.state === "closed" && "opacity-70",
         props.className,

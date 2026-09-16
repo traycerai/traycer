@@ -312,19 +312,20 @@ function CollaboratorRow(props: {
           <span className="inline-flex">
             <Button
               type="button"
-              variant="ghost"
+              variant="muted-destructive"
               size="icon-xs"
               onClick={canRevoke ? props.onRevokeRequest : undefined}
               disabled={!canRevoke || isRevokePending}
               aria-label={`Remove ${collaborator.displayName}`}
-              className="text-muted-foreground hover:text-destructive disabled:opacity-30"
+              className="disabled:opacity-30"
               data-testid="collaborator-revoke-button"
             >
               {isRevokePending ? (
                 <AgentSpinningDots
-                  className="text-muted-foreground"
+                  className={undefined}
                   testId="collaborator-revoke-spinner"
                   variant={undefined}
+                  tone="muted"
                 />
               ) : (
                 <Trash2 className="size-3.5" />
@@ -396,19 +397,20 @@ function TeamAccessRow(props: {
           {isOwner ? (
             <Button
               type="button"
-              variant="ghost"
+              variant="muted-destructive"
               size="icon-xs"
               onClick={props.onRevoke}
               disabled={isPending}
               aria-label={`Remove ${row.name}`}
-              className="text-muted-foreground hover:text-destructive disabled:opacity-30"
+              className="disabled:opacity-30"
               data-testid="team-revoke-button"
             >
               {isRevokePending ? (
                 <AgentSpinningDots
-                  className="text-muted-foreground"
+                  className={undefined}
                   testId="team-revoke-spinner"
                   variant={undefined}
+                  tone="muted"
                 />
               ) : (
                 <Trash2 className="size-3.5" />

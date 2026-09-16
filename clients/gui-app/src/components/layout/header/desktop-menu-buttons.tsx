@@ -141,7 +141,6 @@ export function DesktopMenuButtons(props: {
             <MenubarMenu key={item.id} value={item.id}>
               <MenubarTrigger
                 aria-keyshortcuts={`Alt+${item.mnemonic}`}
-                className="group inline-flex h-full items-center text-ui-xs text-canvas-foreground/70 outline-none select-none"
                 onMouseDown={(event) => event.preventDefault()}
               >
                 <span className="rounded-md px-2 py-1 transition-colors duration-100 ease-out group-hover:bg-canvas-foreground/5 group-hover:text-canvas-foreground/90 group-data-[state=open]:bg-canvas-foreground/8 group-data-[state=open]:text-canvas-foreground group-focus-visible:ring-2 group-focus-visible:ring-ring group-focus-visible:ring-inset motion-reduce:transition-none">

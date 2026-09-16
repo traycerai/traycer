@@ -219,17 +219,16 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
         </span>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted-destructive"
           size="icon-xs"
           disabled={isClosing}
           aria-label={closeAriaLabel}
           data-testid={`epic-browser-sidebar-close-${tab.tabId}`}
           className={cn(
-            "size-6 cursor-pointer justify-self-center text-muted-foreground opacity-0 transition-opacity duration-100 pointer-events-none motion-reduce:transition-none",
+            "size-6 cursor-pointer justify-self-center opacity-0 transition-opacity duration-100 pointer-events-none motion-reduce:transition-none",
             "group-focus-within/browser-row:pointer-events-auto group-focus-within/browser-row:opacity-100",
             "group-hover/browser-row:pointer-events-auto group-hover/browser-row:opacity-100",
             "group-data-[active=true]/browser-row:pointer-events-auto group-data-[active=true]/browser-row:opacity-100",
-            "hover:bg-destructive/10 hover:text-destructive",
             "[@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
             (isFailed || isClosing) && "pointer-events-auto opacity-100",
           )}
@@ -237,9 +236,10 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
         >
           {isClosing ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId={undefined}
               variant={undefined}
+              tone="muted"
             />
           ) : (
             <X className="size-3.5" aria-hidden />
@@ -293,7 +293,7 @@ function BrowserTabStateSlot(props: {
         <button
           type="button"
           aria-label={`Open driving chat: ${names.join(", ")}`}
-          className="flex size-6 cursor-pointer items-center justify-center rounded-sm text-blue-500 outline-none hover:bg-blue-500/10 focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex size-6 cursor-pointer items-center justify-center rounded-sm text-info-foreground outline-none hover:bg-info/10 focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => props.onOpenDrivingChat(driver)}
         >
           <Bot className="size-3.5" aria-hidden />

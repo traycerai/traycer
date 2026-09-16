@@ -8,7 +8,6 @@ import { useAuthLinkLoginProgress } from "@/hooks/auth/use-auth-link-login-progr
 import { useLinkCodeSignInMutation } from "@/hooks/auth/use-link-code-sign-in-mutation";
 import type { LinkLoginSignInResult } from "@/lib/auth/auth-service";
 import { useAuthService } from "@/lib/host";
-import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLinkLoginDeepLinkOutcomeStore } from "@/stores/auth/link-login-deep-link-outcome-store";
@@ -217,7 +216,9 @@ export function LinkCodeSignIn(props: {
         autoCorrect="off"
         spellCheck={false}
         data-testid="link-code-signin-input"
-        className="flex-1 font-mono text-ui-sm"
+        className="flex-1"
+        font="mono"
+        size="sm"
       />
       <Button
         type="submit"
@@ -311,7 +312,7 @@ export function LinkCodeSignIn(props: {
               onClick={() => {
                 setOpen(true);
               }}
-              className="w-full cursor-pointer text-foreground"
+              className="w-full cursor-pointer"
             >
               Enter code manually
             </Button>
@@ -325,16 +326,13 @@ export function LinkCodeSignIn(props: {
     return (
       <Button
         type="button"
-        size={props.isHero ? "default" : "sm"}
+        size={props.isHero ? "inline" : "sm"}
         variant="link"
         disabled={claimInFlight}
         data-testid="link-code-signin-open"
         onClick={() => {
           setOpen(true);
         }}
-        className={cn(
-          props.isHero ? "h-auto justify-center px-0 py-0 text-ui-sm" : null,
-        )}
       >
         <QrCode aria-hidden="true" />
         Scan from desktop

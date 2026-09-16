@@ -33,7 +33,7 @@ export function HarnessModelPickerSearch(props: HarnessModelPickerSearchProps) {
 
   return (
     <div className="shrink-0 border-b p-2">
-      <InputGroup className="h-9! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+      <InputGroup className="h-9!" variant="search">
         <InputGroupInput
           ref={inputRef}
           value={value}
@@ -41,7 +41,6 @@ export function HarnessModelPickerSearch(props: HarnessModelPickerSearchProps) {
           aria-label={placeholder}
           aria-controls={listboxId}
           aria-activedescendant={activeDescendant}
-          className="text-ui-sm"
           onChange={(event) => {
             onChange(event.target.value);
           }}

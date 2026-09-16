@@ -71,9 +71,10 @@ function OnboardingAgentGuideStatus(props: {
     return (
       <span className="flex items-center gap-1 text-code-xs text-muted-foreground">
         <AgentSpinningDots
-          className="text-muted-foreground"
+          className={undefined}
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
         Saving
       </span>

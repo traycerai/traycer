@@ -263,9 +263,7 @@ function DeletedArtifactListEntry(props: {
           {props.entry.versionCount === 1 ? "version" : "versions"}
         </p>
         {reason === null ? null : (
-          <p className="mt-1 text-ui-xs text-amber-600 dark:text-amber-400">
-            {reason}
-          </p>
+          <p className="mt-1 text-ui-xs text-warning-foreground">{reason}</p>
         )}
       </button>
       <div className="flex shrink-0 items-center p-4 pl-0">

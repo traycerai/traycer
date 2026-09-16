@@ -219,7 +219,7 @@ export function NewWorktreeForm(props: NewWorktreeFormProps) {
           spellCheck={false}
           aria-label="New branch name"
           placeholder={namePlaceholder}
-          className="h-8 text-ui-sm"
+          className="h-8"
           data-testid="new-worktree-branch-name"
           onChange={(event) => handleChangeName(event.target.value)}
           onKeyDown={(event) => {
@@ -228,6 +228,7 @@ export function NewWorktreeForm(props: NewWorktreeFormProps) {
               flush();
             }
           }}
+          size="sm"
         />
       </div>
       <div className="flex min-h-4 items-center justify-end px-1">
@@ -529,7 +530,7 @@ const SourceBranchList = memo(function SourceBranchList(props: {
       >
         <div className="flex items-center justify-center gap-2 px-2 py-6 text-ui-sm text-muted-foreground">
           <AgentSpinningDots
-            className="text-current"
+            className={undefined}
             testId={undefined}
             variant="dots"
           />
@@ -584,7 +585,7 @@ const SourceBranchList = memo(function SourceBranchList(props: {
   // name field instead of stepping through every branch.
   return (
     <div className="flex flex-col gap-1.5">
-      <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+      <InputGroup className="h-8!" variant="search">
         <InputGroupInput
           ref={inputRef}
           role="combobox"
@@ -594,7 +595,6 @@ const SourceBranchList = memo(function SourceBranchList(props: {
           value={query}
           placeholder="Search branches"
           aria-label="Search branches"
-          className="text-ui-sm"
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") {

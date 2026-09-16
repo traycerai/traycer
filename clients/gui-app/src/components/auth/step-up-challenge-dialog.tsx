@@ -202,7 +202,7 @@ function StepUpChallengeDialogActive(props: {
             {requestChallenge.isPending ? (
               <p className="flex items-center gap-2 text-ui-xs text-muted-foreground">
                 <AgentSpinningDots
-                  className="text-current"
+                  className={undefined}
                   testId={undefined}
                   variant="orbit"
                 />
@@ -252,7 +252,7 @@ function StepUpChallengeDialogActive(props: {
               Verify
               {verifyChallenge.isPending ? (
                 <AgentSpinningDots
-                  className="text-current"
+                  className={undefined}
                   testId={undefined}
                   variant="orbit"
                 />
