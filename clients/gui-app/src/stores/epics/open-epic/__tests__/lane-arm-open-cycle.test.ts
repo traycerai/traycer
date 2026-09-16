@@ -46,6 +46,7 @@ import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-tran
 import type { EpicStatusStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { EarlyMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicMigrationStatus } from "@traycer/protocol/host/epic/status-subscribe";
+import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicLaneSelectionSources,
   EpicLaneUnaries,
@@ -71,6 +72,13 @@ interface LaneRigOptions {
   readonly unaries: EpicLaneUnaries;
   /** What the status snapshot says about a major migration. */
   readonly migration: EpicMigrationStatus | null;
+  /**
+   * The role the status snapshot establishes. Defaults to `"editor"` (the
+   * pre-existing suites' fixed value) so every call site above is unaffected;
+   * a suite pinning the displayed-vs-write-gate role split needs a specific
+   * value (e.g. `"owner"`) rather than this default.
+   */
+  readonly statusRole?: PermissionRole;
 }
 
 interface LaneRig {
@@ -100,21 +108,27 @@ interface LaneRig {
     readonly chunksDone: number;
     readonly chunksTotal: number;
   }) => void;
+  /** A `permissionChanged` transition on the status (control) lane. */
+  readonly emitPermissionChanged: (role: PermissionRole | null) => void;
+  /** A second/later status SNAPSHOT on an already-open control lane. */
+  readonly emitStatusSnapshot: (role: PermissionRole) => void;
 }
 
 function statusSnapshot(
   migration: EpicMigrationStatus | null,
+  // Required, no default: callers pass it explicitly (repo ESLint bans
+  // default parameters). Most suites here pass "editor" - about the
+  // freshness arm of the write gate, not the permission arm, and a viewer
+  // role would refuse the write for the other reason and pass for the wrong
+  // one.
+  role: PermissionRole,
 ): EpicStatusSnapshotFrame {
   const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
     securityEpoch: 1,
-    // EDITOR: the write gate has a permission arm as well as a freshness arm,
-    // and this suite is about the freshness arm. A viewer role would refuse
-    // the write for the other reason and the assertion would pass for the
-    // wrong one.
-    permissionRole: "editor",
+    permissionRole: role,
     cloudSyncStatus: "connected",
     dirty: false,
     migration,
@@ -210,8 +224,28 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     // snapshot established and this suite would fail for the wrong reason.
     statusCallbacks.onConnectionStatus("open", null);
     stateCallbacks.onConnectionStatus("open", null);
-    statusCallbacks.onSnapshot(statusSnapshot(options.migration), true);
+    statusCallbacks.onSnapshot(
+      // `statusRole` is optional on `LaneRigOptions` (defaults the pre-existing
+      // suites did not have to change); the fallback moves here since
+      // `statusSnapshot` itself may not default its own parameter.
+      statusSnapshot(options.migration, options.statusRole ?? "editor"),
+      true,
+    );
     stateCallbacks.onSnapshot(stateSnapshot());
+  }
+
+  /**
+   * A second (or later) status SNAPSHOT on an already-open control lane - a
+   * restated/regranted answer, as the protocol allows at any point, not only
+   * at attach. Reuses `statusSnapshot()`, so the real adapter maps it to both
+   * `control-snapshot` AND a `permission-changed` restatement, exactly as
+   * `openLanes()`'s own status half does.
+   */
+  function emitStatusSnapshot(role: PermissionRole): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    statusCallbacks.onSnapshot(statusSnapshot(options.migration, role), true);
   }
 
   function reconnectControlLane(): void {
@@ -253,6 +287,23 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     statusCallbacks.onTransition(parsed, true);
   }
 
+  function emitPermissionChanged(role: PermissionRole | null): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
+      kind: "permissionChanged",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      securityEpoch: 2,
+      permissionRole: role,
+    });
+    if (parsed.kind !== "permissionChanged") {
+      throw new Error(`expected a permissionChanged frame, got ${parsed.kind}`);
+    }
+    statusCallbacks.onTransition(parsed, true);
+  }
+
   return {
     handle,
     received,
@@ -260,6 +311,8 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     reconnectControlLane,
     reconnectStateLane,
     emitMigrationProgress,
+    emitPermissionChanged,
+    emitStatusSnapshot,
   };
 }
 
@@ -607,6 +660,166 @@ describe("a lane-selected session retries a failed migration", () => {
     // Still the host's reading, not a fabricated error.
     expect(rig.handle.store.getState().migration.status).toBe("running");
     expect(rig.handle.store.getState().migration.chunksDone).toBe(3);
+
+    rig.handle.dispose();
+  });
+});
+
+/**
+ * Like {@link recordingWorkspaceContext}, but the caller controls WHEN each
+ * `getWorkspaceContext` call answers - needed to land a workspace-context
+ * response after a specific status-lane event rather than at attach.
+ */
+function controllableWorkspaceContext(): {
+  readonly unaries: EpicLaneUnaries;
+  /** Resolves every currently-pending `getWorkspaceContext` call with `context`. */
+  resolveAll(context: EarlyMetaEpic): void;
+  pendingCount(): number;
+} {
+  let resolvers: Array<(context: EarlyMetaEpic) => void> = [];
+  return {
+    unaries: {
+      getWorkspaceContext: () =>
+        new Promise<EarlyMetaEpic>((resolve) => {
+          resolvers.push(resolve);
+        }),
+      retryMigration: () =>
+        Promise.reject(new Error("this test never retries a migration")),
+    },
+    resolveAll: (context) => {
+      const pending = resolvers;
+      resolvers = [];
+      for (const resolve of pending) resolve(context);
+    },
+    pendingCount: () => resolvers.length,
+  };
+}
+
+/**
+ * Regression: `onWorkspaceContext` (`epic-replica-runtime.ts`) must not move
+ * the DISPLAYED permission role - `useEpicPermissionRole()`, what every UI
+ * surface gates on. Only the status lane's `control-snapshot` /
+ * `permissionChanged` frames are that authority. Before the fix, every
+ * workspace-context answer - the tab-open read, or its reconnect refetch -
+ * was ALSO routed through `control.apply({kind: "early-meta", ...})`, which
+ * unconditionally overwrote the displayed role regardless of arrival order,
+ * while leaving the write gate (`currentRole`) untouched. So a late `null`
+ * answer could show a real owner as a viewer, and a late STALE `"owner"`
+ * answer could show a real viewer as an owner - two directions, one cause.
+ */
+describe("a lane session's displayed role is not moved by a workspace-context answer", () => {
+  it("keeps the snapshot-established owner role when a late workspace-context read answers permissionRole: null", async () => {
+    const context = controllableWorkspaceContext();
+    const rig = openLaneRig({
+      unaries: context.unaries,
+      migration: null,
+      statusRole: "owner",
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+    expect(context.pendingCount()).toBeGreaterThan(0);
+
+    context.resolveAll({ ...WORKSPACE_CONTEXT, permissionRole: null });
+    await settle(rig.handle);
+
+    // The display field - unaffected by the workspace-context answer.
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+
+    // The write gate agrees - not merely the display field.
+    const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "still an owner",
+      updatedAt: 5000,
+    });
+    expect(commandId).not.toBeNull();
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
+
+    rig.handle.dispose();
+  });
+
+  it("does not let a late, stale workspace-context read restore a role permissionChanged just revoked", async () => {
+    const context = controllableWorkspaceContext();
+    const rig = openLaneRig({
+      unaries: context.unaries,
+      migration: null,
+      statusRole: "owner",
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+
+    rig.emitPermissionChanged(null);
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBeNull();
+
+    // Every workspace-context read still pending - the tab-open read, any
+    // coalesced restatement, and the refetch the revocation itself may
+    // trigger - answers with the STALE, pre-revocation role.
+    context.resolveAll({ ...WORKSPACE_CONTEXT, permissionRole: "owner" });
+    await settle(rig.handle);
+
+    expect(rig.handle.store.getState().permissionRole).toBeNull();
+
+    await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "should never reach the host",
+      updatedAt: 6000,
+    });
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(0);
+
+    rig.handle.dispose();
+  });
+});
+
+/**
+ * Regression: `accessLost` clears only on a real regrant (a status
+ * `control-snapshot` naming a non-null role), never on a workspace-context
+ * answer - the same authority split as `permissionRole` above, for the
+ * sibling field the access coordinator force-closes a tab on.
+ */
+describe("accessLost clears on a real snapshot regrant, not on a workspace-context answer", () => {
+  it("stays denied through a delayed, stale workspace-context read, and clears only when a real status snapshot regrants", async () => {
+    const context = controllableWorkspaceContext();
+    const rig = openLaneRig({
+      unaries: context.unaries,
+      migration: null,
+      statusRole: "owner",
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+    expect(rig.handle.store.getState().accessLost).toBe(false);
+
+    rig.emitPermissionChanged(null);
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBeNull();
+    expect(rig.handle.store.getState().accessLost).toBe(true);
+
+    // A delayed workspace-context read, stale from before the revocation,
+    // must not restore access.
+    context.resolveAll({ ...WORKSPACE_CONTEXT, permissionRole: "owner" });
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBeNull();
+    expect(rig.handle.store.getState().accessLost).toBe(true);
+
+    // The host actually regrants: a real status snapshot.
+    rig.emitStatusSnapshot("owner");
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+    expect(rig.handle.store.getState().accessLost).toBe(false);
+
+    const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "regranted",
+      updatedAt: 7000,
+    });
+    expect(commandId).not.toBeNull();
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
 
     rig.handle.dispose();
   });
