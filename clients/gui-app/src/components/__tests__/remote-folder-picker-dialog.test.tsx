@@ -5,7 +5,7 @@ import {
   screen,
   fireEvent,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -20,7 +20,10 @@ import type {
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { modLabel } from "@/lib/keybindings/platform";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
-import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
+import {
+  useRemoteFolderPickerStore,
+  type FolderPickerIntent,
+} from "@/stores/workspace/remote-folder-picker-store";
 import type { NegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
@@ -179,6 +182,24 @@ function render(ui: ReactNode) {
   });
   return renderBase(
     <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
+
+/** Lets tests refresh the real picker after changing the fake query seam. */
+function PickerRerenderHarness(): ReactNode {
+  const [, setRevision] = useState(0);
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Refresh picker test"
+        data-testid="remote-folder-picker-test-rerender"
+        onClick={() => {
+          setRevision((revision) => revision + 1);
+        }}
+      />
+      <RemoteFolderPickerDialog />
+    </>
   );
 }
 
@@ -347,6 +368,26 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(useRemoteFolderPickerStore.getState().showHiddenFolders).toBe(true);
   });
 
+  it("hidden-folder preference changes clear a previous keyboard aim", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Folder picker settings" }),
+    );
+    fireEvent.click(screen.getByRole("switch"));
+    // Rebuilding the visible list resets the selected row; Add falls back to
+    // the current home instead of resurrecting the old consulting aim.
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester"],
+    });
+  });
+
   it("a timed-out listing shows the host's message with Retry", async () => {
     queryByPath.set(pathKey("/Users/tester/Desktop"), {
       data: undefined,
@@ -510,6 +551,106 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(useRemoteFolderPickerStore.getState().client).toBeNull();
   });
 
+  it.each(["button", "meta", "ctrl"] as const)(
+    "%s submits the deliberately aimed visible directory",
+    async (submitKind) => {
+      render(<RemoteFolderPickerDialog />);
+      const pick = useRemoteFolderPickerStore
+        .getState()
+        .requestPick(makeClient());
+      await screen.findAllByTestId("remote-folder-picker-row");
+
+      // The resting highlight is `code` (option 1); moving once deliberately
+      // aims `consulting` (option 2) without opening it.
+      fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+      if (submitKind === "button") {
+        fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+      } else {
+        fireEvent.keyDown(pathInput(), {
+          key: "Enter",
+          ...(submitKind === "meta" ? { metaKey: true } : { ctrlKey: true }),
+        });
+      }
+
+      await expect(pick).resolves.toEqual({
+        kind: "prepare",
+        folderPaths: ["/Users/tester/consulting"],
+      });
+    },
+  );
+
+  it("an untouched automatic home highlight does not become an Add target", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester"],
+    });
+  });
+
+  it("does not treat the automatic row 0 at filesystem root as aimed", async () => {
+    queryByPath.set(
+      pathKey(null),
+      readyLevel({
+        directoryPath: "/",
+        parentPath: null,
+        entries: [
+          { path: "/Users", name: "Users", hidden: false },
+          { path: "/var", name: "var", hidden: false },
+        ],
+      }),
+    );
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    expect(pathInput().getAttribute("aria-activedescendant")).toBe(
+      "remote-folder-picker-option-0",
+    );
+    fireEvent.keyDown(pathInput(), { key: "ArrowUp" });
+    // At the filesystem root row 0 is a real child, but ArrowUp is clamped;
+    // the no-op must not turn that automatic highlight into an aim.
+    expect(pathInput().getAttribute("aria-activedescendant")).toBe(
+      "remote-folder-picker-option-0",
+    );
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/"],
+    });
+  });
+
+  it("can deliberately aim row 0 after moving away and back at filesystem root", async () => {
+    queryByPath.set(
+      pathKey(null),
+      readyLevel({
+        directoryPath: "/",
+        parentPath: null,
+        entries: [
+          { path: "/Users", name: "Users", hidden: false },
+          { path: "/var", name: "var", hidden: false },
+        ],
+      }),
+    );
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.keyDown(pathInput(), { key: "ArrowUp" });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users"],
+    });
+  });
+
   it("cmd+Enter adds the typed path even when it was never listed", async () => {
     render(<RemoteFolderPickerDialog />);
     const pick = useRemoteFolderPickerStore
@@ -523,6 +664,63 @@ describe("<RemoteFolderPickerDialog />", () => {
     await expect(pick).resolves.toEqual({
       kind: "prepare",
       folderPaths: ["/Users/tester/projects/deep"],
+    });
+  });
+
+  it("manual filter remains authoritative after arrows", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.change(pathInput(), {
+      target: { value: "/Users/tester/co" },
+    });
+    // Filtering removes `..`; ArrowDown deliberately moves among matches, but
+    // it must not replace the typed path with the selected `consulting` row.
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "createAndPrepare",
+      path: "/Users/tester/co",
+    });
+  });
+
+  it("manual trailing-slash path remains authoritative after moving among children", async () => {
+    queryByPath.set(
+      pathKey("/Users/tester/code"),
+      readyLevel({
+        directoryPath: "/Users/tester/code",
+        parentPath: "/Users/tester",
+        entries: [
+          { path: "/Users/tester/code/api", name: "api", hidden: false },
+          { path: "/Users/tester/code/docs", name: "docs", hidden: false },
+        ],
+      }),
+    );
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.change(pathInput(), {
+      target: { value: "/Users/tester/code/" },
+    });
+    expect(rowNames()).toEqual(["api", "docs"]);
+    // Move between real children. Even though a child is highlighted, the
+    // trailing-slash field remains the explicitly typed path.
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    expect(pathInput().getAttribute("aria-activedescendant")).toBe(
+      "remote-folder-picker-option-2",
+    );
+    fireEvent.keyDown(pathInput(), { key: "ArrowUp" });
+    expect(pathInput().getAttribute("aria-activedescendant")).toBe(
+      "remote-folder-picker-option-1",
+    );
+    fireEvent.keyDown(pathInput(), { key: "Enter", ctrlKey: true });
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/code"],
     });
   });
 
@@ -603,6 +801,94 @@ describe("<RemoteFolderPickerDialog />", () => {
     );
     fireEvent.keyDown(pathInput(), { key: "Enter" });
     expect(pathInput().value).toBe("/Users/tester/consulting/");
+  });
+
+  it("mouse navigation clears an aim instead of submitting the old row", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    const rows = await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    // The aim is consulting, but a pointer navigation to code replaces the
+    // field source and must clear it before Add settles.
+    fireEvent.click(rows[0]);
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/code"],
+    });
+  });
+
+  it("the Up row never becomes an Add target after an earlier aim", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.keyDown(pathInput(), { key: "ArrowUp" });
+    fireEvent.keyDown(pathInput(), { key: "ArrowUp" });
+    expect(pathInput().getAttribute("aria-activedescendant")).toBe(
+      "remote-folder-picker-option-0",
+    );
+    expect(pathInput().value).toBe("/Users/tester/");
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester"],
+    });
+  });
+
+  it("can freshly aim a child after descending into a directory", async () => {
+    queryByPath.set(
+      pathKey("/Users/tester/code"),
+      readyLevel({
+        directoryPath: "/Users/tester/code",
+        parentPath: "/Users/tester",
+        entries: [
+          { path: "/Users/tester/code/api", name: "api", hidden: false },
+          { path: "/Users/tester/code/docs", name: "docs", hidden: false },
+        ],
+      }),
+    );
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    fireEvent.click(
+      (await screen.findAllByTestId("remote-folder-picker-row"))[0],
+    );
+    expect(pathInput().value).toBe("/Users/tester/code/");
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/code/docs"],
+    });
+  });
+
+  it("plain Enter and Up clear an aim, then a fresh arrow can aim again", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.keyDown(pathInput(), { key: "Enter" });
+    expect(pathInput().value).toBe("/Users/tester/consulting/");
+    fireEvent.click(screen.getByTestId("remote-folder-picker-up-row"));
+    expect(pathInput().value).toBe("/Users/tester/");
+
+    // `goUp` leaves the `..` row active. This new movement, after navigation,
+    // must be able to deliberately aim the first child again.
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/code"],
+    });
   });
 
   it("keeps the parent row active while repeatedly ascending with Enter", async () => {
@@ -736,6 +1022,77 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(pathInput().value).toBe("/Users/tester/");
   });
 
+  it("does not resurrect an aim after failed refetch recovery of the same listing", async () => {
+    const codeListing: WorkspaceBrowseFoldersResponseV11 = {
+      directoryPath: "/Users/tester/code",
+      parentPath: "/Users/tester",
+      entries: [
+        { path: "/Users/tester/code/api", name: "api", hidden: false },
+        { path: "/Users/tester/code/docs", name: "docs", hidden: false },
+      ],
+    };
+    queryByPath.set(pathKey("/Users/tester/code"), readyLevel(codeListing));
+    const view = render(<PickerRerenderHarness />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    fireEvent.click(
+      (await screen.findAllByTestId("remote-folder-picker-row"))[0],
+    );
+    await screen.findAllByTestId("remote-folder-picker-row");
+    // Aim `docs`, then expose a failed refetch while retaining the exact old
+    // response object TanStack Query would leave in its cache.
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    queryByPath.set(pathKey("/Users/tester/code"), {
+      data: codeListing,
+      isPending: false,
+      error: new Error("Timed out listing this folder"),
+      refetch: () => Promise.resolve(),
+    });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-test-rerender"));
+    expect(screen.getByTestId("remote-folder-picker-error")).toBeTruthy();
+
+    // Recovery returns the same data identity. The old aim must stay cleared,
+    // so Add submits the navigation-filled directory, not `docs`.
+    queryByPath.set(pathKey("/Users/tester/code"), readyLevel(codeListing));
+    fireEvent.click(screen.getByTestId("remote-folder-picker-test-rerender"));
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/code"],
+    });
+    view.unmount();
+  });
+
+  it("does not carry an aim across a reordered listing restored to its old rows", async () => {
+    const reordered: WorkspaceBrowseFoldersResponseV11 = {
+      directoryPath: "/Users/tester",
+      parentPath: "/Users",
+      entries: [
+        { path: "/Users/tester/consulting", name: "consulting", hidden: false },
+        { path: "/Users/tester/code", name: "code", hidden: false },
+        { path: "/Users/tester/Documents", name: "Documents", hidden: false },
+      ],
+    };
+    const view = render(<PickerRerenderHarness />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    queryByPath.set(pathKey(null), readyLevel(reordered));
+    fireEvent.click(screen.getByTestId("remote-folder-picker-test-rerender"));
+    expect(rowNames()).toEqual(["consulting", "code", "Documents"]);
+    queryByPath.set(pathKey(null), readyLevel(HOME_RESPONSE));
+    fireEvent.click(screen.getByTestId("remote-folder-picker-test-rerender"));
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester"],
+    });
+    view.unmount();
+  });
+
   it("navigates up via the up row", async () => {
     render(<RemoteFolderPickerDialog />);
     void useRemoteFolderPickerStore.getState().requestPick(makeClient());
@@ -765,18 +1122,46 @@ describe("<RemoteFolderPickerDialog />", () => {
   it("a second requestPick after drilling down starts back at the home", async () => {
     // The body is keyed per request: the path and active query from a
     // cancelled request must not leak into the next one.
+    queryByPath.set(
+      pathKey("/Users/tester/code"),
+      readyLevel({
+        directoryPath: "/Users/tester/code",
+        parentPath: "/Users/tester",
+        entries: [
+          { path: "/Users/tester/code/api", name: "api", hidden: false },
+          { path: "/Users/tester/code/docs", name: "docs", hidden: false },
+        ],
+      }),
+    );
     const secondClient = makeClient();
     render(<RemoteFolderPickerDialog />);
-    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    const first = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
     fireEvent.click(
       (await screen.findAllByTestId("remote-folder-picker-row"))[0],
     );
     expect(pathInput().value).toBe("/Users/tester/code/");
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    const secondRequest: { promise: Promise<FolderPickerIntent | null> } = {
+      // The synchronous act below replaces this with the real request promise
+      // while keeping the holder definitely Promise-typed for Oxlint/TS.
+      promise: Promise.resolve(null),
+    };
     act(() => {
-      void useRemoteFolderPickerStore.getState().requestPick(secondClient);
+      secondRequest.promise = useRemoteFolderPickerStore
+        .getState()
+        .requestPick(secondClient);
     });
+    await expect(first).resolves.toBeNull();
     expect(pathInput().value).toBe("/Users/tester/");
     expect(lastClient).toBe(secondClient);
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(secondRequest.promise).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester"],
+    });
   });
 
   it("offers the host's recent workspaces on the pristine field", async () => {
@@ -809,6 +1194,26 @@ describe("<RemoteFolderPickerDialog />", () => {
     // Fills the field rather than adding outright - still editable, and shown
     // in context (its parent, filtered to it).
     expect(pathInput().value).toBe("/srv/app");
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/srv/app"],
+    });
+  });
+
+  it("recent navigation clears a previous keyboard aim", async () => {
+    recentEntries = [
+      { path: "/srv/app", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
+    ];
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.click(
+      (await screen.findAllByTestId("remote-folder-picker-recent"))[0],
+    );
     fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
     await expect(pick).resolves.toEqual({
       kind: "prepare",
