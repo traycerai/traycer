@@ -162,9 +162,10 @@ export type ChatSearchMessageMatch = z.infer<
 
 export const chatSearchResponseSchema = z.object({
   chatMatches: z.array(chatSearchChatMatchSchema),
-  chatNextCursor: z.string().nullable(),
+  /** Bounded like the request cursors: a page's cursor is the next request's. */
+  chatNextCursor: cursorSchema,
   messageMatches: z.array(chatSearchMessageMatchSchema),
-  messageNextCursor: z.string().nullable(),
+  messageNextCursor: cursorSchema,
   /**
    * `partial` while the host's index has not yet caught up with every chat,
    * so a missing result may still appear.
