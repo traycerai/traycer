@@ -69,13 +69,41 @@ describe("teardown holder copy", () => {
       ),
     ];
     expect(sentences).toEqual([
-      "Agent “Fixing persistent busyness” is working on a turn — will be stopped",
+      "Agent “Fixing persistent busyness” has work in progress — will be stopped",
       "Terminal agent “Claude Code agent polite-ocelot” is idle — terminal will be closed",
       "Shell “bun run dev” is running — will be stopped",
       "Agent “Fixing persistent busyness” is still running from this worktree — will be stopped",
     ]);
     expect(sentences.join("\n")).not.toMatch(
       /Run directory|\bbusy\b|holder|PTY|\bowner\b/i,
+    );
+  });
+
+  it("formats each chat-turn chatTier with its own sentence", () => {
+    const withTier = (chatTier: WorktreeBusyHolder["chatTier"]) =>
+      formatHolderSentence(
+        holder({
+          holdKind: "chat-turn",
+          activity: "working",
+          label: "ignored",
+          chatTier,
+        }),
+        names,
+      );
+    expect(withTier("turn")).toBe(
+      "Agent “Fixing persistent busyness” is mid-turn — the turn will be stopped",
+    );
+    expect(withTier("queue")).toBe(
+      "Agent “Fixing persistent busyness” has queued prompts — they will be dropped",
+    );
+    expect(withTier("native-agent")).toBe(
+      "Agent “Fixing persistent busyness” has subagents running — they will be stopped",
+    );
+    expect(withTier("background")).toBe(
+      "Agent “Fixing persistent busyness” is idle, kept awake by background work — that work will be stopped",
+    );
+    expect(withTier(undefined)).toBe(
+      "Agent “Fixing persistent busyness” has work in progress — will be stopped",
     );
   });
 
