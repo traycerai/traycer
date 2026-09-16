@@ -1172,6 +1172,7 @@ function AssistantSegment({
         <ProviderNoticeSegment
           status={segment.status}
           noticeKind={segment.noticeKind}
+          presentation={segment.presentation}
           tone={segment.tone}
           title={segment.title}
           message={segment.message}

@@ -150,7 +150,7 @@ export function ErrorSegment({
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="text-overline font-semibold uppercase text-destructive">
-              Error
+              {harnessId === "codex" ? "Codex turn failed" : "Error"}
             </span>
             {code !== null && code.length > 0 ? (
               <span className="rounded border border-destructive/30 bg-destructive/10 px-1 font-mono text-code-xs text-destructive">

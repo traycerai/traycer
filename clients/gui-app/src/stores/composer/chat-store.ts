@@ -208,6 +208,8 @@ export interface ProviderNoticeSegment {
   // their details, and the resumed-turn marker for `fallback_wait_resumed` -
   // and none of that can be inferred from a tone and a title.
   noticeKind: ProviderNoticeKind;
+  /** Local display choice for a transient Codex retry; never persisted. */
+  presentation?: "retry";
   tone: ProviderNoticeTone;
   title: string;
   message: string | null;
