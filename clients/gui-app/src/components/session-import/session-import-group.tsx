@@ -1,8 +1,9 @@
-import { Check, ChevronRight, Minus } from "lucide-react";
+import { Check, ChevronRight, Folder, Minus } from "lucide-react";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { SessionImportOpenTaskButton } from "@/components/session-import/session-import-open-task-button";
 import { cn } from "@/lib/utils";
+import { getBasename } from "@/lib/path/cross-platform-path";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import type {
   SessionImportGroupSelectionState,
@@ -64,19 +65,15 @@ function groupSelectionLabel(group: SessionImportGroupView): string {
   const count = group.selectableCount.toLocaleString();
   const noun = group.selectableCount === 1 ? "task" : "tasks";
   if (group.selectionState === "none")
-    return `Select ${count} available ${noun}`;
-  if (group.selectionState === "all")
-    return `All ${count} available ${noun} selected`;
-  return `${group.selectedCount.toLocaleString()} of ${count} available ${noun} selected`;
+    return `${count} ${noun} available to import`;
+  if (group.selectionState === "all") return `All ${count} ${noun} selected`;
+  return `${group.selectedCount.toLocaleString()} of ${count} ${noun} selected`;
 }
 
-function SessionRow(props: {
+export function SessionImportTaskRow(props: {
   readonly row: SessionImportRowView;
   readonly tone: SessionImportTone;
-  /**
-   * Whether to show the folder the session ran in under its title. Only the
-   * Deleted Folders group does: everywhere else the header names the folder.
-   */
+  /** Show folder context when rows are not under a named folder header. */
   readonly showFolder: boolean;
   readonly onToggle: (selectionKey: string) => void;
   readonly onTaskOpened: () => void;
@@ -84,34 +81,24 @@ function SessionRow(props: {
 }) {
   const { row, tone, showFolder, onToggle, onTaskOpened } = props;
   const { candidate } = row;
+  const onboarding = tone.surface === "onboarding";
 
   if (candidate.state.kind === "already_in_traycer") {
     return (
       <div
         data-testid="session-import-row"
         data-selectable={false}
-        className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left"
+        className={cn(
+          "flex w-full min-w-0 items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left",
+          onboarding && "onboarding-import-task",
+        )}
       >
         <span aria-hidden className="size-4 shrink-0" />
         <HarnessIcon
           harnessId={candidate.harness}
           className={cn("size-3.5 opacity-75", tone.muted)}
         />
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span
-            className={cn(
-              "min-w-0 truncate text-ui-sm opacity-75",
-              tone.strong,
-            )}
-          >
-            {row.title}
-          </span>
-          {showFolder ? (
-            <span className={cn("truncate text-ui-xs", tone.faint)}>
-              {row.folderPath}
-            </span>
-          ) : null}
-        </span>
+        <SessionImportTaskLabel row={row} tone={tone} showFolder={showFolder} />
         <span
           className={cn(
             "shrink-0 rounded px-1.5 py-0.5 text-ui-xs bg-foreground/8",
@@ -121,6 +108,8 @@ function SessionRow(props: {
           Imported
         </span>
         <SessionImportOpenTaskButton
+          targetHostId={null}
+          presentation="icon"
           target={candidate.state}
           title={row.title}
           onTaskOpened={onTaskOpened}
@@ -147,22 +136,19 @@ function SessionRow(props: {
         // unavailable could never open - which is the only explanation the
         // user gets.
         aria-disabled={!row.selectable}
-        // Inside Deleted Folders the header names no folder, so the folder
-        // has to be part of the name: two "Fix the build" rows from different
-        // gone checkouts are otherwise indistinguishable to a screen reader.
         aria-label={
-          showFolder ? `${row.title} in ${row.folderPath}` : row.title
+          showFolder || onboarding
+            ? `${row.title} in ${row.folderPath}`
+            : row.title
         }
         data-testid="session-import-row"
         data-selectable={row.selectable}
         onClick={() => {
           if (row.selectable) onToggle(row.selectionKey);
         }}
-        // px-1.5 under the list's own p-1 lands this checkbox on the group
-        // header's 10px left edge; the chevron up there and the harness icon
-        // here then share a column, and the titles start flush with each other.
         className={cn(
           "flex w-full min-w-0 items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+          onboarding && "onboarding-import-task",
           row.selectable ? tone.rowHover : "cursor-default",
           !row.selectable && "opacity-55",
         )}
@@ -176,19 +162,7 @@ function SessionRow(props: {
           harnessId={candidate.harness}
           className={cn("size-3.5", tone.muted)}
         />
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className={cn("min-w-0 truncate text-ui-sm", tone.strong)}>
-            {row.title}
-          </span>
-          {showFolder ? (
-            <span
-              data-testid="session-import-row-folder"
-              className={cn("min-w-0 truncate text-ui-xs", tone.faint)}
-            >
-              {row.folderPath}
-            </span>
-          ) : null}
-        </span>
+        <SessionImportTaskLabel row={row} tone={tone} showFolder={showFolder} />
         {row.unavailableLabel !== null ? (
           <span className={cn("shrink-0 text-ui-xs", tone.faint)}>
             {row.unavailableLabel}
@@ -197,6 +171,43 @@ function SessionRow(props: {
         <SessionRowTimestamp updatedAt={candidate.updatedAt} tone={tone} />
       </button>
     </TooltipWrapper>
+  );
+}
+
+function SessionImportTaskLabel(props: {
+  readonly row: SessionImportRowView;
+  readonly tone: SessionImportTone;
+  readonly showFolder: boolean;
+}) {
+  const { row, tone, showFolder } = props;
+  const onboarding = tone.surface === "onboarding";
+  const folderLabel = onboarding ? getBasename(row.folderPath) : row.folderPath;
+  const titleClass = cn(
+    "min-w-0 text-ui-sm",
+    onboarding
+      ? "line-clamp-2 break-words font-medium leading-relaxed"
+      : "truncate",
+    tone.strong,
+  );
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className={titleClass}>{row.title}</span>
+      {showFolder ? (
+        <TooltipWrapper
+          label={onboarding ? row.folderPath : null}
+          side="top"
+          sideOffset={6}
+          align="start"
+        >
+          <span
+            data-testid="session-import-row-folder"
+            className={cn("min-w-0 truncate text-ui-xs", tone.faint)}
+          >
+            {folderLabel}
+          </span>
+        </TooltipWrapper>
+      ) : null}
+    </span>
   );
 }
 
@@ -216,6 +227,75 @@ export function SessionImportGroupItem(props: {
     onSetGroupSelection,
     onToggleSession,
   } = props;
+
+  const rows = group.rows.map((row) => (
+    <SessionImportTaskRow
+      key={row.selectionKey}
+      row={row}
+      tone={tone}
+      showFolder={group.missingFolder}
+      onToggle={onToggleSession}
+      onTaskOpened={props.onTaskOpened}
+      onBeforeTaskOpen={props.onBeforeTaskOpen}
+    />
+  ));
+
+  if (tone.surface === "onboarding") {
+    return (
+      <section
+        data-testid="session-import-group"
+        data-group-key={group.groupKey}
+        className="min-w-0 pb-3"
+      >
+        <div className="mb-3 flex items-center gap-3">
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={
+              group.selectionState === "partial"
+                ? "mixed"
+                : group.selectionState === "all"
+            }
+            aria-label={`${group.name}: ${groupSelectionLabel(group)}`}
+            disabled={group.selectableCount === 0}
+            onClick={() =>
+              onSetGroupSelection(
+                group.groupKey,
+                group.selectionState !== "all",
+              )
+            }
+            className="flex size-9 shrink-0 items-center justify-center rounded-md hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50"
+          >
+            <SelectionBox
+              state={group.selectionState}
+              disabled={group.selectableCount === 0}
+              tone={tone}
+            />
+          </button>
+          <Folder
+            aria-hidden
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+          <TooltipWrapper
+            label={group.path}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <h2 className="min-w-0 truncate text-sm font-medium">
+              {group.name}
+            </h2>
+          </TooltipWrapper>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {group.selectableCount > 0
+              ? `${group.selectedCount} of ${group.selectableCount} selected`
+              : `${group.totalCount} ${group.totalCount === 1 ? "task" : "tasks"}`}
+          </span>
+        </div>
+        <div className="onboarding-import-task-grid">{rows}</div>
+      </section>
+    );
+  }
 
   return (
     <div
@@ -287,7 +367,7 @@ export function SessionImportGroupItem(props: {
           <ChevronRight
             aria-hidden
             className={cn(
-              "size-3.5 shrink-0 transition-transform",
+              "size-3.5 shrink-0",
               tone.faint,
               group.expanded && "rotate-90",
             )}
@@ -317,17 +397,7 @@ export function SessionImportGroupItem(props: {
       </div>
       {group.expanded ? (
         <div className={cn("flex flex-col gap-0.5 border-t p-1", tone.border)}>
-          {group.rows.map((row) => (
-            <SessionRow
-              key={row.selectionKey}
-              row={row}
-              tone={tone}
-              showFolder={group.missingFolder}
-              onToggle={onToggleSession}
-              onTaskOpened={props.onTaskOpened}
-              onBeforeTaskOpen={props.onBeforeTaskOpen}
-            />
-          ))}
+          {rows}
         </div>
       ) : null}
     </div>

@@ -1,48 +1,90 @@
+import { z } from "zod";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
+export const SETUP_GUIDE_LENGTHS = {
+  agents: 1,
+  appearance: 3,
+  cookies: 1,
+} as const;
+
+export type SetupGuideId = keyof typeof SETUP_GUIDE_LENGTHS;
+const setupProgressSchema = z.object({
+  agents: z.number().int().min(-1).max(SETUP_GUIDE_LENGTHS.agents).catch(-1),
+  appearance: z
+    .number()
+    .int()
+    .min(-1)
+    .max(SETUP_GUIDE_LENGTHS.appearance)
+    .catch(-1),
+  cookies: z.number().int().min(-1).max(SETUP_GUIDE_LENGTHS.cookies).catch(-1),
+});
+const emptySetupProgress = { agents: -1, appearance: -1, cookies: -1 };
+
+const lastStepOf = (stepCount: number): number => Math.max(0, stepCount - 1);
+
+/** Current step, clamped so a step can't outrun the step list being shown. */
+export const clampOnboardingStep = (step: number, stepCount: number): number =>
+  Math.min(Math.max(Math.trunc(step), 0), lastStepOf(stepCount));
+
+export const isLastOnboardingStep = (
+  step: number,
+  stepCount: number,
+): boolean => clampOnboardingStep(step, stepCount) >= lastStepOf(stepCount);
+
 /**
- * The tour's length is a per-host fact - an act whose capability the bound host
- * lacks is dropped from the list (`onboardingActsFor`) - so the store cannot
- * derive its own bounds from the act catalog. Every caller passes the count of
- * the act list it is actually showing.
- */
-const lastStepOf = (actCount: number): number => Math.max(0, actCount - 1);
-
-/** Current act, clamped so a step can't outrun the act list being shown. */
-export const clampOnboardingStep = (step: number, actCount: number): number =>
-  Math.min(Math.max(Math.trunc(step), 0), lastStepOf(actCount));
-
-export const isLastOnboardingStep = (step: number, actCount: number): boolean =>
-  clampOnboardingStep(step, actCount) >= lastStepOf(actCount);
-
-/**
- * First-launch onboarding state, persisted locally so the tour runs once per
+ * Onboarding and optional setup progress, persisted locally. The tour runs once per
  * machine. `completedAt` is set when the tour is finished or skipped; `step`
  * is intentionally session-local so a closed or replayed tour starts from the
- * first act instead of resuming from the last viewed page. The store owns step
+ * first step instead of resuming from the last viewed page. The store owns step
  * movement and bounds - callers just invoke the actions.
  */
 interface OnboardingState {
+  readonly setupReminderDismissed: boolean;
+  readonly dismissSetupReminder: () => void;
+  readonly setupProgress: Record<SetupGuideId, number>;
+  readonly activeSetup: {
+    readonly id: SetupGuideId;
+    readonly step: number;
+  } | null;
+  readonly startSetup: (id: SetupGuideId) => void;
+  readonly pauseSetup: () => void;
+  readonly advanceSetup: () => void;
+  readonly retreatSetup: () => void;
+  readonly completeSetup: (id: SetupGuideId) => void;
   readonly completedAt: number | null;
   readonly step: number;
-  /** Next act, or complete the tour if already on the last one. */
-  readonly advance: (actCount: number) => void;
-  /** Previous act (no-op on the first). */
-  readonly retreat: (actCount: number) => void;
+  /** Next step, or complete the tour if already on the last one. */
+  readonly advance: (stepCount: number) => void;
+  /** Previous step (no-op on the first). */
+  readonly retreat: (stepCount: number) => void;
   /** Finish the tour (also used by skip). */
   readonly complete: () => void;
-  /** Return to the first act without changing completion state. */
+  /** Return to the first step without changing completion state. */
   readonly restart: () => void;
   /**
-   * Put the position on `step` directly: the page's re-seat when the act
-   * list changes under the user and the act they were on now sits at another
+   * Put the position on `step` directly: the page's re-seat when the step
+   * list changes under the user and the step they were on now sits at another
    * index. Not a navigation, so it records nothing and completes nothing.
    */
   readonly reseat: (step: number) => void;
-  /** Clear completion and return to the first act. */
+  /** Clear completion and return to the first step. */
   readonly reset: () => void;
+}
+
+export const ONBOARDING_GUIDE_COUNT =
+  1 + Object.keys(SETUP_GUIDE_LENGTHS).length;
+
+export function onboardingCompletedCount(
+  state: Pick<OnboardingState, "completedAt" | "setupProgress">,
+): number {
+  return (
+    Number(state.completedAt !== null) +
+    Object.entries(SETUP_GUIDE_LENGTHS).filter(
+      ([id, length]) => state.setupProgress[id as SetupGuideId] >= length,
+    ).length
+  );
 }
 
 const ONBOARDING_PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
@@ -59,27 +101,82 @@ function persistedCompletedAt(persistedState: unknown): number | null {
 export const useOnboardingStore = create<OnboardingState>()(
   persist(
     (set, get) => ({
+      setupReminderDismissed: false,
+      dismissSetupReminder: () => set({ setupReminderDismissed: true }),
+      setupProgress: emptySetupProgress,
+      activeSetup: null,
+      startSetup: (id) => {
+        const progress = get().setupProgress[id];
+        set({
+          setupProgress: {
+            ...get().setupProgress,
+            [id]: Math.max(0, progress),
+          },
+          activeSetup: {
+            id,
+            step:
+              progress >= SETUP_GUIDE_LENGTHS[id] ? 0 : Math.max(0, progress),
+          },
+        });
+      },
+      pauseSetup: () => set({ activeSetup: null }),
+      advanceSetup: () => {
+        const active = get().activeSetup;
+        // Cookie import is completed only by the native import result.
+        if (active === null || active.id === "cookies") return;
+        const step = active.step + 1;
+        set({
+          setupProgress: {
+            ...get().setupProgress,
+            [active.id]: Math.max(step, get().setupProgress[active.id]),
+          },
+          activeSetup:
+            step >= SETUP_GUIDE_LENGTHS[active.id]
+              ? null
+              : { id: active.id, step },
+        });
+      },
+      retreatSetup: () => {
+        const active = get().activeSetup;
+        if (active !== null && active.step > 0)
+          set({ activeSetup: { ...active, step: active.step - 1 } });
+      },
+      completeSetup: (id) =>
+        set({
+          setupProgress: {
+            ...get().setupProgress,
+            [id]: SETUP_GUIDE_LENGTHS[id],
+          },
+          activeSetup: get().activeSetup?.id === id ? null : get().activeSetup,
+        }),
       completedAt: null,
       step: 0,
-      advance: (actCount) => {
-        const step = clampOnboardingStep(get().step, actCount);
-        if (step >= lastStepOf(actCount)) {
+      advance: (stepCount) => {
+        const step = clampOnboardingStep(get().step, stepCount);
+        if (step >= lastStepOf(stepCount)) {
           set({ completedAt: Date.now() });
           return;
         }
         set({ step: step + 1 });
       },
-      // Clamped from the same place the page reads: when the act list shrinks
-      // under a user who is past its new end, Back must leave the act they can
+      // Clamped from the same place the page reads: when the step list shrinks
+      // under a user who is past its new end, Back must leave the step they can
       // see rather than step down to the same clamped one.
-      retreat: (actCount) =>
+      retreat: (stepCount) =>
         set({
-          step: Math.max(0, clampOnboardingStep(get().step, actCount) - 1),
+          step: Math.max(0, clampOnboardingStep(get().step, stepCount) - 1),
         }),
       complete: () => set({ completedAt: Date.now() }),
       restart: () => set({ step: 0 }),
       reseat: (step) => set({ step: Math.max(0, step) }),
-      reset: () => set({ completedAt: null, step: 0 }),
+      reset: () =>
+        set({
+          completedAt: null,
+          step: 0,
+          setupReminderDismissed: false,
+          setupProgress: emptySetupProgress,
+          activeSetup: null,
+        }),
     }),
     {
       ...basePersistOptions(ONBOARDING_PERSIST_KEY),
@@ -87,10 +184,26 @@ export const useOnboardingStore = create<OnboardingState>()(
       merge: (persistedState, currentState) => ({
         ...currentState,
         completedAt: persistedCompletedAt(persistedState),
+        setupReminderDismissed: z
+          .object({ setupReminderDismissed: z.boolean().catch(false) })
+          .catch({ setupReminderDismissed: false })
+          .parse(persistedState).setupReminderDismissed,
+        setupProgress: setupProgressSchema
+          .catch(emptySetupProgress)
+          .parse(
+            typeof persistedState === "object" &&
+              persistedState !== null &&
+              "setupProgress" in persistedState
+              ? (persistedState.setupProgress ?? {})
+              : {},
+          ),
+        activeSetup: null,
         step: 0,
       }),
       partialize: (state) => ({
         completedAt: state.completedAt,
+        setupReminderDismissed: state.setupReminderDismissed,
+        setupProgress: state.setupProgress,
       }),
     },
   ),

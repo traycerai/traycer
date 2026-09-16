@@ -1,4 +1,4 @@
-import { ExternalLink } from "lucide-react";
+import { ArrowRight, ExternalLink, MessageSquare } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import type { SessionImportCandidateState } from "@traycer/protocol/host/session-import/candidate";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -11,6 +11,7 @@ import { activateTabIntent, resourceEpicTabIntent } from "@/lib/tab-navigation";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { cn } from "@/lib/utils";
 
 type ImportedTask = Extract<
   SessionImportCandidateState,
@@ -27,11 +28,14 @@ interface OpenImportedTaskVariables {
 export function SessionImportOpenTaskButton(props: {
   readonly target: ImportedTask;
   readonly title: string;
+  readonly targetHostId: string | null;
+  readonly presentation: "icon" | "card";
   readonly onTaskOpened: () => void;
   readonly onBeforeTaskOpen: (() => Promise<boolean>) | null;
 }) {
   const binding = useHostBinding();
-  const hostId = useStreamHostId();
+  const streamHostId = useStreamHostId();
+  const hostId = props.targetHostId ?? streamHostId;
   const navigate = useNavigate();
   const openTask = useHostMutation<
     HostRpcRegistry,
@@ -103,17 +107,22 @@ export function SessionImportOpenTaskButton(props: {
         toastFromHostErrorWithDetail(error, "Couldn't open imported task."),
     },
   });
+  const OpenIcon = props.presentation === "card" ? ArrowRight : ExternalLink;
   return (
     <TooltipWrapper
-      label="Open task"
+      label={props.presentation === "icon" ? "Open task" : null}
       side="top"
       sideOffset={undefined}
       align={undefined}
     >
       <Button
-        variant="ghost"
-        size="icon-sm"
-        className="shrink-0"
+        variant={props.presentation === "card" ? "outline" : "ghost"}
+        size={props.presentation === "card" ? "default" : "icon-sm"}
+        className={cn(
+          "shrink-0",
+          props.presentation === "card" &&
+            "h-auto min-w-0 justify-start gap-3 rounded-xl bg-background/60 px-4 py-3 text-left",
+        )}
         disabled={hostId === null || openTask.isPending}
         aria-label={`Open task: ${props.title}`}
         onClick={() => {
@@ -126,6 +135,15 @@ export function SessionImportOpenTaskButton(props: {
           });
         }}
       >
+        {props.presentation === "card" ? (
+          <>
+            <MessageSquare
+              aria-hidden
+              className="size-4 shrink-0 text-muted-foreground"
+            />
+            <span className="min-w-0 flex-1 truncate">{props.title}</span>
+          </>
+        ) : null}
         {openTask.isPending ? (
           <AgentSpinningDots
             className={undefined}
@@ -134,7 +152,10 @@ export function SessionImportOpenTaskButton(props: {
             tone="muted"
           />
         ) : (
-          <ExternalLink aria-hidden className="size-3.5" />
+          <OpenIcon
+            aria-hidden
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
         )}
       </Button>
     </TooltipWrapper>

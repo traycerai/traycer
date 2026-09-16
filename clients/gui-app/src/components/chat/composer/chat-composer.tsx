@@ -103,6 +103,9 @@ import {
 import { PromptStashControl } from "./prompt-stash-control";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+
+import { FirstTaskChatGuide } from "@/components/onboarding/first-task-guide";
 
 // Re-exported beside `ChatComposerSubmitInput` so a caller wiring both
 // handlers imports them from one place.
@@ -312,6 +315,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
+  const guideRef = useRef<HTMLDivElement | null>(null);
+  const submitWithGuide = useFirstTaskSubmit(
+    onSubmitMessage,
+    tabHostId,
+    taskId,
+  );
   // Where the picker's setup terminal lands: this epic, in THIS view - in a
   // split view each pane's composer names its own, exactly as the reauth
   // banner does. Memoized because the toolbar and picker are memo'd.
@@ -585,7 +594,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       workspaceBlocked,
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
-      onSubmitMessage,
+      onSubmitMessage: submitWithGuide,
       onSideChat,
     });
   const attachmentPending = composerAttachmentPending(
@@ -700,7 +709,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
           </div>
         </ChatComposerBannerPortal>
       ) : null}
-      <div data-chat-composer="" className="pointer-events-none px-4">
+      <div
+        ref={guideRef}
+        data-chat-composer=""
+        className="pointer-events-none px-4"
+      >
+        <FirstTaskChatGuide
+          enabled={focused}
+          rootRef={guideRef}
+          hostId={tabHostId}
+          chatId={taskId}
+        />
         <div
           className={cn(
             "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas pb-4 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
@@ -988,4 +1007,21 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.attachmentPreparationPending &&
     (args.draftHasText || args.draftHasImages)
   );
+}
+
+function useFirstTaskSubmit(
+  onSubmit: ((input: ChatComposerSubmitInput) => boolean) | null,
+  hostId: string | null,
+  chatId: string,
+): ((input: ChatComposerSubmitInput) => boolean) | null {
+  const submit = useCallback(
+    (input: ChatComposerSubmitInput): boolean => {
+      const accepted = onSubmit?.(input) ?? false;
+      if (accepted)
+        useFirstTaskGuideStore.getState().messageSubmitted(hostId, chatId);
+      return accepted;
+    },
+    [onSubmit, hostId, chatId],
+  );
+  return onSubmit === null ? null : submit;
 }

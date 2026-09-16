@@ -62,6 +62,7 @@ type SetEnabledMutate = (variables: {
   readonly enabled: boolean;
   readonly profileAction: unknown;
 }) => void;
+type SetEnabledVariables = Parameters<SetEnabledMutate>[0];
 
 // `codex` is disabled with a DETECTED candidate, so it's the one row that
 // satisfies `providerNeedsSignInToEnable` (`!state.enabled && installDetected`)
@@ -134,6 +135,7 @@ const fixtures = vi.hoisted(() => {
     awaitLoginData: undefined as AwaitLoginCompletion | undefined,
     setEnabledMutate: vi.fn<SetEnabledMutate>(),
     setEnabledPending: false,
+    setEnabledVariables: undefined as SetEnabledVariables | undefined,
     toastError: vi.fn(),
   };
 });
@@ -150,6 +152,9 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
   useProvidersSetEnabled: () => ({
     isPending: fixtures.setEnabledPending,
+    variables:
+      fixtures.setEnabledVariables ??
+      fixtures.setEnabledMutate.mock.lastCall?.[0],
     mutate: fixtures.setEnabledMutate,
   }),
 }));
@@ -202,6 +207,10 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(() => Promise.resolve()),
 }));
 
+vi.mock("@/components/onboarding/onboarding-provider-discovery", () => ({
+  OnboardingProviderDiscovery: () => null,
+}));
+
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
   useHostOptions: () => ({
     hosts: [{ isActive: true, isLocalMachine: true }],
@@ -242,6 +251,10 @@ function signInButton(): HTMLElement {
   return screen.getByRole("button", { name: /sign in & enable/i });
 }
 
+function providerButton(name: string, pressed: boolean): HTMLButtonElement {
+  return screen.getByRole<HTMLButtonElement>("button", { name, pressed });
+}
+
 /**
  * The whole mutable surface of `fixtures`, back to its declared state. Shared
  * by every block below: this suite mocks its hooks at module scope, so a value
@@ -260,6 +273,7 @@ function resetFixtures(): void {
   fixtures.awaitLoginData = undefined;
   fixtures.setEnabledMutate.mockReset();
   fixtures.setEnabledPending = false;
+  fixtures.setEnabledVariables = undefined;
   fixtures.toastError.mockReset();
 }
 
@@ -331,13 +345,32 @@ describe("OnboardingDetectedAgents", () => {
     ).toEqual(expectedNames);
   });
 
-  it("shows only the toggle for a disabled traycer row - no sign-in affordance, no 'Not signed in' fallback", () => {
+  it("puts enabled providers before disabled providers", () => {
+    fixtures.providers = [
+      { ...fixtures.signInProvider, providerId: "codex", enabled: false },
+      {
+        ...fixtures.signInProvider,
+        providerId: "claude-code",
+        enabled: true,
+      },
+    ];
+    render(<OnboardingDetectedAgents />);
+
+    const firstRows = screen
+      .getAllByRole("listitem")
+      .slice(0, 2)
+      .map((row) => row.textContent);
+    expect(firstRows[0]).toContain("Claude Code");
+    expect(firstRows[1]).toContain("Codex");
+  });
+
+  it("shows a disabled Traycer card without sign-in or 'Not signed in' copy", () => {
     // Traycer seeds disabled on purpose (its inference bills credits), and its
     // account IS the host session - there is nothing to sign into. Without the
     // traycer guard in `providerNeedsSignInToEnable`, the row would fall
     // through `providerSignInUnavailableHint` to a muted "Not signed in",
     // which is exactly backwards for the one provider that is always signed
-    // in. The enable toggle is the whole gesture.
+    // in. The card is the enable gesture.
     fixtures.providers = [
       {
         ...fixtures.signInProvider,
@@ -352,14 +385,15 @@ describe("OnboardingDetectedAgents", () => {
     ).toBeNull();
     expect(screen.queryByText("Not signed in")).toBeNull();
     expect(
-      screen.getByRole("switch", { name: "Enable Traycer Inference" }),
+      screen.getByText("Available with your Traycer subscription"),
     ).toBeTruthy();
+    expect(providerButton("Traycer Inference", false)).toBeTruthy();
   });
 
   // "Off" is not evidence that an account is missing. These two rows carry
   // POSITIVE evidence of credentials that needs no probe, so the sign-in
   // affordance is wrong on both - the row is one toggle away from working.
-  it("shows only the toggle for a disabled provider whose API key is already configured", () => {
+  it("shows a disabled provider card without sign-in copy when its API key is configured", () => {
     // The actively wrong case, not merely the redundant one. An API-key-only
     // provider ships no `oauthArgs`, so it fell to
     // `providerSignInUnavailableHint`'s first branch and rendered a muted "Not
@@ -378,19 +412,10 @@ describe("OnboardingDetectedAgents", () => {
       screen.queryByRole("button", { name: /sign in & enable/i }),
     ).toBeNull();
     expect(screen.queryByText("Not signed in")).toBeNull();
-    expect(screen.getByRole("switch", { name: /^Enable / })).toBeTruthy();
+    expect(providerButton("Codex", false)).toBeTruthy();
   });
 
-  it("enables directly, without a login, for a disabled provider that is already signed in", () => {
-    // A provider the user deliberately switched off keeps its account, so the
-    // remaining gesture is the ENABLE. Starting an OAuth round trip would
-    // arrive exactly where they already were - and a CLI that refuses to start
-    // a login while signed in answers `started: false`, so the press would
-    // report a failure for a state that is not one.
-    //
-    // The row still MOUNTS: the auth verdict decides what a press does, never
-    // whether the row exists. Keying mounting on it is what strands the enable
-    // (see the mid-attempt test below).
+  it("enables a disabled provider card directly when its account is already signed in", () => {
     fixtures.providers = [
       {
         ...fixtures.signInProvider,
@@ -404,34 +429,152 @@ describe("OnboardingDetectedAgents", () => {
     ];
     render(<OnboardingDetectedAgents />);
 
-    fireEvent.click(signInButton());
+    expect(screen.getByText("Signed in")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /sign in & enable/i }),
+    ).toBeNull();
+    fireEvent.click(providerButton("Codex", false));
 
     expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
     expect(fixtures.startLoginMutate).not.toHaveBeenCalled();
   });
-});
 
-// A disabled row's "Sign in & enable" button and enable switch live in the
-// same trailing area the dim treatment recedes around them, not over them -
-// a row-level opacity would ghost an outline button to near invisibility. The
-// dim belongs to the identity pieces (icon, label, badge) alone.
-describe("OnboardingDetectedAgents row dimming", () => {
-  afterEach(resetFixtures);
+  it("toggles the provider card, keeps the initial enabled-first order, and leaves sign-in as a sibling action", () => {
+    fixtures.providers = [
+      { ...fixtures.signInProvider, providerId: "codex", enabled: false },
+      {
+        ...fixtures.signInProvider,
+        providerId: "claude-code",
+        enabled: true,
+      },
+    ];
+    const view = render(<OnboardingDetectedAgents />);
 
-  it("dims the install badge but leaves the sign-in button and switch at full opacity, for a disabled+installed row", () => {
-    fixtures.providers = [fixtures.signInProvider];
-    render(<OnboardingDetectedAgents />);
+    const names = (): (string | null)[] =>
+      screen
+        .getAllByRole("listitem")
+        .slice(0, 2)
+        .map((row) => row.textContent);
+    expect(names()[0]).toContain("Claude Code");
+    expect(names()[1]).toContain("Codex");
 
-    expect(signInButton().closest(".opacity-60")).toBeNull();
-    expect(
-      screen.getByRole("switch", { name: /^Enable / }).closest(".opacity-60"),
-    ).toBeNull();
+    const codexRow = screen.getByText("Codex").closest("li");
+    if (codexRow === null) throw new Error("Expected the Codex provider card.");
+    const codexButton = within(codexRow).getByRole("button", {
+      name: "Codex",
+      pressed: false,
+    });
+    const signIn = within(codexRow).getByRole("button", {
+      name: /sign in & enable/i,
+    });
+    expect(codexRow.querySelector("button button")).toBeNull();
+    expect(codexButton.contains(signIn)).toBe(false);
 
-    const row = signInButton().closest("li");
-    if (row === null) throw new Error("Expected the row's <li>.");
-    expect(within(row).getByText("Installed").className).toContain(
-      "opacity-60",
+    fireEvent.click(codexButton);
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      enabled: true,
+      profileAction: null,
+    });
+
+    fixtures.providers = fixtures.providers.map((provider) =>
+      provider.providerId === "codex"
+        ? { ...provider, enabled: true }
+        : provider,
     );
+    view.rerender(<OnboardingDetectedAgents />);
+
+    expect(names()[0]).toContain("Claude Code");
+    expect(names()[1]).toContain("Codex");
+    expect(providerButton("Codex", true)).toBeTruthy();
+
+    fireEvent.click(providerButton("Codex", true));
+    expect(fixtures.setEnabledMutate).toHaveBeenLastCalledWith({
+      providerId: "codex",
+      enabled: false,
+      profileAction: null,
+    });
+    fixtures.providers = fixtures.providers.map((provider) =>
+      provider.providerId === "codex"
+        ? { ...provider, enabled: false }
+        : provider,
+    );
+    view.rerender(<OnboardingDetectedAgents />);
+
+    expect(names()[0]).toContain("Claude Code");
+    expect(names()[1]).toContain("Codex");
+    expect(providerButton("Codex", false)).toBeTruthy();
+  });
+
+  it("disables the last enabled card and blocks repeated clicks while the mutation is pending", () => {
+    fixtures.providers = [
+      {
+        ...fixtures.signInProvider,
+        enabled: true,
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      },
+    ];
+    const view = render(<OnboardingDetectedAgents />);
+    const codexButton = providerButton("Codex", true);
+    expect(codexButton.disabled).toBe(true);
+    fireEvent.click(codexButton);
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+
+    fixtures.providers = [
+      ...fixtures.providers,
+      { ...fixtures.signInProvider, providerId: "claude-code", enabled: true },
+    ];
+    view.rerender(<OnboardingDetectedAgents />);
+    const enabledCodexButton = providerButton("Codex", true);
+    expect(enabledCodexButton.disabled).toBe(false);
+
+    fixtures.setEnabledPending = true;
+    view.rerender(<OnboardingDetectedAgents />);
+    const pendingCodexButton = providerButton("Codex", true);
+    expect(pendingCodexButton.disabled).toBe(true);
+    fireEvent.click(pendingCodexButton);
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  it("shows enablement pending only on the provider whose mutation is running", () => {
+    fixtures.providers = [
+      fixtures.signInProvider,
+      { ...fixtures.signInProvider, providerId: "claude-code" },
+    ];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(providerButton("Codex", false));
+    fixtures.setEnabledPending = true;
+    fixtures.setEnabledVariables = {
+      providerId: "codex",
+      enabled: true,
+      profileAction: null,
+    };
+    view.rerender(<OnboardingDetectedAgents />);
+
+    const codexRow = screen.getByText("Codex").closest("li");
+    const claudeRow = screen.getByText("Claude Code").closest("li");
+    if (codexRow === null || claudeRow === null) {
+      throw new Error("Expected both provider rows.");
+    }
+    const codexSignIn = within(codexRow).getByRole<HTMLButtonElement>(
+      "button",
+      { name: /sign in & enable/i },
+    );
+    const claudeSignIn = within(claudeRow).getByRole<HTMLButtonElement>(
+      "button",
+      { name: /sign in & enable/i },
+    );
+
+    expect(codexSignIn.disabled).toBe(true);
+    expect(claudeSignIn.disabled).toBe(true);
+    expect(codexSignIn.getAttribute("aria-busy")).toBe("true");
+    expect(claudeSignIn.getAttribute("aria-busy")).toBe("false");
   });
 });
 
@@ -458,7 +601,7 @@ describe("SignInToEnableButton declined sign-in", () => {
     view.rerender(<OnboardingDetectedAgents />);
 
     expect(screen.getByRole("alert").textContent).toBe(
-      "Sign-in did not start. Try again when ready.",
+      "Sign-in did not start. Try again.",
     );
     expect(fixtures.awaitLoginMutate).not.toHaveBeenCalled();
   });
@@ -716,8 +859,8 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
 });
 
 // The attempt that ends without an account used to end SILENTLY: the spinner
-// stopped, the switch had not moved, and nothing said the enable this button
-// promises had not happened.
+// stopped, the card had not changed state, and nothing said the enable this
+// button promised had not happened.
 describe("SignInToEnableButton unauthenticated outcome", () => {
   afterEach(resetFixtures);
 
@@ -805,7 +948,7 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     });
     expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(signInButton());
+    fireEvent.click(providerButton("Codex", false));
 
     // The enable was retried directly, and no second OAuth flow was spawned.
     expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(2);
@@ -1013,10 +1156,9 @@ describe("SignInToEnableButton mount survival", () => {
       view.rerender(<OnboardingDetectedAgents />);
     });
 
-    // The precondition TanStack actually requires of us.
-    expect(
-      screen.queryByRole("button", { name: /sign in & enable/i }),
-    ).not.toBeNull();
+    // The provider card remains available even though the separate sign-in
+    // action disappears once the auth echo lands.
+    expect(providerButton("Codex", false)).toBeTruthy();
 
     // ...and so the completion still reaches the enable.
     act(() => {
@@ -1060,7 +1202,7 @@ describe("SignInToEnableButton already-authenticated with sign-in unavailable", 
 
     expect(screen.queryByText("Not signed in")).toBeNull();
 
-    fireEvent.click(signInButton());
+    fireEvent.click(providerButton("Codex", false));
 
     expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
     expect(fixtures.startLoginMutate).not.toHaveBeenCalled();
@@ -1076,6 +1218,7 @@ describe("SignInToEnableButton already-authenticated with sign-in unavailable", 
     render(<OnboardingDetectedAgents />);
 
     expect(screen.getByText("Not signed in")).toBeTruthy();
+    expect(screen.getByText("Sign-in unavailable here")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: /sign in & enable/i }),
     ).toBeNull();

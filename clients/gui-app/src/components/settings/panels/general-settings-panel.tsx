@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -23,7 +22,6 @@ import type {
 } from "@/lib/windows/types";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import {
   GENERAL,
@@ -38,8 +36,6 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 }
 
 export function GeneralSettingsPanel() {
-  const navigate = useNavigate();
-  const restartOnboarding = useOnboardingStore((s) => s.restart);
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
   const steerOnModEnterEnabled = useSettingsStore(
@@ -147,41 +143,6 @@ export function GeneralSettingsPanel() {
             />
           </SettingsGroup>
         ) : null}
-
-        {/* One row, and named for the SUBJECT rather than for itself: the
-            tour is a window-level replay of onboarding, so it belongs on the
-            app-wide page. Import and Data migration used to sit beside it and
-            do not - each moves one machine's local data, and neither could
-            name the machine from here. Both are now on that host's own
-            Overview, under the sidebar's host picker. */}
-        <SettingsGroup
-          group={GENERAL.definitions.onboarding}
-          showTitle
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <SettingsRow
-            row={GENERAL.definitions.productTour}
-            control={
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                data-testid="settings-replay-onboarding"
-                onClick={() => {
-                  restartOnboarding();
-                  void navigate({
-                    to: "/onboarding",
-                    search: { replay: true },
-                  });
-                }}
-              >
-                Replay tour
-              </Button>
-            }
-          />
-        </SettingsGroup>
 
         <DangerZoneSection />
       </div>

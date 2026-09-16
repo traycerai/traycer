@@ -93,6 +93,7 @@ export type AnalyticsSettingsSection =
   | "diagnostics"
   | "fallback"
   | "general"
+  | "getting-started"
   | "host"
   | "keybindings"
   | "layout"
@@ -1186,6 +1187,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     diagnostics: true,
     fallback: true,
     general: true,
+    "getting-started": true,
     host: true,
     keybindings: true,
     layout: true,

@@ -22,6 +22,7 @@ SettingsLayout
 ├── SettingsSidebar
 └── Outlet
     └── settings panel route
+        ├── GettingStartedSettingsPanel
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
         ├── LayoutSettingsPanel
@@ -61,6 +62,34 @@ alias - so it is a superset, and three ids went missing before anyone noticed
 The gate now exists and is a test rather than the compiler:
 `stores/tabs/__tests__/settings-kind.test.ts` asserts every section id is in
 the set.
+
+## Getting started
+
+`/settings/getting-started` is the persistent setup checklist for agent selection,
+appearance, and browser sign-ins. Cards launch guides over the existing controls
+through `SettingsSetupGuide`, shared by the modal and routed settings surfaces.
+Joyride uses the same nonmodal coachmark as the first-task guide: no overlay or
+focus trap, and nested pickers pause it. In a modal it portals inside that modal.
+An arrow joins the card to its target. While the card has focus, Right/Enter
+continues and Left goes back; Tab and Enter retain native button behavior.
+Action-required steps focus the real control instead of skipping it. Once focus
+moves into a control, the coachmark does not take it back. Text fields and pickers
+keep their own keys. Keyboard navigation reveals settings instantly.
+Escape pauses the guide before Settings can close and returns focus to its target.
+
+Progress is local in `onboarding-store`: -1 means not started, intermediate steps
+resume, and the guide length means complete. Active guides are session-local;
+replaying a completed guide does not clear completion. Agent selection and
+appearance finish on Done, so keeping defaults is valid. Browser sign-ins finish
+only when the existing import mutation reports cookies successfully imported;
+cancelled, blocked, and empty imports leave the card unfinished. Import is offered
+only when the desktop browser bridge and host binding are present.
+
+Getting started leads the sidebar in its own unlabeled Guide group, above
+Application. It uses the first settings leader digit; General uses the second.
+The start page offers the checklist through a persistent, dismissible toast once
+the first-task guide ends. Dismissing it is remembered locally across reloads;
+the checklist remains available in Settings. Completed checklists hide the toast.
 
 ## Search
 

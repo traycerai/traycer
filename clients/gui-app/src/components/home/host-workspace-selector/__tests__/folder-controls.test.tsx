@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import {
   contrastRatio,
   DARK_THEME_SURFACES,
@@ -1504,6 +1505,103 @@ describe("FolderBranchControl — Escape close", () => {
 });
 
 describe("WorkspaceFolderSummaryControl", () => {
+  function renderGuidedSummary(
+    onComplete: () => void,
+    over: Partial<WorkspaceRunItem>,
+  ): void {
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
+          items={[item(over)]}
+          readOnly={false}
+          bindingResolved
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onAddFolder={NOOP_ADD}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={null}
+          discardDisabled={false}
+          onEditEnvironment={NOOP}
+          refresh={null}
+          popoverTestId="workspace-rows-popover"
+          popoverSide="top"
+          onFirstTaskSetupComplete={onComplete}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  it("shows guided workspace choices, selects Local, and manual Escape does not complete", async () => {
+    const onSelectMode = vi.fn();
+    const onComplete = vi.fn();
+    useFirstTaskGuideStore.setState({ workspaceReviewed: false });
+    renderGuidedSummary(onComplete, { onSelectMode });
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    const setup = await screen.findByRole("region", {
+      name: "Set up your first task",
+    });
+    const local = within(setup).getByRole("button", { name: /Local/ });
+    const worktree = within(setup).getByRole("button", {
+      name: /New worktree/,
+    });
+    local.focus();
+    fireEvent.keyDown(local, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(worktree);
+    fireEvent.keyDown(worktree, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(local);
+    fireEvent.click(local);
+    expect(onSelectMode).toHaveBeenCalledWith("local");
+    fireEvent.keyDown(screen.getByTestId("workspace-rows-popover"), {
+      key: "Escape",
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Set up your first task" }),
+      ).toBeNull(),
+    );
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(useFirstTaskGuideStore.getState().workspaceReviewed).toBe(false);
+  });
+
+  it("completes guided setup once when Write a task closes the popover", async () => {
+    const onComplete = vi.fn(() =>
+      useFirstTaskGuideStore.getState().reviewWorkspace(),
+    );
+    useFirstTaskGuideStore.setState({ workspaceReviewed: false });
+    renderGuidedSummary(onComplete, {});
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    const setup = await screen.findByRole("region", {
+      name: "Set up your first task",
+    });
+    fireEvent.click(
+      within(setup).getByRole("button", { name: "Write a task" }),
+    );
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(useFirstTaskGuideStore.getState().workspaceReviewed).toBe(true);
+  });
+
+  it("disables Write a task while workspace metadata is pending", async () => {
+    const onComplete = vi.fn();
+    useFirstTaskGuideStore.setState({ workspaceReviewed: false });
+    renderGuidedSummary(onComplete, { metadataPending: true });
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    const setup = await screen.findByRole("region", {
+      name: "Set up your first task",
+    });
+    const continueButton = within(setup).getByRole("button", {
+      name: "Write a task",
+    });
+    expect(continueButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(continueButton);
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
   it("uses the rich hover preview instead of a competing native title", () => {
     render(
       <TooltipProvider>

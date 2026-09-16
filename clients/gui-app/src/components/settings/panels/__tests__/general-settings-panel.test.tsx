@@ -30,7 +30,6 @@ import {
 import { modLabel } from "@/lib/keybindings/platform";
 import { clearAllPersistedStores } from "@/lib/persist";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 
@@ -85,8 +84,6 @@ interface HostQueryMocks {
 interface TestHostClient {
   readonly getActiveHostId: () => string | null;
 }
-
-const navigateMock = vi.hoisted(() => vi.fn());
 
 interface TestPerWindowSnapshot {
   readonly epicTabs: readonly unknown[];
@@ -201,15 +198,6 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridge: () => windowsBridgeMock.current,
 }));
 
-vi.mock("@tanstack/react-router", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@tanstack/react-router")>();
-  return {
-    ...actual,
-    useNavigate: () => navigateMock,
-  };
-});
-
 const clearAllPersistedStoresMock = vi.mocked(clearAllPersistedStores);
 
 function makeBridgeWithClear(): TestWindowsBridge {
@@ -256,7 +244,6 @@ describe("GeneralSettingsPanel", () => {
         websocketUrl: "ws://remote.invalid",
       },
     ];
-    navigateMock.mockReset();
     windowsBridgeMock.current = null;
     clearAllPersistedStoresMock.mockClear();
     clearAllPersistedStoresMock.mockResolvedValue(undefined);
@@ -273,7 +260,6 @@ describe("GeneralSettingsPanel", () => {
       },
     });
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
-    useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSettingsStore.setState({
       showGlobalResourceMonitor: true,
       navigatorResourceMetrics: [],
@@ -297,7 +283,6 @@ describe("GeneralSettingsPanel", () => {
     setMobileApp(false);
     useAuthStore.getState().setSignedOut();
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
-    useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSettingsStore.setState({ homeTabEnabled: false });
     delete (globalThis as { runnerHost?: unknown }).runnerHost;
   });
@@ -452,21 +437,6 @@ describe("GeneralSettingsPanel", () => {
     ).toBeTruthy();
   });
 
-  it("navigates to replay onboarding without clearing first-run completion", () => {
-    useOnboardingStore.setState({ completedAt: 123, step: 4 });
-
-    renderPanel();
-
-    fireEvent.click(screen.getByTestId("settings-replay-onboarding"));
-
-    expect(navigateMock).toHaveBeenCalledWith({
-      to: "/onboarding",
-      search: { replay: true },
-    });
-    expect(useOnboardingStore.getState().completedAt).toBe(123);
-    expect(useOnboardingStore.getState().step).toBe(0);
-  });
-
   // The Danger Zone used to mix three scopes in one red box: one machine's
   // snapshots, this device's installation, and this app's state. Only the last
   // is app-global, so it is the only one that stays; the other two live on the
@@ -593,12 +563,10 @@ describe("GeneralSettingsPanel", () => {
 
     const chat = screen.getByText("Chat & composer");
     const running = screen.getByText("Running agents");
-    const onboarding = screen.getByText("Onboarding");
     const danger = screen.getByText("Danger Zone");
 
     expect(documentPosition(chat, running)).toBe("before");
-    expect(documentPosition(running, onboarding)).toBe("before");
-    expect(documentPosition(onboarding, danger)).toBe("before");
+    expect(documentPosition(running, danger)).toBe("before");
   });
 
   // Both rows moved to the scoped host's Overview: each acts on ONE machine's
@@ -623,7 +591,7 @@ describe("GeneralSettingsPanel", () => {
     expect(screen.queryByText("Running agents")).toBeNull();
     expect(screen.queryByText("Prevent sleep while running")).toBeNull();
     expect(screen.getByText("Chat & composer")).not.toBeNull();
-    expect(screen.getByText("Onboarding")).not.toBeNull();
+    expect(screen.getByText("Danger Zone")).not.toBeNull();
   });
 
   it("renders named sections as h2 headings outside separate bordered cards", () => {
@@ -635,7 +603,6 @@ describe("GeneralSettingsPanel", () => {
     const sectionTitles = [
       "Chat & composer",
       "Running agents",
-      "Onboarding",
       "Danger Zone",
     ] as const;
 
@@ -654,13 +621,11 @@ describe("GeneralSettingsPanel", () => {
     // Representative rows live inside each section's card, not the heading.
     const voice = screen.getByText("Voice input");
     const preventSleep = screen.getByText("Prevent sleep while running");
-    const productTour = screen.getByText("Product tour");
     const snapshots = screen.getByText("Local app state");
 
     const chatHeading = headings[0];
     const runningHeading = headings[1];
-    const onboardingHeading = headings[2];
-    const dangerHeading = headings[3];
+    const dangerHeading = headings[2];
 
     // Heading and its rows do NOT share the closest bordered card.
     expect(chatHeading.closest("div.rounded-lg")).toBeNull();
@@ -680,9 +645,6 @@ describe("GeneralSettingsPanel", () => {
       preventSleep.closest("div.rounded-lg"),
     );
     expect(preventSleep.closest("div.rounded-lg")).not.toBe(
-      productTour.closest("div.rounded-lg"),
-    );
-    expect(productTour.closest("div.rounded-lg")).not.toBe(
       snapshots.closest("div.rounded-lg"),
     );
 
@@ -690,9 +652,6 @@ describe("GeneralSettingsPanel", () => {
     expect(chatHeading.closest("section")).toBe(voice.closest("section"));
     expect(runningHeading.closest("section")).toBe(
       preventSleep.closest("section"),
-    );
-    expect(onboardingHeading.closest("section")).toBe(
-      productTour.closest("section"),
     );
     expect(dangerHeading.closest("section")).toBe(snapshots.closest("section"));
     // Distinct sections per group.
@@ -706,13 +665,11 @@ describe("GeneralSettingsPanel", () => {
 
     const chat = screen.getByText("Chat & composer");
     const running = screen.getByText("Running agents");
-    const onboarding = screen.getByText("Onboarding");
     const danger = screen.getByText("Danger Zone");
 
     const voice = screen.getByText("Voice input");
     const quote = screen.getByText("Quote reply on text selection");
     const preventSleep = screen.getByText("Prevent sleep while running");
-    const productTour = screen.getByText("Product tour");
     const snapshots = screen.getByText("Local app state");
 
     // Chat & composer rows sit between that header and Running agents.
@@ -720,16 +677,12 @@ describe("GeneralSettingsPanel", () => {
     expect(documentPosition(voice, quote)).toBe("before");
     expect(documentPosition(quote, running)).toBe("before");
 
-    // Running agents rows sit between that header and Onboarding.
+    // Running agents rows sit between that header and Danger Zone.
     expect(documentPosition(running, preventSleep)).toBe("before");
-    expect(documentPosition(preventSleep, onboarding)).toBe("before");
+    expect(documentPosition(preventSleep, danger)).toBe("before");
     // Prevent sleep is not still in Chat & composer.
     expect(documentPosition(chat, preventSleep)).toBe("before");
     expect(documentPosition(preventSleep, running)).not.toBe("before");
-
-    // Onboarding holds the tour alone now.
-    expect(documentPosition(onboarding, productTour)).toBe("before");
-    expect(documentPosition(productTour, danger)).toBe("before");
 
     // Danger Zone content after its header.
     expect(documentPosition(danger, snapshots)).toBe("before");

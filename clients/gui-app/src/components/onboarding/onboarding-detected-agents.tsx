@@ -5,11 +5,11 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ProviderList } from "@/components/providers/provider-list";
+import { OnboardingProviderDiscovery } from "@/components/onboarding/onboarding-provider-discovery";
+import { OnboardingProviderCarousel } from "@/components/onboarding/onboarding-provider-carousel";
 import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import { Switch } from "@/components/ui/switch";
 import {
   providerSignInUnavailableHint,
   providerStartLoginFailureMessage,
@@ -39,7 +39,7 @@ import {
 } from "@/lib/providers/provider-ambient-auth";
 import {
   orderProvidersByEnablement,
-  providerDisplayName,
+  type OrderedProvider,
 } from "@/lib/provider-ordering";
 import { cn } from "@/lib/utils";
 
@@ -59,7 +59,7 @@ function installStateFor(state: ProviderCliState | undefined): InstallState {
 
 const INSTALL_LABELS: Record<InstallState, string> = {
   detected: "Installed",
-  missing: "Not found",
+  missing: "Not installed",
   pending: "Detecting…",
 };
 
@@ -71,23 +71,24 @@ interface AccountLine {
 
 /** Mirrors `ProviderAuthLine`, restyled for the cinematic copy column. */
 function accountLineFor(state: ProviderCliState): AccountLine {
-  if (state.providerId === "traycer" && state.enabled) {
+  if (state.providerId === "traycer") {
     return {
-      text: "Ready with your Traycer subscription",
+      text: state.enabled
+        ? "Ready with your Traycer subscription"
+        : "Available with your Traycer subscription",
       tone: "good",
       title: null,
     };
   }
-  if (!state.enabled) return { text: "Disabled", tone: "muted", title: null };
   const { auth } = state;
   if (state.authPending) {
     return { text: "Checking account…", tone: "muted", title: null };
   }
   if (auth.status === "authenticated") {
     return {
-      text: auth.label ?? "Signed in",
+      text: "Signed in",
       tone: "good",
-      title: auth.detail,
+      title: [auth.label, auth.detail].filter(Boolean).join(" · ") || null,
     };
   }
   if (auth.status === "configured") {
@@ -104,11 +105,11 @@ function accountLineFor(state: ProviderCliState): AccountLine {
       title: auth.detail,
     };
   }
-  if (auth.status === "unauthenticated") {
-    return { text: "Not signed in", tone: "muted", title: null };
-  }
   if (state.apiKey.configured) {
     return { text: "API key set", tone: "good", title: null };
+  }
+  if (auth.status === "unauthenticated") {
+    return { text: "Not signed in", tone: "muted", title: null };
   }
   return { text: "Account status unavailable", tone: "muted", title: null };
 }
@@ -151,11 +152,11 @@ function installBadge(
   return (
     <span
       className={cn(
-        "font-mono text-overline uppercase tracking-wider",
-        installDetected ? "text-[#7fd6a4]" : "text-white/40",
+        "ml-auto shrink-0 text-xs",
+        installDetected ? "text-foreground/80" : "text-muted-foreground",
         // The list deliberately leaves a dimmed row's opacity alone so the
         // row's controls stay readable, so the badge recedes on its own.
-        dimmed && "opacity-60",
+        dimmed && "text-muted-foreground",
       )}
     >
       {installLabel}
@@ -175,7 +176,9 @@ function accountDescription(state: ProviderCliState | undefined): ReactNode {
     >
       <span
         className={cn(
-          account.tone === "good" ? "text-[#7fd6a4]" : "text-white/45",
+          account.tone === "good"
+            ? "text-foreground/80"
+            : "text-muted-foreground",
         )}
       >
         {account.text}
@@ -276,6 +279,7 @@ function resolveAttemptAuthPhase(input: {
 }): {
   readonly authenticatedAwaitingEnable: boolean;
   readonly notAuthenticated: boolean;
+  readonly hideAction: boolean;
 } {
   const attemptAuthenticated =
     input.awaitSuccess &&
@@ -285,6 +289,7 @@ function resolveAttemptAuthPhase(input: {
     attemptAuthenticated || isProviderAmbientAuthenticated(input.state);
   return {
     authenticatedAwaitingEnable,
+    hideAction: authenticatedAwaitingEnable && !input.isPending,
     // Gated on `!isPending` so a fresh press hides the previous verdict while
     // the new attempt runs: `startLogin.mutate` does not touch `awaitLogin`,
     // so its `data` would otherwise linger across the retry it is no longer
@@ -388,13 +393,13 @@ function OnboardingLoginWaiting(props: {
   });
   return (
     <div className="flex min-w-0 flex-col gap-2" aria-live="polite">
-      <div className="text-ui-xs leading-relaxed text-white/70">
-        <div className="font-medium text-white/90">{title}</div>
+      <div className="text-ui-xs leading-relaxed text-muted-foreground">
+        <div className="font-medium text-foreground">{title}</div>
         {guidance !== null ? <p className="mt-0.5">{guidance}</p> : null}
       </div>
       {!processingCode && userCode !== null ? (
         <div className="flex flex-wrap items-center gap-1.5">
-          <code className="rounded-md border border-white/20 bg-white/5 px-2 py-0.5 font-mono text-ui tracking-[0.12em] text-white">
+          <code className="rounded-md border border-foreground/20 bg-foreground/5 px-2 py-0.5 font-mono text-ui tracking-[0.12em] text-foreground">
             {userCode}
           </code>
           <Button
@@ -512,6 +517,7 @@ function SignInToEnableButton(props: {
   /** True while the parent's `providers.setEnabled` is in flight - see
    *  `isPending` below for why this button has to know. */
   readonly enablementPending: boolean;
+  readonly enablementBlocked: boolean;
   readonly onEnable: (providerId: ProviderId) => void;
 }) {
   const { state, enablementPending, onEnable } = props;
@@ -562,8 +568,7 @@ function SignInToEnableButton(props: {
   // without its flag this button re-arms in the window between a successful
   // login and the row flipping enabled - long enough for a second press to
   // spawn a redundant login child for a provider that is already being turned
-  // on. The parent's flag is shared across rows, exactly like the enable
-  // switches it already drives.
+  // on. Only this provider's enable request drives its loading state.
   const isPending =
     startLogin.isPending ||
     awaitLogin.isPending ||
@@ -584,7 +589,7 @@ function SignInToEnableButton(props: {
   const declined = startLogin.isSuccess && !startLogin.data.started;
   const declinedMessage = providerStartLoginFailureMessage(
     startLogin.data?.failure,
-    "Sign-in did not start. Try again when ready.",
+    "Sign-in did not start. Try again.",
   );
   // The counterpart to `declined`, for a login that STARTED and then did not
   // produce an authenticated account: a cancelled browser login, a settled
@@ -610,7 +615,7 @@ function SignInToEnableButton(props: {
   // would end pending having never called `awaitLogin`, and the row would
   // render "did not start" and "did not complete" together - the second one
   // describing an attempt the user had already moved on from.
-  const { authenticatedAwaitingEnable, notAuthenticated } =
+  const { authenticatedAwaitingEnable, notAuthenticated, hideAction } =
     resolveAttemptAuthPhase({
       state,
       awaitSuccess: awaitLogin.isSuccess,
@@ -739,6 +744,7 @@ function SignInToEnableButton(props: {
   const unavailableHint = authenticatedAwaitingEnable
     ? null
     : providerSignInUnavailableHint(state, isLocalHost);
+  if (hideAction) return null;
   if (unavailableHint !== null) {
     return (
       <TooltipWrapper
@@ -747,7 +753,9 @@ function SignInToEnableButton(props: {
         sideOffset={undefined}
         align={undefined}
       >
-        <span className="text-ui-xs text-white/40">Not signed in</span>
+        <span className="text-ui-xs text-foreground/40">
+          Sign-in unavailable here
+        </span>
       </TooltipWrapper>
     );
   }
@@ -778,7 +786,9 @@ function SignInToEnableButton(props: {
           type="button"
           variant="outline"
           size="sm"
-          disabled={isPending}
+          disabled={[isPending, props.enablementBlocked].includes(true)}
+          aria-busy={isPending}
+          className="disabled:opacity-100"
           onClick={() =>
             pressSignInToEnable(
               authenticatedAwaitingEnable,
@@ -799,48 +809,6 @@ function SignInToEnableButton(props: {
   );
 }
 
-function ProviderEnableSwitch(props: {
-  readonly providerId: ProviderId;
-  readonly name: string;
-  readonly enabled: boolean;
-  readonly disablingLastEnabled: boolean;
-  readonly isSettingEnabled: boolean;
-  readonly onSetEnabled: (providerId: ProviderId, enabled: boolean) => void;
-}) {
-  const {
-    providerId,
-    name,
-    enabled,
-    disablingLastEnabled,
-    isSettingEnabled,
-    onSetEnabled,
-  } = props;
-  return (
-    <TooltipWrapper
-      label={
-        disablingLastEnabled ? "At least one provider must stay enabled." : null
-      }
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      {/* Guard span: the Switch is `disabled` in exactly the state this
-          explains, and a disabled control emits no pointer events. */}
-      <span className="ml-auto inline-flex">
-        <Switch
-          checked={enabled}
-          onCheckedChange={(next) => {
-            if (isSettingEnabled || (!next && disablingLastEnabled)) return;
-            onSetEnabled(providerId, next);
-          }}
-          disabled={isSettingEnabled || disablingLastEnabled}
-          aria-label={`Enable ${name}`}
-        />
-      </span>
-    </TooltipWrapper>
-  );
-}
-
 /**
  * The agents act's provider panel. Once past sign-in the host's
  * `providers.list` returns real state, so each row shows the CLI, its
@@ -854,6 +822,8 @@ export function OnboardingDetectedAgents() {
   const providersQuery = useProvidersList({ enabled: true, subscribed: true });
   const providers = providersQuery.data?.providers;
   const setEnabled = useProvidersSetEnabled();
+  const [pinnedOrder, setPinnedOrder] =
+    useState<ReadonlyArray<OrderedProvider> | null>(null);
   // A disabled query (no host bound yet) never leaves `pending` with an idle
   // fetch, and a hard query error leaves no data; surface both honestly as
   // "Unavailable" instead of an eternal "Detecting…".
@@ -863,7 +833,15 @@ export function OnboardingDetectedAgents() {
   const enabledProviderCount =
     providers?.filter((provider) => provider.enabled).length ?? 0;
 
+  const orderedProviders =
+    pinnedOrder ??
+    orderProvidersByEnablement((providerId) =>
+      enabledForProvider(providerStateFor(providers, providerId)),
+    );
   const handleSetEnabled = (providerId: ProviderId, enabled: boolean): void => {
+    if (setEnabled.isPending) return;
+    // Keep cards under the pointer after the user starts choosing.
+    setPinnedOrder(orderedProviders);
     // No profile management UI yet - this call never renames/removes a profile.
     setEnabled.mutate({
       providerId,
@@ -874,9 +852,7 @@ export function OnboardingDetectedAgents() {
   // Enabled providers first. The host's one-time seeding enables only the
   // accounts the user actually has, so without this the two or three rows that
   // matter sit scattered among a dozen-plus they have never used.
-  const rows = orderProvidersByEnablement((providerId) =>
-    enabledForProvider(providerStateFor(providers, providerId)),
-  ).map(({ providerId }): ProviderListRow => {
+  const rows = orderedProviders.map(({ providerId }): ProviderListRow => {
     const state = providerStateFor(providers, providerId);
     const enabled = enabledForProvider(state);
     const traycerProvider = providerId === "traycer";
@@ -893,8 +869,7 @@ export function OnboardingDetectedAgents() {
       enabled,
       enabledProviderCount,
     );
-    const name = providerDisplayName(providerId);
-    const dimmed = state !== undefined && !enabled;
+    const dimmed = !enabled;
     return {
       providerId,
       active: false,
@@ -904,39 +879,58 @@ export function OnboardingDetectedAgents() {
       description: accountDescription(state),
       trailing:
         state === undefined ? null : (
-          <div className="ml-auto flex items-center gap-2">
-            {/* Beside the switch, not instead of it: the switch still states
-                sticky intent, and this only answers the reason the provider is
-                off. A user who wants it on regardless can still say so. */}
+          <div className="flex min-w-0 flex-col gap-2">
+            <OnboardingProviderDiscovery state={state} visible />
             {providerNeedsSignInToEnable(state, installDetected) ? (
               <SignInToEnableButton
                 state={state}
-                enablementPending={setEnabled.isPending}
-                onEnable={(providerId) => {
-                  handleSetEnabled(providerId, true);
-                }}
+                enablementBlocked={setEnabled.isPending}
+                enablementPending={
+                  setEnabled.isPending
+                    ? setEnabled.variables.providerId === providerId
+                    : false
+                }
+                onEnable={(providerId) => handleSetEnabled(providerId, true)}
               />
             ) : null}
-            <ProviderEnableSwitch
-              providerId={state.providerId}
-              name={name}
-              enabled={enabled}
-              disablingLastEnabled={disablingLastEnabled}
-              isSettingEnabled={setEnabled.isPending}
-              onSetEnabled={handleSetEnabled}
-            />
           </div>
         ),
-      onSelect: null,
+      disabledReason: disablingLastEnabled
+        ? "At least one provider must stay enabled."
+        : null,
+      onSelect:
+        state === undefined || setEnabled.isPending || disablingLastEnabled
+          ? null
+          : (providerId) => handleSetEnabled(providerId, !enabled),
     };
   });
 
+  let discoveryStatus = "Finding your providers…";
+  if (hostUnavailable)
+    discoveryStatus = "Connect a device to check your accounts";
+  else if (providers !== undefined)
+    discoveryStatus = `${enabledProviderCount} ${enabledProviderCount === 1 ? "provider" : "providers"} enabled`;
+
   return (
-    <ProviderList
-      ariaLabel="Coding agent CLIs"
-      variant="onboarding"
-      rows={rows}
-      className="my-auto flex max-h-full min-h-0 w-full flex-col gap-2.5 overflow-y-auto overscroll-contain pr-2"
-    />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="onboarding-provider-status flex shrink-0 items-center justify-between gap-3 px-1 pb-3">
+        <p
+          role="status"
+          className="flex items-center gap-2 text-sm tabular-nums text-muted-foreground"
+        >
+          {discoveryStatus}
+        </p>
+        {providersQuery.isError ? (
+          <button
+            type="button"
+            onClick={() => void providersQuery.refetch()}
+            className="rounded text-sm text-foreground underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+          >
+            Try again
+          </button>
+        ) : null}
+      </div>
+      <OnboardingProviderCarousel rows={rows} />
+    </div>
   );
 }

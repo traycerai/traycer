@@ -63,7 +63,7 @@ export function SessionImportProgress(props: {
           testId="session-import-progress-spinner"
           variant={undefined}
         />
-        <p className={cn("text-ui-sm font-medium", tone.strong)}>
+        <p className={cn("text-ui-sm font-medium tabular-nums", tone.strong)}>
           Importing {done} of {run.total}…
         </p>
         {run.lastTitle !== null ? (
@@ -79,7 +79,7 @@ export function SessionImportProgress(props: {
             data-testid="session-import-progress-attached"
             className={cn("max-w-md text-ui-xs", tone.muted)}
           >
-            An import is already running on this machine.
+            An import is already running on this device.
           </p>
         ) : null}
       </div>
@@ -97,13 +97,18 @@ export function SessionImportProgress(props: {
       >
         <p className={cn("text-ui-sm font-medium", tone.strong)}>
           {neverStarted
-            ? "The import did not start."
-            : "Traycer lost connection to the host importing the tasks."}
+            ? "Import couldn’t start."
+            : "Lost connection to the importing device."}
         </p>
-        <p className={cn("max-w-md text-ui-xs", tone.muted)}>
+        <p
+          className={cn(
+            "max-w-md text-ui-xs leading-relaxed text-pretty",
+            tone.muted,
+          )}
+        >
           {neverStarted
-            ? "The host turned the request down before reading any session. Pick the sessions again to retry."
-            : "The import keeps running on your machine."}
+            ? "Select your tasks again to retry."
+            : "The import continues on that device."}
         </p>
       </div>
     );
@@ -119,18 +124,14 @@ export function SessionImportProgress(props: {
           margins center what fits and scroll what does not. */}
       <div className="m-auto flex w-full max-w-md flex-col items-center gap-4 text-center">
         <div className="flex flex-col gap-1">
-          <p className={cn("text-ui-sm font-medium", tone.strong)}>
+          <p className={cn("text-ui-sm font-medium tabular-nums", tone.strong)}>
             {counts.imported === 0
               ? "Nothing was imported"
-              : `Imported ${counts.imported} ${counts.imported === 1 ? "session" : "sessions"}`}
+              : `Imported ${counts.imported} ${counts.imported === 1 ? "task" : "tasks"}`}
           </p>
           {counts.imported > 0 ? (
-            // Mid-tour there is no task list to point at yet - it is behind
-            // the act the user has not finished.
             <p className={cn("text-ui-xs", tone.muted)}>
-              {tone.surface === "onboarding"
-                ? "They'll be in your task list when you finish the tour."
-                : "They're in your task list."}
+              Ready in your task list.
             </p>
           ) : null}
           {counts.skippedAlreadyImported > 0 ? (

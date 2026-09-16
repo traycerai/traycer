@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
+import { Check } from "lucide-react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import {
@@ -6,6 +7,7 @@ import {
   providerIdToGuiHarnessId,
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 
 export type ProviderListVariant = "settings" | "onboarding" | "diorama";
@@ -18,6 +20,7 @@ export interface ProviderListRow {
   readonly badge: ReactNode | null;
   readonly description: ReactNode | null;
   readonly trailing: ReactNode | null;
+  readonly disabledReason: string | null;
   readonly onSelect: ((providerId: ProviderId) => void) | null;
 }
 
@@ -28,7 +31,8 @@ export function ProviderList(props: {
   readonly className: string;
 }) {
   const { rows, variant, ariaLabel, className } = props;
-  const orderedRows = sortProviderStatesByProviderOrder(rows);
+  const orderedRows =
+    variant === "onboarding" ? rows : sortProviderStatesByProviderOrder(rows);
   return (
     <ul aria-label={ariaLabel} className={cn("flex flex-col", className)}>
       {orderedRows.map((row) => (
@@ -43,13 +47,67 @@ function ProviderListItem(props: {
   readonly variant: ProviderListVariant;
 }) {
   const { row, variant } = props;
+  const descriptionId = useId();
   const onSelect = row.onSelect;
+  if (variant === "onboarding") {
+    return (
+      <TooltipWrapper
+        label={row.disabledReason}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <li
+          className="onboarding-provider-card relative flex min-w-0 flex-col"
+          data-enabled={row.enabled === true}
+        >
+          <button
+            type="button"
+            aria-label={providerDisplayName(row.providerId)}
+            aria-pressed={row.enabled === true}
+            aria-describedby={descriptionId}
+            disabled={onSelect === null}
+            onClick={() => onSelect?.(row.providerId)}
+            className="onboarding-provider-toggle flex min-w-0 flex-1 flex-col gap-2 rounded-xl p-4 text-left"
+          >
+            <span className="flex w-full min-w-0 items-center gap-2.5">
+              <HarnessIcon
+                harnessId={providerIdToGuiHarnessId(row.providerId)}
+                className={cn(
+                  "size-6 shrink-0 transition-opacity",
+                  row.dimmed && "opacity-50",
+                )}
+              />
+              <span className={labelClassName(variant, row.dimmed)}>
+                {providerDisplayName(row.providerId)}
+              </span>
+              <span
+                aria-hidden="true"
+                className="onboarding-provider-check ml-auto flex size-4 shrink-0 items-center justify-center rounded-full"
+              >
+                <Check className="size-3" />
+              </span>
+            </span>
+            <span id={descriptionId} className="min-h-4 text-ui-sm">
+              {row.description ?? row.badge}
+              {row.disabledReason !== null ? (
+                <span className="sr-only"> {row.disabledReason}</span>
+              ) : null}
+            </span>
+          </button>
+          {row.trailing !== null ? (
+            <div className="relative mt-auto px-4 pb-3">{row.trailing}</div>
+          ) : null}
+        </li>
+      </TooltipWrapper>
+    );
+  }
   const rowContent = (
     <>
       <div className={innerClassName()}>
         <HarnessIcon
           harnessId={providerIdToGuiHarnessId(row.providerId)}
-          className={iconClassName(variant, row.dimmed)}
+          className={variant === "diorama" ? "size-3.5 shrink-0" : ""}
         />
         <span className={labelClassName(variant, row.dimmed)}>
           {providerDisplayName(row.providerId)}
@@ -58,13 +116,13 @@ function ProviderListItem(props: {
         {trailingFor(row, variant)}
       </div>
       {row.description !== null ? (
-        <div className={descriptionClassName(variant)}>{row.description}</div>
+        <div className="min-w-0 truncate">{row.description}</div>
       ) : null}
     </>
   );
 
   return (
-    <li className={liClassName(variant)}>
+    <li className="min-w-0">
       {onSelect === null ? (
         <div className={rowClassName(variant, row.active)}>{rowContent}</div>
       ) : (
@@ -93,11 +151,6 @@ function trailingFor(
   );
 }
 
-function liClassName(variant: ProviderListVariant): string {
-  if (variant === "onboarding") return "flex flex-col gap-1";
-  return "min-w-0";
-}
-
 function innerClassName(): string {
   return "flex w-full min-w-0 items-center gap-2.5";
 }
@@ -117,36 +170,14 @@ function rowClassName(variant: ProviderListVariant, active: boolean): string {
       active ? "bg-accent text-accent-foreground" : "text-foreground/80",
     );
   }
-  // No row-level dim: a dimmed onboarding row still carries its live controls
-  // ("Sign in & enable", the enable switch) in `trailing`, and a wrapper
-  // opacity would dim those with it - stacked on the outline button's
-  // translucent dark fill it left the row's one call to action near
-  // invisible. The dimmed treatment lives on the identity pieces instead
-  // (icon, label, badge - each already keyed on `dimmed`), which recede
-  // without taking the controls down with them.
-  return "min-w-0";
-}
-
-function iconClassName(variant: ProviderListVariant, dimmed: boolean): string {
-  if (variant === "onboarding") {
-    // Opacity as well as text color: brand icons that paint their own colors
-    // ignore `currentColor`, so without the opacity a disabled row's logo
-    // renders at full vibrance next to its dimmed label.
-    return cn("size-4", dimmed ? "text-white/35 opacity-60" : "text-white/85");
-  }
-  if (variant === "diorama") return "size-3.5 shrink-0";
-  return "";
+  return "flex h-full min-w-0 flex-col";
 }
 
 function labelClassName(variant: ProviderListVariant, dimmed: boolean): string {
   if (variant === "settings") return "min-w-0 flex-1 truncate";
   if (variant === "diorama") return "min-w-0 flex-1 truncate";
-  return cn("text-ui-sm", dimmed ? "text-white/40" : "text-white/85");
-}
-
-function descriptionClassName(variant: ProviderListVariant): string {
-  if (variant === "onboarding") {
-    return "min-w-0 truncate pl-[1.625rem] text-ui-xs text-white/45";
-  }
-  return "min-w-0 truncate";
+  return cn(
+    "min-w-0 truncate text-sm font-medium",
+    dimmed ? "text-muted-foreground" : "text-foreground",
+  );
 }

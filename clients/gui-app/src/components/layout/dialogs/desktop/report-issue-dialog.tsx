@@ -118,6 +118,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Host diagnostics",
   "/settings/fallback": "Settings - Fallback",
+  "/settings/getting-started": "Getting started",
   "/settings/general": "Settings - General",
   "/settings/host": "Settings - Host",
   "/settings/keybindings": "Settings - Keybindings",

@@ -187,6 +187,7 @@ function TestWizard(props: {
   return (
     <SessionImportWizard
       {...props}
+      hostPicker={null}
       scan={scan}
       onTaskOpened={taskOpenedMock}
       onBeforeTaskOpen={null}
@@ -221,6 +222,7 @@ function candidate(input: {
   readonly nativeSessionId: string;
   readonly title: string;
   readonly state: SessionImportCandidateState;
+  readonly updatedAt?: number;
 }): SessionImportCandidate {
   return {
     harness: input.harness,
@@ -228,7 +230,7 @@ function candidate(input: {
     title: input.title,
     firstPrompt: null,
     createdAt: 1_000,
-    updatedAt: 1_000,
+    updatedAt: input.updatedAt ?? 1_000,
     messageCount: null,
     hasSubagents: false,
     state: input.state,
@@ -761,7 +763,7 @@ describe("<SessionImportWizard />", () => {
 
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
-    ).toBe("1 task selected for import");
+    ).toBe("1 task selected");
   });
 
   it("shows the scan's own failure inline, with the groups it already delivered still on screen", () => {
@@ -1034,7 +1036,7 @@ describe("<SessionImportWizard />", () => {
     });
 
     expect(screen.getByRole("alert").textContent).toContain(
-      "could not check whether an import is already running",
+      "Couldn’t check for an active import.",
     );
     expect(
       screen.getByTestId("session-import-submit").hasAttribute("disabled"),
@@ -1344,7 +1346,7 @@ describe("<SessionImportWizard />", () => {
     expect(screen.getByTestId("session-import-submit")).toBeTruthy();
   });
 
-  it("labels the way back from a failed run as Back to sessions", () => {
+  it("labels the way back from a failed run as Back to tasks", () => {
     renderWizard(vi.fn());
     act(() => {
       const store = useSessionImportRunStore.getState();
@@ -1352,7 +1354,7 @@ describe("<SessionImportWizard />", () => {
       store.applyError("host-a");
     });
     expect(screen.getByTestId("session-import-more").textContent).toBe(
-      "Back to sessions",
+      "Back to tasks",
     );
   });
 
@@ -1381,7 +1383,7 @@ describe("<SessionImportWizard />", () => {
     // selection without an explicit ask.
     expect(
       screen.getByTestId("session-import-selection-count").textContent,
-    ).toBe("1 task selected for import");
+    ).toBe("1 task selected");
 
     fireEvent.click(screen.getByTestId("session-import-submit"));
 
@@ -1390,5 +1392,217 @@ describe("<SessionImportWizard />", () => {
       { harness: "claude", nativeSessionId: "s1" },
     ]);
     expect(onImportStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders onboarding tasks in one flat list ordered by most recent update", () => {
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={vi.fn()}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [
+            candidate({
+              harness: "claude",
+              nativeSessionId: "s1",
+              title: "Oldest task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 1_000,
+            }),
+            candidate({
+              harness: "claude",
+              nativeSessionId: "s2",
+              title: "Middle task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 2_000,
+            }),
+          ],
+        }),
+      );
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/b",
+          sessions: [
+            candidate({
+              harness: "codex",
+              nativeSessionId: "s3",
+              title: "Newest task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 3_000,
+            }),
+          ],
+        }),
+      );
+    });
+
+    expect(screen.queryByTestId("session-import-group")).toBeNull();
+    expect(
+      screen
+        .getAllByTestId("session-import-row")
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual([
+      "Newest task in /repo/b",
+      "Middle task in /repo/a",
+      "Oldest task in /repo/a",
+    ]);
+  });
+
+  it("updates onboarding selection when a task is deselected and reselected by the master checkbox", () => {
+    const onImportStarted = vi.fn();
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={onImportStarted}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [
+            importableCandidate("claude", "s1", "Session one"),
+            importableCandidate("claude", "s2", "Session two"),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Session one in /repo/a" }),
+    );
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe("1 task selected");
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Select all available tasks shown",
+      }),
+    );
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe("2 tasks selected");
+
+    fireEvent.click(screen.getByTestId("session-import-submit"));
+    expect(startSessionImportRunMock.mock.calls[0][0].selections).toEqual([
+      { harness: "claude", nativeSessionId: "s1" },
+      { harness: "claude", nativeSessionId: "s2" },
+    ]);
+    expect(onImportStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves onboarding selection and task labels across Tasks and By project views", () => {
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={vi.fn()}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [
+            candidate({
+              harness: "claude",
+              nativeSessionId: "s1",
+              title: "Oldest task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 1_000,
+            }),
+            candidate({
+              harness: "claude",
+              nativeSessionId: "s2",
+              title: "Newest task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 3_000,
+            }),
+          ],
+        }),
+      );
+      requireCallbacks().onGroup(
+        folderGroup({
+          path: "/repo/b",
+          sessions: [
+            candidate({
+              harness: "codex",
+              nativeSessionId: "s3",
+              title: "Middle task",
+              state: IMPORTABLE_STATE,
+              updatedAt: 2_000,
+            }),
+          ],
+        }),
+      );
+    });
+
+    expect(
+      screen.getByRole("radiogroup", { name: "Import view" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLInputElement>("radio", { name: "Tasks" }).checked,
+    ).toBe(true);
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Newest task in /repo/a" }),
+    );
+    expect(
+      screen.getByTestId("session-import-selection-count").textContent,
+    ).toBe("2 tasks selected");
+
+    fireEvent.click(screen.getByRole("radio", { name: "By project" }));
+
+    expect(
+      screen.getByRole<HTMLInputElement>("radio", { name: "By project" })
+        .checked,
+    ).toBe(true);
+    expect(screen.getByText("a", { exact: true })).toBeTruthy();
+    expect(screen.getByText("b", { exact: true })).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: "a: 1 of 2 tasks selected" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: "b: All 1 task selected" }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Newest task in /repo/a" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Oldest task in /repo/a" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Middle task in /repo/b" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen.queryByRole("button", { name: /Review tasks in/ }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Tasks" }));
+
+    expect(
+      screen
+        .getAllByTestId("session-import-row")
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual([
+      "Newest task in /repo/a",
+      "Middle task in /repo/b",
+      "Oldest task in /repo/a",
+    ]);
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Newest task in /repo/a" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
   });
 });

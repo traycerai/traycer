@@ -547,12 +547,12 @@ describe("buildSessionImportView - search + provider filter", () => {
     expect(view.groups[0]?.rows).toHaveLength(2);
   });
 
-  it("matches a title:null candidate by firstPrompt, and candidateDisplayTitle falls back title -> firstPrompt -> Untitled session, collapsing/truncating a long prompt", () => {
+  it("matches a title:null candidate by firstPrompt, and candidateDisplayTitle falls back title -> firstPrompt -> Untitled task, collapsing/truncating a long prompt", () => {
     const withTitle = candidate({ title: "Explicit title" });
     expect(candidateDisplayTitle(withTitle)).toBe("Explicit title");
 
     const untitled = candidate({ title: null, firstPrompt: null });
-    expect(candidateDisplayTitle(untitled)).toBe("Untitled session");
+    expect(candidateDisplayTitle(untitled)).toBe("Untitled task");
 
     const whitespacePrompt = candidate({
       title: null,
@@ -1494,11 +1494,11 @@ describe("sessionImportNotImportedLine", () => {
       new Map(),
     );
     expect(sessionImportNotImportedLine(groups)).toBe(
-      "Not imported: 2 sessions with no messages",
+      "Not imported: 2 tasks with no messages",
     );
   });
 
-  it("keeps the line plain when the causes are mixed, and singular for one session", () => {
+  it("keeps the line plain when the causes are mixed, and singular for one task", () => {
     const mixed = groupSessionImportFailures(
       [
         failureEntry("s1", "source_empty", ""),
@@ -1506,15 +1506,13 @@ describe("sessionImportNotImportedLine", () => {
       ],
       new Map(),
     );
-    expect(sessionImportNotImportedLine(mixed)).toBe(
-      "Not imported: 2 sessions",
-    );
+    expect(sessionImportNotImportedLine(mixed)).toBe("Not imported: 2 tasks");
     const one = groupSessionImportFailures(
       [failureEntry("s1", "source_unreadable", "disk error")],
       new Map(),
     );
     expect(sessionImportNotImportedLine(one)).toBe(
-      "Not imported: 1 session that could not be read",
+      "Not imported: 1 task that could not be read",
     );
   });
 });

@@ -556,8 +556,8 @@ export interface SessionImportRowView {
   readonly title: string;
   /**
    * The folder this session ran in, as the scan spelled it. Every row carries
-   * it; the list shows it only inside the Deleted Folders group, where the
-   * header no longer names one folder.
+   * it; task view and Deleted Folders show it because no project header
+   * supplies that context.
    */
   readonly folderPath: string;
   readonly selected: boolean;
@@ -615,7 +615,7 @@ export interface SessionImportWizardView {
   readonly visibleSelectedCount: number;
 }
 
-const UNTITLED_SESSION = "Untitled session";
+const UNTITLED_SESSION = "Untitled task";
 const FIRST_PROMPT_PREVIEW_LENGTH = 140;
 
 /** Native title first, then the opening prompt, then a neutral placeholder. */
@@ -708,7 +708,7 @@ export function sessionImportNotImportedLine(
     (total, group) => total + group.entries.length,
     0,
   );
-  const noun = count === 1 ? "session" : "sessions";
+  const noun = count === 1 ? "task" : "tasks";
   const only = groups.length === 1 ? groups[0] : undefined;
   if (only === undefined) return `Not imported: ${count} ${noun}`;
   return `Not imported: ${count} ${noun} ${failureCause(only.reason)}`;
@@ -723,7 +723,7 @@ function failureCause(reason: SessionImportFailureReason): string {
     case "workspace_bind_failed":
       return "with no matching folder on this machine";
     case "creation_failed":
-      return "whose task could not be created";
+      return "that could not be created";
     case "internal_error":
       return "that hit an unexpected error";
   }

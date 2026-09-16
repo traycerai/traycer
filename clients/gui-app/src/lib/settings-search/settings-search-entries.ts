@@ -14,6 +14,7 @@ import { DELETE_ACCOUNT } from "@/components/settings/panels/delete-account-sett
 import { DEVICES } from "@/components/settings/panels/devices-sessions.definitions";
 import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
 import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
+import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { KEYBINDINGS } from "@/components/settings/panels/keybindings-settings.definitions";
@@ -41,6 +42,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     KEYBINDINGS,
     APP_DIAGNOSTICS,
     LAYOUT,
+    GETTING_STARTED,
     DEVICES,
     LINK_PHONE,
     USAGE,

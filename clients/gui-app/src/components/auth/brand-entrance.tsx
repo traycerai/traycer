@@ -13,23 +13,27 @@ import "@/styles/auth-arrival.css";
  * progress stay what the eye lands on - and its mark carries a slow highlight
  * sweep for as long as the card is up (see {@link BootMarkShimmer}).
  *
+ * `welcome` uses the hero size on the onboarding's themed background.
  * The hero mark is white by construction: it only ever sits on the cinematic
- * dark backdrop. The boot mark sits on a themed card, so it takes the
- * foreground colour - a white mark on the light theme's white card is no mark
+ * dark backdrop. The boot and welcome marks use their surface's foreground
+ * colour - a white mark on the light theme's white card is no mark
  * at all. The SVG's own `<mask>` keeps its white fill (white is "show" there),
  * which is why the rule targets the drawn paths and not every `<path>`.
  */
 export function BrandEntrance(props: {
-  readonly size: "hero" | "boot";
+  readonly size: "hero" | "boot" | "welcome";
   readonly children: ReactNode;
 }): ReactNode {
   const mark = (
     <BrandMark
       className={cn(
         "brand-entrance-mark h-auto",
+        props.size === "boot"
+          ? "w-[clamp(1.5rem,6vw,2.25rem)]"
+          : "w-[clamp(3.75rem,8vw,5.4rem)]",
         props.size === "hero"
-          ? "w-[clamp(3.75rem,8vw,5.4rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]"
-          : "w-[clamp(1.5rem,6vw,2.25rem)] text-foreground [&_g>path]:fill-current",
+          ? "drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]"
+          : "text-foreground [&_g>path]:fill-current",
       )}
     />
   );
@@ -37,7 +41,7 @@ export function BrandEntrance(props: {
     <div
       className={cn(
         "flex flex-col items-center",
-        props.size === "hero" ? "gap-[clamp(1.2rem,2.8vh,2rem)]" : "gap-1",
+        props.size === "boot" ? "gap-1" : "gap-[clamp(1.2rem,2.8vh,2rem)]",
       )}
       data-testid="brand-entrance"
       data-size={props.size}

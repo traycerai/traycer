@@ -1,30 +1,158 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
-import { ONBOARDING_ACTS } from "@/components/onboarding/onboarding-acts";
+import { ONBOARDING_STEPS } from "@/components/onboarding/onboarding-steps";
 import {
   clampOnboardingStep,
   isLastOnboardingStep,
+  ONBOARDING_GUIDE_COUNT,
+  onboardingCompletedCount,
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
 
 const PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
-// The full catalog is one host's tour; a host missing an optional capability
-// runs a shorter one, which is why every bound below is a passed count.
-const ACT_COUNT = ONBOARDING_ACTS.length;
-const LAST_STEP = ACT_COUNT - 1;
+const STEP_COUNT = ONBOARDING_STEPS.length;
+const LAST_STEP = STEP_COUNT - 1;
 
 function resetStore(): void {
   window.localStorage.clear();
-  useOnboardingStore.setState({ completedAt: null, step: 0 });
+  useOnboardingStore.setState({
+    setupProgress: { agents: -1, appearance: -1, cookies: -1 },
+    setupReminderDismissed: false,
+    activeSetup: null,
+    completedAt: null,
+    step: 0,
+  });
 }
 
 describe("useOnboardingStore", () => {
   beforeEach(resetStore);
   afterEach(resetStore);
 
-  it("initializes on the first act, not yet complete", () => {
+  it("initializes on the first step, not yet complete", () => {
     expect(useOnboardingStore.getState().completedAt).toBeNull();
     expect(useOnboardingStore.getState().step).toBe(0);
+    expect(useOnboardingStore.getState().setupProgress).toEqual({
+      agents: -1,
+      appearance: -1,
+      cookies: -1,
+    });
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+  });
+
+  it("counts only the completed tour and setup guides", () => {
+    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(0);
+
+    useOnboardingStore.setState({
+      setupProgress: { agents: 0, appearance: 2, cookies: 0 },
+    });
+    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(0);
+
+    useOnboardingStore.getState().complete();
+    useOnboardingStore.getState().completeSetup("agents");
+    useOnboardingStore.getState().completeSetup("cookies");
+    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(3);
+
+    useOnboardingStore.getState().completeSetup("appearance");
+    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(
+      ONBOARDING_GUIDE_COUNT,
+    );
+  });
+
+  it("preserves completion count when a completed setup guide is replayed", () => {
+    useOnboardingStore.getState().completeSetup("appearance");
+    const completedCount = onboardingCompletedCount(
+      useOnboardingStore.getState(),
+    );
+
+    useOnboardingStore.getState().startSetup("appearance");
+
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 0,
+    });
+    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(
+      completedCount,
+    );
+  });
+
+  it("starts, pauses, and resumes appearance at its saved step", () => {
+    const store = useOnboardingStore.getState();
+    store.startSetup("appearance");
+    store.advanceSetup();
+    store.pauseSetup();
+
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(1);
+
+    useOnboardingStore.getState().startSetup("appearance");
+
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 1,
+    });
+  });
+
+  it("retreats an active setup step without changing saved progress or completion", () => {
+    const completedAt = 1_600_000_000_000;
+    useOnboardingStore.setState({
+      completedAt,
+      setupProgress: { agents: 0, appearance: 2, cookies: 0 },
+      activeSetup: { id: "appearance", step: 2 },
+    });
+    useOnboardingStore.getState().retreatSetup();
+
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 1,
+    });
+    expect(useOnboardingStore.getState().setupProgress).toEqual({
+      agents: 0,
+      appearance: 2,
+      cookies: 0,
+    });
+    expect(useOnboardingStore.getState().completedAt).toBe(completedAt);
+
+    useOnboardingStore.getState().retreatSetup();
+    useOnboardingStore.getState().retreatSetup();
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 0,
+    });
+  });
+
+  it("completes appearance after its third step and replays from the start without losing completion", () => {
+    useOnboardingStore.getState().startSetup("appearance");
+    useOnboardingStore.getState().advanceSetup();
+    useOnboardingStore.getState().advanceSetup();
+    useOnboardingStore.getState().advanceSetup();
+
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(3);
+
+    useOnboardingStore.getState().startSetup("appearance");
+
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 0,
+    });
+    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(3);
+  });
+
+  it("requires the cookie import result to complete the cookie guide", () => {
+    useOnboardingStore.getState().startSetup("cookies");
+    useOnboardingStore.getState().advanceSetup();
+
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "cookies",
+      step: 0,
+    });
+    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(0);
+
+    useOnboardingStore.getState().completeSetup("cookies");
+
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(1);
   });
 
   it("complete marks the tour done with a timestamp", () => {
@@ -33,23 +161,23 @@ describe("useOnboardingStore", () => {
     expect(typeof useOnboardingStore.getState().completedAt).toBe("number");
   });
 
-  it("advance moves to the next act for the active session", () => {
-    useOnboardingStore.getState().advance(ACT_COUNT);
+  it("advance moves to the next step for the active session", () => {
+    useOnboardingStore.getState().advance(STEP_COUNT);
 
     expect(useOnboardingStore.getState().step).toBe(1);
   });
 
-  it("advance on the last act completes the tour instead of overrunning", () => {
+  it("advance on the last step completes the tour instead of overrunning", () => {
     useOnboardingStore.setState({ step: LAST_STEP });
 
-    useOnboardingStore.getState().advance(ACT_COUNT);
+    useOnboardingStore.getState().advance(STEP_COUNT);
 
     expect(useOnboardingStore.getState().step).toBe(LAST_STEP);
     expect(typeof useOnboardingStore.getState().completedAt).toBe("number");
   });
 
-  it("advance completes on the last act of a SHORTER tour, not of the catalog", () => {
-    const shorterCount = ACT_COUNT - 1;
+  it("advance completes on the last step of a shorter tour", () => {
+    const shorterCount = STEP_COUNT - 1;
     useOnboardingStore.setState({ step: shorterCount - 1 });
 
     useOnboardingStore.getState().advance(shorterCount);
@@ -58,51 +186,65 @@ describe("useOnboardingStore", () => {
     expect(typeof useOnboardingStore.getState().completedAt).toBe("number");
   });
 
-  it("retreat moves back and clamps at the first act", () => {
+  it("retreat moves back and clamps at the first step", () => {
     useOnboardingStore.setState({ step: 2 });
-    useOnboardingStore.getState().retreat(ACT_COUNT);
+    useOnboardingStore.getState().retreat(STEP_COUNT);
     expect(useOnboardingStore.getState().step).toBe(1);
 
     useOnboardingStore.setState({ step: 0 });
-    useOnboardingStore.getState().retreat(ACT_COUNT);
+    useOnboardingStore.getState().retreat(STEP_COUNT);
     expect(useOnboardingStore.getState().step).toBe(0);
   });
 
-  it("retreat leaves the act the user can SEE when the tour shrank under them", () => {
-    // An act retired mid-tour clamps the view to the new last act; Back has to
-    // move off that act rather than land on it again.
-    const shorterCount = ACT_COUNT - 1;
-    useOnboardingStore.setState({ step: ACT_COUNT - 1 });
+  it("retreat leaves the visible step when the tour shrinks under the user", () => {
+    const shorterCount = STEP_COUNT - 1;
+    useOnboardingStore.setState({ step: STEP_COUNT - 1 });
 
     useOnboardingStore.getState().retreat(shorterCount);
 
     expect(useOnboardingStore.getState().step).toBe(shorterCount - 2);
   });
 
-  it("clampOnboardingStep holds a stale step inside the tour being shown", () => {
-    expect(clampOnboardingStep(999, ACT_COUNT)).toBe(LAST_STEP);
-    expect(clampOnboardingStep(999, ACT_COUNT - 1)).toBe(LAST_STEP - 1);
-    expect(clampOnboardingStep(-3, ACT_COUNT)).toBe(0);
+  it("clampOnboardingStep holds a stale position inside the tour being shown", () => {
+    expect(clampOnboardingStep(999, STEP_COUNT)).toBe(LAST_STEP);
+    expect(clampOnboardingStep(999, STEP_COUNT - 1)).toBe(LAST_STEP - 1);
+    expect(clampOnboardingStep(-3, STEP_COUNT)).toBe(0);
   });
 
-  it("isLastOnboardingStep reflects whether the last act is showing", () => {
-    expect(isLastOnboardingStep(0, ACT_COUNT)).toBe(false);
-    expect(isLastOnboardingStep(LAST_STEP, ACT_COUNT)).toBe(true);
-    // The same step is the last act of a tour one act shorter.
-    expect(isLastOnboardingStep(LAST_STEP - 1, ACT_COUNT - 1)).toBe(true);
+  it("isLastOnboardingStep reflects whether the final step is showing", () => {
+    expect(isLastOnboardingStep(0, STEP_COUNT)).toBe(false);
+    expect(isLastOnboardingStep(LAST_STEP, STEP_COUNT)).toBe(true);
+    expect(isLastOnboardingStep(LAST_STEP - 1, STEP_COUNT - 1)).toBe(true);
   });
 
-  it("reset clears both completedAt and step (replay from act 1)", () => {
+  it("reset clears completion, step, and setup reminder dismissal", () => {
     useOnboardingStore.getState().complete();
+    useOnboardingStore.getState().completeSetup("agents");
     useOnboardingStore.setState({ step: 4 });
+    useOnboardingStore.getState().dismissSetupReminder();
 
     useOnboardingStore.getState().reset();
 
     expect(useOnboardingStore.getState().completedAt).toBeNull();
     expect(useOnboardingStore.getState().step).toBe(0);
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(0);
   });
 
-  it("restart returns to act 1 without clearing completion", () => {
+  it("persists and rehydrates setup reminder dismissal", async () => {
+    useOnboardingStore.getState().dismissSetupReminder();
+
+    await useOnboardingStore.persist.rehydrate();
+
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    const raw = window.localStorage.getItem(PERSIST_KEY);
+    const parsed = JSON.parse(raw ?? "{}") as {
+      state?: { setupReminderDismissed?: boolean };
+    };
+    expect(parsed.state?.setupReminderDismissed).toBe(true);
+  });
+
+  it("restart returns to the first step without clearing completion", () => {
     useOnboardingStore.setState({ completedAt: 123, step: 4 });
 
     useOnboardingStore.getState().restart();
@@ -122,7 +264,7 @@ describe("useOnboardingStore", () => {
     expect(useOnboardingStore.getState().step).toBe(0);
   });
 
-  it("persists completedAt to localStorage under its catalog persist key", async () => {
+  it("persists completedAt to localStorage under its store key", async () => {
     useOnboardingStore.getState().complete();
 
     // Let the persist middleware flush (microtask boundary is enough for
@@ -137,9 +279,13 @@ describe("useOnboardingStore", () => {
     expect(typeof parsed.state?.completedAt).toBe("number");
   });
 
-  it("persistence partialize includes only completedAt — not step or action functions", async () => {
+  it("persists setup progress but not the active guide or step", async () => {
     useOnboardingStore.getState().complete();
-    useOnboardingStore.setState({ step: 2 });
+    useOnboardingStore.setState({
+      step: 2,
+      setupProgress: { agents: 1, appearance: 2, cookies: 0 },
+      activeSetup: { id: "appearance", step: 2 },
+    });
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -149,7 +295,17 @@ describe("useOnboardingStore", () => {
     };
     const keys = Object.keys(parsed.state ?? {}).sort();
 
-    expect(keys).toEqual(["completedAt"]);
+    expect(keys).toEqual([
+      "completedAt",
+      "setupProgress",
+      "setupReminderDismissed",
+    ]);
+    expect(parsed.state?.setupProgress).toEqual({
+      agents: 1,
+      appearance: 2,
+      cookies: 0,
+    });
+    expect(parsed.state?.activeSetup).toBeUndefined();
   });
 
   it("rehydrates completion but ignores stale persisted step", async () => {
@@ -157,7 +313,12 @@ describe("useOnboardingStore", () => {
     window.localStorage.setItem(
       PERSIST_KEY,
       JSON.stringify({
-        state: { completedAt: timestamp, step: 2 },
+        state: {
+          completedAt: timestamp,
+          step: 2,
+          setupProgress: { agents: 0, appearance: 2, cookies: 1 },
+          activeSetup: { id: "appearance", step: 2 },
+        },
         version: CURRENT_PERSIST_VERSION,
       }),
     );
@@ -166,5 +327,53 @@ describe("useOnboardingStore", () => {
 
     expect(useOnboardingStore.getState().completedAt).toBe(timestamp);
     expect(useOnboardingStore.getState().step).toBe(0);
+    expect(useOnboardingStore.getState().setupProgress).toEqual({
+      agents: 0,
+      appearance: 2,
+      cookies: 1,
+    });
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+  });
+
+  it("restores legacy state with default setup progress", async () => {
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { completedAt: null, step: 3 },
+        version: CURRENT_PERSIST_VERSION,
+      }),
+    );
+
+    await useOnboardingStore.persist.rehydrate();
+
+    expect(useOnboardingStore.getState().setupProgress).toEqual({
+      agents: -1,
+      appearance: -1,
+      cookies: -1,
+    });
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+  });
+
+  it("recovers safely from malformed persisted setup progress", async () => {
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          completedAt: null,
+          setupProgress: { agents: 10, appearance: "later", cookies: 0 },
+          activeSetup: { id: "cookies", step: 0 },
+        },
+        version: CURRENT_PERSIST_VERSION,
+      }),
+    );
+
+    await useOnboardingStore.persist.rehydrate();
+
+    expect(useOnboardingStore.getState().setupProgress).toEqual({
+      agents: -1,
+      appearance: -1,
+      cookies: 0,
+    });
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
   });
 });

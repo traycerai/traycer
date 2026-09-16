@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
 import { useRouterState } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
 import { HomeHero } from "@/components/home/home-hero";
@@ -187,6 +188,12 @@ export function LandingDraftSurface() {
               />
             </SurfaceActivityProvider>
           </div>
+
+          <FirstTaskLandingGuide
+            enabled={surfaceEffectivelyFocused}
+            rootRef={surfaceRef}
+            workspaceFolders={workspaceFolders}
+          />
 
           {/* Drafts another host owns are not a section of their own: the
               ingest mount puts them in the landing store and the History
