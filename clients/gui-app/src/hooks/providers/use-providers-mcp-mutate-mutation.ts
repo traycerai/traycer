@@ -1,4 +1,4 @@
-import type { UseMutationResult } from "@tanstack/react-query";
+import type { Query, UseMutationResult } from "@tanstack/react-query";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -17,6 +17,17 @@ import { providersMutationKeys } from "@/lib/query-keys";
 import { providersNativeQueryKeys } from "@/lib/query-keys/providers-native-query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
+// Count only mutation completions, including writes that structural sharing
+// makes referentially identical. Keep this out of shared list data and let the
+// record expire with its exact catalog query, independently of polling.
+const mcpMutationCompletionRevisions = new WeakMap<Query, number>();
+
+function getMutationCompletionRevision(query: Query | undefined): number {
+  return query === undefined
+    ? 0
+    : (mcpMutationCompletionRevisions.get(query) ?? 0);
+}
+
 export type McpMutateVariables = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
@@ -31,6 +42,8 @@ export type McpMutateVariables = {
 };
 
 interface McpMutateSnapshot {
+  readonly listQuery: Query | undefined;
+  readonly mutationCompletionRevision: number;
   readonly listData: McpListData | undefined;
   readonly listParams: {
     readonly providerId: ProviderId;
@@ -83,13 +96,18 @@ export function useProvidersMcpMutate(): UseMutationResult<
         scope: variables.scope,
         workspaceRoot: variables.workspaceRoot,
       };
+      const listKey = providersNativeQueryKeys.mcpList(hostId, listParams);
+      const listQuery = queryClient.getQueryCache().find({
+        queryKey: listKey,
+        exact: true,
+      });
       // This snapshot only decides whether to reconcile after applying the
       // confirmed response; it must never suppress a successful mutation.
       const snapshot: McpMutateSnapshot = {
+        listQuery,
+        mutationCompletionRevision: getMutationCompletionRevision(listQuery),
         listParams,
-        listData: queryClient.getQueryData<McpListData>(
-          providersNativeQueryKeys.mcpList(hostId, listParams),
-        ),
+        listData: queryClient.getQueryData<McpListData>(listKey),
       };
       const response = await client.request("providers.nativeMutate", {
         providerId: variables.providerId,
@@ -108,6 +126,12 @@ export function useProvidersMcpMutate(): UseMutationResult<
         ctx.hostId,
         snapshot.listParams,
       );
+      const listQuery = queryClient.getQueryCache().find({
+        queryKey: listKey,
+        exact: true,
+      });
+      const mutationCompletionRevision =
+        getMutationCompletionRevision(listQuery);
       const {
         fetchStatus,
         data: currentData,
@@ -118,6 +142,16 @@ export function useProvidersMcpMutate(): UseMutationResult<
       // response can replace newer rows until a complete read reconciles them.
       // A confirmed config write does not clear a failed list-read warning.
       queryClient.setQueryData<McpListData>(listKey, { ...data, refreshError });
+      const writtenQuery = queryClient.getQueryCache().find({
+        queryKey: listKey,
+        exact: true,
+      });
+      if (writtenQuery !== undefined) {
+        mcpMutationCompletionRevisions.set(
+          writtenQuery,
+          getMutationCompletionRevision(writtenQuery) + 1,
+        );
+      }
       if (refreshError !== null) {
         void queryClient.invalidateQueries({
           queryKey: listKey,
@@ -127,7 +161,9 @@ export function useProvidersMcpMutate(): UseMutationResult<
       }
       if (
         fetchStatus === "fetching" ||
-        currentData?.servers !== snapshot.listData?.servers
+        currentData?.servers !== snapshot.listData?.servers ||
+        listQuery !== snapshot.listQuery ||
+        mutationCompletionRevision !== snapshot.mutationCompletionRevision
       ) {
         // The cache now has full data even if an initial read was pending,
         // so default invalidation can replace that read. Do not hold mutation
