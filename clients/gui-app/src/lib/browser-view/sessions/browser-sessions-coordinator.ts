@@ -22,7 +22,12 @@ import {
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
-import { appLogger } from "@/lib/logger";
+import {
+  logBrowserOpenSpan,
+  recordProvisioningReceipt,
+  forgetProvisioningReceipt,
+} from "@/lib/browser-view/sessions/browser-open-perf";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { surfaceHostOpenedTab } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { browserSessionsReducer } from "@/lib/browser-view/sessions/browser-sessions-stream";
 import { recordIndependentPageOpenedTab } from "@/lib/browser-view/sessions/independent-page-open-registry";
@@ -43,6 +48,24 @@ import {
   applyPipCaption,
   applyPipHostLifecycle,
 } from "@/lib/browser-view/pip/pip-store";
+
+export interface PendingBrowserTabRequest {
+  readonly requestId: string;
+  readonly hostId: string;
+  readonly scope: HostResourceScope;
+  readonly requestedUrl: string;
+  readonly clickedAt: number;
+}
+
+export interface PendingBrowserTabPresentation {
+  readonly rebind: (opened: BrowserOpenedTab) => boolean;
+  readonly remove: () => void;
+}
+
+export interface PreparedBrowserTabOpen extends PendingBrowserTabRequest {
+  readonly send: () => Promise<BrowserOpenedTab>;
+  readonly dismiss: () => void;
+}
 
 export interface BrowserSessionsState {
   readonly viewports: Readonly<Partial<Record<string, BrowserViewportState>>>;
@@ -104,6 +127,11 @@ export interface BrowserSessionsState {
     sessionId: string | null,
     url: string,
   ) => Promise<BrowserOpenedTab>;
+  /** Reserve presentation synchronously; send only after the canvas has opened it. */
+  readonly prepareOpenTab: (
+    url: string,
+    presentation: PendingBrowserTabPresentation,
+  ) => PreparedBrowserTabOpen;
   readonly closeTab: (sessionId: string, tabId: string) => Promise<void>;
   /**
    * "Attach this tab on MY window's route" - the electron-capable tile's ask
@@ -690,6 +718,8 @@ function createBrowserSessionsCoordinator(args: {
   const pendingViewports: PendingRequests<void> = new Map();
   const pendingOpens: PendingRequests<BrowserOpenedTab> = new Map();
   const pendingPreviews: PendingRequests<BrowserTabPreview> = new Map();
+  // Request-only overlay. Publishing it through state would wake inventory consumers.
+  const pendingPresentations = new Map<string, () => void>();
   const runtimes = new Map<symbol, BrowserSessionsCoordinatorRuntime>([
     [args.consumerId, args.runtime],
   ]);
@@ -741,7 +771,8 @@ function createBrowserSessionsCoordinator(args: {
    * all; a closed stream rejects every pending request through
    * `rejectPendingRequests` instead.
    */
-  const sendRequest = <T>(
+  const sendRequestWithId = <T>(
+    requestId: string,
     pending: PendingRequests<T>,
     timeoutMs: number | null,
     frame: (requestId: string) => BrowserSessionsUxClientFrame,
@@ -750,7 +781,6 @@ function createBrowserSessionsCoordinator(args: {
     if (live === null || lifecycle !== "live") {
       return Promise.reject(new Error("Browser sessions stream is not ready."));
     }
-    const requestId = crypto.randomUUID();
     return new Promise<T>((resolve, reject) => {
       const timer =
         timeoutMs === null
@@ -780,6 +810,77 @@ function createBrowserSessionsCoordinator(args: {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
+  };
+
+  const sendRequest = <T>(
+    pending: PendingRequests<T>,
+    timeoutMs: number | null,
+    frame: (requestId: string) => BrowserSessionsUxClientFrame,
+  ): Promise<T> =>
+    sendRequestWithId(crypto.randomUUID(), pending, timeoutMs, frame);
+
+  const prepareOpenTab: BrowserSessionsState["prepareOpenTab"] = (
+    url,
+    presentation,
+  ) => {
+    const request: PendingBrowserTabRequest = {
+      requestId: crypto.randomUUID(),
+      hostId: args.owner.hostId,
+      scope: args.scope,
+      requestedUrl: url,
+      clickedAt: performance.now(),
+    };
+    let dismissed = false;
+    let result: Promise<BrowserOpenedTab> | null = null;
+    pendingPresentations.set(request.requestId, presentation.remove);
+    return {
+      ...request,
+      dismiss: () => {
+        dismissed = true;
+        presentation.remove();
+      },
+      send: () => {
+        if (result !== null) return result;
+        if (!pendingPresentations.has(request.requestId)) {
+          return Promise.reject(new Error("Browser sessions stream closed."));
+        }
+        result = sendRequestWithId<BrowserOpenedTab>(
+          request.requestId,
+          pendingOpens,
+          null,
+          (requestId) => ({
+            kind: "openTab",
+            hasBinaryPayload: false,
+            requestId,
+            sessionId: null,
+            url,
+          }),
+        ).then(
+          (opened) => {
+            if (!pendingPresentations.has(request.requestId)) return opened;
+            pendingPresentations.delete(request.requestId);
+            if (dismissed || !presentation.rebind(opened)) {
+              void closeTab(opened.sessionId, opened.tabId).catch(
+                (error: unknown) => {
+                  appLogger.warn("[browser] dismissed tab close failed", {
+                    error: describeLogError(error),
+                  });
+                },
+              );
+            } else {
+              logBrowserOpenSpan("click-to-real", request, request.clickedAt);
+            }
+            return opened;
+          },
+          (error: unknown) => {
+            pendingPresentations.delete(request.requestId);
+            presentation.remove();
+            throw error;
+          },
+        );
+        return result;
+      },
+    };
   };
 
   const closeTab = (sessionId: string, tabId: string): Promise<void> =>
@@ -853,6 +954,11 @@ function createBrowserSessionsCoordinator(args: {
     }));
 
   const rejectEveryPendingRequest = (): void => {
+    coordinator.state.items.forEach((item) =>
+      forgetProvisioningReceipt(item.hostId, item.sessionId),
+    );
+    pendingPresentations.forEach((remove) => remove());
+    pendingPresentations.clear();
     const closed = new Error("Browser sessions stream closed.");
     rejectPendingRequests(pendingCloses, closed);
     rejectPendingRequests(pendingAttaches, closed);
@@ -922,6 +1028,12 @@ function createBrowserSessionsCoordinator(args: {
   };
 
   const onFrame = (frame: BrowserSessionsUxServerFrame): void => {
+    if (
+      frame.kind === "sessionCreated" &&
+      frame.session.tabs.some((tab) => tab.status === "provisioning")
+    ) {
+      recordProvisioningReceipt(frame.session);
+    }
     if (frame.kind === "viewportState") {
       const current = coordinator.state.viewports[frame.tabId];
       if (current !== undefined && current.revision > frame.revision) return;
@@ -1037,6 +1149,7 @@ function createBrowserSessionsCoordinator(args: {
       errorMessage: null,
       retry: restart,
       openTab,
+      prepareOpenTab,
       closeTab,
       attachTab,
       moveTab,
@@ -1136,6 +1249,7 @@ function handleBrowserSessionsFrame(args: {
     case "sessionUpdated":
     case "sessionClosed": {
       if (frame.kind === "sessionClosed") {
+        forgetProvisioningReceipt(args.hostId, frame.sessionId);
         forgetHandoffTokensForSession(args.hostId, frame.sessionId);
       }
       const nextItems = browserSessionsReducer(args.currentItems(), frame);

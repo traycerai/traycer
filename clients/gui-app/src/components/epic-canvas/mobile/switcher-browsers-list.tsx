@@ -110,10 +110,8 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
     () => filterBrowserTabRows(tabs, searchQuery),
     [searchQuery, tabs],
   );
-  // Dismissing on the tile rather than on the tap: a refusal reports itself
-  // with a toast and opens nothing, and a sheet that left anyway would take the
-  // unavailable state's Retry with it. Same rule the Terminals row follows,
-  // which closes on `onLaunched`.
+  // Leave when a tile opens, including request-only chrome. Preflight
+  // refusals keep the sheet's Retry available; PiP waits for the result.
   const { add: handleAdd, isAdding } = useAddBrowserAction(tabId, onClose);
 
   return (

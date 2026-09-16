@@ -1,3 +1,4 @@
+import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
 import {
   memo,
@@ -148,7 +149,7 @@ function sidebarRevealNodeIdForTab(tab: EpicCanvasTileRef): string | null {
   if (isTileRefRecordBacked(tab)) return tab.id;
   switch (tab.type) {
     case TILE_KIND_BROWSER_SESSION:
-      return tab.id;
+      return tab.pending === undefined ? browserSessionTileId(tab) : null;
     case "terminal":
       return epicTerminalUiIdentityKey("session", tab.hostId, tab.id);
     case TILE_KIND_PUBLISHED_CHAT:

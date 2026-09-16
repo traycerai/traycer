@@ -18,9 +18,11 @@ import type {
   BrowserTabInfo,
 } from "@traycer/protocol/host/browser/contracts";
 import {
+  fakePrepareOpenTab,
   sessionInfo,
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import { recordProvisioningReceipt } from "@/lib/browser-view/sessions/browser-open-perf";
 import {
   BROWSER_TILE_DND_TYPE,
   readEpicCanvasDragSourceData,
@@ -182,6 +184,9 @@ const sessionsState = vi.hoisted<{
     errorMessage: null,
     retry: vi.fn(),
     openTab: forwardOpenTab,
+    prepareOpenTab: () => {
+      throw new Error("not used in this test");
+    },
     closeTab: forwardCloseTab,
     attachTab: () => Promise.reject(new Error("not used")),
     moveTab: () => Promise.reject(new Error("not used")),
@@ -280,6 +285,12 @@ function seedCanvasTab(): void {
         name: "Epic 1",
       },
     },
+    // A pending tab open is only counted "present" while its view tab is in
+    // `openTabOrder` (see `preparePendingBrowserTile`'s observer) - a tab
+    // registered only in `tabsById`, the way a real close/reopen leaves a
+    // preserved-but-closed tab, reads as never opened and the pending tile
+    // is dismissed the instant it is created.
+    openTabOrder: ["view-tab-1"],
   });
 }
 
@@ -376,6 +387,9 @@ describe("BrowsersPanelBody", () => {
       errorMessage: null,
       retry: vi.fn(),
       openTab: forwardOpenTab,
+      prepareOpenTab: () => {
+        throw new Error("not used in this test");
+      },
       closeTab: forwardCloseTab,
       attachTab: () => Promise.reject(new Error("not used")),
       moveTab: () => Promise.reject(new Error("not used")),
@@ -1407,6 +1421,55 @@ describe("BrowsersPanelBody", () => {
     });
     expect(closeButton.className.split(/\s+/)).toContain("opacity-100");
   });
+
+  it("logs the receipt-to-row perf span through the row's own RAF effect, not before it flushes", async () => {
+    recordProvisioningReceipt(
+      session({
+        sessionId: "sess-provisioning",
+        profile: "primary",
+        tabs: [],
+      }),
+    );
+    window.localStorage.setItem("traycer:perf:telemetry", "1");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    replaceSessions([
+      session({
+        sessionId: "sess-provisioning",
+        profile: "primary",
+        tabs: [
+          tab({
+            tabId: "tab-provisioning",
+            url: "https://provisioning.example",
+            title: "Provisioning page",
+            status: "provisioning",
+          }),
+        ],
+      }),
+    ]);
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    // `BrowserTabRow` schedules the measurement in a `useLayoutEffect` via
+    // `requestAnimationFrame` - it must not have fired synchronously with the
+    // render itself, only once that frame actually flushes.
+    expect(warn).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+    const line = String(warn.mock.calls[0]?.[0]);
+    expect(line.startsWith("[traycer-perf] ")).toBe(true);
+    const payload = JSON.parse(line.slice("[traycer-perf] ".length)) as {
+      readonly name: string;
+      readonly fields: { readonly hostId: string; readonly sessionId: string };
+    };
+    expect(payload.name).toBe("receipt-to-row");
+    expect(payload.fields.hostId).toBe("host-1");
+    expect(payload.fields.sessionId).toBe("sess-provisioning");
+
+    warn.mockRestore();
+    window.localStorage.removeItem("traycer:perf:telemetry");
+  });
 });
 
 describe("BrowsersPanelActions", () => {
@@ -1449,6 +1512,10 @@ describe("BrowsersPanelActions", () => {
       errorMessage: null,
       retry: vi.fn(),
       openTab: forwardOpenTab,
+      prepareOpenTab: fakePrepareOpenTab({
+        hostId: () => sessionsState.value.hostId ?? "host-1",
+        openTab: forwardOpenTab,
+      }),
       closeTab: forwardCloseTab,
       attachTab: () => Promise.reject(new Error("not used")),
       moveTab: () => Promise.reject(new Error("not used")),
