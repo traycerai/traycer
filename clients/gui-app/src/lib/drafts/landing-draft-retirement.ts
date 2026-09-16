@@ -1,17 +1,23 @@
 import { z } from "zod";
 import { persistKey, scopedPersistKey, STORE_KEYS } from "@/lib/persist";
 import { appLogger, describeLogError } from "@/lib/logger";
+import type { PendingHostDelete } from "./draft-mirror-session";
 
 const retirementSchema = z.object({
   hostId: z.string().nullable(),
   pendingDelete: z.boolean(),
   ownerResolved: z.boolean(),
+  // A pending request that is a `drafts.retract` of a row `hostId` does not
+  // own (a foreign row deleted here), not a `drafts.delete`. Receipts
+  // written before the field existed are deletes.
+  retract: z.boolean().default(false),
 });
 
 interface LandingDraftRetirement {
   readonly hostId: string | null;
   readonly pendingDelete: boolean;
   readonly ownerResolved: boolean;
+  readonly retract: boolean;
 }
 
 // Desktop disables the landing store's localStorage persistence. Keep its
@@ -84,6 +90,27 @@ export function retireLandingDraft(
     hostId,
     pendingDelete: hostId !== null,
     ownerResolved: hostId !== null,
+    retract: false,
+  });
+}
+
+/**
+ * Record that a retired foreign row's cloud entry is to be retracted
+ * through `hostId` (the placement host, on the user's authority), so the
+ * request is retried by that host's session like a pending delete until
+ * the host answers. A receipt already pending a request is left alone.
+ */
+export function retireLandingDraftForRetract(
+  draftId: string,
+  hostId: string,
+): void {
+  const receipt = readRetirement(draftId);
+  if (receipt?.pendingDelete === true) return;
+  writeRetirement(draftId, {
+    hostId,
+    pendingDelete: true,
+    ownerResolved: true,
+    retract: true,
   });
 }
 
@@ -97,6 +124,7 @@ export function resolveLandingDraftRetirementOwner(
     hostId,
     pendingDelete: true,
     ownerResolved: true,
+    retract: false,
   });
 }
 
@@ -115,10 +143,17 @@ export function pendingLandingDraftDeleteHostId(
   return receipt?.pendingDelete ? receipt.hostId : null;
 }
 
-export function pendingLandingDraftDeleteIdsForHost(hostId: string): string[] {
-  return retiredIds().filter(
-    (draftId) => pendingLandingDraftDeleteHostId(draftId) === hostId,
-  );
+/** Every receipt still pending a request through `hostId`, with its kind. */
+export function pendingLandingDraftDeletesForHost(
+  hostId: string,
+): readonly PendingHostDelete[] {
+  const out: PendingHostDelete[] = [];
+  for (const draftId of retiredIds()) {
+    const receipt = readRetirement(draftId);
+    if (receipt?.pendingDelete !== true || receipt.hostId !== hostId) continue;
+    out.push({ draftId, retract: receipt.retract });
+  }
+  return out;
 }
 
 export function completeLandingDraftDelete(draftId: string): void {

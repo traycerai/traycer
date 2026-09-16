@@ -424,10 +424,17 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
 
     completeHandshake(sockets[0]);
 
+    // The @1.1 pin is a FLOOR (consent needs stopOwners on the wire), so the
+    // frame carries whatever the handshake negotiated - the registry's
+    // latest minor on a same-version host - not 1.1 itself.
     expect(subscribeFrame(sockets[0])).toMatchObject({
       kind: "subscribe",
       method: "worktree.deleteBatchByPath",
-      schemaVersion: { major: 1, minor: 1 },
+      schemaVersion: {
+        major: 1,
+        minor:
+          hostStreamRpcRegistry["worktree.deleteBatchByPath"][1].latestMinor,
+      },
       params: {
         mode: "start",
         targets: [

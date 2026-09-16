@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { legacyComposerDraftId } from "@/lib/drafts/draft-ids";
 
 import {
+  pendingSubmittedDraftDeletesForHost,
   readComposerDraftSnapshot,
   useComposerDraftStore,
   type DraftState,
@@ -47,6 +48,7 @@ const MENTION_DRAFT: DraftState = {
   syncedGeneration: 0,
   ownerHostId: null,
   origin: null,
+  supersedes: null,
   publication: null,
 };
 
@@ -201,6 +203,7 @@ describe("composer draft store hydration", () => {
       syncedGeneration: 0,
       ownerHostId: null,
       origin: null,
+      supersedes: null,
       publication: null,
     });
   });
@@ -229,7 +232,169 @@ describe("composer draft store hydration", () => {
 
     expect(
       useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
-    ).toEqual({ hostId: "host-a" });
+    ).toEqual({ hostId: "host-a", retract: false });
+  });
+
+  // The store persists whatever id a row carries on its next write, so a
+  // legacy draft that was edited or acknowledged before the derivation
+  // changed has the retired `legacy-composer-<key>` form on disk. The host
+  // re-keyed its row to the uuid v5; a persisted row that kept the old id
+  // would reject that document as foreign and re-send the long id.
+  it("maps a persisted legacy-composer-prefixed id, its supersedes pointer and its delete fence to the uuid v5 form", async () => {
+    const legacy = "legacy-composer-7f1c1d2a-9b4e-4d8e-8f2a-3c5b6d7e8f90";
+    const derived = "de1163cc-8dfa-5d11-9ad0-a350cc095612";
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          drafts: {
+            edited: {
+              content: MENTION_DRAFT.content,
+              selection: null,
+              draftId: legacy,
+              hostRevision: 2,
+            },
+            forkedFromLegacy: {
+              content: MENTION_DRAFT.content,
+              selection: null,
+              draftId: "d-fork",
+              supersedes: legacy,
+            },
+            detached: {
+              content: MENTION_DRAFT.content,
+              selection: null,
+              draftId: null,
+            },
+            minted: {
+              content: MENTION_DRAFT.content,
+              selection: null,
+              draftId: "d-minted",
+            },
+          },
+          pendingSubmittedDraftDeletes: {
+            [legacy]: { hostId: "host-a", retract: false },
+            "d-other": { hostId: "host-b", retract: true },
+          },
+        },
+      }),
+    );
+
+    await useComposerDraftStore.persist.rehydrate();
+
+    const state = useComposerDraftStore.getState();
+    expect(state.drafts.edited?.draftId).toBe(derived);
+    expect(state.drafts.edited?.draftId).toBe(
+      legacyComposerDraftId("7f1c1d2a-9b4e-4d8e-8f2a-3c5b6d7e8f90"),
+    );
+    expect(state.drafts.edited?.hostRevision).toBe(2);
+    expect(state.drafts.forkedFromLegacy?.supersedes).toBe(derived);
+    expect(state.drafts.detached?.draftId).toBeNull();
+    expect(state.drafts.minted?.draftId).toBe("d-minted");
+    expect(state.pendingSubmittedDraftDeletes).toEqual({
+      [derived]: { hostId: "host-a", retract: false },
+      "d-other": { hostId: "host-b", retract: true },
+    });
+  });
+
+  it("hydrates a persisted supersedes value, and treats an absent one as null", async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          drafts: {
+            forked: {
+              content: MENTION_DRAFT.content,
+              selection: null,
+              draftId: "d-new",
+              supersedes: "d-old",
+            },
+            plain: {
+              content: MENTION_DRAFT.content,
+              selection: null,
+              draftId: "d-plain",
+            },
+          },
+        },
+      }),
+    );
+
+    await useComposerDraftStore.persist.rehydrate();
+
+    const drafts = useComposerDraftStore.getState().drafts;
+    expect(drafts.forked?.supersedes).toBe("d-old");
+    expect(drafts.plain?.supersedes).toBeNull();
+  });
+});
+
+describe("composer draft store: pending submitted draft retract entries", () => {
+  it("hydrates a persisted pendingSubmittedDraftDeletes entry missing retract to retract: false", async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          drafts: {},
+          pendingSubmittedDraftDeletes: {
+            "legacy-pending-delete": { hostId: "host-a" },
+          },
+        },
+      }),
+    );
+
+    await useComposerDraftStore.persist.rehydrate();
+
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[
+        "legacy-pending-delete"
+      ],
+    ).toEqual({ hostId: "host-a", retract: false });
+  });
+
+  it("recordPendingSubmittedDraftRetract leaves an existing entry as is", () => {
+    useComposerDraftStore.setState({
+      pendingSubmittedDraftDeletes: {
+        "already-pending": { hostId: "host-a", retract: false },
+      },
+    });
+
+    useComposerDraftStore
+      .getState()
+      .recordPendingSubmittedDraftRetract("already-pending", "host-b");
+
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[
+        "already-pending"
+      ],
+    ).toEqual({ hostId: "host-a", retract: false });
+  });
+
+  it("recordPendingSubmittedDraftRetract on a fresh id writes a pending retract", () => {
+    useComposerDraftStore
+      .getState()
+      .recordPendingSubmittedDraftRetract("fresh-retract", "host-a");
+
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[
+        "fresh-retract"
+      ],
+    ).toEqual({ hostId: "host-a", retract: true });
+  });
+
+  it("pendingSubmittedDraftDeletesForHost lists both a delete and a retract entry with their kinds", () => {
+    useComposerDraftStore.setState({
+      pendingSubmittedDraftDeletes: {
+        "delete-entry": { hostId: "host-a", retract: false },
+        "retract-entry": { hostId: "host-a", retract: true },
+        "other-host-entry": { hostId: "host-b", retract: true },
+      },
+    });
+
+    expect(pendingSubmittedDraftDeletesForHost("host-a")).toEqual([
+      { draftId: "delete-entry", retract: false },
+      { draftId: "retract-entry", retract: true },
+    ]);
   });
 });
 
@@ -302,7 +467,9 @@ describe("composer draft store revision (prompt-stash CAS)", () => {
 
     // Caret-only: goes through setSelection under the event-driven contract.
     // setSnapshot is reserved for real document mutations and always bumps.
-    useComposerDraftStore.getState().setSelection(taskId, { from: 3, to: 3 });
+    useComposerDraftStore
+      .getState()
+      .setSelection(taskId, { from: 3, to: 3 }, "host-a");
     const afterSelection = useComposerDraftStore.getState().drafts[taskId];
     expect(afterSelection?.revision).toBe(1);
     expect(afterSelection?.selection).toEqual({ from: 3, to: 3 });

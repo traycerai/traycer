@@ -100,6 +100,12 @@ export function composerDraftWrite(input: {
   readonly composerMode: ComposerMode | null;
   readonly workspace: LandingDraftWorkspaceSnapshot | null;
   readonly closed: boolean;
+  /**
+   * Ancestor id on a fork's FIRST write (the row's still-unacknowledged
+   * pointer); null on every other write. The session clears the row's
+   * pointer on the ACK, so the write plane simply carries what the row has.
+   */
+  readonly supersedes: string | null;
 }): DraftWrite {
   return {
     draftId: input.draftId,
@@ -108,6 +114,7 @@ export function composerDraftWrite(input: {
     revision: input.revision,
     lastTouchedAt: input.lastTouchedAt,
     workspace: workspaceSnapshotOrNull(input.workspace),
+    supersedes: input.supersedes,
     portable: portableComposerFromLocal({
       content: input.content,
       selection: input.selection,
@@ -132,6 +139,9 @@ export function interviewDraftWrite(input: {
     revision: input.revision,
     lastTouchedAt: input.lastTouchedAt,
     workspace: null,
+    // Interview drafts are never forked: they are answered on the chat's
+    // own host, so there is no ancestor to retract.
+    supersedes: null,
     portable: {
       pageIndex: input.draft.pageIndex,
       // Labels alone are a LEGACY answer, whose settlement must stay
@@ -184,6 +194,7 @@ export function stashDraftWrite(input: {
     revision: 0,
     lastTouchedAt: input.createdAt,
     workspace: null,
+    supersedes: null,
     portable: {
       content: input.content,
       blobHashes: [...input.blobHashes],

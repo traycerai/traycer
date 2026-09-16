@@ -761,6 +761,8 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.windowSetTitleBarOverlay,
           // Windows frameless menu strip → native submenu popup.
           RunnerHostInvoke.menuOpenTopLevel,
+          RunnerHostInvoke.menuGetSnapshot,
+          RunnerHostInvoke.menuExecuteItem,
           RunnerHostInvoke.displayList,
           RunnerHostInvoke.fileDropWriteTemporary,
           RunnerHostInvoke.fileDropCopyTemporary,

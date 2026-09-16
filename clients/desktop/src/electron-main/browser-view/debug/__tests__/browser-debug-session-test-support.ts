@@ -178,7 +178,13 @@ export class FakeWebContents
   implements BrowserViewWebContents
 {
   readonly id = 1;
-  readonly debugger = new FakeDebugger();
+  private readonly debuggerImpl = new FakeDebugger();
+  /** Electron's native getter throws once the WebContents is destroyed. */
+  get debugger(): FakeDebugger {
+    if (this.destroyed) throw new Error("Object has been destroyed");
+    return this.debuggerImpl;
+  }
+  destroyed = false;
   readonly session = {
     cookies: {
       get: () => Promise.resolve([]),
@@ -232,7 +238,7 @@ export class FakeWebContents
   }
 
   isDestroyed(): boolean {
-    return false;
+    return this.destroyed;
   }
 
   close(): void {}

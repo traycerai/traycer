@@ -267,6 +267,7 @@ import {
   chatSubscribeV18,
   chatSubscribeV19,
   chatSubscribeV110,
+  chatSubscribeV111,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -415,11 +416,11 @@ import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-ca
 import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import {
-  draftsClaimV10,
   draftsDeleteV10,
   draftsListV10,
   draftsPutBlobV10,
   draftsReadBlobV10,
+  draftsRetractV10,
   draftsSubscribeV10,
   draftsUpsertV10,
 } from "@traycer/protocol/host/drafts/contracts";
@@ -780,11 +781,13 @@ import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/co
 import {
   worktreeDeleteBatchByPathStreamV10,
   worktreeDeleteBatchByPathStreamV11,
+  worktreeDeleteBatchByPathStreamV12,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import {
   worktreeDeleteByPathStreamV10,
   worktreeDeleteByPathStreamV11,
   worktreeDeleteByPathStreamV12,
+  worktreeDeleteByPathStreamV13,
 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import {
@@ -849,6 +852,8 @@ import {
   worktreeDeleteResponseSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
+  worktreeListHoldersRequestSchemaV11,
+  worktreeListHoldersResponseSchemaV11,
   worktreeListAllForHostRequestSchema,
   worktreeListAllForHostResponseSchema,
   worktreeListAllForHostRequestSchemaV11,
@@ -880,6 +885,7 @@ import {
   worktreeListByWorkspacePathsRequestSchemaV14,
   worktreeListByWorkspacePathsResponseSchemaV14,
   worktreeListBindingsForEpicRequestSchema,
+  worktreeListBindingsForEpicRequestSchemaV13,
   worktreeListBindingsForEpicResponseSchema,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV12,
@@ -1433,6 +1439,28 @@ export const worktreeListHoldersV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: worktreeListHoldersRequestSchema,
   responseSchema: worktreeListHoldersResponseSchema,
+});
+
+/**
+ * `worktree.listHolders@1.1` - response-only minor: `chat-turn` holders may
+ * carry `chatTier`. Request identical. A `@1.0` client reparses through its
+ * frozen V1 holder object, which strips the key.
+ */
+export const worktreeListHoldersV11 = defineRpcContract({
+  method: "worktree.listHolders",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: worktreeListHoldersRequestSchemaV11,
+  responseSchema: worktreeListHoldersResponseSchemaV11,
+});
+
+export const worktreeListHoldersUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeListHoldersV10,
+  typeof worktreeListHoldersV11
+>({
+  from: worktreeListHoldersV10.schemaVersion,
+  to: worktreeListHoldersV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // Host-wide worktree surface for Settings ▸ Worktrees. `listAllForHost`
@@ -4509,6 +4537,23 @@ export const worktreeListBindingsForEpicUpgradeV11ToV12 = defineUpgradePath<
       isGitResolvePending: false,
     })),
   }),
+});
+
+export const worktreeListBindingsForEpicV13 = defineRpcContract({
+  method: "worktree.listBindingsForEpic",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: worktreeListBindingsForEpicRequestSchemaV13,
+  responseSchema: worktreeListBindingsForEpicResponseSchemaV12,
+});
+
+export const worktreeListBindingsForEpicUpgradeV12ToV13 = defineUpgradePath<
+  typeof worktreeListBindingsForEpicV12,
+  typeof worktreeListBindingsForEpicV13
+>({
+  from: worktreeListBindingsForEpicV12.schemaVersion,
+  to: worktreeListBindingsForEpicV13.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, purpose: "git" }),
+  upgradeResponse: (response) => response,
 });
 
 // Note: git contract definitions are imported from git-contracts.ts above
@@ -8788,11 +8833,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "worktree.listHolders": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeListHoldersV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeListHoldersV11,
+          upgradeFromPreviousVersion: worktreeListHoldersUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8880,7 +8929,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listBindingsForEpic": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: worktreeListBindingsForEpicV10,
@@ -8895,6 +8944,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: worktreeListBindingsForEpicV12,
           upgradeFromPreviousVersion:
             worktreeListBindingsForEpicUpgradeV11ToV12,
+        },
+        3: {
+          contract: worktreeListBindingsForEpicV13,
+          upgradeFromPreviousVersion:
+            worktreeListBindingsForEpicUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -10287,13 +10341,13 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  "drafts.claim": {
+  "drafts.retract": {
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
       versions: {
         0: {
-          contract: draftsClaimV10,
+          contract: draftsRetractV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -11243,7 +11297,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "worktree.deleteByPath": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: worktreeDeleteByPathStreamV10,
@@ -11253,6 +11307,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: worktreeDeleteByPathStreamV12,
+        },
+        3: {
+          contract: worktreeDeleteByPathStreamV13,
         },
       },
     },
@@ -11266,13 +11323,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // which is what makes fallback safe for a destructive operation.
   "worktree.deleteBatchByPath": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: worktreeDeleteBatchByPathStreamV10,
         },
         1: {
           contract: worktreeDeleteBatchByPathStreamV11,
+        },
+        2: {
+          contract: worktreeDeleteBatchByPathStreamV12,
         },
       },
     },
@@ -11356,7 +11416,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 10,
+      latestMinor: 11,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11397,8 +11457,16 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         9: {
           contract: chatSubscribeV19,
         },
+        // @1.10 is itself frozen as the staging builds shipped it (provider
+        // fallback, no shell host). The shell host on a resume trigger and on
+        // the queued managed-command item re-minted ABOVE it at @1.11; both
+        // keys are defaulted, so a @1.10 peer drops them on parse and nothing
+        // is withheld.
         10: {
           contract: chatSubscribeV110,
+        },
+        11: {
+          contract: chatSubscribeV111,
         },
       },
     },

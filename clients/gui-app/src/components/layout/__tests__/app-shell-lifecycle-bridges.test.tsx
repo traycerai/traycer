@@ -90,8 +90,8 @@ vi.mock("@/components/layout/header/rate-limit-icon", () => ({
 // The Windows menu strip routes its popup through a TanStack mutation; this
 // provider-light AppShell test has no QueryClient, so stub it like the other
 // host/query-backed header children above.
-vi.mock("@/components/layout/header/windows-menu-bar", () => ({
-  WindowsMenuBar: () => null,
+vi.mock("@/components/layout/header/desktop-menu-bar", () => ({
+  DesktopMenuBar: () => null,
 }));
 
 // NOTE: there is deliberately NO stub for `use-epic-open-in-new-window` here.

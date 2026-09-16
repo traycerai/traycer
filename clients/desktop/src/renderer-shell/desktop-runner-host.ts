@@ -1,3 +1,4 @@
+import type { DesktopMenuSnapshot } from "../ipc-contracts/window-types";
 import type {
   ActivateInstalledOk,
   ApplyStagedOk,
@@ -494,7 +495,11 @@ export interface DesktopPlatformBridge {
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
-    setTitleBarOverlay(color: string, symbolColor: string): Promise<void>;
+    setTitleBarOverlay(
+      color: string,
+      symbolColor: string,
+      themeSource: "system" | "light" | "dark",
+    ): Promise<void>;
   };
 }
 
@@ -547,6 +552,12 @@ export interface DesktopServiceBridge {
 }
 
 export interface DesktopMenuBridge {
+  getSnapshot(): Promise<DesktopMenuSnapshot>;
+  onChange(handler: () => void): {
+    dispose: () => void;
+  };
+  executeItem(revision: number, itemId: string): Promise<void>;
+
   readonly platform: DesktopRuntimePlatform;
   onCommand(handler: (payload: MenuCommandPayload) => void): {
     dispose: () => void;

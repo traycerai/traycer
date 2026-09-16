@@ -23,10 +23,12 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import { ManagedCommandBadge } from "@/components/chat/queued-message-surface";
 import { AutonomousResumeSegment } from "@/components/chat/segments/autonomous-resume-segment";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -203,6 +205,22 @@ function renderInChatContext(children: React.ReactNode): void {
 }
 
 /**
+ * Same providers as `renderInChatContext`, plus the transcript identity a
+ * segment's presence read needs to tell "this chat's own set has spoken" from
+ * "no chat is bound here at all". Only the tests that exercise presence
+ * (remote-vs-local, cloned-onto-its-own-host, shallow-parsed) need this; every
+ * other S7 door test renders without a bound chat, where presence is always
+ * `unknown` and no door ever reads as deleted.
+ */
+function renderInOwnedChatContext(children: React.ReactNode): void {
+  renderInChatContext(
+    <ChatTranscriptProvider value={{ chatId: CHAT_A, hostId: HOST_ID }}>
+      {children}
+    </ChatTranscriptProvider>,
+  );
+}
+
+/**
  * The chat's Background panel, which is where a running monitor or shell shows
  * up now. It is a drawer that starts closed, so opening it is part of reaching
  * the rows under test; `items` stays empty because every S6 assertion is about
@@ -277,6 +295,19 @@ afterEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   vi.clearAllMocks();
 });
+
+/** The host the open output window for `commandId` is pinned to. */
+function openWindowHostFor(commandId: string): string | null {
+  const found = findOpenArtifactInTab(TAB_ID, commandId);
+  if (found === null) return null;
+  const ref =
+    useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.tilesByInstanceId[
+      found.instanceId
+    ];
+  return ref === undefined || ref.type !== "managed-command-output"
+    ? null
+    : ref.hostId;
+}
 
 describe("S6 · running work in the chat's Background panel", () => {
   it("S6a: shows only THIS chat's running commands, kind-explicit, and none of another chat's or terminal ones", () => {
@@ -371,7 +402,11 @@ describe("S6 · running work in the chat's Background panel", () => {
 describe("S7 · doors", () => {
   it("S7a: the queued-delivery chip names the shell and opens the output window", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-chip" monitoring={false} />,
+      <ManagedCommandBadge
+        commandId="cmd-chip"
+        monitoring={false}
+        hostId={null}
+      />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toContain("Shell output");
@@ -382,7 +417,11 @@ describe("S7 · doors", () => {
 
   it("S7b: a chip from a build that recorded no monitor flag still names the shell", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-old" monitoring={null} />,
+      <ManagedCommandBadge
+        commandId="cmd-old"
+        monitoring={null}
+        hostId={null}
+      />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toContain("Shell output");
@@ -398,13 +437,21 @@ describe("S7 · doors", () => {
             blockId: "blk-quiet",
             title: "db migration",
             status: "completed",
-            managedCommand: { commandId: "cmd-quiet", monitoring: false },
+            managedCommand: {
+              commandId: "cmd-quiet",
+              monitoring: false,
+              hostId: null,
+            },
           }),
           makeTrigger({
             blockId: "blk-watcher",
             title: "deploy watcher",
             status: "failed",
-            managedCommand: { commandId: "cmd-watcher", monitoring: true },
+            managedCommand: {
+              commandId: "cmd-watcher",
+              monitoring: true,
+              hostId: null,
+            },
           }),
         ]}
       />,
@@ -419,7 +466,11 @@ describe("S7 · doors", () => {
         triggers={[
           makeTrigger({
             blockId: "blk-door",
-            managedCommand: { commandId: "cmd-divider", monitoring: true },
+            managedCommand: {
+              commandId: "cmd-divider",
+              monitoring: true,
+              hostId: null,
+            },
           }),
         ]}
       />,
@@ -430,6 +481,9 @@ describe("S7 · doors", () => {
     expect(door.getAttribute("aria-label")).toBe("Open in tab");
     fireEvent.click(door);
     expect(findOpenArtifactInTab(TAB_ID, "cmd-divider")).not.toBeNull();
+    // No host of its own (a shell this host runs, or a divider written before
+    // the field): the window is pinned to the tab's host, as it always was.
+    expect(openWindowHostFor("cmd-divider")).toBe(HOST_ID);
   });
 
   it("S7e: a kind-only monitor trigger keeps the harness tool's name, and gets no dead door", () => {
@@ -456,7 +510,11 @@ describe("S7 · doors", () => {
           makeTrigger({
             blockId: "blk-live",
             live: true,
-            managedCommand: { commandId: "cmd-live", monitoring: true },
+            managedCommand: {
+              commandId: "cmd-live",
+              monitoring: true,
+              hostId: null,
+            },
           }),
         ]}
       />,
@@ -469,7 +527,7 @@ describe("S7 · doors", () => {
 
   it("S7g: one window per shell — every door and a second press converge on a single pane", () => {
     renderBackgroundPanelInChat(
-      <ManagedCommandBadge commandId="cmd-one" monitoring />,
+      <ManagedCommandBadge commandId="cmd-one" monitoring hostId={null} />,
     );
     emitCommands(
       [makeCommand({ id: "cmd-one", description: "solo watcher" })],
@@ -516,5 +574,159 @@ describe("S7 · doors", () => {
     expect(previewInstanceIdFor(TAB_ID, second.paneId)).toBe(second.instanceId);
     // Standard preview eviction: the glance the reader moved on from goes.
     expect(findOpenArtifactInTab(TAB_ID, "cmd-first")).toBeNull();
+  });
+
+  it("S7i: a divider for a shell on another host opens the window on THAT host, and one without a host reads as deleted", () => {
+    renderInOwnedChatContext(
+      <AutonomousResumeSegment
+        triggers={[
+          makeTrigger({
+            blockId: "blk-remote",
+            managedCommand: {
+              commandId: "cmd-remote",
+              monitoring: true,
+              hostId: "host-far",
+            },
+          }),
+          makeTrigger({
+            blockId: "blk-local",
+            managedCommand: {
+              commandId: "cmd-local",
+              monitoring: true,
+              hostId: null,
+            },
+          }),
+        ]}
+      />,
+    );
+    // The owner chat has spoken and knows neither shell.
+    act(() => {
+      chatSession(CHAT_A).setConnectionStatus("open");
+    });
+    emitCommands([], CHAT_A);
+
+    // A local divider is judged by THIS chat's own set: the owner has spoken
+    // and named nothing, so the deletion gate applies.
+    const localDoor = screen.getByTestId(
+      "resume-managed-command-door-blk-local",
+    );
+    expect(localDoor.getAttribute("aria-disabled")).toBe("true");
+
+    // A remote shell is never in this host's set, so its presence is not
+    // judged here (only its own host could answer, and this tab is not bound
+    // to it): the door stays open, and opens on the shell's host.
+    const remoteDoor = screen.getByTestId(
+      "resume-managed-command-door-blk-remote",
+    );
+    expect(remoteDoor.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(remoteDoor);
+    expect(openWindowHostFor("cmd-remote")).toBe("host-far");
+  });
+
+  it("S7i2: a present local shell's divider opens on the tab's host", () => {
+    renderInOwnedChatContext(
+      <AutonomousResumeSegment
+        triggers={[
+          makeTrigger({
+            blockId: "blk-local",
+            managedCommand: {
+              commandId: "cmd-local",
+              monitoring: true,
+              hostId: null,
+            },
+          }),
+        ]}
+      />,
+    );
+    emitCommands([makeCommand({ id: "cmd-local" })], CHAT_A);
+
+    const localDoor = screen.getByTestId(
+      "resume-managed-command-door-blk-local",
+    );
+    expect(localDoor.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(localDoor);
+    expect(openWindowHostFor("cmd-local")).toBe(HOST_ID);
+  });
+
+  it("S7i3: a divider cloned onto the shell's own host is not judged by this chat's own set", () => {
+    // Chat A got a digest for its shell on host B, then was cloned onto B.
+    // The copied divider's explicit `hostId: B` equals the clone's transcript
+    // host, but the clone's own set never lists that shell - the source chat
+    // on host B owns it, not this one.
+    renderInOwnedChatContext(
+      <AutonomousResumeSegment
+        triggers={[
+          makeTrigger({
+            blockId: "blk-cloned",
+            managedCommand: {
+              commandId: "cmd-cloned",
+              monitoring: true,
+              hostId: HOST_ID,
+            },
+          }),
+        ]}
+      />,
+    );
+    act(() => {
+      chatSession(CHAT_A).setConnectionStatus("open");
+    });
+    emitCommands([], CHAT_A);
+
+    const clonedDoor = screen.getByTestId(
+      "resume-managed-command-door-blk-cloned",
+    );
+    expect(clonedDoor.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(clonedDoor);
+    expect(openWindowHostFor("cmd-cloned")).toBe(HOST_ID);
+  });
+
+  it("S7i4: an older host's shallow-parsed body normalizes an absent hostId to local, not remote", () => {
+    // The shallow snapshot path (`isStructuralRecord` /
+    // `z.custom<Message>(isStructuralRecord)` in
+    // `protocol/src/host/agent/gui/subscribe.ts`) validates a message body
+    // structurally, so a key an older host never wrote - `managedCommand.hostId`
+    // - is `undefined` at runtime although the deep schema types it as
+    // `string | null`. Before normalization, `undefined !== null` made a
+    // deleted local shell's divider look remote and re-enabled it.
+    const trigger = makeTrigger({
+      blockId: "blk-shallow",
+      managedCommand: {
+        commandId: "cmd-shallow",
+        monitoring: true,
+        hostId: null,
+      },
+    });
+    if (trigger.managedCommand === null) {
+      throw new Error("expected a managedCommand block");
+    }
+    const { hostId: _hostId, ...withoutHost } = trigger.managedCommand;
+    const shallowTrigger = z
+      .custom<AutonomousResumeTrigger>(
+        (value) => typeof value === "object" && value !== null,
+      )
+      .parse({ ...trigger, managedCommand: withoutHost });
+
+    renderInOwnedChatContext(
+      <AutonomousResumeSegment triggers={[shallowTrigger]} />,
+    );
+    act(() => {
+      chatSession(CHAT_A).setConnectionStatus("open");
+    });
+    emitCommands([], CHAT_A);
+
+    const door = screen.getByTestId("resume-managed-command-door-blk-shallow");
+    expect(door.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("S7j: the queued chip for a shell on another host opens the window on that host", () => {
+    renderInChatContext(
+      <ManagedCommandBadge
+        commandId="cmd-queued-remote"
+        monitoring
+        hostId="host-far"
+      />,
+    );
+    fireEvent.click(screen.getByTestId("queued-managed-command-badge"));
+    expect(openWindowHostFor("cmd-queued-remote")).toBe("host-far");
   });
 });

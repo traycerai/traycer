@@ -153,6 +153,7 @@ function tabStatus(viewed: boolean): BrowserViewNativeTabStatusChange {
     canGoBack: false,
     canGoForward: false,
     zoomPercent: 100,
+    navigationAttempt: 0,
     viewed,
   };
 }

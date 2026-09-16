@@ -167,6 +167,7 @@ interface NativeStatusChange {
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
+  readonly navigationAttempt: number;
 }
 
 class TestBridge {
@@ -668,6 +669,7 @@ describe("ElectronTabSurface", () => {
         canGoBack: false,
         canGoForward: false,
         zoomPercent: 100,
+        navigationAttempt: 0,
       });
     });
     expect(screen.queryByText("foreign failure")).toBeNull();
@@ -685,6 +687,7 @@ describe("ElectronTabSurface", () => {
         canGoBack: false,
         canGoForward: false,
         zoomPercent: 100,
+        navigationAttempt: 0,
       });
     });
     expect(screen.getByText("native guest crashed")).toBeTruthy();
@@ -864,6 +867,7 @@ describe("ElectronTabSurface navigation stall", () => {
       canGoBack: false,
       canGoForward: false,
       zoomPercent: 100,
+      navigationAttempt: 0,
     };
   }
 
@@ -909,7 +913,7 @@ describe("ElectronTabSurface navigation stall", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
-  it("rearms the stall clock on every fresh loading status", async () => {
+  it("does not rearm the stall clock on a repeat loading report for the same attempt", async () => {
     const bridge = state.bridge;
     if (bridge === null) throw new Error("bridge missing");
     renderTile(
@@ -917,13 +921,37 @@ describe("ElectronTabSurface navigation stall", () => {
     );
     await act(() => Promise.resolve());
 
-    // 20s in, a fresh loading report arrives - this must push the deadline
-    // out rather than let the original 30s window expire.
+    // 20s in, the desktop re-reports `loading` for the SAME navigationAttempt
+    // (a title/zoom refresh mid-navigation, not progress) - this must NOT
+    // push the 30s deadline out.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
     act(() => {
       bridge.emitStatus(loadingStatus());
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.getByText("This page did not load")).toBeTruthy();
+  });
+
+  it("rearms the stall clock on a loading report for a new attempt", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    // 20s in, a genuinely NEW navigation attempt arrives - this must push the
+    // deadline out rather than let the original 30s window expire.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    act(() => {
+      bridge.emitStatus({ ...loadingStatus(), navigationAttempt: 1 });
     });
 
     await act(async () => {
@@ -974,6 +1002,27 @@ describe("ElectronTabSurface navigation stall", () => {
 
     expect(state.navigateToUrl).toHaveBeenCalledExactlyOnceWith(NODE.url);
   });
+
+  it("clears the stalled surface immediately on Retry, before any status echoes back", async () => {
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(screen.getByText("This page did not load")).toBeTruthy();
+    const retryButton = screen.getByRole("button", { name: "Retry" });
+
+    // The click alone - no `navigateToUrl` follow-up, no timer advance, no
+    // status echo - must clear the stalled surface synchronously.
+    act(() => {
+      retryButton.click();
+    });
+
+    expect(screen.queryByText("This page did not load")).toBeNull();
+  });
 });
 
 /**
@@ -1000,6 +1049,7 @@ describe("ElectronTabSurface echo-less settle", () => {
       canGoBack: false,
       canGoForward: false,
       zoomPercent: 100,
+      navigationAttempt: 0,
     };
   }
 
@@ -1067,6 +1117,38 @@ describe("ElectronTabSurface echo-less settle", () => {
     expect(screen.queryByText("This page did not load")).toBeNull();
   });
 
+  it("forgets a pre-echo latch when the binding registration changes", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    const binding = createBinding(() =>
+      Promise.resolve({ detach: () => Promise.resolve() }),
+    );
+    const view = renderTile(binding);
+    await act(() => Promise.resolve());
+
+    // An address submit against the OLD guest that never echoed.
+    act(() => {
+      latch("https://example.com/page-b");
+    });
+    // The directory replaced the binding: a fresh guest whose first report
+    // is a ready for some other page. Without the reset, the stale latch
+    // would drop it as a pre-echo settle and hold the tile at loading.
+    await act(async () => {
+      view.rerender(
+        surfaceElement(NODE, { ...binding, registrationId: "registration-2" }),
+      );
+      await Promise.resolve();
+    });
+    act(() => {
+      bridge.emitStatus({
+        ...statusChange("https://other.example/", "ready"),
+        registrationId: "registration-2",
+      });
+    });
+
+    expect(loaderOverlayClassName()).toContain("opacity-0");
+  });
+
   it("still drops an echo-less ready for a different url (newest submit wins)", async () => {
     const bridge = state.bridge;
     if (bridge === null) throw new Error("bridge missing");
@@ -1127,6 +1209,7 @@ describe("ElectronTabSurface document-committed loader gating", () => {
       canGoBack: false,
       canGoForward: false,
       zoomPercent: 100,
+      navigationAttempt: 0,
     };
   }
 
@@ -1224,6 +1307,60 @@ describe("ElectronTabSurface document-committed loader gating", () => {
         ...statusChange("loading"),
         registrationId: "registration-2",
       });
+    });
+
+    const overlay = loaderOverlayElement();
+    expect(overlay.className).toContain("opacity-100");
+    expect(overlay.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("drops a status event for a different registration than the current binding", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    // A late report from an incarnation the directory has already replaced -
+    // this must not be read through as if it were for the mounted binding.
+    act(() => {
+      bridge.emitStatus({
+        ...statusChange("ready"),
+        registrationId: "registration-other",
+      });
+    });
+
+    const overlay = loaderOverlayElement();
+    expect(overlay.className).toContain("opacity-100");
+    expect(overlay.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("derives the initial state immediately on a binding swap, with no status event at all", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    const binding = createBinding(() =>
+      Promise.resolve({ detach: () => Promise.resolve() }),
+    );
+    const view = renderTile(binding);
+    await act(() => Promise.resolve());
+
+    act(() => {
+      bridge.emitStatus(statusChange("ready"));
+    });
+    expect(loaderOverlayElement().className).toContain("opacity-0");
+
+    // The directory swaps in a fresh registration for the same tile, but no
+    // status has arrived for it yet - the derived reading must fall back to
+    // the initial (loading, uncommitted) state rather than keep showing the
+    // previous registration's `ready`.
+    const replacement: ElectronTabBinding = {
+      ...binding,
+      registrationId: "registration-2",
+    };
+    await act(async () => {
+      view.rerender(surfaceElement(NODE, replacement));
+      await Promise.resolve();
     });
 
     const overlay = loaderOverlayElement();

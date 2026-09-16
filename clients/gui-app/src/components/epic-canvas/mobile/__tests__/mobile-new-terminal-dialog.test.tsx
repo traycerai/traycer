@@ -32,6 +32,8 @@ const bindingsQuery = vi.hoisted(() => ({
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => bindingsQuery.current,
   useWorktreeListBindingsForEpicForClient: () => bindingsQuery.current,
+  useTerminalWorkspaceBindings: () => bindingsQuery.current,
+  useTerminalWorkspaceBindingsForClient: () => bindingsQuery.current,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({

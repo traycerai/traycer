@@ -93,7 +93,7 @@ function bootstrap(): void {
     signInUrl: composeDesktopSignInUrl(redirectUri),
   });
 
-  if (bridge.menu.platform === "win32") {
+  if (bridge.menu.platform === "win32" || bridge.menu.platform === "linux") {
     const disposeTitleBarThemeSync = installTitleBarOverlayThemeSync(
       bridge.platform.windowEx,
       document,

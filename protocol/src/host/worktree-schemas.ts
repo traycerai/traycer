@@ -13,10 +13,12 @@ import { z } from "zod";
 import {
   HOLDERS_REVISION_DIGEST_PATTERN,
   worktreeBusyHoldersSchema,
+  worktreeBusyHoldersSchemaV1,
   worktreeBusyOwnerRefSchema,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 export {
   HOLDERS_REVISION_DIGEST_PATTERN,
+  worktreeBusyChatTierSchema,
   worktreeBusyErrorDetailsSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
@@ -27,6 +29,7 @@ export {
   worktreeHoldersChangedErrorDetailsSchema,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 export type {
+  WorktreeBusyChatTier,
   WorktreeBusyErrorDetails,
   WorktreeBusyHoldKind,
   WorktreeBusyHolder,
@@ -966,7 +969,8 @@ export type WorktreeListHoldersRequest = z.infer<
 >;
 
 export const worktreeListHoldersResponseSchema = z.object({
-  holders: worktreeBusyHoldersSchema,
+  /** Released `@1.0` holder shape - see `worktreeBusyHolderSchemaV1`. */
+  holders: worktreeBusyHoldersSchemaV1,
   /**
    * Host-computed digest of `holders`. Optional so a pre-revision
    * response still parses; a current host always emits it. Present
@@ -978,6 +982,24 @@ export const worktreeListHoldersResponseSchema = z.object({
 });
 export type WorktreeListHoldersResponse = z.infer<
   typeof worktreeListHoldersResponseSchema
+>;
+
+/**
+ * `worktree.listHolders@1.1` - request unchanged (aliased so the two cannot
+ * drift); the response's `chat-turn` holders may carry `chatTier`, the WHY
+ * behind a chat's `working` activity. A `@1.0` client reparses through its
+ * own frozen holder object and strips the key.
+ */
+export const worktreeListHoldersRequestSchemaV11 =
+  worktreeListHoldersRequestSchema;
+export type WorktreeListHoldersRequestV11 = WorktreeListHoldersRequest;
+
+export const worktreeListHoldersResponseSchemaV11 = z.object({
+  holders: worktreeBusyHoldersSchema,
+  holdersRevision: z.string().regex(HOLDERS_REVISION_DIGEST_PATTERN).optional(),
+});
+export type WorktreeListHoldersResponseV11 = z.infer<
+  typeof worktreeListHoldersResponseSchemaV11
 >;
 
 /**
@@ -1467,6 +1489,28 @@ export const worktreeListBindingsForEpicRequestSchema = z.object({
 });
 export type WorktreeListBindingsForEpicRequest = z.infer<
   typeof worktreeListBindingsForEpicRequestSchema
+>;
+
+/** Exact retryable directory-timeout detail carried by the RPC error. */
+export const WORKTREE_DIRECTORY_CHECK_TIMEOUT_MESSAGE =
+  "Workspace directory check timed out. Try again.";
+
+/**
+ * v1.3 lets terminal launchers request directory availability without Git.
+ * Omitted purpose preserves Git selector behavior. Directory reads return
+ * verified directory presence independently of Git. Their present rows have
+ * no disabled reason and leave Git facts pending; missing directories are
+ * definitive missing rows. A partially resolved batch preserves verified
+ * siblings and marks unresolved paths disabled/pending for retry. If nothing
+ * resolves, errors/timeouts fail the request. Git consumers must keep using
+ * the default purpose.
+ */
+export const worktreeListBindingsForEpicRequestSchemaV13 =
+  worktreeListBindingsForEpicRequestSchema.extend({
+    purpose: z.enum(["git", "directory"]).optional(),
+  });
+export type WorktreeListBindingsForEpicRequestV13 = z.infer<
+  typeof worktreeListBindingsForEpicRequestSchemaV13
 >;
 
 export const worktreeBindingSelectorDisabledReasonSchema = z.enum([

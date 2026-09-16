@@ -17,6 +17,17 @@ export type CommGraphViewMode = CommGraphTileViewState["mode"];
 export interface CommGraphViewModeToggleProps {
   readonly mode: CommGraphViewMode;
   readonly onModeChange: (mode: CommGraphViewMode) => void;
+  /**
+   * Where this floats, for a renderer that has other chrome to put beside it.
+   *
+   * It pins itself to the canvas's top-right by default, which is all the node
+   * graph needs. The office lays out a ROW - the directory toggle, the view
+   * picker, then this - and a control that pins itself cannot be in a row, so
+   * that renderer passes `static` and the row does the placing. `cn` resolves
+   * the conflict, so a caller can only displace the position, never lose the
+   * chrome.
+   */
+  readonly className: string | undefined;
 }
 
 interface ModeOption {
@@ -42,10 +53,13 @@ const MODE_OPTIONS: ReadonlyArray<ModeOption> = [
 ];
 
 export function CommGraphViewModeToggle(props: CommGraphViewModeToggleProps) {
-  const { mode, onModeChange } = props;
+  const { className, mode, onModeChange } = props;
   return (
     <div
-      className="absolute top-2 right-2 z-10 flex items-center gap-0.5 rounded-md border border-border bg-popover p-0.5 shadow-xs"
+      className={cn(
+        "absolute top-2 right-2 z-10 flex items-center gap-0.5 rounded-md border border-border bg-popover p-0.5 shadow-xs",
+        className,
+      )}
       data-testid="comm-graph-mode-toggle"
     >
       {MODE_OPTIONS.map((option) => {

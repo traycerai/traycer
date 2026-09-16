@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { countingArrayCtor } from "@/lib/comm-graph/office/__tests__/counting-array-ctor";
 import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
-import { findOfficePath } from "@/lib/comm-graph/office/office-path";
+import {
+  findOfficePath,
+  officePathScratch,
+} from "@/lib/comm-graph/office/office-path";
 import type {
   OfficeAgentInput,
   OfficeAppearance,
@@ -41,15 +45,21 @@ function sealedLayout(): OfficeLayout {
     [false, false, true],
   ];
   return {
+    view: "floor",
     cols: 3,
     rows: 3,
     desks: new Map(),
+    seats: new Map(),
+    signs: [],
     rooms: [],
     floors: [],
     doorTile: { col: 0, row: 0 },
     lobbyTile: { col: 0, row: 0 },
     props: [],
     walkable,
+    frozen: null,
+    shiftFromPrevious: null,
+    stable: false,
   };
 }
 
@@ -157,5 +167,128 @@ describe("findOfficePath", () => {
         row: layout.rows,
       }),
     ).toBeNull();
+  });
+
+  it("grows its working grids once for a layout, not once per search", () => {
+    // A search used to allocate two full-grid typed arrays every time it ran,
+    // and a sync of a live office runs dozens of them. The capacity and
+    // growth counters below are the scratch's own bookkeeping, and stay green
+    // for a version that reverted to `new Int32Array(cellCount)` and
+    // `new Uint8Array(cellCount)` at the two working-buffer bindings while
+    // leaving that bookkeeping untouched - so a transparent constructor proxy
+    // watches for the allocation itself over several warmed searches, not
+    // only the counters a correct implementation happens to also produce.
+    const desks = [...layout.desks.values()];
+    findOfficePath(layout, layout.doorTile, desks[0].chairTile);
+    const first = officePathScratch();
+
+    const intCtor = Int32Array;
+    const byteCtor = Uint8Array;
+    let ints = 0;
+    let bytes = 0;
+    vi.stubGlobal(
+      "Int32Array",
+      countingArrayCtor(intCtor, () => {
+        ints += 1;
+      }),
+    );
+    vi.stubGlobal(
+      "Uint8Array",
+      countingArrayCtor(byteCtor, () => {
+        bytes += 1;
+      }),
+    );
+    try {
+      for (const desk of desks) {
+        findOfficePath(layout, layout.doorTile, desk.chairTile);
+        findOfficePath(layout, desk.chairTile, layout.lobbyTile);
+      }
+    } finally {
+      // A stub left in place breaks every later suite's typed arrays, so this
+      // has to come off even if an assertion above throws.
+      vi.unstubAllGlobals();
+    }
+
+    const after = officePathScratch();
+    expect(after.growths).toBe(first.growths);
+    expect(after.capacity).toBeGreaterThanOrEqual(layout.cols * layout.rows);
+    // THE ACTUAL ALLOCATION: zero of each type, once the first search above
+    // has already sized the buffers to this layout.
+    expect({ ints, bytes }).toEqual({ ints: 0, bytes: 0 });
+  });
+
+  it("keeps a grid big enough for the largest office it has searched", () => {
+    const small = sealedLayout();
+    // ITS OWN PRECONDITION. The scratch is module state, so this case used to
+    // pass only because an earlier `it` had already sized it to the big
+    // layout. Run alone - under `it.only`, or after a reordering - the
+    // three-by-three search below would do the growing itself and the case
+    // would fail for something that is not a regression.
+    findOfficePath(layout, layout.doorTile, layout.lobbyTile);
+    const before = officePathScratch();
+
+    findOfficePath(small, { col: 0, row: 0 }, { col: 2, row: 2 });
+
+    // A three-by-three floor reuses what the big layout left rather than
+    // shrinking it and growing it back.
+    const after = officePathScratch();
+    expect(after.capacity).toBe(before.capacity);
+    expect(after.growths).toBe(before.growths);
+  });
+
+  it("counts every constructor form, not only the length one", () => {
+    // The guards above are only sound while the stand-in is INVISIBLE, and a
+    // version that forwarded `new Ctor(length)` alone was not: an array, a
+    // typed array or a buffer view all came back empty, and nothing in this
+    // file would have said so - the counts it exists to produce were right.
+    // These are the four forms, plus a native method over the result.
+    const intCtor = Int32Array;
+    const buffer = new ArrayBuffer(16);
+    new Int32Array(buffer).set([5, 20, 30, 40]);
+    let ints = 0;
+
+    vi.stubGlobal(
+      "Int32Array",
+      countingArrayCtor(intCtor, () => {
+        ints += 1;
+      }),
+    );
+    try {
+      expect([...new Int32Array(3)]).toEqual([0, 0, 0]);
+      expect([...new Int32Array([7, 11])]).toEqual([7, 11]);
+      expect([...new Int32Array(new Int32Array([7, 11]))]).toEqual([7, 11]);
+
+      // A view keeps its offset and its BUFFER, which is the form a stub that
+      // rebuilt from a length silently turned into two zeroes.
+      const view = new Int32Array(buffer, 4, 2);
+      expect([...view]).toEqual([20, 30]);
+      expect(view.byteOffset).toBe(4);
+      expect(view.buffer).toBe(buffer);
+
+      expect([
+        ...new Int32Array([1, 2, 3]).filter((value) => value > 1),
+      ]).toEqual([2, 3]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    // Six `new` expressions above, one of them nested; `filter` builds its
+    // result through the real constructor on the prototype, not the stub.
+    expect(ints).toBe(6);
+  });
+
+  it("finds the same route whichever search ran before it", () => {
+    // The grids are shared between calls, so a stale cell left by the previous
+    // search would show up as a route that depends on history.
+    const desk = layout.desks.get("fourth");
+    if (desk === undefined) throw new Error("expected a desk");
+    const alone = findOfficePath(layout, layout.doorTile, desk.chairTile);
+
+    findOfficePath(layout, layout.lobbyTile, layout.doorTile);
+    findOfficePath(sealedLayout(), { col: 0, row: 0 }, { col: 2, row: 2 });
+
+    expect(findOfficePath(layout, layout.doorTile, desk.chairTile)).toEqual(
+      alone,
+    );
   });
 });

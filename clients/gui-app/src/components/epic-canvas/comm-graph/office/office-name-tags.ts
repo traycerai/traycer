@@ -18,6 +18,14 @@ export interface OfficeNameTagCandidate {
   readonly text: string;
   /** Carried through placement so the caller keeps its own colour choice. */
   readonly tone: "default" | "muted";
+  /**
+   * Whose name this is, or `null` for lettering that names nobody.
+   *
+   * Carried through placement because placement can DROP a tag, and a caller
+   * that draws names by another route needs to know which agents actually
+   * ended up with one - not which ones were offered one.
+   */
+  readonly ownerAgentId: string | null;
   /** Horizontal centre, in screen pixels. */
   readonly centerX: number;
   /** Text baseline, in screen pixels. */
@@ -31,6 +39,7 @@ export interface OfficePlacedNameTag {
   readonly tone: "default" | "muted";
   readonly centerX: number;
   readonly baselineY: number;
+  readonly ownerAgentId: string | null;
 }
 
 interface TagBox {
@@ -87,6 +96,7 @@ export function layoutNameTags(
         tone: candidate.tone,
         centerX: candidate.centerX,
         baselineY,
+        ownerAgentId: candidate.ownerAgentId,
       });
       break;
     }

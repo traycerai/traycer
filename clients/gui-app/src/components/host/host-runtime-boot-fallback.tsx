@@ -1,25 +1,26 @@
 import type { ReactNode } from "react";
+import { BootDesktopMenus } from "@/components/host/boot-desktop-menus";
 import { HostBootSurface } from "@/components/host/host-boot-surface";
-import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
+import { DesktopMenuHeader } from "@/components/layout/header/desktop-menu-header";
 import { cn } from "@/lib/utils";
 import { BRAND_DARK_GROUND_CLASS } from "@/components/auth/brand-surface";
 import { isMobileApp } from "@/lib/mobile-app";
 
 /**
  * THE FIRST of a launch's three boot surfaces: what `HostRuntimeProvider`
- * draws before the runtime binding exists, i.e. before any app chrome.
+ * draws before the runtime binding exists and app tabs can mount.
  *
  * Deliberately the same component as the two after it - same card, same
  * sentence, same controls (`HostBootSurface`). Giving each phase its
  * own shape and its own phrasing is what made one continuous wait look like a
  * sequence of unrelated modals.
  *
- * It owns the whole window, so it RESERVES the header's slot instead of
- * centring against the full viewport. The two surfaces after it sit under the
- * gate frame's header, and a card that centres once against the viewport and
+ * It owns the whole window. The menu header occupies the app header's slot
+ * even before host startup, instead of centring against the full viewport.
+ * The two surfaces after it sit under the gate frame's header, and a card that centres once against the viewport and
  * then against the area under a 40px header moves 20px at the hand-off. Same
- * column, same empty band on top, same `p-6` box: the header later paints INTO
- * the band, and the card does not move.
+ * column, same header height, same `p-6` box: tabs later join the menu row,
+ * and the card does not move.
  */
 export function HostRuntimeBootFallback(props: {
   readonly onConfigureShell: () => void;
@@ -59,7 +60,8 @@ export function HostRuntimeBootFallback(props: {
       className="flex min-h-safe-svh w-full flex-col bg-background text-foreground"
       data-testid="host-runtime-boot-fallback"
     >
-      <div aria-hidden className={cn("shrink-0", APP_HEADER_HEIGHT_CLASS)} />
+      <BootDesktopMenus onOpenSettings={props.onOpenSettings} />
+      <DesktopMenuHeader />
       <div className="flex flex-1 items-center justify-center p-6">
         <HostBootSurface
           testId={null}

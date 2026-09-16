@@ -19,6 +19,7 @@ vi.mock("@/lib/epic-selectors", () => ({
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { OfficeAgentHover } from "@/components/epic-canvas/comm-graph/office/office-agent-hover";
 import { followOfficeHover } from "@/components/epic-canvas/comm-graph/office/office-hover-follow";
 import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
@@ -26,19 +27,37 @@ import type { OfficeHitRegion } from "@/lib/comm-graph/office/office-types";
 
 const RECT = { x: 40, y: 24, width: 16, height: 20 };
 
-function renderHover(onSelect: (agentId: string) => void) {
+const CLAIM: RoleClaim = {
+  claimId: "claim-1",
+  role: "Edge owner",
+  scope: "comm-graph edges",
+  agentId: "agent-1",
+  userId: "user-1",
+  claimedAt: 1,
+};
+
+function renderHover(
+  onSelect: (agentId: string) => void,
+  roleClaims: readonly RoleClaim[],
+) {
   return render(
     <OfficeAgentHover
       epicId="epic-1"
       agentId="agent-1"
       name="Reviewer"
       screenRect={RECT}
+      roleClaims={roleClaims}
       extraContent={
-        <OfficeHoverSupplement status="working" modelTier="large" />
+        <OfficeHoverSupplement
+          status="working"
+          modelTier="large"
+          whereabouts={null}
+        />
       }
       onSelect={onSelect}
       onLeave={vi.fn()}
       onPointerDown={vi.fn()}
+      onDoubleClick={vi.fn()}
     />,
   );
 }
@@ -63,7 +82,7 @@ afterEach(() => {
 
 describe("OfficeAgentHover", () => {
   it("renders the shared agent tooltip rather than a card of its own", () => {
-    renderHover(vi.fn());
+    renderHover(vi.fn(), []);
 
     const props = tooltipProps();
     expect(props.epicId).toBe("epic-1");
@@ -79,7 +98,7 @@ describe("OfficeAgentHover", () => {
   });
 
   it("appends the floor's own reading under the shared card", () => {
-    renderHover(vi.fn());
+    renderHover(vi.fn(), []);
 
     render(tooltipProps().extraContent as ReactElement);
     expect(
@@ -87,8 +106,17 @@ describe("OfficeAgentHover", () => {
     ).toBe("Working · large model");
   });
 
+  it("passes the role claims it was given straight through to the shared tooltip", () => {
+    // The claims come from the canvas's ONE bulk selector, never from a
+    // per-agent hook opened here - this pins that the component hands over
+    // exactly what it was given, with no lookup of its own in between.
+    renderHover(vi.fn(), [CLAIM]);
+
+    expect(tooltipProps().roleClaims).toEqual([CLAIM]);
+  });
+
   it("puts the trigger exactly over the character it describes", () => {
-    renderHover(vi.fn());
+    renderHover(vi.fn(), []);
 
     render(tooltipProps().trigger as ReactElement);
     const trigger = screen.getByTestId(
@@ -104,7 +132,7 @@ describe("OfficeAgentHover", () => {
 
   it("selects the agent when the trigger is clicked", () => {
     const onSelect = vi.fn();
-    renderHover(onSelect);
+    renderHover(onSelect, []);
 
     render(tooltipProps().trigger as ReactElement);
     fireEvent.click(
@@ -112,6 +140,40 @@ describe("OfficeAgentHover", () => {
     );
 
     expect(onSelect).toHaveBeenCalledWith("agent-1");
+  });
+});
+
+/**
+ * `OfficeHoverSupplement` is a pure presentation of what it was given, so it
+ * is rendered directly rather than through the tooltip mock's plumbing.
+ */
+describe("OfficeHoverSupplement", () => {
+  afterEach(cleanup);
+
+  it("shows no where line when whereabouts is null", () => {
+    render(
+      <OfficeHoverSupplement
+        status="working"
+        modelTier="large"
+        whereabouts={null}
+      />,
+    );
+
+    expect(screen.queryByTestId("comm-graph-office-hover-where")).toBeNull();
+  });
+
+  it("shows the where line from whereabouts, in the scene's own words", () => {
+    render(
+      <OfficeHoverSupplement
+        status="working"
+        modelTier="large"
+        whereabouts="Kitchen"
+      />,
+    );
+
+    expect(
+      screen.getByTestId("comm-graph-office-hover-where").textContent,
+    ).toBe("Kitchen");
   });
 });
 
@@ -155,11 +217,13 @@ describe("followOfficeHover", () => {
 
   it("closes rather than re-targeting when another character is painted over the pointer", () => {
     const anchor = { agentId: "agent-1", screenX: 48, screenY: 40 };
-    // Draw order: agent-2 painted last is on top, so the pointer is on it now.
+    // FRONT-MOST FIRST, which is the order the scene now reports its hit
+    // regions in: agent-2 was painted over agent-1, so it leads the list and
+    // the pointer is on it rather than on the agent the card belongs to.
     expect(
       followOfficeHover(
         anchor,
-        [walker(40, "agent-1"), walker(44, "agent-2")],
+        [walker(44, "agent-2"), walker(40, "agent-1")],
         IDENTITY,
       ),
     ).toBe(null);

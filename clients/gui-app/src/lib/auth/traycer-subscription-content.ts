@@ -157,6 +157,17 @@ export function formatCredits(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+// The same amount with no currency, for the installed mobile app. App Store
+// review guideline 3.1.1 forbids an app from presenting a subscription that
+// cannot be bought through Apple, and a dollar figure is the part that reads
+// as a price rather than as consumption - so the phone states the usage in
+// bare credits and the caller labels the unit. Desktop and the browser keep
+// `formatCredits`; picking between the two is the view's job
+// (`traycer-subscription-views.tsx`), which is where the build signal lives.
+export function formatCreditsPlain(value: number): string {
+  return value.toFixed(2);
+}
+
 // Local mirror of the extension's `getCreditBreakdown` (the helper lives in
 // an internal shared package, which clients can't import). Three buckets -
 // Plan, Bonus, Bundle - tracked as consumed/total, matching the extension's

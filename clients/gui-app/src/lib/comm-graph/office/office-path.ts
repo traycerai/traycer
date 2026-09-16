@@ -25,6 +25,52 @@ const NEIGHBOUR_OFFSETS: ReadonlyArray<OfficeTilePos> = [
   { col: 1, row: 0 },
 ];
 
+/**
+ * The search's two working grids, kept between calls.
+ *
+ * A search used to allocate an `Int32Array` and a `Uint8Array` the size of the
+ * whole floor EVERY TIME it ran, and a sync of a thousand-agent office runs
+ * dozens of them: at the review's largest plan that is two arrays of 103,896
+ * cells per walk, handed straight to the collector. They are grown to the
+ * largest grid ever searched and reused, which costs one allocation per office
+ * that is bigger than every office before it.
+ *
+ * Safe to share because a search is synchronous and calls nothing that could
+ * re-enter it, and because each one resets what it reads: `seen` is cleared
+ * over the cells this grid uses, and `cameFrom` is only ever read at cells
+ * this search wrote (the walk back from the goal follows the links it laid).
+ */
+let scratchCameFrom = new Int32Array(0);
+let scratchSeen = new Uint8Array(0);
+let scratchGrowths = 0;
+
+/** What the scratch holds and how often it has had to grow. For the budgets. */
+export interface OfficePathScratchStats {
+  readonly capacity: number;
+  readonly growths: number;
+}
+
+export function officePathScratch(): OfficePathScratchStats {
+  return { capacity: scratchCameFrom.length, growths: scratchGrowths };
+}
+
+/**
+ * The scratch, big enough for this grid and cleared where this grid reads it.
+ *
+ * Growth is to the exact cell count rather than a doubling: an office's grid
+ * is the same size for as long as its plan is, so the sequence of sizes a tab
+ * sees is a handful of plans, not a stream.
+ */
+function takeScratch(cellCount: number): void {
+  if (scratchCameFrom.length < cellCount) {
+    scratchCameFrom = new Int32Array(cellCount);
+    scratchSeen = new Uint8Array(cellCount);
+    scratchGrowths += 1;
+    return;
+  }
+  scratchSeen.fill(0, 0, cellCount);
+}
+
 function inBounds(layout: OfficeLayout, tile: OfficeTilePos): boolean {
   return (
     Number.isInteger(tile.col) &&
@@ -54,8 +100,9 @@ export function findOfficePath(
   const cellCount = layout.cols * layout.rows;
   const startIndex = from.row * layout.cols + from.col;
   const goalIndex = to.row * layout.cols + to.col;
-  const cameFrom = new Int32Array(cellCount).fill(-1);
-  const seen = new Uint8Array(cellCount);
+  takeScratch(cellCount);
+  const cameFrom = scratchCameFrom;
+  const seen = scratchSeen;
   seen[startIndex] = 1;
 
   const queue: number[] = [startIndex];

@@ -38,7 +38,36 @@ export const worktreeBusyOwnerRefSchema = z.object({
 });
 export type WorktreeBusyOwnerRef = z.infer<typeof worktreeBusyOwnerRefSchema>;
 
-export const worktreeBusyHolderSchema = z.object({
+/**
+ * WHY a `chat-turn` holder is `working`. The host marks a chat busy for
+ * the union of an in-progress turn, a runnable queue, native agent work
+ * (a detached subagent or workflow) and background-only work (a
+ * supervised shell, a background task, a scheduled wake). The mark is one
+ * boolean on the wire before this field existed, which is why every
+ * released client renders every busy chat as "working on a turn" - the
+ * one reading that decides whether a sweep interrupts something.
+ *
+ * - `turn`: a provider turn is in flight (or a retry of one is owed).
+ * - `queue`: no turn yet, but queued prompts will start one.
+ * - `native-agent`: idle at the top level; subagents / a workflow run.
+ * - `background`: idle; only background items keep the session awake.
+ */
+export const worktreeBusyChatTierSchema = z.enum([
+  "turn",
+  "queue",
+  "native-agent",
+  "background",
+]);
+export type WorktreeBusyChatTier = z.infer<typeof worktreeBusyChatTierSchema>;
+
+/**
+ * Frozen holder shape bound to the RELEASED minors that carry an
+ * inventory (`worktree.listHolders@1.0`, `worktree.deleteByPath@1.1`
+ * / `@1.2`, `worktree.deleteBatchByPath@1.0` / `@1.1`). Hand-written, not
+ * derived, so a plain `z.object` reparse strips `chatTier` for an old
+ * peer. Never add a key here.
+ */
+export const worktreeBusyHolderSchemaV1 = z.object({
   ownerRef: worktreeBusyOwnerRefSchema,
   holdKind: worktreeBusyHoldKindSchema,
   activity: worktreeBusyHolderActivitySchema,
@@ -49,6 +78,36 @@ export const worktreeBusyHolderSchema = z.object({
    * inventory still parses; a current host always emits it.
    */
   holderId: z.string().optional(),
+});
+export type WorktreeBusyHolderV1 = z.infer<typeof worktreeBusyHolderSchemaV1>;
+
+export const worktreeBusyHoldersSchemaV1 = z.array(worktreeBusyHolderSchemaV1);
+export type WorktreeBusyHoldersV1 = z.infer<typeof worktreeBusyHoldersSchemaV1>;
+
+/** Envelope-seam twin of {@link worktreeBusyHoldersWireFieldSchema} for the released minors. */
+export const worktreeBusyHoldersWireFieldSchemaV1 = worktreeBusyHoldersSchemaV1
+  .optional()
+  .catch(undefined);
+
+/**
+ * Current holder shape: the frozen V1 keys plus `chatTier`. Carried by the
+ * unversioned envelopes (`WORKTREE_BUSY` error payloads on the WS and mux
+ * seams) and by the minors that opened for it (`worktree.listHolders@1.1`,
+ * `worktree.deleteByPath@1.3`, `worktree.deleteBatchByPath@1.2`).
+ */
+export const worktreeBusyHolderSchema = z.object({
+  ownerRef: worktreeBusyOwnerRefSchema,
+  holdKind: worktreeBusyHoldKindSchema,
+  activity: worktreeBusyHolderActivitySchema,
+  label: z.string(),
+  /** See {@link worktreeBusyHolderSchemaV1}. */
+  holderId: z.string().optional(),
+  /**
+   * Only on `chat-turn` holders, and only from a host that reports the
+   * tier. Absent means "busy, tier unknown" (an older host), NOT idle - a
+   * client must keep rendering the holder as something a sweep stops.
+   */
+  chatTier: worktreeBusyChatTierSchema.optional(),
 });
 export type WorktreeBusyHolder = z.infer<typeof worktreeBusyHolderSchema>;
 
