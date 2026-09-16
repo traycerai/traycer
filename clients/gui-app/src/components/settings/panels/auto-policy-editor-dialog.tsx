@@ -221,7 +221,14 @@ export function AutoPolicyEditorDialog(props: {
         props.onCancel();
       }}
     >
-      <DialogContent className="max-h-[min(85vh,52rem)] w-[min(92vw,46rem)] overflow-y-auto">
+      {/* `sm:max-w-*` as well as `w-*`, which is what every other dialog here
+          pairs (`chat-fork-dialog`, `terminal-agent-fork-dialog`,
+          `new-conversation-modal`). `DialogContent`'s base carries
+          `sm:max-w-sm`, and `tailwind-merge` only displaces a class whose
+          MODIFIERS match - so a bare `w-[...]` leaves that 24rem cap standing
+          and `max-width` beats `width`. Without this line the dialog rendered
+          at 24rem on every desktop viewport and the 46rem below was inert. */}
+      <DialogContent className="max-h-[min(85vh,52rem)] w-[min(92vw,46rem)] overflow-y-auto sm:max-w-[min(92vw,46rem)]">
         <DialogHeader>
           <DialogTitle>Auto mode policy</DialogTitle>
           <DialogDescription>

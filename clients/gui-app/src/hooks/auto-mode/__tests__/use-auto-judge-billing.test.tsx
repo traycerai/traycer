@@ -7,7 +7,11 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import type { AutoJudgeGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
-import { guiHarnessOptionSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import {
+  guiAgentModelOptionSchema,
+  guiHarnessOptionSchema,
+  type GuiAgentModelOption,
+} from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 
@@ -159,21 +163,58 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   ) => useGuiHarnessesQueryForClientMock(client, activity),
   // The judge harness's model list. Declared EXPLICITLY rather than left off:
   // a partial module mock throws on the first access, so every case in this
-  // file died at import when the hook grew this read. `data: undefined` is the
-  // honest default here - "the catalog has not answered" - which
-  // `judgeModelUnavailable` reads as "cannot say", so existing cases keep the
-  // billing answer they were written for and the model dimension is exercised
-  // only where a case opts in.
+  // file died at import when the hook grew this read.
+  //
+  // The default is a SETTLED, successful read of a catalog containing the
+  // model the stored-judge fixtures name. It used to be `data: undefined` -
+  // "the catalog has not answered" - on the reasoning that existing cases
+  // would then keep the billing answer they were written for. That reasoning
+  // was the defect in miniature: the answer they were written for was one
+  // published BEFORE the model read settled, which is exactly what the
+  // readiness gate now withholds. A case that wants an unsettled read overrides
+  // with `{ data: undefined, isSuccess: false }` - which is BOTH pending and
+  // failed, since an errored query keeps `data` undefined forever. That is why
+  // the gate reads `isSuccess` and not `data`.
   useGuiHarnessModelsQueryForClient: () => judgeModelsQueryMock(),
 }));
 
-const judgeModelsQueryMock = vi.fn<
-  () => {
-    readonly data:
-      | { readonly models: ReadonlyArray<{ slug: string }> }
-      | undefined;
-  }
->(() => ({ data: undefined }));
+/** The model every stored-judge fixture below names. */
+const JUDGE_MODEL_SLUG = "claude-sonnet";
+
+function judgeModelRow(
+  slug: string,
+  resolvedModel: string | null,
+): GuiAgentModelOption {
+  return guiAgentModelOptionSchema.parse({
+    harnessId: CLAUDE_HARNESS_ID,
+    slug,
+    label: slug,
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    metadata: resolvedModel === null ? {} : { resolvedModel },
+  });
+}
+
+interface JudgeModelsQueryResult {
+  readonly data:
+    | { readonly models: ReadonlyArray<GuiAgentModelOption> }
+    | undefined;
+  readonly isSuccess: boolean;
+}
+
+/** A catalog that ANSWERED, listing exactly these rows. */
+function judgeModelsAnswered(
+  models: ReadonlyArray<GuiAgentModelOption>,
+): JudgeModelsQueryResult {
+  return { data: { models }, isSuccess: true };
+}
+
+const judgeModelsQueryMock = vi.fn<() => JudgeModelsQueryResult>(() =>
+  judgeModelsAnswered([judgeModelRow(JUDGE_MODEL_SLUG, null)]),
+);
 
 function harnessRow(nativeAutoJudge: boolean): GuiHarnessOption {
   return guiHarnessOptionSchema.parse({
@@ -265,8 +306,10 @@ afterEach(() => {
   }));
   // Re-established every test, like its three siblings above: a case that
   // opts into a concrete judge-model catalog via `.mockReturnValue` must not
-  // leak that catalog into the next test's default "cannot say" read.
-  judgeModelsQueryMock.mockReturnValue({ data: undefined });
+  // leak that catalog into the next test's default settled read.
+  judgeModelsQueryMock.mockReturnValue(
+    judgeModelsAnswered([judgeModelRow(JUDGE_MODEL_SLUG, null)]),
+  );
 });
 
 useHostQueryMock.mockImplementation(() => ({ data: autoJudgeGetData }));
@@ -488,9 +531,9 @@ describe("useAutoJudgeBilling", () => {
     providersListData = {
       providers: [providerState({})],
     };
-    judgeModelsQueryMock.mockReturnValue({
-      data: { models: [{ slug: "kept-model" }] },
-    });
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([judgeModelRow("kept-model", null)]),
+    );
 
     const { result } = renderHook(() =>
       useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
@@ -513,9 +556,9 @@ describe("useAutoJudgeBilling", () => {
     providersListData = {
       providers: [providerState({})],
     };
-    judgeModelsQueryMock.mockReturnValue({
-      data: { models: [{ slug: "kept-model" }] },
-    });
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([judgeModelRow("kept-model", null)]),
+    );
 
     const { result } = renderHook(() =>
       useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
@@ -760,6 +803,172 @@ describe("useAutoJudgeBilling", () => {
         expect.anything(),
         { enabled: true, subscribed: true },
       );
+    });
+  });
+
+  // Round 16, group A: `billingInputsSettled` gained `judgeModelsSettled` so a
+  // stored judge's billing waits on the judge harness's own model-catalog read
+  // and not merely on `autoJudge.get` having answered.
+  describe("waits for the judge harness's model catalog to settle before publishing billing copy", () => {
+    // A1: a stored judge whose model read has not settled - neither succeeded
+    // nor failed - must withhold the disclosure entirely rather than publish a
+    // stale one.
+    it("returns null for a stored judge while the judge model read is unsettled", () => {
+      autoJudgeGetData = {
+        selection: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          profileId: null,
+        },
+      };
+      providersListData = { providers: [] };
+      judgeModelsQueryMock.mockReturnValue({
+        data: undefined,
+        isSuccess: false,
+      });
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toBeNull();
+    });
+
+    // A2: the same stored judge, once the judge harness's model read SUCCEEDS
+    // and lists the stored model - proves A1 is about settledness, not about
+    // having a judge at all.
+    it("publishes billing for a stored judge once the judge model read succeeds listing the stored model", () => {
+      autoJudgeGetData = {
+        selection: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          profileId: null,
+        },
+      };
+      providersListData = { providers: [] };
+      judgeModelsQueryMock.mockReturnValue(
+        judgeModelsAnswered([judgeModelRow(JUDGE_MODEL_SLUG, null)]),
+      );
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toEqual({
+        kind: "provider",
+        harnessId: "claude",
+        harnessLabel: "Claude Code",
+      });
+    });
+
+    // A3: a PROVIDER-NATIVE run must not wait on the judge model read at all -
+    // that arm never consults the stored record, so gating it on
+    // `judgeModelsSettled` would withhold the one disclosure that is always
+    // safe to publish. A stored judge is present here specifically so the
+    // model read is unsettled (applicable, not just skipped) and the
+    // provider-native arm still has to win.
+    it("still publishes provider-native when the judge model read is unsettled", () => {
+      autoJudgeGetData = {
+        selection: {
+          harnessId: "claude",
+          model: "claude-sonnet",
+          profileId: null,
+        },
+      };
+      providersListData = {
+        providers: [providerState({ autoJudge: "provider" })],
+      };
+      harnessesData = { harnesses: [harnessRow(true)] };
+      judgeModelsQueryMock.mockReturnValue({
+        data: undefined,
+        isSuccess: false,
+      });
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toEqual({
+        kind: "provider-native",
+        harnessId: CLAUDE_HARNESS_ID,
+        harnessLabel: "Claude Code",
+      });
+    });
+
+    // A4: no stored judge at all - the model query is never even enabled, so
+    // an `isSuccess` gate that does not special-case "nothing to wait for"
+    // would withhold the disclosure forever. A disabled query never succeeds.
+    it("still publishes billing with no stored judge, even though the model query is never enabled", () => {
+      autoJudgeGetData = { selection: null };
+      providersListData = { providers: [] };
+      judgeModelsQueryMock.mockReturnValue({
+        data: undefined,
+        isSuccess: false,
+      });
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toEqual({ kind: "traycer" });
+    });
+  });
+
+  // Round 16, group C: `judgeModelsQueryTarget` turns off the model query for
+  // a stored judge harness id outside `guiHarnessIdSchema` (a newer host, an
+  // older app) rather than falling back to comparing the stored slug against
+  // TRAYCER's own catalog.
+  describe("an unrecognized judge harness does not consult a stand-in catalog", () => {
+    // C1: the stored harness is outside the union and its model does not
+    // appear in TRAYCER's catalog either - the old fallback compared against
+    // that catalog anyway and reported almost any such judge as gone. The
+    // fix must publish the judge's own billing rather than "blocked".
+    it("does not report the judge unrunnable for an unrecognized harness, even though the traycer catalog omits its model", () => {
+      autoJudgeGetData = {
+        selection: {
+          harnessId: "some-future-harness",
+          model: "some-future-model",
+          profileId: null,
+        },
+      };
+      providersListData = { providers: [] };
+      // Default judge-model catalog only lists JUDGE_MODEL_SLUG
+      // ("claude-sonnet"), never "some-future-model" - left unset so a
+      // regression to the "traycer" stand-in fallback is exactly what this
+      // catches.
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toEqual({
+        kind: "provider",
+        harnessId: "some-future-harness",
+        harnessLabel: "some-future-harness",
+      });
+    });
+
+    // C2, the paired control: the SAME stored model slug, but on a
+    // RECOGNIZED harness ("claude") whose own catalog genuinely omits it.
+    // Without this, C1 would pass against a predicate that never reports
+    // anything unrunnable.
+    it("does report the judge unrunnable when a recognized harness's own catalog omits the stored model", () => {
+      autoJudgeGetData = {
+        selection: {
+          harnessId: "claude",
+          model: "some-future-model",
+          profileId: null,
+        },
+      };
+      providersListData = { providers: [] };
+      // Default judge-model catalog only lists JUDGE_MODEL_SLUG
+      // ("claude-sonnet"), so "some-future-model" is genuinely absent.
+
+      const { result } = renderHook(() =>
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+      );
+
+      expect(result.current).toEqual({ kind: "blocked" });
     });
   });
 });

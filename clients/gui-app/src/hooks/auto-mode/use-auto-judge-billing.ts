@@ -2,7 +2,9 @@ import { useMemo } from "react";
 import {
   guiHarnessIdSchema,
   type GuiHarnessId,
+  type ListGuiAgentModelsResponse,
 } from "@traycer/protocol/host/index";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -32,6 +34,138 @@ import {
 // Stable params identity so the host-scoped query key stays referentially
 // constant across renders.
 const AUTO_JUDGE_GET_PARAMS = {};
+
+/**
+ * Whether every read the billing answer depends on has settled.
+ *
+ * Extracted for the complexity ceiling, like its neighbour below, but the
+ * grouping is real: these are exactly the reads whose PENDING state must
+ * publish `null` rather than a guess, and keeping them in one predicate is what
+ * stops a later edit from adding a fourth read to the hook and forgetting one
+ * of the two places readiness is decided.
+ *
+ * `isProviderNative` is an OR rather than a requirement: a provider running its
+ * own classifier needs no judge record, which is what lets a host without
+ * `autoJudge.get` still publish "no extra cost".
+ */
+function billingInputsSettled(input: {
+  readonly providersSettled: boolean;
+  readonly harnessesSettled: boolean;
+  readonly providerJudgeUnknown: boolean;
+  readonly isProviderNative: boolean;
+  readonly judgeRecordAnswered: boolean;
+  /**
+   * The judge harness's MODEL catalog, `true` when it has succeeded or when
+   * there is no stored judge for it to describe.
+   *
+   * Paired with `judgeRecordAnswered` rather than folded into
+   * `catalogsSettled`, because it is only required on the arm that consults
+   * the stored record: the provider-native answer is resolved from
+   * `providers.list` and the harness catalog alone, and making "no extra cost"
+   * wait on a model read it never consults would withhold the one disclosure
+   * that is always safe to publish.
+   */
+  readonly judgeModelsSettled: boolean;
+}): boolean {
+  const catalogsSettled =
+    input.providersSettled &&
+    input.harnessesSettled &&
+    !input.providerJudgeUnknown;
+  return (
+    catalogsSettled &&
+    (input.isProviderNative ||
+      (input.judgeRecordAnswered && input.judgeModelsSettled))
+  );
+}
+
+/**
+ * The ROWS the judge harness currently lists, or `undefined` while the catalog
+ * has not answered - the value {@link judgeModelUnavailable} reads as "cannot
+ * say". Extracted for the complexity ceiling, same reason as its neighbours.
+ *
+ * Rows, not slugs. A slug list cannot answer whether the catalog covers the
+ * stored slug: a row also matches through its `metadata.resolvedModel`, and
+ * mapping to `.slug` throws that evidence away before the resolver can use it.
+ */
+function offeredJudgeModels(
+  data: ListGuiAgentModelsResponse | undefined,
+): ReadonlyArray<GuiAgentModelOption> | undefined {
+  return data?.models;
+}
+
+/**
+ * The judge's MODEL dimension, as the two facts the billing answer needs: is
+ * the stored model gone, and has the read that would say so actually answered.
+ *
+ * Both halves in one helper because they share one gate. A harness this build
+ * cannot name has no catalog to consult, so there is nothing to find missing
+ * AND nothing to wait for - and splitting them invites a caller that waits on a
+ * query it also decided not to run. Extracted for the complexity ceiling, the
+ * same reason as its neighbours.
+ */
+function storedJudgeModelState(
+  applicable: boolean,
+  storedModelSlug: string,
+  models: ListGuiAgentModelsResponse | undefined,
+  modelsSucceeded: boolean,
+): { readonly unavailable: boolean; readonly settled: boolean } {
+  if (!applicable) return { unavailable: false, settled: true };
+  return {
+    unavailable: judgeModelUnavailable(
+      storedModelSlug,
+      offeredJudgeModels(models),
+    ),
+    settled: modelsSucceeded,
+  };
+}
+
+/**
+ * What the judge's model-catalog query should target, and whether it applies.
+ *
+ * `AutoJudgeSelection.harnessId` is a plain string on the wire while the models
+ * query takes the narrowed union, so an unrecognized id has to resolve to
+ * SOMETHING - and the two facts have to travel together, which is why this
+ * returns a pair rather than a nullable id.
+ *
+ * It used to be a bare `GuiHarnessId` falling back to `"traycer"`, with a note
+ * claiming the query was "gated off" for an unrecognized id. It was not: the
+ * gate read `judgeHarnessId !== null`, which is TRUE for an unrecognized id, so
+ * the fallback stopped being an unused placeholder and became the harness whose
+ * catalog the stored slug was compared against - reporting almost any such
+ * judge as gone. `applicable` is the gate that note assumed existed; the
+ * `harnessId` beside it is only ever a cache key for a query that is off.
+ */
+function judgeModelsQueryTarget(judgeHarnessId: string | null): {
+  readonly harnessId: GuiHarnessId;
+  readonly applicable: boolean;
+} {
+  const parsed = guiHarnessIdSchema.safeParse(judgeHarnessId);
+  return parsed.success
+    ? { harnessId: parsed.data, applicable: true }
+    : { harnessId: "traycer", applicable: false };
+}
+
+/**
+ * The composer's half of round 12's profile-availability read.
+ *
+ * Extracted rather than inlined because `useAutoJudgeBilling` is at gui-app's
+ * complexity ceiling (16) and this is the branch that pushed it over - the same
+ * reason `offeredJudgeProfileIds` lives beside the picker rather than in it.
+ *
+ * A null judge harness short-circuits: with no stored judge there is no profile
+ * to have lost, and `offeredJudgeProfileIds` would have no row to look up.
+ */
+function storedJudgeProfileUnavailable(
+  judgeHarnessId: string | null,
+  storedProfileId: string | null,
+  providers: ReadonlyArray<ProviderCliState> | undefined,
+): boolean {
+  if (judgeHarnessId === null) return false;
+  return judgeProfileUnavailable(
+    storedProfileId,
+    offeredJudgeProfileIds(providers, judgeHarnessId),
+  );
+}
 
 /**
  * Which pocket THIS composer's judged approvals would be charged to.
@@ -69,83 +203,6 @@ const AUTO_JUDGE_GET_PARAMS = {};
  * the caller this read actually fetches for - which is the point, since that
  * row makes the same claim.
  */
-/**
- * The composer's half of round 12's profile-availability read.
- *
- * Extracted rather than inlined because `useAutoJudgeBilling` is at gui-app's
- * complexity ceiling (16) and this is the branch that pushed it over - the same
- * reason `offeredJudgeProfileIds` lives beside the picker rather than in it.
- *
- * A null judge harness short-circuits: with no stored judge there is no profile
- * to have lost, and `offeredJudgeProfileIds` would have no row to look up.
- */
-/**
- * Whether every read the billing answer depends on has settled.
- *
- * Extracted for the complexity ceiling, like its neighbour below, but the
- * grouping is real: these are exactly the reads whose PENDING state must
- * publish `null` rather than a guess, and keeping them in one predicate is what
- * stops a later edit from adding a fourth read to the hook and forgetting one
- * of the two places readiness is decided.
- *
- * `isProviderNative` is an OR rather than a requirement: a provider running its
- * own classifier needs no judge record, which is what lets a host without
- * `autoJudge.get` still publish "no extra cost".
- */
-function billingInputsSettled(input: {
-  readonly providersSettled: boolean;
-  readonly harnessesSettled: boolean;
-  readonly providerJudgeUnknown: boolean;
-  readonly isProviderNative: boolean;
-  readonly judgeRecordAnswered: boolean;
-}): boolean {
-  const catalogsSettled =
-    input.providersSettled &&
-    input.harnessesSettled &&
-    !input.providerJudgeUnknown;
-  return (
-    catalogsSettled && (input.isProviderNative || input.judgeRecordAnswered)
-  );
-}
-
-/**
- * The judge harness id as a `GuiHarnessId`, or the run harness as a stand-in.
- *
- * `AutoJudgeSelection.harnessId` is a plain string on the wire, and the models
- * query takes the narrowed union. A stored id outside it cannot name a real
- * catalog, so the query is gated off for it anyway (`judgeHarnessId !== null`
- * plus a parse that fails) and the model read answers "cannot say".
- */
-/**
- * The slugs the judge harness currently lists, or `undefined` while the catalog
- * has not answered - the value {@link judgeModelUnavailable} reads as "cannot
- * say". Extracted for the complexity ceiling, same reason as its neighbours.
- */
-function offeredModelSlugs(
-  data:
-    | { readonly models: ReadonlyArray<{ readonly slug: string }> }
-    | undefined,
-): ReadonlyArray<string> | undefined {
-  return data?.models.map((model) => model.slug);
-}
-
-function guiHarnessIdFor(judgeHarnessId: string | null): GuiHarnessId {
-  const parsed = guiHarnessIdSchema.safeParse(judgeHarnessId);
-  return parsed.success ? parsed.data : "traycer";
-}
-
-function storedJudgeProfileUnavailable(
-  judgeHarnessId: string | null,
-  storedProfileId: string | null,
-  providers: ReadonlyArray<ProviderCliState> | undefined,
-): boolean {
-  if (judgeHarnessId === null) return false;
-  return judgeProfileUnavailable(
-    storedProfileId,
-    offeredJudgeProfileIds(providers, judgeHarnessId),
-  );
-}
-
 export function useAutoJudgeBilling(
   hostId: string | null,
   harnessId: GuiHarnessId | null,
@@ -282,16 +339,37 @@ export function useAutoJudgeBilling(
   // `judgeModelUnavailable` reads as "cannot say" rather than "gone" - the same
   // direction as the profile read beside it, and the one that keeps the
   // disclosure steady on a cold load.
+  //
+  // Gated on the harness PARSING, not merely on a record existing. The comment
+  // on `guiHarnessIdFor` used to claim the query was "gated off" for a stored
+  // id outside the union; it was not - `judgeHarnessId !== null` is true for an
+  // unrecognized id, so the read fell through to the `"traycer"` stand-in and
+  // compared the stored slug against TRAYCER's catalog. That reports almost any
+  // such judge as gone and suppresses the disclosure. A harness this build
+  // cannot name has no catalog to check, which is a "cannot say", not a verdict.
+  const judgeModelsTarget = judgeModelsQueryTarget(judgeHarnessId);
   const judgeModelsQuery = useGuiHarnessModelsQueryForClient(
     client,
-    guiHarnessIdFor(judgeHarnessId),
+    judgeModelsTarget.harnessId,
     null,
-    { enabled: autoModeHost && judgeHarnessId !== null, subscribed: false },
+    {
+      enabled: autoModeHost && judgeModelsTarget.applicable,
+      subscribed: false,
+    },
   );
-  const storedModelUnavailable = judgeModelUnavailable(
-    selection?.model ?? "",
-    offeredModelSlugs(judgeModelsQuery.data),
-  );
+  // SUCCESS ONLY on the `settled` half, for the same reason `providersSettled`
+  // and `harnessesSettled` above are: a read that has not answered is an
+  // UNKNOWN, and turning it into "the model is fine" publishes "your provider
+  // account will be charged" for a judge that may not run. Pending made that
+  // claim early; a FAILED read made it permanently, because `data` stays
+  // `undefined` forever and `judgeModelUnavailable` reads that as "cannot say".
+  const { unavailable: storedModelUnavailable, settled: judgeModelsSettled } =
+    storedJudgeModelState(
+      judgeModelsTarget.applicable,
+      selection?.model ?? "",
+      judgeModelsQuery.data,
+      judgeModelsQuery.isSuccess,
+    );
   // The host's own verdict that it CANNOT run the judge it has stored
   // (`provider-disabled`, `no-default`, `unsupported-harness`). Optional on the
   // wire, so an older host answers `undefined` and reads as "not blocked".
@@ -308,6 +386,7 @@ export function useAutoJudgeBilling(
     providerJudgeUnknown,
     isProviderNative,
     judgeRecordAnswered: query.data !== undefined,
+    judgeModelsSettled,
   });
 
   return useMemo(

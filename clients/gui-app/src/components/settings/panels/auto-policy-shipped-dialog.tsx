@@ -53,7 +53,10 @@ export function AutoPolicyShippedDialog(props: {
       }}
     >
       <DialogContent
-        className="max-h-[min(85vh,52rem)] w-[min(92vw,46rem)] overflow-y-auto"
+        // Same pairing as the editor dialog beside it - see its comment:
+        // `DialogContent`'s `sm:max-w-sm` survives a bare `w-[...]`, so the
+        // cap has to be restated under the same modifier.
+        className="max-h-[min(85vh,52rem)] w-[min(92vw,46rem)] overflow-y-auto sm:max-w-[min(92vw,46rem)]"
         data-testid="auto-policy-shipped-view"
       >
         <DialogHeader>

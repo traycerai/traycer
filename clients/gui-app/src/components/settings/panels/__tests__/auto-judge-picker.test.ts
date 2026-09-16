@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { useStore } from "zustand";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
-import { guiHarnessOptionSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import {
+  guiAgentModelOptionSchema,
+  guiHarnessOptionSchema,
+  type GuiAgentModelOption,
+} from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type {
   AutoJudgeEffective,
   AutoJudgeSelection,
@@ -612,23 +616,72 @@ describe("judgeProfileUnavailable", () => {
 // asks about a profile, one field over - the harness catalog has no substitute
 // for a vanished MODEL the way the picker's store does, so it asks the catalog
 // directly rather than comparing presented-vs-stored.
+//
+// Takes catalog ROWS, not slugs: coverage is a two-pass question (exact slug,
+// then a row's `metadata.resolvedModel`) and a slug list drops the evidence the
+// second pass needs.
+function judgeModelRow(
+  slug: string,
+  resolvedModel: string | null,
+): GuiAgentModelOption {
+  return guiAgentModelOptionSchema.parse({
+    harnessId: "claude",
+    slug,
+    label: slug,
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    metadata: resolvedModel === null ? {} : { resolvedModel },
+  });
+}
+
+const OFFERED_JUDGE_MODELS = [
+  judgeModelRow("a", null),
+  judgeModelRow("b", null),
+];
+
 describe("judgeModelUnavailable", () => {
   it("is false for the no-carry seed ('') - an unset record has nothing to have lost", () => {
-    expect(judgeModelUnavailable("", ["a", "b"])).toBe(false);
+    expect(judgeModelUnavailable("", OFFERED_JUDGE_MODELS)).toBe(false);
   });
 
-  it("is false when offeredModelSlugs is undefined - the harness's model catalog has not answered yet", () => {
+  it("is false when the offered catalog is undefined - the harness's model catalog has not answered yet", () => {
     // Must not flash the disclosure-suppressing finding on a cold load before
     // the models read has settled.
     expect(judgeModelUnavailable("gpt-x", undefined)).toBe(false);
   });
 
-  it("is false when the stored model is present in a settled offered list", () => {
-    expect(judgeModelUnavailable("a", ["a", "b"])).toBe(false);
+  it("is false when the stored model is present in a settled offered catalog", () => {
+    expect(judgeModelUnavailable("a", OFFERED_JUDGE_MODELS)).toBe(false);
   });
 
-  it("is true when the stored model is absent from a settled, non-empty offered list", () => {
-    expect(judgeModelUnavailable("gone-model", ["a", "b"])).toBe(true);
+  it("is true when the stored model is absent from a settled, non-empty offered catalog", () => {
+    expect(judgeModelUnavailable("gone-model", OFFERED_JUDGE_MODELS)).toBe(
+      true,
+    );
+  });
+
+  // The fix: a stored slug that matches only a row's `metadata.resolvedModel`
+  // (no exact `slug` match) is COVERED, because resolution is two-pass. A
+  // regression back to `slugs.includes(...)` sees no exact match and reports
+  // the judge as gone even though the catalog still routes it.
+  it("is false when the stored slug matches only a row's resolvedModel, not its slug", () => {
+    const models = [judgeModelRow("opus[1m]", "claude-opus-5")];
+    expect(judgeModelUnavailable("claude-opus-5", models)).toBe(false);
+  });
+
+  // Ambiguity is not absence: two rows publishing the SAME resolvedModel
+  // (Claude's `default` and `opus[1m]` tying on one canonical id, in
+  // production) still resolve to an alias match, so the stored slug is still
+  // runnable.
+  it("is false when the stored slug ties across two rows publishing the same resolvedModel", () => {
+    const models = [
+      judgeModelRow("default", "claude-opus-5[1m]"),
+      judgeModelRow("opus[1m]", "claude-opus-5[1m]"),
+    ];
+    expect(judgeModelUnavailable("claude-opus-5[1m]", models)).toBe(false);
   });
 });
 

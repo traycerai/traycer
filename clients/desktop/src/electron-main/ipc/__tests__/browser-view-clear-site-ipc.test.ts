@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserStorageCookie } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserPrimaryProfileCaptureResult } from "../../browser-view/storage/browser-storage-state";
 
@@ -516,6 +516,19 @@ describe("clear-site IPC jar targeting", { timeout: 15_000 }, () => {
     // With the directory, the ledger module's own in-memory state has to go
     // too - it is loaded once per module registry, not once per directory.
     vi.resetModules();
+  });
+
+  // The reset above only drops the module registry's references. Every
+  // `vi.fn()` on the bridge keeps its recorded calls, and each recorded
+  // `handleInvoke` call holds the handler closure, which holds the whole
+  // freshly imported IPC graph - registry, transports and all. Nineteen
+  // tests times one retained graph is ~2.3 GB, which is over the darwin
+  // runner's default heap (main sat 36 MB under it; the first protocol
+  // growth tipped the file into "Ineffective mark-compacts near heap
+  // limit"). Clearing the recorded calls releases each graph as the test
+  // that imported it ends; measured peak drops from 2357 MB to 949 MB.
+  afterEach(() => {
+    vi.clearAllMocks();
   });
 
   it("clears the durable jar as well as the live one when saving is off (tile menu)", async () => {

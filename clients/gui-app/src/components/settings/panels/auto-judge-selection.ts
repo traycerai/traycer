@@ -10,6 +10,11 @@
  */
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import {
+  modelMatchIsCovered,
+  resolveModelBySlug,
+} from "@traycer/protocol/host/agent/gui/model-slug-resolution";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
@@ -232,8 +237,13 @@ export function autoJudgeRecordHealth(input: {
    * The COMMIT ids (`profileCommitId`), not the wire rows: the stored record
    * speaks the same vocabulary the composer does, where ambient is `null` and
    * never the `"ambient"` wire sentinel. Passed as ids rather than as profile
-   * objects to keep this module free of provider types, the way its two
-   * siblings take slugs rather than model rows.
+   * objects because a commit id is the whole question here - membership in a
+   * set, with no second matching pass to run.
+   *
+   * That is what separates it from {@link judgeModelUnavailable}, which USED to
+   * take slugs on the same reasoning and was wrong to: a model slug can also be
+   * matched by a row's `metadata.resolvedModel`, so the ids alone were not
+   * enough evidence and it now takes rows. Profiles have no such alias.
    */
   readonly offeredProfileIds: ReadonlyArray<string | null> | undefined;
 }): AutoJudgeRecordHealth {
@@ -314,19 +324,39 @@ export function autoJudgeRecordHealth(input: {
  * asks the catalog directly. Two questions, one fact, and neither surface can
  * answer the other's.
  *
+ * **Different mechanisms, but they must reach the same verdict, and they did
+ * not.** This took the catalog's SLUGS and compared with `includes()`, while
+ * the picker's store resolves through {@link resolveModelBySlug} - a two-pass
+ * match that also accepts a row whose `metadata.resolvedModel` equals the
+ * stored slug, and then HOLDS the stored slug rather than rewriting it (see
+ * `resolveModelSlug`). So an entitlement-decorated catalog (`opus[1m]` listed
+ * where `claude-opus-5` was persisted) left Settings correctly reporting a
+ * runnable judge while this predicate called it gone and suppressed the charge
+ * disclosure for a judge that routes fine. Exact equality is not a second
+ * spelling of coverage - it is a strictly narrower question - so this now asks
+ * the SAME resolver, and takes catalog ROWS because slugs alone cannot answer
+ * it.
+ *
+ * `models` must be one harness's catalog, which is what
+ * `agent.gui.listModels` returns; {@link resolveModelBySlug} is only unique
+ * within a harness.
+ *
  * Both "cannot say" values are `false`, matching {@link judgeProfileUnavailable}:
  * `""` is the no-carry seed for an unset record (the store is SUPPOSED to
  * resolve it to the harness default), and `undefined` offers is a catalog that
  * has not answered - reading either as "the model is gone" would suppress the
- * disclosure on every cold load.
+ * disclosure on every cold load. `""` is also what `resolveModelBySlug` answers
+ * `none` for, so it is checked here rather than relied on there.
  */
 export function judgeModelUnavailable(
   storedModelSlug: string,
-  offeredModelSlugs: ReadonlyArray<string> | undefined,
+  offeredModels: ReadonlyArray<GuiAgentModelOption> | undefined,
 ): boolean {
   if (storedModelSlug.length === 0) return false;
-  if (offeredModelSlugs === undefined) return false;
-  return !offeredModelSlugs.includes(storedModelSlug);
+  if (offeredModels === undefined) return false;
+  return !modelMatchIsCovered(
+    resolveModelBySlug(offeredModels, storedModelSlug),
+  );
 }
 
 export function judgeProfileUnavailable(
