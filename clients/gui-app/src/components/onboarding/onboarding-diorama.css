@@ -278,7 +278,10 @@
   gap: clamp(0.375rem, 1vw, 0.75rem);
   width: 100%;
   max-width: calc(72rem + 2 * var(--diorama-gutter));
-  padding-inline: var(--diorama-gutter);
+  /* The active segment's ring is 1px of line and 5px of halo, and the panel
+     clips at its own padding edge: 6px below and 8px above draw all of it, and
+     keep the top of the strip off the window's shadow. */
+  padding: 0.5rem var(--diorama-gutter) 0.375rem;
 }
 /* Wrapped rather than stacked: the track takes a whole line, the label and
    caption share the next one. Two text rows would cost the window ~20px of
@@ -391,14 +394,87 @@
   position: relative;
 }
 
+/* The split is the scene's STATE, carried by `data-stage` off the beat model,
+   not a keyframe that happens to fire late in chapter 2. A delayed keyframe
+   cannot hold a state that has to survive the chapters after it: every replay
+   and every chapter switch rewinds it, and chapters 3 and 4 then need their own
+   copy of the answer - two sources of truth, which is how this drifted. */
 .diorama-tiled {
   opacity: 0;
+  transition: opacity 250ms var(--diorama-ease);
 }
+.diorama-scene[data-stage="tiled"] .diorama-tiled,
+.diorama-scene[data-stage="browsing"] .diorama-tiled {
+  opacity: 1;
+}
+.diorama-scene[data-stage="tiled"] .diorama-unsplit,
+.diorama-scene[data-stage="browsing"] .diorama-unsplit {
+  opacity: 0;
+  visibility: hidden;
+}
+/* The drop settles the tile once, in the chapter where the drop happens. */
+.diorama-scene[data-chapter="2"][data-stage="tiled"] .diorama-tiled-drop {
+  animation: diorama-settle 420ms var(--diorama-ease) both;
+}
+
 .diorama-drop-target,
-.diorama-browser,
 .diorama-drag,
 .diorama-cursor {
   opacity: 0;
+}
+
+/* Two faces in one grid cell: a switch is a crossfade in place, with no mount,
+   no unmount and no layout shift. */
+.diorama-face-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.diorama-face {
+  grid-area: 1 / 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition:
+    opacity 200ms var(--diorama-ease),
+    transform 200ms var(--diorama-ease);
+}
+.diorama-face[data-active="true"] {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* A pane tab: the active one wears the surface and the primary bar. The tab
+   the click adds has nowhere to slide in from, so it just arrives. */
+.diorama-pane-tab {
+  color: var(--muted-foreground);
+  animation: diorama-fade-in 160ms var(--diorama-ease) both;
+  transition:
+    background-color 200ms var(--diorama-ease),
+    color 200ms var(--diorama-ease);
+}
+.diorama-pane-tab[data-active="true"] {
+  background: var(--background);
+  color: var(--foreground);
+}
+.diorama-pane-tab-bar {
+  opacity: 0;
+  transition: opacity 200ms var(--diorama-ease);
+}
+.diorama-pane-tab[data-active="true"] .diorama-pane-tab-bar {
+  opacity: 1;
+}
+/* The row is selected for exactly as long as the browser is open. */
+.diorama-browser-row {
+  transition: background-color 160ms var(--diorama-ease);
+}
+.diorama-scene[data-stage="browsing"] .diorama-browser-row {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 
 .diorama-drag {
@@ -425,7 +501,7 @@
   }
 }
 
-/* ---------------------------------------------------- chapter 2 — tile */
+/* ------------------------------------- chapter 2 — open (drag, then click) */
 
 .diorama-scene[data-chapter="2"] .diorama-drag {
   animation: diorama-drag-travel 2400ms var(--diorama-ease-in-out) 300ms both;
@@ -439,14 +515,13 @@
 .diorama-scene[data-chapter="2"] .diorama-drop-target {
   animation: diorama-target 1100ms linear 1400ms both;
 }
-.diorama-scene[data-chapter="2"] .diorama-tiled {
-  animation: diorama-fade-in 250ms var(--diorama-ease) 2350ms both;
-}
-.diorama-scene[data-chapter="2"] .diorama-tiled-drop {
-  animation: diorama-settle 420ms var(--diorama-ease) 2350ms both;
-}
-.diorama-scene[data-chapter="2"] .diorama-unsplit {
-  animation: diorama-hide 1ms step-end 2350ms both;
+
+/* The tile has settled; now the same cursor goes back for the browser. The
+   spotlight moves to the sidebar 600ms before the cursor arrives (the chapter's
+   third beat), so the eye is already where the click is going to land; the
+   fourth beat, at 3900ms, is the click itself. */
+.diorama-scene[data-chapter="2"] .diorama-cursor--open {
+  animation: diorama-cursor-in 1500ms var(--diorama-ease-in-out) 3200ms both;
 }
 
 @keyframes diorama-drag-travel {
@@ -505,32 +580,73 @@
   }
 }
 
-/* ---------------------------------------------------- chapter 3 — open */
+/* -------------------------------------------------- chapter 3 — panels */
 
-.diorama-scene[data-chapter="3"] .diorama-tiled,
-.diorama-scene[data-chapter="4"] .diorama-tiled {
-  opacity: 1;
+/* The app's horizontal rail marks its tab with the foreground colour and a
+   primary underline - no pill; the pill is the vertical rail's treatment. One
+   underline for the rail, sliding a slot at a time. */
+.diorama-rail-item {
+  color: var(--muted-foreground);
+  transition: color 200ms var(--diorama-ease);
 }
-.diorama-scene[data-chapter="3"] .diorama-unsplit,
-.diorama-scene[data-chapter="4"] .diorama-unsplit {
-  opacity: 0;
-  visibility: hidden;
+.diorama-rail-item[data-active="true"] {
+  color: var(--foreground);
 }
-.diorama-scene[data-chapter="3"] .diorama-cursor--open {
-  animation: diorama-cursor-in 1500ms var(--diorama-ease-in-out) 300ms both;
+.diorama-rail-underline {
+  transform: translateX(calc(var(--diorama-rail-slot, 0) * 100%));
+  transition: transform 200ms var(--diorama-ease);
 }
-.diorama-scene[data-chapter="3"] .diorama-browser-row {
-  animation: diorama-row-select 160ms var(--diorama-ease) 1000ms both;
+
+/* One 100% step is one icon, because the slot is a fifth of the rail. The
+   stops are the chapter's beats: 0, 800, 1600, 2400, 3200, then back to the
+   first at 4400 so the sidebar hands "Browse" the panel it started from. */
+.diorama-scene[data-chapter="3"] .diorama-rail-cursor {
+  animation: diorama-rail-walk 5000ms var(--diorama-ease-in-out) both;
 }
-.diorama-scene[data-chapter="3"] .diorama-browser {
-  animation: diorama-fade-in 220ms var(--diorama-ease) 1100ms both;
-}
-.diorama-scene[data-chapter="4"] .diorama-browser,
-.diorama-scene[data-chapter="4"] .diorama-browser-row {
-  opacity: 1;
-}
-.diorama-scene[data-chapter="4"] .diorama-browser-row {
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+@keyframes diorama-rail-walk {
+  0% {
+    opacity: 0;
+    transform: translate(-40%, 4px);
+  }
+  4.4% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  14% {
+    transform: translate(0, 0);
+  }
+  16% {
+    transform: translate(100%, 0);
+  }
+  30% {
+    transform: translate(100%, 0);
+  }
+  32% {
+    transform: translate(200%, 0);
+  }
+  46% {
+    transform: translate(200%, 0);
+  }
+  48% {
+    transform: translate(300%, 0);
+  }
+  62% {
+    transform: translate(300%, 0);
+  }
+  64% {
+    transform: translate(400%, 0);
+  }
+  82% {
+    transform: translate(400%, 0);
+  }
+  88% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
 }
 
 @keyframes diorama-cursor-in {
@@ -629,16 +745,6 @@
     opacity: 1;
   }
 }
-@keyframes diorama-hide {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-    visibility: hidden;
-  }
-}
-
 /* ------------------------------------------------------------- mobile */
 
 .onboarding-workspace--mobile {
@@ -701,8 +807,18 @@
   .diorama-scene[data-chapter="4"] .diorama-browser-project {
     animation: none;
   }
-  .diorama-scene[data-chapter="2"] .diorama-tiled-drop {
+  .diorama-scene[data-chapter="2"][data-stage="tiled"] .diorama-tiled-drop {
     animation-name: diorama-fade-in;
+  }
+  .diorama-face {
+    transform: none;
+    transition: opacity 200ms ease;
+  }
+  .diorama-rail-underline {
+    transition: none;
+  }
+  .diorama-tiled {
+    transition: none;
   }
   .diorama-mobile-sheet {
     animation-name: diorama-fade-in;

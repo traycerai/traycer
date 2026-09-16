@@ -6,6 +6,14 @@
 .onboarding-host-control {
   position: relative;
   min-height: 2.25rem;
+  /* Both acts place this bar flush against `.onboarding-stage-scroll`'s own
+     left edge, one padded container up from where `.onboarding-panel` puts
+     its inset. A `overflow-y: auto` box with no `overflow-x` of its own
+     computes `overflow-x: auto` too, so that inner edge clips - and the 1px
+     ring below bleeds a pixel past the border box on every side. Nudged in
+     so the ring is inside the scroll box, never clipped by it (same fix as
+     the card scroller's own padding, just sized to a 1px ring). */
+  margin-inline-start: 0.125rem;
   border-radius: 0.625rem;
   background: color-mix(in srgb, var(--foreground) 4%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 8%, transparent);

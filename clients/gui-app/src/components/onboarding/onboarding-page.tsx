@@ -384,8 +384,15 @@ function OnboardingTour(props: {
         data-welcoming={welcomePhase !== "ready"}
         className="onboarding-tour-layer relative z-10 flex h-full min-h-0 w-full flex-col pt-safe-top pr-safe-right pb-safe-bottom pl-safe-left"
       >
-        <header className="onboarding-header flex shrink-0 items-center justify-between gap-4">
-          <div className="onboarding-brand flex items-center gap-2.5">
+        {/* The inline padding mirrors `AppHeader`: the tour is a full-bleed
+            surface, so on a frameless shell the traffic lights sit on top of
+            this row's leading edge and the brand mark has to start after them.
+            `wco:` only matches while the controls are actually visible. */}
+        <header className="onboarding-header flex shrink-0 items-center justify-between gap-4 px-[var(--onboarding-gutter)] wco:pl-[env(titlebar-area-x,82px)] wco:pr-[max(12px,calc(100vw-env(titlebar-area-x,82px)-env(titlebar-area-width,100vw)+12px))]">
+          {/* The brand block is the header's only non-interactive run, so it
+              is also its drag handle - the same role AppHeader gives its
+              title-bar spacers. */}
+          <div className="onboarding-brand flex items-center gap-2.5 [-webkit-app-region:drag]">
             {welcomePhase === "ready" ? (
               <m.div
                 layoutId={reducedMotion ? undefined : "onboarding-brand-mark"}

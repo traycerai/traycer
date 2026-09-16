@@ -13,13 +13,15 @@
 
 /* The live dithered field (onboarding-field.tsx) owns the depth behind the
    welcome mark. It concentrates there and fades out inside its own shader, so
-   the element itself is plain: the only thing CSS drives is how far it recedes
-   once the glass panel takes over. */
+   the element itself is plain. What CSS drives is how far the field recedes
+   once the glass panel takes over - the panel's backdrop blur softens whatever
+   ends up behind it, so the tour can afford more of the field than the welcome
+   screen's bare copy can. */
 .onboarding-field {
   transition: opacity 320ms var(--onboarding-ease);
 }
 .onboarding-field[data-welcoming="false"] {
-  opacity: 0.3;
+  opacity: 0.5;
 }
 
 /* Only reached when WebGL is unavailable - the field renders this instead. */
@@ -90,9 +92,11 @@
 
 /* -------------------------------------------------------------------- header */
 
+/* The inline padding is on the element, not here: it has to lose to the
+   `wco:` utilities that clear the window controls. */
 .onboarding-header {
   min-height: 3.5rem;
-  padding: 0.75rem var(--onboarding-gutter);
+  padding-block: 0.75rem;
 }
 
 .onboarding-progress-segment {

@@ -32,6 +32,11 @@ uniform float uTime;
 uniform float uCell;
 uniform vec3 uPrimary;
 uniform vec3 uForeground;
+/* Where the field gathers: x is the centre's height in gl space (0 at the
+   bottom), y the radius of the falloff, z how much the centre lifts the noise
+   toward being lit. The component eases between two presets - behind the
+   welcome mark, then spread across the tour's panel. */
+uniform vec3 uFocus;
 
 /* Alpha of the brightest dot. The page's copy sits on top of this. */
 const float PEAK_ALPHA = 0.35;
@@ -94,17 +99,15 @@ void main() {
 
   /* A wide smoothstep rather than an ellipse: the field has to thin out into
      nothing well before any edge, with no rim anywhere. Distance is measured
-     in a square space so a wide window fades before its sides. gl_FragCoord
-     counts up from the bottom, so 0.58 here is the brand mark's 42% from the
-     top. */
-  vec2 centred = (uv - vec2(0.5, 0.58)) * vec2(uResolution.x / uResolution.y, 1.0);
-  float fade = 1.0 - smoothstep(0.0, 0.62, length(centred));
+     in a square space so a wide window fades before its sides. */
+  vec2 centred = (uv - vec2(0.5, uFocus.x)) * vec2(uResolution.x / uResolution.y, 1.0);
+  float fade = 1.0 - smoothstep(0.0, uFocus.y, length(centred));
 
   /* The raw noise clusters around the middle. Stretching it is what gives the
      field open space to flow through instead of an even wash of dots. The
      fade also lifts the noise, so the middle always carries some field and
      the composition never depends on where the noise happens to peak. */
-  float level = smoothstep(0.30, 0.88, field(cellIndex / BLOB_CELLS) + 0.22 * fade) * fade;
+  float level = smoothstep(0.30, 0.88, field(cellIndex / BLOB_CELLS) + uFocus.z * fade) * fade;
   float lit = clamp(floor(level * LEVELS + bayer4(cellIndex)) / LEVELS, 0.0, 1.0);
 
   float radius = uCell * DOT_RADIUS * lit;
@@ -117,6 +120,22 @@ void main() {
   gl_FragColor = vec4(tint, PEAK_ALPHA * lit * ink);
 }
 `;
+
+/** `uFocus`: the centre's height in gl space, the falloff radius, the lift. */
+type Focus = readonly [number, number, number];
+
+/** Gathered behind the brand mark, at 42% from the top. */
+const FOCUS_WELCOME: Focus = [0.58, 0.62, 0.22];
+/** Spread behind the tour's glass panel, wide enough to roll off before the
+ *  sides of the window, and lifted less so it stays a texture. */
+const FOCUS_TOUR: Focus = [0.42, 1.05, 0.12];
+/** The handoff rides along with the welcome layer's own 320ms exit. */
+const FOCUS_EASE_MS = 600;
+
+/** The same shape as `--onboarding-ease`: all of the move up front. */
+function easeOut(t: number): number {
+  return 1 - (1 - t) ** 4;
+}
 
 type Rgb = readonly [number, number, number];
 
@@ -168,6 +187,16 @@ function buildProgram(gl: WebGLRenderingContext): WebGLProgram | null {
 export function OnboardingField(props: { readonly welcoming: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [supported, setSupported] = useState(true);
+  // The loop reads the target each frame and eases toward it, so the handoff
+  // costs no renders. `settleFocus` is how a PAUSED field (reduced motion, a
+  // hidden document) still lands on the new preset.
+  const focusRef = useRef<Focus>(props.welcoming ? FOCUS_WELCOME : FOCUS_TOUR);
+  const settleFocusRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    focusRef.current = props.welcoming ? FOCUS_WELCOME : FOCUS_TOUR;
+    settleFocusRef.current?.();
+  }, [props.welcoming]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -209,6 +238,7 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
     const uCell = gl.getUniformLocation(program, "uCell");
     const uPrimary = gl.getUniformLocation(program, "uPrimary");
     const uForeground = gl.getUniformLocation(program, "uForeground");
+    const uFocus = gl.getUniformLocation(program, "uFocus");
 
     const probe = document
       .createElement("canvas")
@@ -217,10 +247,48 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
     let elapsed = 0;
     let frame = 0;
 
+    // The preset the ease is travelling from, where it has reached, and which
+    // target that ease was started for. Presets are module constants, so an
+    // identity check is all "the target changed" needs.
+    let seen = focusRef.current;
+    let fromFocus = seen;
+    let atX = seen[0];
+    let atY = seen[1];
+    let atZ = seen[2];
+    let since = 0;
+
     const draw = (): void => {
       gl.uniform1f(uTime, elapsed);
+      gl.uniform3f(uFocus, atX, atY, atZ);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
+
+    const stepFocus = (now: number): void => {
+      const target = focusRef.current;
+      if (target !== seen) {
+        fromFocus = [atX, atY, atZ];
+        seen = target;
+        since = now;
+      }
+      if (since === 0) return;
+      const eased = easeOut(Math.min(1, (now - since) / FOCUS_EASE_MS));
+      atX = fromFocus[0] + (target[0] - fromFocus[0]) * eased;
+      atY = fromFocus[1] + (target[1] - fromFocus[1]) * eased;
+      atZ = fromFocus[2] + (target[2] - fromFocus[2]) * eased;
+    };
+
+    // A paused field cannot ease, so it snaps - which is also what reduced
+    // motion asks for.
+    const settleFocus = (): void => {
+      if (frame !== 0) return;
+      seen = focusRef.current;
+      fromFocus = seen;
+      atX = seen[0];
+      atY = seen[1];
+      atZ = seen[2];
+      draw();
+    };
+    settleFocusRef.current = settleFocus;
 
     const resize = (): void => {
       const dpr = Math.min(window.devicePixelRatio, MAX_DEVICE_PIXEL_RATIO);
@@ -248,6 +316,7 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
 
     const loop = (now: number): void => {
       elapsed = (now - start) / 1000;
+      stepFocus(now);
       draw();
       frame = window.requestAnimationFrame(loop);
     };
@@ -280,6 +349,7 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
 
     return () => {
       if (frame !== 0) window.cancelAnimationFrame(frame);
+      settleFocusRef.current = null;
       theme.disconnect();
       box.disconnect();
       document.removeEventListener("visibilitychange", play);
