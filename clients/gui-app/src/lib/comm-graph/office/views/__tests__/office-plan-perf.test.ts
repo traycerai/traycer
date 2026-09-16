@@ -116,30 +116,49 @@ const BUDGET_RUNS = 3;
  *
  * PER VIEW, like {@link PLAN_BUDGET_MS} above and for the same reason: one
  * number across six views is a gate set by whichever view is densest, and it
- * stops gating the other five the moment that one grows. Rule 8 states 12 for
- * all of them, and five of them still measure about 9 against it.
+ * stops gating the other five the moment that one grows.
  *
- * CITY IS THE SIXTH, and its number is content rather than slack. A City
- * building is `citySeatProps` (iso-painter.ts) drawing four sprites a storey -
- * two wall slabs and a window on each face - plus one roof, so a seat's cost
- * is linear in how tall its building stands. Feedback round 1 moved that range
- * from 1..7 storeys to 3..14, and the number that matters is the FLOOR, not
- * the ceiling: at a thousand agents almost every agent is a quiet one sitting
- * at the minimum, so tripling the minimum roughly tripled the common case.
- * Measured at 1,000 agents: 428 and 462 painted seats costing 6,213 and 6,811
- * drawables, which is 14.5 and 14.7 a seat against the ~9 the old headroom was
- * sized for.
+ * WHAT THE SIX ACTUALLY MEASURE, worst rect of the thousand-agent cases -
+ * taken by logging `body / seats` at the assertion below, because a budget
+ * argued from memory is how the old "about 9" in this comment came to be
+ * wrong about five views at once:
  *
- * 20 KEEPS RULE 8'S OWN HEADROOM RATIO over that measurement (12 against 9 is
- * a third clear; 20 against 14.7 is a third clear). A ceiling at 15 would have
- * been the worse mistake of the two available: it passes today at 98% of
- * budget and reddens on the first frame that draws one more building, which is
- * a tripwire that fires for no reason rather than a budget.
+ * | view            | worst drawables / seat |
+ * | --------------- | ---------------------- |
+ * | building        | 2.4                    |
+ * | campus          | 4.3                    |
+ * | towers          | 5.2                    |
+ * | floor           | 6.4                    |
+ * | mission-control | 7.9                    |
+ * | city            | 14.8                   |
  *
- * What this number does NOT say is that City still renders as fast as it did.
+ * So Rule 8's 12 is comfortable for five of them and City is the only view
+ * that has ever needed a number of its own.
+ *
+ * CITY'S IS CONTENT RATHER THAN SLACK, and it is not a small amount of
+ * content. A City building is `citySeatProps` (iso-painter.ts) drawing four
+ * sprites a storey - two wall slabs and a window on each face - plus one roof,
+ * so a seat's cost is linear in how tall its building stands. Feedback round 1
+ * moved that range from 1..7 storeys to 3..14, and the number that matters is
+ * the FLOOR, not the ceiling: at a thousand agents almost every agent is a
+ * quiet one sitting at the minimum, so a quiet building went from 5 sprites to
+ * 13 and the common case roughly doubled. City now costs about TWICE the next
+ * densest view per seat, which is the honest way to read 20 - not as room City
+ * was given, but as the price of a stack being the view's whole idea.
+ *
+ * 20 is therefore TIGHTER relative to its own measurement than 12 is for
+ * anybody else: 20 against 14.8 leaves 35%, where 12 against mission control's
+ * 7.9 leaves 52%. A ceiling at 15 would have been the worse mistake of the two
+ * available - it passes today at 98% of budget and reddens on the first frame
+ * that draws one more building, which is a tripwire that fires for no reason
+ * rather than a budget.
+ *
+ * WHAT THIS NUMBER DOES NOT SAY is that City still renders as fast as it did.
  * It is a drawable COUNT, and a count is a proxy for a frame time nobody has
- * re-measured since the range moved - so read a City frame-time regression as
- * unguarded by this file until somebody sits in front of one.
+ * re-measured since the range moved - jsdom has no canvas to time, so the
+ * measurement that would settle it cannot be taken from here at all. Read a
+ * City frame-time regression as unguarded by this file until somebody sits in
+ * front of one.
  */
 const FRAME_DRAWABLES_PER_SEAT: Readonly<Record<OfficeViewId, number>> = {
   floor: 12,

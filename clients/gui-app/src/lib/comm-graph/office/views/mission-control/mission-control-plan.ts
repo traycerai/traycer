@@ -204,6 +204,28 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
+/**
+ * STRUCTURAL, AND THAT IS SAFE ONLY BECAUSE `frozen` NEVER OUTLIVES A BUILD.
+ *
+ * Every field is required, so adding one to {@link MissionControlFrozen} makes
+ * this reject any payload written before it existed - and a rejection here is
+ * not a small thing: `frozenOf` returns `null`, `pack` falls to `packFresh`,
+ * and every agent in the hall moves to a different console.
+ *
+ * That is fine today because there is no payload this validator can be handed
+ * except one the same build just produced. `office-scene.ts` passes its own
+ * in-memory layout as `input.previous` and nothing else ever constructs one:
+ * `frozen` is not serialized anywhere (`tierSeatCounts` and
+ * `teamReserveSeatIds` appear nowhere outside this directory), and what an
+ * office tile persists is its camera and its Auto choice, neither of which
+ * carries a packing.
+ *
+ * So the rule for the next person: the moment a packing starts crossing a
+ * version boundary - persisted to a store, sent over the wire - this becomes a
+ * migration surface, and a new required field becomes a silent re-pack on
+ * upgrade. Accept the older shape and derive the missing field from the
+ * packing rather than tightening this.
+ */
 export function isMissionControlFrozen(
   value: unknown,
 ): value is MissionControlFrozen {

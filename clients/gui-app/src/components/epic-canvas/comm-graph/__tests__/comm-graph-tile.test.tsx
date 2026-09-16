@@ -3845,6 +3845,25 @@ describe("CommGraphTile", () => {
   });
 
   describe("picking a view", () => {
+    it("removes the auto announcer once a view is picked explicitly - a person who chose it has nothing to be told", async () => {
+      // `OfficeAutoAnnouncer` replaced a deleted visible chip and is
+      // `sr-only`, so its own text/roles are pinned directly in
+      // `office-auto-announcer.test.tsx`. What that focused test cannot see
+      // is the WIRING - the tile only renders it `choice === "auto"` - so
+      // this drives the real picker to flip `choice` away from Auto and
+      // checks the announcer actually leaves with it.
+      await reachAutoFloor();
+      expect(
+        screen.getByTestId("comm-graph-office-auto-announcer"),
+      ).toBeDefined();
+
+      await pickView("towers");
+
+      expect(
+        screen.queryByTestId("comm-graph-office-auto-announcer"),
+      ).toBeNull();
+    });
+
     it("picking the already-resolved view records the choice without moving the camera", async () => {
       // `handleOfficeViewChange` used to compare `next` against the STORED
       // `officeView`, which is null on a tile still following Auto - so

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
+import {
+  officeTruncateLabel,
+  OFFICE_MAX_LABEL_CHARS,
+} from "@/lib/comm-graph/office/office-label-text";
 import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import {
@@ -29,6 +33,7 @@ import {
   waitingScript,
   type OfficeTestEpic,
 } from "@/lib/comm-graph/office/office-test-epic";
+import { floorPainter } from "@/lib/comm-graph/office/views/floor/floor-painter";
 import { obliqueReserveLabelSeatId } from "@/lib/comm-graph/office/views/oblique/oblique-plan";
 import {
   OFFICE_VIEW_IDS,
@@ -1023,6 +1028,98 @@ describe("OfficeScene", () => {
     expect(labels).toHaveLength(2);
     for (const label of labels) expect(label.length).toBeLessThanOrEqual(14);
     expect(labels.some((label) => label.endsWith("…"))).toBe(true);
+  });
+
+  it("puts a seated agent's tag on the exact line floorPainter writes that same seat's absent-owner desk plate (shared OFFICE_LABEL_GAP)", () => {
+    // Two modules letter the same row of seats: the scene tags who is
+    // sitting there, and `floorPainter`'s `sheetedDesk` plates the desk once
+    // they leave - its own comment says why the two must land on one line:
+    // "so the desk does not appear to shift when its owner leaves". Both
+    // derive from `foot + OFFICE_LABEL_GAP` (`office-types.ts`'s shared
+    // constant), so this reads the two RUNTIME values off real code instead
+    // of re-deriving either by hand.
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
+    const seatedLabel = frameOf(scene).actors.find(
+      (drawable) =>
+        drawable.kind === "label" && drawable.ownerAgentId === "alpha",
+    );
+    if (seatedLabel?.kind !== "label") {
+      throw new Error("expected alpha's seated name tag");
+    }
+
+    const seat = layoutOf(scene).desks.get("alpha");
+    if (seat === undefined) throw new Error("expected alpha's desk");
+    const sheeted: OfficeDeskState = {
+      agentId: null,
+      name: "alpha",
+      accentId: null,
+      status: "idle",
+      sheeted: true,
+      openRequests: 0,
+      screenFrame: 0,
+      harnessId: null,
+      modelTier: "medium",
+    };
+    const plateEntry = floorPainter
+      .seatProps(layoutOf(scene), seat, sheeted, 2)
+      .find((entry) => entry.drawable.kind === "label");
+    if (plateEntry?.drawable.kind !== "label") {
+      throw new Error("expected the vacated desk's plate label");
+    }
+
+    expect(seatedLabel.y).toBe(plateEntry.drawable.y);
+  });
+
+  it("cuts a long name to the same text for a seated tag and a sheeted desk plate, via the shared officeTruncateLabel helper", () => {
+    // The other half of the same agreement: both letterers cut through
+    // `officeTruncateLabel` (`office-label-text.ts`), which replaced a
+    // private, byte-identical `truncate` in each module - so a name that
+    // overflows must read identically whether the agent is still in the
+    // chair or has already left it.
+    const longName = "an extremely long agent name that keeps going";
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(
+      sceneInput({
+        agents: [agent({ id: "alpha", name: longName, createdAt: 1 }), BETA],
+        visibleAgentIds: BOTH,
+      }),
+    );
+    const seatedLabel = frameOf(scene).actors.find(
+      (drawable) =>
+        drawable.kind === "label" && drawable.ownerAgentId === "alpha",
+    );
+    if (seatedLabel?.kind !== "label") {
+      throw new Error("expected alpha's seated name tag");
+    }
+
+    const seat = layoutOf(scene).desks.get("alpha");
+    if (seat === undefined) throw new Error("expected alpha's desk");
+    const sheeted: OfficeDeskState = {
+      agentId: null,
+      name: longName,
+      accentId: null,
+      status: "idle",
+      sheeted: true,
+      openRequests: 0,
+      screenFrame: 0,
+      harnessId: null,
+      modelTier: "medium",
+    };
+    const plateEntry = floorPainter
+      .seatProps(layoutOf(scene), seat, sheeted, 2)
+      .find((entry) => entry.drawable.kind === "label");
+    if (plateEntry?.drawable.kind !== "label") {
+      throw new Error("expected the vacated desk's plate label");
+    }
+
+    // Not vacuous: the name really was cut, on both sides, and both agree
+    // with the canonical cut rather than merely with each other.
+    expect(seatedLabel.text.endsWith("…")).toBe(true);
+    expect(seatedLabel.text).toBe(plateEntry.drawable.text);
+    expect(seatedLabel.text).toBe(
+      officeTruncateLabel(longName, OFFICE_MAX_LABEL_CHARS),
+    );
   });
 
   it("stands every prop on its tile rather than over the row below", () => {
