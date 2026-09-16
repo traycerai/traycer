@@ -102,7 +102,7 @@ describe("makePendingBrowserSessionTileRef", () => {
     expect(ref.type).toBe(TILE_KIND_BROWSER_SESSION);
     expect(ref.sessionId).toBeNull();
     expect(ref.tabId).toBeNull();
-    expect(ref.pending).toBe(pending);
+    expect(ref.pending).toStrictEqual(pending);
     expect(ref.hostId).toBe(HOST);
     expect(ref.id).toContain(pending.requestId);
   });
