@@ -1131,8 +1131,14 @@ export function measureCampus(input: OfficePlanInput): OfficeSize {
 export const CAMPUS_VIEW: OfficeView = {
   id: "campus",
   label: "Campus",
+  // WHAT A READER SEES, like the other five. This used to describe the PACKER
+  // - "shelf-packed into a near-square so the projected diamond fills the
+  // viewport" - which is the reason the cabins are laid out the way they are
+  // and not a thing anybody can look at. The picker shows this line precisely
+  // because the label alone tells a first-time reader nothing, so a sentence
+  // only the planner's author can parse spends that slot on nobody.
   description:
-    "A cabin per team, sized by its members and shelf-packed into a near-square so the projected diamond fills the viewport.",
+    "A cabin per team, low on grass and seen from the corner; the desks inside are drawn, and a team too big for one cabin takes a second.",
   plan: planCampus,
   measure: measureCampus,
   painter: ISO_PAINTER,
