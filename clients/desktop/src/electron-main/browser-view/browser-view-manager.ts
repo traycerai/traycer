@@ -194,12 +194,12 @@ export class BrowserViewManager {
   >();
   private readonly popups: BrowserViewPopups;
   private readonly debugSessions: BrowserViewDebugSessions;
-  private readonly windows: BrowserViewWindowAttachment;
   private readonly entryFactory: BrowserViewEntryFactory;
   private readonly provisioning: BrowserViewProvisioning;
   // Collaborators are part of the manager's public surface: the IPC layer
   // calls them directly (`manager.find.find(...)`) rather than through
   // pass-through methods that add no policy.
+  readonly windows: BrowserViewWindowAttachment;
   readonly annotations: BrowserViewAnnotationHost;
   readonly find: BrowserViewFind;
   readonly chords: BrowserViewChords;
@@ -615,6 +615,7 @@ export class BrowserViewManager {
 
   dispose(): void {
     this.offWindowChange();
+    this.windows.dispose();
     this.offDownloadChange();
     this.offCertificateError();
     for (const entry of Array.from(this.entries.guestValues())) {
@@ -703,9 +704,6 @@ export class BrowserViewManager {
       this.annotations.end(entry, "tile-close");
     }
     this.entries.bindSurface(entry, key);
-    if (previousSurface !== null && previousSurface.windowId !== key.windowId) {
-      this.windows.detachResetListenerIfUnused(previousSurface.windowId);
-    }
   }
 
   private detachEntrySurface(entry: BrowserViewEntry): void {
@@ -716,7 +714,6 @@ export class BrowserViewManager {
     this.entries.detachSurface(entry);
     entry.surfaceBindingId = null;
     entry.rendererResetPending = false;
-    this.windows.detachResetListenerIfUnused(surface.windowId);
     // LAST, once every field the reading depends on has moved: `viewed` is
     // read off the entry now (H10), so a detach that emitted nothing would
     // leave the host believing a tile is still showing this guest. `attachSurface`
@@ -1113,11 +1110,6 @@ export class BrowserViewManager {
     step("devtools", () => this.destroyDevToolsWindow(entry));
     step("annotations", () => this.annotations.failPendingForEntry(entry));
     this.entries.detachSurface(entry);
-    if (surface !== null) {
-      step("surface-reset-listener", () =>
-        this.windows.detachResetListenerIfUnused(surface.windowId),
-      );
-    }
     const webContents = entry.webContents;
     step("listeners", () => {
       for (const [event, handler] of Object.entries(entry.listeners)) {
@@ -1145,11 +1137,6 @@ export class BrowserViewManager {
     );
     this.entries.remove(entry);
     step("isolated-storage", () => this.releaseIsolatedSessionStorage(entry));
-    step("lifecycle-reset-listener", () =>
-      this.windows.detachResetListenerIfUnused(
-        entry.identity.lifecycleWindowId,
-      ),
-    );
     log.info("[browser-view] view destroy requested", { keyId });
   }
 

@@ -295,17 +295,10 @@ export function registerBrowserViewIpc(
       now: () => Date.now(),
       isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
       isHeadlessOriginKey: isHeadlessOriginCookieKey,
-      // The observer first, then the durable record: the observer is what
-      // stops this applier's own inserts from handing the keys straight back
-      // to the desktop, and the record is what lets the sending host update
-      // them again later.
-      //
-      // The applier calls neither for a write bound for the ephemeral jar,
-      // which is why both may write the durable ledger unconditionally.
-      claimHeadlessOriginKeys: async (keys) => {
-        noteBrowserPrimaryProfileAppliedKeys(keys);
-        await recordHeadlessOriginCookieKeys(keys);
-      },
+      // Durable ownership precedes the merge; insert marks precede only real
+      // writes, so an unchanged replay cannot mask a later desktop edit.
+      claimHeadlessOriginKeys: recordHeadlessOriginCookieKeys,
+      noteAppliedKeys: noteBrowserPrimaryProfileAppliedKeys,
       // The mirror image, for the keys Chromium refused: the observer mark
       // first (no insert is coming to spend it), then the durable claim.
       releaseHeadlessOriginKeys: async (keys) => {
@@ -722,10 +715,10 @@ export function registerBrowserViewIpc(
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSessionsOpen,
     (event, payload) => {
-      sessions.open(
-        readSenderWindowId(bridge, event),
-        browserViewIpcPayload.sessionsStreamKey.parse(payload),
-      );
+      const windowId = readSenderWindowId(bridge, event);
+      const key = browserViewIpcPayload.sessionsStreamKey.parse(payload);
+      manager.windows.ensureResetListener(windowId);
+      sessions.open(windowId, key);
     },
   );
 
