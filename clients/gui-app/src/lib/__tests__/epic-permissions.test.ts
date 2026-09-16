@@ -39,4 +39,16 @@ describe("mutationDisabledHint", () => {
       "Reconnect to make changes.",
     );
   });
+
+  it("distinguishes a role that is not yet known (null) from a real viewer", () => {
+    // `null` means "not known here" (see `epicStatusSubscribeSnapshotFrameSchemaV10`'s
+    // `permissionRole` doc comment), not "confirmed viewer" - a control that reads
+    // "Viewers cannot ..." for a role the host simply hasn't resolved yet is a
+    // false, specific claim about the caller's access.
+    expect(mutationDisabledHint(null, false, "create chats")).toBe(
+      "Task permissions are not available yet.",
+    );
+    // Still gated exactly like a viewer - not editable, regardless of copy.
+    expect(isEditableRole(null)).toBe(false);
+  });
 });
