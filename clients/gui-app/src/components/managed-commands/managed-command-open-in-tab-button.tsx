@@ -21,24 +21,29 @@ import { cn } from "@/lib/utils";
  * (a preview tab); dragging is how a person says WHERE - onto a canvas pane -
  * exactly as dragging a row out of the Background panel
  * does, on the same payload, so the canvas needs to know nothing about which
- * surface the gesture began in. The identity a drag needs (epic, bound host,
- * owning canvas view) is read from the same contexts the door hook itself
- * reads; a transcript outside a canvas view simply cannot drag, and still
- * clicks.
+ * surface the gesture began in. The identity a drag needs (epic, host, owning
+ * canvas view) is read from the same contexts the door hook itself reads,
+ * except the host, which the caller may name: a shell created through a
+ * cross-host dial runs on another host than the tab's, and a tile dragged
+ * out of its door has to open there too - `hostId ?? tabHostId`, exactly the
+ * resolution the click's door applies. A transcript outside a canvas view
+ * simply cannot drag, and still clicks.
  */
 export function ManagedCommandOpenInTabButton(props: {
   readonly commandId: string;
+  /** The host the shell runs on when not the tab's own; `null` is the tab's. */
+  readonly hostId: string | null;
   readonly testId: string;
   readonly onOpen: () => void;
 }) {
-  const hostId = use(TabHostContext);
+  const tabHostId = use(TabHostContext);
   const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
   const viewTabId = useEpicViewTabId();
   const { isDraggable, setNodeRef, listeners, isDragging } =
     useManagedCommandOutputDragSource({
       epicId,
       viewTabId,
-      hostId,
+      hostId: props.hostId ?? tabHostId,
       commandId: props.commandId,
       enabled: true,
     });
