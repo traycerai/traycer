@@ -124,6 +124,7 @@ export function ManagedCommandRestartSegment(
   const headerAction = (
     <ManagedCommandTranscriptDoor
       commandId={restart.commandId}
+      hostId={null}
       gone={gone}
       onOpen={openOutput}
       testId={`managed-command-restart-door-${restart.commandId}`}

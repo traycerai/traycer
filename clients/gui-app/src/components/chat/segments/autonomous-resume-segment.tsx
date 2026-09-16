@@ -223,30 +223,35 @@ function ResumeManagedCommandDoor(props: {
   const managedCommand = props.trigger.managedCommand;
   const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
   const transcript = useMaybeChatTranscript();
-  // A shell that runs on another host is not in this host's set, so presence
-  // read here would call it deleted the moment the owner's snapshot lands.
-  // Its host is the only one that could answer, and this tab is not bound to
-  // it - so the door stays open and the output window it opens gives its own
-  // account of what it finds, exactly the `unknown` contract.
-  const remoteHostId =
-    managedCommand !== null &&
-    managedCommand.hostId !== null &&
-    managedCommand.hostId !== transcript?.hostId
-      ? managedCommand.hostId
-      : null;
+  // The host the digest named as the shell's, or null for a shell the chat's
+  // own host produced. Normalized BEFORE anything reads it: a body that
+  // reached the store through an older host's full-snapshot line
+  // (`chat.subscribe@1.6`/`1.7`) was validated structurally, not deep-parsed,
+  // so a key that host never wrote is `undefined` there - and `undefined`
+  // must classify as "the chat's own host", not as a foreign one.
+  const originHostId = managedCommand?.hostId ?? null;
+  // A shell whose digest named its host is not in this tab's set even when
+  // the two hosts coincide: a chat cloned onto its remote shell's host still
+  // does not own that shell (the source chat does), so a presence read here
+  // would call it deleted the moment the owner's snapshot lands. The named
+  // host is the only one that could answer, and the door stays open - the
+  // output window it opens gives its own account of what it finds, exactly
+  // the `unknown` contract. Only a null-origin digest, which the chat's own
+  // host wrote for its own shell, takes the deletion gate.
   const presence = useManagedCommandPresence({
     epicId,
     commandId: managedCommand?.commandId ?? "",
-    owner: remoteHostId === null ? transcript : null,
+    owner: originHostId === null ? transcript : null,
   });
   const openOutput = useManagedCommandDoor();
   if (managedCommand === null || openOutput === null) return null;
   const door = (
     <ManagedCommandTranscriptDoor
       commandId={managedCommand.commandId}
+      hostId={originHostId}
       gone={presence.kind === "absent"}
       onOpen={(commandId) => {
-        openOutput(commandId, remoteHostId);
+        openOutput(commandId, originHostId);
       }}
       testId={`resume-managed-command-door-${props.trigger.blockId}`}
     />

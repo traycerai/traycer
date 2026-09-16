@@ -144,6 +144,7 @@ export function ManagedCommandStartSegment(
   const headerAction = (
     <ManagedCommandTranscriptDoor
       commandId={managedCommand.commandId}
+      hostId={null}
       gone={gone}
       onOpen={openOutput}
       testId={`managed-command-start-door-${managedCommand.commandId}`}

@@ -142,22 +142,6 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
-      "path": "**.triggers.items.properties.managedCommand.anyOf[*].properties.hostId",
-      "reason": "The host a resume divider's shell runs on, nullable/.default(null), one level inside the `managedCommand` key exempted above and on the same terms: null IS the pre-feature semantic, because a host that predates the key could only create shells on the chat's own host, so a new client reading null (or stripping absence to null) opens the output window on the tab's host - exactly what it always did - and old clients strip the key on parse. Exists because a shell created through a cross-host dial keeps its log on the dialed host, and the divider's door has to open there; scoped by field path."
-    },
-    {
-      "family": "stream",
-      "method": "chat.subscribe",
-      "version": "*",
-      "payload": "serverFrame",
-      "path": "**.queue.properties.items.items.anyOf[*].properties.hostId",
-      "reason": "The same host id on the queued managed-command delivery item (the chip shown before dispatch), nullable/.default(null), same terms as the divider's: null is what every item written before the key means (the chat's own host), a new client opens on the tab's host for null exactly as before, and old clients strip the key. Scoped to the managed-command arm's field; the prompt arm has no such key."
-    },
-    {
-      "family": "stream",
-      "method": "chat.subscribe",
-      "version": "*",
-      "payload": "serverFrame",
       "path": "**.event.anyOf[*]",
       "reason": "Runtime event union grows with gated harness/event features; old clients only subscribe to chats whose harnesses they can open."
     },
