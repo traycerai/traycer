@@ -5607,6 +5607,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             buildTextOnlyPromptHandoff({
               ...entry,
               content: source.content,
+              // Not carried - this path owns no blobs for a record to name -
+              // but passed so the entry can SAY the sidecar was dropped
+              // rather than looking like a complete capture.
+              browserAnnotations: source.browserAnnotations,
               reason: source.reason,
               cause: "capacity",
             }).then(save),

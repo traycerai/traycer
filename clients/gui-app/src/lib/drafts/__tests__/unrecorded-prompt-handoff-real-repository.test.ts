@@ -206,6 +206,40 @@ describe("unrecorded prompt handoff - real repository round trip (R5F1)", () => 
     expect(row.entry.blobHashes).toContain(record.imageHash);
   });
 
+  it("says so when a crop cannot be read, rather than stashing a partial capture as a complete one (DRIVE RED)", async () => {
+    // `buildPromptStashSnapshot` leaves out a record whose crop it cannot
+    // resolve and hands back the COUNT, and its contract is that the caller
+    // keeps the source instead of destroying what the entry could not carry.
+    // The composer path honours that: it declines to clear and warns. Teardown
+    // has no source to keep - the session is going - so the entry itself has
+    // to say it. Otherwise the comment, the page it was taken on and which
+    // elements were marked are gone, and what is left LOOKS like a complete
+    // stash of the prompt.
+    const cropHash = "annotation-crop-unreadable";
+    const text = "the annotated prompt";
+    const readHashImage: PromptStashImageResolver = () => Promise.resolve(null);
+
+    const snapshot = await buildUnrecordedPromptHandoff({
+      id: "entry-annotation-dropped",
+      createdAt: 1_000,
+      content: {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+      },
+      browserAnnotations: [annotationRecord(cropHash)],
+      reason: "The chat closed before the host confirmed this message.",
+      readHashImage,
+    });
+
+    // The record could not be carried, and the snapshot reports that.
+    expect(snapshot.droppedAnnotations).toBe(1);
+    expect(snapshot.entry.annotations).toEqual([]);
+    // The words survive, and the entry states the loss rather than hiding it.
+    const rendered = contentText(snapshot.entry.content);
+    expect(rendered).toContain(text);
+    expect(rendered).toContain("A browser annotation was not saved with it");
+  });
+
   it("a hash-only prompt whose bytes are NOT resolvable survives save -> restore as text-only, with a qualification saying the image was dropped", async () => {
     const hash = "source-hash-unresolvable";
     const text = "the words must survive";

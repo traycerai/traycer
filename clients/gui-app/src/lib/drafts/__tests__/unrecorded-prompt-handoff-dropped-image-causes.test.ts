@@ -51,6 +51,7 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
         createdAt: 1,
         content: contentWithOneImage("hello"),
         reason: "Reason.",
+        browserAnnotations: [],
         cause,
       });
       notes.set(cause, JSON.stringify(snapshot.entry.content));
@@ -67,6 +68,7 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
         createdAt: 1,
         content: contentWithOneImage("hello"),
         reason: "Reason.",
+        browserAnnotations: [],
         cause,
       });
       return JSON.stringify(snapshot.entry.content);
@@ -89,6 +91,7 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
       createdAt: 1,
       content: contentWithOneImage(TEXT),
       reason: "Reason.",
+      browserAnnotations: [],
       cause: "capacity",
     });
     const text = JSON.stringify(snapshot.entry.content);

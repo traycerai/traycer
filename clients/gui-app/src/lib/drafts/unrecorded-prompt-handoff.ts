@@ -171,7 +171,24 @@ export async function buildUnrecordedPromptHandoff(args: {
         cause: "timed-out",
       });
     }
-    return withQualification(withImages, `Unsent — ${args.reason}`);
+    // `droppedAnnotations` is not decoration. `buildPromptStashSnapshot`
+    // leaves out a record whose crop it cannot resolve and hands the COUNT
+    // back precisely so the caller can keep the source instead of destroying
+    // what the entry could not carry - which is what the composer path does.
+    // Teardown has no source to keep: the session is going. So the only
+    // honest alternative is to SAY it in the entry. A record's comment, the
+    // page it was taken on and which elements were marked are none of them in
+    // the document text, and a stash that looks complete is how the user
+    // finds that out far too late, if at all.
+    return withQualification(
+      withImages,
+      teardownQualification({
+        reason: args.reason,
+        droppedImages: 0,
+        droppedImageCause: null,
+        droppedAnnotations: withImages.droppedAnnotations,
+      }),
+    );
   } catch (error: unknown) {
     return buildTextOnlyPromptHandoff({ ...args, cause: causeOf(error) });
   }
@@ -192,6 +209,12 @@ export async function buildTextOnlyPromptHandoff(args: {
   readonly id: string;
   readonly createdAt: number;
   readonly content: JsonContent;
+  /**
+   * The sidecar this path is about to drop. It cannot be carried - the crops
+   * live under the annotation hash and this path owns no blobs - but the
+   * COUNT is what lets the entry say so instead of looking complete.
+   */
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
   readonly cause: DroppedImageCause;
 }): Promise<PromptStashSnapshot> {
@@ -206,15 +229,50 @@ export async function buildTextOnlyPromptHandoff(args: {
     // Unreachable: `stripped.content` has no image nodes left to ask about.
     readHashImage: () => Promise.resolve(null),
   });
-  if (stripped.dropped === 0) {
-    return withQualification(snapshot, `Unsent — ${args.reason}`);
-  }
-  const subject =
-    stripped.dropped === 1 ? "An image was" : `${stripped.dropped} images were`;
   return withQualification(
     snapshot,
-    `Unsent — ${args.reason} ${subject} not saved with it: ${DROPPED_IMAGE_CLAUSE[args.cause]}.`,
+    teardownQualification({
+      reason: args.reason,
+      droppedImages: stripped.dropped,
+      droppedImageCause: args.cause,
+      // EVERY record, not a subset: this path carries no blobs at all, so
+      // there is nothing for a record to name.
+      droppedAnnotations: args.browserAnnotations.length,
+    }),
   );
+}
+
+/**
+ * The trailing sentence, stating exactly what this entry could not take.
+ *
+ * One builder for both paths so the two cannot drift into describing the same
+ * loss differently - and so a NEW kind of loss has one place to be added.
+ */
+function teardownQualification(args: {
+  readonly reason: string;
+  readonly droppedImages: number;
+  readonly droppedImageCause: DroppedImageCause | null;
+  readonly droppedAnnotations: number;
+}): string {
+  const clauses: string[] = [];
+  if (args.droppedImages > 0 && args.droppedImageCause !== null) {
+    const subject =
+      args.droppedImages === 1
+        ? "An image was"
+        : `${args.droppedImages} images were`;
+    clauses.push(
+      `${subject} not saved with it: ${DROPPED_IMAGE_CLAUSE[args.droppedImageCause]}.`,
+    );
+  }
+  if (args.droppedAnnotations > 0) {
+    const subject =
+      args.droppedAnnotations === 1
+        ? "A browser annotation was"
+        : `${args.droppedAnnotations} browser annotations were`;
+    const crops = args.droppedAnnotations === 1 ? "its crop" : "their crops";
+    clauses.push(`${subject} not saved with it: ${crops} could not be read.`);
+  }
+  return [`Unsent — ${args.reason}`, ...clauses].join(" ");
 }
 
 function causeOf(error: unknown): DroppedImageCause {
