@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   LEGACY_COMPOSER_DRAFT_NAMESPACE,
   legacyComposerDraftId,
+  migratedLegacyComposerDraftId,
   mintDraftId,
 } from "../draft-ids";
 
@@ -32,5 +33,26 @@ describe("legacyComposerDraftId", () => {
     expect(derived.charAt(14)).toBe("5");
     expect(mintDraftId().charAt(14)).toBe("4");
     expect(mintDraftId()).toHaveLength(36);
+  });
+});
+
+describe("migratedLegacyComposerDraftId", () => {
+  it("maps the retired prefixed form to the same derivation and leaves every other id alone", () => {
+    expect(
+      migratedLegacyComposerDraftId(
+        "legacy-composer-7f1c1d2a-9b4e-4d8e-8f2a-3c5b6d7e8f90",
+      ),
+    ).toBe("de1163cc-8dfa-5d11-9ad0-a350cc095612");
+    expect(migratedLegacyComposerDraftId("legacy-composer-legacy")).toBe(
+      legacyComposerDraftId("legacy"),
+    );
+    expect(
+      migratedLegacyComposerDraftId("de1163cc-8dfa-5d11-9ad0-a350cc095612"),
+    ).toBe("de1163cc-8dfa-5d11-9ad0-a350cc095612");
+    expect(migratedLegacyComposerDraftId("d-minted")).toBe("d-minted");
+    // A bare prefix names no composer; it is not a legacy id.
+    expect(migratedLegacyComposerDraftId("legacy-composer-")).toBe(
+      "legacy-composer-",
+    );
   });
 });
