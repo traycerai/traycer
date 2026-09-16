@@ -371,7 +371,9 @@ describe("ChatSearchResultsView: a show-more page that failed", () => {
       },
     });
 
-    expect(screen.getByRole("button", { name: "Show more chats" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Show more chats" }),
+    ).toBeTruthy();
     expect(
       screen.getByRole("separator", { name: "Matches in messages" }),
     ).toBeTruthy();

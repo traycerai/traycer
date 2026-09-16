@@ -160,7 +160,8 @@ export function useChatSearchResults(args: {
           failed === undefined || !failed.isError
             ? null
             : {
-                section: failedIndex < chatCursors.length ? "chats" : "messages",
+                section:
+                  failedIndex < chatCursors.length ? "chats" : "messages",
                 message: failed.error.message,
                 retry: () => {
                   void failed.refetch();
