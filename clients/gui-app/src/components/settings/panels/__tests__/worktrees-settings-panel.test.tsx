@@ -8,6 +8,7 @@ import {
   screen,
   waitFor,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -32,7 +33,12 @@ import {
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { __resetWorktreeDeleteRunForTests } from "@/components/settings/panels/use-worktree-delete-run";
+import {
+  __resetWorktreeDeleteRunForTests,
+  clearSettledWorktreeDeleteSuccessesForHostIfQuiescent,
+  summarizeWorktreeDeleteRuns,
+  useWorktreeDeleteRun,
+} from "@/components/settings/panels/use-worktree-delete-run";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
 import {
@@ -536,6 +542,34 @@ function renderDefault(): void {
     onVisiblePathsChange: undefined,
     taskTitlesByEpicId: undefined,
   });
+}
+
+// Re-renders the SAME mounted tree with a fresh `worktrees` prop - the shape
+// of a background delete's host poll landing while the panel stays mounted.
+// A remount would sidestep the very effect (`clearCompletedDeletedMissingFromList`)
+// these progress-pruning tests exist to exercise.
+function rerenderWorktreeList(
+  rendered: RenderResult,
+  queryClient: QueryClient,
+  worktrees: readonly WorktreeHostEntryV16[],
+): void {
+  rendered.rerender(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <WorktreesList
+          openStreamTransport={() => stubOpenStreamTransport()}
+          hostId="host-a"
+          worktrees={worktrees}
+          enrichedByPath={fullyEnriched(worktrees)}
+          erroredPaths={new Set()}
+          seededPaths={new Set()}
+          onVisiblePathsChange={vi.fn()}
+          taskTitlesByEpicId={new Map()}
+          toolbarProps={testToolbarProps()}
+        />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
 }
 
 function confirmDelete(branch: string): void {
@@ -1133,7 +1167,12 @@ describe("WorktreesList delete flow", () => {
       lastUpdatedAt: Date.now() - 60_000,
       refreshing: true,
     });
-    expect(screen.queryByTestId("worktrees-updated-ago")).toBeNull();
+    // Keep its layout space while hiding the stale timestamp during refresh.
+    expect(
+      screen
+        .getByTestId("worktrees-updated-ago")
+        .parentElement?.getAttribute("aria-hidden"),
+    ).toBe("true");
   });
 
   it("selecting the first row does not insert a new top bar that shifts the list", () => {
@@ -2024,6 +2063,168 @@ describe("WorktreesList delete flow", () => {
     expect(streamMock.paths).toEqual(["/wt/clean", "/wt/dirty"]);
   });
 
+  it("keeps a background batch's total stable as the list drops already-deleted rows mid-batch, and prunes the whole group only once every member has settled", () => {
+    const targets = [
+      entry({ worktreePath: "/wt/x", branch: "feat-x" }),
+      entry({ worktreePath: "/wt/y", branch: "feat-y" }),
+      entry({ worktreePath: "/wt/z", branch: "feat-z" }),
+    ];
+    const queryClient = new QueryClient();
+    const rendered = renderList({
+      hostId: "host-a",
+      queryClient,
+      worktrees: targets,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    selectRows(["feat-x", "feat-y", "feat-z"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.commandCount).toBe(1);
+    screen.getByText("0/3 deleted");
+
+    // First target lands, and the host's next poll no longer lists it - the
+    // real shape of a background delete succeeding while its siblings are
+    // still running.
+    act(() => {
+      callbacksFor("/wt/x").onComplete(true);
+    });
+    rerenderWorktreeList(rendered, queryClient, [targets[1], targets[2]]);
+    // The batch is still active for y/z: x's settled success must still
+    // count toward the group's total instead of being dropped (and its
+    // count lost) the moment it leaves the list.
+    screen.getByText("1/3 deleted");
+
+    act(() => {
+      callbacksFor("/wt/y").onComplete(true);
+    });
+    rerenderWorktreeList(rendered, queryClient, [targets[2]]);
+    screen.getByText("2/3 deleted");
+
+    act(() => {
+      callbacksFor("/wt/z").onComplete(true);
+    });
+    screen.getByText("3/3 deleted");
+
+    // Only now - every member terminal and every path gone from the list -
+    // does the whole-success group get pruned as one unit.
+    rerenderWorktreeList(rendered, queryClient, []);
+    expect(screen.queryByText("3/3 deleted")).toBeNull();
+    expect(screen.queryByText("Worktrees deleted")).toBeNull();
+  });
+
+  it("keeps a mixed batch's success counted after the list refreshes and the panel remounts, until the batch is dismissed", () => {
+    const targets = [
+      entry({ worktreePath: "/wt/p", branch: "feat-p" }),
+      entry({ worktreePath: "/wt/q", branch: "feat-q" }),
+    ];
+    const queryClient = new QueryClient();
+    const rendered = renderList({
+      hostId: "host-a",
+      queryClient,
+      worktrees: targets,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    selectRows(["feat-p", "feat-q"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    act(() => {
+      callbacksFor("/wt/p").onComplete(true);
+      callbacksFor("/wt/q").onFailed("delete failed", undefined, undefined);
+    });
+    screen.getByText("1/2 deleted, 1 failed");
+
+    // The host's next poll drops the successfully-deleted row; the failed
+    // one (still on disk) stays listed. A mixed group is never auto-pruned,
+    // so the success must still be counted.
+    rerenderWorktreeList(rendered, queryClient, [targets[1]]);
+    screen.getByText("1/2 deleted, 1 failed");
+
+    // Settings closes/reopens (or the section switches): the panel unmounts
+    // and remounts against the same host. The quiescent-success sweep that
+    // runs on unmount must not drop the success out of a mixed group either.
+    rendered.unmount();
+    const remounted = renderList({
+      hostId: "host-a",
+      queryClient,
+      worktrees: [targets[1]],
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+    screen.getByText("1/2 deleted, 1 failed");
+
+    fireEvent.click(screen.getByTestId("worktree-delete-progress-dismiss"));
+    expect(screen.queryByText(/\d+\/\d+ deleted/)).toBeNull();
+    remounted.unmount();
+  });
+
+  it("scopes list-refresh pruning and quiescent-success pruning to the host that owns the run", () => {
+    const openStreamTransport = () => stubOpenStreamTransport();
+    const hostATarget = entry({
+      worktreePath: "/wt/host-a-1",
+      branch: "feat-host-a-1",
+    });
+    const hostBTarget = entry({
+      worktreePath: "/wt/host-b-1",
+      branch: "feat-host-b-1",
+    });
+
+    const hostA = renderHook(() =>
+      useWorktreeDeleteRun("host-a", openStreamTransport, vi.fn()),
+    );
+    const hostB = renderHook(() =>
+      useWorktreeDeleteRun("host-b", openStreamTransport, vi.fn()),
+    );
+
+    act(() => {
+      hostA.result.current.startBatchBackgrounded([hostATarget], new Map());
+    });
+    act(() => {
+      hostB.result.current.startBatchBackgrounded([hostBTarget], new Map());
+    });
+    act(() => {
+      callbacksFor("/wt/host-a-1").onComplete(true);
+      callbacksFor("/wt/host-b-1").onComplete(true);
+    });
+
+    // host-a's own list refresh (its worktree is gone) must not touch
+    // host-b's settled success.
+    act(() => {
+      hostA.result.current.clearCompletedDeletedMissingFromList(new Set());
+    });
+    const afterListRefresh = summarizeWorktreeDeleteRuns(
+      hostB.result.current.runs,
+    );
+    expect(afterListRefresh.total).toBe(1);
+    expect(afterListRefresh.deleted).toBe(1);
+    expect(afterListRefresh.failed).toBe(0);
+
+    // Ditto for the quiescent-success sweep that runs when a host's
+    // Worktrees view unmounts.
+    act(() => {
+      clearSettledWorktreeDeleteSuccessesForHostIfQuiescent("host-a");
+    });
+    const afterQuiescentSweep = summarizeWorktreeDeleteRuns(
+      hostB.result.current.runs,
+    );
+    expect(afterQuiescentSweep.total).toBe(1);
+    expect(afterQuiescentSweep.deleted).toBe(1);
+    expect(afterQuiescentSweep.failed).toBe(0);
+  });
+
   it("shows a plain confirm for a clean worktree", () => {
     renderDefault();
     fireEvent.click(
@@ -2582,7 +2783,7 @@ describe("WorktreesList confirm-time re-check", () => {
     );
   }
 
-  it("drops a swept row that regressed to Checking in the freshest snapshot, updates the dialog, and names the drop", () => {
+  it("drops a swept row that disappeared from the freshest snapshot, updates the dialog, and names the drop", () => {
     const queryClient = new QueryClient();
     const clean = [
       merged("/wt/a", "feat-a"),
@@ -2596,17 +2797,12 @@ describe("WorktreesList confirm-time re-check", () => {
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     screen.getByText("Delete 3 worktrees?");
 
-    // A background refresh re-arms /wt/c as Checking while the dialog is open,
-    // so it is no longer deletable and drops out of the confirm.
+    // A background refresh finds /wt/c already removed while the dialog is
+    // open, so it drops out of the confirmation.
     rendered.rerender(
       renderWith(queryClient, [
         merged("/wt/a", "feat-a"),
         merged("/wt/b", "feat-b"),
-        entry({
-          worktreePath: "/wt/c",
-          branch: "feat-c",
-          resolvedAt: null,
-        }),
       ]),
     );
 
@@ -2616,7 +2812,7 @@ describe("WorktreesList confirm-time re-check", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(streamMock.paths).toEqual(["/wt/a", "/wt/b"]);
-    expect(toastMock.messages.join("\n")).toContain("still checking");
+    expect(toastMock.messages.join("\n")).toContain("became ineligible");
   });
 
   it("filter → Landed then select-all picks only the Landed rows (fast path)", () => {
@@ -2868,17 +3064,11 @@ describe("WorktreesList confirm-time re-check", () => {
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     screen.getByText("Delete 3 worktrees?");
 
-    // /wt/c regresses to Checking, so it is dropped at confirm while /wt/a and
-    // /wt/b run.
+    // /wt/c disappears, so it is dropped at confirm while /wt/a and /wt/b run.
     rendered.rerender(
       renderWith(queryClient, [
         merged("/wt/a", "feat-a"),
         merged("/wt/b", "feat-b"),
-        entry({
-          worktreePath: "/wt/c",
-          branch: "feat-c",
-          resolvedAt: null,
-        }),
       ]),
     );
     screen.getByText("Delete 2 worktrees?");
@@ -2886,7 +3076,7 @@ describe("WorktreesList confirm-time re-check", () => {
 
     expect(streamMock.paths).toEqual(["/wt/a", "/wt/b"]);
 
-    // On a later refresh /wt/c is selectable again. If the dropped path had
+    // On a later refresh /wt/c reappears. If the dropped path had
     // lingered in the selection it would show selected; the prune keeps it
     // unselected, so it reads as a fresh pick.
     rendered.rerender(renderWith(queryClient, [merged("/wt/c", "feat-c")]));
@@ -4915,152 +5105,124 @@ describe("WorktreesList status-aware delete safety", () => {
     expect([...streamMock.paths].sort()).toEqual(["/wt/errored", "/wt/merged"]);
   });
 
-  it("clears a stale single-row delete target that regresses to Checking, names it in the drop toast, and does not reopen once it settles", () => {
-    const readyRow = entry({ worktreePath: "/wt/ready", branch: "feat-ready" });
+  it("keeps a single confirmation open but blocked during a status check, then uses the fresh warning", () => {
+    const ready = entry({ worktreePath: "/wt/ready", branch: "feat-ready" });
     const queryClient = new QueryClient();
     const rendered = render(
       statusAwareElement({
         queryClient,
-        worktrees: [readyRow],
-        enrichedByPath: new Map([[readyRow.worktreePath, readyRow]]),
+        worktrees: [ready],
+        enrichedByPath: new Map([[ready.worktreePath, ready]]),
         erroredPaths: new Set(),
       }),
     );
-
     fireEvent.click(
       screen.getByRole("button", { name: "Delete worktree feat-ready" }),
     );
     screen.getByText("Delete worktree?");
-
-    // A refresh re-arms the row's enrichment while the confirmation is open -
-    // it regresses from ready back to Checking. The only pending target
-    // dropped to zero eligible rows, so the confirmation - which can no
-    // longer be trusted - closes, the drop is named, and the stale intent is
-    // cleared (not just visually hidden).
     rendered.rerender(
       statusAwareElement({
         queryClient,
-        worktrees: [readyRow],
+        worktrees: [ready],
         enrichedByPath: new Map(),
         erroredPaths: new Set(),
       }),
     );
-
-    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
-    expect(streamMock.paths).toEqual([]);
-    expect(toastMock.messages.join("\n")).toContain("still checking status");
-
-    // The row later settles back to ready. Since the stale intent was already
-    // cleared (not merely hidden), the old confirmation must NOT silently
-    // reopen without the user choosing Delete again.
-    rendered.rerender(
-      statusAwareElement({
-        queryClient,
-        worktrees: [readyRow],
-        enrichedByPath: new Map([[readyRow.worktreePath, readyRow]]),
-        erroredPaths: new Set(),
-      }),
-    );
-
-    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
-    expect(screen.queryByText("Delete worktree?")).toBeNull();
-    expect(streamMock.paths).toEqual([]);
-  });
-
-  it("clears a stale bulk delete target set when every selected row regresses to Checking, and does not reopen once settled", () => {
-    const readyA = entry({ worktreePath: "/wt/a", branch: "feat-a" });
-    const readyB = entry({ worktreePath: "/wt/b", branch: "feat-b" });
-    const queryClient = new QueryClient();
-    const rendered = render(
-      statusAwareElement({
-        queryClient,
-        worktrees: [readyA, readyB],
-        enrichedByPath: new Map([
-          [readyA.worktreePath, readyA],
-          [readyB.worktreePath, readyB],
-        ]),
-        erroredPaths: new Set(),
-      }),
-    );
-
-    selectRows(["feat-a", "feat-b"]);
-    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
-    screen.getByText("Delete 2 worktrees?");
-
-    // Both selected rows regress to Checking while the bulk confirmation is
-    // open - every pending target drops, unlike the mixed-drop case where a
-    // sibling stays eligible.
-    rendered.rerender(
-      statusAwareElement({
-        queryClient,
-        worktrees: [readyA, readyB],
-        enrichedByPath: new Map(),
-        erroredPaths: new Set(),
-      }),
-    );
-
-    expect(screen.queryByText("Delete 2 worktrees?")).toBeNull();
-    expect(screen.queryByTestId("worktree-bulk-delete-dialog")).toBeNull();
-    expect(streamMock.paths).toEqual([]);
-    expect(toastMock.messages.join("\n")).toContain("still checking status");
-
-    // Both rows later settle back to ready - the stale bulk intent was
-    // already cleared, so the old bulk confirmation must not reopen.
-    rendered.rerender(
-      statusAwareElement({
-        queryClient,
-        worktrees: [readyA, readyB],
-        enrichedByPath: new Map([
-          [readyA.worktreePath, readyA],
-          [readyB.worktreePath, readyB],
-        ]),
-        erroredPaths: new Set(),
-      }),
-    );
-
-    expect(screen.queryByText("Delete 2 worktrees?")).toBeNull();
-    expect(screen.queryByTestId("worktree-bulk-delete-dialog")).toBeNull();
-    expect(streamMock.paths).toEqual([]);
-  });
-
-  it("skips a row that regresses to Checking mid-dialog, names it in the drop toast, and still deletes its still-eligible sibling", () => {
-    const readyA = entry({ worktreePath: "/wt/a", branch: "feat-a" });
-    const readyB = entry({ worktreePath: "/wt/b", branch: "feat-b" });
-    const queryClient = new QueryClient();
-    const rendered = render(
-      statusAwareElement({
-        queryClient,
-        worktrees: [readyA, readyB],
-        enrichedByPath: new Map([
-          [readyA.worktreePath, readyA],
-          [readyB.worktreePath, readyB],
-        ]),
-        erroredPaths: new Set(),
-      }),
-    );
-
-    selectRows(["feat-a", "feat-b"]);
-    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
-    screen.getByText("Delete 2 worktrees?");
-
-    // /wt/b regresses to Checking while the bulk confirmation is open; /wt/a
-    // stays ready.
-    rendered.rerender(
-      statusAwareElement({
-        queryClient,
-        worktrees: [readyA, readyB],
-        enrichedByPath: new Map([[readyA.worktreePath, readyA]]),
-        erroredPaths: new Set(),
-      }),
-    );
-
-    // Only one target remains eligible, so the dialog re-resolves to the
-    // single-row confirmation for /wt/a.
     screen.getByText("Delete worktree?");
+    screen.getByText(
+      "Checking worktree status. You can delete once the check finishes.",
+    );
+    expect(screen.getByTestId("confirm-action").hasAttribute("disabled")).toBe(
+      true,
+    );
     fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual([]);
 
-    expect(streamMock.paths).toEqual(["/wt/a"]);
-    expect(toastMock.messages.join("\n")).toContain("still checking status");
+    const fresh = { ...ready, uncommittedCount: 4 };
+    rendered.rerender(
+      statusAwareElement({
+        queryClient,
+        worktrees: [fresh],
+        enrichedByPath: new Map([[fresh.worktreePath, fresh]]),
+        erroredPaths: new Set(),
+      }),
+    );
+    screen.getByText("Discard 4 uncommitted changes?");
+    expect(screen.getByTestId("confirm-action").hasAttribute("disabled")).toBe(
+      false,
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual(["/wt/ready"]);
+  });
+
+  it("allows cancelling a checking bulk confirmation without reopening it when status settles", () => {
+    const a = entry({ worktreePath: "/wt/a", branch: "feat-a" });
+    const b = entry({ worktreePath: "/wt/b", branch: "feat-b" });
+    const queryClient = new QueryClient();
+    const readyProps = {
+      queryClient,
+      worktrees: [a, b],
+      enrichedByPath: new Map([
+        [a.worktreePath, a],
+        [b.worktreePath, b],
+      ]),
+      erroredPaths: new Set<string>(),
+    };
+    const rendered = render(statusAwareElement(readyProps));
+    selectRows(["feat-a", "feat-b"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    rendered.rerender(
+      statusAwareElement({ ...readyProps, enrichedByPath: new Map() }),
+    );
+    screen.getByText("Delete 2 worktrees?");
+    screen.getByText(
+      "Checking worktree status. You can delete once the check finishes.",
+    );
+    expect(screen.getByTestId("confirm-action").hasAttribute("disabled")).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual([]);
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
+    rendered.rerender(statusAwareElement(readyProps));
+    expect(screen.queryByTestId("worktree-bulk-delete-dialog")).toBeNull();
+    expect(streamMock.paths).toEqual([]);
+  });
+
+  it("holds the whole reviewed batch when one target needs a fresh status check", () => {
+    const a = entry({ worktreePath: "/wt/a", branch: "feat-a" });
+    const b = entry({ worktreePath: "/wt/b", branch: "feat-b" });
+    const queryClient = new QueryClient();
+    const readyProps = {
+      queryClient,
+      worktrees: [a, b],
+      enrichedByPath: new Map([
+        [a.worktreePath, a],
+        [b.worktreePath, b],
+      ]),
+      erroredPaths: new Set<string>(),
+    };
+    const rendered = render(statusAwareElement(readyProps));
+    selectRows(["feat-a", "feat-b"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    rendered.rerender(
+      statusAwareElement({
+        ...readyProps,
+        enrichedByPath: new Map([[a.worktreePath, a]]),
+      }),
+    );
+    screen.getByText("Delete 2 worktrees?");
+    expect(screen.getByTestId("confirm-action").hasAttribute("disabled")).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual([]);
+    rendered.rerender(statusAwareElement(readyProps));
+    expect(screen.getByTestId("confirm-action").hasAttribute("disabled")).toBe(
+      false,
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect([...streamMock.paths].sort()).toEqual(["/wt/a", "/wt/b"]);
   });
 
   it("names permanent dirty loss and unknown risk for an Unknown row with uncommitted changes", () => {
