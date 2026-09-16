@@ -280,7 +280,7 @@ describe("Codex retry presentation", () => {
     expect(assistant?.blocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          label: "Codex is retrying…",
+          label: "Retrying",
           details: ["Retrying automatically. · Reported by Codex"],
         }),
       ]),

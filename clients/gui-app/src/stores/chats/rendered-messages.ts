@@ -288,10 +288,7 @@ function blockContentVersion(block: ContentBlock): number {
     case "reasoning":
       return block.content.length;
     case "error":
-      return hashStringField(
-        hashStringField(TURN_SIGNATURE_HASH_OFFSET, block.code ?? ""),
-        block.message,
-      );
+      return errorBlockContentVersion(block);
     case "steer":
       return extractPlainTextFromComposerJSONContent(block.content).length;
     case "plan":
@@ -299,6 +296,19 @@ function blockContentVersion(block: ContentBlock): number {
     default:
       return 0;
   }
+}
+
+function errorBlockContentVersion(
+  block: Extract<ContentBlock, { type: "error" }>,
+): number {
+  let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, block.code ?? "");
+  hash = hashStringField(hash, block.message);
+  hash = hashNumberField(hash, block.recoverable ? 1 : 0);
+  hash = hashStringField(hash, block.failure?.reason ?? "");
+  hash = hashStringField(hash, block.failure?.resetsAt?.toString() ?? "");
+  hash = hashStringField(hash, block.failure?.resetsAtSource ?? "");
+  hash = hashStringField(hash, block.failure?.scope ?? "");
+  return hashStringField(hash, block.failure?.providerDetail ?? "");
 }
 
 /**
@@ -2933,7 +2943,12 @@ function renderAssistantTurnRows(
   const needsBoundary =
     input.runState !== null ||
     input.stopped !== null ||
-    (input.turnComplete && input.showCompletionFooter);
+    (plan.split &&
+      input.turnComplete &&
+      input.showCompletionFooter &&
+      rows.some(
+        (row) => row.role === "assistant" && !hiddenSliceIds.has(row.id),
+      ));
   const boundaryRow = needsBoundary ? rows.at(-1) : undefined;
   const visibleRows = rows.filter(
     (row) => !hiddenSliceIds.has(row.id) || row === boundaryRow,
@@ -3747,20 +3762,15 @@ function buildAssistantSegments(
         imageProjection.retryTurnEnded,
       ) === "active"
     ) {
-      const attempt = /^Reconnecting(?:\.{3}|…)?\s*(\d+\s*\/\s*\d+)/i.exec(
-        block.message,
-      )?.[1];
       flat.push({
         id: block.blockId,
         kind: "provider_notice",
         status: "streaming",
         noticeKind: "harness_message",
+        presentation: "retry",
         tone: "info",
         title: codexRetryTitle(block.message),
-        message:
-          attempt === undefined
-            ? "Retrying automatically."
-            : `Retrying automatically · attempt ${attempt}`,
+        message: null,
         details: [{ label: "Reported by Codex", value: block.message }],
         parentId: block.parentBlockId ?? null,
       });

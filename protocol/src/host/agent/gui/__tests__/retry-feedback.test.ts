@@ -59,14 +59,11 @@ describe("retry feedback protocol helpers", () => {
     expect(codexRetryVisibility("codex", "auth", false)).toBeNull();
   });
 
-  it("uses generic retry copy unless a known reconnecting message is supplied", () => {
-    expect(codexRetryTitle("Provider overloaded; retrying")).toBe(
-      "Codex is retrying…",
-    );
-    expect(codexRetryTitle("Reconnecting… (attempt 2)")).toBe(
-      "Codex is reconnecting…",
-    );
-    expect(codexRetryTitle("reconnecting now")).toBe("Codex is reconnecting…");
+  it("uses native reconnecting copy when a provider counter is supplied", () => {
+    expect(codexRetryTitle("Provider overloaded; retrying")).toBe("Retrying");
+    expect(codexRetryTitle("Reconnecting… 4/5")).toBe("Reconnecting 4/5");
+    expect(codexRetryTitle("Reconnecting… (attempt 2)")).toBe("Reconnecting");
+    expect(codexRetryTitle("reconnecting now")).toBe("Reconnecting");
   });
 
   it.each([
