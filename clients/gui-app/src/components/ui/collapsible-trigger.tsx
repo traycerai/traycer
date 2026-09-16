@@ -13,7 +13,10 @@ import { cn } from "@/lib/utils";
 //     hover fill. Five call sites had this character for character.
 //   - `quiet` — a disclosure inside running text (an activity group, a
 //     resolved interview): no box, a muted label that comes up to foreground
-//     on hover and on focus.
+//     on hover and on focus. `px-1`, not the `pr-1` two of its three call
+//     sites happened to carry: the inset is symmetric because the hover fill
+//     is, and a glyph touching the left edge of a rounded fill reads as a
+//     clipping bug.
 const collapsibleTriggerVariants = cva(
   "gap-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
   {
@@ -24,7 +27,7 @@ const collapsibleTriggerVariants = cva(
         // bg-canvas, and --canvas never equals --muted.
         panel: "px-3 py-1.5 hover:bg-muted/50",
         quiet:
-          "rounded-sm py-1 pr-1 text-muted-foreground hover:text-foreground focus-visible:text-foreground",
+          "rounded-sm px-1 py-1 text-muted-foreground hover:text-foreground focus-visible:text-foreground",
       },
     },
     defaultVariants: { variant: "default" },

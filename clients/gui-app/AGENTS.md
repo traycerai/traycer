@@ -24,6 +24,19 @@ After making changes, run `bun run lint` and fix all errors. `@shadcn/lint`
 runs there and reads `components.json` and `src/index.css`, so its errors name
 this app's real variants, sizes and tokens — the fix is in the message.
 
+**A `shadcn/no-restyle` error is answered in `src/components/ui/`, not in
+`eslint.config.mjs`.** Every design-system component has a CONTRACT in that
+config saying what a call site may still write on it — usually `layout` and
+nothing else, because a call site PLACES a component and the component owns how
+it looks. The fix for "`px-3` is not allowed on `<Button>`" is a size; for a
+colour, a variant; for a header band, a `layout` prop. Add the variant, migrate
+the sites that were hand-rolling it, and delete their classes. Widening a
+contract is the last resort and has one test: the reason has to be a fact about
+the SITE, not about the component — if it generalises, it should have been a
+variant. A treatment that is genuinely one file's own goes in
+`restyleExemptions`, one entry per file, `allow` keyed by the contract it opens
+and the reason written above it.
+
 **Commits:** don't manually run `compile` / `build` / `lint` / `format` before
 committing — repo-root `pre-commit` already runs the affected checks (see root
 `AGENTS.md`). Tests are CI, not the hook. Re-run checks only when diagnosing
