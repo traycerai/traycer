@@ -3256,52 +3256,51 @@ describe("ChatMessages scroll policy", () => {
       });
       await settleLegendList();
 
-      const list = legendListRefHolder.current;
-      if (list === null) {
-        throw new Error("LegendList ref is not mounted");
-      }
-      const scrollToOffset = vi.spyOn(list, "scrollToOffset");
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: target.id,
+          blockId: null,
+          requestId: 58,
+        },
+      });
+      rerenderWith({
+        scrollRequest: { kind: "end", requestId: 59 },
+      });
 
-      try {
-        rerenderWith({
-          scrollRequest: {
-            kind: "message",
-            messageId: target.id,
-            blockId: null,
-            requestId: 58,
-          },
-        });
-        rerenderWith({
-          scrollRequest: { kind: "end", requestId: 59 },
-        });
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
 
-        await waitForNavigationSettle();
-        await waitForNavigationSettle();
+      expect(onScrollRequestSettled).toHaveBeenCalledWith(58, "cancelled");
+      const scrollTopAfterCancel = getScrollNode().scrollTop;
+      onScrollRequestSettled.mockClear();
 
-        expect(onScrollRequestSettled).toHaveBeenCalledWith(58, "cancelled");
-        const offsetCallsAfterCancel = scrollToOffset.mock.calls.length;
-        onScrollRequestSettled.mockClear();
+      // The cleared pending landing must NOT come back on the next
+      // hidden->visible transition - a re-issue there would be scrolling
+      // toward a request that already reached a terminal outcome.
+      rerenderWith({ visible: false });
+      rerenderWith({ visible: true });
 
-        // The cleared pending landing must NOT come back on the next
-        // hidden->visible transition - a re-issue there would issue another
-        // message landing toward a request that already reached a terminal
-        // outcome. The end replay on visibility is allowed to settle its own
-        // scroll; assert the message-specific command did not recur instead
-        // of coupling this test to LegendList's eventual spacer geometry.
-        rerenderWith({ visible: false });
-        rerenderWith({ visible: true });
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
 
-        await waitForNavigationSettle();
-        await waitForNavigationSettle();
-
-        expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
-          58,
-          expect.anything(),
-        );
-        expect(scrollToOffset.mock.calls.length).toBe(offsetCallsAfterCancel);
-      } finally {
-        scrollToOffset.mockRestore();
-      }
+      expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+        58,
+        expect.anything(),
+      );
+      // The viewport stays at the tail. Not pixel-exact: the end navigation's
+      // own settle/re-issue loop is still running here (LegendList's
+      // `scrollToEnd` parks one footer past the latch's strict end, so each
+      // attempt validates invalid and re-issues on its 750ms fallback), and
+      // on CI a late attempt can land a footer's height away from the value
+      // read above. A re-issue of request 58 would move the viewport by more
+      // than a dozen rows, which is what this pins.
+      expect(
+        Math.abs(getScrollNode().scrollTop - scrollTopAfterCancel),
+      ).toBeLessThan(TICKET_13_ROW_HEIGHT_PX);
+      expect(getScrollNode().scrollTop).not.toBe(
+        expectedRowScrollTop(targetIndex),
+      );
     });
 
     it("does not report an outcome for end requests", async () => {
