@@ -403,19 +403,18 @@ function seatProps(
           text: "reserve",
           ownerAgentId: null,
           x: x + 16,
-          // CLEAR OF THE DESK FACE, on the floor among its legs - where the
-          // name tag of the agent at the next desk along already lands.
+          // EXACTLY THE LINE A NAME TAG LANDS ON. The scene draws one at
+          // `foot + OFFICE_LABEL_GAP` (a character is `OFFICE_CHARACTER_HEIGHT`
+          // tall with its feet on `foot`), so an occupied desk in this same row
+          // already letters here - which is the whole reason the gap is shared
+          // rather than each painter picking its own number.
           //
-          // `y + 34` put it across the desk's own front panel, where muted
-          // grey lettering over the wood read as a name with its bottom half
-          // missing (feedback round 1: "lower half of labels on some agents
-          // are cut out"). The desk face runs to `y + DESK_FRONT_Y_OFFSET +
-          // <sprite height>`, and the gap below it is the scene's own.
-          y:
-            y +
-            DESK_FRONT_Y_OFFSET +
-            officeSpriteSize({ name: "desk-front" }).height +
-            OFFICE_LABEL_GAP,
+          // `y + 34` put it across the desk's own front panel, where muted grey
+          // lettering over the wood read as a name with its bottom half missing
+          // (feedback round 1: "lower half of labels on some agents are cut
+          // out"). Nothing was clipping it; it was lettering with no floor
+          // behind it.
+          y: foot + OFFICE_LABEL_GAP,
           tone: "muted",
           // Nobody's name, so no seat to be fitted to.
           fitTiles: null,

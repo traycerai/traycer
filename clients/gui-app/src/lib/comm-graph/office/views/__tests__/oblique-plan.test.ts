@@ -1766,16 +1766,22 @@ describe("oblique painters: fixup 6 rule 4 - one reserve label per storey, not o
         seat.deskTile.row * OFFICE_TILE,
       );
       const deskFrontBottom = deskFront.drawable.y + deskFrontHeight;
-      // Exactly the sprite's own bottom edge plus the shared label gap - read
-      // off the desk-front THIS SAME call drew, never a re-typed y-offset
-      // constant, so a later change to how far the desk-front sits from its
-      // tile keeps this test honest instead of silently drifting out of sync
-      // with it.
-      expect(label.drawable.y).toBe(deskFrontBottom + OFFICE_LABEL_GAP);
-      // CLEAR OF THE FURNITURE: at or below the sprite's own bottom edge.
-      // `y + 34` used to land mid-sprite instead, over the desk face, which
-      // is the exact bug feedback round 1 filed ("lower half of labels on
-      // some agents are cut out").
+      // EXACTLY THE LINE A NAME TAG LANDS ON, which is the rule the fix is
+      // actually about: the scene letters a seated agent at
+      // `foot + OFFICE_LABEL_GAP` (`buildActors`, where a character is
+      // `OFFICE_CHARACTER_HEIGHT` tall with its feet on `foot`), and `foot` is
+      // the bottom of the chair tile. An empty desk has to letter on the same
+      // line as the occupied desk beside it or the shared gap buys nothing.
+      expect(label.drawable.y).toBe(
+        (seat.chairTile.row + 1) * OFFICE_TILE + OFFICE_LABEL_GAP,
+      );
+      // CLEAR OF THE FURNITURE: at or below the sprite's own bottom edge -
+      // which for this geometry is the same line, since the desk-front ends
+      // where the chair tile does. Asserted against the desk-front THIS SAME
+      // call drew rather than a re-typed offset, so moving the desk cannot
+      // leave the lettering behind on its face. `y + 34` used to land
+      // mid-sprite, which is the exact bug feedback round 1 filed ("lower half
+      // of labels on some agents are cut out").
       expect(label.drawable.y).toBeGreaterThanOrEqual(deskFrontBottom);
       checked += 1;
     }
