@@ -2300,6 +2300,7 @@ function rejectionLastCopySend(input: {
   return {
     clientActionId: input.frame.clientActionId,
     content: pending.restore.content,
+    browserAnnotations: pending.restore.browserAnnotations,
     circumstance: `A message was not accepted (${reason.replace(/\.$/, "")})`,
     account: input.account ?? EMPTY_DEAD_SEND_ACCOUNT,
   };
@@ -2585,6 +2586,18 @@ function collectPendingAnnotationImageHashes(): ReadonlyArray<string> {
     for (const recovery of Object.values(state.hashOnlyRecoveries)) {
       records.push(...recovery.restore.browserAnnotations);
     }
+    // A LAST-COPY prompt's sidecar, for the reason its document already had
+    // its own collector here: the action is settled and gone and the echo is
+    // retired, so until the handoff writes it nothing else names these crops.
+    for (const prompt of Object.values(state.lastCopyPrompts)) {
+      records.push(...prompt.browserAnnotations);
+    }
+  }
+  // Anything a disposal is still CAPTURING. The session's own roots go with
+  // it synchronously, but the handoff reads crops asynchronously afterwards,
+  // so for that window these records are named by nothing at all.
+  for (const capture of handoffCaptureRoots.values()) {
+    records.push(...capture.browserAnnotations);
   }
   return collectAnnotationImageHashes(records);
 }
@@ -2649,21 +2662,29 @@ function collectPendingRestoreContentImageHashes(): ReadonlyArray<string> {
   // Anything a disposal is still CAPTURING. The session's own roots go with it
   // synchronously, but the handoff reads images asynchronously afterwards, so
   // for that window these hashes are named by nothing at all.
-  for (const content of handoffCaptureRoots.values()) {
-    hashes.push(...blobHashesFromContent(content));
+  for (const capture of handoffCaptureRoots.values()) {
+    hashes.push(...blobHashesFromContent(capture.content));
   }
   return hashes;
 }
 
 /**
- * Documents whose images a disposal's handoff has not finished reading.
+ * What a disposal's handoff has not finished reading: the document AND the
+ * annotation sidecar beside it. Both need rooting for the same reason and
+ * neither covers the other - the crops live under the annotation hash, not
+ * inside the document.
  *
  * Held from just before the capture starts until its save settles, because
  * `dispose()` removes the store from `liveChatSessionStores` in the same tick
  * and every root above is derived from that set. Keyed by the stash entry id,
  * which is unique per handoff and is what the `finally` has in hand.
  */
-const handoffCaptureRoots = new Map<string, JsonContent>();
+interface HandoffCaptureRoot {
+  readonly content: JsonContent;
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+}
+
+const handoffCaptureRoots = new Map<string, HandoffCaptureRoot>();
 
 registerExtraImageRootSource({
   hashes: collectPendingRestoreContentImageHashes,
@@ -5522,7 +5543,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // synchronously, so from that instant until the read completes nothing
         // else names these hashes and a concurrent sweep is free to delete
         // them.
-        handoffCaptureRoots.set(entry.id, source.content);
+        handoffCaptureRoots.set(entry.id, {
+          content: source.content,
+          browserAnnotations: source.browserAnnotations,
+        });
         // Stamped before the first await, checked at every save. See
         // `identityGeneration`: the synchronous flag cannot fence a capture
         // that was already in flight when the account changed.
@@ -5548,6 +5572,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         void buildUnrecordedPromptHandoff({
           ...entry,
           content: source.content,
+          browserAnnotations: source.browserAnnotations,
           reason: source.reason,
           // The SAME resolver the composer's own stash capture uses. Passing
           // an empty `imagesByHash` instead - which this did - made every
@@ -5864,6 +5889,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       const lastCopy: UnrecoverableSend = {
         clientActionId: recovery.clientActionId,
         content: recovery.restore.content,
+        browserAnnotations: recovery.restore.browserAnnotations,
         circumstance: reason.replace(/\.$/, ""),
         account,
       };
@@ -9546,6 +9572,10 @@ export function createChatSessionStoreWithNotificationDependencies(
               [clientActionId]: {
                 clientActionId,
                 content: restoration.content,
+                // The sidecar goes with it: from here the stash handoff is
+                // this prompt's only custody, and the records name crops that
+                // nothing else will root once the slot is cleared.
+                browserAnnotations: restoration.browserAnnotations,
                 reason: restoration.displacedReason,
               },
             },
@@ -10277,6 +10307,13 @@ interface UnrecordedPrompt {
   readonly clientActionId: string;
   readonly content: JsonContent;
   /**
+   * The annotation sidecar, which does NOT travel inside `content`: the
+   * records name crops stored under their own hashes. The handoff built from
+   * this is the last copy of both, so a source that drops them here destroys
+   * the records and orphans their bytes in the same step.
+   */
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  /**
    * Already account-qualified by whoever produced it, in the NOT-handed-back
    * wording: every one of these is going to the stash rather than back to a
    * composer, so each needs its worktree named and a re-pick asked for.
@@ -10306,6 +10343,7 @@ function unrecordedPromptSources(
     byAction.set(restoration.clientActionId, {
       clientActionId: restoration.clientActionId,
       content: restoration.content,
+      browserAnnotations: restoration.browserAnnotations,
       // The DISPLACED variant, not `reason`. The prompt is going to the stash,
       // not back to a composer with its binding, so the reader needs the
       // worktree named and a re-pick asked for - which is exactly what the
@@ -10321,6 +10359,7 @@ function unrecordedPromptSources(
     byAction.set(action.clientActionId, {
       clientActionId: action.clientActionId,
       content: action.restore.content,
+      browserAnnotations: action.restore.browserAnnotations,
       // Nothing composed an account for an in-flight retry, so one is built
       // here from the action's own frozen values - every staged entry, its
       // branch and its worktree ref, not just a primary workspace path.

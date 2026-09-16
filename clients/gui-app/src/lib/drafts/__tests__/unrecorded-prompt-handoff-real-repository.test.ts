@@ -10,6 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 
 import {
   buildUnrecordedPromptHandoff,
@@ -82,6 +83,25 @@ function hashOnlyDoc(hash: string, text: string): JsonContent {
   };
 }
 
+function annotationRecord(imageHash: string): BrowserAnnotationRecord {
+  return {
+    kind: "browser-annotation",
+    annotationId: "ann-handoff",
+    tabId: "tab-1",
+    sessionId: "session-1",
+    origin: "https://example.test",
+    pageUrl: "https://example.test/checkout",
+    pageTitle: "Checkout",
+    capturedAt: 1_700_000_000_000,
+    comment: "the button is misaligned",
+    counts: { elements: 1, regions: 0, strokes: 2 },
+    elements: [],
+    imageFileName: "crop.png",
+    imageHash,
+    droppedElementCount: 0,
+  };
+}
+
 async function findRow(id: string): Promise<PromptStashRow> {
   const manifest = await loadPromptStashSnapshot();
   const row = manifest.rows.find(
@@ -118,6 +138,7 @@ describe("unrecorded prompt handoff - real repository round trip (R5F1)", () => 
       id: "entry-resolvable",
       createdAt: 1_000,
       content: hashOnlyDoc(hash, text),
+      browserAnnotations: [],
       reason: "The chat closed before the host confirmed this message.",
       readHashImage,
     });
@@ -143,6 +164,48 @@ describe("unrecorded prompt handoff - real repository round trip (R5F1)", () => 
     expect(canonicalHash).not.toBe(hash); // re-hashed by the capture pipeline
   });
 
+  it("carries the annotation sidecar into the entry, crop bytes and all (DRIVE RED)", async () => {
+    // A disposal's handoff is the LAST copy of the prompt. The sidecar does
+    // not travel inside the document - the records name crops stored under
+    // their own hashes - so a handoff built from `content` alone destroys the
+    // records AND orphans their bytes for the next sweep, on the one path
+    // whose entire purpose is that nothing is lost when the session goes.
+    // The builder used to pass `annotations: []` outright, reasoning that
+    // submit detaches the sidecar; the send's own restore state keeps it,
+    // which is why `collectPendingAnnotationImageHashes` roots those crops.
+    const cropHash = "annotation-crop-source-hash";
+    const cropBytes = pngBytesOfSize(48);
+    const text = "the annotated prompt";
+    const readHashImage: PromptStashImageResolver = (candidate) =>
+      Promise.resolve(candidate === cropHash ? cropBytes : null);
+
+    const snapshot = await buildUnrecordedPromptHandoff({
+      id: "entry-annotated",
+      createdAt: 1_000,
+      content: {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+      },
+      browserAnnotations: [annotationRecord(cropHash)],
+      reason: "The chat closed before the host confirmed this message.",
+      readHashImage,
+    });
+
+    await savePromptStashSnapshot(snapshot);
+
+    const row = await findRow("entry-annotated");
+    expect(row.kind).toBe("entry");
+    if (row.kind !== "entry") throw new Error("expected an entry row");
+
+    expect(row.entry.annotations.length).toBe(1);
+    const [record] = row.entry.annotations;
+    expect(record.comment).toBe("the button is misaligned");
+    // The crop came with it: the record names a blob this entry owns, under
+    // the canonical hash the capture pipeline re-encoded it to.
+    expect(record.imageHash).not.toBe(cropHash);
+    expect(row.entry.blobHashes).toContain(record.imageHash);
+  });
+
   it("a hash-only prompt whose bytes are NOT resolvable survives save -> restore as text-only, with a qualification saying the image was dropped", async () => {
     const hash = "source-hash-unresolvable";
     const text = "the words must survive";
@@ -152,6 +215,7 @@ describe("unrecorded prompt handoff - real repository round trip (R5F1)", () => 
       id: "entry-unresolvable",
       createdAt: 1_000,
       content: hashOnlyDoc(hash, text),
+      browserAnnotations: [],
       reason: "The chat closed before the host confirmed this message.",
       readHashImage,
     });
@@ -183,6 +247,7 @@ describe("unrecorded prompt handoff - real repository round trip (R5F1)", () => 
       id: "entry-timeout",
       createdAt: 1_000,
       content: hashOnlyDoc("source-hash-stalled", text),
+      browserAnnotations: [],
       reason: "The chat closed before the host confirmed this message.",
       readHashImage,
     });

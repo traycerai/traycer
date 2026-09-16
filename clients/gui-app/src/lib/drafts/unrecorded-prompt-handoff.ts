@@ -71,6 +71,7 @@
  * after the first.
  */
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 
 import {
   buildPromptStashSnapshot,
@@ -126,6 +127,12 @@ export async function buildUnrecordedPromptHandoff(args: {
   readonly id: string;
   readonly createdAt: number;
   readonly content: JsonContent;
+  /**
+   * The prompt's annotation sidecar, or `[]` for a source that has none.
+   * Required rather than defaulted, so a new handoff site has to decide -
+   * the entry this builds is the LAST copy of both.
+   */
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
   readonly readHashImage: PromptStashImageResolver;
 }): Promise<PromptStashSnapshot> {
@@ -142,10 +149,16 @@ export async function buildUnrecordedPromptHandoff(args: {
         id: args.id,
         createdAt: args.createdAt,
         content: args.content,
-        // A handoff prompt is a SEND that never landed, not a composer draft:
-        // it was detached from the composer - and from the annotation sidecar
-        // that lives there - at submit. There is nothing to carry.
-        annotations: [],
+        // A handoff prompt is a SEND that never landed, and the sidecar did
+        // NOT stay behind in the composer: every record that reaches this
+        // builder was kept by the send's own restore state precisely so a
+        // refusal could hand it back, and `collectPendingAnnotationImageHashes`
+        // roots those crops for as long as that state exists. Dropping them
+        // here - which this did, on the reasoning that submit detaches the
+        // sidecar - destroyed the last copy of the records AND left their
+        // crops unreferenced for the next sweep, on the one path whose whole
+        // purpose is that nothing is lost when the session goes.
+        annotations: args.browserAnnotations,
         readHashImage: args.readHashImage,
       }),
       timeoutAfter(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS),

@@ -6,6 +6,7 @@ import type {
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
@@ -302,6 +303,13 @@ export const WORKTREE_SUPERSEDED_STATEMENT =
 export interface UnrecoverableSend {
   readonly clientActionId: string;
   readonly content: JsonContent;
+  /**
+   * The send's browser-annotation sidecar. Carried because the stash handoff
+   * built from this is the LAST copy: the records name crops whose bytes live
+   * under the annotation hash rather than inside `content`, so a prompt
+   * rebuilt from the document alone loses them with nothing left to restore.
+   */
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /** How this send died, phrased to open the statement. */
   readonly circumstance: string;
   /**
@@ -397,6 +405,8 @@ function quotedDraftOf(content: JsonContent): string | null {
 export interface UnrecoverableSendPrompt {
   readonly clientActionId: string;
   readonly content: JsonContent;
+  /** The sidecar travels with the document; see {@link UnrecoverableSend}. */
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /** The same account text the notice renders - `handedBack: false`. */
   readonly reason: string;
 }
@@ -411,6 +421,7 @@ export function unrecoverableSendPrompt(
   return {
     clientActionId: send.clientActionId,
     content: send.content,
+    browserAnnotations: send.browserAnnotations,
     reason: `${send.circumstance}.${deadSendAccountClauses(send.account, false)}`,
   };
 }
@@ -1159,6 +1170,7 @@ export function reconcileSnapshotChange(
         const reconnectLastCopy: UnrecoverableSend = {
           clientActionId: pending.clientActionId,
           content: pending.restore.content,
+          browserAnnotations: pending.restore.browserAnnotations,
           circumstance: "A message was not confirmed after reconnect",
           account: {
             worktree: worktreeSweepFor(
@@ -1347,6 +1359,7 @@ function reconcileAcceptedSends(
         const queuedLastCopy: UnrecoverableSend = {
           clientActionId: accepted.clientActionId,
           content: accepted.restore.content,
+          browserAnnotations: accepted.restore.browserAnnotations,
           circumstance: "A queued message was not confirmed after reconnect",
           account,
         };
@@ -1575,6 +1588,7 @@ export function reconcileTurnSettled(
     .map((message) => ({
       clientActionId: message.clientActionId,
       content: message.content,
+      browserAnnotations: message.restore.browserAnnotations,
       circumstance: "A message was not recorded before the turn stopped",
       account: {
         worktree: worktreeSweepFor(

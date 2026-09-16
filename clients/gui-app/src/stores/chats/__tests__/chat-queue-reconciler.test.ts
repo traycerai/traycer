@@ -1511,6 +1511,7 @@ describe("chat-queue-reconciler", () => {
       return unrecoverableSendNotice({
         clientActionId: "action-1",
         content,
+        browserAnnotations: [],
         circumstance: "A message was not recorded",
         account: {
           worktree: NO_WORKTREE_SWEEP,
@@ -1595,6 +1596,7 @@ describe("chat-queue-reconciler", () => {
       const message = unrecoverableSendNotice({
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         circumstance: "A message was not recorded",
         account: {
           worktree: NO_WORKTREE_SWEEP,
@@ -1616,6 +1618,7 @@ describe("chat-queue-reconciler", () => {
       const message = unrecoverableSendNotice({
         clientActionId: "action-1",
         content: CONTENT,
+        browserAnnotations: [],
         circumstance: "A message was not recorded",
         account: {
           worktree: NO_WORKTREE_SWEEP,
