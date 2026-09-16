@@ -356,32 +356,131 @@ describe("<AutoPolicyEditorDialog /> saving", () => {
 });
 
 describe("<AutoPolicyEditorDialog /> readable read states", () => {
-  it.each(["fresh", "stale"] as const)(
-    "hides the unreadable-policy banner and lets Save enable normally for readState=%s",
-    (readState) => {
-      render(
-        <AutoPolicyEditorDialog
-          initialBody="short"
-          loadedUpdatedAt={null}
-          currentUpdatedAt={null}
-          readState={readState}
-          saving={false}
-          onCancel={vi.fn()}
-          onSave={vi.fn()}
-        />,
-      );
+  it("hides the unreadable-policy banner and lets Save enable normally for readState=fresh", () => {
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
 
-      expect(screen.queryByTestId("auto-policy-unreadable-warning")).toBeNull();
+    expect(screen.queryByTestId("auto-policy-unreadable-warning")).toBeNull();
 
-      const saveButtonBeforeEdit = screen.getByTestId(
-        "auto-policy-save",
-      ) as HTMLButtonElement;
-      expect(saveButtonBeforeEdit.disabled).toBe(true);
+    const saveButtonBeforeEdit = screen.getByTestId(
+      "auto-policy-save",
+    ) as HTMLButtonElement;
+    expect(saveButtonBeforeEdit.disabled).toBe(true);
 
-      const textarea = screen.getByTestId("auto-policy-input");
-      fireEvent.change(textarea, { target: { value: "short and edited" } });
+    const textarea = screen.getByTestId("auto-policy-input");
+    fireEvent.change(textarea, { target: { value: "short and edited" } });
 
-      expect(saveButtonBeforeEdit.disabled).toBe(false);
-    },
-  );
+    expect(saveButtonBeforeEdit.disabled).toBe(false);
+  });
+
+  // `stale` USED to share the case above, which pinned the defect: a stale read
+  // withholds `updatedAt`, so the "saved somewhere else" warning cannot fire,
+  // and an enabled Save from there is a last-write-wins overwrite of a policy
+  // this window cannot see. The row refuses to OPEN on a stale read; this is
+  // the already-open transition, where the open-time refetch comes back stale
+  // behind an editor that opened on a fresh one.
+  it("refuses to enable Save for readState=stale, and says why", () => {
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="stale"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    // Not the unreadable banner - a different cause wants a different sentence.
+    expect(screen.queryByTestId("auto-policy-unreadable-warning")).toBeNull();
+    expect(
+      screen.getByTestId("auto-policy-stale-read-warning").textContent,
+    ).toContain("couldn't refresh");
+
+    const saveButton = screen.getByTestId(
+      "auto-policy-save",
+    ) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+
+    // Still disabled AFTER a real edit - `!dirty` is not what is holding it.
+    fireEvent.change(screen.getByTestId("auto-policy-input"), {
+      target: { value: "short and edited" },
+    });
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  // JOB 1 (Codex ivFem, P1): the TRANSITION the split case above does not
+  // cover. That case only ever renders `readState="stale"` from the start;
+  // this one opens fresh, lets Save enable through a real edit, and THEN
+  // turns stale underneath the still-open dialog - the open-time refetch
+  // landing behind an editor that opened on a fresh read. Save must go back
+  // to disabled and the notice must appear, without losing the draft: the
+  // dialog holds the same `body` state across the re-render, it does not
+  // remount.
+  //
+  // FALSIFICATION: drop `readIsStale` from the Save `disabled` expression in
+  // `auto-policy-editor-dialog.tsx` (i.e. `disabled={props.saving || overCap
+  // || !dirty || unreadable}`). Driven by hand - both this test AND the
+  // already-split `readState="stale"` case above go red:
+  //   ✗ shows the stale-read notice and disables Save once an open editor's
+  //     read goes stale after an edit, while preserving the draft
+  //     AssertionError: expected false to be true // Object.is equality
+  //   ✗ refuses to enable Save for readState=stale, and says why
+  //     AssertionError: expected false to be true // Object.is equality
+  // (`saveButton.disabled` read `false` in both - `dirty` alone was still
+  // enabling it.) Restored by retyping the dropped `|| readIsStale` back into
+  // the `disabled` expression; the suite is green again.
+  it("shows the stale-read notice and disables Save once an open editor's read goes stale after an edit, while preserving the draft", () => {
+    const { rerender } = render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="fresh"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("auto-policy-input"), {
+      target: { value: "short and edited" },
+    });
+    const saveButton = screen.getByTestId(
+      "auto-policy-save",
+    ) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(false);
+    expect(screen.queryByTestId("auto-policy-stale-read-warning")).toBeNull();
+
+    rerender(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="stale"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(saveButton.disabled).toBe(true);
+    expect(screen.getByTestId("auto-policy-stale-read-warning")).toBeTruthy();
+    // The draft survives the transition - going stale must not discard what
+    // was typed while the read was still fresh.
+    const textarea = screen.getByTestId(
+      "auto-policy-input",
+    ) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("short and edited");
+  });
 });

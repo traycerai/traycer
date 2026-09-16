@@ -15,7 +15,8 @@ import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useAutoJudgeQuery } from "@/hooks/auto-mode/use-auto-judge-query";
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
@@ -62,11 +63,41 @@ export function AutoModeSettingsSection(): ReactNode {
   const scope = useHostScope();
   const realBinding = useHostBinding();
   const scopedBinding = useScopedHostBinding(scope);
-  const judgeSupported = useHostSupportsMethod(scope.hostId, "autoJudge.get");
-  const policySupported = useHostSupportsMethod(scope.hostId, "autoPolicy.get");
+  // TRI-STATE, deliberately. The boolean form collapses `null` ("no handshake
+  // with this host yet") into `false` ("this host handshook and lacks the
+  // method"), and those are opposite facts here: the unsupported verdict below
+  // parks every RPC this page owns, and this page's own RPCs are what would
+  // produce the handshake that overturns it. A scoped remote host nobody has
+  // contacted - or one upgraded in place - would therefore read "predates Auto
+  // mode" indefinitely, until some unrelated surface happened to dial it.
+  const judgeSupport = useHostMethodSupport(scope.hostId, "autoJudge.get");
+  const policySupport = useHostMethodSupport(scope.hostId, "autoPolicy.get");
+  const judgeSupported = judgeSupport === true;
+  const policySupported = policySupport === true;
+  // The probe is what keeps the verdict REFUTABLE: one bounded read of a
+  // released-floor method, re-asked when the host's reported version or
+  // dialability changes, issued exactly while this page is parked on a `false`.
+  // `scope.client`, never the ambient one, so it asks the host this page is
+  // showing. Same shape as `ShellSettingsPanel` / `DiagnosticsSettingsPanel`,
+  // and it must sit above the branch because hooks may not be conditional.
+  const supportUnknown = judgeSupport === null && policySupport === null;
+  useHostCapabilityProbe({
+    client: scope.client,
+    stale: !judgeSupported && !policySupported,
+    incarnation: [
+      scope.host?.version ?? null,
+      scope.host?.connectable ?? false,
+    ],
+  });
 
   if (!isHostScopeUsable(scope.status)) return null;
   const binding = scopedBinding ?? realBinding;
+  // "Not known yet" is not "predates Auto mode". While the probe is still
+  // producing the first handshake the page says nothing rather than accusing a
+  // host it has not spoken to - the same fail-toward-silence the composer's
+  // disclosure takes, and the reason `useHostMethodSupport` keeps `null`
+  // distinct at all.
+  if (supportUnknown && binding !== null) return null;
   if ((!judgeSupported && !policySupported) || binding === null) {
     return (
       <p

@@ -6,6 +6,7 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { providerCliIdForHarness } from "@/lib/provider-ordering";
+import { fallbackPermissionMode } from "@/components/home/data/landing-options";
 
 export interface ResolvedClonedChatSettings {
   readonly status: "ready";
@@ -61,8 +62,10 @@ function findAccountUuid(
 /**
  * Resolves the `ChatRunSettings` a cloned chat should start with on
  * `targetClient`'s host, given the source chat's own settings. Harness/model/
- * permission/reasoning/tier carry over verbatim (unlike today's clone, which
- * drops them entirely); only `profileId` needs host-aware remapping.
+ * reasoning/tier carry over verbatim (unlike today's clone, which drops them
+ * entirely); `profileId` needs host-aware remapping, and `permissionMode` needs
+ * host-aware CLAMPING - see {@link permissionModeForTarget}, which is what
+ * stops an `auto` chat failing the create on a target below that line.
  *
  * `sourceClient: null` means the source host is unreachable (e.g. cloning off
  * a dead tile) - there is then no way to read the source profile's identity,
@@ -80,7 +83,12 @@ export async function resolveClonedChatSettings(input: {
     readonly profileId: string | null;
   } | null;
 }): Promise<ClonedChatSettingsResolution> {
-  const { sourceSettings } = input;
+  // Clamp the MODE against the target's catalog before anything else, so every
+  // return below carries a tuple that host can actually accept.
+  const sourceSettings = await permissionModeForTarget(
+    input.sourceSettings,
+    input.targetClient,
+  );
   const providerId = providerCliIdForHarness(sourceSettings.harnessId);
   if (providerId === null) {
     return {
@@ -113,6 +121,52 @@ export async function resolveClonedChatSettings(input: {
     sourceAccountUuid,
     explicitTargetProfileId: input.explicitTargetProfileId,
   });
+}
+
+/**
+ * The source chat's settings with `permissionMode` resolved against the TARGET
+ * host's catalog.
+ *
+ * The clone hands its tuple straight to the target's `epic.createChat`, so a
+ * mode that host cannot spell fails the create outright - and `auto` is exactly
+ * such a mode on any host below the line that introduced it. The composer and
+ * session-import paths already demote this case; the clone carried it verbatim,
+ * which is the one path where the whole operation is lost rather than degraded.
+ *
+ * **Demotes only on POSITIVE evidence**, and that asymmetry is deliberate.
+ * A catalog that answers and offers no `auto` anywhere is proof; a catalog read
+ * that FAILS is not, and guessing from it would silently change a durable
+ * setting on a transient blip. This function's neighbour takes the same line
+ * one field over - a failed `providers.list` becomes the explicit, retryable
+ * `catalog-unavailable` rather than an assumed ambient profile - so a failed
+ * harness read leaves the mode alone and lets the create surface the error the
+ * user can retry.
+ *
+ * `fallbackPermissionMode` is the shared one-way demotion (`auto` ->
+ * `auto_accept_edits`): dropping the judge is the honest half-measure, where a
+ * walk to the safest supported mode would land on `supervised` and make a
+ * cloned chat stricter than the one it came from.
+ */
+async function permissionModeForTarget(
+  settings: ChatRunSettings,
+  targetClient: HostClient<HostRpcRegistry>,
+): Promise<ChatRunSettings> {
+  if (settings.permissionMode !== "auto") return settings;
+  const harnesses = await targetClient
+    .request("agent.gui.listHarnesses", {})
+    .then(
+      (response) => response.harnesses,
+      () => null,
+    );
+  if (harnesses === null) return settings;
+  const targetOffersAuto = harnesses.some((harness) =>
+    harness.supportedPermissionModes.includes("auto"),
+  );
+  if (targetOffersAuto) return settings;
+  return {
+    ...settings,
+    permissionMode: fallbackPermissionMode(settings.permissionMode),
+  };
 }
 
 async function readProviderProfiles(

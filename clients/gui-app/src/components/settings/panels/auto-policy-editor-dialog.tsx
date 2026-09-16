@@ -67,6 +67,19 @@ export function AutoPolicyEditorDialog(props: {
     props.currentUpdatedAt,
   );
   const unreadable = props.readState === "unreadable";
+  // A read that went STALE while this dialog was open is the same hazard as an
+  // unreadable one, arriving by a different door. The row refuses to OPEN the
+  // editor from a stale read, but the open-time refetch can come back stale
+  // behind an editor that opened on a fresh one - and a stale read withholds
+  // `updatedAt`, so `autoPolicyChangedSinceLoad` (the `stale` flag above, a
+  // different question) has nothing to compare and its warning is structurally
+  // unable to fire. Saving from there is a last-write-wins overwrite of a
+  // policy this window cannot see, with nothing on screen saying so.
+  //
+  // Named `readIsStale` rather than reusing `stale`: that one means "somebody
+  // else saved since you opened this", and conflating the two would make the
+  // wrong sentence appear.
+  const readIsStale = props.readState === "stale";
 
   return (
     <Dialog
@@ -108,6 +121,21 @@ export function AutoPolicyEditorDialog(props: {
               Traycer can&apos;t read your saved policy right now, so saving is
               turned off - a save from here would replace a policy nobody can
               currently see. Reopen Settings to try again.
+            </span>
+          </div>
+        ) : null}
+
+        {readIsStale ? (
+          <div
+            role="status"
+            data-testid="auto-policy-stale-read-warning"
+            className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 text-ui-sm dark:text-amber-300"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <span>
+              Traycer is showing a copy of your policy it couldn&apos;t refresh,
+              so saving is turned off - it can&apos;t tell whether another
+              device has changed it since. Reopen Settings to try again.
             </span>
           </div>
         ) : null}
@@ -171,7 +199,9 @@ export function AutoPolicyEditorDialog(props: {
               variant="default"
               size="sm"
               data-testid="auto-policy-save"
-              disabled={props.saving || overCap || !dirty || unreadable}
+              disabled={
+                props.saving || overCap || !dirty || unreadable || readIsStale
+              }
               onClick={() => props.onSave(body)}
             >
               {props.saving ? (

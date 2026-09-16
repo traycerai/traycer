@@ -215,7 +215,14 @@ export function autoJudgeRecordHealth(input: {
   return {
     storedHarnessUnavailable,
     storedModelUnavailable,
-    noJudgeWillRun: input.isBlocked || storedHarnessUnavailable,
+    // The missing-MODEL case belongs here too, and its absence was a miss in
+    // the same change that introduced it: the row already tells the user "Auto
+    // mode will ask you instead of judging" for a vanished model, which IS this
+    // flag's meaning, while the self-billing line beside it went on claiming
+    // their provider account would be charged. Same contradiction the blocked
+    // and missing-harness cases are here to prevent.
+    noJudgeWillRun:
+      input.isBlocked || storedHarnessUnavailable || storedModelUnavailable,
   };
 }
 

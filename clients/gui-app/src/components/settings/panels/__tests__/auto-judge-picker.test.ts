@@ -328,7 +328,15 @@ describe("autoJudgeRecordHealth", () => {
     });
   });
 
-  it("model reroute with the harness fine: storedModelUnavailable, and noJudgeWillRun stays false - a model swap still runs a judge", () => {
+  // This case previously asserted `noJudgeWillRun: false`, on the reasoning that
+  // "a model swap still runs a judge". That reasoning described the DISPLAY
+  // heal, not the host: the picker shows the harness default while the HOST
+  // still holds the vanished slug, tries it, fails, and escalates - which is
+  // what this row's own copy has said all along ("Auto mode will ask you
+  // instead of judging"). The test and the sentence beside it contradicted each
+  // other, and the flag sided with the test, so the self-billing warning went
+  // on claiming a charge next to "Auto mode will ask".
+  it("model reroute with the harness fine: storedModelUnavailable AND noJudgeWillRun - the host tries the missing slug and escalates", () => {
     const health = autoJudgeRecordHealth({
       ...BASE,
       presentedModelSlug: "claude-haiku",
@@ -337,7 +345,7 @@ describe("autoJudgeRecordHealth", () => {
     expect(health).toEqual({
       storedHarnessUnavailable: false,
       storedModelUnavailable: true,
-      noJudgeWillRun: false,
+      noJudgeWillRun: true,
     });
   });
 
@@ -581,6 +589,44 @@ describe("<AutoJudgePicker /> model-unavailable line", () => {
 
     const line = screen.getByTestId("auto-judge-model-unavailable");
     expect(line.textContent).toContain("claude-opus-retired");
+  });
+
+  // JOB 2 (Codex ivFeq, P2): the user-visible half of the finding. The unit
+  // case above already fixed `noJudgeWillRun` to `true` for this record - the
+  // host keeps trying the vanished slug and escalates, exactly as
+  // `auto-judge-model-unavailable`'s own copy says ("Auto mode will ask you
+  // instead of judging"). Before that fix, this row still rendered
+  // `auto-judge-self-billing` right beside it, claiming a provider account
+  // would be charged for a judge call that was never going to happen - the two
+  // lines contradicted each other. `harnessId: "claude"` (not "traycer") is
+  // what makes this an EXTERNAL-provider judge selection, so the billing line
+  // would render here if `noJudgeWillRun` did not suppress it.
+  it("suppresses auto-judge-self-billing while auto-judge-model-unavailable is shown for a vanished external-provider model", () => {
+    const storedDifferentModel: AutoJudgeSelection = {
+      harnessId: "claude",
+      model: "claude-opus-retired",
+      profileId: null,
+    };
+
+    render(
+      createElement(AutoJudgePicker, {
+        hostId: "host-a",
+        selection: storedDifferentModel,
+        effective: {
+          harnessId: "claude",
+          model: "claude-opus-retired",
+          source: "selection",
+        },
+        blocked: null,
+        disabled: false,
+        saving: false,
+        resetNonce: 0,
+        onCommit: vi.fn(),
+      }),
+    );
+
+    expect(screen.getByTestId("auto-judge-model-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("auto-judge-self-billing")).toBeNull();
   });
 });
 

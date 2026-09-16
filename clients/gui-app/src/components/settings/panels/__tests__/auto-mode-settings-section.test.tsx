@@ -13,11 +13,42 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
 // below. Defaults to neither, which is the negative-half suite's own state
 // (a host that predates auto mode, or one this window has not handshaken
 // with yet) and keeps that suite's assertions accurate without its own mock.
-let supportsPolicy = false;
+let supportsPolicy: boolean | null = false;
+// TRI-STATE now, because the section reads `useHostMethodSupport`: `null` is
+// "no handshake with this host yet", which the page must NOT render as
+// "predates Auto mode" - it parks every RPC behind that verdict, including the
+// one that would overturn it. `false` here keeps every pre-existing case
+// meaning what it did: a host that HANDSHOOK and lacks the method.
+let judgeSupport: boolean | null = false;
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostSupportsMethod: (_hostId: string | null, method: string) =>
-    method === "autoPolicy.get" && supportsPolicy,
+  useHostMethodSupport: (_hostId: string | null, method: string) =>
+    method === "autoPolicy.get" ? supportsPolicy : judgeSupport,
+}));
+
+// The probe exists to produce a handshake while the page is parked on `false`.
+// Stubbed to a no-op: what this suite asserts is the SECTION's verdict, and a
+// real `useHostQuery` here would need a host runtime it deliberately does not
+// stand up.
+const capabilityProbeMock = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/host/use-host-capability-probe", () => ({
+  // The parameter RESTATES `useHostCapabilityProbe`'s real props rather than
+  // taking `unknown`: this suite asserts on what the section passes, so the
+  // shape is the thing under test and a field renamed on the hook should
+  // surface here rather than sail through an `unknown`.
+  //
+  // Block body, not a concise one: `vi.fn()` returns `any`, and returning that
+  // from the arrow trips `typescript(no-unsafe-return)` - which oxlint catches
+  // and eslint does not. Returning nothing is also the honest shape: the
+  // section mounts this hook for the handshake it produces, never for its
+  // result.
+  useHostCapabilityProbe: (args: {
+    readonly client: unknown;
+    readonly stale: boolean;
+    readonly incarnation: ReadonlyArray<unknown>;
+  }) => {
+    capabilityProbeMock(args);
+  },
 }));
 
 // The section re-provides `HostRuntimeContext` off this binding, but nothing
@@ -62,6 +93,8 @@ vi.mock("@/hooks/auto-mode/use-auto-policy-set-mutation", () => ({
 
 beforeEach(() => {
   supportsPolicy = false;
+  judgeSupport = false;
+  capabilityProbeMock.mockClear();
   policy = undefined;
   autoPolicyRefetchMock.mockReset();
 });
@@ -99,6 +132,45 @@ describe("<AutoModeSettingsSection />", () => {
     // could ever have produced it.
     expect(screen.queryByText("Traycer's auto mode judge")).toBeNull();
     expect(screen.queryByText("Auto mode")).toBeNull();
+  });
+
+  // JOB 4 (Codex ivFev, P2): the defect. Before this line, "no handshake yet"
+  // collapsed into the same false-y read as "handshook and lacks the
+  // method", so a scoped host nobody had contacted yet showed "predates Auto
+  // mode" - a claim about a host this window has never actually asked.
+  it("renders nothing while support for both methods is still unknown (no handshake yet) - not 'predates Auto mode'", () => {
+    judgeSupport = null;
+    supportsPolicy = null;
+    const { container } = render(<AutoModeSettingsSection />);
+
+    expect(screen.queryByTestId("auto-mode-unsupported")).toBeNull();
+    expect(screen.queryByTestId("auto-judge-picker")).toBeNull();
+    expect(screen.queryByText("Auto mode policy")).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+
+  // Control for the case above already exists: the suite's very first test
+  // renders against the default `judgeSupport = false` / `supportsPolicy =
+  // false` (handshook, lacks both methods) and asserts the banner IS shown -
+  // proving the section can render a verdict at all, so the null case above
+  // is not passing because nothing here ever renders it.
+
+  // The probe is what keeps "renders nothing" refutable rather than a verdict
+  // this section could assert with no way to ever overturn it: it is mounted
+  // on the SCOPED client (`scope.client`, not some ambient one) and marked
+  // `stale` for exactly as long as the page is parked on a `false` verdict for
+  // both methods - the incarnation tuple is what re-asks it when the host's
+  // reported version or dialability changes.
+  it("mounts the capability probe on the scoped client, staled while parked on false", () => {
+    judgeSupport = false;
+    supportsPolicy = false;
+    render(<AutoModeSettingsSection />);
+
+    expect(capabilityProbeMock).toHaveBeenCalledWith({
+      client: null,
+      stale: true,
+      incarnation: ["1.4.2", true],
+    });
   });
 
   describe("when the host advertises autoPolicy.get", () => {
