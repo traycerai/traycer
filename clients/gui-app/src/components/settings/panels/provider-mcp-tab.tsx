@@ -755,11 +755,16 @@ export function ProviderMcpTab(props: {
         workspacesLoading={workspacesLoading}
         listPending={listQuery.isPending}
         listHasData={listData !== undefined}
-        listFetching={listQuery.isFetching}
+        listIdentity={JSON.stringify([
+          hostId,
+          providerId,
+          effectiveScope,
+          listWorkspaceRoot,
+        ])}
         listError={listError !== null}
         errorMessage={listError?.message ?? null}
-        onRetryList={() => {
-          void listQuery.refetch();
+        onRetryList={async () => {
+          await listQuery.refetch();
         }}
         servers={filteredServers}
         unfilteredServerCount={servers.length}
@@ -937,10 +942,10 @@ function McpServerList(props: {
   readonly workspacesLoading: boolean;
   readonly listPending: boolean;
   readonly listHasData: boolean;
-  readonly listFetching: boolean;
+  readonly listIdentity: string;
   readonly listError: boolean;
   readonly errorMessage: string | null;
-  readonly onRetryList: () => void;
+  readonly onRetryList: () => Promise<void>;
   readonly servers: readonly ProviderMcpServer[];
   readonly unfilteredServerCount: number;
   readonly searchQuery: string;
@@ -1017,7 +1022,9 @@ function McpServerList(props: {
         title="Couldn't load MCP servers"
         description={props.errorMessage ?? "Try refreshing or check the host."}
         actionLabel="Retry"
-        onAction={props.onRetryList}
+        onAction={() => {
+          void props.onRetryList();
+        }}
       />
     );
   }
@@ -1035,9 +1042,9 @@ function McpServerList(props: {
     <>
       {props.listError ? (
         <McpListRefreshError
+          key={props.listIdentity}
           empty={props.unfilteredServerCount === 0}
           errorMessage={props.errorMessage}
-          isFetching={props.listFetching}
           onRetry={props.onRetryList}
         />
       ) : null}
@@ -1101,9 +1108,17 @@ function McpServerList(props: {
 function McpListRefreshError(props: {
   readonly empty: boolean;
   readonly errorMessage: string | null;
-  readonly isFetching: boolean;
-  readonly onRetry: () => void;
+  readonly onRetry: () => Promise<void>;
 }): ReactNode {
+  // This tracks only the person's Retry action, not background polling. The
+  // catalog key remounts this notice so an old retry cannot affect a new list.
+  const [retryPending, setRetryPending] = useState(false);
+  const retry = () => {
+    setRetryPending(true);
+    return props.onRetry().finally(() => {
+      setRetryPending(false);
+    });
+  };
   return (
     <div
       role="status"
@@ -1127,10 +1142,12 @@ function McpListRefreshError(props: {
         size="sm"
         variant="outline"
         className="mt-2 self-start"
-        disabled={props.isFetching}
-        onClick={props.onRetry}
+        disabled={retryPending}
+        onClick={() => {
+          void retry();
+        }}
       >
-        {props.isFetching ? <MutedAgentSpinner /> : null}
+        {retryPending ? <MutedAgentSpinner /> : null}
         Retry
       </Button>
     </div>

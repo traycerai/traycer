@@ -33,10 +33,6 @@ export type McpListData = {
   readonly servers: readonly ProviderMcpServer[];
   /** A failed full-list refresh retained when other responses update rows. */
   readonly refreshError: HostRpcError | null;
-  /** Identifies complete responses even when their server rows are identical. */
-  readonly completeListRevision: number | null;
-  /** Applied discovery request order, independent of server-row content. */
-  readonly discoveryRevisions: Readonly<Record<string, number>>;
 };
 export type PluginsListData = { readonly plugins: readonly ProviderPlugin[] };
 export type SkillsListData = { readonly skills: readonly ProviderSkill[] };
@@ -127,20 +123,10 @@ export function mapProvidersListToMcpServers(args: {
   return completeMcpList(native.servers);
 }
 
-let mcpCacheRevision = 0;
-
-/** Client-cache provenance only; never part of a host request or response. */
-export function nextMcpCacheRevision(): number {
-  mcpCacheRevision += 1;
-  return mcpCacheRevision;
-}
-
 function completeMcpList(servers: readonly ProviderMcpServer[]): McpListData {
   return {
     servers,
     refreshError: null,
-    completeListRevision: nextMcpCacheRevision(),
-    discoveryRevisions: {},
   };
 }
 

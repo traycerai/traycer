@@ -28,6 +28,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
 import type { McpListData } from "@/hooks/providers/native-response-map";
 import { useProvidersMcpDiscover } from "@/hooks/providers/use-providers-mcp-discover-mutation";
+import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -185,6 +186,10 @@ function discoveredServer(name: string): ProviderMcpServer {
       },
     ],
   };
+}
+
+function pollingServer(name: string): ProviderMcpServer {
+  return { ...server(name), discoveryPending: true };
 }
 
 type ListOutcome =
@@ -650,7 +655,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
   });
 
-  it("clears stale warning when an actual full-list mutation returns authoritative state", async () => {
+  it("keeps refresh error when a mutation writes authoritative rows until a full read", async () => {
     const fixture = createFixture();
     fixture.enqueue(globalKey(HOST_A, "codex"), {
       kind: "success",
@@ -664,6 +669,10 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
       kind: "success",
       servers: [server("authoritative-server")],
     });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [server("authoritative-server")],
+    });
     renderTab(fixture, "codex");
 
     await screen.findByText("stale-server");
@@ -674,7 +683,23 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     );
 
     await screen.findByText("authoritative-server");
+    expect(screen.getByText("Couldn't refresh MCP servers")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+    const key = providersNativeQueryKeys.mcpList(HOST_A, {
+      providerId: "codex",
+      scope: GLOBAL,
+      workspaceRoot: null,
+    });
+    expect(fixture.queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fixture.listRequestCount()).toBe(3));
+    await waitFor(() =>
+      expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull(),
+    );
+    await screen.findByText("authoritative-server");
     expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
+    expect(fixture.queryClient.getQueryState(key)?.isInvalidated).toBe(false);
   });
 
   it("keeps a successful toggle through a stale refresh until explicit Retry recovers", async () => {
@@ -873,9 +898,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
         suppressToast: undefined,
       });
     });
-    await waitFor(() =>
-      expect(fixture.mutateRequestCount()).toBeGreaterThanOrEqual(1),
-    );
+    await waitFor(() => expect(fixture.mutateRequestCount()).toBe(2));
 
     await act(async () => {
       resolveFirst?.(
@@ -886,7 +909,6 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
       );
       await firstPromise;
     });
-    await waitFor(() => expect(fixture.mutateRequestCount()).toBe(2));
     await act(async () => {
       resolveSecond?.(
         mutateResponse([
@@ -911,14 +933,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
       ).toBe("false");
     });
 
-    await refetchMcpList(fixture);
     await screen.findByText("Couldn't refresh MCP servers");
-    await screen.findByText("list refresh failed after mutations");
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
-      ).toBe(false),
-    );
     expect(screen.getByText("server-a")).toBeDefined();
     expect(screen.getByText("server-b")).toBeDefined();
     expect(
@@ -933,20 +948,20 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     ).toBe("false");
   });
 
-  it("runs a queued mutation on its original host after the hook switches hosts", async () => {
+  it("applies a late concurrent mutation response, then converges on a successful full read", async () => {
     const fixture = createFixture();
-    const aKey = providersNativeQueryKeys.mcpList(HOST_A, {
-      providerId: "codex",
-      scope: GLOBAL,
-      workspaceRoot: null,
-    });
-    // Keep the seeded A cache alive after unmounting the viewer under test.
-    fixture.queryClient.setQueryDefaults(aKey, { gcTime: Infinity });
     fixture.enqueue(globalKey(HOST_A, "codex"), {
       kind: "success",
-      servers: [server("server-a")],
+      servers: [server("server-a"), server("server-b")],
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "error",
+      error: new Error("concurrent reconciliation failed"),
     });
     let resolveFirst:
+      | ((response: ProvidersNativeMutateResponse) => void)
+      | null = null;
+    let resolveSecond:
       | ((response: ProvidersNativeMutateResponse) => void)
       | null = null;
     fixture.enqueueMutate({
@@ -955,18 +970,15 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
         resolveFirst = resolve;
       }),
     });
-    let resolveSecond:
-      | ((response: ProvidersNativeMutateResponse) => void)
-      | null = null;
     fixture.enqueueMutate({
       kind: "pending",
       promise: new Promise<ProvidersNativeMutateResponse>((resolve) => {
         resolveSecond = resolve;
       }),
     });
-    const seedTab = renderTab(fixture, "codex");
+    renderTab(fixture, "codex");
     await screen.findByText("server-a");
-    seedTab.unmount();
+    await screen.findByText("server-b");
 
     const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
       wrapper: fixture.Wrapper,
@@ -985,122 +997,153 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
         providerId: "codex",
         scope: GLOBAL,
         workspaceRoot: null,
-        mutation: { action: "toggleServer", name: "server-a", enabled: false },
+        mutation: { action: "toggleServer", name: "server-b", enabled: false },
         suppressToast: undefined,
       });
     });
-    await waitFor(() => expect(fixture.mutateRequestCount()).toBe(1));
-
-    const hostBClient = fixture.clients.get(HOST_B);
-    if (hostBClient === undefined) throw new Error("missing host-b client");
-    runtimeMocks.client = hostBClient;
-    mutateRendered.rerender();
-    expect(fixture.mutateRequestCount()).toBe(1);
-
-    await act(() => {
-      resolveFirst?.(mutateResponse([server("server-a")]));
-      return Promise.resolve();
-    });
     await waitFor(() => expect(fixture.mutateRequestCount()).toBe(2));
-    await act(() => {
-      resolveSecond?.(
-        mutateResponse([{ ...server("server-a"), enabled: false }]),
-      );
-      return Promise.resolve();
-    });
+
+    // Generation stamps were intentionally removed: completion order is
+    // last-write-wins until a successful full read reconciles the catalog.
     await act(async () => {
-      await firstPromise;
+      resolveSecond?.(
+        mutateResponse([
+          server("server-a"),
+          { ...server("server-b"), enabled: false },
+        ]),
+      );
       await secondPromise;
     });
+    await act(async () => {
+      resolveFirst?.(
+        mutateResponse([
+          { ...server("server-a"), enabled: false },
+          server("server-b"),
+        ]),
+      );
+      await firstPromise;
+    });
 
-    expect(fixture.mutateRequestHosts()).toEqual([HOST_A, HOST_A]);
+    await screen.findByText("Couldn't refresh MCP servers");
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("switch", { name: "Enable server-a" })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+      expect(
+        screen
+          .getByRole("switch", { name: "Disable server-b" })
+          .getAttribute("aria-checked"),
+      ).toBe("true");
+    });
+
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [
+        { ...server("server-a"), enabled: false },
+        { ...server("server-b"), enabled: false },
+      ],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fixture.listRequestCount()).toBe(3));
+    await waitFor(() =>
+      expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull(),
+    );
+    await screen.findByRole("switch", { name: "Enable server-a" });
+    await screen.findByRole("switch", { name: "Enable server-b" });
     expect(
-      fixture.queryClient.getQueryData<McpListData>(aKey)?.servers[0]?.enabled,
-    ).toBe(false);
-    const bKey = providersNativeQueryKeys.mcpList(HOST_B, {
+      screen
+        .getByRole("switch", { name: "Enable server-a" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("switch", { name: "Enable server-b" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
+  });
+
+  it("keeps identical complete polling data referentially stable", async () => {
+    const fixture = createFixture();
+    const key = providersNativeQueryKeys.mcpList(HOST_A, {
       providerId: "codex",
       scope: GLOBAL,
       workspaceRoot: null,
     });
-    expect(fixture.queryClient.getQueryData<McpListData>(bKey)).toBeUndefined();
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [pollingServer("server-a")],
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [pollingServer("server-a")],
+    });
+
+    const client = fixture.clients.get(HOST_A);
+    if (client === undefined) throw new Error("missing fixture client");
+    runtimeMocks.client = client;
+    const rendered = renderHook(
+      () =>
+        useProvidersMcpList({
+          providerId: "codex",
+          scope: GLOBAL,
+          workspaceRoot: null,
+          enabled: true,
+          pollWhilePending: false,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.data?.servers).toHaveLength(1),
+    );
+    const initialData = rendered.result.current.data;
+    const initialDataUpdateCount =
+      fixture.queryClient.getQueryState<McpListData>(key)?.dataUpdateCount ?? 0;
+    await waitFor(() => expect(fixture.listRequestCount()).toBe(2), {
+      timeout: 2000,
+    });
+    await waitFor(
+      () =>
+        expect(
+          fixture.queryClient.getQueryState<McpListData>(key)?.dataUpdateCount,
+        ).toBeGreaterThan(initialDataUpdateCount),
+      { timeout: 2000 },
+    );
+    expect(fixture.queryClient.getQueryData<McpListData>(key)).toBe(
+      initialData,
+    );
+    expect(rendered.result.current.data).toBe(initialData);
   });
 
-  it("does not let an older discovery overwrite a newer complete list with identical contents", async () => {
+  it("merges discovery during an identical poll and reconciles a changed target row", async () => {
     const fixture = createFixture();
     fixture.enqueue(globalKey(HOST_A, "codex"), {
       kind: "success",
-      servers: [server("server-a")],
-    });
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "error",
-      error: new Error("list refresh failed before discovery"),
+      servers: [server("server-a"), server("server-b")],
     });
     fixture.enqueue(globalKey(HOST_A, "codex"), {
       kind: "success",
-      servers: [server("server-a")],
+      servers: [server("server-a"), { ...server("server-b"), enabled: false }],
     });
-    let resolveDiscover: ((response: ProvidersListResponse) => void) | null =
-      null;
-    fixture.enqueueDiscover({
-      kind: "pending",
-      promise: new Promise<ProvidersListResponse>((resolve) => {
-        resolveDiscover = resolve;
-      }),
-    });
-    renderTab(fixture, "codex");
-    await screen.findByText("server-a");
-    await refetchMcpList(fixture);
-    await screen.findByText("Couldn't refresh MCP servers");
-
-    const discoverRendered = renderHook(() => useProvidersMcpDiscover(), {
-      wrapper: fixture.Wrapper,
-    });
-    act(() => {
-      void discoverRendered.result.current.mutateAsync({
-        providerId: "codex",
-        scope: GLOBAL,
-        workspaceRoot: null,
-        serverName: "server-a",
-        forceRefresh: true,
-      });
-    });
-    await waitFor(() =>
-      expect(discoverRendered.result.current.isPending).toBe(true),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("server-a");
-    await waitFor(() =>
-      expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull(),
-    );
-    await act(() => {
-      resolveDiscover?.(discoverResponse(discoveredServer("server-a")));
-      return Promise.resolve();
-    });
-    await waitFor(() =>
-      expect(discoverRendered.result.current.isPending).toBe(false),
-    );
-
-    expect(screen.getByText("server-a")).toBeDefined();
-    expect(screen.queryByText("1 tool")).toBeNull();
-    expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
-  });
-
-  it("keeps a newer identical discovery ahead after the first hook unmounts", async () => {
-    const fixture = createFixture();
     fixture.enqueue(globalKey(HOST_A, "codex"), {
       kind: "success",
-      servers: [server("server-a")],
+      servers: [{ ...server("server-a"), enabled: false }, server("server-b")],
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [server("reconciled-server")],
     });
     let resolveFirst: ((response: ProvidersListResponse) => void) | null = null;
+    let resolveSecond: ((response: ProvidersListResponse) => void) | null =
+      null;
     fixture.enqueueDiscover({
       kind: "pending",
       promise: new Promise<ProvidersListResponse>((resolve) => {
         resolveFirst = resolve;
       }),
     });
-    let resolveSecond: ((response: ProvidersListResponse) => void) | null =
-      null;
     fixture.enqueueDiscover({
       kind: "pending",
       promise: new Promise<ProvidersListResponse>((resolve) => {
@@ -1109,80 +1152,12 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     });
     renderTab(fixture, "codex");
     await screen.findByText("server-a");
-
-    const firstDiscover = renderHook(() => useProvidersMcpDiscover(), {
-      wrapper: fixture.Wrapper,
-    });
-    let firstPromise: Promise<unknown> | null = null;
-    act(() => {
-      firstPromise = firstDiscover.result.current.mutateAsync({
-        providerId: "codex",
-        scope: GLOBAL,
-        workspaceRoot: null,
-        serverName: "server-a",
-        forceRefresh: false,
-      });
-    });
-    await waitFor(() => expect(fixture.discoverRequestCount()).toBe(1));
-    firstDiscover.unmount();
-
-    const secondDiscover = renderHook(() => useProvidersMcpDiscover(), {
-      wrapper: fixture.Wrapper,
-    });
-    let secondPromise: Promise<unknown> | null = null;
-    act(() => {
-      secondPromise = secondDiscover.result.current.mutateAsync({
-        providerId: "codex",
-        scope: GLOBAL,
-        workspaceRoot: null,
-        serverName: "server-a",
-        forceRefresh: true,
-      });
-    });
-    await waitFor(() => expect(fixture.discoverRequestCount()).toBe(2));
-
-    await act(async () => {
-      resolveSecond?.(discoverResponse(server("server-a")));
-      await secondPromise;
-    });
-
-    await act(async () => {
-      resolveFirst?.(discoverResponse(discoveredServer("server-a")));
-      await firstPromise;
-    });
-    expect(screen.getByText("server-a")).toBeDefined();
-    expect(screen.queryByText("1 tool")).toBeNull();
-  });
-
-  it("allows a newer discovery to replace an older result when it completes later", async () => {
-    const fixture = createFixture();
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "success",
-      servers: [server("server-a")],
-    });
-    let resolveFirst: ((response: ProvidersListResponse) => void) | null = null;
-    fixture.enqueueDiscover({
-      kind: "pending",
-      promise: new Promise<ProvidersListResponse>((resolve) => {
-        resolveFirst = resolve;
-      }),
-    });
-    let resolveSecond: ((response: ProvidersListResponse) => void) | null =
-      null;
-    fixture.enqueueDiscover({
-      kind: "pending",
-      promise: new Promise<ProvidersListResponse>((resolve) => {
-        resolveSecond = resolve;
-      }),
-    });
-    renderTab(fixture, "codex");
-    await screen.findByText("server-a");
+    await screen.findByText("server-b");
 
     const discoverRendered = renderHook(() => useProvidersMcpDiscover(), {
       wrapper: fixture.Wrapper,
     });
     let firstPromise: Promise<unknown> | null = null;
-    let secondPromise: Promise<unknown> | null = null;
     act(() => {
       firstPromise = discoverRendered.result.current.mutateAsync({
         providerId: "codex",
@@ -1191,6 +1166,19 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
         serverName: "server-a",
         forceRefresh: false,
       });
+    });
+    await waitFor(() => expect(fixture.discoverRequestCount()).toBe(1));
+    await refetchMcpList(fixture);
+    await screen.findByRole("switch", { name: "Enable server-b" });
+    await act(async () => {
+      resolveFirst?.(discoverResponse(discoveredServer("server-a")));
+      await firstPromise;
+    });
+    await screen.findByText("1 tool");
+    expect(screen.getByText("server-b")).toBeDefined();
+
+    let secondPromise: Promise<unknown> | null = null;
+    act(() => {
       secondPromise = discoverRendered.result.current.mutateAsync({
         providerId: "codex",
         scope: GLOBAL,
@@ -1200,227 +1188,85 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
       });
     });
     await waitFor(() => expect(fixture.discoverRequestCount()).toBe(2));
-
+    await refetchMcpList(fixture);
+    await screen.findByRole("switch", { name: "Enable server-a" });
     await act(async () => {
-      resolveFirst?.(discoverResponse(discoveredServer("server-a")));
-      await firstPromise;
-    });
-    await screen.findByText("1 tool");
-
-    await act(async () => {
-      resolveSecond?.(discoverResponse(server("server-a")));
+      resolveSecond?.(discoverResponse(discoveredServer("server-a")));
       await secondPromise;
     });
+
+    await screen.findByText("reconciled-server");
+    expect(fixture.listRequestCount()).toBe(4);
+    expect(screen.queryByText("1 tool")).toBeNull();
+  });
+
+  it("does not seed a partial list while an active complete read has no data", async () => {
+    const fixture = createFixture();
+    interface PendingList {
+      resolve: ((response: ProvidersListResponse) => void) | null;
+    }
+    const pendingList: PendingList = { resolve: null };
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "pending",
+      promise: new Promise<ProvidersListResponse>((resolve) => {
+        pendingList.resolve = resolve;
+      }),
+    });
+    const client = fixture.clients.get(HOST_A);
+    if (client === undefined) throw new Error("missing fixture client");
+    runtimeMocks.client = client;
+    const listRendered = renderHook(
+      () =>
+        useProvidersMcpList({
+          providerId: "codex",
+          scope: GLOBAL,
+          workspaceRoot: null,
+          enabled: true,
+          pollWhilePending: false,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => expect(fixture.listRequestCount()).toBe(1));
+
+    const discoverRendered = renderHook(() => useProvidersMcpDiscover(), {
+      wrapper: fixture.Wrapper,
+    });
+    fixture.enqueueDiscover({
+      kind: "success",
+      server: discoveredServer("orphan-server"),
+    });
+    await act(async () => {
+      await discoverRendered.result.current.mutateAsync({
+        providerId: "codex",
+        scope: GLOBAL,
+        workspaceRoot: null,
+        serverName: "orphan-server",
+        forceRefresh: true,
+      });
+    });
+
     const key = providersNativeQueryKeys.mcpList(HOST_A, {
       providerId: "codex",
       scope: GLOBAL,
       workspaceRoot: null,
     });
-    expect(fixture.queryClient.getQueryData<McpListData>(key)?.servers).toEqual(
-      [server("server-a")],
-    );
-    await waitFor(() => expect(screen.queryByText("1 tool")).toBeNull());
-  });
-
-  it("preserves a newer full-list error when an older discovery completes", async () => {
-    const fixture = createFixture();
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "success",
-      servers: [server("server-a")],
-    });
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "error",
-      error: new Error("newer list refresh failed"),
-    });
-    let resolveDiscover: ((response: ProvidersListResponse) => void) | null =
-      null;
-    fixture.enqueueDiscover({
-      kind: "pending",
-      promise: new Promise<ProvidersListResponse>((resolve) => {
-        resolveDiscover = resolve;
-      }),
-    });
-    renderTab(fixture, "codex");
-    await screen.findByText("server-a");
-
-    const discoverRendered = renderHook(() => useProvidersMcpDiscover(), {
-      wrapper: fixture.Wrapper,
-    });
-    act(() => {
-      void discoverRendered.result.current.mutateAsync({
-        providerId: "codex",
-        scope: GLOBAL,
-        workspaceRoot: null,
-        serverName: "server-a",
-        forceRefresh: true,
-      });
-    });
+    expect(fixture.queryClient.getQueryData<McpListData>(key)).toBeUndefined();
+    pendingList.resolve?.(listResponse([]));
     await waitFor(() =>
-      expect(discoverRendered.result.current.isPending).toBe(true),
+      expect(listRendered.result.current.data?.servers).toEqual([]),
     );
-
-    await refetchMcpList(fixture);
-    await screen.findByText("Couldn't refresh MCP servers");
-    await act(() => {
-      resolveDiscover?.(discoverResponse(discoveredServer("server-a")));
-      return Promise.resolve();
-    });
-    await waitFor(() =>
-      expect(discoverRendered.result.current.isPending).toBe(false),
-    );
-
-    expect(screen.getByText("1 tool")).toBeDefined();
-    expect(screen.getByText("Couldn't refresh MCP servers")).toBeDefined();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+    expect(listRendered.result.current.data?.servers).toEqual([]);
   });
 
-  it("does not roll a superseded full-list Retry result back after a deferred toggle rejects", async () => {
+  it("does not create a list query when discovery has no eligible cache", async () => {
     const fixture = createFixture();
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "success",
-      servers: [server("server-a")],
-    });
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "error",
-      error: new Error("list refresh failed"),
-    });
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "success",
-      servers: [server("server-b")],
-    });
-    let rejectToggle: ((reason: Error) => void) | null = null;
-    fixture.enqueueMutate({
-      kind: "pending",
-      promise: new Promise<ProvidersNativeMutateResponse>(
-        (_resolve, reject) => {
-          rejectToggle = (reason: Error) => reject(reason);
-        },
-      ),
-    });
-    renderTab(fixture, "codex");
-
-    await screen.findByText("server-a");
-    await refetchMcpList(fixture);
-    await screen.findByText("Couldn't refresh MCP servers");
-    fireEvent.click(screen.getByRole("switch", { name: "Disable server-a" }));
-    await waitFor(() => {
-      expect(screen.getByText("Couldn't refresh MCP servers")).toBeDefined();
-      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("server-b");
-    expect(screen.queryByText("server-a")).toBeNull();
-
-    await act(() => {
-      rejectToggle?.(new Error("toggle failed after full refresh"));
-      return Promise.resolve();
-    });
-    await waitFor(() =>
-      expect(toastMocks.errors).toContain("Couldn't update MCP server."),
-    );
-    await waitFor(() => {
-      expect(screen.getByText("server-b")).toBeDefined();
-      expect(screen.queryByText("server-a")).toBeNull();
-    });
-  });
-
-  it("keeps a newer full-list result while an older successful toggle reconciles", async () => {
-    const fixture = createFixture();
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "success",
-      servers: [server("server-a")],
-    });
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "error",
-      error: new Error("list refresh failed"),
-    });
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "success",
-      servers: [server("server-b")],
-    });
-    let resolveReconciliation:
-      | ((response: ProvidersListResponse) => void)
-      | null = null;
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "pending",
-      promise: new Promise<ProvidersListResponse>((resolve) => {
-        resolveReconciliation = resolve;
-      }),
-    });
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "success",
-      servers: [server("server-c")],
-    });
-    let resolveToggle:
-      | ((response: ProvidersNativeMutateResponse) => void)
-      | null = null;
-    fixture.enqueueMutate({
-      kind: "pending",
-      promise: new Promise<ProvidersNativeMutateResponse>((resolve) => {
-        resolveToggle = resolve;
-      }),
-    });
-    renderTab(fixture, "codex");
-
-    await screen.findByText("server-a");
-    const toggle = screen.getByRole("switch", { name: "Disable server-a" });
-    fireEvent.click(toggle);
-    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(true));
-
-    await refetchMcpList(fixture);
-    await screen.findByText("Couldn't refresh MCP servers");
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("server-b");
-    expect(screen.queryByText("server-a")).toBeNull();
-    expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
-
-    await act(() => {
-      resolveToggle?.(mutateResponse([server("server-a")]));
-      return Promise.resolve();
-    });
-    await waitFor(() => expect(resolveReconciliation).not.toBeNull());
-    expect(screen.getByText("server-b")).toBeDefined();
-    expect(screen.queryByText("server-c")).toBeNull();
-
-    await act(() => {
-      resolveReconciliation?.(listResponse([server("server-c")]));
-      return Promise.resolve();
-    });
-    await screen.findByText("server-c");
-    expect(screen.queryByText("server-b")).toBeNull();
-  });
-
-  it("keeps confirmed A and refreshed B after a deferred toggle failure", async () => {
-    const fixture = createFixture();
-    fixture.enqueue(globalKey(HOST_A, "codex"), {
-      kind: "success",
-      servers: [server("server-a")],
-    });
-    let rejectToggle: ((reason: Error) => void) | null = null;
-    fixture.enqueueMutate({
-      kind: "pending",
-      promise: new Promise<ProvidersNativeMutateResponse>(
-        (_resolve, reject) => {
-          rejectToggle = (reason: Error) => reject(reason);
-        },
-      ),
-    });
+    const client = fixture.clients.get(HOST_A);
+    if (client === undefined) throw new Error("missing fixture client");
+    runtimeMocks.client = client;
     fixture.enqueueDiscover({
       kind: "success",
-      server: discoveredServer("server-b"),
+      server: discoveredServer("orphan-server"),
     });
-    renderTab(fixture, "codex");
-
-    await screen.findByText("server-a");
-    const toggle = screen.getByRole("switch", { name: "Disable server-a" });
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(toggle);
-    await waitFor(() => {
-      expect(toggle.hasAttribute("disabled")).toBe(true);
-      expect(toggle.getAttribute("aria-checked")).toBe("true");
-    });
-
     const discoverRendered = renderHook(() => useProvidersMcpDiscover(), {
       wrapper: fixture.Wrapper,
     });
@@ -1429,32 +1275,235 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
         providerId: "codex",
         scope: GLOBAL,
         workspaceRoot: null,
-        serverName: "server-b",
+        serverName: "orphan-server",
         forceRefresh: true,
       });
     });
-    await screen.findByText("server-b");
+
+    const key = providersNativeQueryKeys.mcpList(HOST_A, {
+      providerId: "codex",
+      scope: GLOBAL,
+      workspaceRoot: null,
+    });
+    expect(fixture.queryClient.getQueryData<McpListData>(key)).toBeUndefined();
+    expect(fixture.queryClient.getQueryState(key)).toBeUndefined();
+    expect(fixture.listRequestCount()).toBe(0);
+  });
+
+  it("preserves a refresh error through discovery and a successful toggle until Retry", async () => {
+    const fixture = createFixture();
+    const key = providersNativeQueryKeys.mcpList(HOST_A, {
+      providerId: "codex",
+      scope: GLOBAL,
+      workspaceRoot: null,
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [server("server-a")],
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "error",
+      error: new Error("refresh outage"),
+    });
+    fixture.enqueueDiscover({
+      kind: "success",
+      server: discoveredServer("server-a"),
+    });
+    fixture.enqueueMutate({
+      kind: "success",
+      servers: [{ ...discoveredServer("server-a"), enabled: false }],
+    });
+    renderTab(fixture, "codex");
+
+    await screen.findByText("server-a");
+    await refetchMcpList(fixture);
+    await screen.findByText("Couldn't refresh MCP servers");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh server-a" }));
     await screen.findByText("1 tool");
-    expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
+    expect(screen.getByText("Couldn't refresh MCP servers")).toBeDefined();
+    expect(fixture.queryClient.getQueryState(key)?.isInvalidated).toBe(true);
 
-    await act(() => {
-      rejectToggle?.(new Error("toggle failed after discovery write"));
-      return Promise.resolve();
+    fireEvent.click(screen.getByRole("switch", { name: "Disable server-a" }));
+    await screen.findByRole("switch", { name: "Enable server-a" });
+    expect(screen.getByText("Couldn't refresh MCP servers")).toBeDefined();
+    expect(fixture.queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [{ ...server("server-a"), enabled: false }],
     });
-
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fixture.listRequestCount()).toBe(3));
     await waitFor(() =>
-      expect(toastMocks.errors).toContain("Couldn't update MCP server."),
+      expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull(),
     );
-    await waitFor(() => {
-      const confirmedToggle = screen.getByRole("switch", {
-        name: "Disable server-a",
-      });
-      expect(confirmedToggle.getAttribute("aria-checked")).toBe("true");
-      expect(screen.getByText("server-a")).toBeDefined();
-      expect(screen.getByText("server-b")).toBeDefined();
-      expect(screen.getByText("1 tool")).toBeDefined();
-      expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
+    await screen.findByRole("switch", { name: "Enable server-a" });
+    expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
+  });
+
+  it("applies a successful mutation before its deferred reconciliation settles", async () => {
+    const fixture = createFixture();
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [server("server-a")],
     });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "error",
+      error: new Error("refresh before deferred reconciliation"),
+    });
+    let rejectRetry: ((reason: Error) => void) | null = null;
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "pending",
+      promise: new Promise<ProvidersListResponse>((_resolve, reject) => {
+        rejectRetry = (reason: Error) => reject(reason);
+      }),
+    });
+    let rejectReplacement: ((reason: Error) => void) | null = null;
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "pending",
+      promise: new Promise<ProvidersListResponse>((_resolve, reject) => {
+        rejectReplacement = (reason: Error) => reject(reason);
+      }),
+    });
+    let resolveMutation:
+      | ((response: ProvidersNativeMutateResponse) => void)
+      | null = null;
+    fixture.enqueueMutate({
+      kind: "pending",
+      promise: new Promise<ProvidersNativeMutateResponse>((resolve) => {
+        resolveMutation = resolve;
+      }),
+    });
+    renderTab(fixture, "codex");
+
+    await screen.findByText("server-a");
+    await refetchMcpList(fixture);
+    await screen.findByText("Couldn't refresh MCP servers");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+      ).toBe(true),
+    );
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+      wrapper: fixture.Wrapper,
+    });
+    let mutationPromise: Promise<unknown> | null = null;
+    act(() => {
+      mutationPromise = mutateRendered.result.current.mutateAsync({
+        providerId: "codex",
+        scope: GLOBAL,
+        workspaceRoot: null,
+        mutation: { action: "toggleServer", name: "server-a", enabled: false },
+        suppressToast: undefined,
+      });
+    });
+    await waitFor(() => expect(fixture.mutateRequestCount()).toBe(1));
+
+    await act(async () => {
+      resolveMutation?.(
+        mutateResponse([{ ...server("server-a"), enabled: false }]),
+      );
+      await mutationPromise;
+    });
+    await waitFor(() =>
+      expect(mutateRendered.result.current.isPending).toBe(false),
+    );
+    await waitFor(() => expect(fixture.listRequestCount()).toBe(4));
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("switch", { name: "Enable server-a" })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+      expect(screen.getByText("Couldn't refresh MCP servers")).toBeDefined();
+    });
+
+    await act(async () => {
+      rejectReplacement?.(new Error("deferred reconciliation failed"));
+      rejectRetry?.(new Error("original reconciliation canceled"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    await screen.findByText("deferred reconciliation failed");
+    expect(
+      screen
+        .getByRole("switch", { name: "Enable server-a" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(screen.getByText("Couldn't refresh MCP servers")).toBeDefined();
+  });
+
+  it("keeps Retry enabled during a background read and does not cancel it on ticks", async () => {
+    const fixture = createFixture();
+    let resolveBackground: ((response: ProvidersListResponse) => void) | null =
+      null;
+    let resolveRetry: ((response: ProvidersListResponse) => void) | null = null;
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "success",
+      servers: [pollingServer("server-a")],
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "error",
+      error: new Error("background poll failed"),
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "pending",
+      promise: new Promise<ProvidersListResponse>((resolve) => {
+        resolveBackground = resolve;
+      }),
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "pending",
+      promise: new Promise<ProvidersListResponse>((resolve) => {
+        resolveRetry = resolve;
+      }),
+    });
+
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      renderTab(fixture, "codex");
+      await screen.findByText("server-a");
+      await act(async () => {
+        vi.advanceTimersByTime(800);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      await screen.findByText("Couldn't refresh MCP servers");
+
+      await act(async () => {
+        vi.advanceTimersByTime(800);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(fixture.listRequestCount()).toBe(3);
+      const retry = screen.getByRole("button", { name: "Retry" });
+      expect(retry.hasAttribute("disabled")).toBe(false);
+
+      await act(async () => {
+        vi.advanceTimersByTime(800);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(fixture.listRequestCount()).toBe(3);
+
+      fireEvent.click(retry);
+      await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(true));
+      await waitFor(() => expect(fixture.listRequestCount()).toBe(4));
+      await act(async () => {
+        vi.advanceTimersByTime(800);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(fixture.listRequestCount()).toBe(4);
+      await act(async () => {
+        resolveBackground?.(listResponse([server("server-a")]));
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        resolveRetry?.(listResponse([server("server-b")]));
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      await screen.findByText("server-b");
+      expect(screen.queryByText("Couldn't refresh MCP servers")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not turn a previously empty successful list into a fresh absence after refresh fails", async () => {

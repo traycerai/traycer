@@ -31,19 +31,16 @@ export type McpMutateVariables = {
 };
 
 interface McpMutateSnapshot {
-  readonly hostId: string | null;
-  readonly listState:
-    | {
-        readonly data: McpListData | undefined;
-        readonly dataUpdateCount: number;
-        readonly errorUpdateCount: number;
-      }
-    | undefined;
+  readonly listData: McpListData | undefined;
   readonly listParams: {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
     readonly workspaceRoot: string | null;
   };
+}
+
+interface McpMutateContext {
+  readonly hostId: string | null;
 }
 
 interface McpMutateResult {
@@ -64,15 +61,21 @@ interface McpMutateResult {
 export function useProvidersMcpMutate(): UseMutationResult<
   McpMutateResult,
   HostRpcError,
-  McpMutateVariables
+  McpMutateVariables,
+  McpMutateContext
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  return useMutation<McpMutateResult, HostRpcError, McpMutateVariables>({
-    // A host switch detaches the observer instead of retargeting queued work.
-    mutationKey: providersMutationKeys.mcpMutate(client.getActiveHostId()),
-    // Serialize MCP writes so each request sees prior successful writes.
-    scope: { id: "providers.mcpMutate" },
+  return useMutation<
+    McpMutateResult,
+    HostRpcError,
+    McpMutateVariables,
+    McpMutateContext
+  >({
+    // Settings mounts this hook under a host-keyed subtree with a pinned
+    // requester. Keep the observer attached while that host's readiness changes.
+    mutationKey: providersMutationKeys.mcpMutate(),
+    onMutate: () => ({ hostId: client.getActiveHostId() }),
     mutationFn: async (variables) => {
       const hostId = client.getActiveHostId();
       const listParams = {
@@ -80,12 +83,11 @@ export function useProvidersMcpMutate(): UseMutationResult<
         scope: variables.scope,
         workspaceRoot: variables.workspaceRoot,
       };
-      // onMutate runs before a scoped mutation waits. Capture only once this
-      // mutation actually starts, after the previous write has settled.
+      // This snapshot only decides whether to reconcile after applying the
+      // confirmed response; it must never suppress a successful mutation.
       const snapshot: McpMutateSnapshot = {
-        hostId,
         listParams,
-        listState: queryClient.getQueryState<McpListData>(
+        listData: queryClient.getQueryData<McpListData>(
           providersNativeQueryKeys.mcpList(hostId, listParams),
         ),
       };
@@ -100,42 +102,38 @@ export function useProvidersMcpMutate(): UseMutationResult<
       });
       return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
     },
-    onSuccess: async ({ data, snapshot }) => {
-      if (snapshot.hostId === null) return;
+    onSuccess: ({ data, snapshot }, _variables, ctx) => {
+      if (ctx.hostId === null) return;
       const listKey = providersNativeQueryKeys.mcpList(
-        snapshot.hostId,
+        ctx.hostId,
         snapshot.listParams,
       );
       const {
         fetchStatus,
         data: currentData,
-        dataUpdateCount,
-        errorUpdateCount,
         error,
       } = queryClient.getQueryState<McpListData, HostRpcError>(listKey) ?? {};
+      const refreshError = error ?? currentData?.refreshError ?? null;
+      // Full mutation responses are applied in completion order. A late
+      // response can replace newer rows until a complete read reconciles them.
+      // A confirmed config write does not clear a failed list-read warning.
+      queryClient.setQueryData<McpListData>(listKey, { ...data, refreshError });
+      if (refreshError !== null) {
+        void queryClient.invalidateQueries({
+          queryKey: listKey,
+          exact: true,
+          refetchType: "none",
+        });
+      }
       if (
         fetchStatus === "fetching" ||
-        currentData !== snapshot.listState?.data ||
-        dataUpdateCount !== snapshot.listState?.dataUpdateCount
+        currentData?.servers !== snapshot.listData?.servers
       ) {
-        // Newer data or an in-flight list supersedes this mutation's
-        // snapshot. Reconcile through the existing list query, preserving its
-        // error until that complete read succeeds.
-        if (fetchStatus === "fetching") {
-          // invalidateQueries alone reuses an initial fetch with no data;
-          // this read must begin after the mutation has completed.
-          await queryClient.cancelQueries({ queryKey: listKey, exact: true });
-        }
-        await queryClient.invalidateQueries({ queryKey: listKey, exact: true });
-        return;
+        // The cache now has full data even if an initial read was pending,
+        // so default invalidation can replace that read. Do not hold mutation
+        // settlement (or the row's pending UI) open for another host round trip.
+        void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
       }
-      // A failed refresh supplies no newer rows. Apply the successful mutation
-      // while retaining an error that arrived after this mutation began.
-      const refreshError =
-        errorUpdateCount !== snapshot.listState?.errorUpdateCount
-          ? (error ?? currentData?.refreshError ?? null)
-          : null;
-      queryClient.setQueryData<McpListData>(listKey, { ...data, refreshError });
     },
     onError: (error, variables) => {
       if (variables.suppressToast === true && isProviderNativeRpcError(error)) {

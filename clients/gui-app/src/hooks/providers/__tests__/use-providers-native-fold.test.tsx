@@ -154,16 +154,9 @@ describe("native response mappers", () => {
         native: { ok: true, kind: "mcp", servers: [] },
       },
     });
-    expect(Object.keys(mapped).sort()).toEqual([
-      "completeListRevision",
-      "discoveryRevisions",
-      "refreshError",
-      "servers",
-    ]);
+    expect(Object.keys(mapped).sort()).toEqual(["refreshError", "servers"]);
     expect(mapped.servers).toEqual([]);
     expect(mapped.refreshError).toBeNull();
-    expect(typeof mapped.completeListRevision).toBe("number");
-    expect(mapped.discoveryRevisions).toEqual({});
   });
 
   it("throws ProviderNativeRpcError on ok:false native result", () => {
@@ -244,15 +237,11 @@ describe("useProvidersMcpList fold", () => {
     });
     const cached = fixture.queryClient.getQueryData<McpListData>(key);
     expect(Object.keys(cached ?? {}).sort()).toEqual([
-      "completeListRevision",
-      "discoveryRevisions",
       "refreshError",
       "servers",
     ]);
     expect(cached?.servers).toEqual([EMPTY_SERVER]);
     expect(cached?.refreshError).toBeNull();
-    expect(typeof cached?.completeListRevision).toBe("number");
-    expect(cached?.discoveryRevisions).toEqual({});
     const classicKey = [
       "host",
       fixture.hostId,

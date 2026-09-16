@@ -1,12 +1,14 @@
 import type { UseMutationResult } from "@tanstack/react-query";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  ProviderMcpServer,
+  ProviderNativeScope,
+} from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import {
   mapProvidersListToMcpDiscover,
-  nextMcpCacheRevision,
   type McpDiscoverData,
   type McpListData,
 } from "@/hooks/providers/native-response-map";
@@ -27,8 +29,7 @@ export type McpDiscoverVariables = {
 
 interface McpDiscoverContext {
   readonly hostId: string | null;
-  readonly completeListRevision: number | null;
-  readonly requestRevision: number;
+  readonly server: ProviderMcpServer | undefined;
   readonly listParams: {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
@@ -76,58 +77,54 @@ export function useProvidersMcpDiscover(): UseMutationResult<
       return {
         hostId,
         listParams,
-        completeListRevision: list?.completeListRevision ?? null,
-        requestRevision: nextMcpCacheRevision(),
+        server: list?.servers.find(
+          (server) => server.name === variables.serverName,
+        ),
       };
     },
-    onSuccess: (data, _variables, ctx) => {
+    onSuccess: (data, variables, ctx) => {
       if (ctx.hostId === null) return;
       const listKey = providersNativeQueryKeys.mcpList(
         ctx.hostId,
         ctx.listParams,
       );
-      queryClient.setQueryData<McpListData>(listKey, (prev) => {
-        const previous: McpListData = prev ?? {
-          servers: [],
-          refreshError: null,
-          completeListRevision: null,
-          discoveryRevisions: {},
-        };
-        const servers = previous.servers;
-        const appliedRevision = previous.discoveryRevisions[data.server.name];
-        if (
-          previous.completeListRevision !== ctx.completeListRevision ||
-          (typeof appliedRevision === "number" &&
-            appliedRevision > ctx.requestRevision)
-        ) {
-          // A newer complete list or this server's own update takes priority;
-          // request order survives structural sharing of identical row data.
-          // Discoveries of other servers still merge independently.
-          return undefined;
-        }
-        // setQueryData clears TanStack's error even though this response
-        // refreshes only one server. Keep the full-list error in this same
-        // entry until a successful complete list replaces it.
-        const error = queryClient.getQueryState<McpListData, HostRpcError>(
-          listKey,
-        )?.error;
-        const found = servers.some(
-          (server) => server.name === data.server.name,
-        );
-        return {
-          servers: found
-            ? servers.map((server) =>
-                server.name === data.server.name ? data.server : server,
-              )
-            : [...servers, data.server],
-          refreshError: error ?? previous.refreshError,
-          completeListRevision: previous.completeListRevision,
-          discoveryRevisions: {
-            ...previous.discoveryRevisions,
-            [data.server.name]: ctx.requestRevision,
-          },
-        };
+      const previous = queryClient.getQueryData<McpListData>(listKey);
+      if (
+        previous === undefined ||
+        previous.servers.find(
+          (server) => server.name === variables.serverName,
+        ) !== ctx.server
+      ) {
+        // A changed target row takes priority; identical polls and other rows
+        // do not block this probe. Never seed a complete catalog from one row.
+        // Only an existing, eligible list query can refetch here.
+        void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
+        return;
+      }
+      const error = queryClient.getQueryState<McpListData, HostRpcError>(
+        listKey,
+      )?.error;
+      const refreshError = error ?? previous.refreshError;
+      const found = previous.servers.some(
+        (server) => server.name === data.server.name,
+      );
+      queryClient.setQueryData<McpListData>(listKey, {
+        servers: found
+          ? previous.servers.map((server) =>
+              server.name === data.server.name ? data.server : server,
+            )
+          : [...previous.servers, data.server],
+        refreshError,
       });
+      if (refreshError !== null) {
+        // Manual writes clear Query's error and invalidation. Preserve both
+        // the warning and eligibility for a complete read on the next mount.
+        void queryClient.invalidateQueries({
+          queryKey: listKey,
+          exact: true,
+          refetchType: "none",
+        });
+      }
     },
     onError: (error) =>
       toastFromHostError(error, "Couldn't refresh MCP server tools."),
