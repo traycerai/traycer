@@ -108,13 +108,6 @@ interface UseChatComposerSubmitArgs {
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
   readonly attachmentPreparationPending: boolean;
-  /**
-   * True while this chat's draft is a replica of another host's row that has
-   * not been claimed. The editor is disabled, but the toolbar's send button
-   * and the deferred steer confirm both reach this hook without passing the
-   * editor, so the block belongs in `submitBlocked` beside the others.
-   */
-  readonly draftReadOnly: boolean;
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
@@ -221,7 +214,6 @@ export function useChatComposerSubmit(
     workspaceBlocked,
     imagesUnsupported,
     attachmentPreparationPending,
-    draftReadOnly,
     onSubmitMessage,
     onSideChat,
     targetHostId,
@@ -302,12 +294,10 @@ export function useChatComposerSubmit(
       sendDisabled === true ||
       workspaceBlocked ||
       imagesUnsupported ||
-      attachmentPreparationPending ||
-      draftReadOnly,
+      attachmentPreparationPending,
     [
       activeTurnStatus,
       attachmentPreparationPending,
-      draftReadOnly,
       hasPendingApprovals,
       imagesUnsupported,
       sendDisabled,

@@ -152,7 +152,6 @@ function mountSubmit(
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,
-      draftReadOnly: false,
       onSubmitMessage,
       onSideChat: null,
       targetHostId: null,

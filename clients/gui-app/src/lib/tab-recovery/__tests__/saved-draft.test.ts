@@ -194,6 +194,7 @@ function landingDocumentWithClosed(
     revision: 3,
     lastTouchedAt: 3,
     workspace: null,
+    supersedes: null,
     ownerHostId: HOST_ID,
     origin: "own",
     adoption: { state: "adopted", hostId: HOST_ID },

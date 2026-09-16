@@ -83,6 +83,9 @@ function hostDocument(input: {
     workspace: null,
     ownerHostId: "host-1",
     origin: "own",
+    // The ancestor a fork-only draft replaces (#1913). An ordinary host
+    // document has none.
+    supersedes: null,
     adoption: { state: "adopted", hostId: "host-1" },
     publication: {
       status: "unpublished",

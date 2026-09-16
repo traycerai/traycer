@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -1065,6 +1066,45 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     viewHandle.store,
     (s) => s.requestTranscriptOrdinal,
   );
+  // The ordinal a jump named stays REQUIRED (protected from window eviction)
+  // until the messages surface reports how the landing ended, not until the
+  // jump is consumed: the rows that hydrate while the viewport moves can push
+  // the window over budget, and the coldest unprotected span - the target's -
+  // was the first to go. Released only for the request that is still current
+  // and only while no newer jump is parked, since that one may already have
+  // named an ordinal of its own. The session store holds one ordinal per
+  // chat, so a second tile of the same chat shares it - the pre-existing
+  // shape of `requestTranscriptOrdinal`, not something this changes.
+  const transcriptJumpRef = useRef(transcriptJump);
+  useLayoutEffect(() => {
+    transcriptJumpRef.current = transcriptJump;
+  }, [transcriptJump]);
+  const onScrollRequestSettled = useCallback(
+    (requestId: number): void => {
+      if (requestId !== backgroundScrollRequestIdRef.current) return;
+      if (transcriptJumpRef.current !== undefined) return;
+      requestTranscriptOrdinal(null);
+    },
+    [requestTranscriptOrdinal],
+  );
+  // ...and a landing whose surface never reports (unmounted mid-flight, or a
+  // request that never found its row) must not hold the ordinal forever.
+  const backgroundScrollRequestId = backgroundScrollRequest?.requestId ?? null;
+  useEffect(() => {
+    if (backgroundScrollRequestId === null) return;
+    const timer = setTimeout(() => {
+      onScrollRequestSettled(backgroundScrollRequestId);
+    }, TRANSCRIPT_JUMP_TTL_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [backgroundScrollRequestId, onScrollRequestSettled]);
+  useEffect(
+    () => () => {
+      requestTranscriptOrdinal(null);
+    },
+    [requestTranscriptOrdinal],
+  );
   // A jump target this client cannot place on its own, once it is clear it
   // cannot. Failing to match here does not mean "not delivered yet" the way it
   // does elsewhere - it means "not hydrated, and hydration is exactly what the
@@ -1149,13 +1189,16 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         queueMicrotask(() => {
           highlightComposerBlock(landing.approvalId);
         });
-      } else {
-        queueMicrotask(() => {
-          scrollToBlock(landing.blockId, "plan");
-        });
+        consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+        requestTranscriptOrdinal(null);
+        return;
       }
+      queueMicrotask(() => {
+        scrollToBlock(landing.blockId, "plan");
+      });
+      // The ordinal is released by `onScrollRequestSettled` once the plan
+      // card's row has landed, not here.
       consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
-      requestTranscriptOrdinal(null);
       return;
     }
     if (target.kind === "end") {
@@ -1251,10 +1294,9 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       });
     }
     consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
-    // The jump is done, so the ordinal it was holding open is released. Doing
-    // this AFTER the consume rather than beside the resolve keeps the request
-    // alive across the beat between the two.
-    requestTranscriptOrdinal(null);
+    // The ordinal it named stays held until the messages surface reports the
+    // landing's outcome (`onScrollRequestSettled`) - the target row must not
+    // be evictable while the viewport is still on its way there.
   }, [
     consumeTranscriptJump,
     highlightComposerBlock,
@@ -1468,6 +1510,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 coldRewrittenMessageIds={view.coldRewrittenMessageIds}
                 backgroundItems={view.lower.backgroundItems}
                 scrollRequest={backgroundScrollRequest}
+                onScrollRequestSettled={onScrollRequestSettled}
                 surfaceVisible={view.surfaceVisible}
                 systemOverlayActive={systemOverlayActive}
                 getMessageActions={view.getMessageActions}
@@ -3589,6 +3632,7 @@ interface ChatSessionMessagesSurfaceProps {
   readonly coldRewrittenMessageIds: ReadonlySet<string>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
+  readonly onScrollRequestSettled: (requestId: number) => void;
   readonly surfaceVisible: boolean;
   readonly systemOverlayActive: boolean;
   readonly getMessageActions: (
@@ -3698,6 +3742,7 @@ function ChatSessionMessagesSurface(
               coldRewrittenMessageIds={props.coldRewrittenMessageIds}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
+              onScrollRequestSettled={props.onScrollRequestSettled}
               getMessageActions={props.getMessageActions}
               nextStepActions={props.nextStepActions}
               instanceId={props.node.instanceId}

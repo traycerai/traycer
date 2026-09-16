@@ -9,6 +9,7 @@ import {
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -71,7 +72,10 @@ import {
   selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  landingRowIsForeign,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -108,7 +112,7 @@ import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
-import { DraftAuthorityBanner } from "@/components/drafts/draft-authority-banner";
+import { forkLandingDraftInPlace } from "@/lib/drafts/landing-draft-fork";
 import { useDraftAuthorityControl } from "@/hooks/drafts/use-draft-authority";
 import {
   landingStashIdentity,
@@ -157,16 +161,13 @@ function landingComposerCanSubmit(args: {
   readonly submitBlocked: boolean;
   readonly workspaceCanStart: boolean;
   readonly hasSubmittableContent: boolean;
-  /** Another host owns this draft (replica view); claim before submitting. */
-  readonly readOnly: boolean;
 }): boolean {
   return (
     !args.isSubmitting &&
     !args.attachmentPending &&
     !args.submitBlocked &&
     args.workspaceCanStart &&
-    args.hasSubmittableContent &&
-    !args.readOnly
+    args.hasSubmittableContent
   );
 }
 
@@ -254,50 +255,77 @@ export function LandingComposer(props: LandingComposerProps) {
   const setDraftSettings = useLandingDraftStore(
     (state) => state.setDraftSettings,
   );
-  // Hoisted above the toolbar wiring so the settings handler can consult it:
+  // Hoisted above the toolbar wiring so the settings handler can reach it:
   // every control that mutates the persisted draft - the editor, the mode
-  // switcher, the workspace controls, the run-settings toolbar, the
-  // attachment strip - is held while another host owns the draft. A
-  // foreign-owned draft must not change under its owner before a claim.
-  const landingOwnerHostId = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return (
-      state.drafts.find((entry) => entry.id === draftId)?.ownerHostId ?? null
-    );
-  });
-  const landingOrigin = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return state.drafts.find((entry) => entry.id === draftId)?.origin ?? null;
-  });
-  const landingPublication = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return (
-      state.drafts.find((entry) => entry.id === draftId)?.publication ?? null
-    );
-  });
+  // switcher, the run-settings toolbar - notes its edit, and the first edit
+  // of a draft this host does not own FORKS it underneath: the content moves
+  // into a fresh draft of the placement host's own, the tab re-keys onto it
+  // and the composer remounts under the new id with the same content and
+  // caret. Nothing is held; the user never meets the ownership mechanism.
+  // Foreignness is read at the edit (`landingRowIsForeign` against the
+  // placement), never from a render.
+  const isForeignDraft = useCallback((): boolean => {
+    if (draftId === null) return false;
+    const row = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === draftId);
+    return row !== undefined && landingRowIsForeign(row);
+  }, [draftId]);
+  const forkDraft = useCallback((): void => {
+    if (draftId !== null) forkLandingDraftInPlace(draftId);
+  }, [draftId]);
   const authority = useDraftAuthorityControl({
-    draftId,
-    ownerHostId: landingOwnerHostId,
-    origin: landingOrigin,
-    tabHostId: resolvedHostId,
-    client: hostClient,
-    publication: landingPublication,
+    isForeign: isForeignDraft,
+    fork: forkDraft,
   });
+  // Every local mutation of the draft row bumps `generation`, including the
+  // workspace controls, whose handlers write the store without passing
+  // through this component. A bump past the one seen at mount counts as an
+  // edit only when a substantive field moved with it: a caret move bumps
+  // `generation` but changes no field, and merely looking at a draft must
+  // not fork it. A host echo changes fields without bumping `generation`,
+  // so it does not count either.
+  const landingEditMark = useLandingDraftStore(
+    useShallow((state) => {
+      const draft =
+        draftId === null
+          ? undefined
+          : state.drafts.find((entry) => entry.id === draftId);
+      return {
+        generation: draft?.generation ?? 0,
+        content: draft?.content ?? null,
+        settings: draft?.settings ?? null,
+        composerMode: draft?.composerMode ?? null,
+        workspace: draft?.workspace ?? null,
+        closed: draft?.closed ?? null,
+      };
+    }),
+  );
+  const seenEditMark = useRef<typeof landingEditMark | null>(null);
+  useEffect(() => {
+    const seen = seenEditMark.current;
+    seenEditMark.current = landingEditMark;
+    if (seen === null) return;
+    if (landingEditMark.generation <= seen.generation) return;
+    const substantive =
+      landingEditMark.content !== seen.content ||
+      landingEditMark.settings !== seen.settings ||
+      landingEditMark.composerMode !== seen.composerMode ||
+      landingEditMark.workspace !== seen.workspace ||
+      landingEditMark.closed !== seen.closed;
+    if (substantive) authority.noteEdit();
+  }, [authority, landingEditMark]);
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
-      if (authority.readOnly) return;
       setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
       }
+      // After the write: the fork copies the row as it is, so the setting
+      // rides into the fork and the old row is retired locally unpublished.
+      authority.noteEdit();
     },
-    [
-      activeHostId,
-      authority.readOnly,
-      draftId,
-      setDraftSettings,
-      setGlobalRunSettings,
-    ],
+    [activeHostId, authority, draftId, setDraftSettings, setGlobalRunSettings],
   );
   const settingsSeed = useMemo(
     () =>
@@ -358,7 +386,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // they could not give.
   const actions = useLandingComposerActions(submitTarget);
   const isSubmitting = runtimeState.isSubmitting || actions.isPending;
-  const mutationsDisabled = isSubmitting || authority.readOnly;
+  const mutationsDisabled = isSubmitting;
 
   const hasSubmittableContent = contentIsSubmittable(runtimeState.content);
   const draftWorkspace = useLandingDraftStore((state) => {
@@ -684,7 +712,6 @@ export function LandingComposer(props: LandingComposerProps) {
     submitBlocked,
     workspaceCanStart,
     hasSubmittableContent,
-    readOnly: authority.readOnly,
   });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to
@@ -807,6 +834,10 @@ export function LandingComposer(props: LandingComposerProps) {
     (content: JsonContent, selection: { from: number; to: number }) => {
       if (runtime !== null) {
         runtime.setSnapshot(content, selection);
+        // After the write, in the same handler: a fork flushes the runtime
+        // first, so the copy carries this keystroke, and the old row (never
+        // written through - it is foreign) is retired locally underneath.
+        authority.noteEdit();
         return;
       }
       unboundRuntime.setState((current) => ({
@@ -820,7 +851,7 @@ export function LandingComposer(props: LandingComposerProps) {
         .getState()
         .setDraftContent(ensureBoundDraftId(), content, selection);
     },
-    [ensureBoundDraftId, runtime, unboundRuntime],
+    [authority, ensureBoundDraftId, runtime, unboundRuntime],
   );
 
   const handleSelectionChange = useCallback(
@@ -839,10 +870,14 @@ export function LandingComposer(props: LandingComposerProps) {
     [runtime, unboundRuntime],
   );
 
-  const handleSubmit = useCallback(() => {
-    if (!canSubmit) return;
+  const handleSubmit = useCallback((): boolean => {
+    if (!canSubmit) return false;
     const toolbar = toolbarStore.getState();
-    if (toolbar.selection.modelSlug.length === 0) return;
+    if (toolbar.selection.modelSlug.length === 0) return false;
+    // Submit is "delete the draft here, create the chat". A draft this host
+    // does not own is sent as it is: its retirement receipt keeps the row
+    // from being ingested back here, and its cloud row is retracted on the
+    // user's authority underneath. Nothing waits on ownership.
     const refusal = actions.submit({
       // `handleDocumentChange` mints the unbound draft the moment the first
       // edit becomes submittable, but `props.draftId` only catches up on the
@@ -865,29 +900,34 @@ export function LandingComposer(props: LandingComposerProps) {
     raiseHostNotice(
       refusal === null ? null : { kind: "refused", message: refusal.message },
     );
+    return refusal === null;
   }, [actions, canSubmit, draftId, pickerStore, raiseHostNotice, toolbarStore]);
 
-  const handleStartTerminal = useCallback(
-    (launch: TerminalAgentLaunch) => {
-      if (!workspaceCanStart || isSubmitting) return;
-      // Terminal mode bypasses `canSubmit` entirely, so the authority gate
-      // has to be restated here: a replica must not create an agent before
-      // the claim lands, and `ComposerBody` disabling Start is only the
-      // affordance half of that.
-      if (authority.readOnly) return;
+  const dispatchStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch): boolean => {
       const refusal = actions.selectTerminalAgent(launch, draftId);
       raiseHostNotice(
         refusal === null ? null : { kind: "refused", message: refusal.message },
       );
+      return refusal === null;
     },
-    [
-      actions,
-      authority.readOnly,
-      draftId,
-      isSubmitting,
-      raiseHostNotice,
-      workspaceCanStart,
-    ],
+    [actions, draftId, raiseHostNotice],
+  );
+  const handleStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch, assembledFor: string | null): boolean => {
+      if (!workspaceCanStart || isSubmitting) return false;
+      // A launch names a harness, model and profile out of the host's own
+      // catalog. `assembledFor` is the host the terminal panel held when it
+      // assembled the launch (the one its picker resolved against), so a
+      // launch put together for a host the placement has since left is
+      // dropped rather than forwarded to a host whose catalog may not hold
+      // them.
+      if (assembledFor !== null && assembledFor !== resolvedHostId) {
+        return false;
+      }
+      return dispatchStartTerminal(launch);
+    },
+    [dispatchStartTerminal, isSubmitting, resolvedHostId, workspaceCanStart],
   );
 
   const handleRemoveImage = useCallback(
@@ -912,6 +952,7 @@ export function LandingComposer(props: LandingComposerProps) {
         if (draftId !== null) {
           setDraftComposerMode(draftId, next);
         }
+        authority.noteEdit();
       }}
     />
   );
@@ -928,24 +969,13 @@ export function LandingComposer(props: LandingComposerProps) {
       initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
-      editorReadOnly={authority.readOnly}
+      editorReadOnly={false}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
       toolbarLayout={isMobile ? "collapsed" : "full"}
       topBanner={
         <>
-          {authority.readOnly ? (
-            <DraftAuthorityBanner
-              ownerLabel={authority.ownerLabel}
-              claiming={authority.claiming}
-              claimError={authority.claimError}
-              publicationLabel={authority.publicationLabel}
-              onClaim={() => {
-                void authority.claim();
-              }}
-            />
-          ) : null}
           <ComposerHostNotice
             notice={hostNotice}
             onDismiss={dismissHostNotice}
