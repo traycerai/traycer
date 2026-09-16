@@ -126,6 +126,14 @@ export interface BrowserViewNativeTabStatusChange extends BrowserViewNativeTabCa
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
   /**
+   * Which host-initiated navigation this reading belongs to. Monotonic per
+   * guest incarnation; bumped by every navigate / reload / back / forward the
+   * manager drives. A `loading` that carries the same attempt as the last one
+   * is a refresh of the same episode (a title or zoom report), not progress -
+   * the renderer's stall clock keys on this rather than on report volume.
+   */
+  readonly navigationAttempt: number;
+  /**
    * Whether a tile is showing this guest right now.
    *
    * Read by main, which reports it to the host as `electronTabState.viewed`.

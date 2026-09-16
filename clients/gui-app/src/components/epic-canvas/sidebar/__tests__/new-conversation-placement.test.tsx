@@ -111,7 +111,9 @@ const testState = vi.hoisted(() => ({
   createTerminalAgent: vi.fn(() => Promise.resolve(null)),
   onSubmitted: vi.fn(),
   bodySubmit: null as (() => void) | null,
-  bodyStartTerminal: null as ((launch: TerminalAgentLaunch) => void) | null,
+  bodyStartTerminal: null as
+    | ((launch: TerminalAgentLaunch, assembledFor: string | null) => void)
+    | null,
   installEditor: null as (() => void) | null,
   /** Drives what the modal's placement resolves to, per test. */
   placement: placementHolder(),
@@ -617,13 +619,16 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     };
     renderModal();
     act(() => {
-      testState.bodyStartTerminal?.({
-        harnessId: "claude",
-        model: null,
-        reasoningEffort: null,
-        terminalAgentArgs: null,
-        profileId: null,
-      });
+      testState.bodyStartTerminal?.(
+        {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: null,
+          profileId: null,
+        },
+        "host-b",
+      );
     });
 
     expect(testState.createTerminalAgent).not.toHaveBeenCalled();

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { useOpenLink } from "@/lib/links/open-link";
+import { isMobileApp } from "@/lib/mobile-app";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 /**
@@ -26,8 +27,26 @@ import { useRunnerHost } from "@/providers/use-runner-host";
  * (kind `account`, always external per A2), which owns the runner-error
  * mapping, so a shell that cannot open links says so instead of failing
  * silently.
+ *
+ * It renders NOTHING in the installed mobile app. App Store review guideline
+ * 3.1.1 forbids an app from presenting or linking to a subscription that is
+ * not purchasable through Apple, and this button is both at once: the words
+ * "Upgrade plan" and a link to the web billing page. The notices that render
+ * it switch to the `PLAN_RESTRICTED_MOBILE_*` copy in
+ * `@/lib/host/plan-restricted-copy`, so the phone still explains the state -
+ * it just does not offer the purchase. Every caller mounts this
+ * unconditionally, so the withholding lives here rather than in three copies.
+ *
+ * The flag is read in a wrapper so the button's hooks stay unconditional; it
+ * is immutable after boot, but a hook behind an early return is a rule
+ * violation regardless of how stable the condition is.
  */
 export function PlanRestrictedUpgradeAction(): ReactNode {
+  if (isMobileApp()) return null;
+  return <UpgradeButton />;
+}
+
+function UpgradeButton(): ReactNode {
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
   return (

@@ -161,6 +161,11 @@ import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
+import {
+  PLAN_RESTRICTED_MOBILE_DETAIL,
+  planRestrictedMobileTitle,
+} from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -206,9 +211,8 @@ const CPU_COL = "w-14 text-right";
 const MEM_COL = "w-20 text-right";
 // The current root section pins to the top of the scroll region and swaps to the
 // next section as it scrolls into view (a single sticky header, not a stack).
-// Match the glass surface while blurring scrolled rows beneath the header.
 const STICKY_SECTION_HEADER =
-  "sticky top-0 z-20 border-b border-border/50 glass-inset";
+  "sticky top-0 z-20 border-b border-border/50 bg-popover";
 /**
  * Trailing gutter every row reserves for its kill affordance. Section headers
  * (which have no action) reserve the same width as an empty spacer, so the
@@ -865,7 +869,7 @@ function ResourceMonitorContent(props: {
       collisionPadding={12}
       role="dialog"
       aria-label="Resources"
-      className="glass-with-insets w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
+      className="w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
       onOpenAutoFocus={(event) => event.preventDefault()}
       // Keep the panel open when focus moves elsewhere (switching tabs, a task
       // finishing load and autofocusing its content, a terminal grabbing
@@ -1062,13 +1066,26 @@ function ResourceMonitorHostUnavailableNotice(props: {
         className="flex flex-col items-center gap-2 px-6 py-8 text-center"
         data-testid="resource-monitor-host-plan-restricted"
       >
+        {/* The installed mobile app may not offer the purchase or the upgrade
+            (App Store guideline 3.1.1), so it states the same fact without
+            either; `PlanRestrictedUpgradeAction` withholds the button itself
+            on that shell. The host is still named - that is the reason this
+            notice exists. */}
         <p className="max-w-[40ch] text-ui-sm font-medium text-foreground">
-          Reading {scope.hostLabel} needs a paid plan
+          {isMobileApp()
+            ? planRestrictedMobileTitle(scope.hostLabel)
+            : `Reading ${scope.hostLabel} needs a paid plan`}
         </p>
         <p className="max-w-[40ch] text-ui-sm text-muted-foreground">
-          It keeps working on its own machine. This app just can&apos;t attach
-          to it remotely on the current plan, so its processes can&apos;t be
-          streamed here.
+          {isMobileApp() ? (
+            PLAN_RESTRICTED_MOBILE_DETAIL
+          ) : (
+            <>
+              It keeps working on its own machine. This app just can&apos;t
+              attach to it remotely on the current plan, so its processes
+              can&apos;t be streamed here.
+            </>
+          )}
         </p>
         <PlanRestrictedUpgradeAction />
         <button
@@ -2465,7 +2482,7 @@ function ConfirmableRowAction(props: {
         <span className={ROW_ACTION_SLOT} />
         <span
           {...{ [RESOURCE_CONFIRMATION_ATTRIBUTE]: "" }}
-          className="absolute inset-y-0 right-2 z-30 my-auto flex h-7 items-center gap-0.5 rounded-md border border-border/60 glass-inset px-1 shadow-sm"
+          className="absolute inset-y-0 right-2 z-30 my-auto flex h-7 items-center gap-0.5 rounded-md border border-border/60 bg-popover px-1 shadow-sm"
         >
           <Button
             ref={confirmRef}
@@ -2949,9 +2966,9 @@ function OwnerTreeRow(props: {
     <div>
       <div
         className={cn(
-          "group relative flex items-center pr-3.5 transition-colors hover:bg-foreground/5",
-          selected && "bg-foreground/5",
-          visibleExpanded && "sticky z-10 glass-inset",
+          "group relative flex items-center pr-3.5 transition-colors",
+          visibleExpanded ? "sticky z-10 bg-popover" : "hover:bg-foreground/5",
+          selected && !visibleExpanded && "bg-foreground/5",
         )}
         style={{
           paddingLeft: `${props.depth}rem`,
@@ -3333,7 +3350,7 @@ function ProcessTreeRow(props: {
         className={cn(
           "group relative flex items-center pr-3.5",
           selected && "bg-foreground/5",
-          expanded && "sticky z-10 glass-inset",
+          expanded && "sticky z-10 bg-popover",
         )}
         style={expanded ? { top: props.stickyTop } : undefined}
       >

@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PERMISSION } from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
 import {
+  DEFAULT_AGENT_OFFICE_VIEW,
   DEFAULT_CONTEXT_INDICATOR_STYLE,
   DEFAULT_LINK_OPEN_SETTINGS,
   DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
@@ -38,6 +39,7 @@ function resetSettingsStore(): void {
     pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
     contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
     chatTurnMinimapSide: "right",
+    agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
     quoteReplyEnabled: true,
     linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
     browserDevOrigins: [],
@@ -212,6 +214,126 @@ describe("useSettingsStore", () => {
     await useSettingsStore.persist.rehydrate();
 
     expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
+  });
+
+  it("defaults the agent office default view to auto", () => {
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+  });
+
+  it("persists and rehydrates the agent office default view for auto", async () => {
+    useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"agentOfficeDefaultView":"auto"');
+
+    useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
+    if (persisted === null) throw new Error("expected persisted settings");
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+  });
+
+  it("persists and rehydrates the agent office default view for a real view id", async () => {
+    useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"agentOfficeDefaultView":"towers"');
+
+    useSettingsStore.setState({ agentOfficeDefaultView: "auto" });
+    if (persisted === null) throw new Error("expected persisted settings");
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("towers");
+  });
+
+  it("repairs a non-string persisted agent office default view to auto", async () => {
+    useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
+    await rehydrateFrom({ agentOfficeDefaultView: 42 });
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+  });
+
+  it("repairs a persisted agent office default view naming an unregistered view to auto", async () => {
+    useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
+    // Not in OFFICE_VIEW_IDS at any build - a value a newer one wrote and this
+    // one cannot plan.
+    await rehydrateFrom({ agentOfficeDefaultView: "atrium" });
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+  });
+
+  it("keeps a valid persisted agent office default generation", async () => {
+    useSettingsStore.setState({ agentOfficeDefaultViewGeneration: 0 });
+    await rehydrateFrom({ agentOfficeDefaultViewGeneration: 7 });
+
+    expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+      7,
+    );
+  });
+
+  it.each([
+    ["a string", "5"],
+    ["a negative number", -1],
+    ["a fractional number", 1.5],
+    ["NaN", Number.NaN],
+  ])(
+    "repairs a persisted agent office default generation that is %s to 0",
+    async (_label, value) => {
+      useSettingsStore.setState({ agentOfficeDefaultViewGeneration: 9 });
+      await rehydrateFrom({ agentOfficeDefaultViewGeneration: value });
+
+      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+        0,
+      );
+    },
+  );
+
+  it("rolls the agent office default view generation to a collision-free random stamp on a real change, not a per-window +1 counter (Finding 37)", () => {
+    // Codex: the generation is compared by EQUALITY and rehydrates across
+    // windows via storage events, so a per-window `+1` counter let two
+    // windows land on the SAME next value for two DIFFERENT changes. The
+    // fix rolls to `Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)`
+    // instead - stubbed here to a fixed draw so the new generation is an
+    // exact, deterministic number to assert on rather than merely "some
+    // number that isn't G+1".
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.25);
+    try {
+      useSettingsStore.setState({
+        agentOfficeDefaultView: "auto",
+        agentOfficeDefaultViewGeneration: 5,
+      });
+
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+
+      const generation =
+        useSettingsStore.getState().agentOfficeDefaultViewGeneration;
+      expect(generation).toBe(Math.floor(0.25 * Number.MAX_SAFE_INTEGER));
+      // The distinguishing assertion: not the old `+1` counter's answer.
+      expect(generation).not.toBe(6);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it("does not roll the agent office default view generation when the value does not actually change (Finding 37)", () => {
+    // The setter's own no-op guard (`s.agentOfficeDefaultView === value ? s
+    // : {...}`) - setting the SAME value is not a "real change" and must not
+    // burn a fresh stamp, collision-free or not.
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.9);
+    try {
+      useSettingsStore.setState({
+        agentOfficeDefaultView: "towers",
+        agentOfficeDefaultViewGeneration: 42,
+      });
+
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+
+      expect(useSettingsStore.getState().agentOfficeDefaultViewGeneration).toBe(
+        42,
+      );
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it("updates the global artifact icon color mode", () => {

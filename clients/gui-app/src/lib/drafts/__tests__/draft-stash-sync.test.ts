@@ -166,11 +166,11 @@ describe("stash host sync", () => {
     expect(deletes).toEqual([entry.id]);
   });
 
-  it("restore-consume on a second host claims then deletes; a lost-race delete stays idempotent", async () => {
+  it("restore-consume on a second host retracts the cloud row through drafts.retract, without ever calling drafts.delete there; a lost-race retract falls back to an idempotent delete", async () => {
     installFreshIndexedDb();
     const hostA = "host-a";
     const hostB = "host-b";
-    const claims: string[] = [];
+    const retracts: string[] = [];
     const deletes: string[] = [];
     let listedOnB: DraftDocument[] = [];
     const entry = {
@@ -226,34 +226,10 @@ describe("stash host sync", () => {
               scopeId: "scp_TESTDRAFTSSCOPEID000002",
             });
           }
-          if (method === "drafts.claim") {
+          if (method === "drafts.retract") {
             const draftId = (params as { draftId: string }).draftId;
-            claims.push(draftId);
-            return Promise.resolve({
-              status: "ok" as const,
-              draft: {
-                draftId,
-                kind: "stash-entry" as const,
-                target: { epicId: null, chatId: null, blockId: null },
-                revision: 2,
-                lastTouchedAt: 10,
-                workspace: null,
-                ownerHostId: hostB,
-                origin: "own" as const,
-                adoption: { state: "adopted" as const, hostId: hostB },
-                publication: {
-                  status: "unpublished" as const,
-                  lastPublishedAt: null,
-                  publishedRevision: null,
-                  halted: null,
-                },
-                portable: {
-                  content: EMPTY_DOC,
-                  blobHashes: [],
-                  createdAt: 10,
-                },
-              },
-            });
+            retracts.push(draftId);
+            return Promise.resolve({ retracted: true });
           }
           if (method === "drafts.delete") {
             const draftId = (params as { draftId: string }).draftId;
@@ -270,10 +246,19 @@ describe("stash host sync", () => {
     });
     await Promise.resolve();
     await publishStashEntry(hostA, entry);
+    // Consumed through hostB, which never published this entry: the
+    // coordinator retracts the cloud row on the user's authority through
+    // hostB's client, and - on a successful retract - returns without ever
+    // calling `drafts.delete` there. Ownership never moves; hostA (the
+    // publisher) tombstones its own row once it finds the cloud row gone.
     await consumeStashOnHost(hostB, entry.id);
-    expect(claims).toEqual([entry.id]);
+    expect(retracts).toEqual([entry.id]);
+    expect(deletes).toEqual([]);
+    // The entry is no longer bound to a known publishing host after the
+    // retract, so a second consume through hostB falls back to the
+    // idempotent delete path instead of retracting again.
+    await consumeStashOnHost(hostB, entry.id);
+    expect(retracts).toEqual([entry.id]);
     expect(deletes).toEqual([entry.id]);
-    await consumeStashOnHost(hostB, entry.id);
-    expect(deletes).toEqual([entry.id, entry.id]);
   });
 });

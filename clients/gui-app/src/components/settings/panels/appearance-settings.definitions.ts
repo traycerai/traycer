@@ -20,7 +20,6 @@ export const APPEARANCE = defineSettingsSection("appearance", {
       "color scheme",
       "theme mode",
       "follow device",
-      "background opacity",
       "palette",
       "preset",
       "gruvbox",
@@ -70,16 +69,6 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     description: null,
     availableWhen: alwaysAvailable,
     keywords: ["palette", "preset"],
-  },
-  backgroundOpacity: {
-    kind: "row",
-    group: "themes",
-    search: { anchor: "appearance-background-opacity" },
-    label: "Background opacity",
-    description:
-      "Opacity of menu, dialog, and prompt backgrounds. Lower values let more show through; 100% is solid.",
-    availableWhen: alwaysAvailable,
-    keywords: ["transparency", "translucent", "glass", "blur"],
   },
   startPage: {
     kind: "group",
@@ -305,6 +294,34 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     description: "Blink the terminal cursor while the terminal is focused.",
     availableWhen: alwaysAvailable,
     keywords: ["blink", "flash", "cursor", "caret"],
+  },
+  // Its OWN group rather than a row under Interface: the groups here are
+  // either a cross-cutting appearance concern (Themes, Interface, Fonts and
+  // text, Motion and readability, Icon colors) or one surface's own settings
+  // (Start page, Terminal), and this is the second kind. Interface is app-wide
+  // chrome - zoom, the pointer cursor, where minimaps sit - and a default that
+  // only an epic's comm-graph tile reads would be misfiled there.
+  agentOffice: {
+    kind: "group",
+    search: { anchor: "appearance-agent-office" },
+    label: "Agent office",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["office", "agents", "comm graph", "epic canvas", "tile"],
+  },
+  agentOfficeDefaultView: {
+    kind: "row",
+    group: "agentOffice",
+    search: { anchor: "appearance-agent-office-default-view" },
+    label: "Default view",
+    description:
+      "For epics you have not chosen a view in. Auto picks by how much fits the tile.",
+    availableWhen: alwaysAvailable,
+    // The view NAMES are deliberately not listed: they come from the office
+    // view registry, and a second copy here would drift from it the moment a
+    // view is added or renamed. "Auto" is the choice, not a view.
+    keywords: ["office", "view", "auto", "floor", "layout", "default"],
   },
   artifactIcons: {
     kind: "group",

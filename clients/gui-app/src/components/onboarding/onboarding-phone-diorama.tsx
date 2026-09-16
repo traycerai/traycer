@@ -28,6 +28,7 @@ import {
   type StoryBeat,
   type StoryKind,
 } from "@/components/onboarding/onboarding-story-script";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 
 /**
@@ -290,6 +291,11 @@ function NavDrawerScene(props: { readonly reducedMotion: boolean }) {
   const { reducedMotion } = props;
   const revealed = useRevealed(reducedMotion);
   const activeIndex = useCyclingIndex(TASKS.length, reducedMotion);
+  // The miniature mirrors the real `MobileNavDrawer` identity row, which in
+  // the installed app withholds its "Manage subscription" link (App Store
+  // review guideline 3.1.1, see that drawer). The tour must not teach an
+  // affordance the app does not have, nor name a subscription on first launch.
+  const installedApp = isMobileApp();
   return (
     <>
       {reducedMotion ? null : <PanelTapCue control="menu" />}
@@ -309,10 +315,12 @@ function NavDrawerScene(props: { readonly reducedMotion: boolean }) {
               Your account
             </span>
             <span className="truncate text-overline text-muted-foreground">
-              Subscription
+              {installedApp ? "Signed in" : "Subscription"}
             </span>
           </div>
-          <SquareArrowOutUpRight className="size-3.5 shrink-0 text-muted-foreground/70" />
+          {installedApp ? null : (
+            <SquareArrowOutUpRight className="size-3.5 shrink-0 text-muted-foreground/70" />
+          )}
           <LogOut className="size-3.5 shrink-0 text-muted-foreground/70" />
         </div>
         <nav className="flex min-h-0 flex-1 flex-col gap-1 p-2">
@@ -470,7 +478,7 @@ function PhoneScrim(props: {
       initial={props.reducedMotion ? false : { opacity: 0 }}
       animate={{ opacity: props.revealed ? 1 : 0 }}
       transition={{ duration: 0.32, ease: EASE }}
-      className="absolute inset-0 z-20 bg-black/45 supports-backdrop-filter:backdrop-blur-xs"
+      className="absolute inset-0 z-20 bg-black/45"
     />
   );
 }

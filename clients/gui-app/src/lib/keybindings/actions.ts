@@ -855,9 +855,9 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
   },
   "model.reasoning.byDigit": {
     id: "model.reasoning.byDigit",
-    label: "Switch thinking level by number",
+    label: "Change model settings by number",
     description:
-      "While the model picker is open and the selected model exposes thinking levels, hold the configured modifiers and press a digit to set that level.",
+      "While the model picker is open, hold the configured modifiers and press 1–9 to set thinking effort, or 0 to toggle Fast when available.",
     category: "app",
     kind: "digit",
     defaultChord: "alt",

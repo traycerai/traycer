@@ -42,7 +42,7 @@ export function MigrationBlockingModalHost(): ReactNode {
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
           data-testid="migration-blocking-overlay"
-          className="fixed inset-0 isolate z-[60] bg-black/40 duration-100 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0"
+          className="fixed inset-0 isolate z-[60] bg-black/40 duration-100 data-open:animate-in data-open:fade-in-0"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"

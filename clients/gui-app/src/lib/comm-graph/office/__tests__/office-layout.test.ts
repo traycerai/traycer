@@ -59,6 +59,28 @@ function tileOf(layout: OfficeLayout, agentId: string): OfficeTilePos {
   return desk.deskTile;
 }
 
+/** Where a desk was PUT, with none of the identity a seat also carries. */
+interface DeskPlacement {
+  readonly deskTile: OfficeTilePos;
+  readonly chairTile: OfficeTilePos;
+  readonly manager: boolean;
+}
+
+function deskGeometry(
+  layout: OfficeLayout,
+): ReadonlyMap<string, DeskPlacement> {
+  return new Map(
+    Array.from(layout.desks, ([agentId, desk]) => [
+      agentId,
+      {
+        deskTile: desk.deskTile,
+        chairTile: desk.chairTile,
+        manager: desk.manager,
+      },
+    ]),
+  );
+}
+
 function roomOf(layout: OfficeLayout, rootAgentId: string): OfficeRoom {
   const room = layout.rooms.find(
     (candidate) => candidate.rootAgentId === rootAgentId,
@@ -215,8 +237,21 @@ describe("layoutOffice", () => {
     }
     // Furniture blocks; the lobby rug and the things a character gets ON do
     // not. A sleeping bag, an armchair and a treadmill each ARE their errand
-    // spot, so a grid that called them solid would put the spot behind a wall.
-    const occupiable = new Set(["rug", "sleep-bag", "armchair", "treadmill"]);
+    // spot, so a grid that called them solid would put the spot behind a wall,
+    // and a bed and a lounge chair are the civic seats an agent is IN - their
+    // own tile is where the seat book puts its occupant.
+    // The archive's door is the one prop that is a WAY THROUGH rather than a
+    // thing: an archived agent walks into it, so the tile it stands on is open
+    // exactly as the building's own entrance is. The civic SEATS are not in
+    // this list at all - a bed and a lounge chair are drawn from
+    // `layout.seats` by the painter, so the plan stands up no prop for them.
+    const occupiable = new Set([
+      "rug",
+      "sleep-bag",
+      "armchair",
+      "treadmill",
+      "records-door",
+    ]);
     for (const prop of layout.props) {
       const walkable = layout.walkable[prop.tile.row][prop.tile.col];
       expect(walkable, prop.sprite.name).toBe(occupiable.has(prop.sprite.name));
@@ -655,7 +690,9 @@ describe("layoutOffice floors", () => {
     // host: grouping must not move a desk.
     expect(hosted.cols).toBe(hostless.cols);
     expect(hosted.rows).toBe(hostless.rows);
-    expect(hosted.desks).toEqual(hostless.desks);
+    // A desk now carries its host and a seat id derived from it, so the two
+    // sets are compared on the placement this case is actually about.
+    expect(deskGeometry(hosted)).toEqual(deskGeometry(hostless));
     expect(hosted.doorTile).toEqual(hostless.doorTile);
   });
 
@@ -1204,15 +1241,100 @@ describe("layoutOffice floors", () => {
     }
   });
 
-  it("stacks the amenities down one column while the storey is deep enough", () => {
+  /**
+   * Every walled room the storey's reserved columns hold, in PACKING order.
+   *
+   * The amenities and the two civic rooms that take a column are packed
+   * together into the same columns, so neither list alone describes the
+   * stacking any more. A column's rooms all share one right edge - the packer
+   * measures each placement from it - so grouping by that edge is what
+   * recovers the columns, right-hand one first, each read top to bottom.
+   *
+   * The help desk and the archive are deliberately left out: one is the
+   * reception counter and the other is a door in the outer wall, and neither
+   * is packed.
+   */
+  function columnRooms(floor: OfficeFloor): ReadonlyArray<OfficeTileRect> {
+    const packed = [
+      ...floor.amenities.map((room) => room.bounds),
+      ...floor.civic
+        .filter(
+          (room) => room.kind === "infirmary" || room.kind === "waiting-room",
+        )
+        .map((room) => room.bounds),
+    ];
+    return [...packed].sort((left, right) => {
+      const edges = right.col + right.cols - (left.col + left.cols);
+      return edges === 0 ? left.row - right.row : edges;
+    });
+  }
+
+  it("keeps the infirmary on the road beside the stairwell, on the storey the well stands on", () => {
+    // THE FIXTURE THE FIRST-COLUMN FALLBACK NEEDS, and the reason no case had
+    // reached it: every kerb fixture before this one was single-host, and a
+    // single-host Floor has no stairwell, so the first column's foot was never
+    // taken and `anchorInfirmaryToRoad`'s multi-storey branch never ran. The
+    // same fourteen roots as the packing case below, plus one root on a second
+    // host - which buys a stairwell and nothing else.
+    const deep = Array.from({ length: 14 }, (_, index) =>
+      agent({ id: `deep-${index}`, hostId: "host-a", createdAt: index }),
+    );
+    const layout = layoutOffice([
+      ...deep,
+      agent({ id: "root-b", hostId: "host-b", createdAt: 99 }),
+    ]);
+    const floor = layout.floors[0];
+    const stairs = floor.stairsTile;
+    if (stairs === null) throw new Error("expected a stairwell on floor 0");
+    const infirmary = floor.civic.find((room) => room.kind === "infirmary");
+    if (infirmary === undefined) throw new Error("no infirmary");
+    const kerb = infirmary.kerbTile;
+    if (kerb === null) throw new Error("no infirmary kerb");
+    const road = floor.road;
+    if (road === null) throw new Error("no road");
+
+    // GEOMETRY, RE-MEASURED. This storey's infirmary used to anchor two rows
+    // short of the road - the band the packer reserves so the well cannot cut
+    // a room's bottom wall - and `kerbOnRoad` still took its door's column, so
+    // the kerb measured 3 while the contract promises 1. It now clears the
+    // well SIDEWAYS instead: its right edge steps left by the well's width and
+    // it anchors to the last room row like every other column.
+    expect(infirmary.bounds.col + infirmary.bounds.cols - 1).toBe(
+      stairs.col - 1,
+    );
+    expect(
+      Math.abs(kerb.col - infirmary.doorTile.col) +
+        Math.abs(kerb.row - infirmary.doorTile.row),
+    ).toBe(1);
+    expect(kerb.row).toBe(road.tiles[0].row);
+
+    // The shifted storey still offers a stairs spot, which is what makes the
+    // multi-floor errand possible at all. It may be the tile beside the well
+    // or - where the infirmary's right wall now covers that candidate - the
+    // documented fall-through to the lobby row, which puts the waiting walker
+    // on a road tile. That is allowed: road tiles coincide with corridors and
+    // the lobby by design, and the road is drawn rather than searched.
+    expect(
+      floor.errandSpots.filter((spot) => spot.kind === "stairs").length,
+    ).toBe(1);
+
+    // THE LANE RUNS END TO END, UNDER THE WELL, and these two assertions exist
+    // so nobody later "fixes" that by shortening it. The well's footprint
+    // covers the lobby row at its last two columns, so the road's final tiles
+    // before the exit are the well's own - deliberate, and argued in
+    // `roadAlongLobby`.
+    expect(road.tiles.length).toBe(layout.cols);
+    expect(road.exitTile.col).toBe(layout.cols - 1);
+  });
+
+  it("stacks the column rooms down one column while the storey is deep enough", () => {
     // A tall family: enough cabin bands that every room this floor earns fits
     // one above the other, which is the arrangement that costs no extra width.
     const deep = Array.from({ length: 14 }, (_, index) =>
       agent({ id: `deep-${index}`, createdAt: index }),
     );
     const floor = layoutOffice(deep).floors[0];
-    const rooms = floor.amenities;
-    expect(rooms.map((room) => room.kind)).toEqual([
+    expect(floor.amenities.map((room) => room.kind)).toEqual([
       "cafeteria",
       "game",
       "nap",
@@ -1220,40 +1342,100 @@ describe("layoutOffice floors", () => {
       "garden",
       "gym",
     ]);
+    // The civic rooms the columns hold, and the two that cost no column at
+    // all: the help desk is the reception counter and the archive is a door.
+    expect(floor.civic.map((room) => room.kind)).toEqual([
+      "waiting-room",
+      "infirmary",
+      "help-desk",
+      "archive",
+    ]);
+
+    const rooms = columnRooms(floor);
+    const infirmary = floor.civic.find((room) => room.kind === "infirmary");
+    if (infirmary === undefined) throw new Error("no infirmary");
 
     for (let index = 1; index < rooms.length; index += 1) {
-      const above = rooms[index - 1].bounds;
-      const here = rooms[index].bounds;
+      const above = rooms[index - 1];
+      const here = rooms[index];
+      // One column: every room's RIGHT edge lines up on the storey's own.
+      expect(here.col + here.cols).toBe(above.col + above.cols);
+      // GEOMETRY, RE-MEASURED: this asserted a corridor row under EVERY room,
+      // `here.row === above.row + above.rows + 1`, and the infirmary now
+      // breaks it on purpose - it is dropped to the foot of its column so its
+      // door opens onto the road, which leaves corridor above it rather than
+      // one row. Measured at 60 where the packed row was 56. Every other pair
+      // still follows immediately, which is the thing this case is for.
+      if (here.row === infirmary.bounds.row) continue;
       // A corridor row between them, so the upper room's door has somewhere to
       // open onto rather than straight into the lower room's cap.
       expect(here.row).toBe(above.row + above.rows + 1);
-      // One column: every room's RIGHT edge lines up on the storey's own.
-      expect(here.col + here.cols).toBe(above.col + above.cols);
     }
+
+    // ...and the infirmary's own rule, which is what it left the stack for: its
+    // bottom wall is the last row a room may occupy, so the tile its door opens
+    // onto IS the lobby row - the road - and its kerb is one tile from the door
+    // rather than one column of road that happens to share its column.
+    const road = floor.road;
+    if (road === null) throw new Error("no road");
+    const doorRow = infirmary.bounds.row + infirmary.bounds.rows - 1;
+    expect(infirmary.doorTile.row).toBe(doorRow);
+    expect(road.tiles[0].row).toBe(doorRow + 1);
+    expect(infirmary.kerbTile).toEqual({
+      col: infirmary.doorTile.col,
+      row: doorRow + 1,
+    });
+
+    // THE HELP DESK'S DOOR AND KERB, the same pairing on the room that owns no
+    // column. GEOMETRY, RE-MEASURED: its door was the tile above the counter's
+    // LEFT end while its kerb sits past the RIGHT end - the bell end, where
+    // the queue forms - which measured Manhattan 3 apart. A civic room's door
+    // and kerb are a pair at distance 1 (K2's shared adjacency case asserts
+    // exactly that), so the DOOR moved to the bell end and the kerb stayed
+    // put. Measured 3 -> 1, unchanged at 1, 2, 6, 12, 40, 309 and 1,000
+    // agents. The counter, `receptionTile`, the queue tiles and `queueFacing`
+    // are untouched.
+    const helpDesk = floor.civic.find((room) => room.kind === "help-desk");
+    if (helpDesk === undefined) throw new Error("no help desk");
+    const helpKerb = helpDesk.kerbTile;
+    if (helpKerb === null) throw new Error("no help-desk kerb");
+    expect(helpDesk.doorTile.row).toBe(floor.receptionTile.row - 1);
+    // Directly beneath the door, which is what makes the distance 1.
+    expect(helpKerb.col).toBe(helpDesk.doorTile.col);
+    expect(
+      Math.abs(helpKerb.col - helpDesk.doorTile.col) +
+        Math.abs(helpKerb.row - helpDesk.doorTile.row),
+    ).toBe(1);
+    // The bell end is one tile PAST the counter's right edge, so the door is
+    // not standing on the counter it serves.
+    expect(helpDesk.doorTile.col).toBe(
+      helpDesk.bounds.col + helpDesk.bounds.cols,
+    );
   });
 
-  it("opens a second amenity column when the storey runs out of rows", () => {
-    // Two agents make a shallow storey, so the rooms cannot all stack: the
-    // library goes beside the pair above it rather than below them.
+  it("opens a second room column when the storey runs out of rows", () => {
+    // Two agents make a shallow storey, so the rooms cannot all stack: what
+    // does not fit under the first column starts a second one beside it.
     const floor = layoutOffice(SINGLE_HOST).floors[0];
-    const rooms = new Map(floor.amenities.map((room) => [room.kind, room]));
-    const cafeteria = rooms.get("cafeteria");
-    const game = rooms.get("game");
-    const library = rooms.get("library");
-    if (cafeteria === undefined || game === undefined) {
-      throw new Error("no rooms");
+    const rooms = columnRooms(floor);
+    const first = rooms[0];
+    // The rightmost column's rooms share one right edge and follow each other
+    // down, a corridor row apart.
+    const rightEdge = first.col + first.cols;
+    const column = rooms.filter((room) => room.col + room.cols === rightEdge);
+    expect(column.length).toBeGreaterThan(1);
+    for (let index = 1; index < column.length; index += 1) {
+      const above = column[index - 1];
+      expect(column[index].row).toBe(above.row + above.rows + 1);
     }
-    if (library === undefined) throw new Error("no library");
-
-    expect(game.bounds.row).toBe(
-      cafeteria.bounds.row + cafeteria.bounds.rows + 1,
-    );
-    // A column of its own, left of the first and clear of it, starting back at
-    // the top of the storey.
-    expect(library.bounds.row).toBe(cafeteria.bounds.row);
-    expect(library.bounds.col + library.bounds.cols).toBeLessThan(
-      Math.min(cafeteria.bounds.col, game.bounds.col),
-    );
+    // ...and the rest are in a column of their own, left of the first and
+    // clear of it, starting back at the top of the storey.
+    const spilled = rooms.filter((room) => room.col + room.cols !== rightEdge);
+    expect(spilled.length).toBeGreaterThan(0);
+    for (const room of spilled) {
+      expect(room.col + room.cols).toBeLessThan(first.col);
+    }
+    expect(spilled[0].row).toBe(first.row);
   });
 
   it("gives every cabin a bin with a throwing line under it", () => {
@@ -1757,12 +1939,31 @@ describe("layoutOffice amenities", () => {
     expect(reversed.walkable).toEqual(forward.walkable);
   });
 
+  /**
+   * THE TWO STOREYS, AND THE ONE NUMBER BOTH ARE MEASURED AGAINST: the gym's
+   * own `GYM_MIN_AGENTS`, which `office-layout.ts` sets at 10.
+   *
+   * The upper storey's ten IS that threshold, exactly - measured, nine loses
+   * the gym and the first assertion below reds. That zero headroom is the
+   * point rather than an oversight: the claim is that a storey is sized from
+   * ITS OWN agents, and the sharpest way to say it is a floor that only just
+   * earns the room over one that plainly does not. What was missing was any
+   * statement that it sits on the line, so `GYM_MIN_AGENTS` moving up would
+   * red a case about per-storey sizing and read as a sizing bug.
+   *
+   * The lower storey's four is six under the same threshold, and under
+   * `GARDEN_MIN_AGENTS` (6) as well - so it is a floor with neither, and the
+   * gym is simply the one this case asks about.
+   */
+  const GYM_STOREY_AGENTS = 10;
+  const NO_GYM_STOREY_AGENTS = 4;
+
   it("gives every storey of a stacked building its own amenities", () => {
     const layout = layoutOffice([
-      ...Array.from({ length: 10 }, (_, index) =>
+      ...Array.from({ length: GYM_STOREY_AGENTS }, (_, index) =>
         agent({ id: `a${index}`, hostId: "host-a", createdAt: index }),
       ),
-      ...Array.from({ length: 4 }, (_, index) =>
+      ...Array.from({ length: NO_GYM_STOREY_AGENTS }, (_, index) =>
         agent({ id: `b${index}`, hostId: "host-b", createdAt: 100 + index }),
       ),
     ]);

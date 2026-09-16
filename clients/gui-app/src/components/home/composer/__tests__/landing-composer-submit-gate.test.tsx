@@ -297,10 +297,10 @@ vi.mock("@/hooks/providers/use-refresh-providers-list-on-turn", () => ({
   useRefreshProvidersListOnTurn: () => undefined,
 }));
 
-// `LandingComposer` claims a foreign draft through `useHostMutation`
-// (`useDraftAuthorityControl`), so it needs a Query client the way every
-// host-RPC surface in the app does. Shadows RTL's `render` so each case below
-// keeps reading as a plain render.
+// `useDraftAuthorityControl` no longer claims anything (the fork rule is a
+// synchronous local re-key, no host RPC) - the Query client here is kept
+// for the other host-RPC hooks `LandingComposer` still uses. Shadows RTL's
+// `render` so each case below keeps reading as a plain render.
 function render(ui: ReactElement): RenderResult {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

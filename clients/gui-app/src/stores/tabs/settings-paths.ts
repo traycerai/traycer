@@ -25,6 +25,7 @@ export const SETTINGS_PATHS = new Set([
   "app-diagnostics",
   "app-notifications",
   "appearance",
+  "delete-account",
   "devices",
   "diagnostics",
   "fallback",
