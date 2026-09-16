@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type {
   ChatActiveTurn,
@@ -225,8 +225,13 @@ export function useChatComposerSubmit(
   // value cannot answer "is this still the submit the user asked for" - that is
   // precisely the question, and the closure froze its answer at preparation
   // time. Same shape the other latest-value bridges in this tree use.
+  //
+  // LAYOUT-timed, like every other latest-value bridge in this hook. A passive
+  // effect can run after an awaited read resumes in the post-commit microtask,
+  // so the "live" value would be the one from the render before the change -
+  // which is the staleness these refs exist to remove.
   const queueEditTargetIdRef = useRef(queueEditTargetId);
-  useEffect(() => {
+  useLayoutEffect(() => {
     queueEditTargetIdRef.current = queueEditTargetId;
   }, [queueEditTargetId]);
   const [pendingConflict, setPendingConflict] =
@@ -236,7 +241,7 @@ export function useChatComposerSubmit(
   // the read, which is precisely the value that cannot answer "is this consent
   // still standing".
   const conflictStagedRef = useRef<PendingSteerConflict | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     conflictStagedRef.current = pendingConflict;
   }, [pendingConflict]);
   // One confirmation flight at a time, so repeated clicks cannot start a
@@ -308,8 +313,15 @@ export function useChatComposerSubmit(
   // The LIVE blocking predicate, for the deferred confirmation's continuation.
   // `submitBlocked` is rebuilt per render from props; a continuation holds the
   // one from the render it started in, which is the render before the block.
+  //
+  // Published in a LAYOUT effect, not a passive one. A passive effect runs
+  // after the browser has had a chance to hand control back, so an awaited
+  // image read can resume in the post-commit microtask BEFORE it - and the
+  // "live" gate then answers with the value from the render before the block,
+  // which is exactly the staleness it exists to remove. React commits layout
+  // effects synchronously with the commit, ahead of any such continuation.
   const submitBlockedRef = useRef(submitBlocked);
-  useEffect(() => {
+  useLayoutEffect(() => {
     submitBlockedRef.current = submitBlocked;
   }, [submitBlocked]);
 
@@ -332,7 +344,7 @@ export function useChatComposerSubmit(
     steerEnabled,
     steerProtocolSupported,
   });
-  useEffect(() => {
+  useLayoutEffect(() => {
     steerInputsRef.current = {
       activeTurnStatus,
       steerCapable,

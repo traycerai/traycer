@@ -23,7 +23,7 @@ import {
 } from "@/lib/composer/landing-image-budget";
 import {
   imageHashKeys,
-  deleteImage,
+  deleteImageBytesUnchecked,
   releaseSession,
 } from "@/lib/composer/landing-image-store";
 import { queryClient } from "@/lib/query-client";
@@ -279,7 +279,7 @@ let originalCreateObjectURLDescriptor: PropertyDescriptor | undefined;
 describe("prepareSavedDraft", () => {
   beforeEach(async () => {
     for (const hash of await imageHashKeys()) {
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
     }
     idbData.clear();

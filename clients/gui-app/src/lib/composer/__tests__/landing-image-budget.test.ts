@@ -9,9 +9,19 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
   LANDING_IMAGE_BUDGET_BYTES,
+  LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
+  registerExtraImageRootSource,
   reserveLandingImageBudget,
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import {
+  awaitLandingImageSizes,
+  imageHashKeys,
+  imageStore,
+  putImage,
+} from "@/lib/composer/landing-image-store";
+import { set as idbSet } from "idb-keyval";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import {
   emptyLandingDraftWorkspaceSnapshot,
@@ -89,6 +99,77 @@ describe("reserveLandingImageBudget", () => {
     resetLandingImageBudgetReservationsForTesting();
     draftRuntimeRegistry.resetForTesting();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  });
+
+  // One source, installed once: `registerExtraImageRootSource` has no
+  // withdrawal, so the tests below drive it by emptying the array instead.
+  const extraRoots: string[] = [];
+  registerExtraImageRootSource({ hashes: () => extraRoots });
+
+  it("charges an extra root's MEASURED bytes against the cap (DRIVE RED)", async () => {
+    // Extra roots are hash-only by construction - an annotation crop, a
+    // composer or new-chat row, a stash entry - so nothing about them declares
+    // a size, and they were counted as zero while the sweep dutifully protected
+    // their bytes. The roots and the usage sum have to be the same set.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const bytes = new Uint8Array(512).fill(7);
+    extraRoots.push(await putImage(bytes));
+
+    // Exactly the cap once those 512 bytes are counted.
+    const exact = reserveLandingImageBudget(null, [
+      { hash: "d".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 512 },
+    ]);
+    expect(exact).not.toBeNull();
+    exact?.release();
+
+    // One byte past it.
+    expect(
+      reserveLandingImageBudget(null, [
+        { hash: "e".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 511 },
+      ]),
+    ).toBeNull();
+    extraRoots.length = 0;
+  });
+
+  it("charges a resident root it has not MEASURED at the per-image ceiling", async () => {
+    // Bytes written by a build before the size table existed. Unknown must not
+    // mean free while the partition is holding them; the store measures them at
+    // the next start, and until then the ceiling is the honest bound.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const roots = 13;
+    expect(roots * LANDING_IMAGE_MAX_BYTES_PER_IMAGE).toBeGreaterThan(
+      LANDING_IMAGE_BUDGET_BYTES,
+    );
+    for (let index = 0; index < roots; index += 1) {
+      const hash = `${index}`.padStart(64, "b");
+      await idbSet(hash, new Uint8Array(8).fill(index), imageStore());
+      extraRoots.push(hash);
+    }
+    // Enumerating the partition is what makes them "resident" to the store.
+    await imageHashKeys();
+
+    expect(
+      reserveLandingImageBudget(null, [{ hash: "c".repeat(64), bytes: 1 }]),
+    ).toBeNull();
+    extraRoots.length = 0;
+  });
+
+  it("charges nothing for a DANGLING root with no bytes anywhere", () => {
+    // An annotation record whose crop was reclaimed still names its hash. The
+    // ceiling would be a permanent tax for bytes nobody holds, and no later
+    // measurement could ever retire it.
+    for (let index = 0; index < 13; index += 1) {
+      extraRoots.push(`${index}`.padStart(64, "f"));
+    }
+
+    const admitted = reserveLandingImageBudget(null, [
+      { hash: "c".repeat(64), bytes: 1 },
+    ]);
+    expect(admitted).not.toBeNull();
+    admitted?.release();
+    extraRoots.length = 0;
   });
 
   it("charges zero for a candidate hash that is already a live root", () => {

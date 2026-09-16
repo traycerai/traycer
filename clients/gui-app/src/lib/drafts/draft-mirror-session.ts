@@ -4,6 +4,7 @@ import {
   draftsSubscribeServerFrameSchemaV10,
   type DraftDocument,
   type DraftHeldRevisionState,
+  type DraftListTombstone,
   type DraftWrite,
   type DraftsDeleteResponse,
   type DraftsRetractResponse,
@@ -396,33 +397,14 @@ export class DraftMirrorSession {
       this.listedScopeId = listed.scopeId ?? null;
       this.held.clear();
       const listedIds = new Set<string>();
-      for (const document of listed.drafts) {
-        listedIds.add(document.draftId);
-        this.held.set(document.draftId, {
-          kind: "row",
-          revision: document.revision,
-        });
-        if (!this.sink.isDirty(document.draftId)) {
-          await this.sink.applyUpsert(document);
-          this.rememberIncomingSynced(document);
-        }
+      if (!(await this.applyListedRows(listed.drafts, generation, listedIds))) {
+        return;
       }
-      for (const tombstone of listed.tombstones) {
-        listedIds.add(tombstone.draftId);
-        this.held.set(tombstone.draftId, {
-          kind: "tombstone",
-          revision: tombstone.revision,
-          storeSeq: listed.snapshotSeq,
-        });
-        if (!this.sink.isDirty(tombstone.draftId)) {
-          this.sink.applyDelete(tombstone.draftId);
-          this.sink.rememberSynced(
-            tombstone.draftId,
-            tombstone.revision,
-            Number.POSITIVE_INFINITY,
-          );
-        }
-      }
+      this.applyListedTombstones(
+        listed.tombstones,
+        listed.snapshotSeq,
+        listedIds,
+      );
       // Absence from live rows is a mirror drop, not a content delete.
       // Tombstone ids are in `listedIds` so they are not also dropped.
       this.sink.dropAbsentFromList(this.hostId, listedIds);
@@ -759,6 +741,83 @@ export class DraftMirrorSession {
    * the pre-await `false`. `close()` / `markUnsupported()` can run
    * while `list`/`upsert` are in flight.
    */
+  /**
+   * Has this bootstrap lost the right to mutate anything? Either the session
+   * closed under it, or a newer bootstrap superseded it. Both answers mean the
+   * same thing to every caller, and every caller is on the far side of an
+   * await.
+   */
+  private isSupersededBoot(generation: number): boolean {
+    return this.isClosed() || generation !== this.bootGeneration;
+  }
+
+  /**
+   * Apply the listing's live rows. `false` means this bootstrap was superseded
+   * part way through and its caller must stop - NOT that the listing was empty.
+   *
+   * Each apply awaits its own blob read, and this session can be closed - by a
+   * sign-out, a user switch, or an ordinary release - inside any one of them.
+   * The loop used to simply carry on: the interrupted row was dropped by the
+   * apply's own guard and the NEXT row then captured whatever identity now held
+   * the window, installing one account's private draft under another. A guard
+   * inside the apply cannot see that, because by then it is a fresh call with a
+   * fresh capture.
+   *
+   * ONE check, immediately after the await, covers both halves - and it is
+   * placed there rather than at the top of the iteration on purpose. That apply
+   * is the only await in this loop, so between the end of one iteration and the
+   * start of the next nothing else can run; a check at the top of the body
+   * could never observe anything this one had not already observed, which makes
+   * it an inert guard that reads as load-bearing. Stopping here also stops the
+   * caller, which is the half that was missing: closing during the LAST row
+   * reached `rememberIncomingSynced`, the tombstones and the absence sweep,
+   * with the apply itself correctly abandoned.
+   */
+  private async applyListedRows(
+    drafts: ReadonlyArray<DraftDocument>,
+    generation: number,
+    listedIds: Set<string>,
+  ): Promise<boolean> {
+    for (const document of drafts) {
+      listedIds.add(document.draftId);
+      this.held.set(document.draftId, {
+        kind: "row",
+        revision: document.revision,
+      });
+      if (this.sink.isDirty(document.draftId)) continue;
+      await this.sink.applyUpsert(document);
+      if (this.isSupersededBoot(generation)) return false;
+      this.rememberIncomingSynced(document);
+    }
+    return true;
+  }
+
+  /**
+   * Apply the listing's tombstones as held deletes. Synchronous throughout, so
+   * the caller's guard before it still holds at the end of it.
+   */
+  private applyListedTombstones(
+    tombstones: ReadonlyArray<DraftListTombstone>,
+    snapshotSeq: number,
+    listedIds: Set<string>,
+  ): void {
+    for (const tombstone of tombstones) {
+      listedIds.add(tombstone.draftId);
+      this.held.set(tombstone.draftId, {
+        kind: "tombstone",
+        revision: tombstone.revision,
+        storeSeq: snapshotSeq,
+      });
+      if (this.sink.isDirty(tombstone.draftId)) continue;
+      this.sink.applyDelete(tombstone.draftId);
+      this.sink.rememberSynced(
+        tombstone.draftId,
+        tombstone.revision,
+        Number.POSITIVE_INFINITY,
+      );
+    }
+  }
+
   private isClosed(): boolean {
     return this.closed;
   }

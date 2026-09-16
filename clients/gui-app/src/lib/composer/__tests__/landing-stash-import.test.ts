@@ -12,7 +12,7 @@ import {
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   getImageBytes,
   imageHashKeys,
   putImage,
@@ -161,6 +161,7 @@ function makeEntry(
   blobHashes: readonly string[],
 ): PromptStashEntry {
   return {
+    annotations: [],
     id: "entry-1",
     createdAt: 1,
     content,
@@ -180,7 +181,7 @@ async function seedStashImage(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 
 async function drainLandingStore(): Promise<void> {
   for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
+    await deleteImageBytesUnchecked(hash);
     releaseSession(hash);
   }
 }

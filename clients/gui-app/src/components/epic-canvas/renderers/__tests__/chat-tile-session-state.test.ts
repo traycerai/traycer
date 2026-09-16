@@ -51,6 +51,9 @@ import {
   canModifyChatMessages,
   chatActivityIndicator,
   chatMessageEditingForInlineEdit,
+  chatTileUiReducer,
+  createInitialChatTileUiState,
+  type ChatTileUiState,
   findPendingInterview,
   findUnanswerableInterviews,
   resolvedTurnStatus,
@@ -134,6 +137,7 @@ function inlineEditState(dirty: boolean): InlineEditState {
     originalMessage: MESSAGE,
     initialContent: CONTENT,
     currentContent: CONTENT,
+    revision: 0,
     dirty,
     pendingClientActionId: null,
     pendingMessageId: null,
@@ -167,6 +171,64 @@ describe("chatMessageEditingForInlineEdit", () => {
 
   it("carries the workspace fallback policy into the inline editor", () => {
     expect(renderInlineEdit(false).fallbackToGlobalMentionRoots).toBe(true);
+  });
+});
+
+describe("chatTileUiReducer - inline edit revisions", () => {
+  const TYPED: JsonContent = {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text: "more" }] }],
+  };
+
+  function openEdit(): ChatTileUiState {
+    return chatTileUiReducer(createInitialChatTileUiState(), {
+      type: "beginInlineEdit",
+      sessionId: "session-1",
+      targetMessageId: "persisted-message-1",
+      originalMessage: MESSAGE,
+      initialContent: CONTENT,
+    });
+  }
+
+  it("refuses a pending mark whose sent revision the edit has moved past (DRIVE RED)", () => {
+    // The send carried revision 0; the user typed while it was in flight, so
+    // the committed edit is revision 1. Marking THAT pending hands an unsent
+    // document to the acknowledgement, which closes the editor over text the
+    // user can still see.
+    const typed = chatTileUiReducer(openEdit(), {
+      type: "updateInlineEditContent",
+      content: TYPED,
+      revision: 1,
+    });
+    const marked = chatTileUiReducer(typed, {
+      type: "markInlineEditPending",
+      targetMessageId: "persisted-message-1",
+      clientActionId: "ca-1",
+      messageId: "m-1",
+      sentRevision: 0,
+    });
+
+    expect(marked.inlineEdit?.pendingClientActionId).toBeNull();
+    expect(marked.inlineEdit?.currentContent).toEqual(TYPED);
+    expect(marked.inlineEdit?.dirty).toBe(true);
+  });
+
+  it("marks pending when the sent revision is the committed one (positive control)", () => {
+    const typed = chatTileUiReducer(openEdit(), {
+      type: "updateInlineEditContent",
+      content: TYPED,
+      revision: 1,
+    });
+    const marked = chatTileUiReducer(typed, {
+      type: "markInlineEditPending",
+      targetMessageId: "persisted-message-1",
+      clientActionId: "ca-1",
+      messageId: "m-1",
+      sentRevision: 1,
+    });
+
+    expect(marked.inlineEdit?.pendingClientActionId).toBe("ca-1");
+    expect(marked.inlineEdit?.pendingMessageId).toBe("m-1");
   });
 });
 

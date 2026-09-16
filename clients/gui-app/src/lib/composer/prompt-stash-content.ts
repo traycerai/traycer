@@ -7,7 +7,10 @@ import {
   PROMPT_STASH_IMAGE_MAX_BYTES,
   type CanonicalImageMimeType,
   type PreparedPromptStashImage,
+  type PromptStashImagePreparationSession,
 } from "@/lib/composer/prompt-stash-image-preparation";
+import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { numberValue, stringValue } from "@/lib/composer/tiptap-json-content";
 import type {
   PromptStashEntry,
@@ -21,6 +24,7 @@ import {
   readPromptStashRestoreBlobs,
 } from "@/lib/composer/prompt-stash-repository";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import { putImageBytesAtHash } from "@/lib/composer/landing-image-store";
 
 interface PreparedOwnedImage {
   readonly bytes: ImageBytes;
@@ -60,9 +64,21 @@ export async function buildPromptStashSnapshot(args: {
   readonly id: string;
   readonly createdAt: number;
   readonly content: JsonContent;
+  /**
+   * Annotation sidecar records to capture with the prompt. Pass the surface's
+   * own records (`[]` for a surface that has none) - this is a required
+   * argument rather than an optional one so a new capture site has to decide.
+   */
+  readonly annotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly readHashImage: PromptStashImageResolver;
 }): Promise<PromptStashSnapshot> {
   const imagesByHash = new Map<string, PromptStashImageBlob>();
+  // Source hash -> what canonicalization turned it into. Annotation records
+  // name a crop by the hash and file name it had in the COMPOSER, and both of
+  // those move here: the pipeline re-encodes to a canonical MIME (so the bytes
+  // re-hash) and renames the file to match. A record carried across unmapped
+  // would point at a blob this entry does not have.
+  const canonicalBySourceHash = new Map<string, PreparedOwnedImage>();
   const resolvedSources = new Map<string, Promise<ImageBytes>>();
   const preparedSources = new Map<string, Promise<PreparedOwnedImage>>();
   const preparation = createPromptStashImagePreparationSession(undefined);
@@ -119,6 +135,7 @@ export async function buildPromptStashSnapshot(args: {
       bytes: canonical.bytes,
       mimeType: canonical.mimeType,
     });
+    if (sourceHash !== null) canonicalBySourceHash.set(sourceHash, canonical);
     return {
       ...attrs,
       fileName: canonicalPromptStashImageFileName(
@@ -131,15 +148,114 @@ export async function buildPromptStashSnapshot(args: {
       size: canonical.byteLength,
     };
   });
+  const annotations = await captureStashAnnotations({
+    records: args.annotations,
+    canonicalBySourceHash,
+    imagesByHash,
+    preparation,
+    readHashImage: args.readHashImage,
+  });
   return {
     entry: {
       id: args.id,
       createdAt: args.createdAt,
       content,
+      // After the annotations, because a sidecar-only crop adds a blob.
       blobHashes: Array.from(imagesByHash.keys()),
+      annotations,
     },
     imagesByHash,
   };
+}
+
+/**
+ * Re-point each annotation record at the blob this entry actually owns, and
+ * take ownership of a crop the content itself no longer references.
+ *
+ * Two cases, and the second is the one that is easy to miss. A record whose
+ * crop is still in the prompt only needs remapping through canonicalization.
+ * A SIDECAR-ONLY record - the user deleted the image from the prompt but kept
+ * the annotation, or the surface holds the record beside content that never
+ * inlined it - has no node to ride along with, so its bytes are resolved and
+ * stored here or the record is not carried at all.
+ *
+ * A record whose bytes cannot be resolved is DROPPED rather than throwing. The
+ * prompt is the thing being saved; refusing to stash a page of text because a
+ * crop that is no longer in it has been reclaimed would be the worse failure.
+ */
+async function captureStashAnnotations(args: {
+  readonly records: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly canonicalBySourceHash: ReadonlyMap<string, PreparedOwnedImage>;
+  readonly imagesByHash: Map<string, PromptStashImageBlob>;
+  readonly preparation: PromptStashImagePreparationSession;
+  readonly readHashImage: PromptStashImageResolver;
+}): Promise<BrowserAnnotationRecord[]> {
+  const captured: BrowserAnnotationRecord[] = [];
+  const sidecars = new Map<string, PreparedOwnedImage | null>();
+  for (const record of args.records) {
+    let canonical = args.canonicalBySourceHash.get(record.imageHash) ?? null;
+    if (canonical === null) {
+      if (!sidecars.has(record.imageHash)) {
+        sidecars.set(
+          record.imageHash,
+          await prepareSidecarCrop(
+            record.imageHash,
+            args.preparation,
+            args.readHashImage,
+          ),
+        );
+      }
+      canonical = sidecars.get(record.imageHash) ?? null;
+      if (canonical !== null) {
+        args.imagesByHash.set(canonical.hash, {
+          bytes: canonical.bytes,
+          mimeType: canonical.mimeType,
+        });
+      }
+    }
+    if (canonical === null) continue;
+    captured.push({
+      ...record,
+      imageHash: canonical.hash,
+      imageFileName: canonicalPromptStashImageFileName(
+        record.imageFileName,
+        canonical.mimeType,
+      ),
+    });
+  }
+  return captured;
+}
+
+/**
+ * Resolve and canonicalize a crop that only an annotation record names.
+ * `null` when the bytes are gone, unreadable, or not a recognizable image -
+ * the record is then dropped rather than left pointing at nothing.
+ */
+async function prepareSidecarCrop(
+  hash: string,
+  preparation: PromptStashImagePreparationSession,
+  readHashImage: PromptStashImageResolver,
+): Promise<PreparedOwnedImage | null> {
+  try {
+    const bytes = await readHashImage(hash);
+    if (bytes === null) return null;
+    // The record carries no MIME, so the bytes have to say what they are.
+    const sniffed = sniffImageMimeType(bytes);
+    if (sniffed === null) return null;
+    const canonical = await preparation.prepare({
+      bytes,
+      fileName: "annotation",
+      declaredMimeType: sniffed,
+    });
+    return {
+      bytes: canonical.bytes,
+      byteLength: canonical.byteLength,
+      hash: await sha256Hex(canonical.bytes),
+      mimeType: canonical.mimeType,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function resolveImageSource(args: {
@@ -165,6 +281,34 @@ async function resolveImageSource(args: {
     throw new PromptStashImageUnavailableError();
   }
   return bytes;
+}
+
+/**
+ * Put an entry's annotation crops back into this window's image partition,
+ * under the same hashes their records name.
+ *
+ * Restoring the RECORDS without the bytes would hand the composer a set of
+ * annotations pointing at nothing: the stash's blob table is the only place
+ * those bytes live while the entry is stashed, and the hook deletes the entry
+ * the moment insertion is accepted. Writing them here - before the insert, and
+ * so before the consume - is what makes a restored annotation a working chip
+ * rather than a broken one.
+ *
+ * Best effort per crop. A blob that has gone missing or fails its digest costs
+ * that one annotation its image, not the restore.
+ */
+export async function restorePromptStashAnnotationCrops(
+  annotations: ReadonlyArray<BrowserAnnotationRecord>,
+): Promise<void> {
+  const hashes = [...new Set(annotations.map((record) => record.imageHash))];
+  if (hashes.length === 0) return;
+  const read = await readPromptStashRestoreBlobs(hashes);
+  if (read.status !== "ok") return;
+  for (const hash of hashes) {
+    const blob = read.blobs.get(hash);
+    if (blob === undefined) continue;
+    await putImageBytesAtHash(hash, blob.bytes);
+  }
 }
 
 export async function materializePromptStashEntry(

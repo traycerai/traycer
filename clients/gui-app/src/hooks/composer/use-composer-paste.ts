@@ -21,7 +21,10 @@ import {
 } from "@/lib/composer/pending-ingest-image-roots";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
-import { reserveLandingImageBudget } from "@/lib/composer/landing-image-budget";
+import {
+  LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
+  reserveLandingImageBudget,
+} from "@/lib/composer/landing-image-budget";
 import {
   Analytics,
   AnalyticsEvent,
@@ -40,7 +43,12 @@ import {
 } from "@/lib/path/cross-platform-path";
 
 export const IMAGE_MIME_PREFIX = "image/";
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/**
+ * Re-exported from the capacity authority rather than restated: the budget
+ * charges an unmeasured root at exactly this ceiling, so the two numbers moving
+ * apart would silently change what the budget admits.
+ */
+export const MAX_IMAGE_BYTES = LANDING_IMAGE_MAX_BYTES_PER_IMAGE;
 export const IMAGE_READ_TIMEOUT_MS = 15_000;
 /**
  * Bound on a single file/URL's `fileDrops` round trip. Without this, a

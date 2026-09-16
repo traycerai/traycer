@@ -80,6 +80,7 @@ describe("stash host sync", () => {
       createdAt: 10,
       content: EMPTY_DOC,
       blobHashes: [] as string[],
+      annotations: [],
     };
     await publishStashEntry(HOST_ID, entry);
     expect(upserts).toHaveLength(1);
@@ -90,6 +91,7 @@ describe("stash host sync", () => {
         content: entry.content,
         blobHashes: entry.blobHashes,
         createdAt: entry.createdAt,
+        annotations: entry.annotations,
       }).draftId,
     ).toBe("stash-1");
 
@@ -158,6 +160,7 @@ describe("stash host sync", () => {
       createdAt: 10,
       content: EMPTY_DOC,
       blobHashes: [] as string[],
+      annotations: [],
     };
     await publishStashEntry(HOST_ID, entry);
     await deleteStashEntryOnHost(null, entry.id);
@@ -178,6 +181,7 @@ describe("stash host sync", () => {
       createdAt: 10,
       content: EMPTY_DOC,
       blobHashes: [] as string[],
+      annotations: [],
     };
     acquireDraftMirrorSession({
       hostId: hostA,

@@ -103,6 +103,7 @@ export function makeSource(
 
   const capture: Mock<PromptStashSourceAdapter["capture"]> = vi.fn(
     (): PromptStashSourceSnapshot | null => ({
+      annotations: [],
       content,
       token: { surface, identity, revision },
     }),

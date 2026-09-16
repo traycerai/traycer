@@ -19,6 +19,10 @@ import {
   KNOWN_STASH_NODE_TYPES,
 } from "@/lib/composer/prompt-stash-schema-descriptor";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import {
+  parseBrowserAnnotationRecords,
+  type BrowserAnnotationRecord,
+} from "@/lib/browser-view/annotation/browser-annotation-record";
 
 export interface PromptStashEntry {
   readonly id: string;
@@ -32,6 +36,19 @@ export interface PromptStashEntry {
    * rather than re-parsing `content`.
    */
   readonly blobHashes: readonly string[];
+  /**
+   * Browser-annotation sidecar records captured with the prompt. Empty for an
+   * entry saved before this field existed, and for every prompt with no
+   * annotations - which is most of them.
+   *
+   * A crop's provenance (the page, the comment, the marked elements) lives
+   * beside the content rather than in it, because the image node carries only
+   * a hash. Stashing without these kept the picture and dropped everything
+   * that made it evidence. Each record's `imageHash` is one of `blobHashes` -
+   * including for a crop the content no longer references, which the entry
+   * still owns the blob for.
+   */
+  readonly annotations: readonly BrowserAnnotationRecord[];
 }
 
 /** Bytes plus the canonical MIME the image-preparation pipeline resolved for them. */
@@ -159,6 +176,11 @@ export function inspectRawStashRecord(
   const blobHashes = isBlobHashesArray(value.blobHashes)
     ? value.blobHashes
     : [];
+  // Missing is `[]`, not invalid: every entry written before annotations were
+  // carried has no such field. A malformed RECORD inside the array is dropped
+  // by the parser rather than failing the entry - losing one crop's provenance
+  // must not cost the user the prompt.
+  const annotations = parseBrowserAnnotationRecords(value.annotations);
   const bestEffortContent =
     isJsonContent(value.content, 0) && value.content.type === "doc"
       ? value.content
@@ -168,12 +190,13 @@ export function inspectRawStashRecord(
   const entry: PromptStashEntry | null =
     bestEffortContent !== null &&
     isCanonicalStashBlobHashesArray(value.blobHashes) &&
-    isRestorableStashContentTree(bestEffortContent, new Set(blobHashes))
+    isRestorableStashEntry(bestEffortContent, blobHashes, annotations)
       ? {
           id: value.id,
           createdAt,
           content: bestEffortContent,
           blobHashes,
+          annotations,
         }
       : null;
   return { id: value.id, createdAt, blobHashes, entry, bestEffortContent };
@@ -282,21 +305,33 @@ function collectStashImageHashes(
 }
 
 /**
- * A tree is restorable only when `collectStashImageHashes` accepts every
- * node/mark and image attr AND the set of image hashes actually referenced
- * by content exactly equals the declared `blobHashes` - no hash kept alive
- * that nothing references, no reference to a hash the entry never declared.
- * `used` is only ever built from hashes already confirmed to be IN
- * `blobHashes` (see `validStashImageHash`), so `used` is always a subset;
- * equal size is therefore sufficient to prove equal sets.
+ * An entry is restorable only when `collectStashImageHashes` accepts every
+ * node/mark and image attr AND the hashes its content and its annotation
+ * records reference between them exactly equal the declared `blobHashes` - no
+ * hash kept alive that nothing references, no reference to a hash the entry
+ * never declared.
+ *
+ * Annotations are the second half of that equality, not an exception to it. A
+ * crop the content no longer shows is still owned by the record that describes
+ * it, so its blob is declared and it counts as a reference; without this the
+ * entry would look like it was hoarding an unreferenced blob and be rejected
+ * wholesale. `used` only ever receives hashes already confirmed to be IN
+ * `blobHashes` (see `validStashImageHash`, and the explicit check below), so it
+ * is always a subset; equal size is therefore sufficient to prove equal sets.
  */
-function isRestorableStashContentTree(
+function isRestorableStashEntry(
   node: JsonContent,
-  blobHashes: ReadonlySet<string>,
+  blobHashes: readonly string[],
+  annotations: ReadonlyArray<BrowserAnnotationRecord>,
 ): boolean {
+  const declared = new Set(blobHashes);
   const used = new Set<string>();
-  if (!collectStashImageHashes(node, blobHashes, used)) return false;
-  return used.size === blobHashes.size;
+  if (!collectStashImageHashes(node, declared, used)) return false;
+  for (const record of annotations) {
+    if (!declared.has(record.imageHash)) return false;
+    used.add(record.imageHash);
+  }
+  return used.size === declared.size;
 }
 
 async function sha256Hex(bytes: ImageBytes): Promise<string> {

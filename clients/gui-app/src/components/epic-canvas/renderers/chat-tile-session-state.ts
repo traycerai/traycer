@@ -57,6 +57,18 @@ export interface InlineEditState {
   readonly originalMessage: ChatMessageModel;
   readonly initialContent: JsonContent;
   readonly currentContent: JsonContent;
+  /**
+   * Which version of `currentContent` this is, counted from 0 at
+   * `beginInlineEdit` and minted at the DISPATCH site like `sessionId`.
+   *
+   * It exists because a React update that has been queued but not yet committed
+   * is invisible to everything outside React - including an awaited image
+   * preparation deciding what to send. The send publishes the revision it
+   * actually sent, and `markInlineEditPending` refuses to mark a different one,
+   * so an acknowledgement can never close an editor over content that was never
+   * put on the wire.
+   */
+  readonly revision: number;
   readonly dirty: boolean;
   readonly pendingClientActionId: string | null;
   readonly pendingMessageId: string | null;
@@ -88,12 +100,15 @@ export type ChatTileUiAction =
   | {
       readonly type: "updateInlineEditContent";
       readonly content: JsonContent;
+      readonly revision: number;
     }
   | {
       readonly type: "markInlineEditPending";
       readonly targetMessageId: string;
       readonly clientActionId: string;
       readonly messageId: string;
+      /** The `revision` whose content this send actually carried. */
+      readonly sentRevision: number;
     }
   | {
       readonly type: "clearInlineEdit";
@@ -136,6 +151,7 @@ export function chatTileUiReducer(
           originalMessage: action.originalMessage,
           initialContent: action.initialContent,
           currentContent: action.initialContent,
+          revision: 0,
           dirty: false,
           pendingClientActionId: null,
           pendingMessageId: null,
@@ -150,6 +166,7 @@ export function chatTileUiReducer(
         inlineEdit: {
           ...state.inlineEdit,
           currentContent: action.content,
+          revision: action.revision,
           dirty: true,
           pendingClientActionId: null,
           pendingMessageId: null,
@@ -159,6 +176,13 @@ export function chatTileUiReducer(
       if (state.inlineEdit?.targetMessageId !== action.targetMessageId) {
         return state;
       }
+      // The mark has to describe the content that was SENT. A send prepared
+      // asynchronously can be overtaken by an edit the user made while it was
+      // in flight, and marking THAT one pending hands it to an acknowledgement
+      // which closes the editor - discarding, with no trace, text the user can
+      // still see. Refusing leaves the newer edit open and dirty, which is what
+      // it is: unsent.
+      if (state.inlineEdit.revision !== action.sentRevision) return state;
       return {
         ...state,
         inlineEdit: {

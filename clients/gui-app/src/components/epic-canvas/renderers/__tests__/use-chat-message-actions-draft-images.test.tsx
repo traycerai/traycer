@@ -15,6 +15,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import {
   useChatMessageActions,
+  type ChatMessageActionsResult,
   type ChatMessageActionsInput,
 } from "@/components/epic-canvas/renderers/use-chat-message-actions";
 import type { InlineEditState } from "@/components/epic-canvas/renderers/chat-tile-session-state";
@@ -116,6 +117,7 @@ function inlineEdit(overrides: Partial<InlineEditState>): InlineEditState {
     originalMessage: baseMessage(),
     initialContent: docWithImageAndText(SENT_IMAGE_HASH, "hi"),
     currentContent: docWithImageAndText(SENT_IMAGE_HASH, "hi"),
+    revision: 0,
     dirty: true,
     pendingClientActionId: null,
     pendingMessageId: null,
@@ -190,6 +192,30 @@ function baseInput(
     queuedCount: 0,
     ...overrides,
   };
+}
+
+/**
+ * Type into the open inline editor the way the editor itself does - through the
+ * `onSnapshot` the hook hands it.
+ *
+ * Deliberately NOT a rerender with a fresh `activeInlineEdit`: the interval this
+ * whole mechanism exists for is the one where the dispatch has been QUEUED and
+ * React has not committed it, so a test that hands the hook a new committed prop
+ * is testing the state after the interval, not the interval. `dispatchUi` is a
+ * no-op here, which models exactly that: the keystroke never reaches the
+ * reducer, and the send still has to carry it.
+ */
+function typeIntoOpenEdit(
+  actions: ChatMessageActionsResult,
+  message: ChatMessageModel,
+  content: JsonContent,
+): void {
+  const editing = actions.messageActionsFor(message);
+  if (editing === null || editing.type !== "user") {
+    throw new Error("no user message actions");
+  }
+  if (editing.editing === null) throw new Error("editor is not open");
+  editing.editing.onSnapshot(content, { from: 0, to: 0 });
 }
 
 function wrapper({ children }: { children: ReactNode }): ReactNode {
@@ -316,7 +342,7 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
       currentContent: docWithImageAndText(ADDED_IMAGE_HASH, "typing"),
       initialContent: docWithText("typing"),
     });
-    const { result, rerender } = renderHook(
+    const { result } = renderHook(
       (edit: InlineEditState) =>
         useChatMessageActions(
           baseInput({
@@ -331,11 +357,11 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
       result.current.revertOnEdit.onDontRevert();
     });
 
-    // A further keystroke lands while the byte read is in flight - the reducer
-    // mints a fresh `currentContent`, which reaches the hook as a new prop.
+    // A further keystroke lands while the byte read is in flight, and it is
+    // never committed - see `typeIntoOpenEdit`.
     const mutated = docWithImageAndText(ADDED_IMAGE_HASH, "typing more");
     act(() => {
-      rerender(inlineEdit({ currentContent: mutated }));
+      typeIntoOpenEdit(result.current, baseMessage(), mutated);
     });
 
     await act(async () => {
@@ -381,7 +407,7 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
       currentContent: docWithImageAndText(ADDED_IMAGE_HASH, "typing"),
       initialContent: docWithText("typing"),
     });
-    const { result, rerender } = renderHook(
+    const { result } = renderHook(
       (edit: InlineEditState) =>
         useChatMessageActions(
           baseInput({
@@ -396,23 +422,20 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
       result.current.revertOnEdit.onDontRevert();
     });
 
-    // A second hash-only node appears WHILE the first is still resolving.
+    // A second hash-only node appears WHILE the first is still resolving, and
+    // like the keystroke above it is never committed.
     act(() => {
-      rerender(
-        inlineEdit({
-          currentContent: {
-            type: "doc",
-            content: [
-              hashOnlyImageNode(ADDED_IMAGE_HASH),
-              hashOnlyImageNode(secondAddedHash),
-              {
-                type: "paragraph",
-                content: [{ type: "text", text: "typing" }],
-              },
-            ],
+      typeIntoOpenEdit(result.current, baseMessage(), {
+        type: "doc",
+        content: [
+          hashOnlyImageNode(ADDED_IMAGE_HASH),
+          hashOnlyImageNode(secondAddedHash),
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "typing" }],
           },
-        }),
-      );
+        ],
+      });
     });
 
     await act(async () => {
@@ -531,6 +554,47 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
     });
 
     expect(editUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("freezes the document the moment a send goes out, before its mark commits (DRIVE RED)", () => {
+    // `dispatchUi` is a no-op here, which is exactly the window: the send and
+    // its `markInlineEditPending` are dispatched together, so until that mark
+    // commits the projection still says nothing is pending. A keystroke landing
+    // in that gap was accepted into the live document and DROPPED by the
+    // reducer - leaving a document only the next send could see.
+    const editUserMessage = vi.fn<ChatActions["editUserMessage"]>(() => ({
+      clientActionId: "ca-1",
+      messageId: "m-1",
+    }));
+    const edit = inlineEdit({
+      currentContent: docWithText("typed"),
+      initialContent: docWithText("typed"),
+    });
+    const { result } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            activeInlineEdit: edit,
+            chatActions: fakeChatActions(editUserMessage),
+          }),
+        ),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.revertOnEdit.onDontRevert();
+    });
+    expect(editUserMessage).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      typeIntoOpenEdit(result.current, baseMessage(), docWithText("late"));
+    });
+    act(() => {
+      result.current.revertOnEdit.onDontRevert();
+    });
+
+    // Still one send, and nothing carrying the keystroke the reducer refused.
+    expect(editUserMessage).toHaveBeenCalledTimes(1);
   });
 
   it("abandons the send when a resend is already pending for this edit", async () => {

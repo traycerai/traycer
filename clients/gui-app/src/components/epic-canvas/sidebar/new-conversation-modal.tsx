@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1100,8 +1101,13 @@ export function NewConversationModalBody(props: {
   // `canSubmit` and the placement it re-validates, and both can move while the
   // byte read is in flight - a verdict captured before the await is stale by
   // construction. Same shape the composer editor uses for its presence getter.
+  //
+  // LAYOUT-timed: a passive effect can run after the byte read resumes in the
+  // post-commit microtask, so the continuation would call the submit from the
+  // render BEFORE the change - carrying the stale `canSubmit` and placement
+  // this ref exists to refresh.
   const submitPreparedDraftRef = useRef(submitPreparedDraft);
-  useEffect(() => {
+  useLayoutEffect(() => {
     submitPreparedDraftRef.current = submitPreparedDraft;
   }, [submitPreparedDraft]);
   /**

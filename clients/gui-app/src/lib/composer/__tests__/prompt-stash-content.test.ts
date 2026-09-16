@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
@@ -98,6 +99,43 @@ function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 /** Rich prompt covering marks, lists, mentions, slash + skill chips, and an image. */
+
+function textDocOf(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
+function requireRecord(
+  record: BrowserAnnotationRecord | undefined,
+): BrowserAnnotationRecord {
+  if (record === undefined) throw new Error("expected an annotation record");
+  return record;
+}
+
+function annotationRecord(
+  imageHash: string,
+  imageFileName: string,
+): BrowserAnnotationRecord {
+  return {
+    kind: "browser-annotation",
+    annotationId: `ann-${imageHash.slice(0, 6)}`,
+    tabId: "tab-1",
+    sessionId: "session-1",
+    origin: "https://example.test",
+    pageUrl: "https://example.test/checkout",
+    pageTitle: "Checkout",
+    capturedAt: 1_700_000_000_000,
+    comment: "the button is misaligned",
+    counts: { elements: 1, regions: 0, strokes: 2 },
+    elements: [],
+    imageFileName,
+    imageHash,
+    droppedElementCount: 0,
+  };
+}
+
 function richDoc(imageAttrs: Record<string, unknown>): JsonContent {
   return {
     type: "doc",
@@ -278,6 +316,7 @@ describe("prompt-stash-content", () => {
       size: imageBytes.byteLength,
     });
     const snapshot = await buildPromptStashSnapshot({
+      annotations: [],
       id: "entry-1",
       createdAt: 1_700_000_000_000,
       content,
@@ -337,6 +376,93 @@ describe("prompt-stash-content", () => {
     expect(restored.content?.[1]).toEqual(content.content?.[1]);
   });
 
+  it("carries an annotation record, re-pointed at the crop the entry owns", async () => {
+    // Canonicalization re-encodes and re-hashes, and the record names the crop
+    // by the hash and file name it had in the COMPOSER. Carried across
+    // unmapped, it would point at a blob this entry does not have.
+    const imageBytes = pngBytesOfSize(48);
+    const sourceHash = await sha256Hex(imageBytes);
+    const content = richDoc({
+      id: "img-annotated",
+      fileName: "annotation.png",
+      b64content: null,
+      hash: sourceHash,
+      mimeType: "image/png",
+      size: imageBytes.byteLength,
+    });
+
+    const snapshot = await buildPromptStashSnapshot({
+      annotations: [annotationRecord(sourceHash, "annotation.JPEG")],
+      id: "entry-annotated",
+      createdAt: 11,
+      content,
+      readHashImage: () => Promise.resolve(imageBytes),
+    });
+
+    expect(snapshot.entry.annotations).toHaveLength(1);
+    const carried = requireRecord(snapshot.entry.annotations[0]);
+    const ownedHash = findImageAttrs(snapshot.entry.content)?.hash;
+    expect(typeof ownedHash).toBe("string");
+    expect(carried.imageHash).toBe(ownedHash);
+    expect(snapshot.entry.blobHashes).toContain(carried.imageHash);
+    // The file name is canonicalized with the bytes, and observably so even
+    // when re-encoding leaves the digest alone - the node beside it gets the
+    // same treatment.
+    expect(carried.imageFileName).toBe("annotation.png");
+    expect(findImageAttrs(snapshot.entry.content)?.fileName).toBe(
+      "annotation.png",
+    );
+    // Everything else about the record is untouched - it is provenance, not
+    // storage bookkeeping.
+    expect(carried.comment).toBe("the button is misaligned");
+    expect(carried.pageUrl).toBe("https://example.test/checkout");
+  });
+
+  it("owns the blob for a SIDECAR-ONLY crop the content no longer shows", async () => {
+    // The user deleted the image from the prompt and kept the annotation. No
+    // node names those bytes, so nothing else in this build would resolve or
+    // store them, and the record would restore pointing at nothing.
+    const cropBytes = pngBytesOfSize(64);
+    const cropHash = await sha256Hex(cropBytes);
+    const readHashImage = vi.fn(() => Promise.resolve(cropBytes));
+
+    const snapshot = await buildPromptStashSnapshot({
+      annotations: [annotationRecord(cropHash, "sidecar.JPEG")],
+      id: "entry-sidecar",
+      createdAt: 12,
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+      readHashImage,
+    });
+
+    expect(readHashImage).toHaveBeenCalledWith(cropHash);
+    expect(snapshot.entry.annotations).toHaveLength(1);
+    const carried = requireRecord(snapshot.entry.annotations[0]);
+    expect(snapshot.entry.blobHashes).toEqual([carried.imageHash]);
+    expect(snapshot.imagesByHash.get(carried.imageHash)?.bytes).toEqual(
+      cropBytes,
+    );
+    expect(carried.imageFileName).toBe("sidecar.png");
+  });
+
+  it("drops a record whose crop is gone rather than failing the whole stash", async () => {
+    // The words are the thing being saved. Refusing to stash a page of text
+    // because a crop that is no longer in it has been reclaimed would be the
+    // worse failure.
+    const snapshot = await buildPromptStashSnapshot({
+      annotations: [annotationRecord("f".repeat(64), "reclaimed.png")],
+      id: "entry-gone",
+      createdAt: 13,
+      content: textDocOf("still worth keeping"),
+      readHashImage: () => Promise.resolve(null),
+    });
+
+    expect(snapshot.entry.annotations).toEqual([]);
+    expect(snapshot.entry.blobHashes).toEqual([]);
+    expect(JSON.stringify(snapshot.entry.content)).toContain(
+      "still worth keeping",
+    );
+  });
+
   it("resolves hash-only images via the caller-supplied reader (chat / landing adapters)", async () => {
     const imageBytes = pngBytesOfSize(48);
     const hash = await sha256Hex(imageBytes);
@@ -355,6 +481,7 @@ describe("prompt-stash-content", () => {
     });
 
     const snapshot = await buildPromptStashSnapshot({
+      annotations: [],
       id: "entry-hash",
       createdAt: 10,
       content,
@@ -400,6 +527,7 @@ describe("prompt-stash-content", () => {
     ]);
 
     const snapshot = await buildPromptStashSnapshot({
+      annotations: [],
       id: "entry-dup",
       createdAt: 1,
       content,
@@ -453,6 +581,7 @@ describe("prompt-stash-content", () => {
 
     await expect(
       buildPromptStashSnapshot({
+        annotations: [],
         id: "entry-abort",
         createdAt: 1,
         content,
@@ -517,6 +646,7 @@ describe("prompt-stash-content", () => {
 
       await expect(
         buildPromptStashSnapshot({
+          annotations: [],
           id: "entry-corrupt-anim",
           createdAt: 1,
           content,
@@ -559,6 +689,7 @@ describe("prompt-stash-content", () => {
       });
 
       const snapshot = await buildPromptStashSnapshot({
+        annotations: [],
         id: "entry-anim",
         createdAt: 1,
         content,
@@ -613,6 +744,7 @@ describe("prompt-stash-content", () => {
 
     await expect(
       buildPromptStashSnapshot({
+        annotations: [],
         id: "entry-over",
         createdAt: 1,
         content,
@@ -633,6 +765,7 @@ describe("prompt-stash-content", () => {
 
     await expect(
       buildPromptStashSnapshot({
+        annotations: [],
         id: "entry-fail",
         createdAt: 1,
         content,
@@ -653,6 +786,7 @@ describe("prompt-stash-content", () => {
 
     await expect(
       buildPromptStashSnapshot({
+        annotations: [],
         id: "entry-empty",
         createdAt: 1,
         content,
@@ -673,6 +807,7 @@ describe("prompt-stash-content", () => {
     });
 
     const snapshot = await buildPromptStashSnapshot({
+      annotations: [],
       id: "entry-meta",
       createdAt: 1,
       content,
@@ -689,6 +824,7 @@ describe("prompt-stash-content", () => {
 
   it("aborts materialize when a stashed image blob is missing", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-orphan",
       createdAt: 1,
       blobHashes: ["deadbeef"],
@@ -728,6 +864,7 @@ describe("prompt-stash-content", () => {
     const imageBytes = pngBytesOfSize(16);
     const hash = await sha256Hex(imageBytes);
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-meta-mismatch",
       createdAt: 1,
       blobHashes: [hash],
@@ -781,6 +918,7 @@ describe("prompt-stash-content", () => {
     const hashA = await sha256Hex(bytesA);
     const hashB = await sha256Hex(bytesB);
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-multi",
       createdAt: 1,
       blobHashes: [hashA, hashB],

@@ -36,10 +36,12 @@ import {
 } from "@/lib/drafts/cloud-draft-image-recovery";
 import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
 
+const OWNER = "user-1";
+
 const IDENTITY: CloudChatIdentity = {
   taskId: "scp_1",
   chatId: "draft-1",
-  ownerUserId: "user-1",
+  ownerUserId: OWNER,
 };
 
 type FakeRequest = HostRequester<HostRpcRegistry>["request"];
@@ -104,7 +106,13 @@ let urlCounter = 0;
 
 beforeEach(() => {
   installFreshIndexedDb();
-  useAuthStore.setState({ status: "signed-in" });
+  useAuthStore.setState({
+    status: "signed-in",
+    // A cloud source carries the identity it was minted under and is not
+    // spendable under another, so the signed-in fixture has to name the same
+    // owner the recorded source does.
+    contextMetadata: { userId: OWNER, username: OWNER },
+  });
   originalCreateObjectURLDescriptor = Object.getOwnPropertyDescriptor(
     URL,
     "createObjectURL",

@@ -218,6 +218,7 @@ export function publishStashEntry(
       content: entry.content,
       blobHashes: entry.blobHashes,
       createdAt: entry.createdAt,
+      annotations: entry.annotations,
     }),
   );
 }
@@ -283,6 +284,7 @@ export async function consumeStashOnHost(
 async function ingestStashDocument(
   document: DraftDocument,
   images: ReadonlyMap<string, PromptStashImageBlob>,
+  applyOwner: string | null,
 ): Promise<void> {
   if (document.kind !== "stash-entry") return;
   stashHostById.set(document.draftId, document.ownerHostId);
@@ -294,8 +296,16 @@ async function ingestStashDocument(
         createdAt: document.portable.createdAt,
         content: document.portable.content,
         blobHashes: document.portable.blobHashes,
+        annotations: document.portable.annotations,
       },
       images,
+      // Threaded, not asked here. `ingestRemote` awaits `hydrate()` and then a
+      // durable write, so a check at this call site covers neither - and the
+      // stash is ONE database with no per-account partition, so a late write
+      // puts this account's prompt in front of the next one. The predicate is
+      // re-asked inside the repository's transaction and again before the
+      // in-memory publication.
+      () => currentDraftBlobOwnerId() === applyOwner,
     );
   } catch (error: unknown) {
     appLogger.warn("[draft-mirror] stash ingest failed", {
@@ -578,6 +588,62 @@ function inheritLandingTab(
   });
 }
 
+/**
+ * Is this apply still for the account that started it?
+ *
+ * A draft document is one person's private text and images. Installing one
+ * after the window has moved to another account puts it in that account's
+ * composer and, worse, gives its images a live root there - which is why no
+ * amount of fencing at the byte layer is sufficient on its own.
+ */
+function applyStillOwned(
+  applyOwner: string | null,
+  document: DraftDocument,
+): boolean {
+  if (currentDraftBlobOwnerId() === applyOwner) return true;
+  appLogger.warn("[draft-mirror] dropped an apply after an identity change", {
+    draft: document.draftId,
+  });
+  return false;
+}
+
+/**
+ * Pull this document's blobs into the local partition before it is applied.
+ *
+ * Extracted from `applyHostDocument` to keep it under the complexity ceiling,
+ * and the three outcomes are its whole contract: `"abandoned"` when a newer
+ * apply or an identity change has made this one moot, `"ingested"` when a stash
+ * document was fully handled here, and `"continue"` when the caller should go
+ * on applying.
+ */
+async function prefetchDocumentBlobs(
+  document: DraftDocument,
+  applySeq: number,
+  applyOwner: string | null,
+): Promise<"abandoned" | "ingested" | "continue"> {
+  const client = sessionClients.get(document.ownerHostId);
+  const hashes = blobHashesOfDocument(document);
+  if (client === undefined || hashes.length === 0) return "continue";
+  const images = await readDraftBlobsIntoLocalStore(
+    document.ownerHostId,
+    client,
+    hashes,
+  );
+  if (
+    document.kind === "landing" &&
+    cloudIngestSeqByDraft.get(document.draftId) !== applySeq
+  ) {
+    return "abandoned";
+  }
+  if (!applyStillOwned(applyOwner, document)) return "abandoned";
+  rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
+  if (document.kind === "stash-entry") {
+    await ingestStashDocument(document, images, applyOwner);
+    return "ingested";
+  }
+  return "continue";
+}
+
 async function applyHostDocument(document: DraftDocument): Promise<void> {
   if (document.kind === "landing") {
     knownLandingDraftIds.add(document.draftId);
@@ -593,33 +659,36 @@ async function applyHostDocument(document: DraftDocument): Promise<void> {
   // its head read), and cloud heads carry revision 0 so nothing later
   // fences an older head by revision: whoever reserved last wins the row.
   const applySeq = cloudIngestSeq;
+  // The ACCOUNT this apply belongs to, captured before any await.
+  //
+  // Every fence below this line is about the DOCUMENT's freshness - a newer
+  // apply, a routed delete, a retired row. None of them is about WHO the
+  // document is for, and the blob read is not cancellable, so a sign-out or a
+  // user switch during it left this continuation to install account A's
+  // private draft under account B: its text in B's composer, and - the part
+  // that defeats the byte-level fences entirely - a row that ROOTS A's images
+  // in B's partition, so the GC keeps them and the retirement upstream is
+  // undone by the very apply that follows it.
+  //
+  // A byte fence cannot answer this; only the apply can. Re-checked before
+  // every side effect below rather than once here, because each of them is
+  // past a different set of awaits.
+  const applyOwner = currentDraftBlobOwnerId();
   if (rejectRetiredLandingDocument(document)) return;
   if (composerSubmittedDraftDeleteIsPending(document.draftId)) {
     await retrySubmittedDraftDelete(document.draftId);
     return;
   }
-  const client = sessionClients.get(document.ownerHostId);
-  const hashes = blobHashesOfDocument(document);
-  if (client !== undefined && hashes.length > 0) {
-    const images = await readDraftBlobsIntoLocalStore(
-      document.ownerHostId,
-      client,
-      hashes,
-    );
-    if (
-      document.kind === "landing" &&
-      cloudIngestSeqByDraft.get(document.draftId) !== applySeq
-    ) {
-      return;
-    }
-    rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
-    if (document.kind === "stash-entry") {
-      await ingestStashDocument(document, images);
-      return;
-    }
-  }
+  const prefetched = await prefetchDocumentBlobs(
+    document,
+    applySeq,
+    applyOwner,
+  );
+  if (prefetched === "abandoned") return;
+  if (prefetched === "ingested") return;
+  if (!applyStillOwned(applyOwner, document)) return;
   if (document.kind === "stash-entry") {
-    await ingestStashDocument(document, new Map());
+    await ingestStashDocument(document, new Map(), applyOwner);
     return;
   }
   if (document.kind === "interview") {
@@ -629,6 +698,7 @@ async function applyHostDocument(document: DraftDocument): Promise<void> {
   if (document.kind === "landing") {
     // Re-checked after the blob reads: a delete routed meanwhile retired it.
     if (rejectRetiredLandingDocument(document)) return;
+    if (!applyStillOwned(applyOwner, document)) return;
     if (rekeyLandingTabInPlace(document)) return;
     if (applyLandingHostDocument(document, document.portable.content)) {
       inheritLandingTab(document);

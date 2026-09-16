@@ -32,10 +32,17 @@ import {
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 
+/**
+ * The account every fixture identity below belongs to. The signed-in fixture
+ * and the recorded sources have to name the SAME owner: a cloud source carries
+ * the identity it was minted under and is not spendable under another.
+ */
+const OWNER = "user-1";
+
 const IDENTITY: CloudChatIdentity = {
   taskId: "scp_1",
   chatId: "draft-1",
-  ownerUserId: "user-1",
+  ownerUserId: OWNER,
 };
 
 /** Map overflow point in `cloud-draft-image-recovery.ts`. */
@@ -160,7 +167,15 @@ function makeDraft(input: {
 
 beforeEach(() => {
   installFreshIndexedDb();
-  useAuthStore.setState({ status: "signed-in" });
+  useAuthStore.setState({
+    status: "signed-in",
+    // The store guarantees non-null `contextMetadata` in every signed-in
+    // state, and the owner id in it is what scopes a cloud source: a record
+    // minted under one account is not spendable under another. A bare
+    // `{ status: "signed-in" }` is a state production cannot produce, and it
+    // made every source here look like another account's.
+    contextMetadata: { userId: OWNER, username: OWNER },
+  });
 });
 
 afterEach(() => {

@@ -68,11 +68,11 @@ import {
 import { base64ToBytes } from "@/lib/composer/image-base64";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import {
-  deleteImage,
   getImageBytes,
   putImageBytesAtHash,
   releaseSession,
 } from "@/lib/composer/landing-image-store";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
   authorizesCloudCapability,
@@ -560,24 +560,41 @@ function stillServingIdentity(owner: string | null): boolean {
 /**
  * Undo a write that landed under a different account than the one that asked.
  *
- * Only when nothing live names the digest: content addressing means the new
- * account may legitimately hold the same image, and deleting it then would take
- * away bytes that are properly theirs. The session entry goes first because it
- * is itself a GC root - leaving it would keep the bytes reachable even after
- * the durable delete, and re-seed presence on the next enumeration.
+ * The session entry goes first and SYNCHRONOUSLY: it is itself a GC root, so
+ * while it stands the bytes stay reachable no matter what follows.
+ *
+ * The durable reclaim is then handed to the root-aware reconcile rather than
+ * done here with a bare delete. A delete of our own would read the roots and
+ * then await an IndexedDB transaction, and an account that legitimately acquired
+ * the same digest inside that window lost bytes it now names - content
+ * addressing is exactly why a root check belongs here at all, and a check that
+ * stale is not a check. `scheduleLandingImageReconcile` re-reads the live roots
+ * when it actually runs, and its `reclaimImageBytes` re-probes them again on the
+ * far side of the delete, so a root acquired in the meantime protects the digest
+ * and a genuine orphan is still reclaimed. *
+ * BEST EFFORT, and the limits are stated rather than implied because the two
+ * halves are not equally strong:
+ *
+ *  - the session release is a GUARANTEE. It is synchronous, and it is what
+ *    removes the GC root - so the bytes stop being reachable through this
+ *    window's cache the instant this returns, which is the half that matters
+ *    for the account that must not see them.
+ *  - the durable reclaim is NOT. The sweep reads roots and then hops inside
+ *    idb-keyval before deleting, so its own outcome is racy in both directions
+ *    (see the note in `landing-image-gc.reconcile`), and `getImageBytes` /
+ *    `knownHashes` can still answer for a digest until a sweep succeeds.
+ *
+ * Closing the second properly means letting a root acquisition veto a delete
+ * already enqueued, which is a change to the storage protocol and does not
+ * belong in an identity helper. Until then: unreferenced, unreachable through
+ * the session, and reclaimed on a later sweep.
  */
-async function retireCrossedWrite(hash: string): Promise<void> {
+function retireCrossedWrite(hash: string): void {
   appLogger.warn("[cloud-draft-image] identity changed during the write", {
     hash,
   });
-  if (landingLiveImageRootHashes().has(hash)) return;
   releaseSession(hash);
-  await deleteImage(hash).catch((error: unknown) => {
-    appLogger.warn("[cloud-draft-image] could not retire a crossed write", {
-      hash,
-      error: describeLogError(error),
-    });
-  });
+  scheduleLandingImageReconcile();
 }
 
 async function readAndStoreFromAnyCloudSource(
@@ -591,14 +608,34 @@ async function readAndStoreFromAnyCloudSource(
   // address key would have skipped it as "already tried" while the requester
   // that failed was the only one ever asked. The replacement is usually the
   // point: the old requester's host connection is what went away.
+  // Captured ONCE for the whole walk, and passed into every attempt.
+  //
+  // Each attempt used to capture its own, which is a fence at the wrong scope:
+  // candidate 1 starts under account A, the window switches to B while it is
+  // waiting, candidate 1 misses, and candidate 2 then captures B - so both of
+  // its write checks pass and A's source delivers bytes into B's partition.
+  // The switch is invisible precisely because the thing that moved is not the
+  // candidate. Same rule as the bootstrap row loop: the operation owns the
+  // identity, not the innermost call.
+  const walkOwner = currentDraftBlobOwnerId();
   const tried = new Set<CloudDraftImageSource>();
   while (tried.size < MAX_CLOUD_SOURCE_ATTEMPTS) {
+    // Before SELECTING the next candidate, not only before writing: a walk
+    // that has outlived its account should stop asking, not ask and discard.
+    if (!stillServingIdentity(walkOwner)) return null;
     const next = cloudDraftImageSourcesFor(hash).find(
       (source) => !tried.has(source),
     );
     if (next === undefined) return null;
+    // A retained record can name an account this window no longer serves -
+    // normal teardown does not clear the registry - so the SOURCE's own owner
+    // has to match too, not just the window's.
+    if (next.identity.ownerUserId !== walkOwner) {
+      tried.add(next);
+      continue;
+    }
     tried.add(next);
-    const bytes = await readAndStoreCloudDraftImage(hash, next);
+    const bytes = await readAndStoreCloudDraftImage(hash, next, walkOwner);
     if (bytes !== null) return bytes;
   }
   appLogger.warn("[cloud-draft-image] gave up after every candidate", { hash });
@@ -608,6 +645,7 @@ async function readAndStoreFromAnyCloudSource(
 async function readAndStoreCloudDraftImage(
   hash: string,
   source: CloudDraftImageSource,
+  owner: string | null,
 ): Promise<ImageBytes | null> {
   if (payloadUnsupportedHosts.has(source.hostId)) return null;
   // Captured at the start, like the blob transport's: what matters is whether
@@ -619,15 +657,6 @@ async function readAndStoreCloudDraftImage(
   // cloud, and a session demoted in between must not spend the retained host
   // credential. Same rule `createHostCloudChatReadPort` applies per call.
   if (!authorizesCloudCapability(useAuthStore.getState().status)) return null;
-  // The ACCOUNT this read is made for, captured at dispatch. The request is not
-  // cancellable, so a sign-out or user switch while it is on the wire cannot
-  // stop it - and the landing-image store it writes into is window-global and
-  // NOT account-partitioned, with its session entries acting as GC roots. So a
-  // late response would land account A's image in the partition account B is
-  // now using, and root it there. Same boundary the prompt-stash handoff
-  // fences, and for the same reason: "is this still the identity that asked?"
-  // has to be answered where the WRITE happens, not only before the request.
-  const owner = currentDraftBlobOwnerId();
   try {
     const response = await source.client.request("epic.readCloudChatPayload", {
       ...source.identity,
@@ -683,7 +712,7 @@ async function readAndStoreCloudDraftImage(
     // the same image, and deleting it then would take away bytes that are
     // properly theirs.
     if (!stillServingIdentity(owner)) {
-      await retireCrossedWrite(hash);
+      retireCrossedWrite(hash);
       return null;
     }
     return bytes;

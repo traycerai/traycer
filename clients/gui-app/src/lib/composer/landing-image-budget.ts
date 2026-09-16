@@ -34,6 +34,10 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  hasLandingImageBytes,
+  measuredLandingImageSize,
+} from "@/lib/composer/landing-image-store";
 import type { LandingDraftTab } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -87,6 +91,14 @@ function currentDrafts(): ReadonlyArray<LandingDraftTab> {
  */
 export const LANDING_IMAGE_BUDGET_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Per-image ceiling the paste paths enforce, and therefore the most an
+ * unmeasured root can possibly be costing. Lives here because this module is
+ * the capacity authority; `use-composer-paste.ts` re-exports it as
+ * `MAX_IMAGE_BYTES` for the validation sites.
+ */
+export const LANDING_IMAGE_MAX_BYTES_PER_IMAGE = 5 * 1024 * 1024;
+
 export interface LandingImageBudgetCandidate {
   /**
    * Canonical content hash, or `null` when unknown at reservation time. See
@@ -132,13 +144,15 @@ export function landingLiveImageRootHashes(): Set<string> {
   return roots;
 }
 
-function referencedImageBytes(drafts: ReadonlyArray<LandingDraftTab>): number {
-  // Bytes are content-addressed: a hash present in N drafts occupies the store
-  // ONCE, so dedupe by hash before summing - counting it per-draft would evict or
-  // block too eagerly. Base64-only atoms (no hash) aren't in the store; skip them.
-  // A node with no `size` attr - only a 0-byte file yields that - counts as 0; the
-  // per-image 5 MB paste cap bounds the untracked slack, so the soft budget stays
-  // meaningful.
+/**
+ * Sizes DECLARED by content this module can read - landing drafts and the live
+ * runtimes. Bytes are content-addressed, so a hash present in N documents
+ * occupies the store ONCE and is recorded once here. Base64-only atoms (no hash)
+ * are not in the store and are skipped.
+ */
+function declaredSizeByHash(
+  drafts: ReadonlyArray<LandingDraftTab>,
+): Map<string, number> {
   const sizeByHash = new Map<string, number>();
   for (const draft of drafts) {
     for (const atom of collectImageAtoms(draft.content)) {
@@ -152,13 +166,55 @@ function referencedImageBytes(drafts: ReadonlyArray<LandingDraftTab>): number {
       if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
     }
   }
-  let total = 0;
-  for (const size of sizeByHash.values()) total += size;
-  return total;
+  return sizeByHash;
 }
 
+/**
+ * What one root costs. The three answers, in order:
+ *
+ *  1. what the STORE measured when it wrote or read those bytes - exact, and the
+ *     only answer available for a hash-only root (an annotation crop, a composer
+ *     or new-chat row, a stash entry), which is most of them;
+ *  2. what the CONTENT declares, for a root whose bytes this partition has never
+ *     held - a restored draft naming a digest the recovery legs have not fetched
+ *     yet. Charging it now is the reservation those bytes need: recovery writes
+ *     them through a path with no budget call of its own, and a root that only
+ *     starts costing once it lands could arrive into a full store;
+ *  3. the per-image ceiling, for a root this partition HOLDS but has not
+ *     measured. Unknown is not free while the bytes are there, and it is not
+ *     permanent either: the store measures what it has not seen at startup, so
+ *     this answer converges to (1) within a moment of a cold start.
+ *
+ * Zero is the answer only for a root with no bytes here, no declared size and
+ * nothing to recover from - a dangling reference, typically an annotation
+ * record whose crop was reclaimed. Charging the ceiling for one of those would
+ * be a permanent tax for bytes nobody holds, and no measurement can ever
+ * retire it.
+ */
+function rootByteCost(hash: string, declared: Map<string, number>): number {
+  const measured = measuredLandingImageSize(hash);
+  if (measured !== null) return measured;
+  const fromContent = declared.get(hash);
+  if (fromContent !== undefined && fromContent > 0) return fromContent;
+  return hasLandingImageBytes(hash) ? LANDING_IMAGE_MAX_BYTES_PER_IMAGE : 0;
+}
+
+/**
+ * Current usage: every hash the sweep would REFUSE to collect, charged once.
+ *
+ * The root union and the usage sum have to be the same set, and for a long time
+ * they were not: roots included the extra registrants, usage counted only
+ * landing drafts and live runtimes. So bytes an extra root was protecting were
+ * free, and admission - which skips a candidate that is already a root - handed
+ * out the same allowance twice.
+ */
 function currentReferencedBytes(): number {
-  return referencedImageBytes(currentDrafts());
+  const declared = declaredSizeByHash(currentDrafts());
+  let total = 0;
+  for (const hash of landingLiveImageRootHashes()) {
+    total += rootByteCost(hash, declared);
+  }
+  return total;
 }
 
 interface LedgerEntry {

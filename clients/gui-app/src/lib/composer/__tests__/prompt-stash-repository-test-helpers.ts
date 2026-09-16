@@ -86,6 +86,7 @@ export function textEntry(
   text: string,
 ): PromptStashEntry {
   return {
+    annotations: [],
     id,
     createdAt,
     content: textDoc(text),
@@ -99,6 +100,7 @@ export function imageEntry(
   hash: string,
 ): PromptStashEntry {
   return {
+    annotations: [],
     id,
     createdAt,
     content: imageDoc(hash, `img-${id}`),

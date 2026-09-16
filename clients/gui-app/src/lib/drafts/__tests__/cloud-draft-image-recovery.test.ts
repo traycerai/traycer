@@ -6,7 +6,11 @@ import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
-import { getImageBytes } from "@/lib/composer/landing-image-store";
+import {
+  getImageBytes,
+  sessionImageBytes,
+} from "@/lib/composer/landing-image-store";
+import { reconcile } from "@/lib/composer/landing-image-gc";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   forgetCloudDraftPayloadUnsupportedHost,
@@ -41,10 +45,17 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   };
 });
 
+/**
+ * The account every fixture identity below belongs to. The signed-in fixture
+ * and the recorded sources have to name the SAME owner: a cloud source carries
+ * the identity it was minted under and is not spendable under another.
+ */
+const OWNER = "user-1";
+
 const IDENTITY: CloudChatIdentity = {
   taskId: "scp_1",
   chatId: "draft-1",
-  ownerUserId: "user-1",
+  ownerUserId: OWNER,
 };
 
 type FakeRequest = HostRequester<HostRpcRegistry>["request"];
@@ -130,7 +141,15 @@ function bytesB(): Uint8Array<ArrayBuffer> {
 
 beforeEach(() => {
   installFreshIndexedDb();
-  useAuthStore.setState({ status: "signed-in" });
+  useAuthStore.setState({
+    status: "signed-in",
+    // The store guarantees non-null `contextMetadata` in every signed-in
+    // state, and the owner id in it is what scopes a cloud source: a record
+    // minted under one account is not spendable under another. A bare
+    // `{ status: "signed-in" }` is a state production cannot produce, and it
+    // made every source here look like another account's.
+    contextMetadata: { userId: OWNER, username: OWNER },
+  });
 });
 
 afterEach(() => {
@@ -389,7 +408,10 @@ describe("cloud-draft-image-recovery", () => {
     expect(signedOutResult).toBeNull();
     expect(calls).toHaveLength(0);
 
-    useAuthStore.setState({ status: "signed-in" });
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: OWNER, username: OWNER },
+    });
     const signedInResult = await readCloudDraftImageBytes(hash);
     expect(signedInResult).toEqual(bytes);
     expect(calls).toHaveLength(1);
@@ -661,6 +683,65 @@ describe("cloud-draft-image-recovery", () => {
     expect(await reading).toEqual(bytes);
     expect(good.calls).toHaveLength(1);
   });
+  it("stops a walk whose ACCOUNT moved, even when the next candidate belongs to the NEW one (DRIVE RED)", async () => {
+    // The sibling above is why the candidate list is re-read per iteration, and
+    // re-reading it is what made this reachable. Content addressing means two
+    // accounts can legitimately record a source for the same digest, so the
+    // candidate that appears mid-walk can be one the NEW account owns - it
+    // matches the live owner, and every per-attempt check passes. The bytes
+    // then go back to the caller that asked under the OLD account, which is a
+    // cross-account answer nothing downstream can see. The identity belongs to
+    // the WALK, so it is captured once and carried.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseSwept: () => void = () => undefined;
+    const sweptGate = new Promise<void>((resolve) => {
+      releaseSwept = resolve;
+    });
+    const swept = recordingClient(async (_method, _params) => {
+      await sweptGate;
+      return { outcome: { status: "unavailable" as const } };
+    });
+    const theirs = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: swept.client,
+      hashes: [hash],
+    });
+    const reading = readCloudDraftImageBytes(hash);
+
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-other", username: "other" },
+    });
+    recordCloudDraftImageSources({
+      identity: {
+        taskId: "scp_other",
+        chatId: "draft-other",
+        ownerUserId: "user-other",
+      },
+      hostId: "host-a",
+      client: theirs.client,
+      hashes: [hash],
+    });
+    releaseSwept();
+
+    expect(await reading).toBeNull();
+    // Not merely unanswered - unasked. A walk that has outlived its account
+    // should stop spending requests, not spend them and discard the result.
+    expect(theirs.calls).toHaveLength(0);
+    expect(sessionImageBytes(hash)).toBeNull();
+    expect(await getImageBytes(hash)).toBeUndefined();
+  });
   it("retries a source whose REQUESTER was replaced, same identity (DRIVE RED)", async () => {
     // `sameCloudDraftImageSource` deliberately ignores `client`, so a re-ingest
     // of the same draft REPLACES its record with one carrying a fresh
@@ -774,7 +855,10 @@ describe("cloud-draft-image-recovery", () => {
     // them there through the session entry.
     const bytes = bytesA();
     const hash = await sha256HexOf(bytes);
-    useAuthStore.setState({ status: "signed-in" });
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: OWNER, username: OWNER },
+    });
 
     const { client } = okClient(toBase64(bytes), bytes.byteLength);
     recordCloudDraftImageSources({
@@ -798,8 +882,15 @@ describe("cloud-draft-image-recovery", () => {
 
     const result = await readCloudDraftImageBytes(hash);
 
-    // Nothing is handed back, and nothing is left behind.
+    // Nothing is handed back, and the SESSION root - the synchronous half of
+    // the retirement - is gone immediately.
     expect(result).toBeNull();
+    expect(sessionImageBytes(hash)).toBeNull();
+    // The durable reclaim belongs to the root-aware reconcile, deliberately:
+    // it re-reads the live roots when it runs, so an account that acquired the
+    // same digest in the meantime keeps bytes it now names. Running it here
+    // proves the retirement actually reclaims rather than merely scheduling.
+    await reconcile();
     expect(await getImageBytes(hash)).toBeUndefined();
   });
   it("an account SWITCH during the write retires them too - the other half of the fence", async () => {
@@ -810,7 +901,7 @@ describe("cloud-draft-image-recovery", () => {
     const hash = await sha256HexOf(bytes);
     useAuthStore.setState({
       status: "signed-in",
-      contextMetadata: { userId: "user-a", username: "a" },
+      contextMetadata: { userId: OWNER, username: OWNER },
     });
 
     const { client } = okClient(toBase64(bytes), bytes.byteLength);
@@ -828,13 +919,15 @@ describe("cloud-draft-image-recovery", () => {
         const stored = await passthrough(writtenHash, writtenBytes);
         useAuthStore.setState({
           status: "signed-in",
-          contextMetadata: { userId: "user-b", username: "b" },
+          contextMetadata: { userId: "user-other", username: "other" },
         });
         return stored;
       },
     );
 
     expect(await readCloudDraftImageBytes(hash)).toBeNull();
+    expect(sessionImageBytes(hash)).toBeNull();
+    await reconcile();
     expect(await getImageBytes(hash)).toBeUndefined();
   });
 });

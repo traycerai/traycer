@@ -32,7 +32,7 @@ import {
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   releaseSession,
 } from "@/lib/composer/landing-image-store";
@@ -402,7 +402,7 @@ beforeEach(async () => {
     Promise.resolve(Array.from(idbData.keys())),
   );
   for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
+    await deleteImageBytesUnchecked(hash);
     releaseSession(hash);
   }
   idbData.clear();

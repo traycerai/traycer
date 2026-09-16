@@ -22,6 +22,7 @@ function textEntry(
   createdAt: number,
 ): PromptStashEntry {
   return {
+    annotations: [],
     id,
     createdAt,
     blobHashes: [],
@@ -39,6 +40,7 @@ function textEntry(
 
 function imageOnlyEntry(id: string): PromptStashEntry {
   return {
+    annotations: [],
     id,
     createdAt: Date.now(),
     blobHashes: ["abc"],
@@ -624,6 +626,7 @@ describe("PromptStashControl", () => {
 
   it("preserves inline image placement inside a mixed stashed prompt", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "mixed-image-entry",
       createdAt: Date.now(),
       blobHashes: ["hash-a", "hash-b"],
@@ -684,6 +687,7 @@ describe("PromptStashControl", () => {
 
   it("preserves lists and mention chips in stashed prompt rows", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "rich-entry",
       createdAt: Date.now(),
       blobHashes: [],

@@ -4,12 +4,11 @@ import type { DraftWrite } from "@traycer/protocol/host";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
-  deleteImage,
   getImageBytes,
   putImageBytesAtHash,
   releaseSession,
 } from "@/lib/composer/landing-image-store";
-import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { bytesToBase64, base64ToBytes } from "@/lib/composer/image-base64";
 import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
 import { readPromptStashRestoreBlobs } from "@/lib/composer/prompt-stash-repository";
@@ -296,24 +295,36 @@ export async function putDraftBlobs(
 /**
  * Undo a host-blob writeback that landed under a different account.
  *
- * The session entry goes first: it is itself a GC root, so leaving it would
- * keep the bytes reachable past the durable delete. Only when nothing live
- * names the digest - content addressing means the new account may legitimately
- * hold the same image, and taking it away then would be the mirror of the leak
- * this exists to prevent. Twin of `retireCrossedWrite` on the cloud leg.
+ * Twin of `retireCrossedWrite` on the cloud leg, and the same two steps for the
+ * same reasons: release the session entry synchronously because it is itself a
+ * GC root, then let the root-aware reconcile decide about the durable bytes. A
+ * direct delete here would re-read roots and then await a transaction, and an
+ * account that acquired the digest inside that window would lose bytes it now
+ * names; the sweep's `reclaimImageBytes` probes on the far side of its own
+ * delete instead. *
+ * BEST EFFORT, and the limits are stated rather than implied because the two
+ * halves are not equally strong:
+ *
+ *  - the session release is a GUARANTEE. It is synchronous, and it is what
+ *    removes the GC root - so the bytes stop being reachable through this
+ *    window's cache the instant this returns, which is the half that matters
+ *    for the account that must not see them.
+ *  - the durable reclaim is NOT. The sweep reads roots and then hops inside
+ *    idb-keyval before deleting, so its own outcome is racy in both directions
+ *    (see the note in `landing-image-gc.reconcile`), and `getImageBytes` /
+ *    `knownHashes` can still answer for a digest until a sweep succeeds.
+ *
+ * Closing the second properly means letting a root acquisition veto a delete
+ * already enqueued, which is a change to the storage protocol and does not
+ * belong in an identity helper. Until then: unreferenced, unreachable through
+ * the session, and reclaimed on a later sweep.
  */
-async function retireCrossedBlobWrite(sha256: string): Promise<void> {
+function retireCrossedBlobWrite(sha256: string): void {
   appLogger.warn("[draft-blobs] readBlob landed after an identity change", {
     sha256,
   });
-  if (landingLiveImageRootHashes().has(sha256)) return;
   releaseSession(sha256);
-  await deleteImage(sha256).catch((error: unknown) => {
-    appLogger.warn("[draft-blobs] could not retire a crossed writeback", {
-      sha256,
-      error: describeLogError(error),
-    });
-  });
+  scheduleLandingImageReconcile();
 }
 
 /** The in-flight key: one upload per (host, digest, owner) at a time. */
@@ -543,7 +554,7 @@ async function readDraftBlobs(
       const stored = await store(sha256, bytes);
       if (!stored) continue;
       if (currentDraftBlobOwnerId() !== owner) {
-        await retireCrossedBlobWrite(sha256);
+        retireCrossedBlobWrite(sha256);
         return images;
       }
       const mimeType = sniffImageMimeType(bytes) ?? "image/png";

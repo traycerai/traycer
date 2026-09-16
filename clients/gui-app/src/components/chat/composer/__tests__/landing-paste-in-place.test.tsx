@@ -19,7 +19,7 @@ import {
 } from "@/lib/composer/composer-clipboard";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   putImage,
   releaseSession,
@@ -131,7 +131,7 @@ beforeEach(async () => {
     Promise.resolve(Array.from(idbData.keys())),
   );
   for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
+    await deleteImageBytesUnchecked(hash);
     releaseSession(hash);
   }
   idbData.clear();

@@ -2,10 +2,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
-// In-memory stand-in for idb-keyval, mirroring landing-image-store.test. Keyed by
-// string hash; the store argument is ignored. The Map is hoisted so tests can
-// reinstall a working `set` after a rejecting override without losing the body.
-const idbData = vi.hoisted(() => new Map<string, unknown>());
+// In-memory stand-in for idb-keyval, ONE MAP PER DATABASE (mirroring
+// landing-image-store.test). Image bytes and their measured sizes live in two
+// databases under the SAME string hash, so a single shared map would let a size
+// overwrite an image - and this suite's whole subject is which bytes survive.
+const idb = vi.hoisted(() => {
+  const byDb = new Map<string, Map<string, unknown>>();
+  const dbNameOf = new Map<unknown, string>();
+  function dataFor(store: unknown): Map<string, unknown> {
+    const dbName = dbNameOf.get(store) ?? "unregistered";
+    const existing = byDb.get(dbName);
+    if (existing !== undefined) return existing;
+    const created = new Map<string, unknown>();
+    byDb.set(dbName, created);
+    return created;
+  }
+  return {
+    byDb,
+    dbNameOf,
+    dataFor,
+    clear: (): void => {
+      byDb.clear();
+    },
+  };
+});
 
 function idbStringKey(key: IDBValidKey): string {
   if (typeof key !== "string") {
@@ -14,22 +34,31 @@ function idbStringKey(key: IDBValidKey): string {
   return key;
 }
 
-vi.mock("idb-keyval", () => {
-  const dummyStore = () => Promise.reject(new Error("unused"));
-  return {
-    createStore: vi.fn(() => dummyStore),
-    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
-    set: vi.fn((key: string, value: unknown) => {
-      idbData.set(key, value);
-      return Promise.resolve();
-    }),
-    del: vi.fn((key: string) => {
-      idbData.delete(key);
-      return Promise.resolve();
-    }),
-    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
-  };
-});
+vi.mock("idb-keyval", () => ({
+  createStore: vi.fn((dbName: string, _storeName: string) => {
+    const handle = (): Promise<never> =>
+      Promise.reject(new Error("unused in tests"));
+    idb.dbNameOf.set(handle, dbName);
+    return handle;
+  }),
+  get: vi.fn((key: IDBValidKey, store: unknown) =>
+    Promise.resolve(idb.dataFor(store).get(idbStringKey(key))),
+  ),
+  set: vi.fn((key: IDBValidKey, value: unknown, store: unknown) => {
+    idb.dataFor(store).set(idbStringKey(key), value);
+    return Promise.resolve();
+  }),
+  del: vi.fn((key: IDBValidKey, store: unknown) => {
+    idb.dataFor(store).delete(idbStringKey(key));
+    return Promise.resolve();
+  }),
+  keys: vi.fn((store: unknown) =>
+    Promise.resolve(Array.from(idb.dataFor(store).keys())),
+  ),
+  entries: vi.fn((store: unknown) =>
+    Promise.resolve(Array.from(idb.dataFor(store).entries())),
+  ),
+}));
 
 const toastInfo = vi.fn();
 const toastError = vi.fn();
@@ -74,7 +103,7 @@ function docWithImages(...nodes: ReadonlyArray<JsonContent>): JsonContent {
   return { type: "doc", content: [{ type: "paragraph", content: [...nodes] }] };
 }
 
-// Flush a handful of microtask turns so `void deleteImage(...)` chains settle.
+// Flush a handful of microtask turns so `void deleteImageBytesUnchecked(...)` chains settle.
 // No real timers are involved in the delete path, so this is enough.
 async function flush(): Promise<void> {
   for (let index = 0; index < 5; index += 1) {
@@ -94,7 +123,7 @@ async function loadModules(opts: {
   readonly desktop: boolean;
 }): Promise<Modules> {
   vi.resetModules();
-  idbData.clear();
+  idb.clear();
   if (opts.desktop) {
     Reflect.set(globalThis, "runnerHost", {
       windows: { windowId: "win-test" },
@@ -102,22 +131,22 @@ async function loadModules(opts: {
   } else {
     Reflect.deleteProperty(globalThis, "runnerHost");
   }
-  const idb = await import("idb-keyval");
+  const idbModule = await import("idb-keyval");
   // Always reinstall a working set after reset - prior tests may have left a
   // rejecting mockImplementation on the shared idb-keyval mock module.
-  vi.mocked(idb.set).mockImplementation((key, value) => {
-    idbData.set(idbStringKey(key), value);
+  vi.mocked(idbModule.set).mockImplementation((key, value, store) => {
+    idb.dataFor(store).set(idbStringKey(key), value);
     return Promise.resolve();
   });
-  vi.mocked(idb.get).mockImplementation((key) =>
-    Promise.resolve(idbData.get(idbStringKey(key))),
+  vi.mocked(idbModule.get).mockImplementation((key, store) =>
+    Promise.resolve(idb.dataFor(store).get(idbStringKey(key))),
   );
-  vi.mocked(idb.del).mockImplementation((key) => {
-    idbData.delete(idbStringKey(key));
+  vi.mocked(idbModule.del).mockImplementation((key, store) => {
+    idb.dataFor(store).delete(idbStringKey(key));
     return Promise.resolve();
   });
-  vi.mocked(idb.keys).mockImplementation(() =>
-    Promise.resolve(Array.from(idbData.keys())),
+  vi.mocked(idbModule.keys).mockImplementation((store) =>
+    Promise.resolve(Array.from(idb.dataFor(store).keys())),
   );
   const store = await import("@/lib/composer/landing-image-store");
   const gc = await import("@/lib/composer/landing-image-gc");
@@ -125,7 +154,7 @@ async function loadModules(opts: {
   const runtime = await import("@/stores/home/draft-runtime-registry");
   draft.useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   runtime.draftRuntimeRegistry.resetForTesting();
-  return { gc, store, draft, runtime, idb };
+  return { gc, store, draft, runtime, idb: idbModule };
 }
 
 function makeDraft(
@@ -407,6 +436,59 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).not.toContain("orphan");
   });
 
+  it("restores bytes whose hash gains a root INSIDE the delete's own transaction hop (DRIVE RED)", async () => {
+    const m = await loadModules({ desktop: true });
+    m.gc.markLandingEditorMounted();
+    // Restored-from-disk bytes: no session entry, so the sweep's own snapshot
+    // correctly calls them an orphan. This is the shape with no second copy
+    // anywhere - a local paste that was never uploaded or published has no host
+    // mirror and no cloud blob to re-fetch from, so a wrong delete is final.
+    const hash = "restored-raced";
+    await m.idb.set(hash, bytesOf([5, 6, 7, 8]), m.store.imageStore());
+    m.gc.markLandingDraftsReady();
+    await flush();
+
+    // The acquisition lands where no caller-side check can see it: after the
+    // sweep read the roots, inside the delete's own hop.
+    const realDel = m.idb.del;
+    vi.mocked(m.idb.del).mockImplementationOnce(async (key) => {
+      m.draft.useLandingDraftStore.setState({
+        drafts: [
+          makeDraft(m, {
+            id: "draft-late",
+            content: docWithImages(imageNode(hash, 4)),
+            lastTouchedAt: 1,
+          }),
+        ],
+        activeDraftId: "draft-late",
+      });
+      await realDel(key, m.store.imageStore());
+    });
+
+    await m.gc.reconcile();
+    await flush();
+
+    // Deleted, then put back: the draft that now names this hash renders.
+    expect(await m.store.imageHashKeys()).toContain(hash);
+    expect(m.store.hasLandingImageBytes(hash)).toBe(true);
+    expect(await m.store.getImageBytes(hash)).toEqual(bytesOf([5, 6, 7, 8]));
+  });
+
+  it("still reclaims a genuine orphan when no root appears (positive control)", async () => {
+    const m = await loadModules({ desktop: true });
+    m.gc.markLandingEditorMounted();
+    const hash = "restored-unraced";
+    await m.idb.set(hash, bytesOf([9, 10]), m.store.imageStore());
+    m.gc.markLandingDraftsReady();
+    await flush();
+
+    await m.gc.reconcile();
+    await flush();
+
+    expect(await m.store.imageHashKeys()).not.toContain(hash);
+    expect(m.store.hasLandingImageBytes(hash)).toBe(false);
+  });
+
   it("empty close deletes the draft and reclaims unreferenced session bytes", async () => {
     const m = await loadModules({ desktop: true });
     m.gc.markLandingEditorMounted();
@@ -514,12 +596,12 @@ describe("landing-image-gc", () => {
 
     // Reject by content hash so the failure is deterministic even if callers
     // ever switch to concurrent putImage (call-count races which write fails).
-    vi.mocked(m.idb.set).mockImplementation((key, value) => {
+    vi.mocked(m.idb.set).mockImplementation((key, value, store) => {
       const hash = idbStringKey(key);
-      if (hash === failedHash) {
+      if (hash === failedHash && value instanceof Uint8Array) {
         return Promise.reject(new Error("idb write failed"));
       }
-      idbData.set(hash, value);
+      idb.dataFor(store).set(hash, value);
       return Promise.resolve();
     });
 
@@ -553,8 +635,8 @@ describe("landing-image-gc", () => {
     expect(m.store.hasLandingImageBytes(successHash)).toBe(false);
 
     // Restore a working set so later cases (same idb mock module) are not poisoned.
-    vi.mocked(m.idb.set).mockImplementation((key, value) => {
-      idbData.set(idbStringKey(key), value);
+    vi.mocked(m.idb.set).mockImplementation((key, value, store) => {
+      idb.dataFor(store).set(idbStringKey(key), value);
       return Promise.resolve();
     });
   });

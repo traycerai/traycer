@@ -38,6 +38,7 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 
 const contentByHolder = new Map<string, JsonContent>();
@@ -54,9 +55,19 @@ export function holdComposerContentImageRoots(
   contentByHolder.set(holderId, content);
 }
 
-/** Withdraw one holder's claim. Safe to call for a key that never registered. */
+/**
+ * Withdraw one holder's claim. Safe to call for a key that never registered.
+ *
+ * Schedules a sweep, and that is not housekeeping - it closes a retention hole.
+ * Dropping the last root for a hash makes it an orphan, and nothing else was
+ * triggering a reconcile on this edge: a sweep that ran while this hold was
+ * still standing saw the hash as ROOTED and kept the bytes, so the release that
+ * made it an orphan left it to be reclaimed by some unrelated later sweep, or
+ * never. The sweep is debounced, so a burst of releases costs one.
+ */
 export function releaseComposerContentImageRoots(holderId: string): void {
-  contentByHolder.delete(holderId);
+  if (!contentByHolder.delete(holderId)) return;
+  scheduleLandingImageReconcile();
 }
 
 /** Every image hash any live holder still references. */

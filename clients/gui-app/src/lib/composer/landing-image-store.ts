@@ -16,7 +16,15 @@
  * partition resolver is imperative, NOT a hook.
  */
 
-import { createStore, del, get, keys, set, type UseStore } from "idb-keyval";
+import {
+  createStore,
+  del,
+  entries,
+  get,
+  keys,
+  set,
+  type UseStore,
+} from "idb-keyval";
 
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
@@ -39,7 +47,7 @@ const session = new Map<string, SessionEntry>();
  * or IndexedDB) as far as we have observed this session. Seeded on write
  * (`putImage`) and on any successful read (`getImageBytes`, which the
  * restored-draft fetcher drives when an image renders), and pruned on
- * `deleteImage`. Backs the synchronous landing paste presence predicate
+ * `reclaimImageBytes`. Backs the synchronous landing paste presence predicate
  * (`hasLandingImageBytes`): unlike the session map alone, it also reports a
  * restored draft's IndexedDB-backed hash as present once its image has rendered,
  * so a same-window copy→paste of that image is not falsely stripped.
@@ -75,10 +83,29 @@ function imageDbName(partition: string): string {
   return `${PERSIST_PREFIX}:${partition}:landing-images`;
 }
 
+/**
+ * Sizes live in their own database rather than beside the bytes.
+ *
+ * Reading a size must not mean deserializing the image: idb-keyval hands back
+ * the whole `Uint8Array`, so measuring a cold partition through the byte store
+ * would pull every image into memory at startup - the exact cost the budget
+ * exists to bound. A separate key-to-number database is enumerable in one cheap
+ * read. It keeps the partition prefix, so the desktop per-window wipe (which
+ * matches by DB-name prefix) still takes it.
+ */
+function imageSizeDbName(partition: string): string {
+  return `${PERSIST_PREFIX}:${partition}:landing-image-sizes`;
+}
+
 // Memoize the open store per partition so repeated ops reuse a single DB
 // connection instead of opening one per call. The partition is stable within a
 // runtime; a change (only possible across desktop windows in tests) re-opens.
 let cachedStore: {
+  readonly partition: string;
+  readonly store: UseStore;
+} | null = null;
+
+let cachedSizeStore: {
   readonly partition: string;
   readonly store: UseStore;
 } | null = null;
@@ -93,6 +120,45 @@ export function imageStore(): UseStore {
     };
   }
   return cachedStore.store;
+}
+
+/** The idb-keyval store for this partition's `hash` -> byte-length side table. */
+function imageSizeStore(): UseStore {
+  const partition = landingImagePartition();
+  if (cachedSizeStore === null || cachedSizeStore.partition !== partition) {
+    cachedSizeStore = {
+      partition,
+      store: createStore(imageSizeDbName(partition), "sizes"),
+    };
+  }
+  return cachedSizeStore.store;
+}
+
+/**
+ * Measured byte length per resident hash - the capacity authority's input.
+ *
+ * The landing byte budget has to charge for every hash its GC roots PROTECT,
+ * and most of those roots are hash-only: an annotation crop, a composer or
+ * new-chat row, a stash entry. Nothing in that shape declares a size, so the
+ * budget used to count them as zero while the GC kept their bytes alive - 60 MiB
+ * of protected bytes plus a 10 MiB paste passed a 64 MiB cap. What the roots
+ * cannot say, the store can: it has the bytes in its hands on every write.
+ */
+const measuredSizes = new Map<string, number>();
+
+function rememberMeasuredSize(hash: string, byteLength: number): void {
+  if (measuredSizes.get(hash) === byteLength) return;
+  measuredSizes.set(hash, byteLength);
+  void set(hash, byteLength, imageSizeStore()).catch(() => undefined);
+}
+
+/**
+ * The measured length of `hash`'s bytes, or `null` when this partition has
+ * never measured them. `null` is NOT zero - see `landing-image-budget.ts`, which
+ * charges an unmeasured root conservatively rather than free.
+ */
+export function measuredLandingImageSize(hash: string): number | null {
+  return measuredSizes.get(hash) ?? null;
 }
 
 async function sha256Hex(bytes: ImageBytes): Promise<string> {
@@ -166,6 +232,9 @@ async function writeImageUnderHash(
     if ((await get(hash, store)) === undefined) {
       await set(hash, bytes, store);
     }
+    // After the write, and on the dedupe path too: a hash whose bytes were
+    // already there may still be unmeasured (an older build wrote them).
+    rememberMeasuredSize(hash, bytes.byteLength);
   } catch (error) {
     // The durable write failed: roll back the optimistic seeding THIS call added
     // (a dedupe hit that found the hash already cached is left intact). Without
@@ -192,17 +261,105 @@ export async function getImageBytes(
     return fromSession.bytes;
   }
   const stored = await get<ImageBytes>(hash, imageStore());
-  if (stored !== undefined) knownHashes.add(hash);
+  if (stored !== undefined) {
+    knownHashes.add(hash);
+    rememberMeasuredSize(hash, stored.byteLength);
+  }
   return stored;
 }
 
-/** Delete the persisted bytes for `hash`. Does not touch the session cache. */
-export async function deleteImage(hash: string): Promise<void> {
+/**
+ * Answers "is `hash` referenced by anything you know about, right now?" - live
+ * for the whole reclaim, not a snapshot. `reclaimImageBytes` calls it several
+ * times and the LAST call is the one that decides.
+ */
+export type ImageRootProbe = () => boolean;
+
+export type ImageReclaimOutcome =
+  /** The bytes were deleted and stayed deleted. */
+  | "reclaimed"
+  /** A root appeared; the bytes are still readable (restored if need be). */
+  | "kept"
+  /** There were no persisted bytes to reclaim. */
+  | "absent";
+
+/**
+ * Reclaim `hash`'s persisted bytes - and put them back if the hash gained a root
+ * while the delete was in flight.
+ *
+ * ## Why the caller cannot do this itself
+ *
+ * A sweep reads the live roots, then calls in here, and `del` hops inside
+ * idb-keyval before its transaction runs. A root acquired in that hop is
+ * invisible to the caller's snapshot, so the bytes are deleted out from under a
+ * live reference - and for a local paste that has never been uploaded or
+ * published, deleted is GONE: there is no host mirror or cloud blob to re-fetch
+ * from. No extra read on the CALLER's side can fix that, because every one of
+ * them runs before the hop.
+ *
+ * So the protocol is here, at the storage boundary, and it is retain-and-restore
+ * rather than validate-and-hope:
+ *
+ *  1. retain the bytes in memory before deleting, because after `del` commits
+ *     they cannot be read back;
+ *  2. probe once more immediately before the delete, so an already-visible root
+ *     costs nothing;
+ *  3. probe AFTER the delete has committed - the decisive one. A root acquired
+ *     at any point up to that line is visible to it, and the delete is undone by
+ *     writing the retained bytes back.
+ *
+ * What is left is the acquisition that lands after step 3: a reference to a hash
+ * that was unrooted at the instant it was deleted, being brought back to life
+ * afterwards. That is a resurrected dead reference, not a lost live one, and it
+ * is not reachable from the paths that acquire roots here - each of them holds
+ * the content it is rooting from the moment it captures it.
+ */
+export async function reclaimImageBytes(
+  hash: string,
+  isRooted: ImageRootProbe,
+): Promise<ImageReclaimOutcome> {
+  const store = imageStore();
+  if (stillRooted(hash, isRooted)) return "kept";
+  const retained = await get<ImageBytes>(hash, store);
+  if (retained === undefined) {
+    knownHashes.delete(hash);
+    return "absent";
+  }
+  if (stillRooted(hash, isRooted)) return "kept";
+  await deleteImageBytesUnchecked(hash);
+  if (!stillRooted(hash, isRooted)) return "reclaimed";
+  await set(hash, retained, store);
+  knownHashes.add(hash);
+  rememberMeasuredSize(hash, retained.byteLength);
+  return "kept";
+}
+
+/**
+ * Delete `hash`'s persisted bytes with NO root check of any kind. Does not touch
+ * the session cache.
+ *
+ * Reclaiming unreferenced bytes goes through `reclaimImageBytes`, which is this
+ * plus the retain-and-restore protocol above; reach for this one only where the
+ * bytes are known to be unwanted regardless of what references them - which in
+ * practice means test fixtures clearing a partition.
+ */
+export async function deleteImageBytesUnchecked(hash: string): Promise<void> {
   // Prune presence only AFTER the durable delete succeeds. Pruning first would,
   // on a rejected `del`, report the still-present bytes as absent until a later
   // enumeration healed the set.
   await del(hash, imageStore());
   knownHashes.delete(hash);
+  measuredSizes.delete(hash);
+  void del(hash, imageSizeStore()).catch(() => undefined);
+}
+
+/**
+ * The session cache is this module's OWN root, and the earliest signal there is:
+ * `writeImageUnderHash` seeds it before the durable write, so a paste that began
+ * during a sweep is visible here before its bytes are.
+ */
+function stillRooted(hash: string, isRooted: ImageRootProbe): boolean {
+  return session.has(hash) || isRooted();
 }
 
 /** Every hash with bytes persisted in this runtime's partition. */
@@ -267,9 +424,47 @@ export function releaseSession(hash: string): void {
   session.delete(hash);
 }
 
-// Seed the presence set from durable IndexedDB keys at module init (best-effort),
-// so a restored draft's hash reports present before any GC reconcile has run and
-// regardless of whether its render went through the fetcher. `imageHashKeys`
-// folds the keys into `knownHashes`; a failure (no IndexedDB) just leaves the set
-// to be populated lazily by put/get/subsequent enumerations.
-void imageHashKeys().catch(() => undefined);
+/**
+ * Hydrate the measured sizes for a partition restored from disk, and measure
+ * anything the side table does not know about.
+ *
+ * Both halves matter. The side table answers the normal case in one cheap read.
+ * The second pass exists because an unmeasured resident hash must not be free to
+ * the budget, and the only honest way out of "unknown" is to go and look: those
+ * are hashes written before this table existed, so the pass is bounded by what a
+ * pre-existing partition holds and converges to nothing on every later start.
+ * `getImageBytes` records the size it reads, so the measurement is the read.
+ */
+async function hydrateMeasuredImageSizes(): Promise<void> {
+  const rows = await entries<string, number>(imageSizeStore());
+  for (const [hash, byteLength] of rows) {
+    if (typeof byteLength === "number") measuredSizes.set(hash, byteLength);
+  }
+  const resident = await imageHashKeys();
+  for (const hash of resident) {
+    if (measuredSizes.has(hash)) continue;
+    await getImageBytes(hash);
+  }
+}
+
+/**
+ * Resolves once this partition's sizes are as known as they are going to get.
+ * Admission consults it rather than blocking: see `landing-image-budget.ts`.
+ */
+const measuredSizesHydration: Promise<void> = hydrateMeasuredImageSizes().catch(
+  () => undefined,
+);
+
+/**
+ * Resolves when the cold-start measurement above has finished. Admission does
+ * not wait on it: an unmeasured root is charged conservatively rather than
+ * free, so the direction of error while this is still running is a refusal, not
+ * an overrun. Tests await it to make the measured numbers deterministic.
+ */
+export function awaitLandingImageSizes(): Promise<void> {
+  return measuredSizesHydration;
+}
+
+export function __resetMeasuredLandingImageSizesForTests(): void {
+  measuredSizes.clear();
+}

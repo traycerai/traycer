@@ -142,6 +142,10 @@ export async function buildUnrecordedPromptHandoff(args: {
         id: args.id,
         createdAt: args.createdAt,
         content: args.content,
+        // A handoff prompt is a SEND that never landed, not a composer draft:
+        // it was detached from the composer - and from the annotation sidecar
+        // that lives there - at submit. There is nothing to carry.
+        annotations: [],
         readHashImage: args.readHashImage,
       }),
       timeoutAfter(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS),
@@ -183,6 +187,9 @@ export async function buildTextOnlyPromptHandoff(args: {
     id: args.id,
     createdAt: args.createdAt,
     content: stripped.content,
+    // Text-only by construction: the images are what this path drops, so
+    // records describing them would name blobs the entry does not own.
+    annotations: [],
     // Unreachable: `stripped.content` has no image nodes left to ask about.
     readHashImage: () => Promise.resolve(null),
   });

@@ -17,10 +17,17 @@ import {
 } from "@/lib/drafts/resolve-draft-image-bytes";
 
 const HOST = "host-cloud-leg";
+/**
+ * The account every fixture identity below belongs to. The signed-in fixture
+ * and the recorded sources have to name the SAME owner: a cloud source carries
+ * the identity it was minted under and is not spendable under another.
+ */
+const OWNER = "user-1";
+
 const IDENTITY: CloudChatIdentity = {
   taskId: "scp_1",
   chatId: "draft-1",
-  ownerUserId: "user-1",
+  ownerUserId: OWNER,
 };
 
 type FakeRequest = HostRequester<HostRpcRegistry>["request"];
@@ -69,7 +76,10 @@ function targetWithClient(handle: FakeRequest): {
 
 beforeEach(() => {
   installFreshIndexedDb();
-  useAuthStore.setState({ status: "signed-in" });
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: OWNER, username: OWNER },
+  });
 });
 
 afterEach(() => {

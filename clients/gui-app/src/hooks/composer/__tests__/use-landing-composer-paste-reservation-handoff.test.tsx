@@ -21,7 +21,7 @@ import {
 } from "@/lib/composer/landing-image-budget";
 import * as landingImageBudget from "@/lib/composer/landing-image-budget";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   releaseSession,
 } from "@/lib/composer/landing-image-store";
@@ -103,7 +103,7 @@ beforeEach(async () => {
   const hashes = await imageHashKeys();
   await Promise.all(
     hashes.map(async (hash) => {
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
     }),
   );

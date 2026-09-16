@@ -85,5 +85,13 @@ export interface PromptStashDestinationAdapter {
   readonly importAndInsert: (args: {
     readonly identity: PromptStashDestinationIdentity;
     readonly content: JsonContent;
+    /**
+     * The entry being restored, for what does not travel inside `content`.
+     * Today that is the annotation sidecar: the records, and the crops they
+     * name, belong to whichever surface can hold them - so the destination
+     * decides, and it does so BEFORE the hook consumes the entry and deletes
+     * its blobs.
+     */
+    readonly entry: PromptStashEntry;
   }) => Promise<PromptStashDestinationResult>;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -38,6 +38,8 @@ import {
 } from "@/lib/composer/tiptap-json-content";
 import { inlineHashOnlyImageBytes } from "@/lib/composer/image-atoms";
 import { withHeldComposerContentImageRoots } from "@/lib/composer/composer-content-image-roots";
+import { toast } from "sonner";
+
 import { appLogger } from "@/lib/logger";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 import {
@@ -165,6 +167,72 @@ const NO_DRAFT_IMAGE_BYTES: ReadonlyMap<string, string> = new Map<
  * All callbacks preserve the same `useCallback` dependency structure as the
  * original view-model so memoized children are not disturbed.
  */
+/**
+ * The inline edit as it is RIGHT NOW, published synchronously at every dispatch
+ * site rather than read back after React commits.
+ *
+ * The reducer's copy is a VIEW, and a view arrives late: `dispatchUi` only
+ * queues, so an update made while an image preparation is awaiting - an async
+ * paste settling, a keystroke - is invisible to every reader outside React
+ * until the commit. A layout effect does not help, because the interval that
+ * matters is BEFORE any commit happens: the preparation resumes in a microtask
+ * and reads a ref that no effect has had a chance to move yet. The send then
+ * carried the previous document while the reducer went on to apply the newer
+ * one and mark THAT pending, so the acknowledgement closed the editor over an
+ * edit that was never sent.
+ *
+ * So the authority for the DOCUMENT lives here, written before the dispatch that
+ * queues the same change, and every send publishes the `revision` it carried.
+ *
+ * Identity and acknowledgement state are NOT this record's to answer. Which
+ * message is being edited, and whether a send is already pending, move through
+ * the committed projection - including moves this hook never dispatched, like a
+ * rejected dispatch clearing the pending ids so the user can retry. Reading
+ * those from here would freeze an editor the projection had already reopened.
+ */
+interface LiveInlineEdit {
+  readonly sessionId: string;
+  readonly targetMessageId: string;
+  readonly initialContent: JsonContent;
+  readonly content: JsonContent;
+  readonly revision: number;
+  /**
+   * The revision this hook last put on the wire for this session, or `null`
+   * when nothing is outstanding.
+   *
+   * Not a boolean, and not read from the committed `pendingClientActionId`: a
+   * send is dispatched and marked pending in the same breath, so between the
+   * send and the commit the committed state still says "nothing pending" and a
+   * keystroke landing in that gap passed every gate. The reducer then DROPPED
+   * it (its own pending guard had caught up by the time it applied) while this
+   * record kept it - leaving a document only the next send could see. Cleared
+   * when the committed projection shows the send settled, which is what keeps a
+   * REJECTED dispatch editable.
+   */
+  readonly sentRevision: number | null;
+}
+
+/**
+ * Is a send outstanding for this edit? Both records answer half of it.
+ *
+ * The LIVE one covers the window the committed copy cannot: a send is
+ * dispatched and marked pending in the same breath, so until that mark commits
+ * the projection still says nothing is pending. The COMMITTED one covers a mark
+ * this hook instance did not make - a renderer remounted around an open editor
+ * inherits a send it never issued.
+ */
+function inlineEditSendOutstanding(
+  live: LiveInlineEdit,
+  committed: InlineEditState | null,
+): boolean {
+  if (live.sentRevision !== null) return true;
+  return (
+    committed !== null &&
+    committed.sessionId === live.sessionId &&
+    committed.pendingClientActionId !== null
+  );
+}
+
 export function useChatMessageActions(
   input: ChatMessageActionsInput,
 ): ChatMessageActionsResult {
@@ -223,6 +291,54 @@ export function useChatMessageActions(
     [inlineEditTargetMessageId, events, messages, transcriptWindow],
   );
 
+  /** See `LiveInlineEdit`: the authority for what a send would carry. */
+  const liveInlineEditRef = useRef<LiveInlineEdit | null>(null);
+  /**
+   * The last COMMITTED edit, and its ONLY job is to re-seed the live record.
+   *
+   * The reducer lives above this hook, so its state can outlive this hook's own
+   * instance - a tile whose renderer remounts around an open editor would find
+   * `liveInlineEditRef` empty and refuse to save. Effect timing is fine for a
+   * fallback: it is consulted only when there is no live record at all, never to
+   * second-guess one.
+   */
+  const committedInlineEditRef = useRef(activeInlineEdit);
+
+  /**
+   * The live record, adopting the committed edit when this hook has none yet.
+   * Seeds the live ref on adoption so the async continuations below - which have
+   * no render-time value to fall back on - always find one.
+   */
+  const currentLiveInlineEdit = useCallback((): LiveInlineEdit | null => {
+    const committed = committedInlineEditRef.current;
+    const live = liveInlineEditRef.current;
+    if (committed === null) return null;
+    // Identity from the COMMITTED state, document from the live record: a
+    // committed edit that disagrees about which session or which message is
+    // being edited is a different edit, and the live record belongs to the one
+    // it replaced.
+    if (
+      live !== null &&
+      live.sessionId === committed.sessionId &&
+      live.targetMessageId === committed.targetMessageId
+    ) {
+      return live;
+    }
+    const adopted: LiveInlineEdit = {
+      sessionId: committed.sessionId,
+      targetMessageId: committed.targetMessageId,
+      initialContent: committed.initialContent,
+      content: committed.currentContent,
+      revision: committed.revision,
+      // A remount around an open editor adopts whatever the projection says,
+      // including a send that is still outstanding.
+      sentRevision:
+        committed.pendingClientActionId === null ? null : committed.revision,
+    };
+    liveInlineEditRef.current = adopted;
+    return adopted;
+  }, []);
+
   const beginInlineEdit = useCallback(
     (message: ChatMessageModel) => {
       if (!canModifyMessages) return;
@@ -237,11 +353,20 @@ export function useChatMessageActions(
         return;
       }
       const content = structuredClone(message.structuredContent);
+      // Minted here, not in the reducer: React may invoke a reducer twice and
+      // `uuidv4()` would answer differently each time.
+      const sessionId = uuidv4();
+      liveInlineEditRef.current = {
+        sessionId,
+        targetMessageId: persistentMessageId,
+        initialContent: content,
+        content,
+        revision: 0,
+        sentRevision: null,
+      };
       dispatchUi({
         type: "beginInlineEdit",
-        // Minted here, not in the reducer: React may invoke a reducer twice and
-        // `uuidv4()` would answer differently each time.
-        sessionId: uuidv4(),
+        sessionId,
         targetMessageId: persistentMessageId,
         originalMessage: message,
         initialContent: content,
@@ -252,9 +377,18 @@ export function useChatMessageActions(
 
   const updateInlineEdit = useCallback(
     (content: JsonContent, _selection: { from: number; to: number }) => {
-      dispatchUi({ type: "updateInlineEditContent", content });
+      const live = currentLiveInlineEdit();
+      if (live === null) return;
+      // Mirrors the reducer's own guard: once a send is out, the editor is
+      // frozen until it settles.
+      if (inlineEditSendOutstanding(live, committedInlineEditRef.current)) {
+        return;
+      }
+      const revision = live.revision + 1;
+      liveInlineEditRef.current = { ...live, content, revision };
+      dispatchUi({ type: "updateInlineEditContent", content, revision });
     },
-    [dispatchUi],
+    [currentLiveInlineEdit, dispatchUi],
   );
 
   /**
@@ -267,7 +401,7 @@ export function useChatMessageActions(
    */
   const submitPreparedEdit = useCallback(
     (
-      edit: InlineEditState,
+      edit: LiveInlineEdit,
       draftImageBase64ByHash: ReadonlyMap<string, string>,
       revertFileChanges: boolean,
       revertArtifacts: boolean,
@@ -278,7 +412,7 @@ export function useChatMessageActions(
       const sent = chatActions.editUserMessage({
         targetMessageId: edit.targetMessageId,
         content: buildSubmittedChatJSONContent(
-          inlineHashOnlyImageBytes(edit.currentContent, draftImageBase64ByHash),
+          inlineHashOnlyImageBytes(edit.content, draftImageBase64ByHash),
           slashCatalog,
         ),
         sender,
@@ -287,11 +421,20 @@ export function useChatMessageActions(
         revertArtifacts,
       });
       if (sent === null) return;
+      // Before the dispatch, for the same reason the content is live at all:
+      // this is what freezes the editor, and a value that only becomes true at
+      // commit is not read by anything running before it.
+      if (liveInlineEditRef.current?.sessionId === edit.sessionId) {
+        liveInlineEditRef.current = { ...edit, sentRevision: edit.revision };
+      }
       dispatchUi({
         type: "markInlineEditPending",
         targetMessageId: edit.targetMessageId,
         clientActionId: sent.clientActionId,
         messageId: sent.messageId,
+        // What this send actually carried. The reducer refuses the mark if the
+        // committed edit has moved past it.
+        sentRevision: edit.revision,
       });
       dispatchUi({
         type: "setConfirmingDeleteMessageId",
@@ -307,16 +450,39 @@ export function useChatMessageActions(
       slashCatalog,
     ],
   );
-  // The LIVE inline edit and the LATEST send, for the continuation below. Both
-  // move while a byte read is in flight - the document on every keystroke, the
-  // send's own guards on every render - and a value captured before the await
-  // is stale by construction.
-  const activeInlineEditRef = useRef(activeInlineEdit);
+  // The LATEST send, for the continuation below: `submitPreparedEdit` gets a
+  // fresh identity whenever its own inputs move, and a value captured before an
+  // await is stale by construction. LAYOUT-timed so it is in place before the
+  // browser paints the render that produced it.
   const submitPreparedEditRef = useRef(submitPreparedEdit);
-  useEffect(() => {
-    activeInlineEditRef.current = activeInlineEdit;
+  useLayoutEffect(() => {
     submitPreparedEditRef.current = submitPreparedEdit;
-  }, [activeInlineEdit, submitPreparedEdit]);
+  }, [submitPreparedEdit]);
+  // The document itself is NOT mirrored through an effect - see `LiveInlineEdit`
+  // for why no effect timing can cover it. What an effect IS right for is the
+  // projection: `activeInlineEdit` can become null with no dispatch at all (an
+  // acknowledgement settles the edit through `projectInlineEditAgainstState`),
+  // and the live record has to follow it down or it outlives its editor.
+  useLayoutEffect(() => {
+    committedInlineEditRef.current = activeInlineEdit;
+    if (activeInlineEdit === null) {
+      liveInlineEditRef.current = null;
+      return;
+    }
+    // A send that is no longer pending has settled, and a REJECTED dispatch
+    // settles by reopening the editor - so the freeze has to lift here rather
+    // than stay latched on the record. Accepted sends never reach this: the
+    // projection answers `null` for them and the branch above runs instead.
+    const live = liveInlineEditRef.current;
+    if (
+      live !== null &&
+      live.sessionId === activeInlineEdit.sessionId &&
+      live.sentRevision !== null &&
+      activeInlineEdit.pendingClientActionId === null
+    ) {
+      liveInlineEditRef.current = { ...live, sentRevision: null };
+    }
+  }, [activeInlineEdit]);
   /**
    * The edit SESSION whose image preparation is in flight, or `null`.
    *
@@ -336,26 +502,28 @@ export function useChatMessageActions(
       // edit was invalidated by an incoming snapshot, etc.) the modal must not
       // be left open with dead buttons.
       dispatchUi({ type: "setRevertOnEditOpen", open: false });
-      if (activeInlineEdit === null) return;
+      // The live record, not the committed projection: the whole decision below
+      // - which hashes need inlining, and therefore whether this send is
+      // synchronous at all - is about the document that would be SENT.
+      const live = currentLiveInlineEdit();
+      if (live === null) return;
+      if (inlineEditSendOutstanding(live, committedInlineEditRef.current)) {
+        return;
+      }
       // The images this editor was SEEDED with are the sent message's own, so
       // the epic already holds them and they travel as bare hashes exactly as
       // they always have. Only what the user added since is this client's to
       // supply. Re-inlining the inherited ones would put the whole screenshot
       // back on a wire that has been carrying a 64-character hash.
-      const hostHeld = new Set(
-        blobHashesFromContent(activeInlineEdit.initialContent),
-      );
-      const pending = draftImageInliningNeeded(
-        activeInlineEdit.currentContent,
-        hostHeld,
-      );
+      const hostHeld = new Set(blobHashesFromContent(live.initialContent));
+      const pending = draftImageInliningNeeded(live.content, hostHeld);
       // The editing SESSION, not just its target. Cancel-and-reopen of the same
       // message keeps `targetMessageId` and is a different edit entirely - the
       // user did not press send on it.
-      const sessionId = activeInlineEdit.sessionId;
+      const sessionId = live.sessionId;
       if (pending.length === 0) {
         submitPreparedEdit(
-          activeInlineEdit,
+          live,
           NO_DRAFT_IMAGE_BYTES,
           revertFileChanges,
           revertArtifacts,
@@ -364,7 +532,7 @@ export function useChatMessageActions(
       }
       if (editImagePrepFlight.current === sessionId) return;
       editImagePrepFlight.current = sessionId;
-      const targetMessageId = activeInlineEdit.targetMessageId;
+      const targetMessageId = live.targetMessageId;
       // `currentContent` lives only in this tile's reducer, so while the read
       // runs it is the sole thing naming these bytes to the image GC.
       // A LABEL; the helper mints the per-acquisition key. See its doc.
@@ -373,7 +541,7 @@ export function useChatMessageActions(
       // `catch` in a hook body defeats the React Compiler's memoization.
       void withHeldComposerContentImageRoots(
         rootsLabel,
-        activeInlineEdit.currentContent,
+        live.content,
         async () => {
           await prepareDraftImageInlining({
             initialHashes: pending,
@@ -382,27 +550,38 @@ export function useChatMessageActions(
             // here rather than captured in render.
             target: draftImageByteTargetForHost(tabHostId),
             readRequiredHashes: () => {
-              const current = activeInlineEditRef.current;
+              const current = currentLiveInlineEdit();
               if (current === null) return [];
               if (current.sessionId !== sessionId) return [];
-              return draftImageInliningNeeded(current.currentContent, hostHeld);
+              return draftImageInliningNeeded(current.content, hostHeld);
             },
             // Synchronous with the final required-set read: no image can
             // arrive between that check and this send.
             commit: (base64ByHash) => {
-              const live = activeInlineEditRef.current;
+              const current = currentLiveInlineEdit();
               // A different target, a closed edit, or one the user already sent
               // is a different intent; sending the captured document would send
               // text the user can no longer see.
-              if (live === null || live.targetMessageId !== targetMessageId) {
+              if (
+                current === null ||
+                current.targetMessageId !== targetMessageId
+              ) {
                 return;
               }
               // A cancelled-and-reopened edit of the SAME message is a new
               // session, and this preparation belongs to the old one.
-              if (live.sessionId !== sessionId) return;
-              if (live.pendingClientActionId !== null) return;
+              if (current.sessionId !== sessionId) return;
+              // Already sent and awaiting its acknowledgement.
+              if (
+                inlineEditSendOutstanding(
+                  current,
+                  committedInlineEditRef.current,
+                )
+              ) {
+                return;
+              }
               submitPreparedEditRef.current(
-                live,
+                current,
                 base64ByHash,
                 revertFileChanges,
                 revertArtifacts,
@@ -420,16 +599,22 @@ export function useChatMessageActions(
         },
       ).catch((error: unknown) => {
         // The helper propagates rather than swallowing, so `void` alone left
-        // this unhandled. The flag is cleared by its `finally` either way; what
-        // this adds is a record that the edit was abandoned.
+        // this unhandled. The flag is cleared by its `finally` either way.
         appLogger.error(
           "[chat-tile] inline edit image preparation failed",
           { targetMessageId },
           error,
         );
+        // And the user is TOLD. Third surface with this shape - the chat
+        // composer toasts and the new-conversation modal raises a notice - and
+        // the one where silence reads worst: Save simply finishes with the
+        // editor still open and nothing changed.
+        toast.error("Couldn't prepare the images in this edit.", {
+          description: "The edit is still open - try saving again.",
+        });
       });
     },
-    [activeInlineEdit, dispatchUi, submitPreparedEdit, tabHostId],
+    [currentLiveInlineEdit, dispatchUi, submitPreparedEdit, tabHostId],
   );
 
   const submitInlineEdit = useCallback(() => {
@@ -640,11 +825,13 @@ export function useChatMessageActions(
           onSubmit: submitInlineEdit,
           onCancel: () => {
             if (pending) return;
+            liveInlineEditRef.current = null;
             dispatchUi({ type: "clearInlineEdit" });
           },
         }),
         onEdit: () => beginInlineEdit(message),
         onDeleteRequest: () => {
+          liveInlineEditRef.current = null;
           dispatchUi({ type: "clearInlineEdit" });
           dispatchUi({
             type: "setConfirmingDeleteMessageId",

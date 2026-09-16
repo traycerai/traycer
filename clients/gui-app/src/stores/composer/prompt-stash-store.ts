@@ -44,9 +44,18 @@ interface PromptStashState {
    * is already local (the local copy may hold blobs the host echo does
    * not). Never a host upsert — that would re-publish an own row.
    */
+  /**
+   * `stillCurrent` is the CALLER's liveness question, threaded all the way to
+   * the repository's fenced write rather than asked once here. `hydrate()`
+   * below is an await, and so is the write - a guard the caller applies before
+   * calling this cannot cover either, which is how a remote stash entry
+   * belonging to one account came to be written, published and persisted under
+   * the next one.
+   */
   readonly ingestRemote: (
     entry: PromptStashEntry,
     imagesByHash: ReadonlyMap<string, PromptStashImageBlob>,
+    stillCurrent: () => boolean,
   ) => Promise<void>;
   readonly dropRemote: (entryId: string) => Promise<void>;
   readonly markUnavailable: (entryId: string) => void;
@@ -155,17 +164,35 @@ export const usePromptStashStore = create<PromptStashState>()((set, get) => ({
   ingestRemote: async (
     entry,
     imagesByHash: ReadonlyMap<string, PromptStashImageBlob>,
+    stillCurrent: () => boolean,
   ) => {
     await get().hydrate();
+    if (!stillCurrent()) return;
     if (get().rows.some((row) => promptStashRowId(row) === entry.id)) {
       return;
     }
-    const { rows, revision } = await savePromptStashSnapshot({
-      entry,
-      imagesByHash,
-    });
-    applyMutationResult(rows, revision);
-    publishPromptStashChange(revision);
+    try {
+      // The FENCED write: it re-asks inside the transaction, immediately
+      // before the first mutation, and aborts the whole transaction when the
+      // answer has changed. A check out here could only cover the gap up to
+      // the call - and `hydrate()` above is itself an await.
+      const { rows, revision } = await savePromptStashSnapshotWhile(
+        { entry, imagesByHash },
+        stillCurrent,
+      );
+      // And again before PUBLISHING: a committed row is only half of what a
+      // viewer sees, and the in-memory rows are the other half.
+      if (!stillCurrent()) return;
+      applyMutationResult(rows, revision);
+      publishPromptStashChange(revision);
+    } catch (error: unknown) {
+      // Abandonment is this fence doing its job, not a failure to report.
+      if (error instanceof PromptStashWriteNoLongerCurrentError) return;
+      // An externally aborted transaction - a teardown calling
+      // `abortLiveFencedPromptStashWrites` mid-write - means the same thing.
+      if (!stillCurrent()) return;
+      throw error;
+    }
   },
   dropRemote: async (entryId) => {
     await get().hydrate();

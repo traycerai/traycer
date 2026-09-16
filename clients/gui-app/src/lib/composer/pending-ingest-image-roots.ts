@@ -28,6 +28,7 @@
  * the batch failed and the bytes are meant to be reclaimed.
  */
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 
 const hashesByHolder = new Map<string, Set<string>>();
 
@@ -57,7 +58,12 @@ export function holdPendingIngestImageHash(
  * to the document's own root with no gap.
  */
 export function releasePendingIngestImageHashes(holderId: string): void {
-  hashesByHolder.delete(holderId);
+  if (!hashesByHolder.delete(holderId)) return;
+  // Same edge as `releaseComposerContentImageRoots`: dropping the last root for
+  // a hash is what MAKES it an orphan, and a sweep that ran while this hold
+  // stood saw it as rooted and kept the bytes. Without a sweep on this edge the
+  // reclaim waits on an unrelated later one. Debounced, so a burst costs one.
+  scheduleLandingImageReconcile();
 }
 
 export function pendingIngestImageHashRoots(): ReadonlyArray<string> {

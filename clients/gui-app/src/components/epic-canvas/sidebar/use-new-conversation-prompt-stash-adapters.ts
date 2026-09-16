@@ -33,6 +33,10 @@ export function useNewConversationPromptStashSource(args: {
           useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
         return {
           content: patch?.content ?? seedContent,
+          // Neither the landing composer nor the new-conversation modal has
+          // an annotation sidecar - browser annotations attach to a CHAT
+          // draft - so there is nothing to carry from here.
+          annotations: [],
           token: {
             surface: "new-conversation",
             identity: epicId,

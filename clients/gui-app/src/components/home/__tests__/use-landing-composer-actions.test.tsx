@@ -142,7 +142,9 @@ const imageStoreMocks = vi.hoisted(() => ({
   ),
   imageHashKeys: vi.fn<() => Promise<string[]>>(() => Promise.resolve([])),
   sessionHashKeys: vi.fn<() => ReadonlySet<string>>(() => new Set<string>()),
-  deleteImage: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+  deleteImageBytesUnchecked: vi.fn<() => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
   releaseSession: vi.fn(),
 }));
 
@@ -151,7 +153,7 @@ vi.mock("@/lib/composer/landing-image-store", () => ({
   getImageBytes: imageStoreMocks.getImageBytes,
   imageHashKeys: imageStoreMocks.imageHashKeys,
   sessionHashKeys: imageStoreMocks.sessionHashKeys,
-  deleteImage: imageStoreMocks.deleteImage,
+  deleteImageBytesUnchecked: imageStoreMocks.deleteImageBytesUnchecked,
   releaseSession: imageStoreMocks.releaseSession,
 }));
 

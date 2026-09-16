@@ -182,6 +182,7 @@ export function usePromptStash(
         id: crypto.randomUUID(),
         createdAt: Date.now(),
         content: snapshot.content,
+        annotations: snapshot.annotations,
         readHashImage,
       });
       // The repository commits the manifest and every referenced image in one
@@ -266,6 +267,7 @@ export function usePromptStash(
           result = await destinationRef.current.importAndInsert({
             identity,
             content: materialized.content,
+            entry,
           });
         } finally {
           materialized.release?.();

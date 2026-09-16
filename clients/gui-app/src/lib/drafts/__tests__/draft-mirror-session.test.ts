@@ -538,6 +538,129 @@ describe("DraftMirrorSession", () => {
     });
   });
 
+  it("abandons the REST of a bootstrap when the session closes inside a row's apply (DRIVE RED)", async () => {
+    // A close lands inside row 1's own blob read. Row 1 is correctly dropped by
+    // the apply's own guard, but without a per-row guard the loop carried on
+    // and row 2 was applied by a session that no longer owns the window - which
+    // on a sign-out or account switch installs one account's private draft
+    // under another. The apply cannot see that: by then it is a fresh call with
+    // a fresh capture.
+    const first = landingDocument({ draftId: "d1", revision: 2 });
+    const second = landingDocument({ draftId: "d2", revision: 3 });
+    const applied: string[] = [];
+    const dropped: string[] = [];
+    let closeSession: () => void = () => undefined;
+    const sink = createSink({
+      dirty: new Set(),
+      writes: [],
+      applyUpsert: (document) => {
+        applied.push(document.draftId);
+        if (document.draftId === "d1") closeSession();
+        return Promise.resolve();
+      },
+      dropAbsentFromList: (_hostId, _listedIds) => {
+        dropped.push(_hostId);
+      },
+    });
+    const stream = createStreamHarness();
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve(
+            listResponse([first, second], 9, [{ draftId: "t1", revision: 4 }]),
+          ),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    closeSession = () => {
+      session.close();
+    };
+    session.start();
+
+    await vi.waitFor(() => {
+      expect(applied).toEqual(["d1"]);
+    });
+    // Everything downstream of the loop is a mutation by a session that lost
+    // the window, so none of it may run either.
+    expect(sink.synced).toEqual([]);
+    expect(sink.deletes).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  it("abandons a bootstrap when the session closes inside the LAST row's apply (DRIVE RED)", async () => {
+    // The per-row guard above is at the TOP of the iteration, so it never runs
+    // again after the final row: closing during the last apply still reached
+    // `rememberIncomingSynced`, the tombstones and the absence sweep. An
+    // absence sweep from a superseded bootstrap drops rows a NEWER bootstrap
+    // already installed, which is the same cross-account failure one step
+    // later.
+    const only = landingDocument({ draftId: "d1", revision: 2 });
+    const applied: string[] = [];
+    const dropped: string[] = [];
+    let closeSession: () => void = () => undefined;
+    const sink = createSink({
+      dirty: new Set(),
+      writes: [],
+      applyUpsert: (document) => {
+        applied.push(document.draftId);
+        closeSession();
+        return Promise.resolve();
+      },
+      dropAbsentFromList: (hostId, _listedIds) => {
+        dropped.push(hostId);
+      },
+    });
+    const stream = createStreamHarness();
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve(
+            listResponse([only], 9, [{ draftId: "t1", revision: 4 }]),
+          ),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    closeSession = () => {
+      session.close();
+    };
+    session.start();
+
+    await vi.waitFor(() => {
+      expect(applied).toEqual(["d1"]);
+    });
+    // Drain the microtask the apply's continuation is queued on, so a missing
+    // post-await guard has actually run its mutations by the time we look.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sink.synced).toEqual([]);
+    expect(sink.deletes).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
   it("drops a subscribe upsert of an omitted list id whose storeSeq is not newer", async () => {
     const sink = createSink({ dirty: new Set(), writes: [] });
     const stream = createStreamHarness();

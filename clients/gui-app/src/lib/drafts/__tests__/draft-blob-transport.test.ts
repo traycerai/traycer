@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { putImage } from "@/lib/composer/landing-image-store";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import {
+  putImage,
+  sessionImageBytes,
+} from "@/lib/composer/landing-image-store";
+import { reconcile } from "@/lib/composer/landing-image-gc";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
@@ -25,6 +30,14 @@ import {
 const localReadMocks = vi.hoisted(() => ({
   getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(),
   real: null as ((hash: string) => Promise<Uint8Array | undefined>) | null,
+  // Wrapped by the post-write fence test so an account switch can land INSIDE
+  // the write. Without that the switch happens before the PRE-write check and
+  // the test passes with the post-write fence deleted - which it did.
+  putImageBytesAtHash:
+    vi.fn<(hash: string, bytes: ImageBytes) => Promise<boolean>>(),
+  realPut: null as
+    | ((hash: string, bytes: ImageBytes) => Promise<boolean>)
+    | null,
 }));
 
 vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
@@ -32,8 +45,32 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
     await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
   localReadMocks.real = actual.getImageBytes;
   localReadMocks.getImageBytes.mockImplementation(actual.getImageBytes);
-  return { ...actual, getImageBytes: localReadMocks.getImageBytes };
+  localReadMocks.realPut = actual.putImageBytesAtHash;
+  localReadMocks.putImageBytesAtHash.mockImplementation(
+    actual.putImageBytesAtHash,
+  );
+  return {
+    ...actual,
+    getImageBytes: localReadMocks.getImageBytes,
+    putImageBytesAtHash: localReadMocks.putImageBytesAtHash,
+  };
 });
+
+function signedInAs(userId: string): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId, username: userId },
+  });
+}
+
+async function sha256HexOfBytes(
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 function unsupportedError(method: string): HostRpcError {
   return new HostRpcError({
@@ -78,6 +115,15 @@ beforeEach(() => {
   localReadMocks.getImageBytes.mockReset();
   if (localReadMocks.real !== null) {
     localReadMocks.getImageBytes.mockImplementation(localReadMocks.real);
+  }
+  // Module-level mocks keep their call log across tests, so a count assertion
+  // reads the whole file's history unless it is cleared here. `mockClear`, not
+  // `mockReset`: the passthrough installed at module load has to survive.
+  localReadMocks.putImageBytesAtHash.mockClear();
+  if (localReadMocks.realPut !== null) {
+    localReadMocks.putImageBytesAtHash.mockImplementation(
+      localReadMocks.realPut,
+    );
   }
 });
 
@@ -170,36 +216,57 @@ describe("draft blob transport", () => {
     expect(images.size).toBe(0);
   });
 
-  it("a readBlob writeback after an identity change is retired, not kept (DRIVE RED)", async () => {
-    // `drafts.readBlob` has no cancellation signal and the landing-image store
-    // it writes into is window-global and NOT account-partitioned - so bytes
-    // fetched for account A and answered after a sign-out would be seeded into
-    // the partition account B is now using, and rooted there by the session
-    // entry. Twin of the cloud-payload leg's fence.
-    // Bytes unique to this test. `pngBytes()` is shared, and the image
-    // store's session cache is module-level - it survives
-    // `installFreshIndexedDb`, so a digest an earlier test stored would be
-    // found LOCALLY here and the request would never be made.
+  it("a switch DURING the write is retired, not kept (DRIVE RED)", async () => {
+    // The switch lands inside `store`, which is the only window the POST-write
+    // fence covers. An earlier version of this test switched inside
+    // `client.request` - before the pre-write check - so it passed with the
+    // post-write fence deleted, which is a test that cannot fail for the thing
+    // it names.
     const bytes = new Uint8Array([...pngBytes(), 0x9a, 0x9b, 0x9c]);
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    const hash = Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-    // A REAL identity, because the fence compares owner ids and a signed-out
-    // store has none - `null === null` would compare equal and prove nothing.
-    useAuthStore.setState({
-      status: "signed-in",
-      contextMetadata: { userId: "user-a", username: "a" },
-    });
+    const hash = await sha256HexOfBytes(bytes);
+    signedInAs("user-a");
+
+    const passthrough = localReadMocks.realPut;
+    if (passthrough === null) throw new Error("no passthrough captured");
+    localReadMocks.putImageBytesAtHash.mockImplementationOnce(
+      async (writtenHash, writtenBytes) => {
+        const stored = await passthrough(writtenHash, writtenBytes);
+        signedInAs("user-b");
+        return stored;
+      },
+    );
+
+    const client: DraftBlobClient = {
+      request: ((_method, _params) =>
+        Promise.resolve({
+          ok: true as const,
+          bytesBase64: bytesToBase64(bytes),
+        })) as HostRequester<HostRpcRegistry>["request"],
+    };
+
+    const images = await readDraftBlobsIntoLocalStore(HOST, client, [hash]);
+
+    // Not handed back, and the session root released synchronously. The
+    // durable reclaim is the reconcile's, exactly as on the cloud leg.
+    expect(images.size).toBe(0);
+    expect(sessionImageBytes(hash)).toBeNull();
+    await reconcile();
+    const realRead = localReadMocks.real;
+    if (realRead === null) throw new Error("no passthrough captured");
+    expect(await realRead(hash)).toBeUndefined();
+  });
+
+  it("a switch BEFORE the write never writes at all (DRIVE RED)", async () => {
+    // The other half: the pre-write check, which costs a wasted fetch rather
+    // than a retirement. Separate test so neither fence can be deleted while
+    // the other keeps the suite green.
+    const bytes = new Uint8Array([...pngBytes(), 0xa1, 0xa2, 0xa3]);
+    const hash = await sha256HexOfBytes(bytes);
+    signedInAs("user-a");
 
     const client: DraftBlobClient = {
       request: ((_method, _params) => {
-        // The switch lands while the response is being handled - after the
-        // request, before the writeback is complete.
-        useAuthStore.setState({
-          status: "signed-in",
-          contextMetadata: { userId: "user-b", username: "b" },
-        });
+        signedInAs("user-b");
         return Promise.resolve({
           ok: true as const,
           bytesBase64: bytesToBase64(bytes),
@@ -209,11 +276,9 @@ describe("draft blob transport", () => {
 
     const images = await readDraftBlobsIntoLocalStore(HOST, client, [hash]);
 
-    // Nothing handed back, and nothing left behind.
     expect(images.size).toBe(0);
-    const realRead = localReadMocks.real;
-    if (realRead === null) throw new Error("no passthrough captured");
-    expect(await realRead(hash)).toBeUndefined();
+    // Never written, so there is nothing to retire.
+    expect(localReadMocks.putImageBytesAtHash).not.toHaveBeenCalled();
   });
 
   // ─── T5's once-per-host upload memo ─────────────────────────────────────

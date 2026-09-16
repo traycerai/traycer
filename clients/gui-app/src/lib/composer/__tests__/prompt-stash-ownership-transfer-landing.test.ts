@@ -243,7 +243,7 @@ describe("prompt-stash ownership transfer: landing", () => {
     // process-global (not window-partitioned), so both durable delete and
     // releaseSession are required - otherwise getImageBytes still hits the
     // in-memory session cache.
-    await h.landingImages.deleteImage(hashA);
+    await h.landingImages.deleteImageBytesUnchecked(hashA);
     h.landingImages.releaseSession(hashA);
     expect(await h.landingImages.getImageBytes(hashA)).toBeUndefined();
 

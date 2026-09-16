@@ -92,6 +92,7 @@ function entry(id: string, createdAt: number, text: string): PromptStashEntry {
     createdAt,
     content: textDoc(text),
     blobHashes: [],
+    annotations: [],
   };
 }
 
