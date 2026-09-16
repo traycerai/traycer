@@ -1,6 +1,6 @@
 import { formatAgentConfigureResponse } from "@traycer/protocol/agent/agent-profile-format";
 import {
-  agentConfigureRequestSchemaV61,
+  agentConfigureRequestSchemaV20,
   agentConfigureResponseSchema,
 } from "@traycer/protocol/host/agent/profiles";
 import {
@@ -39,7 +39,7 @@ export function buildAgentConfigureCommand(opts: {
   readonly permissionMode: string | null;
 }): CommandFn {
   return async () => {
-    const request = parseUserInput(agentConfigureRequestSchemaV61, {
+    const request = parseUserInput(agentConfigureRequestSchemaV20, {
       epicId: resolveEpicId(opts.epicId),
       senderAgentId: resolveSenderAgentId(opts.senderAgentId),
       agentId: opts.agentId,
@@ -49,8 +49,6 @@ export function buildAgentConfigureCommand(opts: {
       reasoningEffort: opts.reasoningEffort,
       fastMode: opts.fast,
       permissionMode: opts.permissionMode ?? "full_access",
-      // Leaves any cross-task chat search grant as it is.
-      crossTaskChatSearch: null,
     });
     const result = await toAgentCliError(
       callHostRpc("agent.configure", request),

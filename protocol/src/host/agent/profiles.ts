@@ -1458,23 +1458,6 @@ export type AgentConfigureRequestV20 = z.infer<
   typeof agentConfigureRequestSchemaV20
 >;
 
-/**
- * v6.1: `crossTaskChatSearch` sets (true) or clears (false) the target agent's
- * cross-task chat search capability; `null` leaves it unchanged. The host
- * allows setting it only when the sender itself holds it.
- *
- * A request minor meeting a v6.0 host is re-parsed through the v6.0 schema,
- * which strips this key: a change sent to an older host is dropped, not
- * applied.
- */
-export const agentConfigureRequestSchemaV61 =
-  agentConfigureRequestSchemaV20.extend({
-    crossTaskChatSearch: z.boolean().nullable(),
-  });
-export type AgentConfigureRequestV61 = z.infer<
-  typeof agentConfigureRequestSchemaV61
->;
-
 export const agentConfigureSettingsSchema = z.object({
   harnessId: guiHarnessIdSchema,
   model: z.string().min(1),
@@ -1725,24 +1708,6 @@ export const agentConfigureV60 = defineRpcContract({
   responseSchema: agentConfigureResponseSchema,
 });
 
-export const agentConfigureV61 = defineRpcContract({
-  method: "agent.configure",
-  schemaVersion: { major: 6, minor: 1 } as const,
-  requestSchema: agentConfigureRequestSchemaV61,
-  responseSchema: agentConfigureResponseSchema,
-});
-
-/** A v6.0 caller changes no capability. The response is unchanged. */
-export const agentConfigureUpgradeV60ToV61 = defineUpgradePath<
-  typeof agentConfigureV60,
-  typeof agentConfigureV61
->({
-  from: agentConfigureV60.schemaVersion,
-  to: agentConfigureV61.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, crossTaskChatSearch: null }),
-  upgradeResponse: (response) => response,
-});
-
 export const agentConfigureUpgradeV50ToV60 = defineUpgradePath<
   typeof agentConfigureV50,
   typeof agentConfigureV60
@@ -1755,21 +1720,13 @@ export const agentConfigureUpgradeV50ToV60 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentConfigureDowngradeV61ToV50 = defineDowngradePath<
-  typeof agentConfigureV61,
+export const agentConfigureDowngradeV60ToV50 = defineDowngradePath<
+  typeof agentConfigureV60,
   typeof agentConfigureV50
 >({
-  from: { major: 6, minor: 1 },
+  from: { major: 6, minor: 0 },
   to: { major: 5, minor: 0 },
-  // An older-major host has no capability to grant: the grant is dropped,
-  // erring toward less access, as the v6.0 projection does.
-  downgradeRequest: ({
-    crossTaskChatSearch: _crossTaskChatSearch,
-    ...request
-  }) => ({
-    ok: true,
-    value: request,
-  }),
+  downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     // Fails closed for a post-v8.0 harness (antigravity) - see the v5->v4
     // bridge below for the full reasoning. The message names no harness so it
@@ -1789,19 +1746,13 @@ export const agentConfigureDowngradeV61ToV50 = defineDowngradePath<
   },
 });
 
-export const agentConfigureDowngradeV61ToV40 = defineDowngradePath<
-  typeof agentConfigureV61,
+export const agentConfigureDowngradeV60ToV40 = defineDowngradePath<
+  typeof agentConfigureV60,
   typeof agentConfigureV40
 >({
-  from: { major: 6, minor: 1 },
+  from: { major: 6, minor: 0 },
   to: { major: 4, minor: 0 },
-  downgradeRequest: ({
-    crossTaskChatSearch: _crossTaskChatSearch,
-    ...request
-  }) => ({
-    ok: true,
-    value: request,
-  }),
+  downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     const parsed = agentConfigureResponseSchemaV4.safeParse(response);
     if (!parsed.success) {
@@ -1818,19 +1769,13 @@ export const agentConfigureDowngradeV61ToV40 = defineDowngradePath<
   },
 });
 
-export const agentConfigureDowngradeV61ToV30 = defineDowngradePath<
-  typeof agentConfigureV61,
+export const agentConfigureDowngradeV60ToV30 = defineDowngradePath<
+  typeof agentConfigureV60,
   typeof agentConfigureV30
 >({
-  from: { major: 6, minor: 1 },
+  from: { major: 6, minor: 0 },
   to: { major: 3, minor: 0 },
-  downgradeRequest: ({
-    crossTaskChatSearch: _crossTaskChatSearch,
-    ...request
-  }) => ({
-    ok: true,
-    value: request,
-  }),
+  downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     const parsed = agentConfigureResponseSchemaV3.safeParse(response);
     if (!parsed.success) {
@@ -2113,19 +2058,13 @@ export const agentConfigureDowngradeV50ToV30 = defineDowngradePath<
   },
 });
 
-export const agentConfigureDowngradeV61ToV20 = defineDowngradePath<
-  typeof agentConfigureV61,
+export const agentConfigureDowngradeV60ToV20 = defineDowngradePath<
+  typeof agentConfigureV60,
   typeof agentConfigureV20
 >({
-  from: { major: 6, minor: 1 },
+  from: { major: 6, minor: 0 },
   to: { major: 2, minor: 0 },
-  downgradeRequest: ({
-    crossTaskChatSearch: _crossTaskChatSearch,
-    ...request
-  }) => ({
-    ok: true,
-    value: request,
-  }),
+  downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     const parsed = agentConfigureResponseSchemaV2.safeParse(response);
     if (!parsed.success) {
@@ -2142,11 +2081,11 @@ export const agentConfigureDowngradeV61ToV20 = defineDowngradePath<
   },
 });
 
-export const agentConfigureDowngradeV61ToV10 = defineDowngradePath<
-  typeof agentConfigureV61,
+export const agentConfigureDowngradeV60ToV10 = defineDowngradePath<
+  typeof agentConfigureV60,
   typeof agentConfigureV10
 >({
-  from: { major: 6, minor: 1 },
+  from: { major: 6, minor: 0 },
   to: { major: 1, minor: 0 },
   // Same refusal as every other bridge onto v1.0 - see the v5->v1 bridge.
   downgradeRequest: () => ({
