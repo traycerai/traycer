@@ -19,6 +19,7 @@ import {
   usePickerReasoningLeaderForIndex,
 } from "@/providers/keybinding-context";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
+import { pickerLeaderControlLabel } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import { useReasoningSliderGesture } from "@/components/home/pickers/use-reasoning-slider-gesture";
 import { FastModeFooterButton } from "@/components/home/pickers/fast-mode-footer-button";
 import {
@@ -115,27 +116,16 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
   const showGroupSeparator = upgradeServiceTier !== null && hasReasoningOptions;
 
   return (
-    <div
-      className={cn(
-        "flex shrink-0 items-center justify-between gap-2 border-t bg-muted/20 px-2 py-1.5",
-        sliderLayout && "items-end",
-      )}
-    >
+    <div className="flex shrink-0 items-center justify-between gap-2 border-t bg-muted/20 px-2 py-1.5">
       {upgradeServiceTier === null || serviceTier === null ? null : (
         <FastModeFooterButton
           config={serviceTier}
           upgrade={upgradeServiceTier}
-          alignWithSlider={sliderLayout}
+          inlineShortcut={sliderLayout}
         />
       )}
       {showGroupSeparator ? (
-        <div
-          className={cn(
-            "h-5 w-px shrink-0 bg-border",
-            sliderLayout && "mb-2.5",
-          )}
-          aria-hidden="true"
-        />
+        <div className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
       ) : null}
       {/* Gated on the option count, not just on `reasoning`: the group owns a
           scroller whose listeners are wired from its own mount, so it must not
@@ -409,12 +399,10 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
   // A level the catalog does not list (remembered from another model, before
   // normalization catches up) parks the thumb at the first stop rather than
   // leaving the slider without a value - `findReasoningLabel` still prints the
-  // raw level above it, so the name and the position disagree visibly instead
+  // raw level beside it, so the name and the position disagree visibly instead
   // of the control vanishing.
   const thumbIndex = selectedIndex === -1 ? 0 : selectedIndex;
   const lastIndex = options.length - 1;
-  const leaderModifier = usePickerReasoningLeaderForIndex(0);
-  const showShortcuts = !disabled && leaderModifier !== null;
   const atMax = isMaxReasoningLevel(value, options);
   // The sparkle field's gate. Reduced motion is deliberately NOT in it: the
   // field still renders, still, which is the max treatment's answer to the
@@ -443,25 +431,12 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
   );
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1 px-2">
-      {/* The label reserves its row even while the held leader replaces it
-          with numbers over the stops. Neither changing levels nor revealing
-          shortcuts changes the track's geometry. */}
-      <span
-        data-testid="model-reasoning-level-name"
-        data-max={atMax ? "true" : undefined}
-        className={cn(
-          "reasoning-effort-label max-w-full truncate text-center text-ui-xs font-medium transition-opacity motion-reduce:transition-none",
-          showShortcuts && "opacity-0",
-        )}
-      >
-        {findReasoningLabel(value, options)}
-      </span>
+    <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
       {/* Keep a generous pointer target around the slimmer track, with room
           for the thumb and its focus ring beyond the capsule. */}
       <Slider
         data-testid="model-reasoning-slider"
-        className="reasoning-effort-slider min-w-0 flex-1 py-2"
+        className="reasoning-effort-slider min-w-0 flex-1 py-1"
         data-max={atMax ? "true" : undefined}
         data-dragging={gesture.dragging ? "true" : undefined}
         data-pressed={gesture.pressed ? "true" : undefined}
@@ -481,7 +456,7 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
         <SliderTrack
           size="pill"
           className={cn(
-            "data-[size=pill]:h-6 transition-shadow motion-reduce:transition-none",
+            "data-[size=pill]:h-4 transition-shadow motion-reduce:transition-none",
             atMax && "reasoning-effort-max-glow",
           )}
         >
@@ -490,11 +465,11 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
               muddies the boundary the thumb sits on. */}
           <SliderRange
             data-testid="model-reasoning-range"
-            // Radix insets the 1.75rem thumb at the endpoints, but leaves its
+            // Radix insets the 1.5rem thumb at the endpoints, but leaves its
             // range on raw percentages. Match that inset and keep the covered
             // edge square so low interior stops have no unfilled crescent.
             style={{
-              marginInlineEnd: `${((2 * gesture.position) / lastIndex - 1) * 0.875}rem`,
+              marginInlineEnd: `${((2 * gesture.position) / lastIndex - 1) * 0.75}rem`,
             }}
             className={cn(
               "reasoning-effort-range bg-primary",
@@ -509,9 +484,9 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
         {/* Inset by half the thumb, which is where Radix keeps the thumb's own
             centre at the two ends (`getThumbInBoundsOffset`) - without it the
             first and last dot sit half a thumb outside the thumb's reach. The
-            pill thumb is 28px, so this is `px-3.5`; `py-2` matches the slider's
-            own padding, which puts the overlay exactly on the track. */}
-        <div className="pointer-events-none absolute inset-0 px-3.5 py-2">
+            pill thumb is 1.5rem, so this is `px-3`; `py-1` matches the slider's
+            own padding. Interactive stops stay below the thumb. */}
+        <div className="pointer-events-none absolute inset-0 px-3 py-1">
           <div className="relative h-full">
             {options.map((option, index) => (
               <ReasoningLevelStop
@@ -536,12 +511,29 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
             ring's channel. */}
         <SliderThumb
           size="pill"
-          className="data-[size=pill]:border"
+          className="data-[size=pill]:size-6 data-[size=pill]:border"
           aria-label="Thinking effort"
           aria-valuenow={thumbIndex}
           aria-valuetext={findReasoningLabel(value, options)}
         />
       </Slider>
+      {/* Fixed width so Low and Extra High leave the track in the same place.
+          Right-aligned so the name sits on the footer’s far edge; unused space
+          falls between the track and a shorter name. */}
+      <TooltipWrapper
+        label={findReasoningLabel(value, options)}
+        side="top"
+        sideOffset={4}
+        align="end"
+      >
+        <span
+          data-testid="model-reasoning-level-name"
+          data-max={atMax ? "true" : undefined}
+          className="reasoning-effort-label w-[9ch] max-w-[40%] shrink-0 truncate text-end text-ui-xs font-medium"
+        >
+          {findReasoningLabel(value, options)}
+        </span>
+      </TooltipWrapper>
     </div>
   );
 }
@@ -563,10 +555,9 @@ interface ReasoningLevelStopProps {
 // so the bare track between two dots still belongs to the slider and a drag
 // that crosses a dot is not interrupted.
 //
-// The hit target is the track's full HEIGHT (24px, meeting the 24px
-// coarse-pointer floor on that axis) and stays narrow across: a target as wide
-// as it is tall would overlap its neighbour on the narrowest picker with the
-// longest ladder, and the thing a finger is aiming at is a column of the track,
+// The hit target includes the padding around the slim track and stays narrow
+// across: a square target would overlap its neighbour on the narrowest
+// picker with the longest ladder, and the thing a finger is aiming at is a column of the track,
 // not a square.
 const ReasoningLevelStop = memo(function ReasoningLevelStop(
   props: ReasoningLevelStopProps,
@@ -588,17 +579,21 @@ const ReasoningLevelStop = memo(function ReasoningLevelStop(
       <button
         type="button"
         tabIndex={-1}
-        aria-label={option.label}
+        aria-label={pickerLeaderControlLabel(
+          option.label,
+          index,
+          disabled ? null : leaderModifier,
+          "to set",
+        )}
         data-testid={`model-reasoning-stop-${index}`}
         disabled={disabled}
         style={{ left: `${percent}%` }}
         onPointerLeave={() => setHovered(false)}
         className={cn(
-          "group pointer-events-auto absolute top-1/2 flex h-full w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full disabled:cursor-not-allowed pointer-coarse:w-6",
-          // The selected stop keeps its slot - the thumb is drawn on top of it
-          // and takes the pointer, so a visible dot under there would only be
-          // a smudge at the edge of the thumb.
-          selected && "pointer-events-none",
+          "group pointer-events-auto absolute top-1/2 flex h-6 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full disabled:cursor-not-allowed pointer-coarse:w-6",
+          // Only the inert selected stop rises above the thumb to show its
+          // shortcut. Neighboring hit targets must stay beneath the thumb.
+          selected && "pointer-events-none z-10",
         )}
         onClick={() => {
           if (props.movedByGesture()) return;
@@ -614,6 +609,7 @@ const ReasoningLevelStop = memo(function ReasoningLevelStop(
           className={cn(
             "size-1 rounded-full transition-colors",
             selected && "opacity-0",
+            showShortcut && "invisible",
             overFill ? "bg-primary-foreground/35" : "bg-foreground/25",
             !disabled &&
               (overFill
@@ -622,12 +618,10 @@ const ReasoningLevelStop = memo(function ReasoningLevelStop(
           )}
         />
         <PickerLeaderBadge
-          show={showShortcut}
+          modifier={disabled ? null : leaderModifier}
           index={index}
-          hintAction="to set"
-          hintTarget={option.label}
           testId={`model-reasoning-digit-${singleDigitLeaderDigitFor(index)}`}
-          placement="above"
+          placement="center"
         />
       </button>
     </TooltipWrapper>
@@ -666,6 +660,12 @@ function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
       ref={buttonRef}
       type="button"
       aria-pressed={selected}
+      aria-label={pickerLeaderControlLabel(
+        option.label,
+        index,
+        disabled ? null : leaderModifier,
+        "to set",
+      )}
       disabled={disabled}
       className={cn(
         "inline-flex max-w-[min(22vw,6.5rem)] shrink-0 items-center rounded-md px-2 py-1 text-ui-xs text-muted-foreground transition-colors aria-[pressed=false]:hover:bg-accent/30 aria-[pressed=false]:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
@@ -676,10 +676,8 @@ function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
       <span className="relative inline-flex min-w-0 items-center">
         <span className="truncate">{option.label}</span>
         <PickerLeaderBadge
-          show={!disabled && leaderModifier !== null}
+          modifier={disabled ? null : leaderModifier}
           index={index}
-          hintAction="to set"
-          hintTarget={option.label}
           testId={`model-reasoning-digit-${singleDigitLeaderDigitFor(index)}`}
           placement="trailing"
         />

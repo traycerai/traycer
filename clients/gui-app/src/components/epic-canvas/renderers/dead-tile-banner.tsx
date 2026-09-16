@@ -3,6 +3,8 @@ import type { HostUnavailability } from "@traycer-clients/shared/host-client/rem
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +69,14 @@ function terminalDeadTileMessage(
     return `This agent is not running on "${hostLabel}" right now, and it can only be started on that machine. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
   }
   if (unavailability === "plan-restricted") {
+    // The fact holds on every shell; only the remedy differs. The installed
+    // mobile app may not tell the reader to upgrade (App Store guideline
+    // 3.1.1), so it points at the shell that may.
+    if (isMobileApp()) {
+      return ownerKind === "agent"
+        ? `Host "${hostLabel}" is local only on your current plan, so this agent cannot be reached from here. ${PLAN_RESTRICTED_MOBILE_REMEDY} The agent and its transcript are kept either way.`
+        : `Host "${hostLabel}" is local only on your current plan, so this terminal cannot be reached from here. ${PLAN_RESTRICTED_MOBILE_REMEDY} Or open this terminal on that machine.`;
+    }
     return ownerKind === "agent"
       ? `Host "${hostLabel}" is local only on your current plan, so this agent cannot be reached from here. Upgrade to use that host remotely — the agent and its transcript are kept either way.`
       : `Host "${hostLabel}" is local only on your current plan, so this terminal cannot be reached from here. Upgrade to use that host remotely, or open this terminal on that machine.`;
@@ -481,13 +491,23 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     offersClone: true,
   },
   "host-plan-restricted": {
-    message: (hostLabel) => (
-      <>
-        Bound host &quot;{hostLabel}&quot; is local only on your current plan,
-        so it can&apos;t be reached from here. Upgrade to use it remotely, or
-        continue here to create a new agent on the active host.
-      </>
-    ),
+    // The clone alternative is the same on both shells; only the upgrade
+    // clause is withheld from the installed mobile app (App Store guideline
+    // 3.1.1), which points at the desktop app instead.
+    message: (hostLabel) =>
+      isMobileApp() ? (
+        <>
+          Bound host &quot;{hostLabel}&quot; is local only on your current plan,
+          so it can&apos;t be reached from here. {PLAN_RESTRICTED_MOBILE_REMEDY}{" "}
+          Or continue here to create a new agent on the active host.
+        </>
+      ) : (
+        <>
+          Bound host &quot;{hostLabel}&quot; is local only on your current plan,
+          so it can&apos;t be reached from here. Upgrade to use it remotely, or
+          continue here to create a new agent on the active host.
+        </>
+      ),
     messageWithoutClone: (hostLabel) => (
       <>
         Bound host &quot;{hostLabel}&quot; is local only on your current plan,

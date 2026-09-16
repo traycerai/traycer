@@ -96,7 +96,14 @@ export interface ComposerBodyProps {
    */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly onSubmit: () => void;
-  readonly onStartTerminal: (launch: TerminalAgentLaunch) => void;
+  /**
+   * `assembledFor` is the host the terminal panel assembled the launch for
+   * (its `hostId` at Start) - see `TerminalLaunchPanel`'s `onStart`.
+   */
+  readonly onStartTerminal: (
+    launch: TerminalAgentLaunch,
+    assembledFor: string | null,
+  ) => void;
   readonly onDocumentChange: (
     content: JsonContent,
     selection: { from: number; to: number },

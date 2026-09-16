@@ -468,7 +468,12 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       : {
           modifier,
           index,
-          hint: leaderHint(leaderDigitFor(index), "to switch to", displayName),
+          hint: leaderHint(
+            leaderDigitFor(index),
+            modifier,
+            "to switch to",
+            displayName,
+          ),
         };
   const control = (
     <ContextMenu>

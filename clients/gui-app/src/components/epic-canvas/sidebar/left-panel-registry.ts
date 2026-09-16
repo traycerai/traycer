@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_LEFT_PANEL_ID,
   type LeftPanelId,
+  type LeftPanelGroup,
   type PanelVisibilityOverrideById,
 } from "@/stores/epics/left-panel-store";
 
@@ -196,4 +197,24 @@ export function resolveActiveVisibleGroupIndex(
   );
   if (defaultIndex >= 0) return defaultIndex;
   return visibleGroupPanelIds.length === 0 ? null : 0;
+}
+
+/** Retain the PR section in the displayed group while its host has no rows yet. */
+export function retainDisplayedPrPanel(
+  groups: ReadonlyArray<LeftPanelGroup>,
+  activePanelId: LeftPanelId,
+  context: LeftPanelAvailabilityContext,
+): LeftPanelAvailabilityContext {
+  const candidateContext = { ...context, hasPullRequests: true };
+  const visibleGroups = groups
+    .map((group) =>
+      group.panelIds.filter((id) =>
+        isLeftPanelVisible(getLeftPanelDefinition(id), candidateContext),
+      ),
+    )
+    .filter((ids) => ids.length > 0);
+  const index = resolveActiveVisibleGroupIndex(visibleGroups, activePanelId);
+  return index !== null && visibleGroups[index].includes("pull-requests")
+    ? candidateContext
+    : context;
 }

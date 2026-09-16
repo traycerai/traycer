@@ -69,6 +69,7 @@ function createEntry(webContents: BrowserViewWebContents): BrowserViewEntry {
     currentTitle: "Example",
     status: "ready",
     statusReason: null,
+    navigationAttempt: 0,
     findState: {
       appRequestId: 0,
       query: "",

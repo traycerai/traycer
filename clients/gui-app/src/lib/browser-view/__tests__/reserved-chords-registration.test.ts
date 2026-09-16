@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   browserScopedChordLabel,
+  registerReservedBrowserChords,
   reservedBrowserChordsFor,
 } from "@/lib/browser-view/reserved-chords-registration";
+import { FakeBrowserViewBridge } from "./fake-browser-view-bridge";
 import {
   ACTION_IDS,
   ACTION_META,
@@ -16,6 +18,7 @@ import {
 } from "@/lib/keybindings/actions";
 import type { ChordString } from "@/lib/keybindings/chord";
 import { findConflict } from "@/lib/keybindings/conflicts";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 
 type Bindings = Readonly<Record<ActionId, ChordString | null>>;
 
@@ -52,6 +55,72 @@ function defaultCommandFor(token: string): string | null | undefined {
  * cannot quietly change behaviour on one side only.
  */
 describe("reserved browser chords", () => {
+  it("reserves all desktop menu mnemonics for Linux and Windows menu bridges", () => {
+    for (const platform of ["linux", "win32"] as const) {
+      const browserView = new FakeBrowserViewBridge({});
+      const runnerHost = createFakeRunnerHost({ browserView });
+      Object.assign(runnerHost, {
+        menu: {
+          platform,
+          onChange: (_handler: () => void) => ({ dispose: () => undefined }),
+          getSnapshot: () => Promise.resolve({ revision: 1, menus: [] }),
+          executeItem: () => Promise.resolve(),
+          openTopLevel: () => Promise.resolve(),
+        },
+      });
+
+      registerReservedBrowserChords(
+        runnerHost,
+        getDefaultBindings(),
+        ON_LANDING,
+      );
+
+      const menuRows = browserView.reservedChordsCalls[0]?.filter((row) =>
+        ["alt+f", "alt+e", "alt+v", "alt+w", "alt+h"].includes(row.token),
+      );
+      expect(menuRows).toEqual([
+        { token: "alt+f", command: null },
+        { token: "alt+e", command: null },
+        { token: "alt+v", command: null },
+        { token: "alt+w", command: null },
+        { token: "alt+h", command: null },
+      ]);
+    }
+  });
+
+  it("does not add menu mnemonics for macOS or browser hosts", () => {
+    const platforms = ["darwin", null] as const;
+    for (const platform of platforms) {
+      const browserView = new FakeBrowserViewBridge({});
+      const runnerHost = createFakeRunnerHost({ browserView });
+      if (platform !== null) {
+        Object.assign(runnerHost, {
+          menu: {
+            platform,
+            onChange: (_handler: () => void) => ({
+              dispose: () => undefined,
+            }),
+            getSnapshot: () => Promise.resolve({ revision: 1, menus: [] }),
+            executeItem: () => Promise.resolve(),
+            openTopLevel: () => Promise.resolve(),
+          },
+        });
+      }
+
+      registerReservedBrowserChords(
+        runnerHost,
+        getDefaultBindings(),
+        ON_LANDING,
+      );
+
+      expect(
+        browserView.reservedChordsCalls[0]?.some((row) =>
+          row.token.startsWith("alt+"),
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("scopes the browser's own chords to the focused tile", () => {
     expect(defaultCommandFor("mod+w")).toBe("closeTab");
     expect(defaultCommandFor("mod+t")).toBe("newTab");

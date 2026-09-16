@@ -88,6 +88,7 @@ export type AnalyticsSettingsSection =
   | "app-diagnostics"
   | "app-notifications"
   | "appearance"
+  | "delete-account"
   | "devices"
   | "diagnostics"
   | "fallback"
@@ -272,6 +273,7 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
+  | "agentOfficeDefaultView"
   | "agentTabSurfacing"
   | "artifactIconColorMode"
   | "artifactIconColors"
@@ -1178,6 +1180,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     "app-diagnostics": true,
     "app-notifications": true,
     appearance: true,
+    "delete-account": true,
     devices: true,
     diagnostics: true,
     fallback: true,
@@ -1207,6 +1210,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
  */
 const ANALYTICS_SETTINGS = new Set<string>(
   Object.keys({
+    agentOfficeDefaultView: true,
     agentTabSurfacing: true,
     allowPrereleaseUpdates: true,
     artifactIconColorMode: true,

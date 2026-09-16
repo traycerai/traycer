@@ -21,12 +21,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import {
-  AnimatePresence,
-  LayoutGroup,
-  useReducedMotion,
-  type Transition,
-} from "motion/react";
+import { LayoutGroup, useReducedMotion, type Transition } from "motion/react";
 import * as m from "motion/react-m";
 import { runTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
 import { useTileTabDisplacement } from "@/components/epic-canvas/dnd/use-tile-tab-displacement";
@@ -835,7 +830,12 @@ function TabItemBody(
       ? null
       : {
           modifier: leaderModifier,
-          hint: leaderHint(leaderDigitFor(index), "to switch to", displayTitle),
+          hint: leaderHint(
+            leaderDigitFor(index),
+            leaderModifier,
+            "to switch to",
+            displayTitle,
+          ),
         };
   const tooltipContent = tabTooltipContent(
     tab,
@@ -965,6 +965,8 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
 
   return (
     <>
+      {/* The title keeps the tab width stable; hints share its overlay.
+          On release, restore the title and close control together without an exit fade. */}
       <span className="relative min-w-[7ch] max-w-40">
         <Tooltip>
           <TooltipTrigger asChild>
@@ -972,6 +974,7 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
               data-testid={`tab-title-${tabInstanceId}`}
               className={cn(
                 "inline-flex max-w-full min-w-0 items-center gap-1 pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
+                leaderBadge !== null && "opacity-0",
                 isPreview && "italic",
                 isActive ? "font-medium" : "font-normal",
               )}
@@ -985,32 +988,37 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
           <TooltipContent>{tooltipContent}</TooltipContent>
         </Tooltip>
         <span
-          aria-hidden="true"
           className={cn(
-            "pointer-events-none absolute inset-y-0 left-0 right-5 hidden min-w-0 items-center gap-1 pr-1 group-focus-within:flex group-hover:flex",
-            leaderBadge !== null && "right-7",
+            "pointer-events-none absolute inset-y-0 left-0 flex min-w-0 items-center gap-1 pr-1",
+            leaderBadge === null
+              ? "right-5 hidden group-focus-within:flex group-hover:flex"
+              : "right-0",
             isPreview && "italic",
             isActive ? "font-medium" : "font-normal",
           )}
         >
-          <TabDisplayTitle
-            displayTitle={displayTitle}
-            isArchived={isArchived}
-          />
+          <span
+            aria-hidden="true"
+            className="flex min-w-0 flex-1 items-center gap-1"
+          >
+            <TabDisplayTitle
+              displayTitle={displayTitle}
+              isArchived={isArchived}
+            />
+          </span>
+          {leaderBadge !== null ? (
+            <span className="shrink-0">
+              <LeaderDigitBadge
+                digit={leaderDigitFor(tabIndex)}
+                modifier={leaderBadge.modifier}
+                ariaLabel={leaderBadge.hint}
+                testId={`canvas-tab-digit-${leaderDigitFor(tabIndex)}`}
+                className={undefined}
+              />
+            </span>
+          ) : null}
         </span>
       </span>
-      <AnimatePresence initial={false}>
-        {leaderBadge !== null ? (
-          <LeaderDigitBadge
-            key={`${leaderBadge.modifier}:${tabInstanceId}`}
-            digit={leaderDigitFor(tabIndex)}
-            modifier={leaderBadge.modifier}
-            ariaLabel={leaderBadge.hint}
-            testId={`canvas-tab-digit-${leaderDigitFor(tabIndex)}`}
-            className={undefined}
-          />
-        ) : null}
-      </AnimatePresence>
       {leaderBadge === null ? (
         <button
           type="button"

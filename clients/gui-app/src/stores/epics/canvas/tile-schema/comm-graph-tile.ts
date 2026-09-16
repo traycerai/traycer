@@ -13,8 +13,15 @@
 import { v4 as uuidv4 } from "uuid";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
+import { OFFICE_VIEW_IDS } from "@/lib/comm-graph/office/office-view-vocabulary";
 import { TILE_KIND_COMM_GRAPH } from "../tile-kinds";
-import type { CommGraphTileRef, CommGraphTileViewState } from "../types";
+import type {
+  CommGraphTileCamera,
+  CommGraphTileRef,
+  CommGraphTileViewState,
+  OfficeViewChoice,
+} from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
 
@@ -31,6 +38,19 @@ export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
   y: 0,
   zoom: 1,
   mode: "office",
+  // NOT a view id. A tile nobody has chosen a view for follows the Settings
+  // default, and writing one here would freeze the default at creation time
+  // for every tile ever opened.
+  officeView: null,
+  officeAutoView: null,
+  // Nothing measured, so no Settings-default generation to attribute it to.
+  officeAutoGeneration: null,
+  officeCameraView: null,
+  // Nobody has framed the office. The tile projects this into the three fields
+  // above before building the office canvas, and `null` is what that canvas
+  // reads as "fit yourself" - so a fresh tile auto-fits, exactly as before D68
+  // gave the office a camera of its own.
+  officeCamera: null,
 };
 
 /**
@@ -40,7 +60,18 @@ export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
  * `mode` is deliberately NOT compared: it is a rendering choice, not a framing.
  * Folding it in would mean a tile that was only ever toggled to the office and
  * back reads as user-framed at the schema default, and would then open at
- * (0, 0) zoom 1 instead of fitting.
+ * (0, 0) zoom 1 instead of fitting. `officeView` and `officeAutoView` are out
+ * for the same reason and a stronger one: picking a view RESETS the camera to
+ * this very default, so a tile that reads as user-framed the moment a view is
+ * chosen would open every switched-to view at (0, 0) zoom 1 and never fit one
+ * again.
+ *
+ * `officeCamera` is out too, and for a third reason: this asks about the
+ * camera the CALLER holds, and both callers hold one of the three fields
+ * below. The graph reads them straight; the office reads the projection the
+ * tile builds from `officeCamera`, where a `null` office camera has already
+ * become this very default. Folding the field in would answer the office's
+ * question with the graph's framing.
  *
  * Lives beside the default it compares against, and not in either renderer:
  * both ask the same question of the same schema value.
@@ -101,19 +132,194 @@ function readCommGraphViewMode(value: unknown): CommGraphTileViewState["mode"] {
   return value === "office" ? "office" : "graph";
 }
 
+/**
+ * A persisted view id this build can actually draw, else `null`.
+ *
+ * The registry is the vocabulary, exactly as it is for the picker and the
+ * tile: a value from a build that ships more views than this one degrades
+ * rather than naming a view nothing can plan.
+ */
+function readOfficeViewId(value: unknown): OfficeViewId | null {
+  if (typeof value !== "string") return null;
+  return OFFICE_VIEW_IDS.find((id) => id === value) ?? null;
+}
+
+function readOfficeViewChoice(value: unknown): OfficeViewChoice | null {
+  if (value === "auto") return "auto";
+  return readOfficeViewId(value);
+}
+
+/**
+ * The Settings-default generation an Auto outcome was measured under.
+ *
+ * `null` unless there IS an outcome and a finite, non-negative generation was
+ * persisted beside it: a stamp with no outcome frames nothing, and an outcome
+ * whose generation did not persist (a record from before this field existed)
+ * re-measures on the next mount rather than being trusted at an unknown vintage.
+ */
+function readOfficeGeneration(
+  value: unknown,
+  officeAutoView: OfficeViewId | null,
+): number | null {
+  if (officeAutoView === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+/**
+ * Whether a field was a real choice this build cannot honour.
+ *
+ * An absent field and a persisted `null` are the SAME thing - never chosen -
+ * and neither is a degrade: a tile saved before views existed keeps the
+ * framing its owner gave it. A value that is present and unreadable is one a
+ * newer build wrote, and the camera saved beside it frames a view this one
+ * cannot draw.
+ */
+function degradesFrom(persisted: unknown, read: string | null): boolean {
+  return persisted !== undefined && persisted !== null && read === null;
+}
+
+/**
+ * The office's own camera as persisted, or `null` for anything unusable.
+ *
+ * Stricter than the three loose fields beside it, which fall back per number:
+ * this one is all-or-nothing, because a HALF-read office camera is worse than
+ * none. `null` means "nobody framed the office" and auto-fits; a camera with
+ * one salvaged coordinate frames somewhere nobody asked for and counts as
+ * user-framed while doing it. A zoom of zero or less is refused for the same
+ * reason the shared zoom is: it renders a canvas nothing can recover from.
+ */
+function readOfficeCamera(value: unknown): CommGraphTileCamera | null {
+  if (!isRecord(value)) return null;
+  const { x, y, zoom } = value;
+  if (typeof x !== "number" || !Number.isFinite(x)) return null;
+  if (typeof y !== "number" || !Number.isFinite(y)) return null;
+  if (typeof zoom !== "number" || !Number.isFinite(zoom)) return null;
+  if (zoom <= 0) return null;
+  return { x, y, zoom };
+}
+
+/** Whether a camera is the one every renderer reads as "fit yourself". */
+export function isNeutralCamera(camera: CommGraphTileCamera): boolean {
+  return (
+    camera.x === DEFAULT_COMM_GRAPH_VIEW.x &&
+    camera.y === DEFAULT_COMM_GRAPH_VIEW.y &&
+    camera.zoom === DEFAULT_COMM_GRAPH_VIEW.zoom
+  );
+}
+
 export function parseCommGraphTileViewState(
   value: unknown,
 ): CommGraphTileViewState {
   if (!isRecord(value)) return PERSISTED_COMM_GRAPH_VIEW;
   const zoom = readFiniteNumber(value.zoom, PERSISTED_COMM_GRAPH_VIEW.zoom);
-  return {
+  const officeView = readOfficeViewChoice(value.officeView);
+  // An explicit office view this build cannot honour degrades to null -
+  // "inherit the Settings default". The Auto outcome recorded under that
+  // now-unknown pick is dormant, but if the inherited default is Auto at the
+  // same generation the renderer trusts it and skips measurement, reopening an
+  // arbitrarily old Floor/Towers decision the degraded pick never stood for.
+  // Drop the outcome so the newly inherited Auto measures afresh. An ABSENT
+  // officeView is "inherit from the start", not a degrade, and keeps its
+  // dormant outcome; the generation follows the view to null on its own.
+  const officeViewDegraded = degradesFrom(value.officeView, officeView);
+  const officeAutoView = officeViewDegraded
+    ? null
+    : readOfficeViewId(value.officeAutoView);
+  const officeAutoGeneration = readOfficeGeneration(
+    value.officeAutoGeneration,
+    officeAutoView,
+  );
+  const officeCameraView = readOfficeViewId(value.officeCameraView);
+  // The camera means "this much of THAT view". Once the view it was saved
+  // against has degraded away, the numbers point into a floor plan that is not
+  // coming back - and keeping them would reopen the fallback view scrolled off
+  // into empty space with no sign of why.
+  // A resolved Auto outcome frames the camera only while the tile is EXPLICITLY
+  // on Auto. `officeView === null` is not that: it means "inherit the Settings
+  // default", which the renderer resolves to `agentOfficeDefaultView` and may
+  // be a concrete view like Towers - and this parser cannot know which, so it
+  // must not assume Auto and clear a camera that frames the resolved concrete
+  // view. Once the tile shows a concrete view (chosen or inherited),
+  // `officeAutoView` lingers as a dormant record; letting ITS unreadability
+  // degrade the camera would wipe the framing saved for the view actually
+  // shown. The explicit `officeView` and the camera's own `officeCameraView`
+  // still degrade unconditionally, so the view the camera frames is covered for
+  // every `officeView` value.
+  const usesAutoOutcome = officeView === "auto";
+  const stale =
+    degradesFrom(value.officeView, officeView) ||
+    (usesAutoOutcome && degradesFrom(value.officeAutoView, officeAutoView)) ||
+    // The most direct case of the rule above: the camera names the view it
+    // frames, and that view is one this build cannot draw.
+    degradesFrom(value.officeCameraView, officeCameraView);
+  const mode = readCommGraphViewMode(value.mode);
+  const camera: CommGraphTileCamera = {
+    // NOT zeroed by `stale`. Staleness is a fact about an OFFICE view id this
+    // build cannot draw, and since D68 these three are the Graph's fields -
+    // so retiring them here wiped a Graph framing that had nothing to do with
+    // the unknown office view. What `stale` retires is the office's own
+    // camera, below. The one case where these numbers do go neutral is a
+    // MIGRATED record, and that is decided on its own terms further down:
+    // there they were the office's, which is exactly why they cannot stay.
     x: readFiniteNumber(value.x, PERSISTED_COMM_GRAPH_VIEW.x),
     y: readFiniteNumber(value.y, PERSISTED_COMM_GRAPH_VIEW.y),
     // A persisted zoom of 0 (or negative) would render an invisible canvas the
     // user cannot recover from, so it degrades to the default rather than
     // failing the whole tile.
-    zoom: zoom > 0 ? zoom : PERSISTED_COMM_GRAPH_VIEW.zoom,
-    mode: readCommGraphViewMode(value.mode),
+    zoom: zoom <= 0 ? DEFAULT_COMM_GRAPH_VIEW.zoom : zoom,
+  };
+  /**
+   * D68's MIGRATION: before the split there was one camera, and in `office`
+   * mode it was the office's. A record saved then carries sprite pixels in
+   * the three shared fields and no `officeCamera` at all, so the numbers are
+   * handed to the field that now owns them.
+   *
+   * ABSENT is the trigger, not falsy: a persisted `null` is a real answer -
+   * a build that has this field saying nobody framed the office - and
+   * re-migrating it on every load would resurrect a camera the user's own
+   * view pick neutralised. `graph` mode is not migrated because there the
+   * numbers were always the graph's, and neither is a neutral camera, which
+   * says nothing to carry.
+   *
+   * A STALE record still migrates, and must: the office camera it produces is
+   * retired to `null` a few lines down, but the three shared fields have to
+   * go neutral with it, because on a pre-D68 office record they were the
+   * office's numbers and are meaningless to the Graph that now owns them.
+   */
+  const migrates =
+    value.officeCamera === undefined &&
+    mode === "office" &&
+    !isNeutralCamera(camera);
+  const officeCamera = migrates ? camera : readOfficeCamera(value.officeCamera);
+  // A MIGRATED camera's coordinates were the office's back when the only office
+  // was the Floor, so the view it frames is Floor even though a pre-split record
+  // carried no `officeCameraView` stamp. Naming it lets the record-mismatch
+  // effect neutralise the camera when the current view differs, instead of
+  // reading a null stamp as "nobody framed this" and reopening Floor-space
+  // coordinates under Towers or Building entirely off-screen. A non-migrated
+  // record keeps whatever stamp it persisted.
+  const framedView: OfficeViewId | null = migrates ? "floor" : officeCameraView;
+  return {
+    // The GRAPH's camera now. A migrated record's numbers went to the office
+    // just above, and sprite pixels read as flow units would open the graph
+    // off-screen the first time somebody switched to it - the same units
+    // mismatch D68 exists to end, pointed the other way.
+    x: migrates ? DEFAULT_COMM_GRAPH_VIEW.x : camera.x,
+    y: migrates ? DEFAULT_COMM_GRAPH_VIEW.y : camera.y,
+    zoom: migrates ? DEFAULT_COMM_GRAPH_VIEW.zoom : camera.zoom,
+    mode,
+    officeView,
+    officeAutoView,
+    officeAutoGeneration,
+    // A degraded camera frames nothing, so it claims nothing either; otherwise
+    // it names the view it frames - Floor for a migrated record (see above).
+    officeCameraView: stale ? null : framedView,
+    // Same rule, same reason: a camera about a view this build cannot draw
+    // points into empty space whichever field holds it.
+    officeCamera: stale ? null : officeCamera,
   };
 }
 
@@ -153,6 +359,21 @@ function serializeCommGraphTileRef(ref: CommGraphTileRef): DesktopJsonValue {
       y: ref.view.y,
       zoom: ref.view.zoom,
       mode: ref.view.mode,
+      officeView: ref.view.officeView,
+      officeAutoView: ref.view.officeAutoView,
+      officeAutoGeneration: ref.view.officeAutoGeneration,
+      officeCameraView: ref.view.officeCameraView,
+      // Written field by field rather than handed over whole: the stored
+      // shape is the wire format, and a spread would carry anything a future
+      // `CommGraphTileCamera` gained into persistence unreviewed.
+      officeCamera:
+        ref.view.officeCamera === null
+          ? null
+          : {
+              x: ref.view.officeCamera.x,
+              y: ref.view.officeCamera.y,
+              zoom: ref.view.officeCamera.zoom,
+            },
     },
   };
 }

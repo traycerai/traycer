@@ -337,8 +337,9 @@ describe("selectTaskGroups jobs", () => {
     expect(groups[0].jobs).toEqual([]);
     expect(groups[0].backgroundVisible).toBe(false);
     expect(groups[0].prompts.length).toBe(0);
-    // The agents are on the group, unnamed, and the body draws them anyway -
-    // see `selectTaskGroupBody nesting`.
+    // The agents stay on the group, unnamed - the summary counts them and the
+    // Stop-all list reads them - and the body draws none of them; see
+    // `selectTaskGroupBody nesting`.
     expect(groups[0].agents).toHaveLength(1);
     expect(groups[0].agents[0].title).toBeNull();
   });
@@ -659,10 +660,11 @@ describe("selectTaskGroupBody nesting", () => {
     expect(body.prompts.map((row) => row.key)).toEqual(["p1"]);
   });
 
-  // The correction: a cold task's agents used to be dropped here, so the task
-  // had no body, its twisty rendered invisible, and the only way to get a
-  // chevron was to open the task once and mount it.
-  it("keeps a cold task's agents as chats, under names borrowed from nothing", () => {
+  // A cold task is one row. Its agents have ids and tiers but no names, and a
+  // column of rows all called `Agent` said nothing the summary's count does
+  // not - so the body carries none of them, and the task has nothing to
+  // disclose until it is open here.
+  it("contributes no chats for a cold task, whatever the activity plane lists", () => {
     const body = bodyOf({
       tasks: [
         taskRow({
@@ -676,14 +678,13 @@ describe("selectTaskGroupBody nesting", () => {
       ],
     });
 
-    expect(body.chats.map((chat) => chat.agent.agentId)).toEqual([
-      "chat-1",
-      "chat-2",
-    ]);
-    expect(body.chats.map((chat) => chat.agent.title)).toEqual([null, null]);
+    expect(body).toEqual({ chats: [], prompts: [], jobs: [], browsers: [] });
   });
 
-  it("buckets a cold task's prompts and jobs under the chat id they name", () => {
+  // No chat row to hang under, so everything that names a cold task sits at
+  // the task's own level - even a row whose `chatId` matches one of the
+  // agents the group still lists for its summary.
+  it("hangs a cold task's prompts and jobs off the task, chat id or not", () => {
     const body = bodyOf({
       tasks: [
         taskRow({
@@ -696,28 +697,28 @@ describe("selectTaskGroupBody nesting", () => {
       prompts: [promptRow({ epicId: "epic-a", chatId: "chat-1", key: "p1" })],
     });
 
-    expect(body.chats[0].jobs).toHaveLength(1);
-    expect(body.chats[0].prompts.map((row) => row.key)).toEqual(["p1"]);
-    expect(body.jobs).toEqual([]);
-    expect(body.prompts).toEqual([]);
+    expect(body.chats).toEqual([]);
+    expect(body.jobs).toHaveLength(1);
+    expect(body.prompts.map((row) => row.key)).toEqual(["p1"]);
   });
 
-  // The window-local planes are the only thing a cold task still cannot show,
-  // and a row whose chat is not here keeps hanging off the task.
-  it("leaves a cold task's job at task level when no agent id matches it", () => {
+  // The rule is about MOUNTING, not about names: a mounted task whose
+  // projection has not filled a title or surface in yet still nests.
+  it("still nests a mounted task's agents when they carry no title or surface", () => {
     const body = bodyOf({
       tasks: [
         taskRow({
           epicId: "epic-a",
-          mountedHere: false,
+          mountedHere: true,
           agents: [agentRow({ agentId: "chat-1", title: null, surface: null })],
         }),
       ],
-      background: [backgroundRow({ epicId: "epic-a", chatId: "chat-gone" })],
+      prompts: [promptRow({ epicId: "epic-a", chatId: "chat-1", key: "p1" })],
     });
 
-    expect(body.chats[0].jobs).toEqual([]);
-    expect(body.jobs).toHaveLength(1);
+    expect(body.chats.map((chat) => chat.agent.agentId)).toEqual(["chat-1"]);
+    expect(body.chats[0].prompts.map((row) => row.key)).toEqual(["p1"]);
+    expect(body.prompts).toEqual([]);
   });
 });
 

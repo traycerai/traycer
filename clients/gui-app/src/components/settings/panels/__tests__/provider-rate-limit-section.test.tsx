@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -20,6 +21,7 @@ import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
 import { formatResetFullDateTime } from "@/lib/relative-time";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 
 type TurnRefreshCall = {
   readonly providerId: string | null;
@@ -230,6 +232,7 @@ describe("ProviderRateLimitForProvider", () => {
 
   afterEach(() => {
     cleanup();
+    useLayoutStore.setState(useLayoutStore.getInitialState(), true);
   });
 
   it("renders the embedded variant as an integrated section without a nested card border", () => {
@@ -316,6 +319,27 @@ describe("ProviderRateLimitForProvider", () => {
     );
     expect(screen.getByText("Usage limits")).toBeTruthy();
     expect(screen.queryByText("Loading usage limits")).toBeNull();
+  });
+
+  it("words the Settings › Providers rows by Layout's Used / Remaining setting, the same as the strip and the popover", () => {
+    mocks.data = envelope(CLAUDE_RATE_LIMITS);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("55% used")).toBeTruthy();
+
+    act(() => {
+      useLayoutStore.getState().setStatusBarPercentMode("remaining");
+    });
+    expect(screen.getByText("88% remaining")).toBeTruthy();
+    expect(screen.getByText("45% remaining")).toBeTruthy();
+    expect(screen.queryByText("12% used")).toBeNull();
   });
 
   it("renders the Claude Code rate-limit detail once loaded", () => {

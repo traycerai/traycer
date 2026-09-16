@@ -16,6 +16,7 @@ import {
   usePickerProviderLeaderForIndex,
 } from "@/providers/keybinding-context";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
+import { pickerLeaderControlLabel } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   harnessAvailabilityUnsettled,
@@ -322,7 +323,13 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         role="tab"
         aria-selected={active}
         aria-disabled={selectable ? undefined : true}
-        aria-label={railButtonAriaLabel(entry)}
+        aria-label={pickerLeaderControlLabel(
+          railButtonAriaLabel(entry),
+          index,
+          selectable ? leaderModifier : null,
+          // Degraded providers can be browsed without committing a switch.
+          entry.degraded ? "to browse" : "to switch",
+        )}
         aria-describedby={railButtonDescribedBy(entry, {
           preparingDescriptionId,
           degradedDescriptionId,
@@ -376,12 +383,8 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
               </span>
             ) : null}
             <PickerLeaderBadge
-              show={leaderModifier !== null && selectable}
+              modifier={selectable ? leaderModifier : null}
               index={index}
-              // Degraded providers stay browse-only (the leader digit browses,
-              // it does not commit), so the hint must not over-promise "switch".
-              hintAction={entry.degraded ? "to browse" : "to switch"}
-              hintTarget={harness.label}
               testId={`model-provider-digit-${singleDigitLeaderDigitFor(index)}`}
               placement="corner"
             />

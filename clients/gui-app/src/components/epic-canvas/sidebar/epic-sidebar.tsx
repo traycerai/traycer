@@ -27,6 +27,7 @@ import {
   isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
   resolveActiveVisibleGroupIndex,
+  retainDisplayedPrPanel,
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
   type LeftPanelSlotProps,
@@ -50,10 +51,12 @@ import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-wo
 import {
   useSurfaceHostClient,
   useSurfaceHostPin,
+  useSurfaceHostPinWithDefault,
   useTabSurfaceKey,
   type SurfaceHostPin,
 } from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
+import { tabSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
@@ -197,7 +200,6 @@ import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
-import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -539,7 +541,7 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
   "pull-requests": {
     live: {
       Body: PrPanelBody,
-      Actions: PrPanelActions,
+      Actions: null,
       Subtitle: null,
     },
     loading: emptyLoadingSlots(GenericLoadingPanelBody),
@@ -652,24 +654,27 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
-  // The SAME host the PR panel records presence under (`pr-panel-body.tsx`
-  // writes `recordPrPresence(useCanvasHostId(), …)`): a producer/consumer
-  // pair keyed by host must read one identity, or the PR icon vanishes for
-  // exactly the window a re-point is in flight - the panel writing under the
-  // session's host A while this rail read under the app-wide B.
-  const hostId = useCanvasHostId();
+  // Match the PR panel's per-tab pin, including its canvas-host fallback.
+  const canvasHostId = useCanvasHostId();
+  const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
+    tabSurfaceKey("pull-requests", tabId),
+    canvasHostId,
+  );
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
-    () => ({
-      commentsPanelRevealed,
-      hasActiveCommentableArtifact,
-      hasPullRequests,
-      visibilityOverrideById,
-    }),
+    () =>
+      retainDisplayedPrPanel(panelGroups, activePanelId, {
+        commentsPanelRevealed,
+        hasActiveCommentableArtifact,
+        hasPullRequests,
+        visibilityOverrideById,
+      }),
     [
+      panelGroups,
+      activePanelId,
       commentsPanelRevealed,
       hasActiveCommentableArtifact,
       hasPullRequests,
@@ -714,10 +719,12 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
-  // Same key as the live host above. Before the session handle registers this
-  // resolves the effective host (`useCanvasHostId`'s documented fallback),
-  // which is where a fresh open's session is about to be established.
-  const hostId = useCanvasHostId();
+  // Resolve the same PR host before and after the session loads.
+  const canvasHostId = useCanvasHostId();
+  const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
+    tabSurfaceKey("pull-requests", tabId),
+    canvasHostId,
+  );
   // The persisted PR baseline is readable before the epic's Y.doc resolves, so
   // the loading rail already shows the same set of panels the live one will -
   // no icon appears or disappears as the epic finishes opening.
@@ -726,13 +733,20 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
-    () => ({
+    () =>
+      retainDisplayedPrPanel(panelGroups, activePanelId, {
+        commentsPanelRevealed,
+        hasActiveCommentableArtifact: false,
+        hasPullRequests,
+        visibilityOverrideById,
+      }),
+    [
+      panelGroups,
+      activePanelId,
       commentsPanelRevealed,
-      hasActiveCommentableArtifact: false,
       hasPullRequests,
       visibilityOverrideById,
-    }),
-    [commentsPanelRevealed, hasPullRequests, visibilityOverrideById],
+    ],
   );
   const panels = useMemo(
     () =>

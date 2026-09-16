@@ -7,6 +7,7 @@ import {
   type OnboardingActId,
 } from "@/components/onboarding/onboarding-acts";
 import { setMobileApp } from "@/lib/mobile-app";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 const FULL_TOUR = { sessionImportAvailable: true, loginImportAvailable: true };
 const NO_IMPORTS = {
@@ -223,5 +224,13 @@ describe("onboardingActsFor", () => {
     // Desktop's closing flow act has no phone counterpart: the tour ends on
     // delegation.
     expect(acts[acts.length - 1].id).toBe("agent-guide");
+  });
+
+  it("advertises the command-theme shortcut through the real formatter, not a hardcoded 'Cmd+K' string", () => {
+    const act = actById(ONBOARDING_ACTS, "command-theme");
+    expect(act.body).toContain(formatChordForDisplay("mod+k"));
+    // Regression guard: the copy used to read a literal "Cmd+K" that never
+    // reflected Windows/Linux users' actual keyboard.
+    expect(act.body).not.toMatch(/Cmd\+?K/i);
   });
 });

@@ -273,7 +273,12 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
             key={`${badgeModifier}:${section.id}`}
             digit={digit}
             modifier={badgeModifier}
-            ariaLabel={leaderHint(digit, "to open", section.label)}
+            ariaLabel={leaderHint(
+              digit,
+              badgeModifier,
+              "to open",
+              section.label,
+            )}
             testId={`settings-section-digit-${digit}`}
             className={undefined}
           />

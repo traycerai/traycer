@@ -1,6 +1,6 @@
 import * as m from "motion/react-m";
 import { cn } from "@/lib/utils";
-import { leaderGlyph } from "@/lib/keybindings/platform";
+import { formatModifierChordForDisplay } from "@/lib/keybindings/chord";
 import { Kbd } from "@/components/ui/kbd";
 
 const LEADER_BADGE_TRANSITION = {
@@ -35,7 +35,6 @@ export function LeaderDigitBadge({
   testId,
   className,
 }: LeaderDigitBadgeProps) {
-  const symbol = leaderGlyph(modifier);
   return (
     <m.span
       initial={false}
@@ -50,8 +49,7 @@ export function LeaderDigitBadge({
         size="xs"
         className={cn("tabular-nums", className)}
       >
-        {symbol}
-        {digit}
+        {formatModifierChordForDisplay(modifier, digit)}
       </Kbd>
     </m.span>
   );

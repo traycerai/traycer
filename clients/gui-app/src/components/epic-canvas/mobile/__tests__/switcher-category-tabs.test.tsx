@@ -54,7 +54,7 @@ function renderBaselineTabs(): { list: HTMLElement; trigger: HTMLElement } {
 function renderCategoryBar(): { list: HTMLElement; trigger: HTMLElement } {
   const { container } = render(
     <Tabs defaultValue="chats">
-      <SwitcherCategoryTabs hasPullRequests={false} />
+      <SwitcherCategoryTabs />
     </Tabs>,
   );
   const scope = within(container);

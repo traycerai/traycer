@@ -37,6 +37,7 @@ import {
   worktreeListAllForHostResponseSchemaV17,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV12,
+  worktreeListBindingsForEpicRequestSchemaV13,
   worktreeListByWorkspacePathsRequestSchemaV11,
   worktreeListByWorkspacePathsRequestSchemaV12,
   worktreeListByWorkspacePathsResponseSchemaV12,
@@ -1479,7 +1480,7 @@ describe("worktreeListBindingsForEpicResponseSchemaV11 (folderlessCwd)", () => {
   });
 });
 
-describe("worktree.listBindingsForEpic v1.1 <-> v1.2 negotiation", () => {
+describe("worktree.listBindingsForEpic v1.1 <-> v1.3 negotiation", () => {
   // NEW CLIENT + OLD HOST: a v1.2 client bridges an inbound v1.1 response up to
   // canonical. Every bridged row must be stamped isGitResolvePending:false - a
   // pre-v1.2 host has no pending concept and never sends a signal to clear it,
@@ -1532,10 +1533,35 @@ describe("worktree.listBindingsForEpic v1.1 <-> v1.2 negotiation", () => {
     ).toThrow();
   });
 
-  it("exposes v1.2 as the latest installed minor of major 1", () => {
-    expect(listBindingsForEpicRegistry[1].latestMinor).toBe(2);
+  it("upgrades an old request to the explicit Git-purpose request", () => {
+    const upgraded = upgradeRequestToVersion(
+      listBindingsForEpicRegistry,
+      V12,
+      V13,
+      { epicId: "epic-1" },
+    );
+
+    expect(upgraded).toEqual({ epicId: "epic-1", purpose: "git" });
+    expect(worktreeListBindingsForEpicRequestSchemaV13.parse(upgraded)).toEqual(
+      upgraded,
+    );
+  });
+
+  it("keeps the v1.2 response projection compatible with v1.3", () => {
+    const response = {
+      rows: [{ ...v11SelectorRow, isGitResolvePending: true }],
+      folderlessCwd: null,
+    };
+
+    expect(
+      worktreeListBindingsForEpicResponseSchemaV12.parse(response),
+    ).toEqual(response);
+  });
+
+  it("exposes v1.3 as the latest installed minor of major 1", () => {
+    expect(listBindingsForEpicRegistry[1].latestMinor).toBe(3);
     expect(Object.keys(listBindingsForEpicRegistry[1].versions).sort()).toEqual(
-      ["0", "1", "2"],
+      ["0", "1", "2", "3"],
     );
   });
 });

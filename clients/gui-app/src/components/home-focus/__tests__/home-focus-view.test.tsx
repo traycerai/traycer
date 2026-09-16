@@ -20,6 +20,8 @@ import type {
 } from "@/lib/home-focus/focus-model";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { ROW_CLASS } from "@/components/home-focus/home-focus-row-style";
+import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const modelMock = vi.hoisted(() => ({ value: null as FocusModel | null }));
 vi.mock("@/hooks/home-focus/use-focus-model", () => ({
@@ -253,6 +255,10 @@ beforeEach(() => {
   modelMock.value = null;
   fleetMock.activeHostId = null;
   fleetMock.entries = [];
+  useSettingsStore.setState({
+    artifactIconColorMode: "byType",
+    artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
+  });
   vi.clearAllMocks();
 });
 
@@ -1152,87 +1158,114 @@ describe("<HomeFocusView /> a cold task", () => {
     });
   }
 
-  // The defect this suite was rewritten for: a cold task drew one flat line
-  // with an `invisible` twisty, so the only way to get a chevron was to open
-  // the task once and mount it.
-  it("carries an enabled twisty, collapsed, with its agents hidden behind it", () => {
-    coldTask({});
-    render(<HomeFocusView />);
-
-    const group = taskGroup("epic-cold");
-    const twisty = within(group).getByTestId(
-      "home-focus-task-group-disclosure",
-    );
-    expect(twisty.className).not.toContain("invisible");
-    expect(twisty.hasAttribute("disabled")).toBe(false);
-    expect(twisty.getAttribute("aria-expanded")).toBe("false");
-    expect(
-      within(group).queryAllByTestId("home-focus-task-group-chat"),
-    ).toHaveLength(0);
-  });
-
-  it("reveals one chat row per agent, under a borrowed name and its own tier", () => {
+  // A cold task is ONE row. Its agents have ids and tiers but no names, and a
+  // column of rows all called `Agent` said nothing the summary does not - so
+  // there is nothing to disclose, the twisty takes the `invisible` branch, and
+  // the summary plus `Stop all` are the row's whole account of the task.
+  it("renders as one row: no twisty, no chat rows, a summary and Stop all", () => {
     coldTask({});
     render(<HomeFocusView />);
     openEveryTask();
 
     const group = taskGroup("epic-cold");
+    const twisty = within(group).getByTestId(
+      "home-focus-task-group-disclosure",
+    );
+    expect(twisty.className).toContain("invisible");
+    expect(twisty.hasAttribute("disabled")).toBe(true);
+    expect(twisty.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      within(group).queryByTestId("home-focus-task-group-body"),
+    ).toBeNull();
+    expect(
+      within(group).queryAllByTestId("home-focus-task-group-chat"),
+    ).toHaveLength(0);
+    expect(within(group).queryByText("Agent")).toBeNull();
+    expect(
+      within(group).getByTestId("home-focus-cold-agents").textContent,
+    ).toBe("2 agentsrunning · not open in this window");
+    expect(within(group).getByTestId("home-focus-task-stop-all")).toBeDefined();
+  });
+
+  it("says `background` on the summary when none of its agents is mid-turn", () => {
+    coldTask({
+      tasks: [
+        taskRow({
+          epicId: "epic-cold",
+          mountedHere: false,
+          agents: [
+            agentRow({
+              agentId: "a",
+              title: null,
+              surface: null,
+              tier: "background",
+            }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      within(taskGroup("epic-cold")).getByTestId("home-focus-cold-agents")
+        .textContent,
+    ).toBe("1 agentbackground · not open in this window");
+  });
+
+  // Said once, on the one row there is.
+  it("says `not open in this window` exactly once", () => {
+    coldTask({});
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    expect(screen.getAllByText(/not open in this window/)).toHaveLength(1);
+  });
+
+  // The rule is about MOUNTING, not about names: the same nameless agents in a
+  // mounted task still nest, under the `Agent` placeholder, and the row keeps
+  // the dashed "surface unknown" glyph rather than a borrowed one.
+  it("still nests a mounted task's agents, even nameless ones", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-warm",
+          mountedHere: true,
+          agents: [
+            agentRow({ agentId: "a", title: null, surface: null }),
+            agentRow({ agentId: "b", title: null, surface: null }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const group = taskGroup("epic-warm");
+    const twisty = within(group).getByTestId(
+      "home-focus-task-group-disclosure",
+    );
+    expect(twisty.className).not.toContain("invisible");
+    expect(twisty.hasAttribute("disabled")).toBe(false);
+    // Still collapsed until asked - no auto-expand.
+    expect(twisty.getAttribute("aria-expanded")).toBe("false");
+    openEveryTask();
     expect(
       within(group)
         .getAllByTestId("home-focus-task-group-chat")
         .map((element) => element.getAttribute("data-agent-id")),
     ).toEqual(["a", "b"]);
     const row = chatRow(group, "a");
-    // No title and no surface is what the activity plane reports for a cold
-    // agent, so the row says what it is rather than what it is called.
     expect(within(row).getByTestId("home-focus-row-name").textContent).toBe(
       "Agent",
     );
-    const status = within(row).getByTestId("home-focus-row-status");
-    expect(status.getAttribute("data-state")).toBe("turn");
-    expect(status.textContent).toBe("turn");
-    // The neutral placeholder, not an absent glyph and not a borrowed one: a
-    // name with nothing in the icon column reads as broken, and a
-    // `MessageSquare` would claim a surface nobody here established.
     expect(
       within(row)
         .getByTestId("home-focus-agent-glyph")
         .getAttribute("data-surface"),
     ).toBe("unknown");
+    expect(within(group).queryByTestId("home-focus-cold-agents")).toBeNull();
   });
 
-  // Said once, on the row the reader actually meets, because the task is
-  // collapsed by default and a caveat behind a click is a caveat nobody sees.
-  it("keeps `not open in this window` on the summary and off the chat rows", () => {
-    coldTask({});
-    render(<HomeFocusView />);
-    openEveryTask();
-
-    const group = taskGroup("epic-cold");
-    expect(
-      within(group).getByTestId("home-focus-cold-agents").textContent,
-    ).toContain("2 agents");
-    expect(
-      within(chatRow(group, "a")).queryByTestId("home-focus-cold-agents"),
-    ).toBeNull();
-    expect(screen.getAllByText(/not open in this window/)).toHaveLength(1);
-  });
-
-  it("opens the chat by id from a cold chat row", () => {
-    coldTask({});
-    render(<HomeFocusView />);
-    openEveryTask();
-
-    fireEvent.click(
-      within(chatRow(taskGroup("epic-cold"), "b")).getByTestId(
-        "home-focus-task-group-agent-body",
-      ),
-    );
-    expect(actionsMock.openAgent).toHaveBeenCalledWith("epic-cold", "b");
-    expect(actionsMock.openTask).not.toHaveBeenCalled();
-  });
-
-  it("stops one cold agent from its own row, cascading, on its own host", () => {
+  it("stops every cold root from the summary row, cascading, on its own host", () => {
     modelMock.value = model({
       tasks: [
         taskRow({
@@ -1252,22 +1285,35 @@ describe("<HomeFocusView /> a cold task", () => {
       ],
     });
     render(<HomeFocusView />);
-    openEveryTask();
 
     fireEvent.click(
-      within(chatRow(taskGroup("epic-cold"), "b")).getByTestId(
-        "home-focus-agent-stop",
-      ),
+      within(taskGroup("epic-cold")).getByTestId("home-focus-task-stop-all"),
     );
-    expect(actionsMock.stopAgent).toHaveBeenCalledWith({
-      epicId: "epic-cold",
-      agentId: "b",
-      hostId: "host-remote",
-      cascade: true,
-    });
+    // The confirmation is where the agents ARE named, since the row does not.
+    const listed = within(
+      screen.getByTestId("home-focus-stop-all-list"),
+    ).getAllByRole("listitem");
+    expect(listed.map((item) => item.textContent)).toEqual([
+      "Agentrunning",
+      "Agentrunning",
+    ]);
+    fireEvent.click(screen.getByTestId("home-focus-stop-all-confirm"));
+    expect(
+      actionsMock.stopAgent.mock.calls.map(
+        (call: ReadonlyArray<unknown>) => call[0],
+      ),
+    ).toEqual([
+      { epicId: "epic-cold", agentId: "a", hostId: null, cascade: true },
+      {
+        epicId: "epic-cold",
+        agentId: "b",
+        hostId: "host-remote",
+        cascade: true,
+      },
+    ]);
   });
 
-  it("disables a cold agent's Stop when it cannot be routed", () => {
+  it("disables Stop all when the cold task cannot be routed", () => {
     modelMock.value = model({
       tasks: [
         taskRow({
@@ -1287,16 +1333,18 @@ describe("<HomeFocusView /> a cold task", () => {
       ],
     });
     render(<HomeFocusView />);
-    openEveryTask();
 
-    const stop = within(chatRow(taskGroup("epic-cold"), "b")).getByTestId(
-      "home-focus-agent-stop",
+    const stop = within(taskGroup("epic-cold")).getByTestId(
+      "home-focus-task-stop-all",
     );
     expect(stop.hasAttribute("disabled")).toBe(true);
     expect(stop.getAttribute("aria-label")).toContain("Runs on another device");
   });
 
-  it("still reveals its jobs, and hangs one on the chat whose id it names", () => {
+  // The window-local planes can in principle still name a cold task, and with
+  // no chat row to hang under, every such row sits at task level and keeps
+  // its `· in <chat>` - even the one whose chat id the summary counts.
+  it("hangs any job it can see off the task, chat named, and gets a twisty for it", () => {
     coldTask({
       background: [
         backgroundRow({
@@ -1317,22 +1365,15 @@ describe("<HomeFocusView /> a cold task", () => {
     openEveryTask();
 
     const group = taskGroup("epic-cold");
-    // The nested one needs no `in <chat>`: the row above it says so.
-    const nested = within(chatRow(group, "a")).getByTestId(
-      "home-focus-task-group-job",
-    );
-    expect(within(nested).getByTestId("home-focus-row-name").textContent).toBe(
-      "watch tests",
-    );
-    expect(within(nested).queryByTestId("home-focus-row-context")).toBeNull();
-    // The one whose chat is not a row here stays at task level and keeps it.
-    const loose = within(group)
-      .getAllByTestId("home-focus-task-group-job")
-      .filter((element) => !chatRow(group, "a").contains(element));
-    expect(loose).toHaveLength(1);
     expect(
-      within(loose[0]).getByTestId("home-focus-row-context").textContent,
-    ).toBe("·in Another chat");
+      within(group).queryAllByTestId("home-focus-task-group-chat"),
+    ).toHaveLength(0);
+    const jobs = within(group).getAllByTestId("home-focus-task-group-job");
+    expect(
+      jobs.map(
+        (job) => within(job).getByTestId("home-focus-row-context").textContent,
+      ),
+    ).toEqual(["·in Warm chat", "·in Another chat"]);
   });
 
   it("shows the attention glyph and nests no prompt when only the indicator says so", () => {
@@ -1622,7 +1663,10 @@ describe("<HomeFocusView /> row vocabulary", () => {
     ).toEqual([null, "monitor"]);
   });
 
-  it("draws no agent glyph when the surface is unknown", () => {
+  // The dashed "surface unknown" ring, not an absent glyph and not a borrowed
+  // one: a mounted agent whose projection has no surface yet still gets a row,
+  // and a `MessageSquare` there would claim a kind nobody established.
+  it("draws the dashed placeholder glyph when a mounted agent's surface is unknown", () => {
     modelMock.value = model({
       tasks: [
         taskRow({
@@ -1632,8 +1676,83 @@ describe("<HomeFocusView /> row vocabulary", () => {
       ],
     });
     render(<HomeFocusView />);
+    openEveryTask();
 
-    expect(screen.queryByTestId("home-focus-agent-glyph")).toBeNull();
+    expect(
+      screen.getByTestId("home-focus-agent-glyph").getAttribute("data-surface"),
+    ).toBe("unknown");
+  });
+
+  // The regression: this row hardcoded `text-muted-foreground`, so with the
+  // per-type colours on, the tab strip drew a blue chat glyph and Home drew a
+  // grey one for the same conversation. The tint follows the one rule every
+  // other surface reads; the placeholder for an unknown surface has no type to
+  // take a colour from and stays muted in both modes.
+  it("tints the agent glyphs by type under `byType`, as the tab strip does", () => {
+    useSettingsStore.setState({
+      artifactIconColorMode: "byType",
+      artifactIconColors: {
+        ...DEFAULT_EPIC_NODE_ICON_COLORS,
+        chat: "#ff0000",
+        "terminal-agent": "#00ff00",
+      },
+    });
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "chat", surface: "chat" }),
+            agentRow({
+              agentId: "chat-2",
+              title: "tui",
+              surface: "terminal-agent",
+            }),
+            agentRow({ agentId: "chat-3", title: "new", surface: null }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const [chat, tui, unknown] = screen.getAllByTestId(
+      "home-focus-agent-glyph",
+    );
+    // `--swatch`, not `color`: the tint travels as a custom property that the
+    // `text-[var(--swatch)]` class reads, so an inline colour literal still
+    // trips `no-inline-styles`.
+    expect(chat.style.getPropertyValue("--swatch")).toBe("#ff0000");
+    expect(chat.classList.contains("text-muted-foreground")).toBe(false);
+    expect(tui.style.getPropertyValue("--swatch")).toBe("#00ff00");
+    expect(unknown.style.getPropertyValue("--swatch")).toBe("");
+    expect(unknown.classList.contains("text-muted-foreground")).toBe(true);
+  });
+
+  it("mutes the agent glyphs under `none`", () => {
+    useSettingsStore.setState({ artifactIconColorMode: "none" });
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "chat", surface: "chat" }),
+            agentRow({
+              agentId: "chat-2",
+              title: "tui",
+              surface: "terminal-agent",
+            }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    for (const glyph of screen.getAllByTestId("home-focus-agent-glyph")) {
+      expect(glyph.style.getPropertyValue("--swatch")).toBe("");
+      expect(glyph.classList.contains("text-muted-foreground")).toBe(true);
+    }
   });
 
   it("keeps the section headings text, with no glyph of their own", () => {
@@ -1701,6 +1820,54 @@ describe("<HomeFocusView /> status column", () => {
         within(group).getAllByTestId("home-focus-task-group-job")[0],
       ).getByTestId("home-focus-row-status-duration").textContent,
     ).toBe("· 5m");
+  });
+
+  // The `turn` STATE keeps its name - it is the wire tier, and the dot colour
+  // and the `data-state` hook read it - but the word it prints is `running`:
+  // `● turn` read as a noun with no verb. Everywhere Home spells a tier goes
+  // through one helper, so the status cell, the cold summary and the Stop-all
+  // list cannot drift apart, and nothing on the page says the bare word.
+  it("prints the mid-turn tier as `running`, and the bare word `turn` nowhere", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "impl", tier: "turn" }),
+            agentRow({ agentId: "chat-2", title: "host", tier: "background" }),
+          ],
+        }),
+        taskRow({
+          epicId: "epic-cold",
+          mountedHere: false,
+          agents: [agentRow({ agentId: "cold-1", title: null, surface: null })],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1", chatId: "chat-2" })],
+      prompts: [promptRow({ epicId: "epic-1", chatId: "chat-1" })],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const warm = taskGroup("epic-1");
+    // The chat's own cell is the first; the prompt and job under it have theirs.
+    const wordOf = (element: HTMLElement): string | null =>
+      within(element).getAllByTestId("home-focus-row-status")[0].textContent;
+    expect(wordOf(chatRow(warm, "chat-1"))).toBe("running");
+    expect(wordOf(chatRow(warm, "chat-2"))).toBe("background");
+    expect(
+      within(taskGroup("epic-cold")).getByTestId("home-focus-cold-agents")
+        .textContent,
+    ).toContain("running · not open in this window");
+
+    fireEvent.click(within(warm).getByTestId("home-focus-task-stop-all"));
+    expect(
+      within(screen.getByTestId("home-focus-stop-all-list"))
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["implrunning", "hostbackground"]);
+
+    expect(document.body.textContent).not.toMatch(/\bturn\b/);
   });
 
   it("keeps `driven by` in the status cell of a tab nested under its driver", () => {

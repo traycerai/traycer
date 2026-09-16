@@ -1542,15 +1542,6 @@ const restyleExemptions = [
     ],
   },
   {
-    // NOT a design-system component: `lucide-react` exports an icon named
-    // `Command`, and the rule keys a contract off the IMPORTED NAME - aliasing
-    // it (`Command as CommandIcon`, which this file does for the reader) does
-    // not change what the rule sees. The tour's fake command palette is drawn
-    // in fixed colours anyway, for the reason `fixedPaletteFiles` gives.
-    files: ["src/components/onboarding/onboarding-diorama.tsx"],
-    contracts: [{ pattern: "^Command$", allow: ["color"] }],
-  },
-  {
     // The mobile tab switcher's strip, whose indicator cannot be the
     // primitive's. The mobile shell's coarse-pointer hit-slop stylesheet
     // claims every trigger's single `::after`, so on touch that pseudo is the
@@ -2957,9 +2948,11 @@ export default tseslint.config(
     // Geometry a SHARED HELPER builds: `frameStyle(paintedSize, origin)`,
     // `containBox(frameSize)`, `gitTreeStyle(...)`, `pipRootBox(geometry)`,
     // `surfaceStyle(placement)`, dnd-kit's `sortable.style`, a measured
-    // `rect`. Every property inside is one the allow list above already
-    // permits - the rule simply cannot follow a function call, the same
-    // single-file limit that keeps `require-static-classes` off (ticket 09).
+    // `rect`, `useEpicNodeIconTone(type).style`. Every property inside is one
+    // the allow list above already permits - `useEpicNodeIconTone` builds the
+    // `--swatch` custom property and nothing else - and the rule simply cannot
+    // follow a function call, the same single-file limit that keeps
+    // `require-static-classes` off (ticket 09).
     // Inlining these helpers at 34 call sites to satisfy it would be a worse
     // codebase, so the rule is off where the helper is used and stays on
     // everywhere else in those files' directories.
@@ -2970,6 +2963,7 @@ export default tseslint.config(
       "src/components/chat/queued-message-surface.tsx",
       "src/components/chat/segments/image-generation/image-generation.tsx",
       "src/components/epic-canvas/dnd/pane-drop-zone.tsx",
+      "src/components/epic-canvas/epic-node-tab-icon.tsx",
       "src/components/epic-canvas/git-diff/file-tree.tsx",
       "src/components/epic-canvas/git-diff/selected-repo-changes.tsx",
       "src/components/epic-canvas/image-preview/image-diff-view.tsx",
@@ -2979,6 +2973,7 @@ export default tseslint.config(
       "src/components/epic-canvas/sidebar/epic-sidebar-chat-tree.tsx",
       "src/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row.tsx",
       "src/components/epic-canvas/sidebar/epic-sidebar-file-tree.tsx",
+      "src/components/home-focus/home-focus-rows.tsx",
       "src/components/home/pickers/harness-model-picker-footers.tsx",
       "src/components/home/terminal-panel/landing-terminal-panel.tsx",
       "src/components/layout/header/app-header.tsx",
@@ -3051,6 +3046,21 @@ export default tseslint.config(
       "shadcn/no-arbitrary-values": [
         "error",
         { allow: [...sanctionedArbitraryValues, "min-h-[44px]"] },
+      ],
+    },
+  },
+  {
+    // The office directory's status glyph is a mark INSIDE a 12px pip - the
+    // second channel beside its colour, not a piece of text. The ramp starts
+    // at `text-micro` (10px), which does not fit a 12px box with the bold
+    // weight the glyph needs to read at that size.
+    files: [
+      "src/components/epic-canvas/comm-graph/office/office-directory-panel.tsx",
+    ],
+    rules: {
+      "shadcn/no-arbitrary-values": [
+        "error",
+        { allow: [...sanctionedArbitraryValues, "text-[8px]"] },
       ],
     },
   },

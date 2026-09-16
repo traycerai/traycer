@@ -34,6 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useEpicNodeIconTone } from "@/components/epic-canvas/use-epic-node-icon-tone";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { useHomeHostGrouped } from "@/components/home-focus/home-host-grouped-context";
@@ -46,6 +47,7 @@ import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
 import {
   focusAgentDisplayName,
   focusTaskTitleOf,
+  focusTierWord,
 } from "@/lib/home-focus/focus-row-labels";
 import {
   RowActionsCell,
@@ -164,15 +166,21 @@ export function TaskAttentionGlyph(): ReactNode {
  * - that glyph means "a shell" everywhere else on this page, and a TUI agent is
  * not one.
  *
- * A `null` surface is every agent in a task no tile in this window has open,
- * and it gets `CircleDashed` - a glyph that MEANS "surface unknown" rather than
- * one borrowed from a kind nobody here has established. The dashed ring is the
+ * Tinted by the same rule too (`useEpicNodeIconTone`): Settings ▸
+ * Appearance's per-type icon colour under `byType`, muted under `none`. This
+ * row used to hardcode `text-muted-foreground`, so with colours on, the tab
+ * strip and the sidebar drew a blue chat glyph and Home drew a grey one for
+ * the same conversation.
+ *
+ * A `null` surface is a mounted agent whose projection has not resolved a kind
+ * yet (a cold task's agents carry none either, but they are not rows), and it
+ * gets `CircleDashed` - a glyph that MEANS "surface unknown" rather than one
+ * borrowed from a kind nobody here has established. The dashed ring is the
  * point: it is legible as a deliberate placeholder at a glance, where the
  * `MessageSquare` a guess would have reached for looks exactly as confident as
  * a resolved row. It fills the same slot at the same size, because the
- * alternative this replaced - rendering nothing - left the cold chat rows with
- * their names hanging in the icon column, which reads as broken rather than as
- * honest.
+ * alternative this replaced - rendering nothing - left the row with its name
+ * hanging in the icon column, which reads as broken rather than as honest.
  *
  * `data-surface="unknown"` marks it, so a test can tell the placeholder from an
  * absent glyph instead of asserting on the icon's own class.
@@ -183,10 +191,12 @@ export function AgentGlyph(props: {
 }): ReactNode {
   const Icon =
     props.surface === null ? CircleDashed : EPIC_NODE_ICONS[props.surface];
+  const tone = useEpicNodeIconTone(props.surface);
   return (
     <Icon
       aria-hidden
-      className={cn("shrink-0 text-muted-foreground", props.className)}
+      className={cn("shrink-0", tone.className, props.className)}
+      style={tone.style}
       data-testid="home-focus-agent-glyph"
       data-surface={props.surface ?? "unknown"}
     />
@@ -484,14 +494,14 @@ function taskTier(agents: ReadonlyArray<FocusAgentRow>): FocusAgentRow["tier"] {
 }
 
 /**
- * What a cold task says about itself on the row the reader actually meets: a
- * count, a tier, and the caveat that this window is not the one the task is
- * open in.
+ * What a cold task says about itself on the one row it is: a count, a tier,
+ * and the caveat that this window is not the one the task is open in.
  *
- * Its agents ARE rows underneath it now, each with a borrowed name and a stop
- * of its own - but the task starts collapsed, so this sentence is what stands
- * in for them until someone asks. It is also the only place the caveat is said;
- * the chat rows below do not repeat it.
+ * Its agents are NOT rows underneath it. The activity plane knows their ids
+ * and tiers but none of their names, and a list of rows all called `Agent`
+ * told the reader nothing the count here does not - so this sentence, and the
+ * `Stop all` beside it, are the whole account until the task is opened here
+ * and its chats have names.
  */
 export function ColdTaskAgents(props: {
   readonly agents: ReadonlyArray<FocusAgentRow>;
@@ -508,7 +518,7 @@ export function ColdTaskAgents(props: {
         {count === 1 ? "1 agent" : `${count} agents`}
       </span>
       <span className="truncate text-ui-xs text-muted-foreground">
-        {tier} · not open in this window
+        {focusTierWord(tier)} · not open in this window
       </span>
     </span>
   );
@@ -650,7 +660,7 @@ function StopAllDialog(props: {
               <ActivityDot tier={agent.tier} />
               <span className="truncate">{focusAgentDisplayName(agent)}</span>
               <span className="shrink-0 text-ui-xs text-muted-foreground">
-                {agent.tier}
+                {focusTierWord(agent.tier)}
               </span>
             </li>
           ))}
