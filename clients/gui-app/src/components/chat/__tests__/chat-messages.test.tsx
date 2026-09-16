@@ -3268,8 +3268,11 @@ describe("ChatMessages scroll policy", () => {
         scrollRequest: { kind: "end", requestId: 59 },
       });
 
+      console.error("PROBE test after requests scrollTop=" + String(getScrollNode().scrollTop));
       await waitForNavigationSettle();
+      console.error("PROBE test after wait1 scrollTop=" + String(getScrollNode().scrollTop));
       await waitForNavigationSettle();
+      console.error("PROBE test after wait2 scrollTop=" + String(getScrollNode().scrollTop));
 
       expect(onScrollRequestSettled).toHaveBeenCalledWith(58, "cancelled");
       const scrollTopAfterCancel = getScrollNode().scrollTop;
@@ -3281,8 +3284,11 @@ describe("ChatMessages scroll policy", () => {
       rerenderWith({ visible: false });
       rerenderWith({ visible: true });
 
+      console.error("PROBE test after show scrollTop=" + String(getScrollNode().scrollTop));
       await waitForNavigationSettle();
+      console.error("PROBE test after wait3 scrollTop=" + String(getScrollNode().scrollTop));
       await waitForNavigationSettle();
+      console.error("PROBE test after wait4 scrollTop=" + String(getScrollNode().scrollTop) + " calls=" + JSON.stringify(onScrollRequestSettled.mock.calls));
 
       expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
         58,

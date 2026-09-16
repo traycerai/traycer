@@ -1997,12 +1997,22 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           void list.scrollToEnd({ animated: false });
         },
         onSettledValid: () => {
+          // PROBE-TEMP
+          console.error(
+            "PROBE scrollToEnd settled valid scrollTop=" +
+              String(scrollNode.scrollTop),
+          );
           finishImperativeScrollOperation(imperativeScrollGeneration);
           followLatchRef.current?.completeOwnedEndNavigation(true);
         },
         // Ticket 10: free-scrolling with the pill visible beats silently
         // claiming ownership from an invalid landing.
         onSettledInvalid: () => {
+          // PROBE-TEMP
+          console.error(
+            "PROBE scrollToEnd settled invalid scrollTop=" +
+              String(scrollNode.scrollTop),
+          );
           finishImperativeScrollOperation(imperativeScrollGeneration);
           followLatchRef.current?.completeOwnedEndNavigation(false);
           reconcileInvalidTimelineLanding();
@@ -2664,6 +2674,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           viewOffset,
           listTopOffsetAdjustmentRef.current,
         );
+        // PROBE-TEMP
+        console.error(
+          "PROBE restore issue " +
+            JSON.stringify({
+              messageId,
+              index,
+              viewOffset,
+              headerAdj: listTopOffsetAdjustmentRef.current,
+              target,
+              scrollTop: scrollNode.scrollTop,
+            }),
+        );
         if (target === null) return Promise.resolve();
         return list.scrollToOffset({
           offset: target,
@@ -3072,6 +3094,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // worst it is one scroll event behind, which is still a position the
       // reader genuinely was at.
       const snapshot = lastVisibleScrollSnapshotRef.current;
+      // PROBE-TEMP
+      console.error(
+        "PROBE hide " +
+          JSON.stringify({
+            mirror: snapshot,
+            scrollTop: chatTimelineRef.current?.getScrollableNode().scrollTop,
+            mode: timelineScrollModeRef.current,
+            pendingRestore: restorePersistencePendingRef.current,
+          }),
+      );
       if (snapshot !== null) {
         saveChatTabState({ identity, ...snapshot });
       }
@@ -3100,8 +3132,37 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       identity,
       listRowsRef.current.map((row) => row.key),
     );
+    // PROBE-TEMP
+    {
+      const probeList = chatTimelineRef.current;
+      const probeNode = probeList?.getScrollableNode();
+      const probeState = probeList?.getState() as unknown as
+        | Record<string, unknown>
+        | undefined;
+      console.error(
+        "PROBE show replay " +
+          JSON.stringify({
+            replay,
+            before: probeNode?.scrollTop,
+            headerAdj: listTopOffsetAdjustmentRef.current,
+            scrollLength: probeState?.scrollLength,
+            scroll: probeState?.scroll,
+            isAtEnd: probeState?.isAtEnd,
+            mode: timelineScrollModeRef.current,
+            rows: listRowsRef.current.length,
+          }),
+      );
+    }
     if (replay.mode === "following-end") {
-      void chatTimelineRef.current?.scrollToEnd({ animated: false });
+      const probeNode = chatTimelineRef.current?.getScrollableNode();
+      void chatTimelineRef.current
+        ?.scrollToEnd({ animated: false })
+        .then(() => {
+          console.error(
+            "PROBE show scrollToEnd resolved scrollTop=" +
+              String(probeNode?.scrollTop),
+          );
+        });
       return;
     }
     if (replay.anchorMessageId === null) return;
