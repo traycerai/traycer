@@ -494,6 +494,52 @@ function makeNoopCallbacks(
   };
 }
 
+describe("ChatStreamClient protocol capability getters", () => {
+  it.each([
+    [{ major: 1, minor: 9 }, false],
+    [{ major: 1, minor: 10 }, false],
+    // `1.11` is the shell-host line; the draft-blob bridge took `1.12`.
+    [{ major: 1, minor: 11 }, false],
+    [{ major: 1, minor: 12 }, true],
+    [null, false],
+    [{ major: 2, minor: 0 }, false],
+  ] as const)(
+    "reports draft-blob bridging from this session's negotiated version (%j)",
+    (version, expected) => {
+      const { wsStreamClient } = stubClientAtVersion(version);
+      const client = new ChatStreamClient({
+        wsStreamClient,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        callbacks: makeNoopCallbacks(() => undefined),
+      });
+
+      expect(client.draftBlobBridgeSupported()).toBe(expected);
+      client.close();
+    },
+  );
+
+  it("does not read a sibling/client-wide chat negotiation for this session", () => {
+    const session = new StubStreamSession({ major: 1, minor: 10 });
+    const wsStreamClient: IStreamClient<typeof hostStreamRpcRegistry> = {
+      subscribe: () => session,
+      subscribeWithParamsProvider: () => session,
+      // Simulate a sibling session that negotiated 1.12: the client-wide
+      // accessor is intentionally newer than this session's 1.10 handshake.
+      getMethodSchemaVersion: () => ({ major: 1, minor: 12 }),
+    };
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: makeNoopCallbacks(() => undefined),
+    });
+
+    expect(client.draftBlobBridgeSupported()).toBe(false);
+    client.close();
+  });
+});
+
 describe("ChatStreamClient", () => {
   it("subscribes to chat.subscribe and dispatches typed frames", () => {
     const { factory, sockets } = makeFactory();

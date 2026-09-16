@@ -219,6 +219,7 @@ function createHarness(): Harness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => {
           rangeRequests += 1;
         },

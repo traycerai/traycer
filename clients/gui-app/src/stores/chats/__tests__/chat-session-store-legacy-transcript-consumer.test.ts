@@ -195,6 +195,7 @@ function createConsumerHarness(): ConsumerHarness {
         sendAction: (frame) => streamClient.sendAction(frame),
         sameTurnSteeringProtocolSupported: () =>
           streamClient.sameTurnSteeringProtocolSupported(),
+        draftBlobBridgeSupported: () => streamClient.draftBlobBridgeSupported(),
         requestTranscriptRange: (request) =>
           streamClient.requestTranscriptRange(request),
         requestResnapshot: () => streamClient.requestResnapshot(),

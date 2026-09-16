@@ -105,6 +105,7 @@ function props(
       activeTurnStatus: null,
       steerCapable: false,
       steerProtocolSupported: true,
+      getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
       stopDisabled: true,
       onStopTurn: () => null,

@@ -152,6 +152,7 @@ describe("draft write codec", () => {
       content: { type: "doc", content: [{ type: "paragraph" }] },
       blobHashes: [HASH],
       createdAt: 42,
+      annotations: [],
     });
     expect(write.kind).toBe("stash-entry");
     if (write.kind !== "stash-entry") return;

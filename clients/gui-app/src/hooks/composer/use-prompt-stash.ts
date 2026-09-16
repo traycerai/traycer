@@ -182,6 +182,7 @@ export function usePromptStash(
         id: crypto.randomUUID(),
         createdAt: Date.now(),
         content: snapshot.content,
+        annotations: snapshot.annotations,
         readHashImage,
       });
       // The repository commits the manifest and every referenced image in one
@@ -200,6 +201,18 @@ export function usePromptStash(
         // identity/revision belongs to a different (possibly reopened)
         // instance, so never clear it and never surface feedback for a
         // composer that is gone.
+        return;
+      }
+      if (entrySnapshot.droppedAnnotations > 0) {
+        // The entry does not carry everything this composer holds, so clearing
+        // would destroy the part it could not take - a record's comment, the
+        // page it was taken on, which elements were marked. None of that is in
+        // the document text, and none of it can be recovered from the stash.
+        setPulseEpoch((epoch) => epoch + 1);
+        toast.warning("Prompt stashed without its annotations", {
+          description:
+            "Their images could not be read, so the composer was left as it is.",
+        });
         return;
       }
       const cleared = sourceRef.current.clearIfUnchanged(snapshot.token);
@@ -235,6 +248,20 @@ export function usePromptStash(
       // A later switch/remount/close must leave the stash intact.
       const identity = destinationRef.current.captureIdentity();
       if (identity === null) return false;
+      // Ask whether this destination can hold the entry at all BEFORE doing
+      // any work for it. `importAndInsert` refuses too, but it is reached
+      // only after `materialize`, and landing's materializer writes the
+      // entry's images into this window's partition first - so a refusal
+      // delivered there arrives with megabytes already on disk. Nothing
+      // roots them and the reconcile sweep reclaims them, but until it runs
+      // they hold budget, and walking through several unsupported entries
+      // can refuse a legitimate paste for capacity spent on prompts that
+      // were never inserted. The question needs nothing but the entry.
+      const refusal = destinationRef.current.unsupportedReason?.(entry) ?? null;
+      if (refusal !== null) {
+        warnUnsupportedDestination(refusal);
+        return false;
+      }
       busyEntryRef.current = entry.id;
       setBusyEntryId(entry.id);
       try {
@@ -266,6 +293,7 @@ export function usePromptStash(
           result = await destinationRef.current.importAndInsert({
             identity,
             content: materialized.content,
+            entry,
           });
         } finally {
           materialized.release?.();
@@ -273,6 +301,12 @@ export function usePromptStash(
         if (result.status === "stale") {
           // Destination disappeared, remounted, or switched while blobs were
           // reading. Never consume; never report success.
+          return false;
+        }
+        if (result.status === "unsupported") {
+          // The destination refused rather than take half of it. Keeping the
+          // entry is the point: the part it cannot hold exists nowhere else.
+          warnUnsupportedDestination(result.reason);
           return false;
         }
         focusEditor();
@@ -355,6 +389,17 @@ export function usePromptStash(
     restore,
     remove,
   };
+}
+
+/**
+ * One refusal message for both places a destination can decline an entry -
+ * the pre-materialization question and `importAndInsert`'s own guard - so a
+ * user sees the same thing whichever answered.
+ */
+function warnUnsupportedDestination(reason: string): void {
+  toast.warning("This composer can't take that prompt", {
+    description: reason,
+  });
 }
 
 /**

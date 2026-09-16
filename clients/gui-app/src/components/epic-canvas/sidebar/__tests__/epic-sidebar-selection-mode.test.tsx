@@ -3385,6 +3385,7 @@ function createSessionHandle(chatId: string): ChatSessionStoreHandle {
     streamClientFactory: () => ({
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => false,
+      draftBlobBridgeSupported: () => false,
       requestTranscriptRange: () => undefined,
       requestResnapshot: () => undefined,
       close: () => undefined,

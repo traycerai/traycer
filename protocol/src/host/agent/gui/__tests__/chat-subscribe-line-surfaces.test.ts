@@ -30,8 +30,14 @@ import {
 import { providerNoticeKindSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
-const LIVE_MINOR = 11;
+// The minor each surface was minted on. A line carries a surface from its own
+// minor UPWARD - `1.12` is not "not the shell-host line", it is a later one
+// that inherits it - so these are thresholds, not equalities. Written as `===`
+// they assert that the newest line has LOST the surface below it.
 const FALLBACK_MINOR = 10;
+const SHELL_HOST_MINOR = 11;
+const DRAFT_IMAGE_CAUSE_MINOR = 12;
+const LIVE_MINOR = DRAFT_IMAGE_CAUSE_MINOR;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -143,8 +149,8 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.11 (a line added later cannot drop out)", () => {
-    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  it("covers chat.subscribe@1.0 through @1.12 (a line added later cannot drop out)", () => {
+    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
 
@@ -162,7 +168,8 @@ describe("chat.subscribe line surfaces", () => {
       const { contract } = chatSubscribeLine.versions[minor];
       const carriesFallback = minor >= FALLBACK_MINOR;
       const carriesPlacement = minor >= 9;
-      const carriesShellHost = minor === LIVE_MINOR;
+      const carriesShellHost = minor >= SHELL_HOST_MINOR;
+      const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
 
       it(`server frames ${carriesFallback ? "carry" : "hold back"} every provider-fallback surface`, () => {
         const text = schemaText(contract.serverFrameSchema);
@@ -190,6 +197,12 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           actionAckPropertyNames(contract.serverFrameSchema).includes("token"),
         ).toBe(carriesFallback);
+      });
+
+      it(`actionAck ${carriesRefusalCause ? "carries" : "has no"} the draft-image refusal cause`, () => {
+        expect(
+          actionAckPropertyNames(contract.serverFrameSchema).includes("cause"),
+        ).toBe(carriesRefusalCause);
       });
 
       it(`server frames ${carriesShellHost ? "carry" : "hold back"} the shell host on every shell shape`, () => {
