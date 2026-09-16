@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSendCommand } from "../agent-send";
 import { runMonitor } from "../monitor";
+import { buildProgramWithAgentRoles } from "../../index";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { callHostRpc } from "../../internal/host-rpc";
@@ -531,6 +532,44 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
         expect(expectReply).toBe(true);
         expect(responseId).toBeNull();
         expect(sendLine).not.toContain("--response-id");
+
+        const commandStart = sendLine.indexOf("traycer agent send ");
+        expect(commandStart).toBeGreaterThanOrEqual(0);
+        const emittedCommand = sendLine.slice(commandStart);
+        const optionArgv = (
+          emittedCommand
+            .slice("traycer agent send ".length)
+            .match(/"[^"]*"|\S+/g) ?? []
+        ).map((token) =>
+          token.startsWith('"') && token.endsWith('"')
+            ? token.slice(1, -1)
+            : token,
+        );
+        const program = buildProgramWithAgentRoles(false);
+        const agent = program.commands.find((cmd) => cmd.name() === "agent");
+        expect(agent).toBeDefined();
+        const send = agent?.commands.find((cmd) => cmd.name() === "send");
+        expect(send).toBeDefined();
+        if (send === undefined) {
+          throw new Error("agent send command was not registered");
+        }
+        const parsed = send.parseOptions(optionArgv);
+        const selected = send.opts<Record<string, unknown>>();
+        expect({
+          operands: parsed.operands,
+          unknown: parsed.unknown,
+          to: selected.to,
+          message: selected.message,
+          expectReply: selected.expectReply,
+          responseId: selected.responseId,
+        }).toEqual({
+          operands: [],
+          unknown: [],
+          to: "receiver-1",
+          message: "<follow-up>",
+          expectReply: true,
+          responseId: undefined,
+        });
 
         callHostRpcMock.mockResolvedValue({ responseId });
         const command = buildAgentSendCommand({
