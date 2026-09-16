@@ -35,9 +35,11 @@ import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/
  * comments in this file did not, and shipped saying a `1.11` peer receives a
  * field it is in fact never sent.
  *
- * `DRAFT_IMAGE_CAUSE_MINOR` in `chat-subscribe-line-surfaces.test.ts` is the
- * one place that names this number for a machine to check. Prefer it to any
- * prose, including this.
+ * Several places name `12` - the contract in `subscribe.ts`, the gate below, a
+ * handful of tests - but only `DRAFT_IMAGE_CAUSE_MINOR` in
+ * `chat-subscribe-line-surfaces.test.ts` drives an assertion across every minor
+ * from `1.0` up, so it is the one that CATCHES a drift rather than restating
+ * the answer. Prefer it to any prose, including this.
  */
 export function projectChatActionAckForVersion(
   frame: ProjectedChatSubscribeServerFrame,
