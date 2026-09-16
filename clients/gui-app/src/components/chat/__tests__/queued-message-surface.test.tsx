@@ -1026,6 +1026,7 @@ function managedCommandQueuedItem(
     kind: "managed-command",
     queueItemId,
     commandId: `${queueItemId}-command`,
+    hostId: null,
     description,
     monitoring: true,
     delivery: "next_turn",

@@ -171,6 +171,7 @@ function managedCommandItem(queueItemId: string): ChatQueuedManagedCommandItem {
     kind: "managed-command",
     queueItemId,
     commandId: `${queueItemId}-command`,
+    hostId: null,
     description: "bun test --watch",
     monitoring: true,
     delivery: "next_turn" as const,
