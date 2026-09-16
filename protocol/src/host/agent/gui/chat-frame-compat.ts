@@ -17,7 +17,7 @@
  *    `1.7` opened above it.
  *
  * 3. `projectChatServerFrameForVersion` - the host's outbound projection,
- *    including `projectChatActionAckForVersion` for the 1.11 refusal cause.
+ *    including `projectChatActionAckForVersion` for the 1.12 refusal cause.
  *
  * These are pure and dependency-free so the host and the OSS clients run the
  * same code rather than two drifting copies.
@@ -25,7 +25,20 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 
-/** Strip draft-image refusal causes before emitting to a pre-1.11 session. */
+/**
+ * Strip draft-image refusal causes before emitting to a pre-`1.12` session.
+ *
+ * The minor is `1.12` and not the `1.11` these comments said until now. The
+ * draft-image work was built against `1.11` and `main` took that minor for the
+ * cross-host shell host while it was in review, so the cause moved up one. The
+ * CONSTANTS moved with it and the gate below has always read `>= 12`; three
+ * comments in this file did not, and shipped saying a `1.11` peer receives a
+ * field it is in fact never sent.
+ *
+ * `DRAFT_IMAGE_CAUSE_MINOR` in `chat-subscribe-line-surfaces.test.ts` is the
+ * one place that names this number for a machine to check. Prefer it to any
+ * prose, including this.
+ */
 export function projectChatActionAckForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
@@ -662,7 +675,7 @@ export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
-  // The >=1.7 fast path still needs the newer 1.11 acknowledgement downgrade.
+  // The >=1.7 fast path still needs the newer 1.12 acknowledgement downgrade.
   const bridgeProjected = projectChatActionAckForVersion(frame, negotiated);
   // BEFORE the 1.7 identity return: `chat.imported` shipped on the 1.8 line,
   // and a released 1.7 client's strict event enum fails the WHOLE snapshot on
