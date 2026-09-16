@@ -17,6 +17,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { isHostStorableImageMimeType } from "@/lib/composer/host-storable-image-formats";
 import {
   holdPendingIngestImageHash,
+  mintPendingIngestHolderId,
   releasePendingIngestImageHashes,
 } from "@/lib/composer/pending-ingest-image-roots";
 import { putImage } from "@/lib/composer/landing-image-store";
@@ -897,7 +898,7 @@ async function hashImageAttrsFromFiles(
   );
   // One holder per BATCH: every hash this conversion produces is released
   // together, once the insertion decision has been made for all of them.
-  const holderId = `composer-hash-ingest:${uuidv4()}`;
+  const holderId = mintPendingIngestHolderId("composer-hash-ingest");
 
   const settled = await Promise.allSettled(
     accepted.map(async (file): Promise<ImageAttachmentAttrs | null> => {

@@ -311,6 +311,22 @@ export function applyNewChatHostDocument(document: DraftDocument): void {
   if (document.kind !== "new-chat") return;
   const epicId = document.target.epicId;
   if (epicId === null) return;
+  // Revision frontier, matching `applyLandingHostDocument` and the composer
+  // store: image reads finish out of order after subscribe-frame admission,
+  // so two upserts for this row can both be admitted and the slower one land
+  // last. The older continuation would otherwise overwrite the newer text.
+  // Only the same draft line is comparable - a re-mint is different
+  // numbering - and a cloud head's synthetic revision 0 is not a position.
+  const held =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+  if (
+    held !== undefined &&
+    held.draftId === document.draftId &&
+    document.revision > 0 &&
+    held.hostRevision > document.revision
+  ) {
+    return;
+  }
   useNewConversationModalStore.setState((state) => {
     const current = state.draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
     if (current.generation > current.syncedGeneration) {

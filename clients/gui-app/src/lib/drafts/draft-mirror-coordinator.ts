@@ -6,6 +6,7 @@ import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   holdPendingIngestImageHash,
+  mintPendingIngestHolderId,
   releasePendingIngestImageHashes,
 } from "@/lib/composer/pending-ingest-image-roots";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -642,7 +643,16 @@ async function prefetchDocumentBlobs(
   // is covered for as long as its siblings run, and released on EVERY exit
   // below - after the install, so custody passes to the document's own root
   // with no gap.
-  const holderId = `draft-mirror-prefetch:${document.ownerHostId}:${document.draftId}:${applySeq}`;
+  //
+  // The id is minted per ACQUISITION and is deliberately not derived from the
+  // document. Keying it by owner/draft/`applySeq` looked unique and was not:
+  // `applySeq` advances only for a landing apply, so two revisions of one
+  // composer row read concurrently under the SAME id, and the first to finish
+  // released the second's holds along with its own. See
+  // `mintPendingIngestHolderId`.
+  const holderId = mintPendingIngestHolderId(
+    `draft-mirror-prefetch:${document.ownerHostId}:${document.draftId}`,
+  );
   for (const hash of hashes) holdPendingIngestImageHash(holderId, hash);
   try {
     const images = await readDraftBlobsIntoLocalStore(

@@ -526,6 +526,52 @@ describe("landing-image-gc", () => {
     expect(m.store.reclaimCustodyHashesForTests()).toEqual([]);
   });
 
+  it("a retry hydration cannot resurrect a measurement a reclaim retired (DRIVE RED)", async () => {
+    // Retiring the measured size with the bytes is only worth anything if
+    // nothing can put it back. The size rows are read as a SNAPSHOT, so a
+    // hydration retry - armed by a transient enumeration failure - can be
+    // holding rows from before a reclaim and import them after it commits.
+    // The hash then measures its old length with no bytes behind it, and the
+    // budget charges an absent root for space nothing occupies: enough of
+    // them and an ordinary paste is refused.
+    const m = await loadModules({ desktop: true });
+    m.gc.markLandingEditorMounted();
+    m.gc.markLandingDraftsReady();
+    await flush();
+
+    const hash = await m.store.putImage(bytesOf([1, 2, 3, 4]));
+    m.store.releaseSession(hash);
+    expect(m.store.measuredLandingImageSize(hash)).toBe(4);
+
+    // The cold-start hydration failed once, so readiness is off and the
+    // sweep's retry is armed - the state this race needs.
+    m.store.setLandingImageSizesHydratedForTests(false);
+
+    let openRows: () => void = () => undefined;
+    const rowsGate = new Promise<void>((resolve) => {
+      openRows = resolve;
+    });
+    vi.mocked(m.idb.entries).mockImplementationOnce(async (store: unknown) => {
+      // Rows as of NOW - before the reclaim below - then held.
+      const rows = Array.from(idb.dataFor(store).entries());
+      await rowsGate;
+      return rows;
+    });
+
+    const hydrating = m.store.ensureMeasuredImageSizes();
+    // The reclaim commits while that read is in flight.
+    expect(await m.store.reclaimImageBytes(hash, () => false)).toBe(
+      "reclaimed",
+    );
+    expect(m.store.measuredLandingImageSize(hash)).toBeNull();
+
+    openRows();
+    await hydrating;
+
+    expect(m.store.measuredLandingImageSize(hash)).toBeNull();
+    expect(m.store.hasLandingImageBytes(hash)).toBe(false);
+  });
+
   it("still reclaims a genuine orphan when no root appears (positive control)", async () => {
     const m = await loadModules({ desktop: true });
     m.gc.markLandingEditorMounted();

@@ -749,6 +749,25 @@ export function applyComposerHostDocument(document: DraftDocument): boolean {
   // An id fenced by a submit is on its way to a tombstone; its late echo
   // must not put the sent content back into the cleared composer.
   if (composerSubmittedDraftDeleteIsPending(document.draftId)) return false;
+  // Revision frontier, the same one `applyLandingHostDocument` keeps and for
+  // the same reason: image reads finish OUT OF ORDER after subscribe-frame
+  // admission. The stream handler admits a frame against the revision it
+  // holds and records the new one synchronously, then awaits the blob
+  // prefetch - so two upserts for this row can both be admitted, and the
+  // slower one lands last. Without this the older continuation overwrites
+  // the newer text, and nothing downstream can restore it.
+  //
+  // Only comparable revisions: the same draft line on the same host. A
+  // re-mint (handled above) and a cloud head's synthetic revision 0 are
+  // different numbering, not an older position in this one.
+  if (
+    before.draftId === document.draftId &&
+    before.ownerHostId === document.ownerHostId &&
+    document.revision > 0 &&
+    before.hostRevision > document.revision
+  ) {
+    return false;
+  }
   useComposerDraftStore.setState((state) => {
     const current = ensureDraft(state.drafts, chatId);
     if (current.generation > current.syncedGeneration) {

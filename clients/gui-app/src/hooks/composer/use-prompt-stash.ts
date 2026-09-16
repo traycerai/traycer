@@ -248,6 +248,20 @@ export function usePromptStash(
       // A later switch/remount/close must leave the stash intact.
       const identity = destinationRef.current.captureIdentity();
       if (identity === null) return false;
+      // Ask whether this destination can hold the entry at all BEFORE doing
+      // any work for it. `importAndInsert` refuses too, but it is reached
+      // only after `materialize`, and landing's materializer writes the
+      // entry's images into this window's partition first - so a refusal
+      // delivered there arrives with megabytes already on disk. Nothing
+      // roots them and the reconcile sweep reclaims them, but until it runs
+      // they hold budget, and walking through several unsupported entries
+      // can refuse a legitimate paste for capacity spent on prompts that
+      // were never inserted. The question needs nothing but the entry.
+      const refusal = destinationRef.current.unsupportedReason?.(entry) ?? null;
+      if (refusal !== null) {
+        warnUnsupportedDestination(refusal);
+        return false;
+      }
       busyEntryRef.current = entry.id;
       setBusyEntryId(entry.id);
       try {
@@ -292,9 +306,7 @@ export function usePromptStash(
         if (result.status === "unsupported") {
           // The destination refused rather than take half of it. Keeping the
           // entry is the point: the part it cannot hold exists nowhere else.
-          toast.warning("This composer can't take that prompt", {
-            description: result.reason,
-          });
+          warnUnsupportedDestination(result.reason);
           return false;
         }
         focusEditor();
@@ -377,6 +389,17 @@ export function usePromptStash(
     restore,
     remove,
   };
+}
+
+/**
+ * One refusal message for both places a destination can decline an entry -
+ * the pre-materialization question and `importAndInsert`'s own guard - so a
+ * user sees the same thing whichever answered.
+ */
+function warnUnsupportedDestination(reason: string): void {
+  toast.warning("This composer can't take that prompt", {
+    description: reason,
+  });
 }
 
 /**

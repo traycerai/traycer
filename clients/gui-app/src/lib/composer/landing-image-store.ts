@@ -563,7 +563,22 @@ async function hydrateMeasuredImageSizes(): Promise<void> {
   const resident = await imageHashKeys();
   const rows = await entries<string, number>(imageSizeStore());
   for (const [hash, byteLength] of rows) {
-    if (typeof byteLength === "number") measuredSizes.set(hash, byteLength);
+    if (typeof byteLength !== "number") continue;
+    // Only for a hash this partition still HOLDS, and that is the whole
+    // guard: these rows are a snapshot, and a reclaim that commits while it
+    // is in flight retires both the bytes and the row - so importing the
+    // snapshot wholesale writes the retired measurement back, and the budget
+    // then prices an absent root at the size it used to have. Retiring the
+    // measurement with the bytes is only worth anything if nothing can
+    // resurrect it. The same test covers an ordinary orphaned row left by an
+    // older build, which was never safe to import either.
+    //
+    // The enumeration above runs first and folds every durable key into
+    // `knownHashes`, so a legitimately resident hash is always in it by here;
+    // custody covers the narrower window where a reclaim is holding the only
+    // copy while the partition itself does not have it.
+    if (!knownHashes.has(hash) && !reclaimCustody.has(hash)) continue;
+    measuredSizes.set(hash, byteLength);
   }
   for (const hash of resident) {
     if (measuredSizes.has(hash)) continue;

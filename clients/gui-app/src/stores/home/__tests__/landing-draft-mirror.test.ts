@@ -34,6 +34,8 @@ import {
   resetLandingDraftRetirementsForTests,
   retireLandingDraft,
 } from "@/lib/drafts/landing-draft-retirement";
+import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { notifyDraftLocalDelete } from "@/lib/drafts/draft-local-edits";
 import { scopedPersistKey, STORE_KEYS } from "@/lib/persist";
 import {
@@ -944,6 +946,320 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(Array.from((await getImageBytes(localHash)) ?? [])).toEqual([
       7, 7, 7, 7,
     ]);
+  });
+
+  it("gives each overlapping apply its own hold, so an older one's finally cannot release a newer one's local hit (DRIVE RED)", async () => {
+    // The sibling test above roots a local hit for the length of ONE apply.
+    // This is what that hold was keyed by. `applySeq` advances only on a
+    // landing apply, so two chat-composer revisions of the same draft read
+    // concurrently under one holder id - and the first to finish released
+    // the second's hashes along with its own. The second's hash is a LOCAL
+    // hit, so no request was ever made for it and nothing re-writes it: the
+    // apply installs a document naming bytes a sweep has already taken.
+    const hostId = "host-prefetch-holder";
+    const draftId = "draft-shared-holder";
+    const stream = controlledStream();
+    const missingX = "cd".repeat(32);
+    const missingY = "ef".repeat(32);
+    const localBytes = new Uint8Array(4).fill(9);
+    const localHash = await putImage(localBytes);
+    // Not session-cached: that entry is a root of its own, and this is about
+    // bytes with nothing but the prefetch hold behind them.
+    releaseSession(localHash);
+
+    const gate = (): {
+      readonly wait: Promise<{
+        readonly ok: false;
+        readonly reason: "missing";
+      }>;
+      readonly open: () => void;
+      readonly started: { value: boolean };
+    } => {
+      const started = { value: false };
+      let open: (() => void) | undefined;
+      const wait = new Promise<{
+        readonly ok: false;
+        readonly reason: "missing";
+      }>((resolve) => {
+        open = () => resolve({ ok: false, reason: "missing" });
+      });
+      return { wait, open: () => open?.(), started };
+    };
+    const x = gate();
+    const y = gate();
+    const client = {
+      request: (method: string, params: unknown) => {
+        if (method === "drafts.list") {
+          return Promise.resolve({
+            drafts: [],
+            tombstones: [],
+            snapshotSeq: 0,
+            scopeId: null,
+          });
+        }
+        if (method === "drafts.readBlob") {
+          const { sha256 } = params as { readonly sha256: string };
+          if (sha256 === missingX) {
+            x.started.value = true;
+            return x.wait;
+          }
+          if (sha256 === missingY) {
+            y.started.value = true;
+            return y.wait;
+          }
+          // A local hit must never be requested - that is the whole reason
+          // nothing re-writes it.
+          return Promise.reject(new Error(`unexpected readBlob ${sha256}`));
+        }
+        return Promise.reject(new Error(`unexpected ${method}`));
+      },
+    };
+    acquireDraftMirrorSession({
+      hostId,
+      client: client as never,
+      streamClient: stream.client,
+      timing: undefined,
+    });
+    await vi.waitFor(() => {
+      expect(stream.started.value).toBe(true);
+    });
+
+    const composerDocument = (
+      revision: number,
+      blobHashes: readonly string[],
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: "epic-1", chatId: "chat-1", blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: EMPTY_LANDING_DRAFT_CONTENT,
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [...blobHashes],
+        closed: false,
+      },
+    });
+
+    // Revision 1 waits on a hash only the host has.
+    const applyingFirst = applyIncomingDraftDocument(
+      composerDocument(1, [missingX]),
+    );
+    await vi.waitFor(() => {
+      expect(x.started.value).toBe(true);
+    });
+    // Revision 2 arrives while it waits: a local hit, then its own host read.
+    const applyingSecond = applyIncomingDraftDocument(
+      composerDocument(2, [localHash, missingY]),
+    );
+    await vi.waitFor(() => {
+      expect(y.started.value).toBe(true);
+    });
+
+    // Revision 1 finishes and runs its `finally`.
+    x.open();
+    await applyingFirst;
+
+    // One ordinary sweep, with revision 2 still reading its sibling.
+    markLandingEditorMounted();
+    markLandingDraftsReady();
+    await reconcile();
+
+    // Compared as plain numbers: a value round-tripped through the fake
+    // IndexedDB is a typed array from another realm, which `toEqual` refuses
+    // even when every byte matches.
+    expect(Array.from((await getImageBytes(localHash)) ?? [])).toEqual([
+      9, 9, 9, 9,
+    ]);
+    y.open();
+    await applyingSecond;
+    expect(Array.from((await getImageBytes(localHash)) ?? [])).toEqual([
+      9, 9, 9, 9,
+    ]);
+
+    // And the hold is a hold, not a pin. Both applies have finished and the
+    // installed content names no image, so nothing roots this hash any more -
+    // if a per-acquisition token leaked its holder, these bytes would now be
+    // unreclaimable for the life of the renderer.
+    await reconcile();
+    expect(await getImageBytes(localHash)).toBeUndefined();
+  });
+
+  it("refuses an older composer revision whose blob read finished last (DRIVE RED)", async () => {
+    // The landing store has kept a revision frontier for exactly this -
+    // "image reads can finish out of order after subscribe-frame admission".
+    // The composer store had none. The stream admits a frame against the
+    // revision it holds and records the new one SYNCHRONOUSLY, then awaits
+    // the blob prefetch, so two upserts for one row are both admitted; if
+    // the older one's read is the slower, its continuation installs last and
+    // the newer text is gone with nothing able to restore it.
+    const hostId = "host-composer-order";
+    const draftId = "draft-composer-order";
+    const chatId = "chat-composer-order";
+    const stream = controlledStream();
+    const slowHash = "ab".repeat(32);
+
+    let openSlow: (() => void) | undefined;
+    let pendingReadBlob = new Promise<{
+      readonly ok: false;
+      readonly reason: "missing";
+    }>((resolve) => {
+      openSlow = () => resolve({ ok: false, reason: "missing" });
+    });
+    let slowStarted = false;
+    const client = {
+      request: (method: string) => {
+        if (method === "drafts.list") {
+          return Promise.resolve({
+            drafts: [],
+            tombstones: [],
+            snapshotSeq: 0,
+            scopeId: null,
+          });
+        }
+        if (method === "drafts.readBlob") {
+          slowStarted = true;
+          return pendingReadBlob;
+        }
+        return Promise.reject(new Error(`unexpected ${method}`));
+      },
+    };
+    acquireDraftMirrorSession({
+      hostId,
+      client: client as never,
+      streamClient: stream.client,
+      timing: undefined,
+    });
+    await vi.waitFor(() => {
+      expect(stream.started.value).toBe(true);
+    });
+
+    const typed = (text: string) => ({
+      type: "doc" as const,
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+    const composerDocument = (
+      revision: number,
+      text: string,
+      blobHashes: readonly string[],
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: "epic-order", chatId, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed(text),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [...blobHashes],
+        closed: false,
+      },
+    });
+
+    // Revision 1 is admitted first and waits on its image.
+    const applyingOld = applyIncomingDraftDocument(
+      composerDocument(1, "older", [slowHash]),
+    );
+    await vi.waitFor(() => {
+      expect(slowStarted).toBe(true);
+    });
+    // Revision 2 carries no image, so it installs immediately.
+    await applyIncomingDraftDocument(composerDocument(2, "newer", []));
+    expect(readComposerDraftSnapshot(chatId).content).toEqual(typed("newer"));
+
+    // Now revision 1's read finishes. It must not land.
+    openSlow?.();
+    await applyingOld;
+    expect(readComposerDraftSnapshot(chatId).content).toEqual(typed("newer"));
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(2);
+
+    // The new-conversation modal is the third store on this path and had the
+    // same gap. Same schedule, same row.
+    const epicId = "epic-order-modal";
+    const modalDraftId = "draft-modal-order";
+    let openModalSlow: (() => void) | undefined;
+    const modalSlowRead = new Promise<{
+      readonly ok: false;
+      readonly reason: "missing";
+    }>((resolve) => {
+      openModalSlow = () => resolve({ ok: false, reason: "missing" });
+    });
+    slowStarted = false;
+    pendingReadBlob = modalSlowRead;
+    const newChatDocument = (
+      revision: number,
+      text: string,
+      blobHashes: readonly string[],
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId: modalDraftId,
+      kind: "new-chat",
+      target: { epicId, chatId: null, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed(text),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [...blobHashes],
+        closed: false,
+      },
+    });
+    const applyingOldModal = applyIncomingDraftDocument(
+      newChatDocument(1, "older", [slowHash]),
+    );
+    await vi.waitFor(() => {
+      expect(slowStarted).toBe(true);
+    });
+    await applyIncomingDraftDocument(newChatDocument(2, "newer", []));
+    const patchOf = (): { content: unknown; hostRevision: number } => {
+      const patch =
+        useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+      if (patch === undefined) throw new Error("expected a modal patch");
+      return { content: patch.content, hostRevision: patch.hostRevision };
+    };
+    expect(patchOf().content).toEqual(typed("newer"));
+    openModalSlow?.();
+    await applyingOldModal;
+    expect(patchOf().content).toEqual(typed("newer"));
+    expect(patchOf().hostRevision).toBe(2);
   });
 
   it("keeps the host revision frontier for direct host-document application", () => {

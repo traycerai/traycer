@@ -32,10 +32,41 @@ import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 
 const hashesByHolder = new Map<string, Set<string>>();
 
+let holderSequence = 0;
+
+/**
+ * Mint a holder id for ONE acquisition. `label` names the call site for
+ * debugging; the sequence is what makes the id unique.
+ *
+ * The key must be per acquisition, never per surface, row or revision - the
+ * same lesson `composer-content-image-roots.ts` records, and one this module
+ * has now learned the hard way. Two acquisitions can legitimately overlap
+ * under any value derived from what they are FOR: two applies of the same
+ * draft whose revisions arrive while the first is still reading, two tiles
+ * showing one row, a composer remounted mid-batch. Under a shared key the
+ * second `hold` merges into the first's entry and the FIRST `finally` then
+ * deletes the second's hashes - releasing a root while the work that needs
+ * it is still running, which is the reap this module exists to prevent. The
+ * shape is at its worst when the second acquisition's hash was a LOCAL hit:
+ * no request was made for it, so nothing re-writes the bytes, and the apply
+ * installs a document naming a digest the store cannot answer.
+ *
+ * Minting here rather than asking each caller for a unique value is
+ * deliberate: there is no correct caller-supplied value, so there is nothing
+ * for a caller to get wrong.
+ */
+export function mintPendingIngestHolderId(label: string): string {
+  holderSequence += 1;
+  return `${label}#${holderSequence}`;
+}
+
 /**
  * Root `hash` under `holderId` from now until that holder is released. Called
  * per hash as each completes, not once per batch, so an early finisher is
  * covered for the whole time its siblings are still running.
+ *
+ * `holderId` must come from `mintPendingIngestHolderId` - see its docs for
+ * what a shared key costs.
  */
 export function holdPendingIngestImageHash(
   holderId: string,

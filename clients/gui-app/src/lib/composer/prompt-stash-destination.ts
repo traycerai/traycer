@@ -31,6 +31,26 @@ export type PromptStashDestinationResult =
    */
   | { readonly status: "unsupported"; readonly reason: string };
 
+/**
+ * The refusal shared by every destination that is not a chat composer.
+ *
+ * A browser annotation is a chat-composer sidecar - the landing composer and
+ * the new-conversation modal have no field for the records and no card to
+ * render them - and the restore hook consumes an accepted entry, so taking
+ * only the content would destroy the records AND the last copy of their
+ * crops. Refused, not degraded: the entry stays where it is, restorable into
+ * a chat composer.
+ *
+ * One function, used as both `unsupportedReason` and `importAndInsert`'s own
+ * guard, so the two answers cannot drift apart.
+ */
+export function annotationSidecarRefusal(
+  entry: PromptStashEntry,
+): string | null {
+  if (entry.annotations.length === 0) return null;
+  return "It has browser annotations, which only a chat composer can hold.";
+}
+
 export interface PromptStashMaterializedContent {
   readonly content: JsonContent;
   /**
@@ -56,6 +76,26 @@ export interface PromptStashDestinationAdapter {
    * is no ready destination to restore into.
    */
   readonly captureIdentity: () => PromptStashDestinationIdentity | null;
+  /**
+   * Why this destination cannot hold `entry` at all, or `null` when it can.
+   * Answerable from the ENTRY alone - no reads, no writes, no freshness
+   * requirement - which is what lets the restore hook ask it before any
+   * materialization.
+   *
+   * That order matters for a destination whose `materialize` is not free.
+   * Landing's writes the entry's images into this window's partition, so a
+   * refusal delivered only by `importAndInsert` arrives after megabytes have
+   * already landed. Nothing roots them - they are orphans the next reconcile
+   * sweep reclaims - but until it runs they hold budget, and a user walking
+   * through several unsupported entries can be refused a legitimate paste
+   * for capacity spent on prompts that were never inserted.
+   *
+   * `importAndInsert` keeps its own refusal: it is the boundary the hook
+   * consumes behind, and a destination that omits this member must still be
+   * unable to take half of an entry. Share one predicate between them rather
+   * than writing the condition twice.
+   */
+  readonly unsupportedReason?: (entry: PromptStashEntry) => string | null;
   /**
    * Destination-owned materialization of `entry`, for a destination that
    * cannot use the restore hook's default inline-base64

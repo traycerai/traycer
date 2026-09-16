@@ -1,6 +1,7 @@
 /** prompt-stash ownership transfer: landing */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { pngBytesOfSize } from "./prompt-stash-image-fixtures";
 import {
@@ -33,6 +34,25 @@ function installBitmapMocks(): void {
     (_obj: Blob | MediaSource) => `blob:mock/${Math.random()}`,
   );
   URL.revokeObjectURL = vi.fn((_url: string) => undefined);
+}
+
+function annotationRecord(imageHash: string): BrowserAnnotationRecord {
+  return {
+    kind: "browser-annotation",
+    annotationId: "ann-landing-refusal",
+    tabId: "tab-1",
+    sessionId: "session-1",
+    origin: "https://example.test",
+    pageUrl: "https://example.test/checkout",
+    pageTitle: "Checkout",
+    capturedAt: 1_700_000_000_000,
+    comment: "the button is misaligned",
+    counts: { elements: 1, regions: 0, strokes: 2 },
+    elements: [],
+    imageFileName: "crop.png",
+    imageHash,
+    droppedElementCount: 0,
+  };
 }
 
 function restoreBitmapMocks(): void {
@@ -142,6 +162,104 @@ describe("prompt-stash ownership transfer: landing", () => {
     expect(firstSetContent(editor.setContents).selection).toBeNull();
     // Accepted consume.
     expect((await h.repo.loadPromptStashSnapshot()).rows).toHaveLength(0);
+
+    cleanup();
+    h.draftRuntime.draftRuntimeRegistry.resetForTesting();
+    h.landingBudget.resetLandingImageBudgetReservationsForTesting();
+  });
+
+  it("landing refuses an annotated entry without writing its images into the partition", async () => {
+    // The landing composer cannot hold an annotation sidecar, and refusing
+    // is already right. What this pins down is the COST of the refusal: it
+    // used to be delivered by `importAndInsert`, which the restore hook
+    // reaches only AFTER `materialize` - and landing's materializer resolves
+    // every blob the entry owns and writes it into this window's partition.
+    // So an entry that was never inserted still left its megabytes behind,
+    // holding budget until the next reconcile sweep. The refusal is now
+    // answered from the entry alone, before any of that.
+    const h = await loadHarness();
+    const { act, cleanup, renderHook } = h.testing;
+    const draftId = "landing-annotated";
+    h.landingDraft.useLandingDraftStore
+      .getState()
+      .createDraftWithId(draftId, null);
+    const runtime = h.draftRuntime.draftRuntimeRegistry.attach(draftId);
+    if (runtime === null) throw new Error("expected runtime");
+
+    // An entry as a CHAT composer would have stashed it: content images plus
+    // an annotation record whose crop is a sidecar the entry owns. Built
+    // through the production snapshot builder so the record is re-pointed at
+    // the canonical blob exactly as a real capture leaves it.
+    const png = pngBytesOfSize(48);
+    const crop = pngBytesOfSize(96);
+    const cropSourceHash = "crop-source-hash";
+    const snapshot = await h.content.buildPromptStashSnapshot({
+      id: "annotated-entry",
+      createdAt: 1,
+      content: multiImageDoc([
+        {
+          id: "src-a",
+          fileName: "a.png",
+          hash: null,
+          b64content: bytesToBase64(png),
+          mimeType: "image/png",
+          size: png.byteLength,
+        },
+      ]),
+      annotations: [annotationRecord(cropSourceHash)],
+      readHashImage: (hash) =>
+        Promise.resolve(hash === cropSourceHash ? crop : null),
+    });
+    expect(snapshot.entry.annotations).toHaveLength(1);
+    expect(snapshot.entry.blobHashes.length).toBeGreaterThan(1);
+    await h.repo.savePromptStashSnapshot(snapshot);
+    const entry = requireEntry(
+      (await h.repo.loadPromptStashSnapshot()).rows,
+      "annotated-entry",
+    );
+
+    runtime.setSnapshot(emptyDoc(), null);
+    // Nothing of this window's own yet, so every key below is something the
+    // refused restore put there.
+    expect(await h.landingImages.imageHashKeys()).toEqual([]);
+
+    const editor = makeEditorHandle({ content: emptyDoc() });
+    const identity = h.landing.landingStashIdentity(draftId, null);
+    const { result: hook } = renderHook(() =>
+      h.usePromptStash({
+        active: true,
+        disabled: false,
+        editorRef: editor.editorRef,
+        readHashImage: () => Promise.resolve(null),
+        source: h.landing.useLandingPromptStashSource({
+          stashIdentity: identity,
+          runtimeStore: runtime.store,
+          draftId,
+          unboundRuntime: runtime.store,
+          editorRef: editor.editorRef,
+        }),
+        destination: h.landing.useLandingPromptStashDestination({
+          stashIdentity: identity,
+          draftId,
+          runtimeStore: runtime.store,
+          editorRef: editor.editorRef,
+        }),
+        hostId: null,
+      }),
+    );
+
+    let ok = true;
+    await act(async () => {
+      ok = await hook.current.restore(entry);
+    });
+
+    expect(ok).toBe(false);
+    // The half that already worked: refusing keeps the entry intact, because
+    // the crops it names exist nowhere else.
+    expect((await h.repo.loadPromptStashSnapshot()).rows).toHaveLength(1);
+    expect(editor.setContents).toEqual([]);
+    // The half this test is for.
+    expect(await h.landingImages.imageHashKeys()).toEqual([]);
 
     cleanup();
     h.draftRuntime.draftRuntimeRegistry.resetForTesting();

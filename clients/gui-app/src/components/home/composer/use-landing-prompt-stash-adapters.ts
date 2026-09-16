@@ -2,10 +2,11 @@ import { useMemo, type RefObject } from "react";
 import type { StoreApi } from "zustand/vanilla";
 
 import { appendPromptStashContent } from "@/lib/composer/prompt-stash-content";
-import type {
-  PromptStashDestinationAdapter,
-  PromptStashDestinationIdentity,
-  PromptStashMaterializedContent,
+import {
+  annotationSidecarRefusal,
+  type PromptStashDestinationAdapter,
+  type PromptStashDestinationIdentity,
+  type PromptStashMaterializedContent,
 } from "@/lib/composer/prompt-stash-destination";
 import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
 import type { PromptStashSourceAdapter } from "@/lib/composer/prompt-stash-source";
@@ -154,6 +155,7 @@ export function useLandingPromptStashDestination(args: {
           editorIncarnation,
         };
       },
+      unsupportedReason: annotationSidecarRefusal,
       materialize: async (
         entry: PromptStashEntry,
       ): Promise<PromptStashMaterializedContent | null> => {
@@ -182,17 +184,14 @@ export function useLandingPromptStashDestination(args: {
         ) {
           return Promise.resolve({ status: "stale" });
         }
-        // Refused, not degraded. A browser annotation is a chat-composer
-        // sidecar - there is no field for one here and no card to render it -
-        // and the restore hook consumes an accepted entry, so taking only the
-        // content would destroy the records AND the last copy of their crops.
-        // The entry stays where it is, restorable into a chat composer.
-        if (importArgs.entry.annotations.length > 0) {
-          return Promise.resolve({
-            status: "unsupported",
-            reason:
-              "It has browser annotations, which only a chat composer can hold.",
-          });
+        // The consuming boundary's own refusal. The hook asks
+        // `unsupportedReason` first, so in practice a restore never reaches
+        // here with annotations - but this is the check that makes "never
+        // take half an entry" a property of the DESTINATION rather than of
+        // the hook's call order.
+        const refusal = annotationSidecarRefusal(importArgs.entry);
+        if (refusal !== null) {
+          return Promise.resolve({ status: "unsupported", reason: refusal });
         }
         const latest = runtimeStore.getState().content;
         const nextContent = appendPromptStashContent(

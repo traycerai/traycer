@@ -491,6 +491,59 @@ describe("prepareSavedDraft", () => {
     }
   });
 
+  it("admits a recovered image through residency, not the ordinary rooted skip (DRIVE RED)", async () => {
+    // The hash is a live ROOT while this partition does not hold its bytes -
+    // an ordinary state, since a landing row naming a hash roots it whether
+    // or not the bytes were ever fetched here. Ordinary admission charges
+    // nothing for a rooted candidate, which is right for a root whose bytes
+    // are present and wrong for one that is rooted while absent: the
+    // recovery below then wrote its bytes for free and the partition
+    // finished over its budget.
+    const hash = await sha256Hex(IMAGE_BYTES);
+    useLandingDraftStore.setState({
+      drafts: [localDraft("rooting-row", imageDocumentWithSize(hash, 0))],
+      activeDraftId: null,
+    });
+    expect(await imageHashKeys()).toEqual([]);
+
+    // One byte of headroom: an honest charge for these bytes does not fit, a
+    // skipped one does. That single byte is the whole difference between the
+    // two admission paths.
+    const outstandingReservation = tryReserveLandingImageBudget([
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES - 1 },
+    ]);
+    if (outstandingReservation === null)
+      throw new Error("expected the capacity reservation to succeed");
+    const draftId = "host-rooted-but-absent";
+    const document = landingDocumentWithClosed(
+      draftId,
+      imageDocumentWithSize(hash, 0),
+      [hash],
+      false,
+    );
+    const fixture = createHostFixture({
+      list: () => Promise.resolve(listResponse([document], [])),
+      readBlob: () =>
+        Promise.resolve({
+          ok: true,
+          bytesBase64: bytesToBase64(IMAGE_BYTES),
+        }),
+    });
+    mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
+
+    try {
+      await expect(
+        prepareSavedDraft(recoveryItem(draftId, HOST_ID), () => true),
+      ).rejects.toThrow("not enough image capacity");
+      expect(idbData.size).toBe(0);
+      expect(
+        useLandingDraftStore.getState().drafts.map((draft) => draft.id),
+      ).toEqual(["rooting-row"]);
+    } finally {
+      outstandingReservation.release();
+    }
+  });
+
   it("counts actual host bytes, normalizes image size, and releases its reservation", async () => {
     const draftId = "host-sized-image";
     const hash = await sha256Hex(IMAGE_BYTES);

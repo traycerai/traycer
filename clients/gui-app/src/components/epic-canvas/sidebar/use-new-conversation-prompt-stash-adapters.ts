@@ -2,9 +2,10 @@ import { useMemo, type RefObject } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { appendPromptStashContent } from "@/lib/composer/prompt-stash-content";
-import type {
-  PromptStashDestinationAdapter,
-  PromptStashDestinationIdentity,
+import {
+  annotationSidecarRefusal,
+  type PromptStashDestinationAdapter,
+  type PromptStashDestinationIdentity,
 } from "@/lib/composer/prompt-stash-destination";
 import type { PromptStashSourceAdapter } from "@/lib/composer/prompt-stash-source";
 import {
@@ -96,6 +97,7 @@ export function useNewConversationPromptStashDestination(args: {
           editorIncarnation,
         };
       },
+      unsupportedReason: annotationSidecarRefusal,
       importAndInsert: (importArgs) => {
         const handle = editorRef.current;
         const editorIncarnation =
@@ -111,17 +113,12 @@ export function useNewConversationPromptStashDestination(args: {
         ) {
           return Promise.resolve({ status: "stale" });
         }
-        // Refused, not degraded. A browser annotation is a chat-composer
-        // sidecar - there is no field for one here and no card to render it -
-        // and the restore hook consumes an accepted entry, so taking only the
-        // content would destroy the records AND the last copy of their crops.
-        // The entry stays where it is, restorable into a chat composer.
-        if (importArgs.entry.annotations.length > 0) {
-          return Promise.resolve({
-            status: "unsupported",
-            reason:
-              "It has browser annotations, which only a chat composer can hold.",
-          });
+        // The consuming boundary's own refusal; the hook asks
+        // `unsupportedReason` before materializing. See that member's docs
+        // for why the destination keeps both.
+        const refusal = annotationSidecarRefusal(importArgs.entry);
+        if (refusal !== null) {
+          return Promise.resolve({ status: "unsupported", reason: refusal });
         }
         const patch =
           useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
