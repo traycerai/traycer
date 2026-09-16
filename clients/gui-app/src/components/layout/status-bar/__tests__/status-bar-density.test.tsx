@@ -219,42 +219,41 @@ describe("<StatusBarResourceSegment /> density", () => {
 
     expect(renderedMetrics()).toEqual([
       "status-bar-resource-metric-cpu",
-      "status-bar-resource-metric-memory",
       "status-bar-resource-metric-processes",
     ]);
     expect(screen.getByText("cpu")).not.toBeNull();
-    expect(screen.getByText("mem")).not.toBeNull();
     expect(screen.getByText("procs")).not.toBeNull();
   });
 
   it("drops the labels but keeps every metric when compact", () => {
     renderSegment("compact");
 
-    expect(renderedMetrics()).toHaveLength(3);
+    expect(renderedMetrics()).toHaveLength(2);
     expect(screen.queryByText("cpu")).toBeNull();
     expect(screen.queryByText("procs")).toBeNull();
   });
 
-  it("keeps memory alone at icon-only width", () => {
-    renderSegment("icon-only");
-
-    expect(renderedMetrics()).toEqual(["status-bar-resource-metric-memory"]);
-  });
-
-  it("never empties a configured segment when memory is switched off", () => {
-    // The density is the app narrowing its own chrome; it has no business
-    // emptying a control the user configured, so the first selected metric
-    // stands in for memory.
+  it("keeps memory alone at icon-only width when it is selected", () => {
     useLayoutStore.setState({
       statusBar: {
         ...DEFAULT_STATUS_BAR_LAYOUT,
         resources: {
           ...DEFAULT_STATUS_BAR_LAYOUT.resources,
-          metrics: ["cpu", "processes"],
+          metrics: ["cpu", "memory", "processes"],
         },
       },
     });
 
+    renderSegment("icon-only");
+
+    expect(renderedMetrics()).toEqual(["status-bar-resource-metric-memory"]);
+  });
+
+  it("never empties a configured segment when memory is not selected", () => {
+    // The density is the app narrowing its own chrome; it has no business
+    // emptying a control the user configured, so the first selected metric
+    // stands in for memory - which is the default's own case, since the
+    // default list (`cpu`, `processes`) carries no memory reading.
     renderSegment("icon-only");
 
     expect(renderedMetrics()).toEqual(["status-bar-resource-metric-cpu"]);
@@ -265,6 +264,6 @@ describe("<StatusBarResourceSegment /> density", () => {
     renderSegment("full");
 
     expect(screen.getByText("cpu: unavailable")).not.toBeNull();
-    expect(screen.getByText("mem: unavailable")).not.toBeNull();
+    expect(screen.getByText("procs: unavailable")).not.toBeNull();
   });
 });

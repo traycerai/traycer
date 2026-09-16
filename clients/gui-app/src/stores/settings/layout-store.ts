@@ -316,9 +316,15 @@ const DEFAULT_STATUS_BAR_RATE_LIMITS: StatusBarRateLimitPreferences = {
   shownProfiles: NO_SHOWN_PROFILES,
 };
 
+/**
+ * CPU and process count, not memory: on a fresh install the footer's memory
+ * figure is the one a reader cannot act on (it is the host's, not a
+ * budget), and it cost the scarcest row in the app a third chip. No
+ * migration off a persisted list - a list that was saved is a choice.
+ */
 const DEFAULT_STATUS_BAR_RESOURCES: StatusBarResourcePreferences = {
   enabled: true,
-  metrics: ["cpu", "memory", "processes"],
+  metrics: ["cpu", "processes"],
   scope: "host-tree",
 };
 

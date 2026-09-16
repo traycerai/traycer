@@ -8,9 +8,11 @@ import {
   DEFAULT_MONO_FONT_STACK,
 } from "@/lib/default-font-stacks";
 import {
+  DEFAULT_AGENT_OFFICE_VIEW,
   DEFAULT_CODE_FONT_SIZE,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
+import { OFFICE_VIEW_LABELS } from "@/lib/comm-graph/office/office-view-vocabulary";
 
 vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
   useDesktopZoomBridge: () => null,
@@ -43,6 +45,7 @@ function resetAppearanceSettings(): void {
     codeFontSize: DEFAULT_CODE_FONT_SIZE,
     terminalFontFamily: null,
     terminalFontSize: null,
+    agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
   });
 }
 
@@ -96,6 +99,73 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(documentPosition(fontsAndText, motion)).toBe("before");
     expect(documentPosition(motion, terminal)).toBe("before");
     expect(documentPosition(terminal, iconColors)).toBe("before");
+  });
+
+  it("renders the Agent office group between Terminal and Icon colors, with its Default view row wired to the store", () => {
+    // The case above is PAIRWISE: it asserts Terminal before Icon colors,
+    // which stays true whether or not Agent office renders between them at
+    // all - a port that added the definitions module entries but never
+    // wired the panel's own `<SettingsGroup>` would leave that case green.
+    // This pins the group by NAME, ties its row to it rather than to its
+    // neighbors, and exercises the row's control end to end.
+    renderPanel(queryClient);
+
+    const terminal = screen.getByRole("heading", {
+      level: 2,
+      name: "Terminal",
+    });
+    const agentOffice = screen.getByRole("heading", {
+      level: 2,
+      name: "Agent office",
+    });
+    const iconColors = screen.getByRole("heading", {
+      level: 2,
+      name: "Icon colors",
+    });
+    expect(documentPosition(terminal, agentOffice)).toBe("before");
+    expect(documentPosition(agentOffice, iconColors)).toBe("before");
+
+    // Tied to its OWN section, the way "places representative rows under
+    // the correct section headers" ties every other row to its heading -
+    // not merely somewhere after Terminal and before Icon colors, but
+    // inside Agent office's own `<section>`.
+    const defaultViewRow = screen.getByText("Default view");
+    expect(agentOffice.closest("section")).toBe(
+      defaultViewRow.closest("section"),
+    );
+    expect(iconColors.closest("section")).not.toBe(
+      defaultViewRow.closest("section"),
+    );
+
+    const select = screen.getByRole("combobox", { name: "Default view" });
+    expect(select.textContent).toBe(
+      DEFAULT_AGENT_OFFICE_VIEW === "auto" ? "Auto" : DEFAULT_AGENT_OFFICE_VIEW,
+    );
+
+    fireEvent.click(select);
+    fireEvent.click(
+      // Sourced from the leaf vocabulary module, not the registry: the panel
+      // itself now reads `OFFICE_VIEW_LABELS`, so this proves the option text
+      // it actually renders, without importing every planner, measurer and
+      // painter the registry pulls in.
+      screen.getByRole("option", { name: OFFICE_VIEW_LABELS.floor }),
+    );
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("floor");
+  });
+
+  it("sizes the Default view selector as a fluid width with a tokenized cap (Finding 16)", () => {
+    // A fixed `w-[min(40vw,8rem)]` caps a new layout surface at an arbitrary
+    // rem, which the GUI fluid-sizing rule forbids - `w-[40vw]` (fluid)
+    // plus a tokenized `max-w-32` ceiling replaces it. Scoped to the
+    // "Default view" trigger only: "Display zoom" carries the same
+    // `w-[min(40vw,8rem)]` shape and is deliberately out of scope here.
+    renderPanel(queryClient);
+
+    const select = screen.getByRole("combobox", { name: "Default view" });
+    expect(select.className).toContain("w-[40vw]");
+    expect(select.className).toContain("max-w-32");
+    expect(select.className).not.toContain("w-[min(40vw,8rem)]");
   });
 
   // The minimap side control moved to Settings > Layout's Chat group, where it

@@ -8,6 +8,7 @@ import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browse
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
+import type { DesktopMenuSnapshot } from "../../ipc-contracts/window-types";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -185,6 +186,9 @@ interface PreloadBridge {
   menu: {
     readonly platform: "darwin" | "win32" | "linux";
     onCommand(handler: (payload: unknown) => void): { dispose: () => void };
+    onChange(handler: () => void): { dispose: () => void };
+    getSnapshot(): Promise<DesktopMenuSnapshot>;
+    executeItem(revision: number, itemId: string): Promise<void>;
     openTopLevel(
       menuId: "file" | "edit" | "view" | "window" | "help",
       anchorX: number,
@@ -718,6 +722,12 @@ describe("preload new-capability wiring", () => {
 
   it("exposes menu-command and support bridges", async () => {
     const invokeFn = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === RunnerHostInvoke.menuGetSnapshot) {
+        return { revision: 8, menus: [] };
+      }
+      if (channel === RunnerHostInvoke.menuExecuteItem) {
+        return undefined;
+      }
       if (channel === RunnerHostInvoke.supportSnapshotGet) {
         return { appName: "Traycer", logs: [] };
       }
@@ -743,13 +753,32 @@ describe("preload new-capability wiring", () => {
     });
 
     const commands: unknown[] = [];
+    const changes: number[] = [];
     const subscription = bridge.menu.onCommand((payload) => {
       commands.push(payload);
     });
+    const changeSubscription = bridge.menu.onChange(() => {
+      changes.push(changes.length + 1);
+    });
+    await expect(bridge.menu.getSnapshot()).resolves.toEqual({
+      revision: 8,
+      menus: [],
+    });
+    await bridge.menu.executeItem(8, "file/0");
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.menuGetSnapshot);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.menuExecuteItem,
+      8,
+      "file/0",
+    );
     fakeElectron.emit(RunnerHostEvent.menuCommand, {
       command: "app.openLogs",
       windowId: "preload-window",
     });
+    fakeElectron.emit(RunnerHostEvent.menuChanged, undefined);
+    expect(changes).toEqual([1]);
+    changeSubscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.menuChanged, undefined);
     subscription.dispose();
     fakeElectron.emit(RunnerHostEvent.menuCommand, {
       command: "app.aboutDetails",

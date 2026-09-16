@@ -18,13 +18,13 @@ import {
 } from "@/lib/epic-selectors";
 import type { AgentActivityCoverage } from "@/lib/agent-activity";
 import { useAgentActivityCoverage } from "@/stores/agent-activity-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   WORKSPACE_FILE_TAB_KIND,
   type EpicArtifactRef,
   type EpicNodeRef,
 } from "@/stores/epics/canvas/types";
 import { WorkspaceFileIcon } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
+import { useEpicNodeIconTone } from "@/components/epic-canvas/use-epic-node-icon-tone";
 
 /**
  * Single source of truth for rendering the icon of a tab/node anywhere in
@@ -264,16 +264,8 @@ export function StaticEpicNodeIcon(props: {
   readonly className: string;
 }) {
   const Icon = EPIC_NODE_ICONS[props.type];
-  const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
-  const color = useSettingsStore((s) => s.artifactIconColors[props.type]);
-  const style = colorMode === "byType" ? { color } : undefined;
+  const tone = useEpicNodeIconTone(props.type);
   return (
-    <Icon
-      className={cn(
-        props.className,
-        colorMode === "none" && "text-muted-foreground",
-      )}
-      style={style}
-    />
+    <Icon className={cn(props.className, tone.className)} style={tone.style} />
   );
 }

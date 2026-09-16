@@ -1,11 +1,17 @@
 import type { UseQueryResult } from "@tanstack/react-query";
+import { hasBlockingWorktreeSelectorReason } from "@traycer-clients/shared/worktree/worktree-row-state";
+import { WORKTREE_DIRECTORY_CHECK_TIMEOUT_MESSAGE } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type {
+import {
   HostRpcError,
-  ResponseOfMethod,
+  RetryableTransportError,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostQuery,
+  useHostQueryWithResponseMap,
+} from "@/hooks/host/use-host-query";
 
 export function useWorktreeListBindingsForEpic(args: {
   readonly epicId: string;
@@ -32,5 +38,72 @@ export function useWorktreeListBindingsForEpicForClient(args: {
     method: "worktree.listBindingsForEpic",
     params: { epicId: args.epicId },
     options: { enabled: args.enabled },
+  });
+}
+
+/**
+ * Terminal selection needs a directory, not a Git repository. Keep this
+ * request in its own cache slot (purpose is part of the query key), so a Git
+ * picker can never consume the deliberately unverified Git fields.
+ */
+export function useTerminalWorkspaceBindings(args: {
+  readonly epicId: string;
+  readonly enabled: boolean;
+}) {
+  const client = useHostClient();
+  return useTerminalWorkspaceBindingsForClient({ ...args, client });
+}
+
+export function useTerminalWorkspaceBindingsForClient(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly epicId: string;
+  readonly enabled: boolean;
+}) {
+  return useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "worktree.listBindingsForEpic",
+    ResponseOfMethod<HostRpcRegistry, "worktree.listBindingsForEpic">
+  >({
+    cacheKeyIdentity: undefined,
+    client: args.client,
+    method: "worktree.listBindingsForEpic",
+    params: { epicId: args.epicId, purpose: "directory" },
+    mapResponse: ({ response }) => {
+      // An older host strips purpose and can answer with an unresolved Git
+      // placeholder. Retry it like a timeout instead of caching a successful
+      // response whose disabled row spins forever. v1.3 directory checks fail
+      // the RPC on timeout. A partial response must preserve usable siblings;
+      // the picker offers Retry for its remaining unverified directories.
+      if (
+        response.rows.some(
+          (row) => row.disabledReason !== null && row.isGitResolvePending,
+        ) &&
+        !response.rows.some((row) => !hasBlockingWorktreeSelectorReason(row))
+      ) {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          requestId: "terminal-workspace-check",
+          method: "worktree.listBindingsForEpic",
+          message: "Workspace availability check has not completed. Try again.",
+          fatalDetails: null,
+        });
+      }
+      return response;
+    },
+    options: {
+      enabled: args.enabled,
+      staleTime: 0,
+      refetchOnMount: "always",
+      // Retry only an unfinished availability check. Auth, permission and
+      // unrelated RPC errors must surface immediately. The transport already
+      // exhausts its own dial retries, so never multiply that budget here.
+      retry: (failureCount, error) =>
+        failureCount < 2 &&
+        !(error instanceof RetryableTransportError) &&
+        error.code === "RPC_ERROR" &&
+        (error.requestId === "terminal-workspace-check" ||
+          error.message === WORKTREE_DIRECTORY_CHECK_TIMEOUT_MESSAGE),
+      retryDelay: (attempt) => 1_000 * 2 ** attempt,
+    },
   });
 }

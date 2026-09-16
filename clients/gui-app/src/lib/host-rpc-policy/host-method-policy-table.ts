@@ -927,7 +927,16 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Pinning changes a task's persisted ordering preference.
   "epic.setPinned": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  "epic.getTaskContexts": { ...LATEST_SCHEDULING, poll: null },
+  // Opt-in (`poll: true`) and short, for one reader only: the pending-title
+  // fetcher (`providers/pending-epic-title-fetcher.tsx`) re-asks for a
+  // just-created epic's title while generation is in flight and no session is
+  // mounted to learn it from. Every other reader leaves `poll` unset and is
+  // not polled. Bounded by the 30s title-generation backstop, so the cadence
+  // sets how quickly a background tab picks up its name, not how long it asks.
+  "epic.getTaskContexts": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 2 * SECOND_MS },
+  },
   // Creating an epic persists a new collaboration root.
   "epic.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Batch deletion permanently removes the selected epics.
@@ -1365,7 +1374,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // would win.
   "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  "drafts.claim": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.retract": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Unary byte channel, same posture as `epic.readChatAttachment`.
   "drafts.putBlob": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.readBlob": { ...LATEST_SCHEDULING, poll: null },

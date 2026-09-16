@@ -315,7 +315,12 @@ class FakeDebugger implements BrowserViewDebugger {
 
 class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   readonly lifecycle: string[] = [];
-  readonly debugger: FakeDebugger;
+  private readonly debuggerImpl: FakeDebugger;
+  /** Electron's native getter throws once the WebContents is destroyed. */
+  get debugger(): FakeDebugger {
+    if (this.destroyed) throw new Error("Object has been destroyed");
+    return this.debuggerImpl;
+  }
   readonly session = {
     cookies: {
       get: () => Promise.resolve([]),
@@ -329,6 +334,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
     clear: () => {},
     goBack: () => {
       this.goBackCalls += 1;
+      if (this.goBackThrows) throw new Error("goBack failed");
     },
     goForward: () => {
       this.goForwardCalls += 1;
@@ -352,8 +358,17 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   readonly backgroundThrottlingStates: boolean[] = [];
   canGoBackValue = false;
   canGoForwardValue = false;
+  goBackThrows = false;
   throwDeprecatedNavigation = false;
   destroyed = false;
+  /**
+   * When set, the next `loadURL` call resolves/rejects through this deferred
+   * settlement instead of the default immediate resolve - lets a test control
+   * exactly when an in-flight `loadURL` settles relative to a later
+   * navigation, to prove an OLDER attempt's rejection cannot settle a NEWER
+   * one.
+   */
+  nextLoadURLDeferred: PromiseWithResolvers<void> | null = null;
   zoomFactor = 1;
   title = "";
   emptyCapture = false;
@@ -373,7 +388,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
     requireLoadedTargetForPageCommands: boolean,
   ) {
     super();
-    this.debugger = new FakeDebugger(
+    this.debuggerImpl = new FakeDebugger(
       this.lifecycle,
       requireLoadedTargetForPageCommands,
     );
@@ -383,6 +398,11 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
     this.lifecycle.push("loadURL");
     this.url = url;
     this.loadUrls.push(url);
+    if (this.nextLoadURLDeferred !== null) {
+      const deferred = this.nextLoadURLDeferred;
+      this.nextLoadURLDeferred = null;
+      return deferred.promise;
+    }
     if (url === "http://127.0.0.1:65535/") {
       return Promise.reject(new Error("ERR_CONNECTION_REFUSED"));
     }
@@ -2005,7 +2025,11 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const firstEnsure = harness.manager.ensureTab("window-1", ensureInput);
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
-    view.debugger.deferCommands = true;
+    // Captured before the supersede closes the guest: Electron's `debugger`
+    // getter throws once the WebContents is destroyed, so a reference taken
+    // beforehand is what lets the still-outstanding commands be resolved.
+    const debug = view.debugger;
+    debug.deferCommands = true;
     await flushCloseEntry();
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
 
@@ -2015,7 +2039,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
       "native tab ensure superseded by another window",
     );
     expect(view.closeCalls).toBe(1);
-    for (const resolve of view.debugger.commandResolvers.splice(0)) {
+    for (const resolve of debug.commandResolvers.splice(0)) {
       resolve(null);
     }
     const reclaimedReady = await reclaimedEnsure;
@@ -2916,6 +2940,10 @@ describe("BrowserViewManager annotation session", () => {
   it("keeps the agent's attachment when the overlay ends, and drops it with the tab", async () => {
     const harness = createHarness();
     const { capability, view } = await attachAnnotationTab(harness);
+    // Captured before `releaseTab` destroys the guest: Electron's `debugger`
+    // getter throws once the WebContents is gone, so the final assertion
+    // reads through this reference instead of the live getter.
+    const debug = view.debugger;
     await expect(
       harness.manager.dispatchElectronTabCdp({
         hostId: "host-1",
@@ -2926,7 +2954,7 @@ describe("BrowserViewManager annotation session", () => {
         command: { kind: "cdpGetFrameTree" },
       }),
     ).resolves.toMatchObject({ ok: true });
-    expect(view.debugger.attached).toBe(true);
+    expect(debug.attached).toBe(true);
 
     await expect(
       harness.manager.annotations.start("window-1", BASE_KEY),
@@ -2935,13 +2963,13 @@ describe("BrowserViewManager annotation session", () => {
 
     // Two holders, and the overlay's is the one that ended. The agent's lease
     // is still out, so its frame routes must survive the overlay's release.
-    expect(view.debugger.attached).toBe(true);
-    expect(view.debugger.detached).toBe(false);
+    expect(debug.attached).toBe(true);
+    expect(debug.detached).toBe(false);
 
     await expect(harness.manager.releaseTab(capability)).resolves.toBe(true);
     await flushCloseEntry();
 
-    expect(view.debugger.attached).toBe(false);
+    expect(debug.attached).toBe(false);
   });
 
   it("replaces an active session on a second startAnnotation", async () => {
@@ -3005,11 +3033,21 @@ describe("BrowserViewManager annotation session", () => {
     const crashHarness = createHarness();
     const { view: crashView } = await attachAnnotationTab(crashHarness);
     await crashHarness.manager.annotations.start("window-1", BASE_KEY);
+    // Captured before the emit: a crash closes the entry (and the guest)
+    // synchronously, and Electron's `debugger` getter throws once the
+    // WebContents is destroyed.
+    const crashDebug = crashView.debugger;
     crashView.emit("render-process-gone", {}, { reason: "crashed" });
-    expect(annotationBindingCommands(crashView)).toEqual([
-      "Runtime.addBinding",
-      "Runtime.removeBinding",
-    ]);
+    expect(
+      crashDebug.commands
+        .filter(
+          (command) =>
+            (command.method === "Runtime.addBinding" ||
+              command.method === "Runtime.removeBinding") &&
+            command.params.name === "__traycerAnnotation",
+        )
+        .map((command) => command.method),
+    ).toEqual(["Runtime.addBinding", "Runtime.removeBinding"]);
     expect(annotationEventTypes(crashHarness)).toEqual([
       { type: "ended", reason: "crash" },
     ]);
@@ -4674,6 +4712,58 @@ describe("BrowserViewManager renderer guest capability", () => {
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expectRendererGuestMint(harness);
   });
+
+  it("unregisters a guest that was already destroyed when its destroyed event fires, and lets the same tab be ensured again", async () => {
+    const harness = createHarness();
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const guest = requireGuest(harness);
+
+    // Give the tab a debugger attachment so the destroyed-WebContents teardown
+    // actually has a native getter to trip over: `dispatchElectronTabCdp`
+    // acquires the agent's CDP lease for the rest of the incarnation (see
+    // "attaches on the first agent dispatch and keeps that attachment for the
+    // incarnation" above), which is exactly the kind of live debug session
+    // `destroyEntry` has to dispose of.
+    await harness.manager.dispatchElectronTabCdp({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      target: { kind: "root" },
+      command: { kind: "cdpGetFrameTree" },
+    });
+    expect(guest.debugger.isAttached()).toBe(true);
+
+    // Electron's `destroyed` event fires AFTER the WebContents is destroyed,
+    // so `guest.debugger` already throws by the time the handler runs.
+    guest.destroyed = true;
+    guest.emit("destroyed");
+    await flushCloseEntry();
+
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
+    // The guest was already gone, so releaseRendererGuest must not try to
+    // close() an object that no longer exists.
+    expect(guest.closeCalls).toBe(0);
+
+    const again = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+
+    expect(again.registrationId).not.toBe(ready.registrationId);
+    expect(harness.attachMints).toHaveLength(2);
+    expect(harness.guests).toHaveLength(2);
+    expectRendererGuestMint(harness);
+  });
 });
 
 /**
@@ -5000,5 +5090,362 @@ describe("reserved chords are matched against the guest's own window", () => {
     // the wrong one of them.
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("BrowserViewManager navigation attempts and failure settles", () => {
+  async function reloadingTab(harness: Harness) {
+    const attached = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    await harness.manager.controlElectronTab("window-1", {
+      ...attached.capability,
+      action: { kind: "reload" },
+    });
+    attached.view.emit(
+      "did-start-navigation",
+      {},
+      "https://example.com/first",
+      false,
+      true,
+    );
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "loading",
+    });
+    harness.nativeTabStatuses.length = 0;
+    return attached;
+  }
+
+  // Electron 42.11.1 emits `did-fail-provisional-load` only for a navigation
+  // that COMMITTED an error page (a never-committed one emits nothing), so
+  // it is a settle for the current navigation exactly as `did-navigate` is.
+  it("settles a reload that ended on an error page, with a bounded reason", async () => {
+    const harness = createHarness();
+    const { view } = await reloadingTab(harness);
+    view.emit(
+      "did-fail-provisional-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://example.com/first",
+      true,
+    );
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "ready",
+      reason: "This page did not load (ERR_NAME_NOT_RESOLVED)",
+    });
+  });
+
+  it("follows the failed navigation's url when it ends on an error page", async () => {
+    const harness = createHarness();
+    const { view, capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "navigate", url: "https://nowhere.invalid/" },
+    });
+    harness.nativeTabStatuses.length = 0;
+    // The guest is showing Chromium's error page for the NEW url; the entry
+    // must say so, as it would for a successful commit, or the toolbar and
+    // the host keep naming the page that was left.
+    view.emit(
+      "did-fail-provisional-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://nowhere.invalid/",
+      true,
+    );
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "ready",
+      url: "https://nowhere.invalid/",
+    });
+  });
+
+  it("does not settle twice on the paired did-fail-load that follows the provisional event", async () => {
+    const harness = createHarness();
+    const { view } = await reloadingTab(harness);
+    view.emit(
+      "did-fail-provisional-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://example.com/first",
+      true,
+    );
+    const settled = harness.nativeTabStatuses.length;
+    view.emit(
+      "did-fail-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://example.com/first",
+      true,
+    );
+    expect(harness.nativeTabStatuses).toHaveLength(settled);
+  });
+
+  it("does not treat a bare did-fail-load as a settle", async () => {
+    // `WebContents::DidFailLoad` emits it for a COMMITTED document whose
+    // load was interrupted - the page being left while still loading - so
+    // it says nothing about the navigation that interrupted it.
+    const harness = createHarness();
+    const { view } = await reloadingTab(harness);
+    // A non-abort code, so the test bites if a did-fail-load listener is
+    // ever re-registered (ERR_ABORTED is ignored by the settle anyway).
+    view.emit(
+      "did-fail-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://example.com/first",
+      true,
+    );
+    expect(harness.nativeTabStatuses).toEqual([]);
+  });
+
+  it("ignores ERR_ABORTED on the provisional event rather than settling", async () => {
+    const harness = createHarness();
+    const { view } = await reloadingTab(harness);
+    view.emit(
+      "did-fail-provisional-load",
+      {},
+      -3,
+      "ERR_ABORTED",
+      "https://example.com/first",
+      true,
+    );
+    expect(harness.nativeTabStatuses).toEqual([]);
+  });
+
+  it("ignores a subframe provisional failure", async () => {
+    const harness = createHarness();
+    const { view } = await reloadingTab(harness);
+    view.emit(
+      "did-fail-provisional-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://example.com/frame",
+      false,
+    );
+    expect(harness.nativeTabStatuses).toEqual([]);
+  });
+
+  it("ignores a provisional failure while the entry is already ready", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    harness.nativeTabStatuses.length = 0;
+    view.emit(
+      "did-fail-provisional-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://example.com/first",
+      true,
+    );
+    expect(harness.nativeTabStatuses).toEqual([]);
+  });
+
+  it("settles a reload that interrupted the same url mid-load on whichever outcome the newest navigation reaches", async () => {
+    const harness = createHarness();
+    const { view, capability } = await reloadingTab(harness);
+    // Second reload while the first is in flight. The first is cancelled
+    // silently (a never-committed navigation emits nothing), so the only
+    // terminal event heard belongs to the second, whichever it is.
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "reload" },
+    });
+    view.emit(
+      "did-start-navigation",
+      {},
+      "https://example.com/first",
+      false,
+      true,
+    );
+    expect(
+      harness.nativeTabStatuses.filter((s) => s.status === "ready"),
+    ).toEqual([]);
+    view.emit(
+      "did-fail-provisional-load",
+      {},
+      -106,
+      "ERR_INTERNET_DISCONNECTED",
+      "https://example.com/first",
+      true,
+    );
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "ready",
+      reason: "This page did not load (ERR_INTERNET_DISCONNECTED)",
+    });
+  });
+
+  it("reports a new attempt for a reload issued while already loading", async () => {
+    const harness = createHarness();
+    const { capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "reload" },
+    });
+    const first = harness.nativeTabStatuses.at(-1);
+    expect(first).toMatchObject({ status: "loading", reason: null });
+    harness.nativeTabStatuses.length = 0;
+
+    // Still loading: `setStatus` would dedupe on (status, reason) and emit
+    // nothing, leaving the renderer's stall clock on the previous episode.
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "reload" },
+    });
+    const second = harness.nativeTabStatuses.at(-1);
+    expect(second).toMatchObject({ status: "loading", reason: null });
+    expect(second?.navigationAttempt).toBe(
+      (first?.navigationAttempt as number) + 1,
+    );
+  });
+
+  it("bumps navigationAttempt for every host-initiated navigation", async () => {
+    const harness = createHarness();
+    const { view, capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    const readyAttempt = harness.nativeTabStatuses.at(-1)?.navigationAttempt;
+    expect(typeof readyAttempt).toBe("number");
+    harness.nativeTabStatuses.length = 0;
+
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "reload" },
+    });
+    const afterReload = harness.nativeTabStatuses.at(-1);
+    expect(afterReload).toMatchObject({ status: "loading" });
+    expect(afterReload?.navigationAttempt).toBeGreaterThan(
+      readyAttempt as number,
+    );
+    // Settle the reload back to ready before the next action - a real caller
+    // never drives goBack while a reload is still in flight, and `setStatus`
+    // dedupes on (status, reason) alone, so a second `loading` set while
+    // still `loading` would otherwise emit nothing to assert on.
+    view.emit("did-navigate", {}, "https://example.com/first", 200, "OK");
+
+    view.canGoBackValue = true;
+    harness.nativeTabStatuses.length = 0;
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "goBack" },
+    });
+    const afterGoBack = harness.nativeTabStatuses.at(-1);
+    expect(afterGoBack).toMatchObject({ status: "loading" });
+    expect(afterGoBack?.navigationAttempt).toBeGreaterThan(
+      afterReload?.navigationAttempt as number,
+    );
+    view.emit(
+      "did-navigate-in-page",
+      {},
+      "https://example.com/first",
+      true,
+      1,
+      2,
+    );
+
+    harness.nativeTabStatuses.length = 0;
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "navigate", url: "https://example.com/second" },
+    });
+    const afterNavigate = harness.nativeTabStatuses.at(-1);
+    expect(afterNavigate).toMatchObject({ status: "loading" });
+    expect(afterNavigate?.navigationAttempt).toBeGreaterThan(
+      afterGoBack?.navigationAttempt as number,
+    );
+  });
+
+  it("does not let an older attempt's loadURL rejection settle a newer one", async () => {
+    const harness = createHarness();
+    const { view, capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/start",
+    );
+    harness.nativeTabStatuses.length = 0;
+
+    const deferredFirst = Promise.withResolvers<void>();
+    view.nextLoadURLDeferred = deferredFirst;
+    // Started but never resolves until the test says so: the first attempt
+    // is still "in flight" from the manager's point of view.
+    const firstNavigate = harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "navigate", url: "https://example.com/a" },
+    });
+    void firstNavigate.catch(() => undefined);
+
+    // A second navigation supersedes it before the first ever settles.
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "navigate", url: "https://example.com/b" },
+    });
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "loading",
+    });
+    harness.nativeTabStatuses.length = 0;
+
+    // Now the first (superseded) attempt's loadURL rejects. It must not
+    // settle the tile to "ready" out from under the second, still-loading
+    // attempt.
+    deferredFirst.reject(new Error("ERR_ABORTED"));
+    await expect(firstNavigate).rejects.toThrow("ERR_ABORTED");
+    expect(harness.nativeTabStatuses).toEqual([]);
+
+    // The second attempt commits normally afterwards.
+    view.emit("did-navigate", {}, "https://example.com/b", 200, "OK");
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "ready",
+      url: "https://example.com/b",
+    });
+  });
+
+  it("settles a history move to ready when the native goBack throws synchronously", async () => {
+    const harness = createHarness();
+    const { view, capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    view.canGoBackValue = true;
+    view.goBackThrows = true;
+    harness.nativeTabStatuses.length = 0;
+
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "goBack" },
+    });
+
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "ready",
+      reason: "Navigation failed",
+    });
   });
 });

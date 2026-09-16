@@ -810,6 +810,7 @@ describe("createElectronTabs", () => {
       canGoBack: false,
       canGoForward: false,
       zoomPercent: 100,
+      navigationAttempt: 0,
       viewed: false,
     });
     recorder.emitStatus({
@@ -824,6 +825,7 @@ describe("createElectronTabs", () => {
       canGoBack: true,
       canGoForward: false,
       zoomPercent: 100,
+      navigationAttempt: 0,
       viewed: true,
     });
 
@@ -867,6 +869,7 @@ describe("createElectronTabs", () => {
       canGoBack: true,
       canGoForward: false,
       zoomPercent: 100,
+      navigationAttempt: 0,
       viewed: false,
     } as const;
     recorder.emitStatus({
@@ -878,6 +881,7 @@ describe("createElectronTabs", () => {
     recorder.emitStatus({
       ...statusFields,
       registrationId: "registration-1",
+      navigationAttempt: 0,
       viewed: true,
     });
     expect(sent).toEqual([

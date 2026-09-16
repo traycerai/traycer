@@ -13,6 +13,49 @@ import type { OfficeAgentStatus } from "@/lib/comm-graph/office/office-types";
 import type { AgentActivityTier } from "@/lib/agent-activity";
 
 /**
+ * Whether each status means SOMETHING IS HAPPENING to this agent - every one
+ * of them, spelled out.
+ *
+ * A TABLE OVER THE WHOLE UNION, not a list of the hot ones, because a list is
+ * satisfiable by a partial answer. Adding a member to `OfficeAgentStatus` and
+ * not coming back here compiles perfectly and quietly reads the new status as
+ * cold - in the partition, the seat book, the scene, the directory and the
+ * painter at once, with nothing to notice it. A `Record` keyed by the union
+ * cannot be answered halfway: the member has to be classified before anything
+ * builds. The class of mistake is not hypothetical - a bench case in this repo
+ * counted `archived` as hot, from a list read off memory, and nothing typed
+ * stopped it.
+ *
+ * Five readers have to agree about this or the floor contradicts itself: the
+ * population partition calls a team live when any member is hot, the seat book
+ * wakes a cubby agent into a reserve seat, the directory lights the same rows,
+ * the scene decides who is drawn awake and the isometric painter picks the
+ * sprite. All five reach it through `isOfficeHotStatus`.
+ *
+ * Listed in the union's own order, so a member missing from one is missing at
+ * the same place in the other. `archived` and `idle` are the cold ones - an
+ * archived desk has nothing left to do, and an idle one has nothing to do yet.
+ */
+export const OFFICE_STATUS_IS_HOT: Readonly<
+  Record<OfficeAgentStatus, boolean>
+> = {
+  failure: true,
+  attention: true,
+  awaiting: true,
+  working: true,
+  archived: false,
+  background: true,
+  idle: false,
+};
+
+/** Whether this status is one of the hot ones; `undefined` is not. */
+export function isOfficeHotStatus(
+  status: OfficeAgentStatus | undefined,
+): boolean {
+  return status !== undefined && OFFICE_STATUS_IS_HOT[status];
+}
+
+/**
  * Whether a record is archived AS OF a cursor.
  *
  * `archivedAt` is a moment on the same timeline the cursor sits on, so a

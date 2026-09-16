@@ -25,6 +25,7 @@ import {
   type StateStorage,
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { basePersistOptions, epicCanvasKey } from "@/lib/persist";
@@ -101,6 +102,8 @@ import {
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
   updateBrowserTileViewportPreset,
+  updateCommGraphTileCamera,
+  updateCommGraphTileOfficeCamera,
   updateCommGraphTileView,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
@@ -126,6 +129,7 @@ import {
   type EdgeDropPosition,
   type EpicCanvasTileRef,
   type EpicCanvasState,
+  type CommGraphTileCamera,
   type CommGraphTileViewState,
   type EpicPipGeometry,
   type EpicViewTab,
@@ -580,6 +584,26 @@ export interface EpicCanvasStore {
     tabId: string,
     tileId: string,
     view: CommGraphTileViewState,
+  ) => void;
+  /**
+   * The viewport alone. Both canvases write their camera through this rather
+   * than through the whole-value action above, so a debounced pan cannot carry
+   * a stale mode or office view back over a pick made while it was in flight.
+   */
+  updateCommGraphTileCameraInTab: (
+    tabId: string,
+    tileId: string,
+    camera: CommGraphTileCamera,
+  ) => void;
+  /**
+   * The office's own camera write, carrying the view the numbers are about.
+   * The graph canvas uses the plain one above and cannot reach this field.
+   */
+  updateCommGraphTileOfficeCameraInTab: (
+    tabId: string,
+    tileId: string,
+    camera: CommGraphTileCamera,
+    framedView: OfficeViewId | null,
   ) => void;
   updatePrDiffTileViewInTab: (
     tabId: string,
@@ -2183,6 +2207,32 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
               updateCommGraphTileView(canvas, tileId, view),
+            ),
+          );
+        },
+
+        updateCommGraphTileCameraInTab: (tabId, tileId, camera) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateCommGraphTileCamera(canvas, tileId, camera),
+            ),
+          );
+        },
+
+        updateCommGraphTileOfficeCameraInTab: (
+          tabId,
+          tileId,
+          camera,
+          framedView,
+        ) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateCommGraphTileOfficeCamera(
+                canvas,
+                tileId,
+                camera,
+                framedView,
+              ),
             ),
           );
         },
