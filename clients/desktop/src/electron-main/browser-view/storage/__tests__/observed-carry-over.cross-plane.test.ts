@@ -178,9 +178,11 @@ class DesktopReceiveHarness {
       isHeadlessOriginKey: isHeadlessOriginCookieKey,
       // Wired exactly as `browser-view-ipc.ts` wires it, observer half
       // included - the half `ObservedApplyHarness` has no observer for.
-      claimHeadlessOriginKeys: (keys) => {
+      // Durable ownership is recorded for every survivor; the observer mark
+      // is armed separately, only immediately before an actual write.
+      claimHeadlessOriginKeys: (keys) => recordHeadlessOriginCookieKeys(keys),
+      noteAppliedKeys: (keys) => {
         this.observer?.noteAppliedKeys(keys);
-        return recordHeadlessOriginCookieKeys(keys);
       },
       releaseHeadlessOriginKeys: (keys) => {
         this.observer?.forgetAppliedKeys(keys);
@@ -319,6 +321,138 @@ describe("carry-over loop, desktop side of the wire", () => {
 
     await Promise.all(releases);
     expect(isHeadlessOriginCookieKey(sid)).toBe(false);
+
+    observer.dispose();
+  });
+});
+
+describe("orphan observer mark on an unchanged replay (ticket 03 fixup-01)", () => {
+  /**
+   * The bug: an identical replay used to arm an observer mark for a write
+   * that never happened (the applier claimed durable ownership and marked the
+   * observer for every survivor, before the compare-before-set check decided
+   * whether to write at all). The orphan mark then sat there until the
+   * desktop's own next insert for that key spent it instead of being read as
+   * a local write - so the key's durable ownership was never handed back, and
+   * a later stale replay overwrote the login the user just made.
+   *
+   * The fix marks the observer only immediately before an actual
+   * `cookies.set`, inside the merge's own compare-before-set branch, so an
+   * unchanged survivor claims durable ownership without arming a mark nothing
+   * will consume.
+   */
+  it("refuses a stale replay after the desktop overwrites an unchanged survivor's key, instead of overwriting the desktop's login", async () => {
+    const releases: Promise<void>[] = [];
+    const observer = new BrowserCookieChangeObserver({
+      cookies: harness.jar,
+      emit: () => undefined,
+      now: () => Date.now(),
+      monotonicNow: () => Date.now(),
+      coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+      onLocalCookieWrite: (key) => {
+        releases.push(releaseHeadlessOriginCookieKeys([key]));
+      },
+    });
+    observer.attach();
+    harness.observer = observer;
+    const sid = cookieKeyId({
+      domain: CARRY_OVER_DOMAIN,
+      name: "sid",
+      path: "/",
+    });
+    const hostFrame = observedFrame({
+      domain: CARRY_OVER_DOMAIN,
+      cookies: [
+        cookie({ name: "sid", domain: CARRY_OVER_DOMAIN, expires: -1 }),
+      ],
+    });
+
+    // The initial observation: a real write. Its own insert consumes the mark
+    // it armed, so it is never mistaken for a local write.
+    expect(await harness.receive(hostFrame, CONNECTION_ID)).toBe("applied");
+    expect(isHeadlessOriginCookieKey(sid)).toBe(true);
+
+    // An unchanged replay of the same frame: the survivor matches its jar
+    // counterpart exactly, so no `cookies.set` fires - and, with the fix,
+    // nothing arms a mark for a write that is not going to happen.
+    expect(await harness.receive(hostFrame, CONNECTION_ID)).toBe("applied");
+    expect(isHeadlessOriginCookieKey(sid)).toBe(true);
+
+    // The user signs in on this machine, overwriting the same key. With the
+    // orphan-mark bug this insert would be consumed by the replay's leftover
+    // mark instead of reaching `onLocalCookieWrite`, and ownership would never
+    // come back.
+    await harness.jar.set({
+      url: `https://${CARRY_OVER_DOMAIN}/`,
+      name: "sid",
+      value: "desktop-login",
+      // No `domain`: host-only, same as the original host cookie - an
+      // explicit domain here would model a different (domain-cookie) key.
+      path: "/",
+      secure: true,
+      expirationDate: CARRY_OVER_PERSISTENT_EXPIRES,
+    });
+    await Promise.all(releases);
+    expect(isHeadlessOriginCookieKey(sid)).toBe(false);
+
+    // A later, stale replay must now be refused as owned by the desktop
+    // rather than overwriting the user's real login.
+    const staleReplay = observedFrame({
+      domain: CARRY_OVER_DOMAIN,
+      cookies: [
+        cookie({ name: "sid", domain: CARRY_OVER_DOMAIN, expires: -1 }),
+      ],
+    });
+    expect(await harness.receive(staleReplay, CONNECTION_ID)).toBe("applied");
+    expect(harness.jar.find("sid")?.value).toBe("desktop-login");
+    expect(isHeadlessOriginCookieKey(sid)).toBe(false);
+
+    observer.dispose();
+  });
+
+  it("arms one mark per actual write when the same key repeats within one apply", async () => {
+    const releases: Promise<void>[] = [];
+    const observer = new BrowserCookieChangeObserver({
+      cookies: harness.jar,
+      emit: () => undefined,
+      now: () => Date.now(),
+      monotonicNow: () => Date.now(),
+      coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+      onLocalCookieWrite: (key) => {
+        releases.push(releaseHeadlessOriginCookieKeys([key]));
+      },
+    });
+    observer.attach();
+    harness.observer = observer;
+    const sid = cookieKeyId({
+      domain: CARRY_OVER_DOMAIN,
+      name: "sid",
+      path: "/",
+    });
+    // Two occurrences of the same key in one frame, both real writes: the
+    // second must not be read as satisfied by the first's stale snapshot, and
+    // each write must arm - and spend - its own mark.
+    const frame = observedFrame({
+      domain: CARRY_OVER_DOMAIN,
+      cookies: [
+        {
+          ...cookie({ name: "sid", domain: CARRY_OVER_DOMAIN, expires: -1 }),
+          value: "first",
+        },
+        {
+          ...cookie({ name: "sid", domain: CARRY_OVER_DOMAIN, expires: -1 }),
+          value: "second",
+        },
+      ],
+    });
+
+    expect(await harness.receive(frame, CONNECTION_ID)).toBe("applied");
+
+    expect(harness.jar.find("sid")?.value).toBe("second");
+    // Both marks were consumed by their own writes: neither insert reached
+    // `onLocalCookieWrite`, so ownership still stands.
+    expect(releases).toHaveLength(0);
+    expect(isHeadlessOriginCookieKey(sid)).toBe(true);
 
     observer.dispose();
   });

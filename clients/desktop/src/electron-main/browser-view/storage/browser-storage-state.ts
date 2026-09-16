@@ -503,9 +503,8 @@ export interface BrowserObservedCookieMergeResult {
  *
  * Both host->jar doors arrive here - the observed frame and the
  * `createElectronTab` seed, which used to have a `seedBrowserViewCookies` loop
- * of its own with none of the checks. Application goes through Chromium's own
- * `cookies.set`, which is what
- * normalises the attributes away from anything the sender chose.
+ * of its own with none of the checks. Changed cookies go through Chromium's
+ * own `cookies.set`; identical survivors count as applied without a write.
  *
  * Merge-only: it sets and never removes. The caller has already dropped the
  * expired cookies that would otherwise reach `cookies.set` as deletes.
@@ -513,7 +512,12 @@ export interface BrowserObservedCookieMergeResult {
 export async function mergeObservedProfileCookies(
   cookies: readonly ProtocolStorageCookie[],
   browserSession: BrowserStorageSession,
+  jarCookies: readonly ProtocolStorageCookie[],
+  beforeSet: (key: BrowserCookieKey) => void,
 ): Promise<BrowserObservedCookieMergeResult> {
+  const currentCookies = new Map(
+    jarCookies.map((cookie) => [cookieKeyId(cookie), cookie]),
+  );
   let applied = 0;
   const refused: BrowserCookieKey[] = [];
   for (const cookie of cookies) {
@@ -534,7 +538,22 @@ export async function mergeObservedProfileCookies(
         refused.push(key);
         continue;
       }
-      await setStorageCookie(parsed, browserSession);
+      const keyId = cookieKeyId(parsed);
+      const current = currentCookies.get(keyId);
+      if (
+        current === undefined ||
+        current.value !== parsed.value ||
+        (current.expires < 0 ? -1 : current.expires) !==
+          (parsed.expires < 0 ? -1 : parsed.expires) ||
+        current.httpOnly !== parsed.httpOnly ||
+        current.secure !== parsed.secure ||
+        current.sameSite !== parsed.sameSite
+      ) {
+        const details = toElectronCookieSetDetails(toCookieSetDetails(parsed));
+        beforeSet(key);
+        await browserSession.cookies.set(details);
+        currentCookies.set(keyId, parsed);
+      }
       applied += 1;
     } catch {
       refused.push(key);
@@ -581,7 +600,7 @@ function canonicalKeyDomain(domain: string): string {
 }
 
 /**
- * The keys one registrable scope holds in this jar right now, subdomains
+ * The cookies one registrable scope holds in this jar right now, subdomains
  * included - Chromium's own `cookies.get` domain filter is subdomain-inclusive,
  * which is what makes this the whole scope the ownership rule reasons over.
  *
@@ -596,38 +615,11 @@ function canonicalKeyDomain(domain: string): string {
  * either. Case and IDN forms are no longer in that set: `readCookieDomain`
  * normalises them the way Chromium's own jar does.
  */
-export async function browserJarCookieKeys(
+export async function browserJarCookies(
   domain: string,
   browserSession: BrowserStorageSession,
-): Promise<readonly BrowserCookieKey[]> {
-  // PROJECTED, not just narrowed by the return type: `browserStorageCookies`
-  // answers whole cookies, and TypeScript accepts the wider object for the
-  // three-field key type - so `value`, `expires`, `httpOnly`, `secure` and
-  // `sameSite` would reach every caller at runtime while the signature says
-  // "keys". This function exists so the ownership rule can ask what the jar
-  // HOLDS without reading what it holds.
-  return browserStorageCookies(
-    await browserSession.cookies.get({ domain }),
-  ).map((cookie) => ({
-    domain: cookie.domain,
-    name: cookie.name,
-    path: cookie.path,
-  }));
-}
-
-/**
- * One parsed cookie into one jar, through Chromium's own `cookies.set`
- * validation. Both application paths go through here - the tab seed and the
- * observed merge - so neither can normalise or scope a cookie differently
- * from the other.
- */
-async function setStorageCookie(
-  cookie: DesktopStorageCookie,
-  browserSession: BrowserStorageSession,
-): Promise<void> {
-  await browserSession.cookies.set(
-    toElectronCookieSetDetails(toCookieSetDetails(cookie)),
-  );
+): Promise<readonly ProtocolStorageCookie[]> {
+  return browserStorageCookies(await browserSession.cookies.get({ domain }));
 }
 
 /**
