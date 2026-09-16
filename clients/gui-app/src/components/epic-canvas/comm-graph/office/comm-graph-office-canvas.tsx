@@ -268,9 +268,12 @@ const SIGN_LABEL_BASELINE = 11;
  * The air between a floating sign's plate and what stands on the room's first
  * row.
  *
- * Two pixels, the same gap the beacon keeps from its plate
- * ({@link SIREN_PLATE_GAP_PX}), so the label reads as belonging to the room
- * under it rather than to whatever is in the row above.
+ * Two pixels rather than the beacon's one ({@link SIREN_PLATE_GAP_PX}): a
+ * beacon is fixed to the plate it sits on and reads as one object with it, so
+ * it wants the tightest seam that still shows a seam. This gap separates two
+ * things that are NOT one object - lettering, and whatever agent or fixture
+ * happens to be standing under it - and at one pixel the plate's backing reads
+ * as resting on a head rather than hanging above it.
  */
 const FLOATING_SIGN_GAP_PX = 2;
 /**
@@ -1849,7 +1852,7 @@ function drawSignArt(args: {
   for (const entry of signs) {
     // A FLOATING SIGN HAS NO BOARD: there is no wall under it to hang one on,
     // and the tile it would hang in is furniture. See `OfficeSignMount`.
-    if (entry.mount === "floating") continue;
+    if (entry.mount.kind === "floating") continue;
     const name = signSpriteFor(entry.sign);
     if (name === null) continue;
     const boardX = signBoardX(entry, name);
@@ -1889,9 +1892,13 @@ function drawSignLabels(args: {
     // lift is made in. A clearance measured wholly in rows clears the
     // furniture at close-up and sits back down on it as the reader zooms out;
     // one measured wholly in screen pixels drifts off the room instead.
+    //
+    // MEASURED FROM THE MOUNT'S CLEARANCE, NOT THE ANCHOR. The resolver is
+    // where the room's own bounds are known; a lift taken from the sign's tile
+    // is a row short at every help desk. See {@link OfficeSignMount}.
     const screenY =
-      entry.mount === "floating"
-        ? (entry.anchor.y - FIGURE_OVERHANG) * camera.zoom +
+      entry.mount.kind === "floating"
+        ? (entry.mount.clearWorldY - FIGURE_OVERHANG) * camera.zoom +
           camera.y -
           FLOATING_SIGN_GAP_PX -
           SIGN_PADDING_Y

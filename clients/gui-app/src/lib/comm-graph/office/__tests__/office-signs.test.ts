@@ -39,8 +39,10 @@ import {
   type OfficeLayout,
   type OfficeSign,
   type OfficeSignKind,
+  type OfficeViewId,
 } from "@/lib/comm-graph/office/office-types";
 import {
+  OFFICE_VIEW_IDS,
   OFFICE_VIEWS,
   type OfficeProjector,
 } from "@/lib/comm-graph/office/views/office-view";
@@ -2675,7 +2677,7 @@ describe("officeSignsToDraw - a civic sign's mount follows its room's enclosure"
     // Non-vacuous on its own too: this run's real Floor plan actually
     // produced a drawn sign for an open room, not zero of them.
     expect(openSigns.length).toBeGreaterThan(0);
-    for (const entry of openSigns) expect(entry.mount).toBe("floating");
+    for (const entry of openSigns) expect(entry.mount.kind).toBe("floating");
   });
 
   it("mounts a walled civic room's sign on the wall", () => {
@@ -2684,7 +2686,7 @@ describe("officeSignsToDraw - a civic sign's mount follows its room's enclosure"
     const { civicRooms, drawn } = realFloorCivicRooms();
     const walledSigns = mountedSignsFor(civicRooms, drawn, "walled");
     expect(walledSigns.length).toBeGreaterThan(0);
-    for (const entry of walledSigns) expect(entry.mount).toBe("wall");
+    for (const entry of walledSigns) expect(entry.mount.kind).toBe("wall");
   });
 });
 
@@ -2811,9 +2813,10 @@ describe("officeSignsToDraw - every non-civic sign kind mounts on a wall", () =>
     // kind and the mount it wrongly got, rather than a bare
     // `expect(...).toBe("wall")` that would print only the first mismatch.
     const offenders = drawn
-      .filter((entry) => entry.mount !== "wall")
+      .filter((entry) => entry.mount.kind !== "wall")
       .map(
-        (entry) => `${entry.sign.kind} sign resolved mount "${entry.mount}"`,
+        (entry) =>
+          `${entry.sign.kind} sign resolved mount "${entry.mount.kind}"`,
       );
     expect(offenders).toEqual([]);
     // NON-VACUOUS PER KIND: the sweep actually produced a drawn sign of every
@@ -2821,5 +2824,222 @@ describe("officeSignsToDraw - every non-civic sign kind mounts on a wall", () =>
     // the lettering gate while the rest silently dropped out of `drawn`.
     const missingKinds = NON_CIVIC_KINDS.filter((kind) => !seenKinds.has(kind));
     expect(missingKinds).toEqual([]);
+  });
+});
+
+/**
+ * THE FLOATING CLEARANCE'S OWN ROW, not the sign's own tile.
+ *
+ * `civicSignToDraw` used to lift a floating plate off `entry.anchor.y` alone
+ * - the SIGN's own tile, projected - which is a row too low whenever the
+ * sign's tile is not on the room's own first row. All four help desks
+ * (Floor, City, Campus, Mission control) letter from `signTile.row ===
+ * bounds.row + 1`: the sign sits on the counter and the queue stands above
+ * it, so their plates landed back inside the room's own first row - the
+ * queue row an agent stands in at the counter. `mount.clearWorldY` now reads
+ * the room's own first row instead, taken at the SIGN's own column through
+ * the view's projector, and `Math.min`'d with the anchor so a sign the plan
+ * already lettered from ABOVE its box (Campus's waiting room, the oblique
+ * archive) is not dragged back down onto it.
+ *
+ * Swept across every view the registry ships, not just Floor: the
+ * relationship between a sign's tile and its room's bounds is written
+ * independently by each view's own plan, and `realFloorCivicRooms` above
+ * already proves the MOUNT itself (wall vs. floating) on Floor alone - this
+ * proves the floating CLEARANCE across all six.
+ */
+describe("officeSignsToDraw - a floating civic sign's clearance is its room's own first row, not its sign's tile", () => {
+  /**
+   * THE REAL PLAN FOR ONE VIEW, at office zoom (lod 2) - `realFloorCivicRooms`
+   * above, generalized from Floor to every view the registry ships. The
+   * projector is returned alongside the drawn signs rather than rebuilt from
+   * the layout a second time, so every check below reads the room's first
+   * row through the exact projector `civicSignToDraw` itself used.
+   */
+  function realCivicRoomsFor(viewId: OfficeViewId): {
+    readonly civicRooms: ReadonlyArray<OfficeCivicRoom>;
+    readonly drawn: ReadonlyArray<OfficeSignToDraw>;
+    readonly projector: OfficeProjector;
+  } {
+    const epic = makeTestEpic("triage", 200, 1);
+    const statusById = new Map(epic.statusById);
+    const partition = partitionOfficePopulation({
+      agents: epic.agents,
+      statusById,
+      previous: null,
+    });
+    const layout = OFFICE_VIEWS[viewId].plan({
+      agents: epic.agents,
+      partition,
+      activityById: new Map(),
+      occupancy: new Map(),
+      needsCapacity: [],
+      viewport: { width: 1040, height: 700 },
+      previous: null,
+    });
+    const projector = OFFICE_VIEWS[viewId].painter.projector(layout);
+    const civicRooms = layout.floors.flatMap((floor) => floor.civic);
+    const drawn = officeSignsToDraw({
+      floors: layout.floors,
+      civicTally: NO_CIVIC_COUNTS,
+      clock: STILL_SIGN_CLOCK,
+      signs: layout.signs.filter((sign) => sign.kind === "civic"),
+      visibleAgentIds: new Set(),
+      statusById: new Map(),
+      nameById: new Map(),
+      hostNameById: new Map(),
+      roleClaims: {},
+      zoom: 1,
+      measure,
+      projector,
+      // CLOSE-UP: the same band `realFloorCivicRooms` reads at - every civic
+      // sign is lettered unconditionally here, so nothing is dropped for
+      // width and the sweep sees every open room the plan made, not
+      // whichever ones happened to fit their own pixels.
+      lod: 2,
+    });
+    return { civicRooms, drawn, projector };
+  }
+
+  /**
+   * Every drawn civic sign paired with its OWN room, restricted to
+   * `enclosure: "open"` - the only rooms `civicSignToDraw` ever floats.
+   * Matched by `civicRoomId` off the plan's own room list, the same join
+   * `mountedSignsFor` above does; a sign the resolver could not place
+   * against a room (or whose room is walled) is left out here rather than
+   * counted.
+   */
+  function openRoomEntries(
+    civicRooms: ReadonlyArray<OfficeCivicRoom>,
+    drawn: ReadonlyArray<OfficeSignToDraw>,
+  ): ReadonlyArray<{
+    readonly entry: OfficeSignToDraw;
+    readonly room: OfficeCivicRoom;
+  }> {
+    const byId = new Map(civicRooms.map((room) => [room.civicRoomId, room]));
+    const pairs: Array<{
+      readonly entry: OfficeSignToDraw;
+      readonly room: OfficeCivicRoom;
+    }> = [];
+    for (const entry of drawn) {
+      const civicRoomId = entry.sign.civicRoomId;
+      if (civicRoomId === null) continue;
+      const room = byId.get(civicRoomId);
+      if (room === undefined || room.enclosure !== "open") continue;
+      pairs.push({ entry, room });
+    }
+    return pairs;
+  }
+
+  it("keeps every open civic room's floating clearance at or above the room's own first row, taken at the sign's own column", () => {
+    const offenders: string[] = [];
+    const seenViews = new Set<OfficeViewId>();
+    for (const viewId of OFFICE_VIEW_IDS) {
+      const { civicRooms, drawn, projector } = realCivicRoomsFor(viewId);
+      for (const { entry, room } of openRoomEntries(civicRooms, drawn)) {
+        seenViews.add(viewId);
+        const label = `${viewId}/${room.kind}`;
+        if (entry.mount.kind !== "floating") {
+          offenders.push(
+            `${label}: mount is "${entry.mount.kind}", not floating`,
+          );
+          continue;
+        }
+        // THE ROOM'S OWN FIRST ROW, taken at the SIGN's column through the
+        // SAME projector the resolver used - two of the four help desks
+        // letter from a column outside their own box entirely, so the row
+        // has to be read at the sign's column, never the room's.
+        const roomFirstRowY = projector.project(
+          entry.sign.tile.col,
+          room.bounds.row,
+        ).y;
+        if (entry.mount.clearWorldY > roomFirstRowY) {
+          offenders.push(
+            `${label}: clearWorldY ${entry.mount.clearWorldY} sits below the room's first row at ${roomFirstRowY}`,
+          );
+          continue;
+        }
+        // EXACTLY THAT VALUE, not merely under it - `civicSignToDraw`'s own
+        // `Math.min`, recomputed here rather than trusted.
+        const expected = Math.min(entry.anchor.y, roomFirstRowY);
+        if (entry.mount.clearWorldY !== expected) {
+          offenders.push(
+            `${label}: clearWorldY ${entry.mount.clearWorldY} !== Math.min(anchor.y, roomFirstRowY) = ${expected}`,
+          );
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+    // NON-VACUOUS ACROSS THE WHOLE REGISTRY: every one of the six views put
+    // at least one open civic room through this sweep, so a view that
+    // stopped emitting an open room (or started emitting none of its own)
+    // would show up as a missing id here rather than as a sweep that quietly
+    // covered less than it used to.
+    const missingViews = OFFICE_VIEW_IDS.filter((id) => !seenViews.has(id));
+    expect(missingViews).toEqual([]);
+  });
+
+  it("actually covers the four help desks a floating plate used to drop into the queue row - Floor, City, Campus and Mission control", () => {
+    // THE NON-VACUITY CONTROL FOR THE CASE ABOVE. If a future plan change
+    // moved every help desk's sign onto its own room's top row - dRow 0, the
+    // way Towers' and Building's already are - the sweep above would keep
+    // passing (clearWorldY would just equal the room's first row every time)
+    // without ever exercising the exact off-by-one shape the bug had. This
+    // is what makes that impossible to do silently: the four views the bug
+    // actually named have to keep showing up here.
+    const coveredViews = new Set<OfficeViewId>();
+    for (const viewId of OFFICE_VIEW_IDS) {
+      const { civicRooms, drawn } = realCivicRoomsFor(viewId);
+      for (const { room } of openRoomEntries(civicRooms, drawn)) {
+        if (
+          room.kind === "help-desk" &&
+          room.signTile.row === room.bounds.row + 1
+        ) {
+          coveredViews.add(viewId);
+        }
+      }
+    }
+    const expectedViews: ReadonlyArray<OfficeViewId> = [
+      "floor",
+      "city",
+      "campus",
+      "mission-control",
+    ];
+    const missingHelpDeskViews = expectedViews.filter(
+      (viewId) => !coveredViews.has(viewId),
+    );
+    expect(missingHelpDeskViews).toEqual([]);
+  });
+
+  it("does not drag a sign the plan already lettered from above its room's box back down onto it", () => {
+    const offenders: string[] = [];
+    let sawALiftedRoom = false;
+    for (const viewId of OFFICE_VIEW_IDS) {
+      const { civicRooms, drawn } = realCivicRoomsFor(viewId);
+      for (const { entry, room } of openRoomEntries(civicRooms, drawn)) {
+        // ABOVE ITS OWN BOUNDS ROW: a smaller row is drawn higher on screen.
+        // Campus's waiting room letters from a row above its own box, and so
+        // does the oblique archive, two rows above.
+        if (room.signTile.row >= room.bounds.row) continue;
+        sawALiftedRoom = true;
+        const label = `${viewId}/${room.kind}`;
+        if (entry.mount.kind !== "floating") {
+          offenders.push(
+            `${label}: mount is "${entry.mount.kind}", not floating`,
+          );
+          continue;
+        }
+        if (entry.mount.clearWorldY !== entry.anchor.y) {
+          offenders.push(
+            `${label}: clearWorldY ${entry.mount.clearWorldY} !== anchor.y ${entry.anchor.y} - the plan's own lift was undone`,
+          );
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+    // NOT VACUOUS: the sweep actually crossed a room lettered from above its
+    // own box - Campus's waiting room and the oblique archive - or the check
+    // above would have passed over an empty set.
+    expect(sawALiftedRoom).toBe(true);
   });
 });

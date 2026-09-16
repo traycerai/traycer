@@ -65,8 +65,37 @@ import type { OfficeProjector } from "@/lib/comm-graph/office/views/office-view"
  * Dispensary's board stood in a bed and hid the agent lying in it, the waiting
  * room's took a chair, and the front desk's collected the name tag of whoever
  * was standing at the counter. A room label belongs over the room, not in it.
+ *
+ * A floating mount CARRIES ITS OWN CLEARANCE rather than leaving the renderer
+ * to infer one from the anchor, because the two are not the same point and the
+ * difference is a whole row. A sign's tile is not always its room's first row:
+ * all four help desks letter from the row BELOW their box's top (the sign sits
+ * on the counter, the queue stands above it), so a lift measured from the
+ * anchor clears the counter and sets the plate straight back down in the queue
+ * - the exact overlap this mount exists to end. Making the clearance part of
+ * the mount is what stops a future floating sign from being added without one.
  */
-export type OfficeSignMount = "wall" | "floating";
+export type OfficeSignMount =
+  | { readonly kind: "wall" }
+  | {
+      readonly kind: "floating";
+      /**
+       * World-space `y` the plate has to clear: the top of the room's own
+       * first row, taken at THIS sign's column, and never below the sign's
+       * own tile - Campus's waiting room and the oblique archive already
+       * letter from above their box, and clamping them down to it would
+       * undo a lift the plan had already made.
+       */
+      readonly clearWorldY: number;
+    };
+
+/**
+ * The mount every board-on-a-wall sign shares. One frozen value rather than a
+ * literal per sign: this resolver runs per frame over every visible agent's
+ * name plate, and at a thousand agents that is a thousand allocations a frame
+ * for a value with no fields to vary.
+ */
+const WALL_MOUNT: OfficeSignMount = { kind: "wall" };
 
 /** One sign, resolved: where it is, and what it says right now. */
 export interface OfficeSignToDraw {
@@ -597,6 +626,14 @@ const OFFICE_FIXTURE_LETTERING_LOD: OfficeLod = 2;
  * floor, so a rule written about Towers and Campus would be re-discovered by
  * the next view to land. The two inputs are the sign's own kind and whether it
  * names somebody - both facts the plan already carries.
+ *
+ * READ THIS AS "DRAWN AT", NOT ONLY "LETTERED AT". A `false` here withholds
+ * the sign's whole ENTRY, and the renderer hangs the board sprite off the same
+ * entry as the text, so the plaque goes with the words. See the call site in
+ * {@link officeSignsToDraw} for why that is the answer the feedback asked for
+ * rather than an oversight. The one thing that outlives a `false` is a ward's
+ * BEACON, which `civicSignToDraw` checks before it consults this at all: an
+ * alarm is not lettering and does not wait for the camera.
  */
 export function officeSignLetteredAt(args: {
   readonly sign: OfficeSign;
@@ -887,8 +924,20 @@ function civicSignToDraw(args: {
   readonly lod: OfficeLod;
   readonly zoom: number;
   readonly measure: OfficePlateMeasure;
+  /** For an open room's clearance: the room's first row is a PROJECTED fact. */
+  readonly projector: OfficeProjector;
 }): OfficeSignToDraw | null {
-  const { anchor, civicTally, clock, lod, measure, placed, sign, zoom } = args;
+  const {
+    anchor,
+    civicTally,
+    clock,
+    lod,
+    measure,
+    placed,
+    projector,
+    sign,
+    zoom,
+  } = args;
   const reading = officeCivicSignText({
     room: placed.room,
     tally: civicTally,
@@ -924,7 +973,22 @@ function civicSignToDraw(args: {
     // THE ROOM'S OWN ENCLOSURE DECIDES, because the board needs a wall and
     // only a walled room has one. See {@link OfficeSignMount} for what an
     // open room's board was landing on instead.
-    mount: placed.room.enclosure === "walled" ? "wall" : "floating",
+    //
+    // THE CLEARANCE IS THE ROOM'S FIRST ROW, NOT THE SIGN'S TILE. Taken at the
+    // sign's own column, because that is the column the plate is drawn in -
+    // two of the four help desks letter from a tile outside their box
+    // entirely - and `min`'d with the anchor so a sign the plan already hung
+    // above its room is not dragged back down onto it.
+    mount:
+      placed.room.enclosure === "walled"
+        ? WALL_MOUNT
+        : {
+            kind: "floating",
+            clearWorldY: Math.min(
+              anchor.y,
+              projector.project(sign.tile.col, placed.room.bounds.row).y,
+            ),
+          },
   };
 }
 
@@ -1016,6 +1080,7 @@ export function officeSignsToDraw(args: {
         sign,
         placed,
         anchor,
+        projector,
         civicTally,
         clock,
         lod,
@@ -1027,6 +1092,16 @@ export function officeSignsToDraw(args: {
     }
     // Every other kind decides on the sign alone - only `civic` counts, so
     // only `civic` has a reading to consult.
+    //
+    // THIS DROPS THE BOARD TOO, not only the lettering. A sign that is not
+    // lettered here gets no entry at all, and the renderer draws a sign's
+    // board sprite off the same entries it draws the text off - so an amenity
+    // plate withheld at office zoom takes its plaque with it and both come
+    // back together at close-up. That is the intent rather than a side
+    // effect: the feedback this band rule answers is "the labels completely
+    // cover the artwork", and a BLANK plaque covers exactly as much of it as
+    // a lettered one. Leaving the board behind would answer the complaint by
+    // deleting the only part of the sign that was doing any work.
     if (!officeSignLetteredAt({ sign, lod, civicReports: false })) continue;
     if (sign.kind === "board" || sign.kind === "hq-board") {
       const text = officeBoardText({
@@ -1048,7 +1123,7 @@ export function officeSignsToDraw(args: {
         subtext: null,
         anchor,
         sirenFrame: null,
-        mount: "wall",
+        mount: WALL_MOUNT,
       });
       continue;
     }
@@ -1113,7 +1188,7 @@ function nameSignToDraw(args: {
       subtext: claim,
       anchor,
       sirenFrame: null,
-      mount: "wall",
+      mount: WALL_MOUNT,
     };
   }
   const fitted = officePlateTextThatFits({
@@ -1140,7 +1215,7 @@ function nameSignToDraw(args: {
           }),
     anchor,
     sirenFrame: null,
-    mount: "wall",
+    mount: WALL_MOUNT,
   };
 }
 
