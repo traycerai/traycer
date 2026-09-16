@@ -579,6 +579,11 @@ export const chatQueuedManagedCommandItemSchema = z.object({
   // this same line must still rehydrate. Absent means "not recorded", which the
   // chip renders generically - it never stands in for a guessed flag.
   monitoring: z.boolean().nullable().default(null),
+  // The host the shell runs on when that is not the chat's own host (a shell
+  // created through a cross-host dial), so the chip can open the output
+  // window there while the delivery is still queued. Null - and absent, for
+  // an item written before the key - means the chat's own host.
+  hostId: z.string().nullable().default(null),
   // Whether this digest opens its own turn or lands inside the turn already
   // running. Defaulted `next_turn` so a row written by an earlier build of this
   // line - and every delivery that has no eligible turn to join - rehydrates as

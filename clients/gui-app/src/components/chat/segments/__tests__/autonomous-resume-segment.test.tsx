@@ -400,6 +400,7 @@ describe("<AutonomousResumeSegment />", () => {
             managedCommand: {
               commandId: "cmd-monitor",
               monitoring: true,
+              hostId: null,
             },
             live: true,
           },
@@ -414,6 +415,7 @@ describe("<AutonomousResumeSegment />", () => {
             managedCommand: {
               commandId: "cmd-shell",
               monitoring: false,
+              hostId: null,
             },
             live: true,
           },
@@ -443,7 +445,7 @@ describe("<AutonomousResumeSegment />", () => {
           filePath: "first.output",
         },
         mcp: null,
-        managedCommand: { commandId: "same-command", monitoring: false },
+        managedCommand: { commandId: "same-command", monitoring: false, hostId: null },
         live: false,
       },
       {
@@ -457,7 +459,7 @@ describe("<AutonomousResumeSegment />", () => {
           filePath: "second.output",
         },
         mcp: null,
-        managedCommand: { commandId: "same-command", monitoring: false },
+        managedCommand: { commandId: "same-command", monitoring: false, hostId: null },
         live: false,
       },
     ];

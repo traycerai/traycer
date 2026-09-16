@@ -1525,6 +1525,7 @@ function managedShellDeliverySegment(
     managedCommand: {
       commandId: `${id}:command`,
       monitoring: false,
+      hostId: null,
     },
   };
   return {

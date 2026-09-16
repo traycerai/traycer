@@ -278,6 +278,19 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/** The host the open output window for `commandId` is pinned to. */
+function openWindowHostFor(commandId: string): string | null {
+  const found = findOpenArtifactInTab(TAB_ID, commandId);
+  if (found === null) return null;
+  const ref =
+    useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.tilesByInstanceId[
+      found.instanceId
+    ];
+  return ref === undefined || ref.type !== "managed-command-output"
+    ? null
+    : ref.hostId;
+}
+
 describe("S6 · running work in the chat's Background panel", () => {
   it("S6a: shows only THIS chat's running commands, kind-explicit, and none of another chat's or terminal ones", () => {
     renderBackgroundPanelInChat(null);
@@ -371,7 +384,7 @@ describe("S6 · running work in the chat's Background panel", () => {
 describe("S7 · doors", () => {
   it("S7a: the queued-delivery chip names the shell and opens the output window", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-chip" monitoring={false} />,
+      <ManagedCommandBadge commandId="cmd-chip" monitoring={false} hostId={null} />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toContain("Shell output");
@@ -382,7 +395,7 @@ describe("S7 · doors", () => {
 
   it("S7b: a chip from a build that recorded no monitor flag still names the shell", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-old" monitoring={null} />,
+      <ManagedCommandBadge commandId="cmd-old" monitoring={null} hostId={null} />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toContain("Shell output");
@@ -398,13 +411,21 @@ describe("S7 · doors", () => {
             blockId: "blk-quiet",
             title: "db migration",
             status: "completed",
-            managedCommand: { commandId: "cmd-quiet", monitoring: false },
+            managedCommand: {
+              commandId: "cmd-quiet",
+              monitoring: false,
+              hostId: null,
+            },
           }),
           makeTrigger({
             blockId: "blk-watcher",
             title: "deploy watcher",
             status: "failed",
-            managedCommand: { commandId: "cmd-watcher", monitoring: true },
+            managedCommand: {
+              commandId: "cmd-watcher",
+              monitoring: true,
+              hostId: null,
+            },
           }),
         ]}
       />,
@@ -419,7 +440,11 @@ describe("S7 · doors", () => {
         triggers={[
           makeTrigger({
             blockId: "blk-door",
-            managedCommand: { commandId: "cmd-divider", monitoring: true },
+            managedCommand: {
+              commandId: "cmd-divider",
+              monitoring: true,
+              hostId: null,
+            },
           }),
         ]}
       />,
@@ -430,6 +455,9 @@ describe("S7 · doors", () => {
     expect(door.getAttribute("aria-label")).toBe("Open in tab");
     fireEvent.click(door);
     expect(findOpenArtifactInTab(TAB_ID, "cmd-divider")).not.toBeNull();
+    // No host of its own (a shell this host runs, or a divider written before
+    // the field): the window is pinned to the tab's host, as it always was.
+    expect(openWindowHostFor("cmd-divider")).toBe(HOST_ID);
   });
 
   it("S7e: a kind-only monitor trigger keeps the harness tool's name, and gets no dead door", () => {
@@ -456,7 +484,11 @@ describe("S7 · doors", () => {
           makeTrigger({
             blockId: "blk-live",
             live: true,
-            managedCommand: { commandId: "cmd-live", monitoring: true },
+            managedCommand: {
+              commandId: "cmd-live",
+              monitoring: true,
+              hostId: null,
+            },
           }),
         ]}
       />,
@@ -469,7 +501,7 @@ describe("S7 · doors", () => {
 
   it("S7g: one window per shell — every door and a second press converge on a single pane", () => {
     renderBackgroundPanelInChat(
-      <ManagedCommandBadge commandId="cmd-one" monitoring />,
+      <ManagedCommandBadge commandId="cmd-one" monitoring hostId={null} />,
     );
     emitCommands(
       [makeCommand({ id: "cmd-one", description: "solo watcher" })],
@@ -516,5 +548,56 @@ describe("S7 · doors", () => {
     expect(previewInstanceIdFor(TAB_ID, second.paneId)).toBe(second.instanceId);
     // Standard preview eviction: the glance the reader moved on from goes.
     expect(findOpenArtifactInTab(TAB_ID, "cmd-first")).toBeNull();
+  });
+
+  it("S7i: a divider for a shell on another host opens the window on THAT host, and one without a host on the tab's", () => {
+    renderInChatContext(
+      <AutonomousResumeSegment
+        triggers={[
+          makeTrigger({
+            blockId: "blk-remote",
+            managedCommand: {
+              commandId: "cmd-remote",
+              monitoring: true,
+              hostId: "host-far",
+            },
+          }),
+          makeTrigger({
+            blockId: "blk-local",
+            managedCommand: {
+              commandId: "cmd-local",
+              monitoring: true,
+              hostId: null,
+            },
+          }),
+        ]}
+      />,
+    );
+    // The owner chat has spoken and knows neither shell. A remote shell is
+    // never in this host's set, so its presence is not judged here (only its
+    // own host could answer, and this tab is not bound to it): the door stays
+    // open, and opens on the shell's host.
+    emitCommands([], CHAT_A);
+    const remoteDoor = screen.getByTestId(
+      "resume-managed-command-door-blk-remote",
+    );
+    expect(remoteDoor.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(remoteDoor);
+    expect(openWindowHostFor("cmd-remote")).toBe("host-far");
+    // The same click on the local divider pins its window to the tab's host.
+    fireEvent.click(screen.getByTestId("resume-managed-command-door-blk-local"));
+    expect(openWindowHostFor("cmd-local")).toBe(HOST_ID);
+  });
+
+  it("S7j: the queued chip for a shell on another host opens the window on that host", () => {
+    renderInChatContext(
+      <ManagedCommandBadge
+        commandId="cmd-queued-remote"
+        monitoring
+        hostId="host-far"
+      />,
+    );
+    fireEvent.click(screen.getByTestId("queued-managed-command-badge"));
+    expect(openWindowHostFor("cmd-queued-remote")).toBe("host-far");
   });
 });

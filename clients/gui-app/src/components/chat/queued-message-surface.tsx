@@ -706,6 +706,7 @@ function QueuedMessageRowContent(props: {
           <ManagedCommandBadge
             commandId={item.commandId}
             monitoring={item.monitoring}
+            hostId={item.hostId}
           />
         </div>
       ) : null}
@@ -774,6 +775,8 @@ function QueuedMessageRowContent(props: {
 export function ManagedCommandBadge(props: {
   readonly commandId: string;
   readonly monitoring: boolean | null;
+  /** The host the shell runs on when it is not this tab's; see the door. */
+  readonly hostId: string | null;
 }) {
   const openOutput = useManagedCommandDoor();
 
@@ -790,7 +793,7 @@ export function ManagedCommandBadge(props: {
         data-testid="queued-managed-command-badge"
         disabled={openOutput === null}
         onClick={() => {
-          openOutput?.(props.commandId);
+          openOutput?.(props.commandId, props.hostId);
         }}
       >
         {/* An unrecorded flag renders NO glyph: the label already names the

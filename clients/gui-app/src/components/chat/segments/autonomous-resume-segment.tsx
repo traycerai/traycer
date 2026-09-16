@@ -222,10 +222,22 @@ function ResumeManagedCommandDoor(props: {
 }) {
   const managedCommand = props.trigger.managedCommand;
   const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
+  const transcript = useMaybeChatTranscript();
+  // A shell that runs on another host is not in this host's set, so presence
+  // read here would call it deleted the moment the owner's snapshot lands.
+  // Its host is the only one that could answer, and this tab is not bound to
+  // it - so the door stays open and the output window it opens gives its own
+  // account of what it finds, exactly the `unknown` contract.
+  const remoteHostId =
+    managedCommand !== null &&
+    managedCommand.hostId !== null &&
+    managedCommand.hostId !== transcript?.hostId
+      ? managedCommand.hostId
+      : null;
   const presence = useManagedCommandPresence({
     epicId,
     commandId: managedCommand?.commandId ?? "",
-    owner: useMaybeChatTranscript(),
+    owner: remoteHostId === null ? transcript : null,
   });
   const openOutput = useManagedCommandDoor();
   if (managedCommand === null || openOutput === null) return null;
@@ -233,7 +245,9 @@ function ResumeManagedCommandDoor(props: {
     <ManagedCommandTranscriptDoor
       commandId={managedCommand.commandId}
       gone={presence.kind === "absent"}
-      onOpen={openOutput}
+      onOpen={(commandId) => {
+        openOutput(commandId, remoteHostId);
+      }}
       testId={`resume-managed-command-door-${props.trigger.blockId}`}
     />
   );

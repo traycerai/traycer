@@ -1111,10 +1111,17 @@ export const autonomousResumeTriggerSchema = z.object({
   // still `kind`, whose value strips on parse): a trigger that cannot say
   // whether its shell was watching renders as a plain shell rather than failing
   // the whole chat.
+  //
+  // `hostId` is the host the shell RUNS on, for a shell created on another
+  // host than the chat's: its log is there, so the door opens the output
+  // window on that host. `null` - and absence, the same way - means the
+  // chat's own host, which is what every shell before cross-host creation
+  // was.
   managedCommand: z
     .object({
       commandId: z.string(),
       monitoring: z.boolean().default(false),
+      hostId: z.string().nullable().default(null),
     })
     .nullable()
     .default(null),
