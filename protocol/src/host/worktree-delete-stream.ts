@@ -46,6 +46,7 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 import {
   holdersRevisionWireFieldSchema,
   worktreeBusyHoldersWireFieldSchema,
+  worktreeBusyHoldersWireFieldSchemaV1,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
   expectedHoldersRevisionFieldSchema,
@@ -181,7 +182,7 @@ export const worktreeDeleteByPathServerFrameSchemaV11 = z.discriminatedUnion(
     z.object({
       kind: z.literal("failed"),
       reason: z.string(),
-      holders: worktreeBusyHoldersWireFieldSchema,
+      holders: worktreeBusyHoldersWireFieldSchemaV1,
       hasBinaryPayload: z.literal(false),
     }),
     z.object({
@@ -238,7 +239,7 @@ export const worktreeDeleteByPathServerFrameSchemaV12 = z.discriminatedUnion(
     z.object({
       kind: z.literal("failed"),
       reason: z.string(),
-      holders: worktreeBusyHoldersWireFieldSchema,
+      holders: worktreeBusyHoldersWireFieldSchemaV1,
       holdersRevision: holdersRevisionWireFieldSchema,
       code: z
         .enum(["WORKTREE_BUSY", "WORKTREE_HOLDERS_CHANGED"])
@@ -261,5 +262,69 @@ export const worktreeDeleteByPathStreamV12 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: worktreeDeleteByPathOpenRequestSchemaV12,
   serverFrameSchema: worktreeDeleteByPathServerFrameSchemaV12,
+  clientFrameSchema: worktreeDeleteByPathClientFrameSchema,
+});
+
+/**
+ * `@1.3` - open request unchanged (aliased). The `failed` frame's `holders`
+ * may carry `chatTier` on `chat-turn` entries. The host emits the key only
+ * to a subscriber that negotiated this minor; the released frames above
+ * are bound to the frozen V1 holder object, so nothing older ever parses it.
+ */
+export const worktreeDeleteByPathOpenRequestSchemaV13 =
+  worktreeDeleteByPathOpenRequestSchemaV12;
+export type WorktreeDeleteByPathOpenRequestV13 =
+  WorktreeDeleteByPathOpenRequestV12;
+
+export const worktreeDeleteByPathServerFrameSchemaV13 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("started"),
+      hasTeardown: z.boolean(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("phase"),
+      phase: worktreeDeletePhaseSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("output"),
+      channel: worktreeDeleteOutputChannelSchema,
+      chunk: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("complete"),
+      deleted: z.boolean(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("failed"),
+      reason: z.string(),
+      holders: worktreeBusyHoldersWireFieldSchema,
+      holdersRevision: holdersRevisionWireFieldSchema,
+      code: z
+        .enum(["WORKTREE_BUSY", "WORKTREE_HOLDERS_CHANGED"])
+        .optional()
+        .catch(undefined),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ],
+);
+export type WorktreeDeleteByPathServerFrameV13 = z.infer<
+  typeof worktreeDeleteByPathServerFrameSchemaV13
+>;
+
+export const worktreeDeleteByPathStreamV13 = defineStreamRpcContract({
+  method: "worktree.deleteByPath",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: worktreeDeleteByPathOpenRequestSchemaV13,
+  serverFrameSchema: worktreeDeleteByPathServerFrameSchemaV13,
   clientFrameSchema: worktreeDeleteByPathClientFrameSchema,
 });
