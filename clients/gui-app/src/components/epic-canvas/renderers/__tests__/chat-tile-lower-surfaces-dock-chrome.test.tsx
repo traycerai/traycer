@@ -60,6 +60,10 @@ vi.mock("@/hooks/agent/use-stop-agent-mutation", () => ({
   useAgentStop: () => ({ mutate: () => undefined }),
 }));
 
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
 // Controlled per test via `setAgentStopControls` - see below. Declared here
 // (rather than read fresh inside the factory) so a test can change it and
 // have the very next render see the new value without re-mocking.
