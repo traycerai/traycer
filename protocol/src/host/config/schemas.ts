@@ -243,3 +243,32 @@ export const configLogLevelsSetResponseSchema = configLogLevelsResponseSchema;
 export type ConfigLogLevelsSetResponse = z.infer<
   typeof configLogLevelsSetResponseSchema
 >;
+
+/**
+ * Reads the machine-user-global switch for agent access to the in-app browser.
+ * Like the log thresholds it is not keyed by host id or deploy slot: the file
+ * is one per OS user, so the answer covers every host environment that user
+ * runs on this machine.
+ */
+export const configBrowserGetRequestSchema = emptyRequestSchema;
+export type ConfigBrowserGetRequest = z.infer<
+  typeof configBrowserGetRequestSchema
+>;
+
+export const configBrowserResponseSchema = z.object({
+  agentAccess: z.boolean(),
+});
+export type ConfigBrowserResponse = z.infer<typeof configBrowserResponseSchema>;
+
+/** Flips the machine-user-global agent browser-access switch. */
+export const configBrowserSetRequestSchema = z.object({
+  agentAccess: z.boolean(),
+});
+export type ConfigBrowserSetRequest = z.infer<
+  typeof configBrowserSetRequestSchema
+>;
+
+export const configBrowserSetResponseSchema = configBrowserResponseSchema;
+export type ConfigBrowserSetResponse = z.infer<
+  typeof configBrowserSetResponseSchema
+>;
