@@ -2,7 +2,10 @@
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
-import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
+import {
+  OFFICE_LABEL_GAP,
+  OFFICE_TILE,
+} from "@/lib/comm-graph/office/office-types";
 import type {
   OfficeBlockFill,
   OfficeDrawable,
@@ -27,6 +30,28 @@ import {
   obliquePropsIn,
   obliqueReserveLabelSeatId,
 } from "./oblique-plan";
+
+/**
+ * How far below a desk seat's own tile the desk FACE hangs, in world pixels.
+ *
+ * Named because three things measure from it: the desk, the dust sheet over an
+ * archived one, and the `reserve` lettering that has to clear both.
+ */
+const DESK_FRONT_Y_OFFSET = 24;
+
+/**
+ * How solid an unclaimed desk is.
+ *
+ * `0.45` was transparent enough to take the sprite's OUTLINE with it - a
+ * near-black line at 45% over a dark floor is barely a line - so an empty desk
+ * read as a brown bar painted onto the floor rather than as furniture nobody
+ * is sitting at. Feedback round 1: "these transparent desks look weird".
+ *
+ * The dimming itself stays: it is what says the desk is unclaimed on a storey
+ * whose occupied desks look otherwise identical. What changes is that the
+ * furniture survives it.
+ */
+const EMPTY_FURNITURE_ALPHA = 0.72;
 
 const STATIC_PROPS: ReadonlySet<OfficeSpriteName> = new Set([
   "face",
@@ -162,13 +187,45 @@ function overviewBlocks(
   );
   return [...buildings, ...storeys, ...civic];
 }
+/**
+ * THE GROUND A CIVIC ROOM STANDS ON, tinted so the room has an edge.
+ *
+ * Every plaza room is `enclosure: "open"` - the waiting room IS a row of
+ * chairs on the walk row, the front desk IS a counter and the tile in front of
+ * it - so until now the only thing saying where one ended was its sign. A
+ * reader seeing seated agents a row below the `WAITING ROOM` plate had no way
+ * to tell they were at cubbies on the plaza, and feedback round 1 asked
+ * exactly that: "some agents are working from the waiting room?".
+ *
+ * The same `civic` fill the overview block map already uses, at an alpha that
+ * reads as floor rather than as a panel. Emitted into the FLOOR stream, which
+ * puts it under every prop and character - it is ground, not a highlight - and
+ * it costs one filled rect per room per frame because a block does not bake
+ * into the static layer (only sprites do).
+ */
+const CIVIC_GROUND_ALPHA = 0.3;
+
+function civicGround(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): OfficeDrawable[] {
+  return layout.floors.flatMap((storey) =>
+    storey.civic.flatMap((room) =>
+      clippedBlock({ ...room.bounds, fill: "civic" }, tiles).map((block) => ({
+        ...block,
+        alpha: CIVIC_GROUND_ALPHA,
+      })),
+    ),
+  );
+}
+
 function floor(
   layout: OfficeLayout,
   tiles: OfficeTileRect,
   lod: OfficeLod,
 ): OfficeDrawable[] {
   if (lod === 0) return overviewBlocks(layout, tiles);
-  return obliquePropsIn(layout, tiles)
+  const props: OfficeDrawable[] = obliquePropsIn(layout, tiles)
     .filter((prop) => STATIC_PROPS.has(prop.sprite.name))
     .map((prop) => ({
       kind: "sprite",
@@ -176,6 +233,18 @@ function floor(
       x: prop.tile.col * OFFICE_TILE,
       y: prop.tile.row * OFFICE_TILE,
     }));
+  // LAST, because a block put before the floor TILES is painted over by them
+  // on the host that walks this list in order - the fallback path, where no
+  // offscreen surface exists - and invisible there while working everywhere
+  // else. Last is the position both paths draw over the tiles from.
+  //
+  // The two paths do differ on the plaza's fixed PROPS, which are sprites in
+  // this same stream: a baking host blits every sprite and then draws this
+  // block, so the tint passes over the reception counter and the glass screens;
+  // an unbaked host draws them after it. At 0.3 alpha over a counter that is a
+  // difference nothing can see, and it is the price of a tint that bakes
+  // nowhere - only sprites bake (`officeBakesIntoStaticFloor`).
+  return [...props, ...civicGround(layout, tiles)];
 }
 interface PropPaint {
   readonly ownerAgentId: string | null;
@@ -310,10 +379,15 @@ function seatProps(
   if (seat.kind === "cubby")
     return cubbySeatProps(state, { x: x, y: y }, foot, lod);
   const result: OfficeWorldDrawable[] = [
-    entry({ name: "desk-front" }, { x: x, y: y + 24 }, foot + 0.1, {
-      ownerAgentId: owner,
-      alpha: owner === null ? 0.45 : 1,
-    }),
+    entry(
+      { name: "desk-front" },
+      { x: x, y: y + DESK_FRONT_Y_OFFSET },
+      foot + 0.1,
+      {
+        ownerAgentId: owner,
+        alpha: owner === null ? EMPTY_FURNITURE_ALPHA : 1,
+      },
+    ),
   ];
   if (owner === null) {
     // ONCE A STOREY, not once a desk: the storey nominates the seat that says
@@ -329,7 +403,19 @@ function seatProps(
           text: "reserve",
           ownerAgentId: null,
           x: x + 16,
-          y: y + 34,
+          // CLEAR OF THE DESK FACE, on the floor among its legs - where the
+          // name tag of the agent at the next desk along already lands.
+          //
+          // `y + 34` put it across the desk's own front panel, where muted
+          // grey lettering over the wood read as a name with its bottom half
+          // missing (feedback round 1: "lower half of labels on some agents
+          // are cut out"). The desk face runs to `y + DESK_FRONT_Y_OFFSET +
+          // <sprite height>`, and the gap below it is the scene's own.
+          y:
+            y +
+            DESK_FRONT_Y_OFFSET +
+            officeSpriteSize({ name: "desk-front" }).height +
+            OFFICE_LABEL_GAP,
           tone: "muted",
           // Nobody's name, so no seat to be fitted to.
           fitTiles: null,
@@ -341,10 +427,15 @@ function seatProps(
   }
   if (state.sheeted) {
     result.push(
-      entry({ name: "dust-sheet" }, { x: x, y: y + 24 }, foot + 0.2, {
-        ownerAgentId: owner,
-        alpha: 1,
-      }),
+      entry(
+        { name: "dust-sheet" },
+        { x: x, y: y + DESK_FRONT_Y_OFFSET },
+        foot + 0.2,
+        {
+          ownerAgentId: owner,
+          alpha: 1,
+        },
+      ),
       entry({ name: "box" }, { x: x + 16, y: y + 8 }, foot - 0.1, {
         ownerAgentId: owner,
         alpha: 1,

@@ -535,12 +535,88 @@ export function officeBoardText(args: {
 /**
  * The band from which a civic sign carries its counter.
  *
- * At office zoom the room itself is the reading - three beds with somebody on
- * two of them - and the plate is already competing with every amenity sign on
- * the storey. Close-up is where a number is worth the pixels, and it is the
- * same band the role claims under a plate appear at.
+ * OFFICE ZOOM, and it used to be close-up. The argument for holding it back
+ * was that "the plate is already competing with every amenity sign on the
+ * storey" - which was true, and is what {@link officeSignLetteredAt} has now
+ * removed: at office zoom the amenity signs are gone, so the pixels the
+ * counter needs are pixels nothing else is using.
+ *
+ * That trade has to go this way round rather than the other. A civic sign with
+ * no counter on it says `FRONT DESK` - a fact about the floor plan that was
+ * equally true last week - and feedback round 1 named exactly that reading
+ * twice: "too prominent and not adding value". The counter is the whole of
+ * what a ward's sign is worth at a glance, so the band that draws the sign and
+ * the band that draws its number are now the same band by construction.
  */
-const OFFICE_SIGN_COUNTER_LOD: OfficeLod = 2;
+const OFFICE_SIGN_COUNTER_LOD: OfficeLod = 1;
+
+/** Close-up: where lettering that reports nothing is finally worth its pixels. */
+const OFFICE_FIXTURE_LETTERING_LOD: OfficeLod = 2;
+
+/**
+ * WHETHER THIS SIGN IS LETTERED AT THIS BAND.
+ *
+ * One rule: **lettering that reports something is drawn at office zoom;
+ * lettering that names a fixture waits for close-up.** A roster board's counts
+ * change, a host's name says which machine you are looking at, a plate that
+ * names a lead re-letters when that lead is renamed, and a ward's sign counts
+ * the beds that are taken. `CAFETERIA`, `SOLO DESKS` and `FRONT DESK` say the
+ * same thing they said on the first frame and will say on the last.
+ *
+ * This is feedback round 1, and it is four complaints rather than one: the
+ * amenity plates were "too prominent", "repetitive" ( `SOLO DESKS` once per
+ * storey down a tower), "not adding value", and - the one that settles it -
+ * "the labels completely cover the artwork". A plate is drawn at a fixed face
+ * whatever the zoom, so the further out the camera goes the more of the floor
+ * each one hides; the band where the art is worth looking at is precisely the
+ * band where the lettering costs the most.
+ *
+ * NOT A LIST OF VIEWS, and deliberately. Every view puts amenity names on its
+ * floor, so a rule written about Towers and Campus would be re-discovered by
+ * the next view to land. The two inputs are the sign's own kind and whether it
+ * names somebody - both facts the plan already carries.
+ */
+export function officeSignLetteredAt(args: {
+  readonly sign: OfficeSign;
+  readonly lod: OfficeLod;
+  /**
+   * For a `civic` sign: whether the reading that fits its room at this zoom
+   * actually carries the room's counter. A ward too narrow to say `2 of 3`
+   * here has nothing to report here, so it is a fixture like any other until
+   * the camera comes in. `false` for every other kind, which never counts.
+   */
+  readonly civicReports: boolean;
+}): boolean {
+  const { civicReports, lod, sign } = args;
+  // NO LETTERING AT OVERVIEW. The block map carries the whole reading there.
+  if (lod === 0) return false;
+  if (lod >= OFFICE_FIXTURE_LETTERING_LOD) return true;
+  switch (sign.kind) {
+    // Counts, and they move.
+    case "board":
+    case "hq-board":
+      return true;
+    // Which machine this part of the office belongs to - the one thing the
+    // floor cannot show by drawing it.
+    case "host":
+      return true;
+    case "civic":
+      return civicReports;
+    // A cabin sign, a pod plate: lettered at office zoom when it names a
+    // person, silent when it names the furniture. `ownerAgentId` is what the
+    // plan sets for a room with a lead and leaves `null` for a solo pod, whose
+    // written plate (`Solo desks`, `Bullpen · 9 live solos`) is the repetition
+    // the feedback pointed at - and whose count the BOARD beside it still
+    // carries at this band.
+    case "room":
+    case "pod":
+    case "plate":
+      return sign.ownerAgentId !== null;
+    // An amenity: the cafeteria is a cafeteria at every zoom.
+    case "area":
+      return false;
+  }
+}
 
 /**
  * HOW LONG ONE FRAME OF A WARD'S BEACON IS UP.
@@ -659,6 +735,18 @@ function civicRungs(
   return [`${name} · ${counter}`, name];
 }
 
+/** What one civic sign says, and whether saying it told the reader anything. */
+export interface OfficeCivicSignReading {
+  readonly text: string;
+  /**
+   * Whether `text` carries the room's counter. `false` for a room that counts
+   * nothing (the help desk, whose queue IS the count) and for one whose tiles
+   * were too narrow for the number at this zoom - both of which leave the sign
+   * saying only its own unchanging word.
+   */
+  readonly reports: boolean;
+}
+
 /**
  * WHAT ONE CIVIC SIGN SAYS at this band and this zoom. Never `null`: see the
  * ladder above - the room's word is drawn whether or not it fits.
@@ -684,15 +772,20 @@ export function officeCivicSignText(args: {
   readonly widthTiles: number;
   readonly zoom: number;
   readonly measure: OfficePlateMeasure;
-}): string {
+}): OfficeCivicSignReading {
   const { lod, measure, room, tally, widthTiles, zoom } = args;
   const counter =
     lod < OFFICE_SIGN_COUNTER_LOD ? null : civicCounterOf(room, tally);
-  return widestThatFits({
+  const text = widestThatFits({
     renderings: civicRungs(room.name, counter),
     available: officePlateWidthPx(widthTiles, zoom),
     measure,
   });
+  // THE READING THAT FITS, not the counter that was offered. A room whose
+  // tiles have no pixels for `2 of 3` comes down to its own word, which is a
+  // fixture reading however live the number behind it was - and at office zoom
+  // that is the difference between a sign and a label over the artwork.
+  return { text, reports: counter !== null && text !== room.name };
 }
 
 /**
@@ -751,6 +844,62 @@ function civicPlacements(
     for (const room of floor.civic) byId.set(room.civicRoomId, { room, floor });
   }
   return byId;
+}
+
+/**
+ * ONE CIVIC SIGN, resolved and banded, or `null` where this band does not
+ * letter it.
+ *
+ * Lifted out of {@link officeSignsToDraw}'s loop rather than inlined with the
+ * other kinds, because it is the only one whose BAND depends on its own
+ * reading: `reports` is not known until the counter has been fitted to the
+ * room, so the resolve has to happen before the gate and the gate cannot be
+ * the loop's usual one-liner.
+ */
+function civicSignToDraw(args: {
+  readonly sign: OfficeSign;
+  readonly placed: CivicPlacement;
+  readonly anchor: OfficePoint;
+  readonly civicTally: OfficeCivicTally;
+  readonly clock: OfficeSignClock;
+  readonly lod: OfficeLod;
+  readonly zoom: number;
+  readonly measure: OfficePlateMeasure;
+}): OfficeSignToDraw | null {
+  const { anchor, civicTally, clock, lod, measure, placed, sign, zoom } = args;
+  const reading = officeCivicSignText({
+    room: placed.room,
+    tally: civicTally,
+    lod,
+    widthTiles: sign.widthTiles,
+    zoom,
+    measure,
+  });
+  const sirenFrame = sirenFrameOf({
+    room: placed.room,
+    floor: placed.floor,
+    tally: civicTally,
+    clock,
+  });
+  // A BEACON IS A REPORT, and it hangs off this plate's own top edge - so a
+  // ward whose counter did not fit is still lettered when it carries one.
+  // Dropping the plate here would take the lamp with it, and on a roadless
+  // floor that lamp is the whole of the alarm (C6): Mission control has no
+  // street for an ambulance to come down.
+  if (
+    sirenFrame === null &&
+    !officeSignLetteredAt({ sign, lod, civicReports: reading.reports })
+  ) {
+    return null;
+  }
+  return {
+    sign,
+    text: reading.text,
+    // A room is not somebody's, so there is no role to letter under it.
+    subtext: null,
+    anchor,
+    sirenFrame,
+  };
 }
 
 /** Any sign's own width on screen: its tiles, through the camera's zoom. */
@@ -837,28 +986,22 @@ export function officeSignsToDraw(args: {
     const placed =
       sign.civicRoomId === null ? undefined : placements.get(sign.civicRoomId);
     if (sign.kind === "civic" && placed !== undefined) {
-      out.push({
+      const civic = civicSignToDraw({
         sign,
-        text: officeCivicSignText({
-          room: placed.room,
-          tally: civicTally,
-          lod,
-          widthTiles: sign.widthTiles,
-          zoom,
-          measure,
-        }),
-        // A room is not somebody's, so there is no role to letter under it.
-        subtext: null,
+        placed,
         anchor,
-        sirenFrame: sirenFrameOf({
-          room: placed.room,
-          floor: placed.floor,
-          tally: civicTally,
-          clock,
-        }),
+        civicTally,
+        clock,
+        lod,
+        zoom,
+        measure,
       });
+      if (civic !== null) out.push(civic);
       continue;
     }
+    // Every other kind decides on the sign alone - only `civic` counts, so
+    // only `civic` has a reading to consult.
+    if (!officeSignLetteredAt({ sign, lod, civicReports: false })) continue;
     if (sign.kind === "board" || sign.kind === "hq-board") {
       const text = officeBoardText({
         sign,
@@ -882,47 +1025,88 @@ export function officeSignsToDraw(args: {
       });
       continue;
     }
-    // A host sign carries no text of its own: the layout knows the id and the
-    // directory knows what the machine is called. Everything else says what
-    // the plan wrote, re-lettered from the owner's current name.
-    const text = signTextOf({ sign, owner, nameById, hostNameById });
-    if (text === "") continue;
-    const claim = roleClaimOf(roleClaims, owner);
-    const rungs = plateRungsFor(sign, text);
-    // A sign that names no ladder is drawn as written, which is every sign on
-    // every view but the two oblique ones: their plates are the only lettering
-    // whose room is narrow enough for the reading to have to give way.
-    if (rungs === null) {
-      out.push({ sign, text, subtext: claim, anchor, sirenFrame: null });
-      continue;
-    }
-    const fitted = officePlateTextThatFits({
-      rungs,
-      widthTiles: sign.widthTiles,
+    const named = nameSignToDraw({
+      sign,
+      owner,
+      anchor,
+      nameById,
+      hostNameById,
+      roleClaims,
       zoom,
       measure,
     });
-    if (fitted === null) continue;
-    out.push({
-      sign,
-      text: fitted,
-      // THE CLAIM FITS TOO, or it is not drawn. It is a second plate on the
-      // same centre, so a claim wider than the room overhangs it exactly as
-      // the name would have, and the name being short is no protection.
-      subtext:
-        claim === null
-          ? null
-          : officePlateTextThatFits({
-              rungs: officePlateRungs(claim),
-              widthTiles: sign.widthTiles,
-              zoom,
-              measure,
-            }),
-      anchor,
-      sirenFrame: null,
-    });
+    if (named !== null) out.push(named);
   }
   return out;
+}
+
+/**
+ * EVERY SIGN THAT IS NEITHER A BOARD NOR A CIVIC ROOM: a cabin's sign, a pod's
+ * plate, an amenity's name, a host's floor. `null` where it has nothing it can
+ * say in the room it names.
+ *
+ * Lifted out of {@link officeSignsToDraw}'s loop for the same reason
+ * {@link civicSignToDraw} is - the loop is a three-way dispatch and each arm is
+ * a paragraph - and this is the arm with the ladder in it.
+ */
+function nameSignToDraw(args: {
+  readonly sign: OfficeSign;
+  readonly owner: string | null;
+  readonly anchor: OfficePoint;
+  readonly nameById: ReadonlyMap<string, string>;
+  readonly hostNameById: ReadonlyMap<string, string>;
+  readonly roleClaims: Readonly<Record<string, readonly RoleClaim[]>>;
+  readonly zoom: number;
+  readonly measure: OfficePlateMeasure;
+}): OfficeSignToDraw | null {
+  const {
+    anchor,
+    hostNameById,
+    measure,
+    nameById,
+    owner,
+    roleClaims,
+    sign,
+    zoom,
+  } = args;
+  // A host sign carries no text of its own: the layout knows the id and the
+  // directory knows what the machine is called. Everything else says what
+  // the plan wrote, re-lettered from the owner's current name.
+  const text = signTextOf({ sign, owner, nameById, hostNameById });
+  if (text === "") return null;
+  const claim = roleClaimOf(roleClaims, owner);
+  const rungs = plateRungsFor(sign, text);
+  // A sign that names no ladder is drawn as written, which is every sign on
+  // every view but the two oblique ones: their plates are the only lettering
+  // whose room is narrow enough for the reading to have to give way.
+  if (rungs === null) {
+    return { sign, text, subtext: claim, anchor, sirenFrame: null };
+  }
+  const fitted = officePlateTextThatFits({
+    rungs,
+    widthTiles: sign.widthTiles,
+    zoom,
+    measure,
+  });
+  if (fitted === null) return null;
+  return {
+    sign,
+    text: fitted,
+    // THE CLAIM FITS TOO, or it is not drawn. It is a second plate on the
+    // same centre, so a claim wider than the room overhangs it exactly as
+    // the name would have, and the name being short is no protection.
+    subtext:
+      claim === null
+        ? null
+        : officePlateTextThatFits({
+            rungs: officePlateRungs(claim),
+            widthTiles: sign.widthTiles,
+            zoom,
+            measure,
+          }),
+    anchor,
+    sirenFrame: null,
+  };
 }
 
 /**

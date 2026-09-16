@@ -3236,12 +3236,12 @@ describe("CommGraphTile", () => {
       caughtUp();
 
       expect(decide).not.toHaveBeenCalled();
+      // The auto chip that used to restate this ("Auto · Building · measured
+      // earlier") is gone (feedback round 1); the trigger already proves the
+      // restored outcome resolved without a fresh decision.
       expect(
         screen.getByTestId("comm-graph-office-view-picker").textContent,
       ).toBe("Auto · Building");
-      expect(
-        screen.getByTestId("comm-graph-office-auto-chip").textContent,
-      ).toBe("Auto · Building · measured earlier");
     });
 
     it("re-measures a restored outcome once the Settings default has round-tripped since it was measured, even on a quiet remount", async () => {
@@ -3414,16 +3414,18 @@ describe("CommGraphTile", () => {
     });
   });
 
-  it("withholds the stale Auto DECISION from the chip and picker once the office starts measuring again, not just the canvas (Finding 10)", async () => {
+  it("withholds the stale Auto DECISION from the picker's Auto row once the office starts measuring again, not just the canvas (Finding 10)", async () => {
     // Codex: `autoDecision` is local state that outlives the persisted
     // outcome it was measured for. When a live default round-trip makes the
     // stamped generation stale, `resolvedViewId` goes null at render (Finding
     // 6) a beat before the new canvas reports a probe and the effect
     // re-measures - `autoDecision` still holds the OLD decision across that
-    // gap, and `node.view.officeAutoView` (the chip's `restoredView` prop)
-    // is untouched by a live generation bump too, so the chip's fallback to
-    // "measured earlier" is what proves the DETAILED decision (the agent
-    // count text) was withheld, not merely that the view name still shows.
+    // gap. `shownAutoDecision` is what the picker's Auto row reads (the chip
+    // this finding was written against is gone - feedback round 1 - but the
+    // withholding it proved is the SAME `shownDecisionFor` gate the row reads
+    // today), so the row's fallback to the generic reason is what proves the
+    // DETAILED decision (the per-view fit text) was withheld, not merely that
+    // the trigger's view name still shows.
     const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
     useSettingsStore.getState().setAgentOfficeDefaultView("towers");
     act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
@@ -3439,12 +3441,14 @@ describe("CommGraphTile", () => {
       expect(storedView()?.officeAutoView).not.toBeNull();
     });
     const measuredGeneration = storedView()?.officeAutoGeneration;
-    // Sanity: the FIRST measurement really does show the numeric decision -
+    // Sanity: the FIRST measurement really does show the detailed reason -
     // otherwise the assertion below would pass even if nothing ever showed
-    // decision detail at all.
+    // decision detail at all. "Choose Auto again to re-measure." only ever
+    // appears in `autoReason`'s decision-present branch (`office-view-picker.tsx`).
+    openPicker();
     expect(
-      screen.getByTestId("comm-graph-office-auto-chip").textContent,
-    ).toContain("measured at");
+      screen.getByTestId("comm-graph-office-view-auto").textContent,
+    ).toContain("Choose Auto again to re-measure.");
 
     // The default round-trips twice more while the tile stays mounted,
     // leaving the stamped generation stale relative to the current one - the
@@ -3461,27 +3465,32 @@ describe("CommGraphTile", () => {
     // re-measured - this is exactly the gap where the OLD `autoDecision`
     // would otherwise still be showing. The default round-trip also clears
     // the PERSISTED outcome outright (a separate, already-fixed effect), so
-    // `restoredView` is null too by now - the chip's fallback all the way to
-    // "measuring…" is what proves the local `autoDecision` state (which that
-    // clear never touches) was withheld, not merely that the persisted
-    // record was.
+    // `trustedAutoView` is null too by now - the row's fallback all the way
+    // to "Measuring this tile…" is what proves the local `autoDecision` state
+    // (which that clear never touches) was withheld, not merely that the
+    // persisted record was.
     expect(decide).not.toHaveBeenCalled();
     expect(storedView()?.officeAutoView).toBeNull();
+    // The measuring surface remounted the canvas (and with it the picker),
+    // so its Auto row has to be reopened rather than reread from the old one.
+    openPicker();
     const withheldText = screen.getByTestId(
-      "comm-graph-office-auto-chip",
+      "comm-graph-office-view-auto",
     ).textContent;
-    expect(withheldText).not.toContain("measured at");
-    expect(withheldText).toBe("Auto · measuring…");
+    expect(withheldText).not.toContain("Choose Auto again to re-measure.");
+    expect(withheldText).toBe("AutoMeasuring this tile…");
   });
 
-  it("withholds a stale inherited Auto outcome's chip label too, not only the canvas (Finding 19)", async () => {
+  it("withholds a stale inherited Auto outcome's picker reason too, not only the canvas (Finding 19)", async () => {
     // Codex: Finding 6 withheld the CANVAS from a stale inherited Auto
-    // outcome at render, but the chip's `restoredView` prop still read
-    // `node.view.officeAutoView` straight off the record regardless of
-    // trust - so a tile whose generation went stale kept showing "measured
-    // earlier" for a view the canvas itself had already stopped trusting.
-    // `restoredView` is now `trustedAutoView`, the same predicate the canvas
-    // resolves through - so an untrusted outcome withholds both.
+    // outcome at render, but the (now-removed) chip's `restoredView` prop
+    // still read `node.view.officeAutoView` straight off the record
+    // regardless of trust - so a tile whose generation went stale kept
+    // showing "measured earlier" for a view the canvas itself had already
+    // stopped trusting. `restoredView` became `trustedAutoView`, the same
+    // predicate the canvas resolves through and `shownAutoDecision` still
+    // gates today (`comm-graph-tile.tsx`) - so an untrusted outcome
+    // withholds the picker's trigger and Auto row too, not only the canvas.
     useSettingsStore.getState().setAgentOfficeDefaultView("auto");
     act(() => useSettingsStore.getState().setAgentOfficeDefaultView("towers"));
     act(() => useSettingsStore.getState().setAgentOfficeDefaultView("auto"));
@@ -3501,15 +3510,18 @@ describe("CommGraphTile", () => {
     setOfficeCanvasSize(OFFICE_CANVAS);
 
     // Stale generation (0 is not the rolled stamp, an INHERITED tile) -
-    // untrusted, so the chip
-    // must fall all the way to "measuring…", not "Auto · Towers · measured
-    // earlier".
-    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
-      "Auto · measuring…",
+    // untrusted, so both surfaces must fall all the way to measuring, never
+    // "Auto · Towers".
+    expect(
+      screen.getByTestId("comm-graph-office-view-picker").textContent,
+    ).toBe("Auto");
+    openPicker();
+    expect(screen.getByTestId("comm-graph-office-view-auto").textContent).toBe(
+      "AutoMeasuring this tile…",
     );
   });
 
-  it("shows a TRUSTED inherited Auto outcome's chip label, contrasting the stale case above (Finding 19)", async () => {
+  it("shows a TRUSTED inherited Auto outcome's picker reason, contrasting the stale case above (Finding 19)", async () => {
     const persisted: CommGraphTileViewState = {
       ...DEFAULT_COMM_GRAPH_VIEW,
       officeAutoView: "towers",
@@ -3521,12 +3533,19 @@ describe("CommGraphTile", () => {
     caughtUp();
 
     // The Settings default generation is untouched (0) here, so it matches
-    // the stamp - trusted, and the chip shows the restored view rather than
-    // withholding it. Non-vacuous proof that the withholding above is about
-    // the STALE generation, not the chip having stopped reading the outcome
-    // at all.
-    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
-      "Auto · Towers · measured earlier",
+    // the stamp - trusted, and the picker shows the restored view rather
+    // than withholding it. Non-vacuous proof that the withholding above is
+    // about the STALE generation, not the row having stopped reading the
+    // outcome at all. No live decision ever ran (a trusted outcome is read
+    // from persistence, not re-measured), so the Auto row falls to its
+    // generic reason rather than a `fits` breakdown - `shownAutoDecision`
+    // is `null` here on purpose, not merely unobserved.
+    expect(
+      screen.getByTestId("comm-graph-office-view-picker").textContent,
+    ).toBe("Auto · Towers");
+    openPicker();
+    expect(screen.getByTestId("comm-graph-office-view-auto").textContent).toBe(
+      "AutoPicks by how much of the office fits this tile.",
     );
   });
 
@@ -3731,7 +3750,7 @@ describe("CommGraphTile", () => {
       expect(plan).toHaveBeenCalled();
     });
 
-    it("still waits for Auto: ready stays false and no decision runs until the feed catches up, and the chip keeps reading measuring", async () => {
+    it("still waits for Auto: ready stays false and no decision runs until the feed catches up, and the picker keeps reading measuring", async () => {
       // The tile's OWN gate for a drawable office loosened in fixup 8, but
       // Auto's gate is a different one and the plan explicitly keeps it: a
       // partition measured off a half-replayed feed could pick the wrong
@@ -3756,9 +3775,13 @@ describe("CommGraphTile", () => {
       });
       expect(lastCanvasReady(office)).toBe(false);
       expect(decide).not.toHaveBeenCalled();
+      // The auto chip this used to read is gone (feedback round 1); the
+      // picker's own Auto row is fed the same `shownAutoDecision` and shows
+      // the same "still measuring" state.
+      openPicker();
       expect(
-        screen.getByTestId("comm-graph-office-auto-chip").textContent,
-      ).toBe("Auto · measuring…");
+        screen.getByTestId("comm-graph-office-view-auto").textContent,
+      ).toBe("AutoMeasuring this tile…");
 
       caughtUp();
       await waitFor(() => {

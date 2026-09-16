@@ -87,7 +87,6 @@ import {
 import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
 import { OfficeCatchingUpChip } from "@/components/epic-canvas/comm-graph/office/office-catching-up-chip";
-import { OfficeLodChip } from "@/components/epic-canvas/comm-graph/office/office-lod-chip";
 import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
 import {
   createOfficeStaticSurface,
@@ -235,14 +234,26 @@ const LABEL_FONT = `${LABEL_FONT_PX}px ${OFFICE_SIGN_MONOSPACE_STACK}`;
 const SIGN_PADDING_Y = 2;
 const SIGN_PLATE_RADIUS = 3;
 /**
+ * How solid a sign's plate is against the floor under it. See
+ * {@link drawSignPlate}: enough to carry bold uppercase, little enough that
+ * the art it sits on is still there.
+ */
+const SIGN_PLATE_FILL_ALPHA = 0.55;
+/**
  * The gap between the ward's beacon and the plate below it, in screen pixels.
  *
- * ONE PIXEL, and it is the plate's own outline that asks for it: `drawSignPlate`
- * strokes at `lineWidth = 1` centred on the box's path, so the ink reaches half
- * a pixel ABOVE `top`. A lamp flush to that edge would have its bottom row
- * grazed by the stroke at every zoom - not enough to hide the lens, but enough
- * that "the beacon is clear of the plate" would stop being exactly true, which
- * is the property the seam case measures.
+ * ONE PIXEL, and it used to be the plate's own OUTLINE that asked for it: the
+ * plate stroked at `lineWidth = 1` centred on the box's path, so its ink
+ * reached half a pixel above `top` and a lamp flush to that edge had its bottom
+ * row grazed at every zoom. That stroke is gone (see {@link drawSignPlate} -
+ * an outline is what made a plate read as a panel over the art), so nothing
+ * reaches above `top` any more.
+ *
+ * The gap stays anyway, and on its own terms: a lamp sitting flush on a filled
+ * box reads as part of the box. One pixel is what separates the two, and it is
+ * the property the seam case measures - "the beacon is clear of the plate" -
+ * which should not quietly become true-by-accident because the thing it was
+ * clearing was removed.
  */
 const SIREN_PLATE_GAP_PX = 1;
 const CLOCK_HOUR_HAND = 3;
@@ -1337,7 +1348,7 @@ function signPlateMeasure(ctx: CanvasRenderingContext2D): OfficePlateMeasure {
 }
 
 /**
- * THE OPAQUE BOX A PLATE FILLS, in screen pixels.
+ * THE BOX A PLATE FILLS, in screen pixels.
  *
  * Factored out because two things need it and they must not measure it twice:
  * the plate paints it, and the ward's beacon hangs off its top edge. A second
@@ -1386,11 +1397,22 @@ function drawSignPlate(
   } else {
     ctx.rect(left, top, width, height);
   }
+  // A WASH, NOT A PANEL - and no outline at all. The plate used to be an
+  // opaque `ink` fill inside a 1px `bright` stroke, which is a hard-edged
+  // rectangle sitting ON the art rather than lettering ON THE FLOOR: feedback
+  // round 1 called it "too prominent" in three views and "the labels
+  // completely cover the artwork" in a fourth. The stroke was the worst of it,
+  // because an outline reads as a separate object however quiet its fill.
+  //
+  // The FILL stays, at an alpha the letters can still be read against: what a
+  // plate is for is keeping bold uppercase legible over a busy floor, and text
+  // alone over pixel art is the unreadable state this box was added to fix.
+  // Keeping the letters at full `bright` is the other half of that bargain -
+  // the loudness the feedback named is the box, not the lettering.
+  ctx.globalAlpha = SIGN_PLATE_FILL_ALPHA;
   ctx.fillStyle = palette.ink;
   ctx.fill();
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = palette.bright;
-  ctx.stroke();
+  ctx.globalAlpha = 1;
   ctx.fillStyle = palette.bright;
   ctx.fillText(text, screenX, screenY);
   ctx.restore();
@@ -2506,8 +2528,6 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    * its canvas ends and a detail panel begins.
    */
   readonly viewPicker: ReactNode;
-  /** Auto's explanation, or `null` where the choice is not Auto. */
-  readonly autoChip: ReactNode;
   /**
    * Whether the tile has settled what this canvas is supposed to draw.
    *
@@ -2625,7 +2645,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const {
     agentIds,
     agents,
-    autoChip,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -2743,18 +2762,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // hover target changes - not every frame.
   const [hoverCard, setHoverCard] = useState<OfficeHoverTarget | null>(null);
 
-  // The BAND the camera is in, mirrored into React for the chip that names it.
-  // The camera itself is a ref read by the frame loop; only a band CHANGE is
-  // worth a render, which is a few times per session rather than per frame.
-  const openingLod = officeLodForZoom(clampZoom(view.zoom));
-  const lodBandRef = useRef<OfficeLod>(openingLod);
-  const [lodBand, setLodBand] = useState<OfficeLod>(openingLod);
-  const syncLodBand = useCallback((zoom: number) => {
-    const next = officeLodForZoom(zoom);
-    if (lodBandRef.current === next) return;
-    lodBandRef.current = next;
-    setLodBand(next);
-  }, []);
+  // THE BAND IS NOT MIRRORED INTO REACT. It used to be, for the chip that
+  // named it ("Overview" / "Office" / "Close-up"); with that chip gone
+  // (feedback round 1) nothing outside the frame loop asks which band the
+  // camera is in, and the loop reads it off the live camera every frame
+  // (`officeLodForZoom(camera.zoom)`). A second copy in state would be a
+  // re-render of this whole component with no reader on the other end.
 
   /** The canvas box as last measured; `EMPTY_VIEWPORT` before the first pass. */
   const [measuredBox, setMeasuredBox] = useState<OfficeSize>(EMPTY_VIEWPORT);
@@ -3318,13 +3331,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       camera.x = screenX - (screenX - camera.x) * ratio;
       camera.y = screenY - (screenY - camera.y) * ratio;
       camera.zoom = nextZoom;
-      syncLodBand(nextZoom);
       // The camera is not part of what the idle skip watches - a still floor
       // would keep the old framing painted under the new hit geometry.
       runtime.invalidateFrame();
       persistView();
     },
-    [persistView, runtime, syncLodBand],
+    [persistView, runtime],
   );
 
   const fitToFloor = useCallback(() => {
@@ -3340,7 +3352,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.getCamera().x = fitted.x;
     runtime.getCamera().y = fitted.y;
     runtime.getCamera().zoom = fitted.zoom;
-    syncLodBand(fitted.zoom);
     fittedRef.current = { floor: size, viewport };
     // AFTER the camera, and after the `takeManualControl` every caller makes
     // on the way in - that call is what abandons a playback pan in flight, and
@@ -3351,7 +3362,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.enableAutoFit();
     runtime.invalidateFrame();
     persistView();
-  }, [peekScene, persistView, runtime, syncLodBand]);
+  }, [peekScene, persistView, runtime]);
 
   const handleZoomIn = useCallback(() => {
     runtime.takeManualControl();
@@ -3447,7 +3458,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   }, []);
 
   /**
-   * The three the render loop READS rather than reacts to.
+   * The two the render loop READS rather than reacts to.
    *
    * `useEffectEvent` exists for exactly this shape: the loop wants each of
    * these at its latest, and none of them is a reason to tear the loop down.
@@ -3457,13 +3468,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
    * can rebuild.
    *
    * Measured before changing: across a pan, both lod-band crossings, a resize
-   * and a view pick on the real component, all three keep one identity
-   * throughout - `syncLodBand` closes over nothing, `peekScene` over `epicId`,
-   * and `applyCanvasSize` over `runtime`, which is a `useState` initial value.
-   * So no office is losing its floor today. What this removes is the standing
-   * hazard: any of those three gaining a dependency that moves would have
-   * turned a callback's re-creation into a dropped bitmap, silently and at a
-   * distance from the line that caused it.
+   * and a view pick on the real component, both keep one identity throughout -
+   * `peekScene` closes over `epicId`, and `applyCanvasSize` over `runtime`,
+   * which is a `useState` initial value. So no office is losing its floor
+   * today. What this removes is the standing hazard: either of those gaining a
+   * dependency that moves would have turned a callback's re-creation into a
+   * dropped bitmap, silently and at a distance from the line that caused it.
    *
    * What it must NOT remove is `epicId`. `peekScene` closes over it, so the
    * old array carried it by accident; the array below names it deliberately,
@@ -3472,9 +3482,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const readScene = useEffectEvent((): OfficeScene | null => peekScene());
   const resizeCanvas = useEffectEvent((): void => {
     applyCanvasSize();
-  });
-  const trackLodBand = useEffectEvent((zoom: number): void => {
-    syncLodBand(zoom);
   });
   /**
    * The cascade's revision, READ rather than reacted to.
@@ -3887,10 +3894,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // map and pips at overview, pixel art otherwise - so it is chosen here,
       // once, and everything below reads it rather than the zoom.
       const lod = officeLodForZoom(camera.zoom);
-      // An auto-fit or a playback pan moves the zoom without any handler
-      // having touched it, so the chip is synced from the frame that results
-      // rather than only from the gestures.
-      trackLodBand(camera.zoom);
       const worldRect = worldRectOf(camera, viewport);
       const frame = scene.frame(lod, worldRect);
       runtime.setHitRegions(frame.hitRegions);
@@ -4702,33 +4705,38 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         </ul>
         <div
           className={cn(
-            // pointer-events-none FRAME: the chips are read-only (their own
-            // roots already carry pointer-events-none), but a wrapper left at
-            // the default auto would still catch a pan or double-click started
-            // over the chips and never pass it to the canvas. The zoom group
-            // re-enables pointer events for itself below.
+            // pointer-events-none FRAME: the catching-up chip is read-only
+            // (its own root already carries pointer-events-none), but a
+            // wrapper left at the default auto would still catch a pan or
+            // double-click started over it and never pass it to the canvas.
+            // The zoom group re-enables pointer events for itself below.
             "pointer-events-none absolute bottom-2 left-2 z-10 flex flex-col items-start gap-1",
-            // Capped against the tile: the auto chip is a sentence, and a
-            // sentence has no business being wider than the office it is
-            // explaining. The box is shrink-to-fit and absolutely positioned,
-            // so its width is already clamped to the space left of `left-2` -
-            // the tile-relative cap - and this only adds the sentence ceiling.
+            // Capped against the tile: the catching-up chip is a sentence, and
+            // a sentence has no business being wider than the office it is
+            // about. The box is shrink-to-fit and absolutely positioned, so its
+            // width is already clamped to the space left of `left-2` - the
+            // tile-relative cap - and this only adds the sentence ceiling.
             "max-w-sm",
           )}
         >
-          {autoChip}
           {/*
             Shown only while an office is actually ON SCREEN from a feed that
             is behind - the chip itself decides, on these two facts, because
-            this component is at its complexity ceiling. Auto's own
-            `measuring…` covers the state where nothing is drawn yet, and two
-            chips explaining the same wait would be one too many.
+            this component is at its complexity ceiling.
+
+            THE ONLY CHIP LEFT ON THE FLOOR, and deliberately: it reports a
+            TRANSIENT wait the reader cannot otherwise account for. The two
+            that used to sit here - Auto's measurement and the zoom band -
+            reported standing state instead, which the picker's Auto row and
+            the drawing itself already say. Feedback round 1: "the text at the
+            bottom left is too verbose - is it even needed", and a read-only
+            band label stacked on the zoom buttons read as a fourth button
+            ("what's the point of the close-up button?").
           */}
           <OfficeCatchingUpChip
             officeDrawn={ready}
             initialHistoryCaughtUp={initialHistoryCaughtUp}
           />
-          <OfficeLodChip lod={lodBand} />
           <div
             className={cn(
               // The one interactive child, so it takes pointer events back from

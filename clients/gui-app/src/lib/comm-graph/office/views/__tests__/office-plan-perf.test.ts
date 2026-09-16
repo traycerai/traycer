@@ -113,9 +113,42 @@ const BUDGET_RUNS = 3;
 /**
  * What one visible seat may cost a frame, and what a frame may cost with no
  * seats in it at all (envelopes in flight, of which there are at most 24).
- * Rule 8's own numbers; the densest view measures about 9 of the 12.
+ *
+ * PER VIEW, like {@link PLAN_BUDGET_MS} above and for the same reason: one
+ * number across six views is a gate set by whichever view is densest, and it
+ * stops gating the other five the moment that one grows. Rule 8 states 12 for
+ * all of them, and five of them still measure about 9 against it.
+ *
+ * CITY IS THE SIXTH, and its number is content rather than slack. A City
+ * building is `citySeatProps` (iso-painter.ts) drawing four sprites a storey -
+ * two wall slabs and a window on each face - plus one roof, so a seat's cost
+ * is linear in how tall its building stands. Feedback round 1 moved that range
+ * from 1..7 storeys to 3..14, and the number that matters is the FLOOR, not
+ * the ceiling: at a thousand agents almost every agent is a quiet one sitting
+ * at the minimum, so tripling the minimum roughly tripled the common case.
+ * Measured at 1,000 agents: 428 and 462 painted seats costing 6,213 and 6,811
+ * drawables, which is 14.5 and 14.7 a seat against the ~9 the old headroom was
+ * sized for.
+ *
+ * 20 KEEPS RULE 8'S OWN HEADROOM RATIO over that measurement (12 against 9 is
+ * a third clear; 20 against 14.7 is a third clear). A ceiling at 15 would have
+ * been the worse mistake of the two available: it passes today at 98% of
+ * budget and reddens on the first frame that draws one more building, which is
+ * a tripwire that fires for no reason rather than a budget.
+ *
+ * What this number does NOT say is that City still renders as fast as it did.
+ * It is a drawable COUNT, and a count is a proxy for a frame time nobody has
+ * re-measured since the range moved - so read a City frame-time regression as
+ * unguarded by this file until somebody sits in front of one.
  */
-const FRAME_DRAWABLES_PER_SEAT = 12;
+const FRAME_DRAWABLES_PER_SEAT: Readonly<Record<OfficeViewId, number>> = {
+  floor: 12,
+  towers: 12,
+  building: 12,
+  "mission-control": 12,
+  campus: 12,
+  city: 20,
+};
 const FRAME_DRAWABLE_SLACK = 24;
 
 /**
@@ -592,7 +625,7 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
         (frame.world === null ? 0 : frame.world.length) +
         frame.overlay.length;
       expect(body).toBeLessThanOrEqual(
-        FRAME_DRAWABLES_PER_SEAT * seats + FRAME_DRAWABLE_SLACK,
+        FRAME_DRAWABLES_PER_SEAT[viewId] * seats + FRAME_DRAWABLE_SLACK,
       );
       worst = Math.max(worst, body);
     }
@@ -690,7 +723,7 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
         (frame.world === null ? 0 : frame.world.length) +
         frame.overlay.length;
       expect(body).toBeLessThanOrEqual(
-        FRAME_DRAWABLES_PER_SEAT * seats + FRAME_DRAWABLE_SLACK,
+        FRAME_DRAWABLES_PER_SEAT[viewId] * seats + FRAME_DRAWABLE_SLACK,
       );
       return { body, vehicles: vehiclesIn(frame) };
     };

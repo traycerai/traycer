@@ -33,6 +33,23 @@ export const OFFICE_TILE = 16;
 export const OFFICE_CHARACTER_WIDTH = 16;
 export const OFFICE_CHARACTER_HEIGHT = 20;
 
+/**
+ * HOW FAR BELOW A SEAT'S FOOT ITS LETTERING SITS, in world pixels.
+ *
+ * Shared rather than repeated, because two different modules letter the same
+ * row of seats: the scene writes a seated agent's name tag, and a view's
+ * painter writes `reserve` under the empty chair next to it. Those two have to
+ * land on one line - a painter that picked its own offset put `reserve`
+ * INSIDE the console art in Mission control, where muted grey lettering on
+ * grey furniture read as a name with its bottom half cut off (feedback round
+ * 1: "lower half of labels on some agents are cut out").
+ *
+ * The number is a gap below the FEET, not below the furniture: a tag that
+ * cleared the desk would still be over the chair on a view whose chair is
+ * taller.
+ */
+export const OFFICE_LABEL_GAP = 8;
+
 export type OfficeTheme = "light" | "dark";
 
 export type OfficeFacing = "down" | "up" | "left" | "right";

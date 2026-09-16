@@ -26,6 +26,7 @@ import {
   officeFloorSignsToDraw,
   officePlateWidthPx,
   officeSignCenterX,
+  officeSignLetteredAt,
   officeSignsToDraw,
 } from "@/lib/comm-graph/office/office-signs";
 import {
@@ -36,6 +37,7 @@ import {
   type OfficeFloor,
   type OfficeLayout,
   type OfficeSign,
+  type OfficeSignKind,
 } from "@/lib/comm-graph/office/office-types";
 import {
   OFFICE_VIEWS,
@@ -778,7 +780,13 @@ for (const viewId of ["towers", "building"] as const) {
       zoom: 1,
       measure,
       projector: OFFICE_VIEWS[viewId].painter.projector(layout),
-      lod: 1,
+      // CLOSE-UP: an ownerless aggregate plate ("Solo desks", "Bullpen · N
+      // live solos") is fixture lettering now - `officeSignLetteredAt` keeps
+      // it off the floor at office zoom (lod 1) and only letters it from
+      // lod 2. The rule this case pins (an ownerless plate's own ladder,
+      // never re-lettered from an owner) is unaffected by which band draws
+      // it, so it is observed at the band where these signs still appear.
+      lod: 2,
     });
     expect(drawn).toHaveLength(aggregate.length + 1);
     // OWNERLESS PLATES ARE NEVER RE-LETTERED FROM AN OWNER. `ownerAgentId` is
@@ -1453,7 +1461,11 @@ describe("officeSignsToDraw - fixup 6 rule 3: bullpen and solo plates come down 
         zoom: 1,
         measure,
         projector: OFFICE_VIEWS.building.painter.projector(layout),
-        lod: 1,
+        // CLOSE-UP: these bullpen plates are ownerless (a bench, not a
+        // lead's room), so `officeSignLetteredAt` withholds them at office
+        // zoom now - see the aggregate-text case above. The rung this case
+        // pins is unaffected by which band draws it.
+        lod: 2,
       });
       expect(drawn).toHaveLength(wideBullpens.length);
       for (const entry of drawn) {
@@ -1520,7 +1532,9 @@ describe("officeSignsToDraw - fixup 6 rule 3: bullpen and solo plates come down 
       zoom: 1,
       measure,
       projector: OFFICE_VIEWS.building.painter.projector(layout),
-      lod: 1,
+      // CLOSE-UP: ownerless, so office zoom now withholds it - see the
+      // aggregate-text case above.
+      lod: 2,
     });
     expect(drawn).toHaveLength(1);
     // `BP`, not `Bul…` or any other cut of a word this plate had no room for.
@@ -1569,11 +1583,139 @@ describe("officeSignsToDraw - fixup 6 rule 3: bullpen and solo plates come down 
         zoom: 1,
         measure,
         projector: SHIFTED_PROJECTOR,
-        lod: 1,
+        // CLOSE-UP: this plate has no owner (a solo bench), so office zoom
+        // (lod 1) now withholds it entirely - the ladder it steps down is
+        // the same one at lod 2, where fixture lettering is drawn again.
+        lod: 2,
       });
       expect(drawn).toHaveLength(1);
       expect(drawn[0].text).toBe(expected);
     }
+  });
+});
+
+/**
+ * FEEDBACK ROUND 1: fixture lettering ("SOLO DESKS", "CAFETERIA", a
+ * counterless "FRONT DESK") waits for close-up now; lettering that reports
+ * something - a count, a name, which machine this is - still shows at office
+ * zoom. `officeSignLetteredAt` is the rule alone, with no camera or resolver
+ * sweep around it: lod 0 and lod 2 are unconditional (nothing is lettered
+ * at overview, everything is at close-up, whatever the sign), so only lod 1
+ * has a kind-by-kind answer to pin.
+ */
+describe("officeSignLetteredAt - fixture lettering waits for close-up", () => {
+  function minimalSign(
+    overrides: Partial<OfficeSign> & { readonly kind: OfficeSignKind },
+  ): OfficeSign {
+    return {
+      tile: { col: 0, row: 0 },
+      widthTiles: 2,
+      text: "",
+      ownerAgentId: null,
+      hostId: null,
+      agentIds: [],
+      civicRoomId: null,
+      ...overrides,
+    };
+  }
+
+  const ALL_KINDS: ReadonlyArray<OfficeSignKind> = [
+    "room",
+    "pod",
+    "area",
+    "host",
+    "plate",
+    "board",
+    "hq-board",
+    "civic",
+  ];
+
+  it("draws no lettering at overview, whatever the kind, ownership or civic reading", () => {
+    for (const kind of ALL_KINDS) {
+      for (const ownerAgentId of [null, "agent-1"]) {
+        for (const civicReports of [false, true]) {
+          expect(
+            officeSignLetteredAt({
+              sign: minimalSign({ kind, ownerAgentId }),
+              lod: 0,
+              civicReports,
+            }),
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("letters every kind at close-up, even an ownerless plate or a civic sign whose reading reports nothing", () => {
+    // THE LEAST FAVOURABLE INPUT for every kind at once - no owner, no
+    // report - still comes back lettered: lod 2 is a floor under the whole
+    // switch, not a case that happens to answer true today.
+    for (const kind of ALL_KINDS) {
+      expect(
+        officeSignLetteredAt({
+          sign: minimalSign({ kind, ownerAgentId: null }),
+          lod: 2,
+          civicReports: false,
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("letters board, hq-board and host signs at office zoom unconditionally - counts and machine names move", () => {
+    for (const kind of ["board", "hq-board", "host"] as const) {
+      expect(
+        officeSignLetteredAt({
+          sign: minimalSign({ kind, ownerAgentId: null }),
+          lod: 1,
+          civicReports: false,
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("letters a civic sign at office zoom only when its reading actually carries the room's counter", () => {
+    const reporting = minimalSign({ kind: "civic", civicRoomId: "civic/1" });
+    expect(
+      officeSignLetteredAt({ sign: reporting, lod: 1, civicReports: true }),
+    ).toBe(true);
+    // A counterless reading - the help desk, or a ward too narrow for its
+    // own number here - is a fixture at this band: `FRONT DESK` said
+    // nothing new on the first frame and says nothing new on this one.
+    expect(
+      officeSignLetteredAt({ sign: reporting, lod: 1, civicReports: false }),
+    ).toBe(false);
+  });
+
+  it("letters a room, pod or plate sign at office zoom only when it names an owner", () => {
+    for (const kind of ["room", "pod", "plate"] as const) {
+      expect(
+        officeSignLetteredAt({
+          sign: minimalSign({ kind, ownerAgentId: "agent-1" }),
+          lod: 1,
+          civicReports: false,
+        }),
+      ).toBe(true);
+      // No owner: the plan's own written summary ("Solo desks", "Bullpen ·
+      // N live solos") is the repetition feedback round 1 pointed at, and
+      // the BOARD beside it still carries the count at this band.
+      expect(
+        officeSignLetteredAt({
+          sign: minimalSign({ kind, ownerAgentId: null }),
+          lod: 1,
+          civicReports: false,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("never letters an area sign at office zoom - an amenity is the same amenity at every zoom", () => {
+    expect(
+      officeSignLetteredAt({
+        sign: minimalSign({ kind: "area", ownerAgentId: null }),
+        lod: 1,
+        civicReports: false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -1658,7 +1800,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
       widthTiles: args.widthTiles,
       zoom: CIVIC_ZOOM,
       measure,
-    });
+    }).text;
   }
 
   it("says the counter rung at a width derived from that rung's own pixels", () => {
@@ -1710,7 +1852,13 @@ describe("officeCivicSignText - the civic counter ladder", () => {
     expect(text).not.toBe(WORD_RUNG);
   });
 
-  it("says the word at lod 1 even at a width the counter rung would fit", () => {
+  it("says the counter rung at lod 1 too, now that a civic sign reports at office zoom (OFFICE_SIGN_COUNTER_LOD)", () => {
+    // Feedback round 1 named a ward's counter-less reading ("FRONT DESK")
+    // as prominent and not adding value - the counter is what makes the
+    // sign worth its pixels, so the band that draws the sign and the band
+    // that draws its number are the same band by construction now. This
+    // used to say WORD_RUNG at lod 1 and only carry the counter from lod 2;
+    // that split is gone.
     const widthTiles = widthTilesFor(COUNTER_RUNG);
     const available = officePlateWidthPx(widthTiles, CIVIC_ZOOM);
     expect(measure(COUNTER_RUNG)).toBeLessThanOrEqual(available);
@@ -1721,7 +1869,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
         lod: 1,
         widthTiles,
       }),
-    ).toBe(WORD_RUNG);
+    ).toBe(COUNTER_RUNG);
   });
 
   it("letters Archive · n from the partition's archived count at this cursor, not from walk-outs", () => {
@@ -1962,7 +2110,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
         widthTiles: sign.widthTiles,
         zoom: HELP_DESK_OVERFLOW_ZOOM,
         measure,
-      }),
+      }).text,
     ).toBe(desk.name);
   });
 });
@@ -2120,6 +2268,214 @@ describe("officeSignsToDraw - the medbay beacon", () => {
         reducedMotion: false,
       }),
     ).toBeNull();
+  });
+});
+
+/**
+ * THE FULL RESOLVER at office zoom, end to end - `officeSignLetteredAt`
+ * above pins the rule in isolation; these run it through `officeSignsToDraw`
+ * itself, the way a view's real signs reach it.
+ */
+describe("officeSignsToDraw - lod 1 fixture lettering gate (feedback round 1)", () => {
+  function civicRoom(
+    overrides: Partial<OfficeCivicRoom> & {
+      readonly kind: OfficeCivicRoom["kind"];
+      readonly civicRoomId: string;
+      readonly name: string;
+    },
+  ): OfficeCivicRoom {
+    return {
+      bounds: { col: 2, row: 2, cols: 6, rows: 4 },
+      doorTile: { col: 2, row: 5 },
+      signTile: { col: 2, row: 2 },
+      seatIds: [],
+      floorIndex: 0,
+      hostId: null,
+      hostScope: "host",
+      enclosure: "walled",
+      kerbTile: null,
+      ...overrides,
+    };
+  }
+
+  function civicSign(room: OfficeCivicRoom, widthTiles: number): OfficeSign {
+    return {
+      kind: "civic",
+      tile: room.signTile,
+      widthTiles,
+      text: room.name,
+      ownerAgentId: null,
+      hostId: room.hostId,
+      agentIds: [],
+      civicRoomId: room.civicRoomId,
+    };
+  }
+
+  it("drops an area sign at office zoom - an amenity's name is the same fact it was on the first frame", () => {
+    const areaSign: OfficeSign = {
+      kind: "area",
+      tile: { col: 0, row: 0 },
+      widthTiles: 2,
+      text: "Cafeteria",
+      ownerAgentId: null,
+      hostId: null,
+      agentIds: [],
+      civicRoomId: null,
+    };
+    const drawn = officeSignsToDraw({
+      floors: [],
+      civicTally: NO_CIVIC_COUNTS,
+      clock: STILL_SIGN_CLOCK,
+      signs: [areaSign],
+      visibleAgentIds: new Set(),
+      statusById: new Map(),
+      nameById: new Map(),
+      hostNameById: new Map(),
+      roleClaims: {},
+      zoom: 1,
+      measure,
+      projector: SHIFTED_PROJECTOR,
+      lod: 1,
+    });
+    expect(drawn).toEqual([]);
+  });
+
+  it("drops an ownerless plate at office zoom while keeping one with an owner, side by side", () => {
+    const ownerless: OfficeSign = {
+      kind: "plate",
+      tile: { col: 0, row: 0 },
+      widthTiles: 2,
+      text: "Solo desks",
+      ownerAgentId: null,
+      hostId: null,
+      agentIds: [],
+      civicRoomId: null,
+    };
+    const owned: OfficeSign = {
+      ...ownerless,
+      tile: { col: 4, row: 0 },
+      text: "Lead room",
+      ownerAgentId: "owner-1",
+    };
+    const drawn = officeSignsToDraw({
+      floors: [],
+      civicTally: NO_CIVIC_COUNTS,
+      clock: STILL_SIGN_CLOCK,
+      signs: [ownerless, owned],
+      visibleAgentIds: new Set(["owner-1"]),
+      statusById: new Map(),
+      nameById: new Map(),
+      hostNameById: new Map(),
+      roleClaims: {},
+      zoom: 1,
+      measure,
+      projector: SHIFTED_PROJECTOR,
+      lod: 1,
+    });
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0].sign).toBe(owned);
+  });
+
+  it("draws a civic sign at office zoom once its counter fits, with the counter inside its text (OFFICE_SIGN_COUNTER_LOD)", () => {
+    const room = civicRoom({
+      kind: "infirmary",
+      civicRoomId: "civic/infirmary-wide",
+      name: "Infirmary",
+      seatIds: ["bed-0", "bed-1", "bed-2", "bed-3"],
+    });
+    const floor = emptyFloor({ civic: [room] });
+    const rung = "Infirmary · 3 of 4";
+    const wideWidth = Math.ceil(measure(rung) / OFFICE_TILE);
+    const sign = civicSign(room, wideWidth);
+    const tally: OfficeCivicTally = {
+      occupiedByRoom: new Map([[room.civicRoomId, 3]]),
+      archivedByHost: new Map(),
+    };
+    const drawn = officeSignsToDraw({
+      floors: [floor],
+      civicTally: tally,
+      clock: STILL_SIGN_CLOCK,
+      signs: [sign],
+      visibleAgentIds: new Set(),
+      statusById: new Map(),
+      nameById: new Map(),
+      hostNameById: new Map(),
+      roleClaims: {},
+      zoom: 1,
+      measure,
+      projector: SHIFTED_PROJECTOR,
+      lod: 1,
+    });
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0].text).toBe(rung);
+    expect(drawn[0].text).toContain("3 of 4");
+  });
+
+  it("drops a counterless help-desk sign at office zoom - the queue in front of it is the count", () => {
+    const room = civicRoom({
+      kind: "help-desk",
+      civicRoomId: "civic/help-desk",
+      name: "Front desk",
+    });
+    const floor = emptyFloor({ civic: [room] });
+    const sign = civicSign(room, 20);
+    const drawn = officeSignsToDraw({
+      floors: [floor],
+      civicTally: NO_CIVIC_COUNTS,
+      clock: STILL_SIGN_CLOCK,
+      signs: [sign],
+      visibleAgentIds: new Set(),
+      statusById: new Map(),
+      nameById: new Map(),
+      hostNameById: new Map(),
+      roleClaims: {},
+      zoom: 1,
+      measure,
+      projector: SHIFTED_PROJECTOR,
+      lod: 1,
+    });
+    expect(drawn).toEqual([]);
+  });
+
+  it("keeps a roadless infirmary's beacon lettered at office zoom even when its counter does not fit the plate", () => {
+    const room = civicRoom({
+      kind: "infirmary",
+      civicRoomId: "civic/infirmary-narrow",
+      name: "Infirmary",
+      seatIds: ["bed-0", "bed-1", "bed-2", "bed-3"],
+    });
+    // ROADLESS: no ambulance can come, so the light on the sign is the whole
+    // of the alarm (C6) - it must survive even where the counter cannot.
+    const floor = emptyFloor({ road: null, civic: [room] });
+    // NARROW: room for the bare word but not for "Infirmary · 3 of 4" -
+    // `reports` comes back false, which is exactly the case a beacon has to
+    // override.
+    const narrowWidth = Math.ceil(measure("Infirmary") / OFFICE_TILE);
+    const available = officePlateWidthPx(narrowWidth, 1);
+    expect(measure("Infirmary · 3 of 4")).toBeGreaterThan(available);
+    const sign = civicSign(room, narrowWidth);
+    const tally: OfficeCivicTally = {
+      occupiedByRoom: new Map([[room.civicRoomId, 3]]),
+      archivedByHost: new Map(),
+    };
+    const drawn = officeSignsToDraw({
+      floors: [floor],
+      civicTally: tally,
+      clock: STILL_SIGN_CLOCK,
+      signs: [sign],
+      visibleAgentIds: new Set(),
+      statusById: new Map(),
+      nameById: new Map(),
+      hostNameById: new Map(),
+      roleClaims: {},
+      zoom: 1,
+      measure,
+      projector: SHIFTED_PROJECTOR,
+      lod: 1,
+    });
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0].text).toBe("Infirmary");
+    expect(drawn[0].sirenFrame).not.toBeNull();
   });
 });
 

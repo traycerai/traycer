@@ -56,6 +56,7 @@ import { officeArchivedByHost } from "@/lib/comm-graph/office/office-population"
 import {
   OFFICE_CHARACTER_HEIGHT,
   OFFICE_CHARACTER_WIDTH,
+  OFFICE_LABEL_GAP,
   OFFICE_LOGO_SIZE,
   OFFICE_TILE,
   type OfficeAgentInput,
@@ -218,7 +219,8 @@ const MAX_LIVE_ENVELOPES = 24;
 /** Even with motion off an arrival has to be on screen long enough to see. */
 const REDUCED_MOTION_ARRIVAL_MS = 300;
 const BUBBLE_GAP = 2;
-const LABEL_GAP = 8;
+/** The one offset; a painter's `reserve` lettering lines up on it too. */
+const LABEL_GAP = OFFICE_LABEL_GAP;
 const MAX_LABEL_CHARS = 14;
 /**
  * A lit screen is never still: two frames alternate while an agent is in a

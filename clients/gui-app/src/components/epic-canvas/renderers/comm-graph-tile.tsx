@@ -47,7 +47,6 @@ import {
   type OfficeAutoProbe,
 } from "@/lib/comm-graph/office/office-auto";
 import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
-import { OfficeAutoChip } from "@/components/epic-canvas/comm-graph/office/office-auto-chip";
 import { officeBenchOverride } from "@/components/epic-canvas/comm-graph/office/office-bench";
 import { OfficeViewPicker } from "@/components/epic-canvas/comm-graph/office/office-view-picker";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -1053,14 +1052,6 @@ export function CommGraphTile(props: CommGraphTileProps) {
                 decision={shownAutoDecision}
                 onChoose={handleOfficeViewChange}
               />
-            }
-            autoChip={
-              choice === "auto" ? (
-                <OfficeAutoChip
-                  decision={shownAutoDecision}
-                  restoredView={trustedAutoView}
-                />
-              ) : null
             }
           />
         ) : (

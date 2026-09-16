@@ -3,8 +3,12 @@
  * filled rect per console tier.
  */
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
-import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import {
+  OFFICE_LABEL_GAP,
+  OFFICE_TILE,
+} from "@/lib/comm-graph/office/office-types";
+import {
+  missionControlLettersReserve,
   originColFor,
   ROWS_PER_TIER,
   seatingWidth,
@@ -30,7 +34,17 @@ import type {
 
 const NAMEPLATE_Y_OFFSET = 4;
 const LOGO_Y_OFFSET = 1;
-const RESERVE_ALPHA = 0.55;
+/**
+ * How solid an unclaimed console is.
+ *
+ * Raised from `0.55` with the oblique views' `EMPTY_FURNITURE_ALPHA`, which it
+ * is the same decision as and is now kept at the same number: below about 0.7
+ * a sprite's near-black OUTLINE stops reading as a line over a dark floor, and
+ * the furniture goes from dimmed to translucent. Feedback round 1 named that
+ * on Building ("these transparent desks look weird") and Mission control's
+ * empty consoles were the same thing one view over.
+ */
+const RESERVE_ALPHA = 0.72;
 const IDLE_MONITOR_ALPHA = 0.6;
 const ARCHIVED_ALPHA = 0.45;
 
@@ -330,7 +344,47 @@ function paintFloor(
     }
   }
   drawables.push(...paintUnownedProps(layout, tiles));
+  drawables.push(...civicGround(layout, tiles));
   return drawables;
+}
+
+/**
+ * THE GROUND A CIVIC ROOM STANDS ON, tinted so the room has an edge.
+ *
+ * The oblique views' `civicGround` one view over, for the same reason and with
+ * the same number: an amphitheatre's medbay, gallery and records are regions
+ * of an open hall with nothing but a sign to say where each one stops, so a
+ * reader cannot tell a seat inside one from a seat beside it. Feedback round 1
+ * asked that question about Building's waiting room; this is the same floor
+ * plan one view over, and fixing only the view somebody happened to screenshot
+ * is how the next round gets the same complaint about a different office.
+ *
+ * Pushed after the tiles AND after the unowned props, which is the position
+ * both floor paths draw over the tiles from - see the oblique painter for the
+ * one place they disagree and why it does not matter.
+ */
+const CIVIC_GROUND_ALPHA = 0.3;
+
+function civicGround(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): ReadonlyArray<OfficeDrawable> {
+  const out: OfficeDrawable[] = [];
+  for (const floor of layout.floors) {
+    for (const room of floor.civic) {
+      if (!tileRectsOverlap(room.bounds, tiles)) continue;
+      out.push({
+        kind: "block",
+        x: room.bounds.col * OFFICE_TILE,
+        y: room.bounds.row * OFFICE_TILE,
+        width: room.bounds.cols * OFFICE_TILE,
+        height: room.bounds.rows * OFFICE_TILE,
+        fill: "civic",
+        alpha: CIVIC_GROUND_ALPHA,
+      });
+    }
+  }
+  return out;
 }
 
 function monitorSpriteFor(state: OfficeDeskState): OfficeSpriteName {
@@ -357,7 +411,7 @@ function envelopeStackFor(openRequests: number): EnvelopeStackArt | null {
 }
 
 function paintSeat(
-  _layout: OfficeLayout,
+  layout: OfficeLayout,
   seat: OfficeSeat,
   state: OfficeDeskState,
   lod: OfficeLod,
@@ -480,14 +534,26 @@ function paintSeat(
     return out;
   }
   if (reserve) {
-    if (lod === 2) {
+    // ONCE A TIER, not once a console - the oblique views' rule, which this
+    // view was missing. See `MissionControlFrozen.reserveLabelSeatIds`.
+    if (lod === 2 && missionControlLettersReserve(layout, seat.seatId)) {
       out.push(
         worldOf(
           {
             kind: "label",
             text: "reserve",
             x: deskX + OFFICE_TILE,
-            y: deskY + OFFICE_TILE,
+            // ON THE FLOOR UNDER THE CHAIR, on the same line the seated
+            // agents' name tags land on - `OFFICE_LABEL_GAP` below the foot,
+            // which is what the scene writes for a character.
+            //
+            // It used to be `deskY + OFFICE_TILE`, which is the console's
+            // BOTTOM EDGE: the glyphs sat entirely inside the console art, in
+            // a muted grey against the console's own grey, and read as a name
+            // with its lower half sliced off (feedback round 1: "lower half of
+            // labels on some agents are cut out"). Nothing was clipping it -
+            // it was lettering with no floor behind it.
+            y: (seat.chairTile.row + 1) * OFFICE_TILE + OFFICE_LABEL_GAP,
             tone: "muted",
             ownerAgentId: null,
             // Nobody's name, so no seat to be fitted to.

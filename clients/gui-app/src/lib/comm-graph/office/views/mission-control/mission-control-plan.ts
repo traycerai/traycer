@@ -99,6 +99,22 @@ export interface MissionControlFrozen {
   readonly hostBands: ReadonlyArray<MissionControlHostBand>;
   readonly bandByTile: Readonly<Record<string, OfficeSpriteName>>;
   readonly podByTile: Readonly<Record<string, OfficeSpriteName>>;
+  /**
+   * ONE CONSOLE A TIER LETTERS `reserve`; every other empty one says it with
+   * its own dimmed furniture.
+   *
+   * The oblique views have said this per STOREY since they shipped
+   * (`obliqueReserveLabelSeatId`), and this view did not: it lettered every
+   * free console, which on one bank of the screenshot in feedback round 1 was
+   * seven identical greyed words in a row. That was camouflaged while the word
+   * sat on the console art - it was unreadable, which is what the round
+   * actually complained about - and moving it onto the floor where it CAN be
+   * read is what makes the repetition worth fixing at the same time.
+   *
+   * The seat nearest the centre of its tier, so the label lands where the eye
+   * already is rather than out at an aisle end.
+   */
+  readonly reserveLabelSeatIds: ReadonlyArray<string>;
 }
 
 interface ConsoleSlot {
@@ -169,6 +185,7 @@ function isFrozenPayload(value: {
   readonly hostBands: unknown;
   readonly bandByTile: unknown;
   readonly podByTile: unknown;
+  readonly reserveLabelSeatIds: unknown;
 }): boolean {
   if (!Array.isArray(value.tierSeatCounts)) return false;
   if (!value.tierSeatCounts.every(isFiniteNumber)) return false;
@@ -178,7 +195,13 @@ function isFrozenPayload(value: {
   if (!Array.isArray(value.hostBands)) return false;
   if (!value.hostBands.every(isHostBand)) return false;
   if (!isSpriteRecord(value.bandByTile)) return false;
+  if (!Array.isArray(value.reserveLabelSeatIds)) return false;
+  if (!value.reserveLabelSeatIds.every(isString)) return false;
   return isSpriteRecord(value.podByTile);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
 }
 
 export function isMissionControlFrozen(
@@ -191,6 +214,7 @@ export function isMissionControlFrozen(
   if (!("hostBands" in value)) return false;
   if (!("bandByTile" in value)) return false;
   if (!("podByTile" in value)) return false;
+  if (!("reserveLabelSeatIds" in value)) return false;
   return isFrozenPayload(value);
 }
 
@@ -198,6 +222,49 @@ function isSpriteRecord(
   value: unknown,
 ): value is Readonly<Record<string, OfficeSpriteName>> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The seat on each tier that letters `reserve`: the free console nearest the
+ * tier's centre, or none where the tier is full.
+ *
+ * Read `packing.fills` by the slot's own `index`, unguarded: the two arrays
+ * are built parallel (`emptyFills(slots.length)`) and kept that way
+ * (`extendFillsTo`), which is the same assumption every other reader in this
+ * file makes - see `reserveIndexFor`. An `=== undefined` check here is a
+ * condition the TYPE cannot reach, so it lints as dead rather than reading as
+ * defensive.
+ */
+function reserveLabelSeatIdsOf(packing: Packing): ReadonlyArray<string> {
+  const nearest = new Map<number, ConsoleSlot>();
+  for (const slot of packing.slots) {
+    if (packing.fills[slot.index].agentId !== null) continue;
+    const held = nearest.get(slot.tier);
+    if (
+      held === undefined ||
+      Math.abs(slot.deskTile.col - packing.centerCol) <
+        Math.abs(held.deskTile.col - packing.centerCol)
+    ) {
+      nearest.set(slot.tier, slot);
+    }
+  }
+  return [...nearest.values()].map((slot) => consoleSeatId(slot.index));
+}
+
+/**
+ * WHETHER THIS EMPTY CONSOLE IS THE ONE ON ITS TIER THAT SAYS `reserve`.
+ *
+ * The painter's half of the rule above, shaped like the oblique views'
+ * `obliqueReserveLabelSeatId` so the two read as one decision. A layout this
+ * view did not plan answers `false`: no tiers, nothing to letter once per.
+ */
+export function missionControlLettersReserve(
+  layout: OfficeLayout,
+  seatId: string,
+): boolean {
+  const frozen = frozenOf(layout);
+  if (frozen === null) return false;
+  return frozen.reserveLabelSeatIds.includes(seatId);
 }
 
 export function frozenOf(
@@ -2401,6 +2468,7 @@ export function planMissionControl(input: OfficePlanInput): OfficeLayout {
     hostBands,
     bandByTile: bandByTileOf(hostBands),
     podByTile: podByTileOf(pods),
+    reserveLabelSeatIds: reserveLabelSeatIdsOf(packing),
   };
   return {
     view: VIEW_ID,
