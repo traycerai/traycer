@@ -534,6 +534,23 @@ export default tseslint.config(
       // ── React: correctness ──────────────────────────────────────────────────
       "react/no-array-index-key": "error",
       "react/jsx-no-leaked-render": "error",
+      // A prop written twice is last-wins in every toolchain here, so it is
+      // silent by construction: it does not change the render when both copies
+      // carry the same expression, and no test can see it. A scripted edit that
+      // applied its insertion twice shipped exactly that
+      // (`hostKnowsAutoMode={hostKnowsAutoMode}` on two adjacent lines in
+      // `composer-toolbar.tsx`) past oxlint, eslint AND oxfmt, all three of
+      // which exited 0. This rule is the only gate that catches the class
+      // before a type-check.
+      //
+      // ENFORCED FROM `.oxlintrc.json`, not from here. The
+      // `oxlint.buildFromOxlintConfigFile` spread at the end of this file
+      // switches off in ESLint every rule oxlint already owns, so this entry
+      // resolves to `off` - exactly like its seven react neighbours below that
+      // also appear in that file. Listing it here keeps the declaration where a
+      // reader looks for it; deleting the `.oxlintrc.json` half would silently
+      // disarm the rule in both.
+      "react/jsx-no-duplicate-props": "error",
       "react/jsx-no-target-blank": "error",
       "react/no-danger": "error",
       "react/no-unstable-nested-components": "error",
