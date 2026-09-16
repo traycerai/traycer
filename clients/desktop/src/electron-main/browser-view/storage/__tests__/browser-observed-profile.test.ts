@@ -20,7 +20,7 @@ import {
   BROWSER_COOKIE_DELTA_WINDOW_MS,
   BrowserCookieChangeObserver,
 } from "../browser-cookie-change-observer";
-import { log } from "../../../app/logger";
+import { isDebugEnabled, log, sanitizeLogFields } from "../../../app/logger";
 import { FakeCookieJar } from "./cookie-jar-fixture";
 
 /**
@@ -38,10 +38,17 @@ import { FakeCookieJar } from "./cookie-jar-fixture";
  */
 
 vi.mock("../../../app/logger", () => ({
+  // Defaults to enabled: the existing decision-log assertions in this file
+  // depend on the diagnostic actually running. The S2 gate tests below flip
+  // it off with `mockReturnValueOnce`.
+  isDebugEnabled: vi.fn(() => true),
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   // The real one, near enough for these assertions: what matters is that the
-  // trace passes its fields through a truncating redactor at all.
-  sanitizeLogFields: (fields: Record<string, unknown>) => fields,
+  // trace passes its fields through a truncating redactor at all. Wrapped in
+  // `vi.fn` (identical behaviour) so the S2 gate tests can prove the decision
+  // batch's OWN sanitize calls are skipped, not merely that the final log line
+  // never lands.
+  sanitizeLogFields: vi.fn((fields: Record<string, unknown>) => fields),
   describeLogError: (error: unknown) => String(error),
 }));
 
@@ -1365,6 +1372,19 @@ describe("observed sign-in debug drop (ticket 04)", () => {
     ]);
   });
 
+  it("still drops the frame when the drop list matches, even with the log level below debug (S2)", async () => {
+    process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS = "example.com";
+    const harness = new ObservedApplyHarness();
+
+    vi.mocked(isDebugEnabled).mockReturnValueOnce(false);
+    const result = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.outcome).toBe("debug-dropped");
+    expect(harness.jar.names()).toEqual([]);
+  });
+
   it("leaves a frame alone when its domain is not named in the drop list", async () => {
     process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS = "other.test";
     const harness = new ObservedApplyHarness();
@@ -1605,5 +1625,91 @@ describe("observed sign-in decision log (ticket 04 instrumentation)", () => {
         attributesChanged: null,
       },
     ]);
+  });
+});
+
+describe("observed sign-in decision log gate (S2)", () => {
+  // `sanitizeLogFields` also runs for the always-on aggregate INFO/WARN trace
+  // (`traceBrowserObservedProfile`), so "not called at all" would be the wrong
+  // assertion - these filter to the shape only the gated decision batch
+  // produces: a per-cookie decision object carries `valueChanged`, which
+  // nothing else this module sanitizes or stringifies does.
+  const isDecisionSanitizeCall = (call: unknown[]): boolean => {
+    const [value] = call;
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "valueChanged" in (value as Record<string, unknown>)
+    );
+  };
+  const isDecisionStringifyCall = (call: unknown[]): boolean => {
+    const [value] = call;
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "decisions" in (value as Record<string, unknown>) &&
+      "omitted" in (value as Record<string, unknown>)
+    );
+  };
+
+  it("skips the decision batch's own formatting (sanitize + JSON.stringify) and its log line when the log level is below debug, without changing the apply outcome", async () => {
+    const harness = new ObservedApplyHarness();
+    // Baseline through an observed apply (not a direct jar seed, which would
+    // make the key desktop-owned and refuse the rotation below).
+    await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+    vi.mocked(log.debug).mockClear();
+    vi.mocked(sanitizeLogFields).mockClear();
+
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    try {
+      vi.mocked(isDebugEnabled).mockReturnValueOnce(false);
+      const result = await harness.applyFrame([
+        {
+          ...observedCookie({
+            name: "sid",
+            domain: "example.com",
+            expires: -1,
+          }),
+          value: "rotated",
+        },
+      ]);
+
+      expect(result.outcome).toBe("applied");
+      expect(result.appliedCookies).toBe(1);
+      expect(harness.jar.names()).toEqual(["sid"]);
+      expect(
+        vi
+          .mocked(log.debug)
+          .mock.calls.filter(
+            ([message]) =>
+              message === "[browser-view] observed cookie decisions",
+          ),
+      ).toHaveLength(0);
+      expect(
+        vi.mocked(sanitizeLogFields).mock.calls.filter(isDecisionSanitizeCall),
+      ).toHaveLength(0);
+      expect(
+        stringifySpy.mock.calls.filter(isDecisionStringifyCall),
+      ).toHaveLength(0);
+
+      // The gate reads the level fresh on every call rather than latching
+      // off: the very next apply, with debug back on, still formats and logs
+      // a decision batch.
+      stringifySpy.mockClear();
+      await harness.applyFrame([
+        observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+      ]);
+      expect(lastDecisionsLog().decisions).toHaveLength(1);
+      expect(
+        vi.mocked(sanitizeLogFields).mock.calls.filter(isDecisionSanitizeCall),
+      ).toHaveLength(1);
+      expect(
+        stringifySpy.mock.calls.filter(isDecisionStringifyCall),
+      ).toHaveLength(1);
+    } finally {
+      stringifySpy.mockRestore();
+    }
   });
 });

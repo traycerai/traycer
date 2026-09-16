@@ -6,7 +6,7 @@ import {
 } from "@traycer/protocol/host/browser/contracts";
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
 import { isDevBuild } from "../../../config";
-import { log, sanitizeLogFields } from "../../app/logger";
+import { isDebugEnabled, log, sanitizeLogFields } from "../../app/logger";
 import {
   browserJarCookies,
   cookieKeyId,
@@ -366,15 +366,18 @@ export async function applyBrowserObservedProfile(
   observed: BrowserObservedProfile,
   dependencies: BrowserObservedProfileDependencies,
 ): Promise<BrowserObservedProfileResult> {
-  const decisions = observed.cookies.slice(0, 64).map((cookie) => ({
-    domain: cookie.domain,
-    name: cookie.name,
-    path: cookie.path,
-    outcome: "refused:apply-failed",
-    valueChanged: null as boolean | null,
-    expiryChanged: null as boolean | null,
-    attributesChanged: null as boolean | null,
-  }));
+  const debugEnabled = isDebugEnabled();
+  const decisions = debugEnabled
+    ? observed.cookies.slice(0, 64).map((cookie) => ({
+        domain: cookie.domain,
+        name: cookie.name,
+        path: cookie.path,
+        outcome: "refused:apply-failed",
+        valueChanged: null as boolean | null,
+        expiryChanged: null as boolean | null,
+        attributesChanged: null as boolean | null,
+      }))
+    : [];
   const refuseFrame = (
     domain: string,
     outcome: BrowserObservedProfileOutcome,
@@ -425,24 +428,26 @@ export async function applyBrowserObservedProfile(
       const target = dependencies.getTargetJar();
       // Read inside the serialized section for both ownership and comparison.
       const jarCookies = await browserJarCookies(scope, target.session);
-      const current = new Map(
-        jarCookies.map((cookie) => [cookieKeyId(cookie), cookie]),
-      );
-      for (const [index, decision] of decisions.entries()) {
-        const incoming = observed.cookies[index];
-        if (incoming === undefined) continue;
-        const previous = current.get(cookieKeyId(incoming));
-        decision.valueChanged =
-          previous === undefined || previous.value !== incoming.value;
-        decision.expiryChanged =
-          previous === undefined ||
-          (previous.expires < 0 ? -1 : previous.expires) !==
-            (incoming.expires < 0 ? -1 : incoming.expires);
-        decision.attributesChanged =
-          previous === undefined ||
-          previous.httpOnly !== incoming.httpOnly ||
-          previous.secure !== incoming.secure ||
-          previous.sameSite !== incoming.sameSite;
+      if (debugEnabled) {
+        const current = new Map(
+          jarCookies.map((cookie) => [cookieKeyId(cookie), cookie]),
+        );
+        for (const [index, decision] of decisions.entries()) {
+          const incoming = observed.cookies[index];
+          if (incoming === undefined) continue;
+          const previous = current.get(cookieKeyId(incoming));
+          decision.valueChanged =
+            previous === undefined || previous.value !== incoming.value;
+          decision.expiryChanged =
+            previous === undefined ||
+            (previous.expires < 0 ? -1 : previous.expires) !==
+              (incoming.expires < 0 ? -1 : incoming.expires);
+          decision.attributesChanged =
+            previous === undefined ||
+            previous.httpOnly !== incoming.httpOnly ||
+            previous.secure !== incoming.secure ||
+            previous.sameSite !== incoming.sameSite;
+        }
       }
       const classified = classifyObservedCookies({
         scope,
@@ -460,7 +465,7 @@ export async function applyBrowserObservedProfile(
             decision.outcome = `refused:${reason}`;
         },
       });
-      const attempted = new Set<string>();
+      const attempted = debugEnabled ? new Set<string>() : null;
       let merged: BrowserObservedCookieMergeResult = {
         applied: 0,
         refused: [],
@@ -480,7 +485,7 @@ export async function applyBrowserObservedProfile(
           target.session,
           jarCookies,
           (key) => {
-            attempted.add(cookieKeyId(key));
+            if (attempted !== null) attempted.add(cookieKeyId(key));
             if (target.durableJar) dependencies.noteAppliedKeys([key]);
           },
         );
@@ -492,17 +497,19 @@ export async function applyBrowserObservedProfile(
           await dependencies.releaseHeadlessOriginKeys(merged.refused);
         }
       }
-      const survivors = new Set(classified.survivors);
-      const refused = new Set(merged.refused.map(cookieKeyId));
-      for (const [index, decision] of decisions.entries()) {
-        const cookie = observed.cookies[index];
-        if (cookie === undefined || !survivors.has(cookie)) continue;
-        const id = cookieKeyId(cookie);
-        decision.outcome = refused.has(id)
-          ? "refused:jar-rejected"
-          : attempted.has(id)
-            ? "applied"
-            : "identical";
+      if (attempted !== null) {
+        const survivors = new Set(classified.survivors);
+        const refused = new Set(merged.refused.map(cookieKeyId));
+        for (const [index, decision] of decisions.entries()) {
+          const cookie = observed.cookies[index];
+          if (cookie === undefined || !survivors.has(cookie)) continue;
+          const id = cookieKeyId(cookie);
+          decision.outcome = refused.has(id)
+            ? "refused:jar-rejected"
+            : attempted.has(id)
+              ? "applied"
+              : "identical";
+        }
       }
       return {
         domain: scope,
@@ -515,19 +522,21 @@ export async function applyBrowserObservedProfile(
       };
     });
   } finally {
-    // Sanitize each entry before JSON encoding: the generic log array cap is 20.
-    log.debug(
-      "[browser-view] observed cookie decisions",
-      JSON.stringify({
-        ...sanitizeLogFields({
-          source: observed.source,
-          hostId: observed.hostId,
-          domain: observed.domain,
+    if (debugEnabled) {
+      // Sanitize each entry before JSON encoding: the generic log array cap is 20.
+      log.debug(
+        "[browser-view] observed cookie decisions",
+        JSON.stringify({
+          ...sanitizeLogFields({
+            source: observed.source,
+            hostId: observed.hostId,
+            domain: observed.domain,
+          }),
+          decisions: decisions.map((decision) => sanitizeLogFields(decision)),
+          omitted: Math.max(0, observed.cookies.length - decisions.length),
         }),
-        decisions: decisions.map((decision) => sanitizeLogFields(decision)),
-        omitted: Math.max(0, observed.cookies.length - decisions.length),
-      }),
-    );
+      );
+    }
   }
 }
 

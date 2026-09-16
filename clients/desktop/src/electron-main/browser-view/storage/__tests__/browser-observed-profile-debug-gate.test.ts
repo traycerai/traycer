@@ -23,6 +23,7 @@ describe("observed sign-in debug drop is dev-build-only (ticket 04)", () => {
     vi.resetModules();
     vi.doMock("../../../../config", () => ({ isDevBuild: false }));
     vi.doMock("../../../app/logger", () => ({
+      isDebugEnabled: () => true,
       log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
       sanitizeLogFields: (fields: Record<string, unknown>) => fields,
       describeLogError: (error: unknown) => String(error),
