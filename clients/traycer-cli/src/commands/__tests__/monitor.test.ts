@@ -467,7 +467,6 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
     { reason: "quiet", detail: null },
     { reason: "user-stopped", detail: null },
     { reason: "errored", detail: "rate limited" },
-    { reason: "awaiting-input", detail: "needs approval" },
   ] as const;
 
   it.each(nonCancellationReasons)(
@@ -566,6 +565,53 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
       }
     },
   );
+
+  it("keeps awaiting-input informational while the human gate is active", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    try {
+      await flush(0);
+
+      sessions[0].serverFrame?.({
+        kind: "notice",
+        hasBinaryPayload: false,
+        notice: {
+          kind: "inactivity",
+          senderAgentId: "a1",
+          responseId: "response-1",
+          receiverAgentId: "receiver-1",
+          receiverTitle: "Worker",
+          receiverHarnessId: "codex",
+          epicId: "e1",
+          reason: "awaiting-input",
+          detail: "needs approval",
+          droppedReceivers: null,
+          stopInitiator: null,
+          noticedAt: 123,
+        },
+      });
+
+      const output = stdoutSpy.mock.calls
+        .map((call) => String(call[0]))
+        .join("");
+      expect(output).toContain(
+        "is blocked waiting on a human — it needs approval — and will not reply until someone responds",
+      );
+      expect(output).toContain(
+        "Sending a follow-up now would queue behind the user's input and re-trigger this notice",
+      );
+      expect(output).toContain("Wait for the receiver's reply");
+      expect(output).toContain(
+        "traycer agent transcript --agent-id receiver-1",
+      );
+      expect(output).not.toContain("traycer agent send");
+    } finally {
+      stdoutSpy.mockRestore();
+      void result;
+    }
+  });
 });
 
 describe("mixed-version inbox message frames", () => {

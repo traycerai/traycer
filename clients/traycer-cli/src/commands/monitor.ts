@@ -940,6 +940,17 @@ function printInboxNotice(notice: AgentInboxNotice): void {
     printReceiverCancelledNotice(notice, receiverLabel, harnessSuffix);
     return;
   }
+  if (notice.reason === "awaiting-input") {
+    const lines = [
+      "",
+      `[traycer inbox] inactivity notice — ${inactivityHeadline(notice, receiverLabel)}${harnessSuffix} (responseId ${notice.responseId})`,
+      `[traycer inbox] Sending a follow-up now would queue behind the user's input and re-trigger this notice. Wait for the receiver's reply.`,
+      `[traycer inbox] you may read its transcript: traycer agent transcript --agent-id ${notice.receiverAgentId}`,
+      "",
+    ];
+    writeStdout(`${lines.join("\n")}\n`);
+    return;
+  }
   const lines = [
     "",
     `[traycer inbox] inactivity notice — ${inactivityHeadline(notice, receiverLabel)}${harnessSuffix} (responseId ${notice.responseId})`,
