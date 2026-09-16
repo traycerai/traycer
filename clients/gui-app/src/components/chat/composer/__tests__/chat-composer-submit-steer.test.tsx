@@ -672,7 +672,6 @@ function mountSubmit(input: MountSubmitInput): {
         workspaceBlocked: props.workspaceBlocked,
         imagesUnsupported: false,
         attachmentPreparationPending: false,
-        draftReadOnly: false,
         onSubmitMessage: props.onSubmitMessage,
         onSideChat: null,
       }),

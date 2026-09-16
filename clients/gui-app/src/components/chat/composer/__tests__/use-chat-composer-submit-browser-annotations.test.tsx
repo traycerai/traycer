@@ -188,7 +188,6 @@ function mountSubmit(args: {
       workspaceBlocked: false,
       imagesUnsupported: args.imagesUnsupported,
       attachmentPreparationPending: false,
-      draftReadOnly: false,
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
     }),

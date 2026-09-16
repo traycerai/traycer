@@ -8,7 +8,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { EpicLeftPanelHost } from "@/components/epic-canvas/sidebar/epic-sidebar";
+import {
+  EpicLeftPanelHost,
+  EpicLeftPanelLoadingHost,
+} from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { EpicLeftPanelRail } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
@@ -25,6 +28,10 @@ import {
   prPresenceScopeKey,
   usePrPresenceStore,
 } from "@/stores/epics/pr-presence-store";
+import {
+  tabSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { SidebarProvider } from "@/components/ui/sidebar";
 
 interface CapturedDroppableInput {
@@ -120,6 +127,13 @@ vi.mock("@/components/epic-canvas/sidebar/epic-terminal-sidebar", () => ({
   TerminalsPanelBody: () => <div data-testid="epic-test-terminals-body" />,
 }));
 
+vi.mock("@/components/epic-canvas/pr/pr-panel-body", () => ({
+  PrPanelBody: () => <div data-testid="epic-test-pr-body" />,
+}));
+vi.mock("@/components/epic-canvas/git-diff/git-diff-panel-body-live", () => ({
+  GitDiffPanelBodyLive: () => <div data-testid="epic-test-git-diff-body" />,
+}));
+
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-artifact-tree", () => ({
   ArtifactReadLifecycleBridge: () => null,
   ArtifactTreePanelBody: () => null,
@@ -128,6 +142,11 @@ vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-artifact-tree", () => ({
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () => testState.activeArtifact,
   useEpicChatRecords: () => [],
+  useEpicArtifactRecords: () => [],
+  useAncestorIds: () => [],
+  useRootIds: () => [],
+  useEpicPermissionRole: () => "owner",
+  useEpicConnectionStatus: () => "open",
 }));
 
 // The rail and panel hosts read PR presence under the CANVAS host - the Epic
@@ -146,6 +165,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 
 const EPIC_ID = "epic-sidebar-test";
 const TAB_ID = "epic-sidebar-tab";
+const PINNED_HOST_ID = "epic-sidebar-pinned-host";
 
 // One client for the file's lifetime - a fresh one per render strands
 // observers on the old one.
@@ -159,6 +179,7 @@ const HOST_ID = "epic-sidebar-host";
 
 function resetLeftPanelStore(): void {
   window.localStorage.clear();
+  useSurfaceHostSelectionStore.setState({ selections: {} });
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
     panelGroups: DEFAULT_LEFT_PANEL_GROUPS,
@@ -177,12 +198,25 @@ function resetLeftPanelStore(): void {
  * complement of groups, so they seed presence; the gate itself is covered
  * separately below.
  */
-function setPullRequestPresence(hasPullRequests: boolean): void {
+function setPullRequestPresenceForHost(
+  hostId: string,
+  hasPullRequests: boolean,
+): void {
   usePrPresenceStore.setState({
     hasItemsByScopeKey: hasPullRequests
-      ? { [prPresenceScopeKey(HOST_ID, EPIC_ID)]: true }
+      ? { [prPresenceScopeKey(hostId, EPIC_ID)]: true }
       : {},
   });
+}
+
+function setPullRequestPresence(hasPullRequests: boolean): void {
+  setPullRequestPresenceForHost(HOST_ID, hasPullRequests);
+}
+
+function pinPullRequestsTo(hostId: string): void {
+  useSurfaceHostSelectionStore
+    .getState()
+    .setSelection(tabSurfaceKey("pull-requests", TAB_ID), hostId);
 }
 
 function resetDndStore(): void {
@@ -560,6 +594,159 @@ describe("<EpicLeftPanelRail />", () => {
       });
 
       expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
+    });
+  });
+
+  describe("host-pinned Pull Requests availability", () => {
+    function renderLiveHost(): void {
+      render(
+        <SidebarProvider>
+          <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+        </SidebarProvider>,
+      );
+    }
+
+    function renderLoadingHost(): void {
+      render(
+        <SidebarProvider>
+          <EpicLeftPanelLoadingHost
+            epicId={EPIC_ID}
+            tabId={TAB_ID}
+            side="left"
+          />
+        </SidebarProvider>,
+      );
+    }
+
+    function renderRail(): void {
+      render(
+        <EpicLeftPanelRail
+          epicId={EPIC_ID}
+          tabId={TAB_ID}
+          orientation="vertical"
+        />,
+      );
+    }
+
+    it("uses the persisted B pin for live, loading and rail availability", () => {
+      pinPullRequestsTo(PINNED_HOST_ID);
+      setPullRequestPresenceForHost(PINNED_HOST_ID, true);
+      useLeftPanelStore.getState().setActivePanelId(TAB_ID, "pull-requests");
+
+      renderLiveHost();
+      expect(
+        screen.getByTestId("epic-sidebar").getAttribute("data-left-panel-id"),
+      ).toBe("pull-requests");
+
+      cleanup();
+      renderLoadingHost();
+      expect(
+        screen.getByTestId("epic-sidebar").getAttribute("data-left-panel-id"),
+      ).toBe("pull-requests");
+
+      cleanup();
+      renderRail();
+      expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
+    });
+
+    it("follows canvas host A when unpinned and ignores B-only presence", () => {
+      setPullRequestPresenceForHost(PINNED_HOST_ID, true);
+      renderRail();
+      expect(screen.queryByTestId("epic-rail-pull-requests")).toBeNull();
+
+      act(() => {
+        setPullRequestPresenceForHost(HOST_ID, true);
+      });
+
+      expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
+    });
+
+    it("retains an active PR panel across A-to-B selection until B is observed", () => {
+      setPullRequestPresenceForHost(HOST_ID, true);
+      useLeftPanelStore.getState().setActivePanelId(TAB_ID, "pull-requests");
+      const rendered = render(
+        <EpicLeftPanelRail
+          epicId={EPIC_ID}
+          tabId={TAB_ID}
+          orientation="vertical"
+        />,
+      );
+
+      expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
+
+      act(() => {
+        pinPullRequestsTo(PINNED_HOST_ID);
+        usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
+      });
+
+      expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
+
+      act(() => {
+        useLeftPanelStore.getState().setActivePanelId(TAB_ID, "chats");
+      });
+      expect(screen.queryByTestId("epic-rail-pull-requests")).toBeNull();
+
+      act(() => {
+        setPullRequestPresenceForHost(PINNED_HOST_ID, true);
+      });
+      expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
+
+      act(() => {
+        useLeftPanelStore
+          .getState()
+          .setPanelVisibilityOverride("pull-requests", false);
+      });
+      expect(screen.queryByTestId("epic-rail-pull-requests")).toBeNull();
+
+      rendered.unmount();
+    });
+
+    it("retains a grouped PR section when its active sibling stays selected", () => {
+      useLeftPanelStore
+        .getState()
+        .applyPanelGroups(
+          moveLeftPanelGroup(
+            DEFAULT_LEFT_PANEL_GROUPS,
+            "pull-requests",
+            "git-diff",
+            "combine",
+          ),
+        );
+      setPullRequestPresenceForHost(HOST_ID, true);
+      useLeftPanelStore.getState().setActivePanelId(TAB_ID, "git-diff");
+      const rendered = render(
+        <>
+          <EpicLeftPanelRail
+            epicId={EPIC_ID}
+            tabId={TAB_ID}
+            orientation="vertical"
+          />
+          <SidebarProvider>
+            <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+          </SidebarProvider>
+        </>,
+      );
+
+      expect(screen.getByTestId("epic-rail-git-diff")).not.toBeNull();
+      expect(
+        screen
+          .getByTestId("epic-sidebar")
+          .getAttribute("data-left-panel-group-size"),
+      ).toBe("2");
+
+      act(() => {
+        pinPullRequestsTo(PINNED_HOST_ID);
+        usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
+      });
+
+      expect(screen.getByTestId("epic-rail-git-diff")).not.toBeNull();
+      expect(
+        screen
+          .getByTestId("epic-sidebar")
+          .getAttribute("data-left-panel-group-size"),
+      ).toBe("2");
+
+      rendered.unmount();
     });
   });
 

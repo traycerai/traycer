@@ -156,8 +156,23 @@ describe.each(["list", "slider"] as const)(
 
       const badge = screen.getByTestId("model-fast-mode-digit-0");
       expect(badge.textContent).toBe("0");
-      const fastButton = screen.getByRole("button", { name: "Fast mode" });
+      // The badge itself is `aria-hidden`; the spoken hint lives on the
+      // button's own accessible name instead (`pickerLeaderControlLabel`).
+      const fastButton = screen.getByRole("button", {
+        name: "Fast mode. Press Alt+0 to toggle Fast mode",
+      });
       expect(fastButton.contains(badge)).toBe(true);
+    });
+
+    it("drops the spoken hint from the Fast button's name once ⌥ is released", () => {
+      renderFooter(reasoningConfig(false), ALT_NOT_HELD);
+
+      expect(screen.getByRole("button", { name: "Fast mode" })).not.toBeNull();
+      expect(
+        screen.queryByRole("button", {
+          name: "Fast mode. Press Alt+0 to toggle Fast mode",
+        }),
+      ).toBeNull();
     });
 
     it("keeps the Fast digit-0 badge lit even while the reasoning ladder is disabled", () => {
@@ -166,26 +181,20 @@ describe.each(["list", "slider"] as const)(
       expect(screen.getByTestId("model-fast-mode-digit-0")).not.toBeNull();
     });
 
-    // Slider layout floats the badge ABOVE the whole Fast button (so it does
-    // not collide with the track's own per-stop badges below); list keeps the
-    // original trailing placement next to the label. `reasoningConfig` has 2
-    // options, so `alignWithSlider` (`sliderLayout`) is true exactly under
-    // "slider" here.
-    it(`places the Fast badge ${control === "slider" ? "above" : "trailing"} the button under the ${control} control`, () => {
+    // The compact slider puts Fast’s shortcut in its icon slot; list mode
+    // keeps the trailing badge beside its label.
+    it(`places the Fast badge within the ${control} layout`, () => {
       renderUnderAltHold(reasoningConfig(false));
 
       const badge = screen.getByTestId("model-fast-mode-digit-0");
+      expect(badge.className).toContain(
+        control === "slider" ? "left-1/2" : "left-full",
+      );
       if (control === "slider") {
-        expect(badge.className).toContain("bottom-full");
-        expect(badge.className).not.toContain("left-full");
-        // "above" needs a positioned ancestor spanning the whole button, not
-        // just the inner label span, or it floats relative to the popover.
-        const fastButton = screen.getByRole("button", { name: "Fast mode" });
-        expect(fastButton.className).toContain("relative");
-      } else {
-        expect(badge.className).toContain("left-full");
-        expect(badge.className).not.toContain("bottom-full");
+        const icon = badge.parentElement?.querySelector("svg");
+        expect(icon?.getAttribute("class")).toContain("invisible");
       }
+      expect(badge.className).not.toContain("bottom-full");
     });
   },
 );
@@ -220,6 +229,29 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning leader badges (lis
     // Fast reserves ⌥0 unconditionally - a disabled reasoning ladder must not
     // hide it.
     expect(screen.getByTestId("model-fast-mode-digit-0")).not.toBeNull();
+  });
+
+  it("names the spoken hint on the pill's own accessible name, not the (aria-hidden) badge", () => {
+    renderUnderAltHold(reasoningConfig(false));
+
+    const lowPill = screen.getByRole("button", {
+      name: "Low. Press Alt+1 to set Low",
+    });
+    expect(
+      lowPill.contains(screen.getByTestId("model-reasoning-digit-1")),
+    ).toBe(true);
+    expect(
+      screen.getByTestId("model-reasoning-digit-1").getAttribute("aria-hidden"),
+    ).toBe("true");
+  });
+
+  it("leaves a disabled pill's accessible name unhinted even while ⌥ is held", () => {
+    renderUnderAltHold(reasoningConfig(true));
+
+    expect(screen.getByRole("button", { name: "Low" })).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Low. Press Alt+1 to set Low" }),
+    ).toBeNull();
   });
 });
 
@@ -282,6 +314,26 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning leader badges (sli
       expect(screen.queryByTestId(`model-reasoning-digit-${digit}`)).toBeNull();
     }
     expect(screen.getByTestId("model-fast-mode-digit-0")).not.toBeNull();
+  });
+
+  it("names the spoken hint on the stop button's own accessible name, not the (aria-hidden) badge", () => {
+    renderFooter(reasoningConfigWithLevels(6, 2, false), ALT_HELD_BY_PICKER);
+
+    const stop = screen.getByTestId("model-reasoning-stop-0");
+    expect(stop.getAttribute("aria-label")).toBe(
+      "Level 1. Press Alt+1 to set Level 1",
+    );
+    expect(
+      screen.getByTestId("model-reasoning-digit-1").getAttribute("aria-hidden"),
+    ).toBe("true");
+  });
+
+  it("leaves a disabled stop's accessible name unhinted even while ⌥ is held", () => {
+    renderFooter(reasoningConfigWithLevels(6, 2, true), ALT_HELD_BY_PICKER);
+
+    expect(
+      screen.getByTestId("model-reasoning-stop-0").getAttribute("aria-label"),
+    ).toBe("Level 1");
   });
 
   it("shows and hides stop badges live as the leader modifier is held and released", () => {
