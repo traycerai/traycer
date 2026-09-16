@@ -384,7 +384,11 @@ describe("S6 · running work in the chat's Background panel", () => {
 describe("S7 · doors", () => {
   it("S7a: the queued-delivery chip names the shell and opens the output window", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-chip" monitoring={false} hostId={null} />,
+      <ManagedCommandBadge
+        commandId="cmd-chip"
+        monitoring={false}
+        hostId={null}
+      />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toContain("Shell output");
@@ -395,7 +399,11 @@ describe("S7 · doors", () => {
 
   it("S7b: a chip from a build that recorded no monitor flag still names the shell", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-old" monitoring={null} hostId={null} />,
+      <ManagedCommandBadge
+        commandId="cmd-old"
+        monitoring={null}
+        hostId={null}
+      />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toContain("Shell output");
@@ -585,7 +593,9 @@ describe("S7 · doors", () => {
     fireEvent.click(remoteDoor);
     expect(openWindowHostFor("cmd-remote")).toBe("host-far");
     // The same click on the local divider pins its window to the tab's host.
-    fireEvent.click(screen.getByTestId("resume-managed-command-door-blk-local"));
+    fireEvent.click(
+      screen.getByTestId("resume-managed-command-door-blk-local"),
+    );
     expect(openWindowHostFor("cmd-local")).toBe(HOST_ID);
   });
 

@@ -445,7 +445,11 @@ describe("<AutonomousResumeSegment />", () => {
           filePath: "first.output",
         },
         mcp: null,
-        managedCommand: { commandId: "same-command", monitoring: false, hostId: null },
+        managedCommand: {
+          commandId: "same-command",
+          monitoring: false,
+          hostId: null,
+        },
         live: false,
       },
       {
@@ -459,7 +463,11 @@ describe("<AutonomousResumeSegment />", () => {
           filePath: "second.output",
         },
         mcp: null,
-        managedCommand: { commandId: "same-command", monitoring: false, hostId: null },
+        managedCommand: {
+          commandId: "same-command",
+          monitoring: false,
+          hostId: null,
+        },
         live: false,
       },
     ];
