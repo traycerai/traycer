@@ -569,6 +569,7 @@ function installChatStreamFactory(
     const client: ChatStreamClientHandle = {
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => true,
+      draftBlobBridgeSupported: () => true,
       requestTranscriptRange: () => undefined,
       requestResnapshot: () => undefined,
       close: () => {

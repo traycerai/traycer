@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import {
+  use,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -42,7 +43,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import {
+  TabHostContext,
+  useTabHostId,
+} from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
@@ -52,9 +56,10 @@ import {
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
   containsImageAtoms,
+  hashOnlyImageHashes,
+  inlineHashOnlyImageBytes,
   omitImageAtomsByHash,
 } from "@/lib/composer/image-atoms";
-import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { cn, formatSingleLine } from "@/lib/utils";
@@ -101,11 +106,15 @@ import type { ProviderId } from "@/components/home/data/landing-options";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   isAttachmentIngestPending,
-  useComposerPaste,
+  useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fetcher";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
@@ -679,7 +688,25 @@ function InlineUserMessageEditor({
     tabHostId,
   );
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
-  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
+  const epicImagePresence = useEpicAttachmentBytesPresence();
+  // Local partition OR epic replica. The epic map answers for a SENT image
+  // only, so on its own it strips a pasted hash-only node whose bytes are
+  // sitting in this very window's image store - reading "the epic does not
+  // hold it" as "these bytes do not exist". It is partial availability, never
+  // provenance.
+  //
+  // `null` before the snapshot loads is preserved rather than collapsed into a
+  // permissive predicate: that is the paste handler's own "do not filter at
+  // all" signal, and it is what this surface has always passed while the
+  // replica is unknown.
+  const hasPastedImageBytes = useMemo(
+    () =>
+      epicImagePresence === null
+        ? null
+        : (hash: string) =>
+            hasLandingImageBytes(hash) || epicImagePresence(hash),
+    [epicImagePresence],
+  );
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const focusFrameRef = useRef<number | null>(null);
@@ -692,7 +719,18 @@ function InlineUserMessageEditor({
     attachImageFiles,
     isIngestingImages,
     isResolvingFilePaths,
-  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+    runPendingImageJob,
+  } = useComposerHashPaste(
+    editorRef,
+    runnerHost.fileDrops,
+    resolvedMentionRoots,
+  );
+  const { ingestPastedComposerImages, reingestPendingImages } =
+    useComposerPendingImageIngest({
+      editorRef,
+      runPendingImageJob,
+      draftId: null,
+    });
   const attachmentPending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
@@ -813,7 +851,7 @@ function InlineUserMessageEditor({
         initialSelection={null}
         slashProviderId={editing.slashProviderId}
         hasPastedImageBytes={hasPastedImageBytes}
-        ingestPastedComposerImages={null}
+        ingestPastedComposerImages={ingestPastedComposerImages}
         isActive
         disabled={editing.pending}
         placeholder="Edit message"
@@ -828,12 +866,13 @@ function InlineUserMessageEditor({
         onKeyDown={handleEditorKeyDown}
         onFocus={NOOP}
         onBlur={NOOP}
-        onEditorReady={null}
+        onEditorReady={reingestPendingImages}
       />
     ),
     [
       editing,
       handleEditorKeyDown,
+      ingestPastedComposerImages,
       onDragOver,
       onDrop,
       onPaste,
@@ -841,6 +880,7 @@ function InlineUserMessageEditor({
       onSelectionChange,
       pickerStore,
       hasPastedImageBytes,
+      reingestPendingImages,
       submit,
     ],
   );
@@ -1060,56 +1100,16 @@ async function inlineCopiedImageBytes(
   content: JsonContent,
   resolveBytes: (hash: string) => Promise<Uint8Array | null>,
 ): Promise<JsonContent> {
-  const hashes = hashOnlyImageHashesInContent(content);
+  const hashes = hashOnlyImageHashes(content);
   if (hashes.length === 0) return content;
-  const bytesByHash = new Map<string, Uint8Array>();
+  const base64ByHash = new Map<string, string>();
   await Promise.all(
     hashes.map(async (hash) => {
       const bytes = await resolveBytes(hash);
-      if (bytes !== null) bytesByHash.set(hash, bytes);
+      if (bytes !== null) base64ByHash.set(hash, bytesToBase64(bytes));
     }),
   );
-  if (bytesByHash.size === 0) return content;
-  return inlineHashOnlyImageNodes(content, bytesByHash);
-}
-
-function hashOnlyImageHashesInContent(content: JsonContent): string[] {
-  const hashes = new Set<string>();
-  const visit = (node: JsonContent): void => {
-    if (node.type === "imageAttachment") {
-      const hash = stringValue(node.attrs?.hash);
-      const b64content = stringValue(node.attrs?.b64content);
-      if (hash !== null && b64content === null) hashes.add(hash);
-      return;
-    }
-    node.content?.forEach(visit);
-  };
-  visit(content);
-  return Array.from(hashes);
-}
-
-function inlineHashOnlyImageNodes(
-  node: JsonContent,
-  bytesByHash: ReadonlyMap<string, Uint8Array>,
-): JsonContent {
-  if (node.type === "imageAttachment") {
-    const hash = stringValue(node.attrs?.hash);
-    const b64content = stringValue(node.attrs?.b64content);
-    if (hash === null || b64content !== null) return node;
-    const bytes = bytesByHash.get(hash);
-    if (bytes === undefined) return node;
-    // An image node carries exactly one payload; swap the hash for base64.
-    const { hash: _hash, ...rest } = node.attrs ?? {};
-    return { ...node, attrs: { ...rest, b64content: bytesToBase64(bytes) } };
-  }
-  const children = node.content;
-  if (children === undefined) return node;
-  return {
-    ...node,
-    content: children.map((child) =>
-      inlineHashOnlyImageNodes(child, bytesByHash),
-    ),
-  };
+  return inlineHashOnlyImageBytes(content, base64ByHash);
 }
 
 /**
@@ -1133,7 +1133,28 @@ function useUserMessageCopy(
   // write; the bytes are no longer answerable synchronously, so the same
   // guarantee now comes from the timeout. A hash that does not resolve stays
   // hash-only, exactly as before, and downstream paste validation drops it.
-  const resolveAttachmentBytes = useChatAttachmentByteReader();
+  const readChatAttachmentBytes = useChatAttachmentByteReader();
+  // The tab's host, read through the context directly rather than
+  // `useTabHostId()`: a copy button is not a tile-only affordance, and the
+  // right answer outside one is "no host to ask", not a thrown render.
+  const tabHostId = use(TabHostContext);
+  // Chat plane first, draft custody behind it. The chat reader answers for a
+  // SENT image; a hash the message carries that a composer is still holding -
+  // one copied out of a draft, or re-copied before its send settled - is in
+  // neither the chat plane nor the epic doc, and a bare hash pasted elsewhere
+  // resolves nowhere. Purely additive: this leg only runs where the chat
+  // reader already answered `null`.
+  const resolveAttachmentBytes = useCallback(
+    async (hash: string): Promise<Uint8Array | null> => {
+      const fromChat = await readChatAttachmentBytes(hash);
+      if (fromChat !== null) return fromChat;
+      return resolveDraftImageBytes(
+        hash,
+        draftImageByteTargetForHost(tabHostId),
+      );
+    },
+    [readChatAttachmentBytes, tabHostId],
+  );
   const onCopy = useCallback(() => {
     if (structuredContent === null) {
       copy(text);

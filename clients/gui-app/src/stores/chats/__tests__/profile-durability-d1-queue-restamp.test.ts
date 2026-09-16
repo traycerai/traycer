@@ -82,6 +82,7 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,

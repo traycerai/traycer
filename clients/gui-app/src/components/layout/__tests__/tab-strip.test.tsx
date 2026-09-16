@@ -485,6 +485,7 @@ function registerChatSession(epicId: string, chatId: string): void {
         streamClientFactory: () => ({
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => true,
           requestTranscriptRange: () => undefined,
           requestResnapshot: () => undefined,
           close: () => undefined,

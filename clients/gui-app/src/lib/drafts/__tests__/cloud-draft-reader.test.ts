@@ -27,6 +27,7 @@ const HEAD: DraftHeadRecord = {
     content: { type: "doc", content: [{ type: "paragraph" }] },
     blobHashes: [],
     createdAt: 1,
+    annotations: [],
   },
 };
 

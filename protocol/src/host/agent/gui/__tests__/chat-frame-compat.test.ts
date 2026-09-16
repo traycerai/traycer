@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
-import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatSubscribeClientFrame,
+  ChatSubscribeServerFrame,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
   chatSubscribeV17,
+  chatSubscribeV19,
+  chatSubscribeV110,
+  chatSubscribeV111,
+  chatSubscribeV112,
   chatSubscribeSnapshotServerFrameShallowSchemaV16,
   chatSubscribeSnapshotServerFrameShallowSchema,
   chatSubscribeServerFrameSchema,
@@ -20,6 +27,7 @@ import {
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
   normalizeV16MessagesInShallowSnapshot,
+  projectChatActionAckForVersion,
   projectChatClientFrameForVersion,
   projectChatServerFrameForVersion,
   supportsInterviewSettlementActions,
@@ -117,6 +125,27 @@ function asRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected object for ${label}`);
   }
   return value;
+}
+
+function actionAckFrame(
+  cause: "unsupported-format" | "too-large" | "not-on-host" | undefined,
+): Extract<ChatSubscribeServerFrame, { readonly kind: "actionAck" }> {
+  const parsed = chatSubscribeServerFrameSchema.parse({
+    kind: "actionAck",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    clientActionId: "action-1",
+    action: "send",
+    status: "rejected",
+    reason: "Draft image bytes are unavailable",
+    code: "MISSING_ATTACHMENT_BYTES",
+    ...(cause === undefined ? {} : { cause }),
+  });
+  if (parsed.kind !== "actionAck") {
+    throw new Error("expected action acknowledgement");
+  }
+  return parsed;
 }
 
 function legacyLines(): ReadonlyArray<SchemaVersion | null> {
@@ -236,6 +265,70 @@ describe("projectChatClientFrameForVersion", () => {
       expect(
         projectChatClientFrameForVersion(frame, { major: 1, minor: 7 }),
       ).toBe(frame);
+    }
+  });
+});
+
+describe("projectChatActionAckForVersion", () => {
+  // The ADJACENT pair, not a comfortable gap: `1.10` is the highest line that
+  // must never see the key, `1.12` the first that may. A test written against
+  // `1.9` would still pass with the threshold left at the wrong minor.
+  const preBridge: SchemaVersion = { major: 1, minor: 10 };
+  const bridge: SchemaVersion = { major: 1, minor: 12 };
+
+  it("strips a typed draft-image refusal cause for a 1.10 session", () => {
+    const frame = actionAckFrame("too-large");
+    const projected = projectChatActionAckForVersion(frame, preBridge);
+
+    expect(projected).not.toBe(frame);
+    expect(Object.hasOwn(projected, "cause")).toBe(false);
+    const parsed = chatSubscribeV110.serverFrameSchema.parse(projected);
+    expect(parsed.kind).toBe("actionAck");
+    expect(Object.hasOwn(parsed, "cause")).toBe(false);
+  });
+
+  it("strips it for a 1.9 session too - every line below the bridge", () => {
+    const frame = actionAckFrame("too-large");
+    const projected = projectChatActionAckForVersion(frame, {
+      major: 1,
+      minor: 9,
+    });
+
+    expect(Object.hasOwn(projected, "cause")).toBe(false);
+    expect(
+      Object.hasOwn(
+        chatSubscribeV19.serverFrameSchema.parse(projected),
+        "cause",
+      ),
+    ).toBe(false);
+  });
+
+  it("passes a typed draft-image refusal cause through on 1.12", () => {
+    const frame = actionAckFrame("not-on-host");
+    expect(projectChatActionAckForVersion(frame, bridge)).toBe(frame);
+    expect(chatSubscribeV112.serverFrameSchema.parse(frame)).toMatchObject({
+      cause: "not-on-host",
+    });
+  });
+
+  it("preserves an acknowledgement with no cause on both sides of the boundary", () => {
+    const frame = actionAckFrame(undefined);
+    expect(projectChatActionAckForVersion(frame, preBridge)).toBe(frame);
+    expect(projectChatActionAckForVersion(frame, bridge)).toBe(frame);
+  });
+
+  it("rejects an unknown cause, and the frozen lines below drop it", () => {
+    const invalid = { ...actionAckFrame(undefined), cause: "unknown-cause" };
+    expect(chatSubscribeV112.serverFrameSchema.safeParse(invalid).success).toBe(
+      false,
+    );
+    // Both lines below the mint drop the key rather than carrying it: `1.11`
+    // is the shell-host line, `1.10` the fallback one, and neither knows this
+    // member at all.
+    for (const contract of [chatSubscribeV111, chatSubscribeV110]) {
+      const parsed = contract.serverFrameSchema.parse(invalid);
+      expect(parsed.kind).toBe("actionAck");
+      expect(Object.hasOwn(parsed, "cause")).toBe(false);
     }
   });
 });
@@ -1631,6 +1724,34 @@ function frozenServerContracts(): ReadonlyArray<{
 
 describe("projectChatServerFrameForVersion", () => {
   const live: SchemaVersion = { major: 1, minor: 7 };
+
+  it("projects action-ack draft-image causes at the server-frame boundary", () => {
+    const frame = actionAckFrame("unsupported-format");
+    const projected = projectChatServerFrameForVersion(frame, {
+      major: 1,
+      minor: 9,
+    });
+
+    expect(projected).not.toBe(frame);
+    expect(Object.hasOwn(projected, "cause")).toBe(false);
+    expect(
+      projectChatServerFrameForVersion(frame, { major: 1, minor: 10 }),
+    ).not.toBe(frame);
+    expect(
+      projectChatServerFrameForVersion(frame, { major: 1, minor: 12 }),
+    ).toBe(frame);
+  });
+
+  it("keeps refusing interviewDeliveryRetry acknowledgements below 1.7", () => {
+    const frame = asProjectedServerFrame({
+      ...actionAckFrame(undefined),
+      action: "interviewDeliveryRetry",
+    });
+
+    expect(() =>
+      projectChatServerFrameForVersion(frame, { major: 1, minor: 6 }),
+    ).toThrow(/interviewDeliveryRetry action acknowledgement/);
+  });
 
   describe("chat.imported below 1.8", () => {
     const windowed: SchemaVersion = { major: 1, minor: 8 };

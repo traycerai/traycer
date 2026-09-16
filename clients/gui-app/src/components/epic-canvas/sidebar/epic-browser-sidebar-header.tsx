@@ -55,7 +55,7 @@ import {
 } from "@/stores/epics/panel-header-menu-store";
 
 export const BROWSERS_PANEL_ID = "browsers";
-const FOLLOW_ACTIVE_HOST_VALUE = "browser-follow-active-host";
+const FOLLOW_TASK_HOST_VALUE = "browser-follow-task-host";
 
 export function BrowsersPanelActions(props: LeftPanelSlotProps) {
   const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
@@ -107,7 +107,7 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
     ? "Filter browsers by host, 1 filter active"
     : "Filter browsers by host";
   const hostSummary =
-    resolvedHost?.label ?? (hostPin.isPinned ? "Selected host" : "Active host");
+    resolvedHost?.label ?? (hostPin.isPinned ? "Selected host" : "Task host");
   return (
     <>
       {searchOpen ? null : (
@@ -198,7 +198,7 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
 }
 
 /**
- * The radio list behind the panel's host filter: follow the active host, or pin
+ * The radio list behind the panel's host filter: follow the task default, or pin
  * a specific one. Exported because the mobile switcher's Browsers category
  * mounts the same choices in its own menu shell rather than restating them.
  */
@@ -207,23 +207,23 @@ export function BrowserHostFilterChoices(props: {
 }) {
   const options = useHostOptions();
   const hostPin = useSurfaceHostPin(props.surfaceKey);
-  const value = hostPin.selection ?? FOLLOW_ACTIVE_HOST_VALUE;
-  const activeHostName =
-    options.hosts.find((host) => host.hostId === options.activeHostId)?.name ??
-    "Active host";
+  const value = hostPin.selection ?? FOLLOW_TASK_HOST_VALUE;
+  const followingHostName =
+    options.hosts.find((host) => host.hostId === hostPin.followingHostId)
+      ?.name ?? "Task host";
   return (
     <>
       <DropdownMenuLabel>Show browsers from</DropdownMenuLabel>
       <DropdownMenuRadioGroup value={value}>
         <DropdownMenuRadioItem
-          value={FOLLOW_ACTIVE_HOST_VALUE}
+          value={FOLLOW_TASK_HOST_VALUE}
           onSelect={(event) => {
             event.preventDefault();
             hostPin.setSelection(null);
           }}
         >
-          <span className="min-w-0 flex-1 truncate">Follow active host</span>
-          <DropdownMenuShortcut>{activeHostName}</DropdownMenuShortcut>
+          <span className="min-w-0 flex-1 truncate">Follow task host</span>
+          <DropdownMenuShortcut>{followingHostName}</DropdownMenuShortcut>
         </DropdownMenuRadioItem>
         {options.hosts.length > 0 ? <DropdownMenuSeparator /> : null}
         {options.hosts.map((host) => (
