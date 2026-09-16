@@ -282,12 +282,36 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     expect(await getImageBytes(hash)).toBeUndefined();
   });
 
-  it("excludes stash-entry documents from cloud image recovery, with a new-chat positive control (case K)", async () => {
-    // Deliberate decision (see `recoverIngestedCloudDraftImages`'s doc
-    // comment): a stash row's images live in the prompt-stash repository, not
-    // this window's image partition, so recovery never runs for it.
-    const stashBytes = bytesA();
+  it("hands a stash document's images to the ingest, fetched BEFORE the apply", async () => {
+    // Stash rows were once excluded from cloud recovery, deliberately: recovery
+    // ran AFTER the apply and wrote into this window's image partition, which is
+    // not where a stash row's bytes live. `ingestRemote` carries them in the SAME
+    // durable write as the row and returns early once the row exists, so "after
+    // the apply" was never late for a stash entry - it was never.
+    //
+    // Asserted at the handover rather than through the repository: this file's
+    // harness cannot drive the real prompt-stash IndexedDB (`hydrate()` answers
+    // "This browser does not support IndexedDB" here), and the repository's own
+    // durability is covered by `prompt-stash-store` and the real-repository
+    // handoff suite. What is new HERE is that a populated map reaches the ingest
+    // at all, and reaches it before the row is written.
+    //
+    // Bytes unique to this test. The case this replaces reused `bytesA()`, which
+    // an earlier test in this file had already stored, so the hash was in the
+    // partition before the ingest ran and NO fetch was issued whatever the rule
+    // was - it asserted "no payload read" and would have passed just the same
+    // with the exclusion removed.
+    const stashBytes = new Uint8Array([61, 62, 63, 64]);
     const stashHash = await sha256HexOf(stashBytes);
+    const handed: Array<ReadonlyMap<string, { readonly mimeType: string }>> =
+      [];
+    usePromptStashStore.setState({
+      ingestRemote: (_entry, imagesByHash) => {
+        handed.push(imagesByHash);
+        return Promise.resolve();
+      },
+    });
+
     const calls = mountIngestingHostSession((method) => {
       if (method === "epic.readCloudChatPayload") {
         return Promise.resolve({
@@ -313,24 +337,48 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
 
     expect(
       calls.some((call) => call.method === "epic.readCloudChatPayload"),
-    ).toBe(false);
+    ).toBe(true);
+    expect(handed).toHaveLength(1);
+    expect([...(handed[0]?.keys() ?? [])]).toEqual([stashHash]);
+    // Sniffed from the bytes, never from the document's own attr, so this map
+    // says what `readDraftBlobs` says about the same bytes.
+    expect(handed[0]?.get(stashHash)?.mimeType).toBe("image/png");
+  });
 
-    // Positive control: a `new-chat` document reaching the same ingest path,
-    // on the same session, DOES fetch - proving the exclusion above is the
-    // stash kind and not a session or pass that stopped working.
-    const newChatBytes = new Uint8Array([5, 6, 7]);
-    const newChatHash = await sha256HexOf(newChatBytes);
-    calls.length = 0;
+  it("still applies a stash document when the image fetch fails", async () => {
+    // A stash entry that lands without its images is the status quo and still
+    // restores its text. One that does not land AT ALL because a blob read threw
+    // would be a regression, so the fetch is never fatal to the apply.
+    const missingHash = await sha256HexOf(new Uint8Array([71, 72, 73, 74]));
+    const handed: Array<ReadonlyMap<string, unknown>> = [];
+    usePromptStashStore.setState({
+      ingestRemote: (_entry, imagesByHash) => {
+        handed.push(imagesByHash);
+        return Promise.resolve();
+      },
+    });
+
+    mountIngestingHostSession((method) => {
+      if (method === "epic.readCloudChatPayload") {
+        return Promise.reject(new Error("payload read exploded"));
+      }
+      throw new Error(`unexpected ${String(method)}`);
+    });
+    await Promise.resolve();
+
+    const cloudSummary = summary();
     await ingestCloudDraftSummary({
       hostId: INGESTING_HOST,
       // Captured where the head read was issued.
       readOwner: OWNER,
       summary: cloudSummary,
-      document: newChatDocument(cloudSummary, [newChatHash]),
+      document: stashDocument(cloudSummary, [missingHash]),
     });
-    expect(
-      calls.some((call) => call.method === "epic.readCloudChatPayload"),
-    ).toBe(true);
+
+    // The row was still ingested - with an empty map, which is the pre-existing
+    // behaviour for a stash entry whose bytes cannot be found.
+    expect(handed).toHaveLength(1);
+    expect(handed[0]?.size).toBe(0);
   });
 
   it("memoizes a host that withholds the payload read, and re-probes it on a new mirror session", async () => {
