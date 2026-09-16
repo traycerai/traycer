@@ -1638,11 +1638,12 @@ export const STAIRS_SIDE_MAP: SpriteMap = [
  * sitting at desks, which is what feedback round 1 said in as many words:
  * "these transparent desks look weird".
  *
- * So the lower band is a DESK: a wood top over a wood front, closing the
- * booth at the height a desk closes one. The cubby is drawn above the
- * character (`foot + 0.1` against the scene's `foot`), so this band passes in
- * FRONT of the occupant's legs and leaves head and shoulders in the opening -
- * which is the whole reading, and the reason the top ten rows stay empty.
+ * So the lower band is a DESK: one row of `woodLight` for the top edge over
+ * three of `woodDark` for the front, closing the booth at the height a desk
+ * closes one. The cubby is drawn above the character (`foot + 0.1` against the
+ * scene's `foot`), so this band passes in FRONT of the occupant's legs and
+ * leaves head and shoulders in the opening - which is the whole reading, and
+ * the reason the eight rows above it stay empty.
  *
  * The lintel keeps its `Z`: it is the one part of a cubby tinted with its
  * occupant's colour, and it is how a dense quiet storey stays legible at a
