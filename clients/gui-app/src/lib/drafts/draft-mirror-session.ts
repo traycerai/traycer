@@ -58,10 +58,27 @@ export interface DraftMirrorSink {
   applyUpsert(document: DraftDocument): Promise<void>;
   applyDelete(draftId: string): void;
   collectDirtyWrites(hostId: string): Promise<readonly DraftDirtyWrite[]>;
+  /**
+   * `ownerHostId` is the host that OWNS this row, which is what makes the
+   * revision meaningful: a revision numbers a row on ONE host, so a store
+   * comparing revisions has to know whose. Without it a locally-created
+   * draft that has only ever been ACKed carries `hostRevision > 0` with no
+   * owner recorded, and every owner-keyed frontier check silently opts out.
+   *
+   * It is the DOCUMENT's owner, never blindly this session's host: a
+   * `replica` row is mirrored here from another host and keeps that host's
+   * numbering, so attributing its revision to the session that delivered it
+   * would file one host's count under another's.
+   *
+   * `null` where the caller genuinely cannot know - a tombstone carries no
+   * document. The stores treat it as "leave the owner alone", and keep
+   * clamping rather than assume a new line.
+   */
   rememberSynced(
     draftId: string,
     hostRevision: number,
     collectedGeneration: number,
+    ownerHostId: string | null,
   ): void;
   prepareWrite(hostId: string, write: DraftWrite): Promise<DraftWrite>;
   dropAbsentFromList(hostId: string, listedIds: ReadonlySet<string>): void;
@@ -273,6 +290,7 @@ export class DraftMirrorSession {
         response.draft.draftId,
         response.draft.revision,
         Number.POSITIVE_INFINITY,
+        response.draft.ownerHostId,
       );
     } catch (error: unknown) {
       if (isDraftsCapabilityMissing(error)) {
@@ -367,7 +385,7 @@ export class DraftMirrorSession {
         revision: this.revisionOfHeld(draftId) + 1,
         storeSeq: this.snapshotSeq,
       });
-      this.sink.rememberSynced(draftId, 0, Number.POSITIVE_INFINITY);
+      this.sink.rememberSynced(draftId, 0, Number.POSITIVE_INFINITY, null);
       return "deleted";
     } catch (error: unknown) {
       if (isDraftsCapabilityMissing(error)) {
@@ -555,6 +573,7 @@ export class DraftMirrorSession {
       frame.draftId,
       frame.revision,
       Number.POSITIVE_INFINITY,
+      null,
     );
   }
 
@@ -592,6 +611,7 @@ export class DraftMirrorSession {
       document.draftId,
       document.revision,
       Number.POSITIVE_INFINITY,
+      document.ownerHostId,
     );
   }
 
@@ -698,6 +718,7 @@ export class DraftMirrorSession {
         response.draft.draftId,
         response.draft.revision,
         entry.generation,
+        response.draft.ownerHostId,
       );
       // `clearTimer`, not `pending.delete`: `schedule()` can have re-armed
       // this draft while the upsert was in flight, and a bare map delete
@@ -870,6 +891,7 @@ export class DraftMirrorSession {
         tombstone.draftId,
         tombstone.revision,
         Number.POSITIVE_INFINITY,
+        null,
       );
     }
   }

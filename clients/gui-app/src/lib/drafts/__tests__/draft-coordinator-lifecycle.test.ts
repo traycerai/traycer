@@ -1063,7 +1063,7 @@ describe("session/write plane: fork carries supersedes", () => {
       useLandingDraftStore
         .getState()
         .drafts.find((draft) => draft.id === nextId)?.generation ?? 0;
-    landingDraftRememberSynced(nextId, 1, generationAfterFork);
+    landingDraftRememberSynced(nextId, 1, generationAfterFork, HOST_ID);
     expect(
       useLandingDraftStore
         .getState()

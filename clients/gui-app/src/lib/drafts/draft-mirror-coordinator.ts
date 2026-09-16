@@ -441,9 +441,23 @@ const sink: DraftMirrorSink = {
   collectDirtyWrites(hostId) {
     return Promise.resolve(collectAllDirtyWrites(hostId));
   },
-  rememberSynced(draftId, hostRevision, collectedGeneration) {
-    landingDraftRememberSynced(draftId, hostRevision, collectedGeneration);
-    composerDraftRememberSynced(draftId, hostRevision, collectedGeneration);
+  rememberSynced(draftId, hostRevision, collectedGeneration, ownerHostId) {
+    // Only the stores that KEY a frontier on the owner are told who owns the
+    // row. Interview keeps no owner and no frontier; new-chat keeps a
+    // frontier but identifies its line by draft id alone, exactly as its own
+    // fence does.
+    landingDraftRememberSynced(
+      draftId,
+      hostRevision,
+      collectedGeneration,
+      ownerHostId,
+    );
+    composerDraftRememberSynced(
+      draftId,
+      hostRevision,
+      collectedGeneration,
+      ownerHostId,
+    );
     interviewDraftRememberSynced(draftId, hostRevision, collectedGeneration);
     newChatDraftRememberSynced(draftId, hostRevision, collectedGeneration);
   },

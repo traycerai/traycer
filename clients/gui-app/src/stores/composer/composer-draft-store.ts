@@ -699,6 +699,7 @@ export function composerDraftRememberSynced(
   draftId: string,
   hostRevision: number,
   collectedGeneration: number,
+  ownerHostId: string | null,
 ): void {
   const found = findComposerChatIdByDraftId(draftId);
   if (found === null) return;
@@ -706,12 +707,41 @@ export function composerDraftRememberSynced(
     const current = state.drafts[found];
     if (current === undefined) return state;
     const clearDirty = collectedGeneration >= current.generation;
+    // The lookup above matched on `draftId`, so this row is the same draft
+    // line the ACK names; clamping is safe within it and only within it. A
+    // different owner is a different numbering and replaces rather than
+    // clamps, exactly as landing does, and a null on either side is
+    // "not known to be different" - which clamps, the safe half.
+    const sameLine =
+      ownerHostId === null ||
+      current.ownerHostId === null ||
+      current.ownerHostId === ownerHostId;
     return {
       drafts: {
         ...state.drafts,
         [found]: {
           ...current,
-          hostRevision,
+          // Never backward within a line. This field IS the frontier
+          // `applyComposerHostDocument` fences on, so whatever lowers it
+          // re-opens the door that fence closes - and the store cannot check
+          // the ordering itself. Revisions arrive here from an upsert ACK, a
+          // subscribe-frame acknowledgement and the bootstrap list, and the
+          // session's held revision is not monotonic across a reconnect: a
+          // stale `drafts.list` can reset it below what is already installed,
+          // after which an acknowledgement carries that lower number through.
+          // The session guards its OWN `held` map with `>` on the ACK path;
+          // this is the store half of the same invariant, enforced where the
+          // value is read rather than at each of the callers.
+          hostRevision: sameLine
+            ? Math.max(current.hostRevision, hostRevision)
+            : hostRevision,
+          // Record whose revision it is: this is the ONLY thing that ever
+          // sets an owner on a draft that was published but never sent a
+          // host document, and the fence is keyed on owner equality.
+          ownerHostId:
+            hostRevision > 0 && ownerHostId !== null
+              ? ownerHostId
+              : current.ownerHostId,
           syncedGeneration: clearDirty
             ? current.generation
             : current.syncedGeneration,

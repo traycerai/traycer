@@ -34,8 +34,15 @@ import {
   resetLandingDraftRetirementsForTests,
   retireLandingDraft,
 } from "@/lib/drafts/landing-draft-retirement";
-import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import {
+  composerDraftRememberSynced,
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import {
+  newChatDraftRememberSynced,
+  useNewConversationModalStore,
+} from "@/stores/epics/new-conversation-modal-store";
 import { notifyDraftLocalDelete } from "@/lib/drafts/draft-local-edits";
 import { scopedPersistKey, STORE_KEYS } from "@/lib/persist";
 import {
@@ -700,7 +707,7 @@ describe("landing draft host-mirror bookkeeping", () => {
       { from: 1, to: 6 },
     );
     adoptLandingDraft(id, "host-a");
-    landingDraftRememberSynced(id, 1, Number.POSITIVE_INFINITY);
+    landingDraftRememberSynced(id, 1, Number.POSITIVE_INFINITY, "host-a");
     expect(useLandingDraftStore.getState().activeDraftId).toBe(id);
 
     const incoming: Extract<DraftDocument, { readonly kind: "landing" }> = {
@@ -1317,6 +1324,239 @@ describe("landing draft host-mirror bookkeeping", () => {
       .drafts.find((entry) => entry.id === id);
     expect(draft?.hostRevision).toBe(13);
     expect(draft?.content).toEqual(newest.portable.content);
+  });
+
+  it("fences a stale composer document on a draft whose owner only an ACK ever set (DRIVE RED)", async () => {
+    // The most ordinary composer draft there is: typed locally, published,
+    // ACKed - and never sent a host document. `composerDraftRememberSynced`
+    // is the only thing that has ever moved its revision, and it records no
+    // owner, so the row sits at `hostRevision > 0` with `ownerHostId: null`.
+    // An owner-EQUALITY fence then reads `null !== hostId` and waves every
+    // stale document straight through, on exactly the drafts users have.
+    const hostId = "host-ack-owner";
+    const chatId = "chat-ack-owner";
+    const typed = (text: string) => ({
+      type: "doc" as const,
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+    useComposerDraftStore.getState().setSnapshot(chatId, typed("local"), null);
+    const draftId = readComposerDraftSnapshot(chatId).draftId;
+    if (draftId === null) throw new Error("expected a minted draft id");
+    // The ACK for the flush that published it. Nothing else touches the row,
+    // so this is the only thing that has ever named a host.
+    composerDraftRememberSynced(draftId, 3, Number.POSITIVE_INFINITY, hostId);
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(3);
+
+    await applyIncomingDraftDocument({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: "epic-ack-owner", chatId, blockId: null },
+      revision: 2,
+      lastTouchedAt: 2,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed("remote older"),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    });
+
+    expect(readComposerDraftSnapshot(chatId).content).toEqual(typed("local"));
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(3);
+  });
+
+  it("does not let an older ACK lower the composer or new-chat frontier (DRIVE RED)", async () => {
+    // `landingDraftRememberSynced` clamps with `Math.max`; these two stores
+    // assigned the incoming revision outright. The frontier fence reads that
+    // field, so anything lowering it re-opens the exact door the fence
+    // closes: the next stale document is compared against the lowered number
+    // and installs over newer text. The store cannot check the ordering of
+    // what reaches it - the session's held revision is not monotonic across
+    // a reconnect, where a stale `drafts.list` resets it below what is
+    // already installed - so the invariant is enforced here, on the value
+    // the fence actually reads, rather than at each caller.
+    const hostId = "host-late-ack";
+    const typed = (text: string) => ({
+      type: "doc" as const,
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+    const composerDoc = (
+      draftId: string,
+      chatId: string,
+      revision: number,
+      text: string,
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: "epic-late-ack", chatId, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed(text),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    });
+
+    const chatId = "chat-late-ack";
+    const draftId = "draft-late-ack";
+    await applyIncomingDraftDocument(composerDoc(draftId, chatId, 3, "newest"));
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(3);
+    // The in-flight write's ACK finally lands, naming its own older commit.
+    composerDraftRememberSynced(draftId, 1, Number.POSITIVE_INFINITY, hostId);
+    await applyIncomingDraftDocument(
+      composerDoc(draftId, chatId, 2, "remote older"),
+    );
+    expect(readComposerDraftSnapshot(chatId).content).toEqual(typed("newest"));
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(3);
+
+    // New-chat keeps its own copy of the same field, and the same ACK path
+    // reaches it through the shared sink.
+    const epicId = "epic-late-ack-modal";
+    const modalDraftId = "draft-late-ack-modal";
+    const newChatDoc = (
+      revision: number,
+      text: string,
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId: modalDraftId,
+      kind: "new-chat",
+      target: { epicId, chatId: null, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed(text),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    });
+    await applyIncomingDraftDocument(newChatDoc(3, "newest"));
+    newChatDraftRememberSynced(modalDraftId, 1, Number.POSITIVE_INFINITY);
+    await applyIncomingDraftDocument(newChatDoc(2, "remote older"));
+    const patch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+    expect(patch?.content).toEqual(typed("newest"));
+    expect(patch?.hostRevision).toBe(3);
+  });
+
+  it("takes a different host's ACK as a new revision line instead of clamping to the old owner's", () => {
+    // The clamp must not outlive the numbering it belongs to. A landing draft
+    // re-adopted to another host keeps its `hostRevision` (`adoptLandingDraft`
+    // does not reset it) while the new host numbers from scratch, so clamping
+    // the new owner's ACK against the old owner's high-water mark would refuse
+    // the new owner's real documents indefinitely. Same-line clamping only.
+    const id = "landing-owner-switch";
+    const hostA = "host-a-owner-switch";
+    const hostB = "host-b-owner-switch";
+    const doc = (
+      revision: number,
+      ownerHostId: string,
+      text: string,
+    ): Extract<DraftDocument, { readonly kind: "landing" }> => ({
+      draftId: id,
+      kind: "landing",
+      target: { epicId: null, chatId: null, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId: ownerHostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: {
+          type: "doc",
+          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+        },
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    });
+
+    const onA = doc(5, hostA, "on host a");
+    applyLandingHostDocument(onA, onA.portable.content);
+    const afterA = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    expect(afterA?.hostRevision).toBe(5);
+    expect(afterA?.ownerHostId).toBe(hostA);
+
+    // Re-adopted, then published to B, whose numbering starts over.
+    adoptLandingDraft(id, hostB);
+    landingDraftRememberSynced(id, 1, Number.POSITIVE_INFINITY, hostB);
+    const afterAck = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    expect(afterAck?.hostRevision).toBe(1);
+    expect(afterAck?.ownerHostId).toBe(hostB);
+
+    // B's next document must land, not be refused by A's old high-water mark.
+    const onB = doc(2, hostB, "on host b");
+    expect(applyLandingHostDocument(onB, onB.portable.content)).toBe(true);
+    const afterB = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    expect(afterB?.hostRevision).toBe(2);
+    expect(afterB?.content).toEqual(onB.portable.content);
+
+    // An acknowledgement that carries no document - a tombstone - knows no
+    // owner. It must not overwrite the one already recorded, and with the
+    // line unknown it clamps rather than assuming a fresh numbering.
+    landingDraftRememberSynced(id, 1, Number.POSITIVE_INFINITY, null);
+    const afterUnknown = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    expect(afterUnknown?.ownerHostId).toBe(hostB);
+    expect(afterUnknown?.hostRevision).toBe(2);
   });
 
   it("keeps the latest landing row when real subscribe applies finish images out of order", async () => {

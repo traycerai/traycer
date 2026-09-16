@@ -296,7 +296,16 @@ export function newChatDraftRememberSynced(
         ...state.draftPatchesByEpicId,
         [found.epicId]: {
           ...current,
-          hostRevision,
+          // Never backward. This field IS the frontier
+          // `applyNewChatHostDocument` fences on, and the store cannot check
+          // the ordering of what reaches it: the session's held revision is
+          // not monotonic across a reconnect, so a stale `drafts.list` can
+          // reset it below what is installed and an acknowledgement then
+          // carries the lower number through. Scoped by draft id alone,
+          // which is exactly how that fence identifies a line too - this
+          // patch carries no owner. If new-chat ever gains cross-host
+          // re-adoption, the fence and this clamp need the owner together.
+          hostRevision: Math.max(current.hostRevision, hostRevision),
           syncedGeneration:
             collectedGeneration >= current.generation
               ? current.generation
