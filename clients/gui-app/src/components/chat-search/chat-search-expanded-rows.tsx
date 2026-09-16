@@ -81,7 +81,23 @@ export function ChatSearchExpandedRows(props: {
           </li>
         ))}
       </ul>
-      {status.nextCursor !== null ? (
+      {status.loadMoreError !== null ? (
+        <div className="flex flex-wrap items-center gap-x-1">
+          <p role="alert" className="px-2 text-ui-xs text-destructive">
+            {status.loadMoreError.message}
+          </p>
+          <Button
+            {...navProps}
+            variant="ghost"
+            size="xs"
+            className="self-start text-muted-foreground"
+            onClick={status.loadMoreError.retry}
+          >
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {status.loadMoreError === null && status.nextCursor !== null ? (
         <Button
           {...navProps}
           variant="ghost"

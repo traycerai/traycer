@@ -198,6 +198,7 @@ describe("ChatSearchPanel: results view keyed by request", () => {
       messages: [],
       nextCursor: null,
       loadingMore: false,
+      loadMoreError: null,
     });
 
     const user = userEvent.setup();

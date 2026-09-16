@@ -181,7 +181,15 @@ export type ChatSearchExpansionStatus =
       readonly messages: ReadonlyArray<ChatSearchMessageHit>;
       readonly nextCursor: string | null;
       readonly loadingMore: boolean;
+      /** A later page that failed; the rows before it stay. */
+      readonly loadMoreError: ChatSearchPageError | null;
     };
+
+export interface ChatSearchPageError {
+  readonly message: string;
+  /** Refetches only the failed page. */
+  readonly retry: () => void;
+}
 
 /**
  * One chat's matching message rows, the expansion of a result group: the same
@@ -217,22 +225,38 @@ export function useChatSearchMessageRows(args: {
     cacheKeyIdentity: undefined,
     options: SEARCH_QUERY_OPTIONS,
     combine: (results) => {
-      const failure = statusOf(results);
+      // `pageCursors` always holds the first page, so there is a result 0;
+      // only it decides the whole expansion. A later page that failed keeps
+      // the rows already loaded and reports beside them.
+      const [first, ...rest] = results;
+      const failure = statusOf([first]);
       if (failure !== null) {
         return failure.kind === "error"
           ? failure
           : { kind: "error", message: "Search is unavailable on this host." };
       }
-      // `pageCursors` always holds the first page, so there is a result 0.
-      if (results[0].data === undefined) return { kind: "loading" };
+      if (first.data === undefined) return { kind: "loading" };
       const merged = mergeChatSearchExpansionPages(
         results.map((result) => result.data),
       );
+      const failedIndex = rest.findIndex((result) => result.isError);
+      const failed = failedIndex === -1 ? undefined : rest[failedIndex];
       return {
         kind: "ready",
         messages: merged.messages,
         nextCursor: merged.nextCursor,
-        loadingMore: results.some((result) => result.data === undefined),
+        loadingMore: rest.some(
+          (result) => result.data === undefined && !result.isError,
+        ),
+        loadMoreError:
+          failed === undefined || !failed.isError
+            ? null
+            : {
+                message: failed.error.message,
+                retry: () => {
+                  void failed.refetch();
+                },
+              },
       };
     },
   });

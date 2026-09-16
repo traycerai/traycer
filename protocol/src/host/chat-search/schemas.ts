@@ -151,7 +151,8 @@ export type ChatSearchChatMatch = z.infer<typeof chatSearchChatMatchSchema>;
 
 export const chatSearchMessageMatchSchema = z.object({
   ...chatSearchChatFields,
-  matchCount: z.number().int().nonnegative(),
+  /** At least one: `best` is one of them. */
+  matchCount: z.number().int().positive(),
   best: chatSearchMessageHitSchema,
   /** A page of this chat's matching rows under `scope: chat`; else empty. */
   messages: z.array(chatSearchMessageHitSchema),

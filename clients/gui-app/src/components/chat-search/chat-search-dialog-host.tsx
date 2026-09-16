@@ -45,7 +45,7 @@ export function ChatSearchDialogHost() {
         // instead of re-centring on every page. The width stays a viewport cap:
         // the unmodified class keeps the safe-area term, the `sm:` one displaces
         // the primitive's `sm:max-w-sm`.
-        className="top-[15vh] w-full max-w-[min(calc(100%-2rem),44rem,var(--safe-area-width))] translate-y-0 gap-0 overflow-hidden rounded-xl p-0 sm:max-w-[min(calc(100%-2rem),44rem,var(--safe-area-width))]"
+        className="top-[15vh] w-full max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))] translate-y-0 gap-0 overflow-hidden rounded-xl p-0 sm:max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))]"
         showCloseButton={false}
       >
         <DialogHeader className="sr-only">
