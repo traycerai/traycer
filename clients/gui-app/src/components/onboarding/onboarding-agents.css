@@ -243,10 +243,6 @@
 
 /* ------------------------------------------------------------- no motion */
 
-/* Keyboard act-to-act navigation lands the focus ring and nothing else. */
-.onboarding-shell[data-motion="false"] .onboarding-provider-card {
-  animation: none;
-}
 .onboarding-provider-card:has(.onboarding-provider-toggle:focus-visible),
 .onboarding-provider-card:has(.onboarding-provider-toggle:focus-visible)
   .onboarding-provider-check {

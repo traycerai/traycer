@@ -18,7 +18,9 @@ import {
   type Transition,
 } from "motion/react";
 import * as m from "motion/react-m";
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
+import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { BrandMark } from "@/components/auth/cinematic-backdrop";
 import {
   onboardingStepsFor,
@@ -89,15 +91,11 @@ interface StepMotion {
  * The act → act swap, shared by the copy block and the panel's contents.
  *
  * `direction` is the vertical sign: forward enters from below and leaves
- * upward, Back mirrors it. Keyboard navigation (`animated: false`) keeps the
- * page's long-standing no-motion behaviour, and reduced motion keeps the
- * crossfade while dropping the travel, the scale and the blur.
+ * upward, Back mirrors it. Reduced motion keeps the crossfade while dropping
+ * the travel, the scale and the blur; it is the only thing that changes the
+ * swap, so an act reached by keyboard moves exactly as one reached by Continue.
  */
-function stepMotion(
-  direction: number,
-  animated: boolean,
-  reduced: boolean,
-): StepMotion {
+function stepMotion(direction: number, reduced: boolean): StepMotion {
   const travel = reduced ? 0 : STEP_TRAVEL_PX * direction;
   const scale = reduced ? 1 : 0.985;
   const blur = reduced ? "blur(0px)" : "blur(2px)";
@@ -117,12 +115,12 @@ function stepMotion(
       transform: `translateY(${-travel}px) scale(1)`,
       filter: blur,
       transition: {
-        duration: animated ? STEP_EXIT_SECONDS : 0,
+        duration: STEP_EXIT_SECONDS,
         ease: ONBOARDING_EASE,
       },
     },
     transition: {
-      duration: animated ? STEP_ENTER_SECONDS : 0,
+      duration: STEP_ENTER_SECONDS,
       ease: ONBOARDING_EASE,
     },
   };
@@ -164,10 +162,8 @@ function OnboardingTour(props: {
   readonly setScopedHostId: (hostId: string) => void;
 }) {
   const { steps, scope, scopedHostId, setScopedHostId, replay } = props;
-  const [animateChanges, setAnimateChanges] = useState(true);
   const [stepDirection, setStepDirection] = useState(1);
   const reducedMotion = useReducedMotion() === true;
-  const pointerNavigationRef = useRef(true);
   const [welcomePhase, setWelcomePhase] = useState<
     "welcome" | "leaving" | "ready"
   >("welcome");
@@ -269,7 +265,6 @@ function OnboardingTour(props: {
 
   const back = useCallback((): void => {
     if (index === 0) return;
-    setAnimateChanges(pointerNavigationRef.current);
     setStepDirection(-1);
     retreat(steps.length);
     Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
@@ -283,7 +278,6 @@ function OnboardingTour(props: {
       finish("completed");
       return;
     }
-    setAnimateChanges(pointerNavigationRef.current);
     setStepDirection(1);
     advanceStep(steps.length);
     Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
@@ -293,7 +287,6 @@ function OnboardingTour(props: {
   }, [advanceStep, finish, index, isLastStep, steps]);
 
   const handleKeyboard = useEffectEvent((event: KeyboardEvent): void => {
-    pointerNavigationRef.current = false;
     if (welcomePhase !== "ready") return;
     if (
       event.defaultPrevented ||
@@ -335,19 +328,10 @@ function OnboardingTour(props: {
     },
   );
 
-  const motionProps = stepMotion(stepDirection, animateChanges, reducedMotion);
+  const motionProps = stepMotion(stepDirection, reducedMotion);
 
   return (
-    <main
-      data-motion={animateChanges}
-      onPointerDownCapture={() => {
-        pointerNavigationRef.current = true;
-      }}
-      onKeyDownCapture={() => {
-        pointerNavigationRef.current = false;
-      }}
-      className="onboarding-shell relative isolate flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background font-heading text-foreground"
-    >
+    <main className="onboarding-shell relative isolate flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background font-heading text-foreground">
       <OnboardingField welcoming={welcomePhase !== "ready"} />
       <div
         aria-hidden="true"
@@ -591,7 +575,8 @@ function OnboardingActions(props: {
           onClick={props.onBack}
           className="onboarding-button onboarding-button--quiet"
         >
-          <ArrowLeft aria-hidden="true" className="size-4" /> Back
+          <ChevronLeft aria-hidden="true" className="size-4" />
+          Back
         </button>
       ) : null}
       <button
@@ -606,7 +591,18 @@ function OnboardingActions(props: {
         )}
       >
         {props.isLastStep ? lastStepLabel : "Continue"}
-        <ArrowRight aria-hidden="true" className="size-4" />
+        {/* The cap rides the button's own foreground: these are plain
+            `.onboarding-button` elements, so `Kbd`'s in-Button rules - the ones
+            that keep a cap readable on a filled primary - never fire here. */}
+        <ShortcutHint>
+          <Kbd
+            aria-hidden="true"
+            variant="inherit"
+            className="hidden md:inline-flex"
+          >
+            ↵
+          </Kbd>
+        </ShortcutHint>
       </button>
     </footer>
   );

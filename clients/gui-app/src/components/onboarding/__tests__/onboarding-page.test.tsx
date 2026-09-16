@@ -671,34 +671,24 @@ describe("OnboardingPage", () => {
     dialog.remove();
   });
 
-  it("keeps motion stable for in-step input and tracks navigation input mode", async () => {
+  // Input inside an act is not navigation: only the deliberate gestures swap
+  // the step, and the block the eye is on is the SAME element afterwards.
+  it("keeps the act stable for in-step input", async () => {
     renderPage(false);
     await advanceToStep("providers");
 
-    const shell = screen.getByRole("main");
     const currentStep = screen.getByTestId("onboarding-step");
     const editor = screen.getByTestId("provider-editor");
 
-    expect(shell.getAttribute("data-motion")).toBe("true");
-
     fireEvent.keyDown(editor, { key: "Tab" });
     expect(screen.getByTestId("onboarding-step")).toBe(currentStep);
-    expect(shell.getAttribute("data-motion")).toBe("true");
 
     fireEvent.pointerDown(editor);
     fireEvent.click(editor);
     expect(screen.getByTestId("onboarding-step")).toBe(currentStep);
-    expect(shell.getAttribute("data-motion")).toBe("true");
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
     await waitFor(() => expect(currentStepId()).toBe("session-import"));
-    expect(shell.getAttribute("data-motion")).toBe("false");
-
-    const back = screen.getByTestId("onboarding-back");
-    fireEvent.pointerDown(back);
-    fireEvent.click(back);
-    await waitFor(() => expect(currentStepId()).toBe("providers"));
-    expect(shell.getAttribute("data-motion")).toBe("true");
   });
 });
 

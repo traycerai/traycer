@@ -266,14 +266,7 @@
   }
 }
 
-/* Keyboard navigation moves between acts without motion; only the focus ring
-   lands. Both step blocks get their motion durations zeroed in the component. */
-.onboarding-shell[data-motion="false"]
-  :is(.onboarding-title-word, .onboarding-progress-label) {
-  animation: none;
-}
-.onboarding-shell[data-motion="false"] .onboarding-progress-segment,
-.onboarding-shell[data-motion="false"] .onboarding-progress-fill,
+/* The focus ring lands without the button's own transitions chasing it. */
 .onboarding-button:focus-visible,
 .onboarding-button:focus-visible > svg {
   transition: none;
