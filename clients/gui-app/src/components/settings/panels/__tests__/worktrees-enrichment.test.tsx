@@ -604,6 +604,75 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     expect(requests).toHaveLength(2);
   });
 
+  it("retries a first cold-host unresolved row and converges once the host resolves it", async () => {
+    vi.useFakeTimers();
+    // Identity is still unknown, unlike a resolved local or detached row.
+    const unresolvedEntry: WorktreeHostEntryV16 = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      branch: null,
+      repoIdentifier: null,
+      gitRemovable: false,
+      prState: null,
+      resolvedAt: null,
+      submodules: [],
+    };
+    const resolvedEntry: WorktreeHostEntryV16 = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      prState: "open",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/app/pull/42",
+    };
+    const entriesByPath = new Map<string, WorktreeHostEntryV16>([
+      ["/wt/a", unresolvedEntry],
+    ]);
+    const requests: string[] = [];
+    const fixture = createFixture(
+      entriesByPath,
+      (path) => {
+        requests.push(path);
+        if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+      },
+      null,
+      new QueryClient(),
+    );
+    const { result } = renderHook(
+      () =>
+        useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          NO_SWEEP_PATHS,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      result.current.reportVisiblePaths(["/wt/a"]);
+      await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+    });
+    expect(requests).toHaveLength(1);
+    // Still unresolved after the first probe - the retry ledger must treat
+    // the placeholder as pending rather than as a settled row.
+    expect(result.current.enrichedByPath.get("/wt/a")?.resolvedAt).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(requests).toHaveLength(2);
+    expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("open");
+    expect(
+      result.current.enrichedByPath.get("/wt/a")?.resolvedAt,
+    ).not.toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(requests).toHaveLength(2);
+  });
+
   it("does not poll intentionally omitted PR probes for local, detached, or at-base rows", async () => {
     vi.useFakeTimers();
     const entries: WorktreeHostEntryV16[] = [
@@ -856,6 +925,68 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       });
       expect(requests).toHaveLength(2);
       expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("none");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(requests).toHaveLength(2);
+    });
+
+    it("sweeps a first cold-host unresolved row and converges once the host resolves it", async () => {
+      vi.useFakeTimers();
+      // Same unresolved-placeholder shape as the viewport-leg regression
+      // above, but reached only through the background sweep (no
+      // reportVisiblePaths at all).
+      const unresolvedEntry: WorktreeHostEntryV16 = {
+        ...enrichedEntry("/wt/a", "feat-a"),
+        branch: null,
+        repoIdentifier: null,
+        gitRemovable: false,
+        prState: null,
+        resolvedAt: null,
+        submodules: [],
+      };
+      const resolvedEntry = warmEntry("/wt/a", "feat-a");
+      const entriesByPath = new Map<string, WorktreeHostEntryV16>([
+        ["/wt/a", unresolvedEntry],
+      ]);
+      const requests: string[] = [];
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+          if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+        },
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+
+      // The mount-time sweep chunk fires without any visible-paths report.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+      });
+      expect(requests).toHaveLength(1);
+      expect(result.current.enrichedByPath.get("/wt/a")?.resolvedAt).toBeNull();
+
+      // Still unresolved → the sweep's exponential backoff re-probes it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+      });
+      expect(requests).toHaveLength(2);
+      expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("none");
+      expect(
+        result.current.enrichedByPath.get("/wt/a")?.resolvedAt,
+      ).not.toBeNull();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);

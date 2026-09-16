@@ -232,6 +232,9 @@ function responseHasColdPrState(
 }
 
 function worktreeHasColdPrState(entry: WorktreeHostEntryV14): boolean {
+  // An unresolved row has placeholder identity fields. Retry until the host
+  // resolves it before deciding that its PR lookup was intentionally omitted.
+  if (entry.resolvedAt === null) return true;
   // The host deliberately skips the superproject PR probe for at-base rows,
   // local repositories, and detached HEADs. Their null is not a pending probe.
   // Owned submodules still need their independent checks in every case.
