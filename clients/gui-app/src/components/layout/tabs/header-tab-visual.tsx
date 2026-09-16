@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { ReactNode } from "react";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import {
@@ -131,8 +132,8 @@ export function TabChrome(props: {
         {props.color !== null ? (
           <span
             aria-hidden
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-[1.5px]"
-            style={{ backgroundColor: props.color }}
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-[1.5px] bg-[var(--swatch)]"
+            style={{ "--swatch": props.color } as CSSProperties}
           />
         ) : null}
         <span

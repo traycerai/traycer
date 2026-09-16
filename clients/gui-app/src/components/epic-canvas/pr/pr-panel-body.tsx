@@ -282,7 +282,8 @@ function PrPanelBodyContent(props: {
         <AgentSpinningDots
           testId="pr-panel-loading-dots"
           variant="dots"
-          className="size-5 text-muted-foreground"
+          className="size-5"
+          tone="muted"
         />
       </div>
     );

@@ -144,7 +144,7 @@ export function ClientUpdateRequiredAction(props: {
           </span>
           {enableRc.isPending ? (
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId={undefined}
               variant={undefined}
             />
@@ -215,7 +215,7 @@ export function ClientUpdateRequiredAction(props: {
         <span className="inline-flex items-center gap-1.5">
           <span>Checking for updates</span>
           <AgentSpinningDots
-            className="text-current"
+            className={undefined}
             testId={undefined}
             variant={undefined}
           />
@@ -272,7 +272,7 @@ function renderCachedUpdateAction(input: {
                 : `Downloading ${snapshot.downloadProgress}%`}
             </span>
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId={undefined}
               variant={undefined}
             />
@@ -310,7 +310,7 @@ function renderCachedUpdateAction(input: {
             </span>
             {snapshot.installInFlight ? (
               <AgentSpinningDots
-                className="text-current"
+                className={undefined}
                 testId={undefined}
                 variant={undefined}
               />

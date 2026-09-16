@@ -121,10 +121,10 @@ function RefreshButton(props: {
       <span className="inline-flex">
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-xs"
           aria-label={refresh.label}
-          className="-my-1 text-muted-foreground/70 hover:text-foreground"
+          className="-my-1 opacity-70"
           disabled={spinner.refreshing}
           onMouseDown={(event) => {
             event.preventDefault();
@@ -154,7 +154,7 @@ export function MentionStepChromeBanner(props: {
     <div
       role="status"
       data-testid="mention-github-unavailable-banner"
-      className="mx-2 mb-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-ui-xs text-foreground"
+      className="mx-2 mb-1 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-ui-xs text-foreground"
     >
       <span className="font-semibold">GitHub CLI unavailable</span>
       {` — Install and sign in to the GitHub CLI (gh auth login) to load ${what}. Cached rows stay visible and may be stale.`}
@@ -179,7 +179,8 @@ export function MentionStepChromeStatusRow(props: {
         <AgentSpinningDots
           testId={undefined}
           variant="orbit"
-          className="text-muted-foreground/80"
+          className={undefined}
+          tone="muted"
         />
       ) : null}
       {props.label}

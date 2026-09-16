@@ -327,12 +327,10 @@ function PromotedSubagentSegment(
       open={open}
       onOpenChange={updateOpen}
       className={cn(
-        "rounded-md border text-ui-sm transition-colors",
         open ? "overflow-visible" : "overflow-hidden",
-        isStreaming
-          ? "border-primary/35 bg-primary/5"
-          : "border-border/45 bg-muted/20",
+        isStreaming ? "border-primary/35 bg-primary/5" : "border-border/45",
       )}
+      variant="card"
     >
       <PromotedSubagentTrigger
         id={id}
@@ -413,15 +411,15 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
       data-find-include="true"
       data-chat-find-unit={headerFindUnitId}
       className={cn(
-        "group/subagent flex w-full gap-2 px-3 py-2 text-left transition-colors",
+        "group/subagent flex w-full text-left",
         showHeaderSummary ? "items-start" : "items-center",
         // The sticky header floats over scrolled content, so its hover tint
         // must stay opaque - a translucent bg lets the content bleed through.
         open
           ? "sticky top-0 z-20 rounded-t-md border-b border-border/35 bg-background shadow-sm hover:bg-[color-mix(in_oklch,var(--muted)_35%,var(--background))]"
-          : "hover:bg-muted/35",
-        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          : null,
       )}
+      variant="panel"
     >
       <SubagentAvatar
         seed={id}
@@ -655,7 +653,7 @@ function ProgressTimeline(props: ProgressTimelineProps) {
     return (
       <div className="flex items-center gap-2 text-muted-foreground">
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={undefined}
           variant={undefined}
         />
@@ -681,7 +679,7 @@ function ProgressTimeline(props: ProgressTimelineProps) {
             <span className="mt-[0.35em] flex w-3 shrink-0 justify-center">
               {newest && isStreaming ? (
                 <AgentSpinningDots
-                  className="text-current"
+                  className={undefined}
                   testId={undefined}
                   variant={undefined}
                 />
@@ -765,7 +763,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
     <>
       <span
         aria-hidden
-        className="flex size-4 shrink-0 items-center justify-center rounded bg-gradient-to-br from-indigo-500 to-purple-500 text-white"
+        className="flex size-4 shrink-0 items-center justify-center rounded bg-primary text-primary-foreground"
       >
         <WorkflowIcon className="size-2.5" />
       </span>
@@ -939,7 +937,7 @@ function WorkflowActivityTimeline(props: WorkflowActivityTimelineProps) {
     return (
       <div className="flex items-center gap-2 text-muted-foreground">
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={undefined}
           variant={undefined}
         />
@@ -965,7 +963,7 @@ function WorkflowActivityTimeline(props: WorkflowActivityTimelineProps) {
             <span className="mt-[0.35em] flex w-3 shrink-0 justify-center">
               {newest && isStreaming ? (
                 <AgentSpinningDots
-                  className="text-current"
+                  className={undefined}
                   testId={undefined}
                   variant={undefined}
                 />

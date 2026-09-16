@@ -313,7 +313,7 @@ function OwnerSettingsHeaderRows(props: {
               {view.fastMode ? (
                 <Zap
                   aria-label="Fast mode"
-                  className="size-3.5 shrink-0 fill-current text-amber-500"
+                  className="size-3.5 shrink-0 fill-current text-warning-foreground"
                   strokeWidth={2}
                 />
               ) : null}

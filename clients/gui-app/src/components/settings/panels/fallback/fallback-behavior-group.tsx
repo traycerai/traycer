@@ -195,7 +195,6 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
             if (next === null) return;
             onChange({ ...policy, returnToPreferred: next });
           }}
-          className="gap-2"
         >
           {Object.entries(RETURN_TO_PREFERRED_COPY).map(([value, copy]) => (
             <div key={value} className="flex items-start gap-2">
@@ -219,10 +218,7 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
                 className="mt-0.5"
               />
               <div className="space-y-0.5">
-                <Label
-                  htmlFor={`fallback-return-${value}`}
-                  className="font-normal"
-                >
+                <Label htmlFor={`fallback-return-${value}`} variant="option">
                   {copy.label}
                 </Label>
                 {copy.description === null ? null : (

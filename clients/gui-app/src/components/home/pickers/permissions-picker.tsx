@@ -174,7 +174,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
       )}
       <DropdownMenuContent
         align="start"
-        className="min-w-[min(90vw,20rem)] p-1.5"
+        className="min-w-[min(90vw,20rem)]"
         // Return focus to the composer editor instead of the trigger pill so
         // the user can keep typing after picking a mode. Without this Radix
         // restores focus to the trigger, leaving the caret out of the textbox.
@@ -224,7 +224,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
                 // on the dropdown-menu primitive (see ui/dropdown-menu.tsx) so a
                 // native browser tooltip would never fire on hover anyway. The
                 // unsupported reason is rendered inline in the item body below.
-                className="items-start gap-2 py-2 pr-8 pl-2 data-[state=checked]:bg-accent/70"
+                className="items-start gap-2"
               >
                 <OptionIcon className="mt-0.5 size-4 text-muted-foreground" />
                 <PermissionOptionBody

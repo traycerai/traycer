@@ -432,7 +432,7 @@ function ProfileSummary({
           </button>
         ) : null}
       </div>
-      <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">
+      <Badge variant="outline" className="h-5 shrink-0" size="xs">
         {profileAuthStatusText(profile)}
       </Badge>
       {planText !== null ? (
@@ -444,7 +444,8 @@ function ProfileSummary({
         >
           <Badge
             variant="outline"
-            className="h-5 max-w-[min(28vw,14rem)] shrink-0 px-1.5 text-[10px]"
+            className="h-5 max-w-[min(28vw,14rem)] shrink-0"
+            size="xs"
           >
             <span className="truncate">{planText}</span>
           </Badge>

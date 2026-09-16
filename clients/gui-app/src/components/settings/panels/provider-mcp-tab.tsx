@@ -1296,34 +1296,22 @@ function ServerRowBadges(props: {
   return (
     <>
       {shadowed ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           shadowed by project
         </Badge>
       ) : null}
       {server.statusSource === "probe" ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal text-muted-foreground"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           connectivity check
         </Badge>
       ) : null}
       {server.configOnly ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           config only
         </Badge>
       ) : null}
       {server.stdioDegraded ? (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal"
-        >
+        <Badge variant="muted" className="h-4" size="xs">
           stdio degraded
         </Badge>
       ) : null}
@@ -1457,14 +1445,10 @@ function ServerToolsPanel(props: {
       }}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <TabsList className="h-auto">
-          <TabsTrigger value="tools" className="text-ui-xs">
-            Tools ({server.tools.length})
-          </TabsTrigger>
+        <TabsList size="sm" className="h-auto">
+          <TabsTrigger value="tools">Tools ({server.tools.length})</TabsTrigger>
           {capabilities.instructionsSource !== "none" ? (
-            <TabsTrigger value="instructions" className="text-ui-xs">
-              Instructions
-            </TabsTrigger>
+            <TabsTrigger value="instructions">Instructions</TabsTrigger>
           ) : null}
         </TabsList>
         {!toolsReadOnly && server.tools.length > 0 ? (

@@ -55,7 +55,7 @@ export function AgentRoleBadges(props: AgentRoleBadgesProps) {
     >
       <Badge
         variant="outline"
-        className="h-4 shrink-0 gap-0.5 rounded-sm border-current/30 bg-background/60 px-1 text-foreground"
+        className="h-4 shrink-0 rounded-sm border-current/30 bg-background/60 text-foreground"
         data-testid="agent-role-badges"
         aria-label={roleCountLabel}
       >

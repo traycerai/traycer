@@ -2101,15 +2101,12 @@ function TreePanelActions(props: TreePanelActionsProps) {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label={props.addLabel}
         aria-disabled={artifactsPresentation.ariaDisabled ? true : undefined}
         data-testid={props.triggerTestId}
-        className={cn(
-          "text-muted-foreground hover:text-foreground",
-          ARIA_DISABLED_TRIGGER_CLASS,
-        )}
+        className={cn(ARIA_DISABLED_TRIGGER_CLASS)}
         disabled={artifactsPresentation.nativeDisabled}
       >
         {addIsPending ? (
@@ -2177,10 +2174,10 @@ function PanelHeaderMoreMenuTrigger(props: {
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label={props.label}
-          className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+          className="shrink-0"
           data-testid={props.testId}
         >
           <MoreHorizontal className="size-4" />
@@ -2563,7 +2560,7 @@ function SidebarBulkSelectionActions() {
       />
       <Button
         type="button"
-        variant="ghost"
+        variant="destructive-ghost"
         size="icon-sm"
         aria-label={
           selection.selectedCount > 0
@@ -2577,7 +2574,6 @@ function SidebarBulkSelectionActions() {
           selection.deletePending ||
           chatArchive.pending
         }
-        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={selection.requestDeleteSelected}
       >
         <Trash2 className="size-4" />
@@ -2591,11 +2587,10 @@ function CommentsPanelActions(props: LeftPanelHeaderSlotProps) {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label="Close comments"
       data-testid="epic-sidebar-comments-close"
-      className="text-muted-foreground hover:text-foreground"
       onClick={() => setActivePanelId(props.tabId, DEFAULT_LEFT_PANEL_ID)}
     >
       <X className="size-4" />

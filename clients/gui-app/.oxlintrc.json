@@ -19,7 +19,8 @@
     "**/*.d.ts",
     "**/*.cjs",
     "**/*.mjs",
-    "src/routeTree.gen.ts"
+    "src/routeTree.gen.ts",
+    "src/lib/cn-tables.ts"
   ],
   "rules": {
     "constructor-super": "error",

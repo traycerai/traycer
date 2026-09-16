@@ -79,7 +79,7 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
         data-theme={themePreset}
         className={cn(resolvedTheme === "dark" && "dark", "max-h-[85dvh]")}
       >
-        <DrawerHeader className="pb-1">
+        <DrawerHeader>
           <DrawerTitle>Task options</DrawerTitle>
         </DrawerHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-2 pb-safe-bottom-gutter">

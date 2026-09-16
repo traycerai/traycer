@@ -123,11 +123,11 @@ export function ResolvedInterviewCard(props: ResolvedInterviewCardProps) {
           <CollapsibleTrigger
             data-find-include="true"
             className={cn(
-              "group/interview flex min-w-0 items-center gap-2 rounded-sm py-1 pr-1 text-left transition-colors",
-              "hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              "group/interview flex min-w-0 items-center text-left",
               model.outcome === "failed" &&
                 "text-destructive/85 hover:text-destructive",
             )}
+            variant="quiet"
           >
             <MessageSquareText
               className="size-3.5 shrink-0 text-muted-foreground/75"

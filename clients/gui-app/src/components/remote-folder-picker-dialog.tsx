@@ -31,7 +31,6 @@ import {
 } from "@/components/ui/popover";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -103,7 +102,8 @@ export function RemoteFolderPickerDialog(): ReactNode {
       }}
     >
       <DialogContent
-        className="top-[18svh] flex h-[min(80dvh,36rem,calc(100dvh-18svh-var(--safe-area-inset-bottom)))] w-full max-w-[min(90vw,40rem,var(--safe-area-width))] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(90vw,40rem,var(--safe-area-width))]"
+        layout="banded"
+        className="top-[18svh] flex h-[min(80dvh,36rem,calc(100dvh-18svh-var(--safe-area-inset-bottom)))] w-full max-w-[min(90vw,40rem,var(--safe-area-width))] translate-y-0 flex-col overflow-hidden sm:max-w-[min(90vw,40rem,var(--safe-area-width))]"
         data-testid="remote-folder-picker-dialog"
         // Phone-facing portal outside HomePage's touch scope: re-apply the
         // coarse-pointer hit-slop rules (home-touch-targets.css) so every
@@ -720,11 +720,9 @@ function PickerRow(props: {
         role={props.option === null ? undefined : "option"}
         id={props.option?.id}
         aria-selected={props.option?.selected}
-        className={cn(
-          "h-10 w-full justify-start gap-2 px-2 hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-          props.option?.selected === true &&
-            "bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-        )}
+        // The selected fill is `ghost`'s own `aria-selected:` state, keyed off
+        // the attribute already set above.
+        className="h-10 w-full justify-start"
         data-testid={props.testId}
         // Keep focus (and the keyboard model) on the combobox field.
         onMouseDown={(event) => {
@@ -858,11 +856,7 @@ function RemoteFolderPickerListing(props: {
             role="option"
             id={pickerOptionId(0)}
             aria-selected={props.selectedIndex === 0}
-            className={cn(
-              "h-10 w-full justify-start gap-2 px-2 hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-              props.selectedIndex === 0 &&
-                "bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,var(--popover))]",
-            )}
+            className="h-10 w-full justify-start"
             data-testid="remote-folder-picker-up-row"
             // Keep focus (and the keyboard model) on the combobox field.
             onMouseDown={(event) => {

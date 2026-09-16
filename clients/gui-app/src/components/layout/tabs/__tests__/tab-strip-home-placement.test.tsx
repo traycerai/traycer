@@ -321,10 +321,12 @@ describe("<TabStrip /> - Home placement", () => {
     render(<RouterProvider router={router} />);
 
     const homeTab = await screen.findByTestId("tab-home");
-    // A manual colour paints an inline `backgroundColor`; Home renders none,
-    // because `TabStripHomeItem` passes `color={null}` and has no menu that
-    // could set one.
-    expect(homeTab.querySelector('[style*="background-color"]')).toBeNull();
+    // A manual colour paints an inline `--swatch`; Home renders none, because
+    // `TabStripHomeItem` passes `color={null}` and has no menu that could set
+    // one. `--swatch`, not `background-color`: ticket 02's inline-style
+    // migration moved it, and a negative assertion against the property it
+    // used to set passes whatever the component does.
+    expect(homeTab.querySelector('[style*="--swatch"]')).toBeNull();
   });
 });
 

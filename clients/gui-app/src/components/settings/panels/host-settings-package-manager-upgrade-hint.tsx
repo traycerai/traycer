@@ -26,7 +26,7 @@ export function PackageManagerUpgradeHint(
   return (
     <output
       data-testid="settings-host-package-manager-upgrade-hint"
-      className="flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-5 py-3 text-ui-sm text-amber-950 dark:text-amber-100"
+      className="flex flex-col gap-2 rounded-lg border border-warning/30 bg-warning/10 px-5 py-3 text-ui-sm text-warning-foreground"
     >
       <div>
         Your {formatPackageManagerSource(hint.source)} install of{" "}
@@ -37,7 +37,7 @@ export function PackageManagerUpgradeHint(
       </div>
       <pre
         data-testid="settings-host-package-manager-upgrade-command"
-        className="w-full max-w-full overflow-auto rounded-md border border-amber-500/30 bg-background/40 px-3 py-2 font-mono text-code-xs"
+        className="w-full max-w-full overflow-auto rounded-md border border-warning/30 bg-background/40 px-3 py-2 font-mono text-code-xs"
       >
         {hint.upgradeCommand}
       </pre>

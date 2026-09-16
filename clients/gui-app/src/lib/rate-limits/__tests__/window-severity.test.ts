@@ -14,13 +14,13 @@ describe("creditUsageSeverity", () => {
 
 describe("rateLimitWindowSeverityBarClassName", () => {
   it("maps each severity to a distinct fill color", () => {
-    expect(rateLimitWindowSeverityBarClassName("healthy")).toContain(
-      "blue-500",
-    );
+    expect(rateLimitWindowSeverityBarClassName("healthy")).toContain("info");
     expect(rateLimitWindowSeverityBarClassName("running_low")).toContain(
-      "amber-500",
+      "warning",
     );
-    expect(rateLimitWindowSeverityBarClassName("limited")).toContain("red-500");
+    expect(rateLimitWindowSeverityBarClassName("limited")).toContain(
+      "destructive",
+    );
   });
 });
 

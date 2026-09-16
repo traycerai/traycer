@@ -389,7 +389,9 @@ describe("<EpicUsageDialog />", () => {
     const dot = screen
       .getByTestId("usage-harness-split-row-claude")
       .querySelector("span");
-    expect(dot?.style.backgroundColor).toBe("var(--usage-harness-claude)");
+    expect(dot?.style.getPropertyValue("--swatch")).toBe(
+      "var(--usage-harness-claude)",
+    );
   });
 
   it("routes an empty window to the empty state, offering only wider windows", async () => {

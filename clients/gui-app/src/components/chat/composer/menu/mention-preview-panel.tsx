@@ -164,7 +164,7 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
             className="mb-2 flex items-start gap-1.5 border-b border-border/60 pb-2 text-ui-xs text-foreground"
           >
             <TriangleAlertIcon
-              className="mt-px size-3.5 shrink-0 text-amber-500"
+              className="mt-px size-3.5 shrink-0 text-warning-foreground"
               aria-hidden
             />
             <span className="min-w-0">

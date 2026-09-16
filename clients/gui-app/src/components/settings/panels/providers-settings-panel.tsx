@@ -624,7 +624,7 @@ function ProvidersPanelBody({
             source: "Providers",
           })}
           presentation="link"
-          className="ml-1 h-auto p-0 text-current"
+          className="ml-1"
         />
       </div>
     );
@@ -1266,10 +1266,10 @@ function ProviderDetail({
                transparent, so there is nothing left to look empty. */
             <TabsList
               variant="line"
-              className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
+              className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start"
             >
               {tabs.map((tab) => (
-                <TabsTrigger key={tab} value={tab} className="flex-none px-3">
+                <TabsTrigger key={tab} value={tab} className="flex-none">
                   {providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)}
                 </TabsTrigger>
               ))}

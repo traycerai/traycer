@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useRef, type ReactNode } from "react";
 import {
   Tooltip,
@@ -176,8 +177,12 @@ function DayTile(props: {
           data-testid="usage-activity-day"
           data-day={cell.day}
           data-level={cell.level}
-          className="size-2.5 rounded-[2px]"
-          style={{ backgroundColor: `var(--usage-heat-${String(cell.level)})` }}
+          className="size-2.5 rounded-xs bg-[var(--swatch)]"
+          style={
+            {
+              "--swatch": `var(--usage-heat-${String(cell.level)})`,
+            } as CSSProperties
+          }
         />
       </TooltipTrigger>
       <TooltipContent>
@@ -338,8 +343,12 @@ function LevelLegend(): ReactNode {
       {LEVELS.map((level) => (
         <span
           key={level}
-          className={cn("size-2.5 rounded-[2px]")}
-          style={{ backgroundColor: `var(--usage-heat-${String(level)})` }}
+          className={cn("size-2.5 rounded-xs bg-[var(--swatch)]")}
+          style={
+            {
+              "--swatch": `var(--usage-heat-${String(level)})`,
+            } as CSSProperties
+          }
         />
       ))}
       More

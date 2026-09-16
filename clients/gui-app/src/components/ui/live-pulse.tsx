@@ -24,8 +24,12 @@ const TONE_CLASS: Record<LivePulseTone, string> = {
 
 const ACTIVE_RING_PEAK_OPACITY = 0.75;
 
-export function LivePulse(props: LivePulseProps) {
-  const { size, tone, ariaLabel, className } = props;
+export function LivePulse({
+  size,
+  tone,
+  ariaLabel,
+  className,
+}: LivePulseProps) {
   const toneClass = TONE_CLASS[tone];
 
   return (

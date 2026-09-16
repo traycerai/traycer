@@ -66,18 +66,15 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
       }
     >
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
         data-testid="host-busy-force-defer-dialog"
         data-purpose={props.purpose}
       >
         <div className="flex flex-col gap-1.5 p-5">
-          <DialogTitle className="text-ui font-semibold leading-snug">
-            {props.title}
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-            {props.message}
-          </DialogDescription>
+          <DialogTitle>{props.title}</DialogTitle>
+          <DialogDescription>{props.message}</DialogDescription>
           {props.detail === null ? null : (
             <p
               className="text-ui-sm leading-relaxed text-foreground"

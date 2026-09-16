@@ -14,7 +14,7 @@ export function CommentsPanelSkeleton() {
       data-testid="comments-panel-skeleton"
       aria-busy="true"
     >
-      <SidebarGroup className="p-2">
+      <SidebarGroup>
         <SidebarGroupContent className="space-y-2">
           {ROWS.map((id) => (
             <div

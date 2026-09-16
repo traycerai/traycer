@@ -193,7 +193,7 @@ export function StartPageSettingsSection() {
               <img
                 src={image.url}
                 alt=""
-                className="h-[34px] w-[56px] shrink-0 rounded-md border border-border/60 object-cover"
+                className="h-8.5 w-14 shrink-0 rounded-md border border-border/60 object-cover"
               />
             )}
             <input

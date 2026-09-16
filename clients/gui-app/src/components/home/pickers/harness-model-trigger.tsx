@@ -110,7 +110,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
           aria-label={serviceTierLabel}
           className={cn(
             "size-4 shrink-0 text-muted-foreground",
-            serviceTierActive && "fill-current text-amber-500",
+            serviceTierActive && "fill-current text-warning-foreground",
           )}
           strokeWidth={2}
         />

@@ -180,14 +180,17 @@ function ProfileUsageSidecarContent({
           >
             {refreshing ? (
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId="profile-usage-refresh-spinner"
                 variant={undefined}
+                tone="muted"
               />
             ) : null}
             {refreshLabel}
             <ShortcutHint>
-              <Kbd className="ml-0.5 font-mono">R</Kbd>
+              <Kbd className="ml-0.5" variant="mono">
+                R
+              </Kbd>
             </ShortcutHint>
           </Button>
         ) : null}
