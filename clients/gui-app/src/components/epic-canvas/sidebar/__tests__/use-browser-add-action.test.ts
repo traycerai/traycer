@@ -1,5 +1,13 @@
 import "../../../../../__tests__/test-browser-apis";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { createElement } from "react";
@@ -55,9 +63,6 @@ function seedCanvasTab(): void {
     tabsById: {
       [VIEW_TAB_ID]: { tabId: VIEW_TAB_ID, epicId: "epic-1", name: "Epic 1" },
     },
-    // See `epic-browser-sidebar.test.tsx` / `switcher-browsers-list.test.tsx`:
-    // the pending-tile observer only counts a view tab "open" when it is in
-    // `openTabOrder`, not merely registered in `tabsById`.
     openTabOrder: [VIEW_TAB_ID],
   });
 }
@@ -325,5 +330,109 @@ describe("useAddBrowserAction", () => {
       tabId: "tab-1",
     });
     expect(onOpened).toHaveBeenCalledOnce();
+  });
+
+  describe("render cost of a real click, flushSync scope included", () => {
+    function renderClickHarness(
+      openTab: BrowserSessionsState["openTab"],
+      onOpened: () => void,
+    ): { readonly counts: { addButton: number; canvasSubscriber: number } } {
+      const counts = { addButton: 0, canvasSubscriber: 0 };
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      function AddButton() {
+        counts.addButton += 1;
+        const { add } = useAddBrowserAction(VIEW_TAB_ID, onOpened);
+        return createElement("button", { onClick: add }, "Add browser");
+      }
+      // Stands in for the mounted sidebar/inventory rows this hook shares a
+      // render tree with - the flushSync's own justification ("commit the
+      // new stream consumer before a mobile sheet releases its own") is a
+      // claim about what these consumers see by the end of the click.
+      function CanvasInventoryPlaceholder() {
+        counts.canvasSubscriber += 1;
+        const tileCount = useEpicCanvasStore(
+          (state) =>
+            Object.keys(
+              state.canvasByTabId[VIEW_TAB_ID]?.tilesByInstanceId ?? {},
+            ).length,
+        );
+        return createElement(
+          "div",
+          { "data-testid": "inventory-count" },
+          String(tileCount),
+        );
+      }
+      render(
+        createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          createElement(
+            BrowserSessionsContext.Provider,
+            { value: sessionsValue(openTab) },
+            createElement(AddButton),
+            createElement(CanvasInventoryPlaceholder),
+          ),
+        ),
+      );
+      return { counts };
+    }
+
+    it("baseline: the placeholder is visible and onOpened has fired by the end of the click's own synchronous scope, with one commit each", () => {
+      const deferred = deferredOpenTab();
+      const onOpened = vi.fn();
+      const { counts } = renderClickHarness(deferred.openTab, onOpened);
+      const before = { ...counts };
+
+      fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
+
+      // Everything below is asserted with NO await/microtask in between -
+      // still inside the click's own call stack.
+      expect(screen.getByTestId("inventory-count").textContent).toBe("1");
+      expect(onOpened).toHaveBeenCalledOnce();
+
+      // Baseline: the add button itself does not re-render on this click, and
+      // the canvas subscriber renders exactly once - the flushSync-wrapped
+      // commit, not a scheduled render plus a forced one.
+      expect(counts.addButton - before.addButton).toBe(0);
+      expect(counts.canvasSubscriber - before.canvasSubscriber).toBe(1);
+    });
+
+    it("a same-tick host answer still finds the pending tile already committed - `send()`'s own microtask, not the click, is what resolves it", async () => {
+      // `openTab`/`send()` always resolves through a microtask even when the
+      // underlying promise is already settled (Promise semantics), so this
+      // proves ordering, not synchronous completion: the placeholder must
+      // already be in the canvas by the time that microtask's `.then` runs,
+      // which is what `flushSync` (commit before `observe()`/`mutate()`) is
+      // actually for.
+      const openTab: BrowserSessionsState["openTab"] = () =>
+        Promise.resolve({
+          sessionId: "sess-1",
+          tabId: "tab-1",
+          handoffToken: null,
+        });
+      const onOpened = vi.fn();
+      renderClickHarness(openTab, onOpened);
+
+      fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
+
+      // Still inside the click: the placeholder is pending, not yet resolved.
+      expect(screen.getByTestId("inventory-count").textContent).toBe("1");
+
+      await waitFor(() => {
+        expect(openBrowserTiles()).toMatchObject([
+          { sessionId: "sess-1", tabId: "tab-1" },
+        ]);
+      });
+      // Rebinds the SAME tile in place - never a second one alongside it.
+      expect(openBrowserTiles()).toMatchObject([
+        { sessionId: "sess-1", tabId: "tab-1" },
+      ]);
+      expect(onOpened).toHaveBeenCalledOnce();
+    });
   });
 });

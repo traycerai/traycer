@@ -80,7 +80,13 @@ export function makePendingBrowserSessionTileRef(
     sessionId: null,
     tabId: null,
     viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
-    pending,
+    pending: {
+      requestId: pending.requestId,
+      hostId: pending.hostId,
+      scope: pending.scope,
+      requestedUrl: pending.requestedUrl,
+      clickedAt: pending.clickedAt,
+    },
   };
 }
 

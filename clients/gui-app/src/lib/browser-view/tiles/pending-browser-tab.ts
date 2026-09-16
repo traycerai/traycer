@@ -46,14 +46,15 @@ export function preparePendingBrowserTile(
   const observe = () => {
     const check = () => {
       const state = useEpicCanvasStore.getState();
-      const present = state.openTabOrder.some((viewTabId) => {
-        const ref =
-          state.canvasByTabId[viewTabId]?.tilesByInstanceId[node.instanceId];
-        return (
-          ref?.type === "browser-session" &&
-          ref.pending?.requestId === request.requestId
-        );
-      });
+      const present = Object.values(state.canvasByTabId).some(
+        (canvas) =>
+          canvas !== undefined &&
+          Object.values(canvas.tilesByInstanceId).some(
+            (ref) =>
+              ref?.type === "browser-session" &&
+              ref.pending?.requestId === request.requestId,
+          ),
+      );
       if (!present) request.dismiss();
     };
     unsubscribe = useEpicCanvasStore.subscribe(check);

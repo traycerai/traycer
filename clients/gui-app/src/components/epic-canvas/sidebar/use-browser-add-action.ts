@@ -103,7 +103,7 @@ export function useAddBrowserAction(
       sessions,
       DEFAULT_BROWSER_TILE_URL,
     );
-    // Commit the new stream consumer before a mobile sheet releases its own.
+    // Commit pending chrome before sending a request that may resolve immediately.
     flushSync(() => {
       openTile(tileIntent(pending.node, { tabId }, "explicit", "direct_ui"));
     });
