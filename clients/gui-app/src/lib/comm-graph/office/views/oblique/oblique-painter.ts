@@ -2,7 +2,11 @@
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
-import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
+import {
+  OFFICE_CIVIC_GROUND_ALPHA,
+  OFFICE_LABEL_GAP,
+  OFFICE_TILE,
+} from "@/lib/comm-graph/office/office-types";
 import type {
   OfficeBlockFill,
   OfficeDrawable,
@@ -22,11 +26,31 @@ import type {
   OfficeProjector,
 } from "../office-view";
 
+import { OFFICE_UNCLAIMED_FURNITURE_ALPHA } from "../office-seat-alpha";
+
 import {
   obliqueIsPlaza,
   obliquePropsIn,
   obliqueReserveLabelSeatId,
 } from "./oblique-plan";
+
+/**
+ * How far below a desk seat's own tile the desk FACE hangs, in world pixels.
+ *
+ * Named because three things measure from it: the desk, the dust sheet over an
+ * archived one, and the `reserve` lettering that has to clear both.
+ */
+const DESK_FRONT_Y_OFFSET = 24;
+
+/**
+ * A COLD AGENT'S SILHOUETTE in a cubby, below close-up.
+ *
+ * Not {@link OFFICE_UNCLAIMED_FURNITURE_ALPHA}: that number is about furniture
+ * keeping its outline, and this is a stand-in for a PERSON who is present but
+ * not working. It is drawn instead of the character rather than over it, so it
+ * is dimmer on purpose - the slot is occupied, quietly.
+ */
+const COLD_SILHOUETTE_ALPHA = 0.55;
 
 const STATIC_PROPS: ReadonlySet<OfficeSpriteName> = new Set([
   "face",
@@ -162,13 +186,42 @@ function overviewBlocks(
   );
   return [...buildings, ...storeys, ...civic];
 }
+/**
+ * THE GROUND A CIVIC ROOM STANDS ON, tinted so the room has an edge.
+ *
+ * The same `civic` fill the overview block map already uses, at
+ * {@link OFFICE_CIVIC_GROUND_ALPHA} - the one number all six views tint with,
+ * and where the reasoning for it lives.
+ *
+ * `ground: true`, which is doing real work: it admits the block to the static
+ * bake, and the bake is the only way this lands UNDER the plaza's fixtures.
+ * The static path blits every baked sprite and only then draws what did not
+ * bake, so an unbaked tint is composited over the reception counter, the glass
+ * screens, the cross and the records door however early it is emitted -
+ * recolouring the fixtures instead of the floor they stand on.
+ */
+function civicGround(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): OfficeDrawable[] {
+  return layout.floors.flatMap((storey) =>
+    storey.civic.flatMap((room) =>
+      clippedBlock({ ...room.bounds, fill: "civic" }, tiles).map((block) => ({
+        ...block,
+        alpha: OFFICE_CIVIC_GROUND_ALPHA,
+        ground: true,
+      })),
+    ),
+  );
+}
+
 function floor(
   layout: OfficeLayout,
   tiles: OfficeTileRect,
   lod: OfficeLod,
 ): OfficeDrawable[] {
   if (lod === 0) return overviewBlocks(layout, tiles);
-  return obliquePropsIn(layout, tiles)
+  const props: OfficeDrawable[] = obliquePropsIn(layout, tiles)
     .filter((prop) => STATIC_PROPS.has(prop.sprite.name))
     .map((prop) => ({
       kind: "sprite",
@@ -176,6 +229,32 @@ function floor(
       x: prop.tile.col * OFFICE_TILE,
       y: prop.tile.row * OFFICE_TILE,
     }));
+  // THE TINT GOES BETWEEN THE GROUND AND WHAT STANDS ON IT, so this stream is
+  // split rather than concatenated whole. `STATIC_PROPS` mixes two different
+  // things: the storey's own opaque floor tiles, and the plaza's fixtures - the
+  // reception counter, the glass screens, the cross, the records door. A tint
+  // before the tiles is erased by them; a tint after the fixtures recolours
+  // them. It belongs in the seam.
+  //
+  // `ground: true` is what holds that seam through the static bake, which
+  // otherwise blits every sprite and then draws the tint last whatever this
+  // array says. See `officeBakesIntoStaticFloor`.
+  const groundTiles = props.filter((prop) => isObliqueGroundSprite(prop));
+  const standing = props.filter((prop) => !isObliqueGroundSprite(prop));
+  return [...groundTiles, ...civicGround(layout, tiles), ...standing];
+}
+
+/** The two sprites that ARE the storey's floor, as opposed to standing on it. */
+const OBLIQUE_GROUND_SPRITES: ReadonlySet<OfficeSpriteName> = new Set([
+  "floor-a",
+  "floor-b",
+]);
+
+function isObliqueGroundSprite(drawable: OfficeDrawable): boolean {
+  return (
+    drawable.kind === "sprite" &&
+    OBLIQUE_GROUND_SPRITES.has(drawable.sprite.name)
+  );
 }
 interface PropPaint {
   readonly ownerAgentId: string | null;
@@ -281,7 +360,7 @@ function cubbySeatProps(
     cubby.push(
       entry({ name: "silhouette" }, point, foot, {
         ownerAgentId: owner,
-        alpha: 0.55,
+        alpha: COLD_SILHOUETTE_ALPHA,
       }),
     );
   // The scene supplies the dimmed, front-facing character at close-up.
@@ -310,10 +389,15 @@ function seatProps(
   if (seat.kind === "cubby")
     return cubbySeatProps(state, { x: x, y: y }, foot, lod);
   const result: OfficeWorldDrawable[] = [
-    entry({ name: "desk-front" }, { x: x, y: y + 24 }, foot + 0.1, {
-      ownerAgentId: owner,
-      alpha: owner === null ? 0.45 : 1,
-    }),
+    entry(
+      { name: "desk-front" },
+      { x: x, y: y + DESK_FRONT_Y_OFFSET },
+      foot + 0.1,
+      {
+        ownerAgentId: owner,
+        alpha: owner === null ? OFFICE_UNCLAIMED_FURNITURE_ALPHA : 1,
+      },
+    ),
   ];
   if (owner === null) {
     // ONCE A STOREY, not once a desk: the storey nominates the seat that says
@@ -329,7 +413,18 @@ function seatProps(
           text: "reserve",
           ownerAgentId: null,
           x: x + 16,
-          y: y + 34,
+          // EXACTLY THE LINE A NAME TAG LANDS ON. The scene draws one at
+          // `foot + OFFICE_LABEL_GAP` (a character is `OFFICE_CHARACTER_HEIGHT`
+          // tall with its feet on `foot`), so an occupied desk in this same row
+          // already letters here - which is the whole reason the gap is shared
+          // rather than each painter picking its own number.
+          //
+          // `y + 34` put it across the desk's own front panel, where muted grey
+          // lettering over the wood read as a name with its bottom half missing
+          // (feedback round 1: "lower half of labels on some agents are cut
+          // out"). Nothing was clipping it; it was lettering with no floor
+          // behind it.
+          y: foot + OFFICE_LABEL_GAP,
           tone: "muted",
           // Nobody's name, so no seat to be fitted to.
           fitTiles: null,
@@ -341,10 +436,15 @@ function seatProps(
   }
   if (state.sheeted) {
     result.push(
-      entry({ name: "dust-sheet" }, { x: x, y: y + 24 }, foot + 0.2, {
-        ownerAgentId: owner,
-        alpha: 1,
-      }),
+      entry(
+        { name: "dust-sheet" },
+        { x: x, y: y + DESK_FRONT_Y_OFFSET },
+        foot + 0.2,
+        {
+          ownerAgentId: owner,
+          alpha: 1,
+        },
+      ),
       entry({ name: "box" }, { x: x + 16, y: y + 8 }, foot - 0.1, {
         ownerAgentId: owner,
         alpha: 1,
