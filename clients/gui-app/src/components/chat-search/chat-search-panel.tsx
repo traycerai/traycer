@@ -162,7 +162,10 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
     methodUnsupported,
     roleFilter,
   ]);
-  const baseKey = base === null ? "" : JSON.stringify(base);
+  // The host is part of the request's identity: a cursor is the answering
+  // host's, so a host switch under an unchanged query must reset paging and
+  // remount the results view like any other new request.
+  const baseKey = base === null ? "" : JSON.stringify([hostId, base]);
 
   const [paging, setPaging] = useState<Paging>({
     key: "",

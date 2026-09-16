@@ -58,9 +58,10 @@ const SEARCH_QUERY_OPTIONS = {
     error.code !== "E_HOST_UNSUPPORTED" &&
     error.code !== "E_INVALID_ARGUMENT" &&
     failureCount < 2,
-  // Typing changes the key on every debounced keystroke; holding the previous
-  // answer keeps the list from blanking between two of them.
-  placeholderData: (previous: ChatSearchResponse | undefined) => previous,
+  // No placeholderData: the status carries no request identity, so a held
+  // previous answer would read as THIS request's results, and a row from the
+  // old query could be opened under the new one. Between two debounced
+  // keystrokes the list shows loading instead.
   staleTime: 30_000,
 } as const;
 
