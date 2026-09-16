@@ -6,6 +6,8 @@ import type { Mock } from "vitest";
 import { log } from "../../app/logger";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { BrowserViewManager } from "../browser-view-manager";
+import { BrowserSessionsRegistry } from "../../browser-sessions/browser-sessions-owner";
+import { createRegistryHarness } from "../../browser-sessions/__tests__/browser-sessions-stream-fixture";
 import { MAX_BROWSER_VIEW_POPUPS } from "../manager/browser-view-popups";
 import type {
   BrowserViewCapturedImage,
@@ -657,6 +659,7 @@ interface Harness {
 }
 
 type HarnessOptions = {
+  readonly onRendererReset?: (windowId: string) => void;
   readonly hostPlatform?: "darwin" | "other";
   readonly requireLoadedTargetForPageCommands?: boolean;
   /** This desktop's local host id; tabs default to owner "host-1" (co-located). */
@@ -820,6 +823,7 @@ function createHarnessWithOptions(
     },
     notifyHostWindowRendererReset: (windowId) => {
       rendererResetWindowIds.push(windowId);
+      harnessOptions?.onRendererReset?.(windowId);
     },
     createPopupWindowOptions: () => ({ width: 900 }),
     createPopupWindow: (input) => {
@@ -2096,7 +2100,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.releasedRendererGuests.at(-1)).toBe(
       window2Ready.registrationId,
     );
-    expect(hostResetListenerCount(harness, "window-2")).toBe(0);
+    expect(hostResetListenerCount(harness, "window-2")).toBe(2);
   });
 
   it("joins a same-window duplicate mint into one in-flight incarnation", async () => {
@@ -2303,12 +2307,12 @@ describe("BrowserViewManager native tab lifecycle", () => {
       harness.windows
         .get("window-1")
         ?.webContents.listenerCount("did-start-navigation"),
-    ).toBe(0);
+    ).toBe(1);
     expect(
       harness.windows
         .get("window-2")
         ?.webContents.listenerCount("did-start-navigation"),
-    ).toBe(0);
+    ).toBe(1);
   });
 
   it("gives a re-ensure of a released identity a fresh incarnation, never the destroyed guest", async () => {
@@ -2848,6 +2852,61 @@ describe("BrowserViewManager host window renderer reset", () => {
     harness.emitWindowChange();
     expect(view.closeCalls).toBe(0);
     expect(harness.releasedRendererGuests).toEqual([]);
+  });
+
+  it("closes streams on reload after the window's last tile closes", async () => {
+    const streamHarness = createRegistryHarness();
+    const registry = new BrowserSessionsRegistry(streamHarness.deps);
+    const harness = createHarnessWithOptions({
+      onRendererReset: (windowId) => registry.closeWindow(windowId),
+    });
+    const key = {
+      scope: { kind: "epic", epicId: "epic-1" } as const,
+      hostId: "host-1",
+      identityKey: "identity-1",
+    };
+    try {
+      registry.open("window-1", key);
+      await Promise.resolve();
+      const { capability, view } = await attachNativeTab(
+        harness,
+        "window-1",
+        BASE_KEY,
+        "https://example.com",
+      );
+      expect(streamHarness.clients).toHaveLength(1);
+      await expect(harness.manager.releaseTab(capability)).resolves.toBe(true);
+      expect(view.closeCalls).toBe(1);
+      expect(streamHarness.closedTransports).toEqual([]);
+
+      emitHostReset(harness);
+      expect(streamHarness.closedTransports).toEqual([0]);
+      registry.open("window-1", key);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(streamHarness.clients).toHaveLength(2);
+    } finally {
+      registry.dispose();
+    }
+  });
+
+  it("disposes the reset listener when the window itself goes away", async () => {
+    const harness = createHarness();
+    await attachNativeTab(harness, "window-1", BASE_KEY, "https://example.com");
+    const webContents = harness.windows.get("window-1")?.webContents;
+    if (webContents === undefined) throw new Error("expected host window");
+    expect(
+      webContents.listenerCount("did-start-navigation") +
+        webContents.listenerCount("render-process-gone"),
+    ).toBeGreaterThan(0);
+
+    harness.windows.delete("window-1");
+    harness.emitWindowChange();
+
+    expect(
+      webContents.listenerCount("did-start-navigation") +
+        webContents.listenerCount("render-process-gone"),
+    ).toBe(0);
   });
 });
 

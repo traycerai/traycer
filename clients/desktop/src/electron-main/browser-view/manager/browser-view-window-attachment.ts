@@ -62,8 +62,9 @@ export class BrowserViewWindowAttachment {
    * reload or crash - a vite HMR full reload in dev, a renderer crash in
    * production. When that happens every tile attached to this window keeps
    * `desiredVisible: true` in this (main-process, reload-surviving) manager
-   * until the new renderer re-registers it. One listener per window, attached
-   * lazily the first time an entry attaches to it.
+   * until the new renderer re-registers it. Streams also belong to that
+   * renderer, even without a tile. One listener per window, retained until
+   * the window closes.
    */
   ensureResetListener(windowId: string): void {
     if (this.hostWindowResetListenersByWindowId.has(windowId)) return;
@@ -92,18 +93,18 @@ export class BrowserViewWindowAttachment {
     });
   }
 
-  detachResetListenerIfUnused(windowId: string): void {
-    const stillUsed = Array.from(this.entries.guestValues()).some(
-      (entry) =>
-        entry.surface?.windowId === windowId ||
-        entry.identity.lifecycleWindowId === windowId,
-    );
-    if (stillUsed) return;
+  private detachResetListener(windowId: string): void {
     const listeners = this.hostWindowResetListenersByWindowId.get(windowId);
     if (listeners === undefined) return;
     listeners.webContents.off("did-start-navigation", listeners.onNavigate);
     listeners.webContents.off("render-process-gone", listeners.onGone);
     this.hostWindowResetListenersByWindowId.delete(windowId);
+  }
+
+  dispose(): void {
+    for (const windowId of this.hostWindowResetListenersByWindowId.keys()) {
+      this.detachResetListener(windowId);
+    }
   }
 
   /**
@@ -112,6 +113,12 @@ export class BrowserViewWindowAttachment {
    * renderer guest stays in the persistent DOM host.
    */
   reconcileBoundWindows(): void {
+    for (const windowId of this.hostWindowResetListenersByWindowId.keys()) {
+      const window = this.getWindow(windowId);
+      if (window === null || window.isDestroyed()) {
+        this.detachResetListener(windowId);
+      }
+    }
     for (const entry of Array.from(this.entries.guestValues())) {
       const surface = entry.surface;
       if (

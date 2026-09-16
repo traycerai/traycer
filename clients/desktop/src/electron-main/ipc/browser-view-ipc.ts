@@ -715,10 +715,10 @@ export function registerBrowserViewIpc(
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSessionsOpen,
     (event, payload) => {
-      sessions.open(
-        readSenderWindowId(bridge, event),
-        browserViewIpcPayload.sessionsStreamKey.parse(payload),
-      );
+      const windowId = readSenderWindowId(bridge, event);
+      const key = browserViewIpcPayload.sessionsStreamKey.parse(payload);
+      manager.windows.ensureResetListener(windowId);
+      sessions.open(windowId, key);
     },
   );
 
