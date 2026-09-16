@@ -122,8 +122,9 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // trigger and the queued managed-command item took @1.11 above that.
     expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(11);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+    // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
-      2,
+      3,
     );
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
