@@ -324,6 +324,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
             <ChatSearchResultsView
               results={status.results}
               loadingMore={status.loadingMore}
+              loadMoreError={status.loadMoreError}
               messagesSearched={
                 debouncedQuery.length >= CHAT_SEARCH_BODY_MIN_QUERY_CHARS
               }

@@ -38,7 +38,18 @@ export type ChatSearchStatus =
       readonly results: ChatSearchMergedResults;
       /** A show-more page is in flight. */
       readonly loadingMore: boolean;
+      /**
+       * A show-more page that failed after its retries. The pages before it
+       * stay on screen; `retry` refetches just that page.
+       */
+      readonly loadMoreError: ChatSearchLoadMoreError | null;
     };
+
+export interface ChatSearchLoadMoreError {
+  readonly section: "chats" | "messages";
+  readonly message: string;
+  readonly retry: () => void;
+}
 
 const SEARCH_QUERY_OPTIONS = {
   // Neither refusal is transient: `E_HOST_UNSUPPORTED` is a host without the
@@ -125,12 +136,16 @@ export function useChatSearchResults(args: {
     options: SEARCH_QUERY_OPTIONS,
     combine: (results) => {
       if (base === null) return { kind: "idle" };
-      const failure = statusOf(results);
-      if (failure !== null) return failure;
       const [first, ...rest] = results;
+      // Only the first page decides the whole surface: a later page that
+      // failed keeps what is already loaded and reports beside its section.
+      const failure = statusOf([first]);
+      if (failure !== null) return failure;
       if (first.data === undefined) return { kind: "loading" };
       const moreChats = rest.slice(0, chatCursors.length);
       const moreMessages = rest.slice(chatCursors.length);
+      const failedIndex = rest.findIndex((result) => result.isError);
+      const failed = failedIndex === -1 ? undefined : rest[failedIndex];
       return {
         kind: "ready",
         results: mergeChatSearchPages({
@@ -138,7 +153,19 @@ export function useChatSearchResults(args: {
           moreChats: moreChats.map((result) => result.data),
           moreMessages: moreMessages.map((result) => result.data),
         }),
-        loadingMore: rest.some((result) => result.data === undefined),
+        loadingMore: rest.some(
+          (result) => result.data === undefined && !result.isError,
+        ),
+        loadMoreError:
+          failed === undefined || !failed.isError
+            ? null
+            : {
+                section: failedIndex < chatCursors.length ? "chats" : "messages",
+                message: failed.error.message,
+                retry: () => {
+                  void failed.refetch();
+                },
+              },
       };
     },
   });

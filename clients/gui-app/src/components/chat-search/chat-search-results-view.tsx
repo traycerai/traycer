@@ -23,6 +23,7 @@ import {
   highlightSegments,
   type ChatSearchMergedResults,
 } from "@/lib/chat-search/chat-search-results";
+import type { ChatSearchLoadMoreError } from "@/hooks/chats/use-chat-search-query";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,11 @@ export interface ChatSearchResultsViewProps {
   /** A show-more page is in flight; its button stays disabled. */
   readonly loadingMore: boolean;
   /**
+   * A show-more page that failed. Its section keeps the rows it has and shows
+   * the failure with a retry in place of the continuation it could not load.
+   */
+  readonly loadMoreError: ChatSearchLoadMoreError | null;
+  /**
    * The query is long enough for the host to search message text. Below that
    * only titles are searched, and an empty message section says nothing.
    */
@@ -62,6 +68,7 @@ export interface ChatSearchResultsViewProps {
 
 export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
   const {
+    loadMoreError,
     loadingMore,
     messagesSearched,
     onOpen,
@@ -89,9 +96,17 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
   // the requester cannot read comes back EMPTY with a cursor still set, and the
   // accessible match sits on the next page - so a section gated on rows alone
   // buries a reachable result permanently.
-  const chatsShown = chatMatches.length > 0 || results.chatNextCursor !== null;
+  const chatsError = loadMoreError?.section === "chats" ? loadMoreError : null;
+  const messagesError =
+    loadMoreError?.section === "messages" ? loadMoreError : null;
+  const chatsShown =
+    chatMatches.length > 0 ||
+    results.chatNextCursor !== null ||
+    chatsError !== null;
   const messagesShown =
-    messageMatches.length > 0 || results.messageNextCursor !== null;
+    messageMatches.length > 0 ||
+    results.messageNextCursor !== null ||
+    messagesError !== null;
   // The terminal answer, and only then: nothing on screen and nowhere left to
   // page to.
   const exhausted = !chatsShown && !messagesShown;
@@ -134,7 +149,9 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
             })}
           </ul>
           {chatMatches.length === 0 ? <EmptyPageNote /> : null}
-          {results.chatNextCursor !== null ? (
+          {chatsError !== null ? (
+            <LoadMoreFailure error={chatsError} />
+          ) : results.chatNextCursor !== null ? (
             <ShowMoreButton
               label="Show more chats"
               disabled={loadingMore}
@@ -174,7 +191,9 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
             })}
           </ul>
           {messageMatches.length === 0 ? <EmptyPageNote /> : null}
-          {results.messageNextCursor !== null ? (
+          {messagesError !== null ? (
+            <LoadMoreFailure error={messagesError} />
+          ) : results.messageNextCursor !== null ? (
             <ShowMoreButton
               label="Show more message matches"
               disabled={loadingMore}
@@ -369,6 +388,25 @@ function EmptyPageNote() {
     <p className="px-3 py-1 text-ui-xs text-muted-foreground">
       No matches on this page.
     </p>
+  );
+}
+
+/**
+ * A failed show-more page, in the place its continuation would sit: the rows
+ * above it stay, and the retry refetches only that page.
+ */
+function LoadMoreFailure(props: { readonly error: ChatSearchLoadMoreError }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-1 px-1.5 pt-0.5">
+      <p role="alert" className="px-1.5 text-ui-xs text-destructive">
+        {props.error.message}
+      </p>
+      <ShowMoreButton
+        label="Retry"
+        disabled={false}
+        onClick={props.error.retry}
+      />
+    </div>
   );
 }
 

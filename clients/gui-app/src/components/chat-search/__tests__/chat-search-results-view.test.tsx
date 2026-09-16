@@ -112,6 +112,7 @@ function renderView(
     <ChatSearchResultsView
       results={results({})}
       loadingMore={false}
+      loadMoreError={null}
       messagesSearched
       onOpen={onOpen}
       onShowMoreChats={onShowMoreChats}
@@ -330,6 +331,51 @@ describe("ChatSearchResultsView: show more", () => {
     expect(
       screen.queryByRole("button", { name: "Show more message matches" }),
     ).toBeNull();
+  });
+});
+
+describe("ChatSearchResultsView: a show-more page that failed", () => {
+  it("keeps the loaded chat rows, shows the failure in place of the continuation, and retries that page", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<() => void>();
+    renderView({
+      results: results({
+        chatMatches: [chatMatch({ chatId: "c1" })],
+        // The failed page is the last one, so it contributes no cursor.
+        chatNextCursor: null,
+      }),
+      loadMoreError: { section: "chats", message: "Host went away", retry },
+    });
+
+    expect(screen.getByText("title-c1")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe("Host went away");
+    expect(
+      screen.queryByRole("button", { name: "Show more chats" }),
+    ).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a failed message page under the message section and leaves the chat section alone", () => {
+    renderView({
+      results: results({
+        chatMatches: [chatMatch({ chatId: "c1" })],
+        chatNextCursor: "cursor-chats",
+        messageMatches: [messageMatch({ chatId: "c2" })],
+        messageNextCursor: null,
+      }),
+      loadMoreError: {
+        section: "messages",
+        message: "Host went away",
+        retry: () => {},
+      },
+    });
+
+    expect(screen.getByRole("button", { name: "Show more chats" })).toBeTruthy();
+    expect(
+      screen.getByRole("separator", { name: "Matches in messages" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe("Host went away");
   });
 });
 
