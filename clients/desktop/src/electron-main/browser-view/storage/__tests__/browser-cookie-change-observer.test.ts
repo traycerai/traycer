@@ -11,7 +11,7 @@ import {
   BrowserCookieChangeObserver,
   type BrowserCookieChangeSource,
 } from "../browser-cookie-change-observer";
-import { log } from "../../../app/logger";
+import { isDebugEnabled, log, sanitizeLogFields } from "../../../app/logger";
 import { browserStorageCookies } from "../browser-storage-state";
 import {
   makeCookie,
@@ -21,10 +21,16 @@ import {
 } from "./cookie-jar-fixture";
 
 vi.mock("../../../app/logger", () => ({
+  // Defaults to enabled: the existing witnessed-removal log assertions in
+  // this file depend on the diagnostic actually running.
+  isDebugEnabled: vi.fn(() => true),
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   // The real one, near enough for these assertions: what matters is that the
-  // trace passes its fields through a truncating redactor at all.
-  sanitizeLogFields: (fields: Record<string, unknown>) => fields,
+  // trace passes its fields through a truncating redactor at all. Wrapped in
+  // `vi.fn` (identical behaviour) so the S2 gate test can prove the witnessed-
+  // removal call's OWN sanitize is skipped, not merely that the log line
+  // never lands.
+  sanitizeLogFields: vi.fn((fields: Record<string, unknown>) => fields),
   describeLogError: (error: unknown) => String(error),
 }));
 
@@ -1049,6 +1055,40 @@ describe("BrowserCookieChangeObserver witnessed-removal event log (ticket 04 ins
       expect.anything(),
     );
 
+    observer.dispose();
+  });
+
+  it("never logs a witnessed removal, or sanitizes its fields, when the log level is below debug (S2)", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+    vi.mocked(sanitizeLogFields).mockClear();
+    // The witnessed-removal call's shape (`domain`, `name`, `path`, `cause`)
+    // is unique to it - the flush's own aggregate suppression trace sanitizes
+    // a `reason`/`removals` shape with no per-cookie `name` or `path`.
+    const isWitnessedRemovalSanitizeCall = (call: unknown[]): boolean => {
+      const [value] = call;
+      return (
+        typeof value === "object" &&
+        value !== null &&
+        "path" in (value as Record<string, unknown>)
+      );
+    };
+
+    vi.mocked(isDebugEnabled).mockReturnValueOnce(false);
+    source.remove(cookie);
+
+    expect(log.debug).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(sanitizeLogFields)
+        .mock.calls.filter(isWitnessedRemovalSanitizeCall),
+    ).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
     observer.dispose();
   });
 });
