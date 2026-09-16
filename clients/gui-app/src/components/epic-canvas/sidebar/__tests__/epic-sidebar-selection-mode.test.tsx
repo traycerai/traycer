@@ -2405,9 +2405,9 @@ describe("epic sidebar selection mode", () => {
     expect(row.contains(marker)).toBe(true);
     expect(marker.className).not.toContain("absolute");
     expect(marker.getAttribute("data-unread-marker")).toBe("self");
-    // Solid bar (exact token, not the muted `bg-blue-500/50` descendant class)
+    // Solid bar (exact token, not the muted `bg-info/50` descendant class)
     // for the artifact's own unread state.
-    expect(marker.classList.contains("bg-blue-500")).toBe(true);
+    expect(marker.classList.contains("bg-info")).toBe(true);
     // An expanded, read parent shows no marker (its child carries its own bar).
     expect(screen.queryByTestId("epic-sidebar-unread-spec-root")).toBeNull();
   });
@@ -2427,7 +2427,7 @@ describe("epic sidebar selection mode", () => {
     ).toBe(true);
     expect(marker.getAttribute("data-unread-marker")).toBe("descendant");
     // A muted (not full-opacity) bar distinguishes "contains unread" from "is unread".
-    expect(marker.className).toContain("bg-blue-500/50");
+    expect(marker.className).toContain("bg-info/50");
   });
 
   it("hides the descendant marker once the parent is expanded", () => {

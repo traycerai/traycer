@@ -140,7 +140,7 @@ export function WorkspaceFolderRows(props: {
                 data-testid="workspace-folder-rows-linking"
               >
                 <AgentSpinningDots
-                  className="size-4 shrink-0 text-current"
+                  className="size-4 shrink-0"
                   testId={undefined}
                   variant="dots"
                 />
@@ -235,8 +235,7 @@ export function AddFolderButton(props: {
     <Button
       type="button"
       size={props.iconOnly ? "icon-sm" : "sm"}
-      variant="ghost"
-      className="rounded-lg text-muted-foreground"
+      variant="muted"
       data-testid="folder-add"
       aria-label={props.iconOnly ? ADD_FOLDER_LABEL : undefined}
       disabled={buttonDisabled}
@@ -246,7 +245,7 @@ export function AddFolderButton(props: {
     >
       {props.pending ? (
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={undefined}
           variant="dots"
         />
@@ -319,7 +318,7 @@ function UpdateFoldersButton(props: {
     >
       {props.pending ? (
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={undefined}
           variant="dots"
         />

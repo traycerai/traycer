@@ -48,13 +48,15 @@ describe("<HistoryButton />", () => {
   it("shows as active on the /epics history route", async () => {
     const button = await renderHistoryButton("/epics");
 
-    expect(button.className).toContain("bg-accent");
+    // The active state is the `muted` variant's own `aria-expanded` styling,
+    // so the attribute is what carries it - the class is present either way.
+    expect(button.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("does not show as active on an epic detail route", async () => {
     const button = await renderHistoryButton("/epics/epic-1");
 
-    expect(button.className).not.toContain("bg-accent");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("shows the current History shortcut in its tooltip", async () => {

@@ -104,9 +104,10 @@ function PushPermissionControl(props: {
   if (kind === "loading") {
     return (
       <AgentSpinningDots
-        className="text-muted-foreground"
+        className={undefined}
         testId="push-permission-checking"
         variant={undefined}
+        tone="muted"
       />
     );
   }

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 
 interface TabChromeBackgroundProps {
@@ -22,18 +23,20 @@ export function TabChromeBackground({
       <span
         data-testid="tab-chrome-center"
         className={cn(
-          "-mx-px h-full flex-1",
-          borderColor && "border-t-[1.5px]",
+          "-mx-px h-full flex-1 bg-[var(--swatch)]",
+          borderColor && "border-t-[1.5px] border-t-[var(--swatch-border)]",
         )}
-        style={{ backgroundColor: fill, borderTopColor: borderColor }}
+        style={
+          { "--swatch": fill, "--swatch-border": borderColor } as CSSProperties
+        }
       />
       <TabCap side="right" fill={fill} borderColor={borderColor} />
       {coversBaseline ? (
         <span
           aria-hidden
           data-testid="tab-baseline-cover"
-          className="absolute inset-x-0 bottom-0 z-0 h-[1.5px]"
-          style={{ backgroundColor: fill }}
+          className="absolute inset-x-0 bottom-0 z-0 h-[1.5px] bg-[var(--swatch)]"
+          style={{ "--swatch": fill } as CSSProperties}
         />
       ) : null}
     </span>

@@ -75,11 +75,11 @@ export function SwitcherTerminalRowActions(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={`Actions for ${actions.label}`}
             data-testid={`switcher-more-${session.sessionId}`}
-            className="shrink-0 text-muted-foreground hover:text-foreground"
+            className="shrink-0"
           >
             <MoreHorizontal className="size-4" />
           </Button>

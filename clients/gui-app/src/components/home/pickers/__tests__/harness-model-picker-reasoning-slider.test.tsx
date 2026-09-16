@@ -353,7 +353,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       expect(thumb().getAttribute("data-size")).toBe("pill");
       // The pill's own height is a LOCAL override (h-4, slimmer than the
       // primitive's own h-9 pill default), merged on top via `cn()` -
-      // `tailwind-merge` strips the primitive's conflicting class.
+      // `cn` strips the primitive's conflicting class.
       expect(track().className).toContain("data-[size=pill]:h-4");
       expect(track().className).not.toContain("data-[size=pill]:h-9");
       expect(track().className).toContain("h-1");

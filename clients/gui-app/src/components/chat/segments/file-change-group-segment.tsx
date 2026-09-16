@@ -75,9 +75,7 @@ export function FileChangeGroupSegment(props: FileChangeGroupSegmentProps) {
       <span aria-hidden className="flex-1" />
       <span className="@max-[28rem]:hidden flex shrink-0 items-center gap-1.5 font-mono text-code-xs">
         {additions > 0 ? (
-          <span className="text-emerald-600 dark:text-emerald-400">
-            +{additions}
-          </span>
+          <span className="text-success-foreground">+{additions}</span>
         ) : null}
         {deletions > 0 ? (
           <span className="text-destructive">−{deletions}</span>

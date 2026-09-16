@@ -70,11 +70,12 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         // Header / scroller / Launch bar, under the shared height cap. The
         // picker's own body supplies the scroller and the bar; the cap is what
         // keeps the bar above a soft keyboard, since both mobile shells shrink
         // the layout viewport to make room for one.
-        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0"
+        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
         data-testid="mobile-epic-new-terminal-dialog"
         // With the search input focusing itself, Radix's own open-autofocus
         // would land on the first host row instead and take it away. With the
@@ -84,7 +85,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
           coarsePointer ? undefined : (event) => event.preventDefault()
         }
       >
-        <DialogHeader className="border-b border-border/60 px-4 py-3 pr-12">
+        <DialogHeader>
           <DialogTitle>New terminal</DialogTitle>
           <DialogDescription className="sr-only">
             Pick a host and folder for the new terminal.

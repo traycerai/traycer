@@ -643,7 +643,7 @@ function ManagedCommandOutputTileBody(props: {
             <div
               aria-hidden
               data-testid="managed-command-output-scrim"
-              className="pointer-events-none absolute inset-x-0 top-0 z-[5] h-13 bg-linear-to-b from-canvas/95 via-canvas/75 via-45% to-canvas/0"
+              className="pointer-events-none absolute inset-x-0 top-0 z-5 h-13 bg-linear-to-b from-canvas/95 via-canvas/75 via-45% to-canvas/0"
             />
             <ManagedCommandOutputControls
               command={command}
@@ -693,9 +693,10 @@ function ManagedCommandOutputTileBody(props: {
           {loadingOlder ? (
             <div className="flex justify-center py-1">
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId="managed-command-output-loading-older"
                 variant={undefined}
+                tone="muted"
               />
             </div>
           ) : null}
@@ -870,22 +871,18 @@ function ManagedCommandOutputDetails(props: {
         <PopoverTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon"
             aria-label="Shell details"
             data-testid="managed-command-output-details"
-            className="size-6 text-muted-foreground hover:text-foreground"
+            className="size-6"
           >
             <Info aria-hidden className="size-3.5" />
           </Button>
         </PopoverTrigger>
       </TooltipWrapper>
-      <PopoverContent
-        align="end"
-        side="bottom"
-        className="w-[min(90vw,26rem)] p-3 text-ui-xs"
-      >
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+      <PopoverContent align="end" side="bottom" className="w-[min(90vw,26rem)]">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-ui-xs">
           <DetailRow label="Command">
             {/* Wrapping, not truncated: a shell command is the one value here
                 worth reading in full, and it is the reason someone opened this.

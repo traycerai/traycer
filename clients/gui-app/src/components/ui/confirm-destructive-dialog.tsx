@@ -73,8 +73,9 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
   return (
     <Dialog open={open} onOpenChange={isPending ? undefined : onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
         data-testid="confirm-destructive-dialog"
         onOpenAutoFocus={() => {
           const active = document.activeElement;
@@ -119,10 +120,8 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
             <AlertTriangle className="size-4" aria-hidden />
           </div>
           <div className="min-w-0 flex-1 space-y-1.5">
-            <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-              {title}
-            </DialogTitle>
-            <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+            <DialogTitle className="wrap-anywhere">{title}</DialogTitle>
+            <DialogDescription className="wrap-anywhere">
               {description}
             </DialogDescription>
             {cascadeSummary !== null ? (

@@ -59,12 +59,9 @@ export function ManagedCommandOpenInTabButton(props: {
         ref={setNodeRef}
         {...listeners}
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon"
-        className={cn(
-          "size-6 text-muted-foreground hover:text-foreground",
-          isDraggable ? grabCursor : null,
-        )}
+        className={cn("size-6", isDraggable ? grabCursor : null)}
         aria-label="Open in tab"
         data-testid={props.testId}
         data-draggable={isDraggable ? "true" : "false"}

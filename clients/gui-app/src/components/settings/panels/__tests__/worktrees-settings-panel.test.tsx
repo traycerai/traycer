@@ -1276,7 +1276,11 @@ describe("WorktreesList delete flow", () => {
 
     const selectAll = screen.getByTestId("worktrees-select-all");
     expect(selectAll.hasAttribute("disabled")).toBe(false);
-    expect(selectAll.classList.contains("text-foreground")).toBe(true);
+    // The control no longer carries an explicit `text-foreground`: ticket 04's
+    // Button contract removed it, because `outline` already renders enabled
+    // text at full foreground and restating it was the restyle the rule bans.
+    // What this test is actually about survives as the negative - an enabled
+    // control must not read as muted.
     expect(selectAll.classList.contains("text-muted-foreground")).toBe(false);
   });
 

@@ -515,7 +515,7 @@ function BrowserTabOtherWindowNote(props: {
       >
         {moving ? (
           <AgentSpinningDots
-            className="text-current"
+            className={undefined}
             testId="browser-tab-show-here-spinner"
             variant={undefined}
           />

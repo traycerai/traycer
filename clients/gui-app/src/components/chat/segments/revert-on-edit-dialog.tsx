@@ -63,7 +63,8 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="w-full min-w-0 gap-0 overflow-hidden p-0"
+        layout="banded"
+        className="w-full min-w-0 overflow-hidden"
         style={{ maxWidth: "min(92vw, 34rem)" }}
         showCloseButton={false}
         data-testid="revert-on-edit-dialog"
@@ -77,10 +78,8 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
           onRevert(revertArtifacts);
         }}
       >
-        <DialogHeader className="space-y-1 px-6 pt-6 pb-2">
-          <DialogTitle className="text-base font-semibold">
-            Submit from a previous message?
-          </DialogTitle>
+        <DialogHeader className="space-y-1">
+          <DialogTitle>Submit from a previous message?</DialogTitle>
           <DialogDescription>
             Submitting from a previous message will revert file changes to
             before this message and clear the messages after this one.
@@ -101,7 +100,7 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
           </div>
         ) : null}
 
-        <DialogFooter className="mx-0 mb-0 mt-2 gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4">
+        <DialogFooter className="mt-2">
           <Button
             type="button"
             variant="ghost"

@@ -1022,7 +1022,7 @@ describe("<HostReadyGate />", () => {
       // Both conditions at once, which is a single-host account whose local
       // provision threw: readiness is `provisioning-error` (A's state) and the
       // authority has nothing effective (B's state). Before this was pinned the
-      // user saw the modal floating at z-[60] behind its blur over the gate's
+      // user saw the modal floating at z-60 behind its blur over the gate's
       // own centred card, each with its own copy and its own recovery actions -
       // the layering this epic exists to delete, rebuilt out of two deciders
       // that were each correct alone.

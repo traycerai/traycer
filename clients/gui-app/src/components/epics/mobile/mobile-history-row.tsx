@@ -54,7 +54,7 @@ import { cn } from "@/lib/utils";
  * lands its tint by zeroing `transition-duration` under `:active`, and an
  * inline duration would outrank it and stretch the press tint over the settle.
  */
-const SETTLE_CLASS = "transition-transform duration-[220ms]";
+const SETTLE_CLASS = "transition-transform duration-220";
 
 type TrayActionKind = "pin" | "rename" | "delete";
 

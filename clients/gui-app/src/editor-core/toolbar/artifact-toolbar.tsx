@@ -285,7 +285,7 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
       pluginKey={artifactToolbarPluginKey}
       options={bubbleMenuOptions}
       shouldShow={shouldShow}
-      style={{ zIndex: 40 }}
+      className="z-40"
     >
       <div
         ref={toolbarRef}

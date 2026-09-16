@@ -157,7 +157,8 @@ function UsageSettingsPanelBody(props: {
         <AgentSpinningDots
           testId={undefined}
           variant="orbit"
-          className="text-muted-foreground"
+          className={undefined}
+          tone="muted"
         />
         Loading usage…
       </div>

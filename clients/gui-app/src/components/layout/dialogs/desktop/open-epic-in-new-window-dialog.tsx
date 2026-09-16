@@ -186,7 +186,8 @@ function OpenEpicPickerBody(props: OpenEpicPickerBodyProps): ReactNode {
         <AgentSpinningDots
           testId={undefined}
           variant="orbit"
-          className="text-muted-foreground"
+          className={undefined}
+          tone="muted"
         />
         Loading Epics…
       </div>
@@ -242,8 +243,9 @@ function OpenEpicPickerBody(props: OpenEpicPickerBodyProps): ReactNode {
           {props.state.pagination.isFetchingNextPage ? (
             <AgentSpinningDots
               variant="dots"
-              className="text-muted-foreground"
+              className={undefined}
               testId={undefined}
+              tone="muted"
             />
           ) : null}
           Show more

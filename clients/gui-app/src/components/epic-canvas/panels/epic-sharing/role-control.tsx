@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { ChevronDown } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -26,18 +27,28 @@ export interface RoleDropdownProps {
   readonly onChange: (newRole: AssignableCollaboratorRole) => void;
   readonly disabled: boolean;
   readonly isPending: boolean;
+  /**
+   * The Button this control IS, chosen rather than painted. Both call sites
+   * used to pass a whole button treatment through `className` - a filled quiet
+   * pill in the collaborator row, a field-height outlined control in the invite
+   * form - which the restyle rule could not see until `className` moved to this
+   * component's parameter list.
+   */
+  readonly variant?: ComponentProps<typeof Button>["variant"];
+  readonly size?: ComponentProps<typeof Button>["size"];
   readonly className: string;
   readonly "aria-label": string;
   readonly "data-testid": string;
 }
 
-export function RoleDropdown(props: RoleDropdownProps) {
+export function RoleDropdown({ className, ...props }: RoleDropdownProps) {
   const {
     value,
     onChange,
     disabled,
     isPending,
-    className,
+    variant = "ghost",
+    size = "sm",
     "aria-label": ariaLabel,
     "data-testid": testId,
   } = props;
@@ -47,13 +58,10 @@ export function RoleDropdown(props: RoleDropdownProps) {
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
-          size="sm"
+          variant={variant}
+          size={size}
           disabled={disabled}
-          className={cn(
-            "justify-between gap-1.5 border-transparent text-ui-sm",
-            className,
-          )}
+          className={cn("justify-between", className)}
           aria-label={ariaLabel}
           data-testid={testId}
         >
@@ -62,9 +70,10 @@ export function RoleDropdown(props: RoleDropdownProps) {
           </span>
           {isPending ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId={`${testId}-spinner`}
               variant={undefined}
+              tone="muted"
             />
           ) : (
             <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
@@ -117,7 +126,8 @@ export function RoleOrBadge(props: {
       onChange={props.onChange}
       disabled={props.disabled}
       isPending={props.isPending}
-      className="min-w-24 justify-between rounded-md bg-foreground/8 px-2.5 py-1 text-ui-sm text-muted-foreground"
+      variant="muted"
+      className="min-w-24"
       aria-label={props.ariaLabel}
       data-testid={props.testId}
     />

@@ -101,7 +101,7 @@ function RecordingControls({
         <Button
           type="button"
           size="sm"
-          className="h-7 shrink-0 gap-1.5"
+          className="h-7 shrink-0"
           onClick={onStop}
           aria-label="Stop and insert transcript"
         >

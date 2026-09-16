@@ -189,12 +189,12 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
               {thread.comments.length === 1 ? "" : "s"}
             </span>
             {thread.resolved ? (
-              <Badge variant="secondary" className="h-4 px-1 text-overline">
+              <Badge variant="secondary" className="h-4" size="sm">
                 Resolved
               </Badge>
             ) : null}
             {hasAnchor ? null : (
-              <Badge variant="outline" className="h-4 px-1 text-overline">
+              <Badge variant="outline" className="h-4" size="sm">
                 Anchor missing
               </Badge>
             )}

@@ -838,7 +838,8 @@ function GitSnapshotErrorBanner(props: { readonly error: HostRpcError }) {
           source: "Git changes",
         })}
         presentation="icon"
-        className="-my-1 shrink-0 text-warning-foreground"
+        variant="warning-ghost"
+        className="-my-1 shrink-0"
       />
     </div>
   );
@@ -867,7 +868,8 @@ function GitModuleSearch(props: {
         clearLabel="Clear filter"
         closeLabel=""
         testIdPrefix="git-selected-repo-filter"
-        className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35"
+        variant="filter"
+        className="h-7"
       />
     </div>
   );
@@ -1113,8 +1115,8 @@ function GitModuleHeader(props: {
           </span>
           <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
             <Badge
-              variant="outline"
-              className="min-w-0 max-w-full shrink rounded-full px-1.5 font-normal text-muted-foreground"
+              variant="muted"
+              className="min-w-0 max-w-full shrink rounded-full"
             >
               {module.headKind === "branch" ? (
                 <GitBranch data-icon="inline-start" aria-hidden />

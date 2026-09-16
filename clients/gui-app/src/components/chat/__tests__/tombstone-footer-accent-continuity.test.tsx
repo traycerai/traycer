@@ -161,8 +161,8 @@ describe("tombstone footer: accent continuity", () => {
     const { container } = renderTombstoned("#ec4899");
     const dot = container.querySelector('span[aria-hidden="true"][style]');
     expect(dot).not.toBeNull();
-    expect((dot as HTMLElement).style.backgroundColor).toBe(
-      "rgb(236, 72, 153)",
+    expect((dot as HTMLElement).style.getPropertyValue("--swatch")).toBe(
+      "#ec4899",
     );
   });
 
@@ -171,12 +171,10 @@ describe("tombstone footer: accent continuity", () => {
     const dot = container.querySelector('span[aria-hidden="true"][style]');
     expect(dot).not.toBeNull();
     const expected = resolveProfileAccentColor("removed-uuid", null);
-    // Compare via a throwaway element so the expected hex and the rendered
-    // `rgb(...)` (jsdom normalizes inline color styles) agree on format.
-    const probe = document.createElement("span");
-    probe.style.backgroundColor = expected;
-    expect((dot as HTMLElement).style.backgroundColor).toBe(
-      probe.style.backgroundColor,
+    // A custom property is stored verbatim, so the hex compares directly - no
+    // probe element is needed to agree on a serialization any more.
+    expect((dot as HTMLElement).style.getPropertyValue("--swatch")).toBe(
+      expected,
     );
   });
 });

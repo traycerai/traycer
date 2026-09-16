@@ -289,9 +289,10 @@ describe("GitChangedFileRow panel density", () => {
     });
     expect(row.getAttribute("aria-current")).toBe("true");
     expect(row.className).toContain("bg-accent");
-    // Regression: tailwind-merge used to misread text-ui-sm as a color and
-    // drop it once text-accent-foreground joined the merge, so the active
-    // row rendered at the larger inherited font size.
+    // Regression: the class merger used to misread text-ui-sm as a color and
+    // drop it once text-accent-foreground joined the merge, so the active row
+    // rendered at the larger inherited font size. `cn` only classifies it
+    // because `cn.config.mjs` registers the `--text-*` tokens.
     expect(row.className).toContain("text-ui-sm");
     expect(row.className).toContain("text-accent-foreground");
   });
