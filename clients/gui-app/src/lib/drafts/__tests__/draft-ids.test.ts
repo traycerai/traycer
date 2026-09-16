@@ -17,9 +17,9 @@ describe("legacyComposerDraftId", () => {
     expect(LEGACY_COMPOSER_DRAFT_NAMESPACE).toBe(
       "848a7355-4280-4cfc-8bc6-f9d5aa3996cc",
     );
-    expect(
-      legacyComposerDraftId("7f1c1d2a-9b4e-4d8e-8f2a-3c5b6d7e8f90"),
-    ).toBe("de1163cc-8dfa-5d11-9ad0-a350cc095612");
+    expect(legacyComposerDraftId("7f1c1d2a-9b4e-4d8e-8f2a-3c5b6d7e8f90")).toBe(
+      "de1163cc-8dfa-5d11-9ad0-a350cc095612",
+    );
     expect(legacyComposerDraftId("legacy")).toBe(
       "390e0338-6a74-5629-adb7-073d3735e98d",
     );
