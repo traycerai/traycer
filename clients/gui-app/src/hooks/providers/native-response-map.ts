@@ -31,7 +31,7 @@ export type ProvidersMcpAuthWireResponse = ResponseOfMethod<
 /** Cached list shapes for tab consumers. */
 export type McpListData = {
   readonly servers: readonly ProviderMcpServer[];
-  /** A failed full-list refresh retained through single-server discovery. */
+  /** A failed full-list refresh retained when other responses update rows. */
   readonly refreshError: HostRpcError | null;
   /** Identifies complete responses even when their server rows are identical. */
   readonly completeListRevision: number | null;

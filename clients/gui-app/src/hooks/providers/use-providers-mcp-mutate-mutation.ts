@@ -104,17 +104,22 @@ export function useProvidersMcpMutate(): UseMutationResult<
         ctx.hostId,
         ctx.listParams,
       );
-      const current = queryClient.getQueryState<McpListData>(listKey);
+      const {
+        fetchStatus,
+        data: currentData,
+        dataUpdateCount,
+        errorUpdateCount,
+        error,
+      } = queryClient.getQueryState<McpListData, HostRpcError>(listKey) ?? {};
       if (
-        current?.fetchStatus === "fetching" ||
-        current?.data !== ctx.listState?.data ||
-        current?.dataUpdateCount !== ctx.listState?.dataUpdateCount ||
-        current?.errorUpdateCount !== ctx.listState?.errorUpdateCount
+        fetchStatus === "fetching" ||
+        currentData !== ctx.listState?.data ||
+        dataUpdateCount !== ctx.listState?.dataUpdateCount
       ) {
-        // A newer response/error or in-flight list supersedes this mutation's
+        // Newer data or an in-flight list supersedes this mutation's
         // snapshot. Reconcile through the existing list query, preserving its
         // error until that complete read succeeds.
-        if (current?.fetchStatus === "fetching") {
+        if (fetchStatus === "fetching") {
           // invalidateQueries alone reuses an initial fetch with no data;
           // this read must begin after the mutation has completed.
           await queryClient.cancelQueries({ queryKey: listKey, exact: true });
@@ -122,7 +127,13 @@ export function useProvidersMcpMutate(): UseMutationResult<
         await queryClient.invalidateQueries({ queryKey: listKey, exact: true });
         return;
       }
-      queryClient.setQueryData<McpListData>(listKey, data);
+      // A failed refresh supplies no newer rows. Apply the successful mutation
+      // while retaining an error that arrived after this mutation began.
+      const refreshError =
+        errorUpdateCount !== ctx.listState?.errorUpdateCount
+          ? (error ?? currentData?.refreshError ?? null)
+          : null;
+      queryClient.setQueryData<McpListData>(listKey, { ...data, refreshError });
     },
     onError: (error, variables) => {
       if (variables.suppressToast === true && isProviderNativeRpcError(error)) {
