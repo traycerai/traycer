@@ -1925,14 +1925,21 @@ function drawSignLabels(args: {
         signMaxChars(entry.sign.widthTiles),
       ).toUpperCase(),
       screenX,
-      // A LINE UNDER THE PLATE ABOVE, measured from where that plate actually
-      // landed rather than from `baseline` - the two agree for a wall sign and
-      // only the first is true for a floating one. No civic sign carries a
-      // claim today, so this is the trap rather than the bug: deriving it from
-      // `baseline` would sit the second plate back down in the room the first
-      // one was lifted out of, the day a floating sign ever has a subtext.
-      screenY:
-        screenY + (OFFICE_SIGN_FONT_PX + SIGN_PADDING_Y * 2) * camera.zoom,
+      // A LINE UNDER THE PLATE ABOVE, and BOTH halves of that are screen-space.
+      //
+      // Measured from where the first plate actually landed rather than from
+      // `baseline`: the two agree for a wall sign and only the first is true
+      // for a floating one, which would otherwise sit its claim back down in
+      // the room the name was lifted out of.
+      //
+      // And the line height is NOT multiplied by the camera. `drawSignLabels`
+      // runs under `setTransform(dpr, 0, 0, dpr, 0, 0)` - the zoom is out of
+      // the transform by then, because a plate magnified by the camera is a
+      // blur at 4x - so `signPlateBox` returns a plate a fixed fourteen pixels
+      // tall at every zoom. Stacking a fixed-height plate under another one
+      // takes a fixed offset: scaled, it left a 28px hole at close-up and
+      // overlapped the name it belongs to below 1x.
+      screenY: screenY + OFFICE_SIGN_FONT_PX + SIGN_PADDING_Y * 2,
       palette,
     });
   }
