@@ -81,7 +81,10 @@ export interface PanelSearchFieldCombobox {
   readonly activeOptionId: string | undefined;
 }
 
-export function PanelSearchField(props: {
+export function PanelSearchField({
+  className,
+  ...props
+}: {
   readonly value: string;
   readonly onValueChange: (value: string) => void;
   /**
@@ -111,6 +114,14 @@ export function PanelSearchField(props: {
    * search renders the one shared box.
    */
   readonly className: string;
+  /**
+   * Which `InputGroup` surface this field is. `search` is the resting box a
+   * panel puts in its own body; `filter` is the borderless one inside a panel
+   * HEADER, which the two git-diff views used to pass as four classes through
+   * `className` - invisible to the restyle rule until `className` moved to
+   * this parameter list.
+   */
+  readonly variant?: "search" | "filter";
 }) {
   const {
     value,
@@ -125,12 +136,12 @@ export function PanelSearchField(props: {
     clearLabel,
     closeLabel,
     testIdPrefix,
-    className,
+    variant = "search",
   } = props;
   const isMobileViewport = useIsMobileViewport();
   return (
     <InputGroup
-      variant="search"
+      variant={variant}
       className={cn(
         "w-full",
         isMobileViewport ? MOBILE_FIELD_CLASS : className,

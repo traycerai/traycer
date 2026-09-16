@@ -178,7 +178,7 @@ function PromotingSegmentRow(
   );
 }
 
-function ExpandableSegmentRow(props: SegmentRowProps) {
+function ExpandableSegmentRow({ className, ...props }: SegmentRowProps) {
   const {
     open,
     onOpenChange,
@@ -188,7 +188,6 @@ function ExpandableSegmentRow(props: SegmentRowProps) {
     stickyHeader,
     headerFindUnitId,
     bodyFindUnitId,
-    className,
   } = props;
   const { footer } = props;
   return (

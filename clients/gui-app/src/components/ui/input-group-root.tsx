@@ -19,6 +19,11 @@ const inputGroupVariants = cva(
       variant: {
         default: "",
         search: "rounded-lg border-input/40 bg-input/25",
+        // A filter box inside a panel HEADER: no border of its own, because
+        // the header already has one, and a fill that comes up on focus. Both
+        // git-diff views wrote this out character for character.
+        filter:
+          "border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35",
       },
     },
     defaultVariants: { variant: "default" },

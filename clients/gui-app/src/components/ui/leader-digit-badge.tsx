@@ -28,8 +28,13 @@ interface LeaderDigitBadgeProps {
  * the leader + digit shortcut. Shared by the epic tab strip and the
  * settings section sidebar.
  */
-export function LeaderDigitBadge(props: LeaderDigitBadgeProps) {
-  const { digit, modifier, ariaLabel, testId, className } = props;
+export function LeaderDigitBadge({
+  digit,
+  modifier,
+  ariaLabel,
+  testId,
+  className,
+}: LeaderDigitBadgeProps) {
   const symbol = leaderGlyph(modifier);
   return (
     <m.span

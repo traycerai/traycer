@@ -123,7 +123,9 @@ export function InviteCard(props: InviteCardProps) {
           onChange={onRoleChange}
           disabled={isPending}
           isPending={false}
-          className="h-9 min-w-0 rounded-md border border-input bg-background px-3"
+          variant="outline"
+          size="lg"
+          className="min-w-0"
           aria-label="Role for new invites"
           data-testid="invite-role-select"
         />

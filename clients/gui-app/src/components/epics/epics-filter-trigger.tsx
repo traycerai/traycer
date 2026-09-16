@@ -10,8 +10,11 @@ interface EpicsFilterTriggerProps extends ComponentPropsWithoutRef<
   readonly ref?: Ref<HTMLButtonElement>;
 }
 
-export function EpicsFilterTrigger(props: EpicsFilterTriggerProps) {
-  const { selectedCount, className, ...buttonProps } = props;
+export function EpicsFilterTrigger({
+  selectedCount,
+  className,
+  ...buttonProps
+}: EpicsFilterTriggerProps) {
   return (
     <Button
       type="button"

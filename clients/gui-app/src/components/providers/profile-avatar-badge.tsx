@@ -17,8 +17,14 @@ interface ProfileAvatarBadgeProps {
  * deterministic accent (`resolveProfileAccentColor`). Shared by the provider
  * picker rail and the chat profile-anchor display.
  */
-export function ProfileAvatarBadge(props: ProfileAvatarBadgeProps) {
-  const { profileId, label, email, accentColor, size, className } = props;
+export function ProfileAvatarBadge({
+  profileId,
+  label,
+  email,
+  accentColor,
+  size,
+  className,
+}: ProfileAvatarBadgeProps) {
   const color = resolveProfileAccentColor(profileId, accentColor);
   const initials = computeInitials(label, email ?? "");
   return (

@@ -25,8 +25,11 @@ export interface CommGraphOpenButtonProps {
   readonly className: string;
 }
 
-export function CommGraphOpenButton(props: CommGraphOpenButtonProps) {
-  const { className, disabled, epicId } = props;
+export function CommGraphOpenButton({
+  className,
+  disabled,
+  epicId,
+}: CommGraphOpenButtonProps) {
   const openGraph = useOpenCommunicationGraph(epicId);
 
   return (

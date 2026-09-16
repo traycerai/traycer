@@ -868,7 +868,8 @@ function GitModuleSearch(props: {
         clearLabel="Clear filter"
         closeLabel=""
         testIdPrefix="git-selected-repo-filter"
-        className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35"
+        variant="filter"
+        className="h-7"
       />
     </div>
   );

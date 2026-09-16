@@ -95,7 +95,7 @@ export function SegmentCard(props: SegmentCardProps) {
   return <ExpandableSegmentCard {...props} />;
 }
 
-function ExpandableSegmentCard(props: SegmentCardProps) {
+function ExpandableSegmentCard({ className, ...props }: SegmentCardProps) {
   const {
     open,
     onOpenChange,
@@ -108,7 +108,6 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
     bodyOverflow,
     headerFindUnitId,
     bodyFindUnitId,
-    className,
   } = props;
   return (
     <Collapsible
