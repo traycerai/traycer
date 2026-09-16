@@ -217,8 +217,9 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingFallback", () => 
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
 
-// `chatSubscribeV110` (minor 10) is the live line proven above; everything
-// below it is frozen and must only tolerate, never carry.
+// `chatSubscribeV110` (minor 10) is the line that introduced the DTO, proven
+// above - frozen since 1.11 took the shell host above it, but still carrying
+// it; everything below it must only tolerate, never carry.
 const RELEASED_MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .filter((minor) => minor < 10)

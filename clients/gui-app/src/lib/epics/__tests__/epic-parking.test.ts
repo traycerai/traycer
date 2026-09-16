@@ -794,6 +794,7 @@ function queuedManagedCommandItemFixture(
     kind: "managed-command",
     queueItemId,
     commandId: `command-${queueItemId}`,
+    hostId: null,
     description: "watch the build",
     monitoring: null,
     delivery: "next_turn",

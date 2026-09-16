@@ -53,10 +53,13 @@ describe("resume divider trigger", () => {
       summary: "exited with code 0",
       managedCommand: { commandId: "cmd-1", monitoring: true },
     });
-    // `commandId` is what a divider click opens the output window on.
+    // `commandId` is what a divider click opens the output window on; a
+    // trigger written before the shell's host was recorded opens on the
+    // chat's own host, which `null` names.
     expect(parsed.managedCommand).toEqual({
       commandId: "cmd-1",
       monitoring: true,
+      hostId: null,
     });
   });
 
@@ -74,6 +77,7 @@ describe("resume divider trigger", () => {
     expect(parsed.managedCommand).toEqual({
       commandId: "cmd-1",
       monitoring: false,
+      hostId: null,
     });
   });
 

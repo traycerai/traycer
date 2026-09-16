@@ -282,7 +282,11 @@ afterEach(() => {
 describe("queued-delivery chip", () => {
   it("names the shell whose output is waiting, monitoring or not", () => {
     renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" monitoring={false} />,
+      <ManagedCommandBadge
+        commandId="cmd-1"
+        monitoring={false}
+        hostId={null}
+      />,
     );
 
     expect(screen.getByTestId("queued-managed-command-badge").textContent).toBe(
@@ -294,7 +298,7 @@ describe("queued-delivery chip", () => {
     // The entity is known even when the flag is not, so only the glyph falls
     // back - the label never says "command".
     renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" monitoring={null} />,
+      <ManagedCommandBadge commandId="cmd-1" monitoring={null} hostId={null} />,
     );
 
     const badge = screen.getByTestId("queued-managed-command-badge");
@@ -304,7 +308,11 @@ describe("queued-delivery chip", () => {
 
   it("shows the monitor glyph rather than a terminal one", () => {
     renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" monitoring={false} />,
+      <ManagedCommandBadge
+        commandId="cmd-1"
+        monitoring={false}
+        hostId={null}
+      />,
     );
 
     const badge = screen.getByTestId("queued-managed-command-badge");
@@ -312,7 +320,9 @@ describe("queued-delivery chip", () => {
   });
 
   it("describes what is waiting in shell words, not 'background command'", () => {
-    renderInChatTile(<ManagedCommandBadge commandId="cmd-1" monitoring />);
+    renderInChatTile(
+      <ManagedCommandBadge commandId="cmd-1" monitoring hostId={null} />,
+    );
 
     fireEvent.focus(screen.getByTestId("queued-managed-command-badge"));
 
@@ -322,7 +332,9 @@ describe("queued-delivery chip", () => {
   });
 
   it("is a door into the shell's output window", () => {
-    renderInChatTile(<ManagedCommandBadge commandId="cmd-1" monitoring />);
+    renderInChatTile(
+      <ManagedCommandBadge commandId="cmd-1" monitoring hostId={null} />,
+    );
 
     fireEvent.click(screen.getByTestId("queued-managed-command-badge"));
 
@@ -338,7 +350,11 @@ describe("resume divider", () => {
           trigger({
             blockId: "block-live-shell",
             live: true,
-            managedCommand: { commandId: "cmd-2", monitoring: true },
+            managedCommand: {
+              commandId: "cmd-2",
+              monitoring: true,
+              hostId: null,
+            },
           }),
         ]}
       />,
@@ -372,12 +388,20 @@ describe("resume divider", () => {
           trigger({
             blockId: "block-quiet",
             status: "completed",
-            managedCommand: { commandId: "cmd-1", monitoring: false },
+            managedCommand: {
+              commandId: "cmd-1",
+              monitoring: false,
+              hostId: null,
+            },
           }),
           trigger({
             blockId: "block-watcher",
             status: "failed",
-            managedCommand: { commandId: "cmd-2", monitoring: true },
+            managedCommand: {
+              commandId: "cmd-2",
+              monitoring: true,
+              hostId: null,
+            },
           }),
         ]}
       />,
@@ -408,7 +432,11 @@ describe("resume divider", () => {
       <AutonomousResumeSegment
         triggers={[
           trigger({
-            managedCommand: { commandId: "cmd-1", monitoring: true },
+            managedCommand: {
+              commandId: "cmd-1",
+              monitoring: true,
+              hostId: null,
+            },
           }),
         ]}
       />,

@@ -5453,6 +5453,17 @@ export const epicSchemaSurfaceBaseline = {
                                               "monitoring": {
                                                 "default": false,
                                                 "type": "boolean"
+                                              },
+                                              "hostId": {
+                                                "default": null,
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
                                               }
                                             },
                                             "required": [
@@ -14280,11 +14291,23 @@ export const epicSchemaSurfaceBaseline = {
                                               "monitoring": {
                                                 "default": false,
                                                 "type": "boolean"
+                                              },
+                                              "hostId": {
+                                                "default": null,
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
                                               }
                                             },
                                             "required": [
                                               "commandId",
-                                              "monitoring"
+                                              "monitoring",
+                                              "hostId"
                                             ],
                                             "additionalProperties": false
                                           },

@@ -54,13 +54,13 @@ function supportsV17(negotiated: SchemaVersion | null): boolean {
 /**
  * The minor whose client frames re-bound the permission mode to the live enum.
  *
- * `1.11` is the first line whose CLIENT may say `auto`: `1.0`-`1.10` name
+ * `1.12` is the first line whose CLIENT may say `auto`: `1.0`-`1.11` name
  * `permissionModeSchemaPreAuto` on every frame that carries the mode, so a host
  * parsing one of those lines rejects the frame outright rather than ignoring an
  * unknown value. That is the whole difference from the `1.7` cliff above, where
  * the extra fields were strippable.
  */
-const CHAT_SUBSCRIBE_AUTO_MODE_MINOR = 11;
+const CHAT_SUBSCRIBE_AUTO_MODE_MINOR = 12;
 
 /**
  * Typed against the live enum on purpose: a rename of the mode breaks this
@@ -98,7 +98,7 @@ export function supportsAutoPermissionMode(
 /**
  * The minor a line must have negotiated to DRAW this event's transcript row.
  *
- * Zero for all but one: `auto-judge-unattended-denial`, which `1.11` added to
+ * Zero for all but one: `auto-judge-unattended-denial`, which `1.12` added to
  * `row-projection.ts`. Every other row kind predates the split and every
  * supported line can materialize it.
  *
@@ -261,7 +261,7 @@ export function supportsInterviewSettlementActions(
  *
  * TWO CLIFFS, and the second one is the case this comment used to only predict.
  * It said that the moment a line above `1.7` grew another client-frame field,
- * identity for every minor `>= 7` would become WRONG - and `1.11` is that line:
+ * identity for every minor `>= 7` would become WRONG - and `1.12` is that line:
  * it re-bound six frames to the live permission-mode enum, so a frame saying
  * `auto` rode out unchanged onto `1.7`-`1.10` and the host rejected the user's
  * send or settings update against its frozen pre-auto union.
@@ -277,7 +277,7 @@ export function supportsInterviewSettlementActions(
  * with nothing to see.
  *
  * `supportsInterviewSettlementActions` stays what it is - the `1.7` predicate -
- * rather than being widened to mean "current", and a third growth above `1.11`
+ * rather than being widened to mean "current", and a third growth above `1.12`
  * needs its own test here for the same reason.
  */
 export function projectChatClientFrameForVersion(
@@ -292,7 +292,7 @@ export function projectChatClientFrameForVersion(
     carriesAutoPermissionMode(frame)
   ) {
     throw new Error(
-      'permissionMode "auto" requires chat.subscribe@1.11 or newer',
+      'permissionMode "auto" requires chat.subscribe@1.12 or newer',
     );
   }
   if (supportsV17(negotiated)) return frame;

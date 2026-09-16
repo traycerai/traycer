@@ -117,6 +117,7 @@ describe("queueItemCanPauseFromQueueHeader", () => {
       kind: "managed-command",
       queueItemId: "queue-managed-1",
       commandId: "command-1",
+      hostId: null,
       description: "bun test --watch",
       monitoring: true,
       delivery: "next_turn",
