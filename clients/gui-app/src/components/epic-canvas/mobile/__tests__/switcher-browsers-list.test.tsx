@@ -344,6 +344,84 @@ describe("SwitcherBrowsersList", () => {
     ).toEqual([pendingInstanceId]);
   });
 
+  it("highlights the rebound row by host/session/tab once a pending add resolves onto it, even though the active tile's node id stays the pending one", async () => {
+    const onClose = vi.fn();
+    openTab.mockResolvedValue({
+      sessionId: "sess-1",
+      tabId: "tab-1",
+      handoffToken: null,
+    });
+    // The same session/tab on another host must stay inactive.
+    replaceSessions(
+      [
+        ...sessionsState.value.items,
+        session({
+          sessionId: "sess-1",
+          hostId: "host-2",
+          profile: "primary",
+          tabs: [
+            tab({
+              tabId: "tab-1",
+              url: "https://shop.example/cart",
+              title: "Other host cart",
+            }),
+          ],
+        }),
+      ],
+      "live",
+    );
+    renderList(onClose);
+
+    const cartRow = screen.getByRole("button", { name: /^Cart/ });
+    const otherHostRow = screen.getByRole("button", {
+      name: /^Other host cart/,
+    });
+    expect(cartRow.getAttribute("aria-current")).toBeNull();
+    expect(otherHostRow.getAttribute("aria-current")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
+
+    expect(openTiles()).toMatchObject([
+      { type: "browser-session", sessionId: null, tabId: null },
+    ]);
+
+    const pendingInstanceId = Object.keys(
+      useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.tilesByInstanceId ??
+        {},
+    ).at(0);
+
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    });
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    expect(
+      Object.keys(
+        useEpicCanvasStore.getState().canvasByTabId[TAB_ID]
+          ?.tilesByInstanceId ?? {},
+      ),
+    ).toEqual([pendingInstanceId]);
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: /^Cart/ })
+          .getAttribute("aria-current"),
+      ).toBe("true");
+    });
+    expect(
+      screen
+        .getByRole("button", { name: /^Other host cart/ })
+        .getAttribute("aria-current"),
+    ).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: /^Guide/ })
+        .getAttribute("aria-current"),
+    ).toBeNull();
+  });
+
   it("opens one browser for two taps while the host is still answering", async () => {
     const user = userEvent.setup();
     // A request that never settles is the whole of the window this guards: on a

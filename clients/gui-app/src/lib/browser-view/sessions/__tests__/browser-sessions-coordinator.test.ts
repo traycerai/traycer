@@ -1121,7 +1121,7 @@ describe("browser sessions coordinator registry", () => {
       };
     }
 
-    it("sends no frame at all until send() is called", () => {
+    it("sends no frame at all until send() is called", async () => {
       const harness = createTransportHarness();
       const { key } = acquire({
         scope: independentScope(),
@@ -1141,11 +1141,28 @@ describe("browser sessions coordinator registry", () => {
       );
       expect(request.requestedUrl).toBe("https://example.com");
 
-      // This test only cares that the frame went out, not how the request
-      // eventually settles - no `openTabResult` is emitted here, so the
-      // promise is deliberately left unresolved.
-      void request.send();
-      expect(sentFrameOfKind(session, "openTab")).toBeDefined();
+      const sendPromise = request.send();
+      const sentFrame = sentFrameOfKind(session, "openTab");
+      expect(sentFrame).toBeDefined();
+
+      session.emit(
+        {
+          kind: "openTabResult",
+          hasBinaryPayload: false,
+          requestId: requestIdOf(sentFrame),
+          result: {
+            ok: true,
+            sessionId: "session-1",
+            tabId: "tab-1",
+            handoffToken: null,
+          },
+        },
+        null,
+      );
+      await expect(sendPromise).resolves.toMatchObject({
+        sessionId: "session-1",
+        tabId: "tab-1",
+      });
     });
 
     it("rebinds the presentation once the host answers", async () => {
@@ -1328,7 +1345,7 @@ describe("browser sessions coordinator registry", () => {
       ).toHaveLength(1);
     });
 
-    it("calling send() twice sends only one frame and returns the same promise", () => {
+    it("calling send() twice sends only one frame and returns the same promise", async () => {
       const harness = createTransportHarness();
       const { key } = acquire({
         scope: independentScope(),
@@ -1346,9 +1363,29 @@ describe("browser sessions coordinator registry", () => {
       const second = request.send();
 
       expect(second).toBe(first);
-      expect(
-        session.sentFrames.filter((frame) => frame.kind === "openTab"),
-      ).toHaveLength(1);
+      const sentFrames = session.sentFrames.filter(
+        (frame) => frame.kind === "openTab",
+      );
+      expect(sentFrames).toHaveLength(1);
+
+      session.emit(
+        {
+          kind: "openTabResult",
+          hasBinaryPayload: false,
+          requestId: requestIdOf(sentFrames[0] ?? {}),
+          result: {
+            ok: true,
+            sessionId: "session-1",
+            tabId: "tab-1",
+            handoffToken: null,
+          },
+        },
+        null,
+      );
+      await expect(first).resolves.toMatchObject({
+        sessionId: "session-1",
+        tabId: "tab-1",
+      });
     });
 
     it("correlates two same-URL requests by requestId alone - never by URL, and an inventory frame in between changes nothing", async () => {
