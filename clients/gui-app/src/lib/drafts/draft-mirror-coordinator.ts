@@ -21,6 +21,7 @@ import {
 import { draftKindIsHostBound } from "./draft-portability";
 import {
   forgetCloudDraftPayloadUnsupportedHost,
+  rebindCloudDraftImageClientForHost,
   recoverCloudDraftImages,
   resetCloudDraftImageRecoveryForTests,
 } from "./cloud-draft-image-recovery";
@@ -976,6 +977,12 @@ export function acquireDraftMirrorSession(
   });
   sessions.set(args.hostId, { session, refCount: 1 });
   sessionClients.set(args.hostId, args.client);
+  // Every cloud address remembered for this host names the requester of the
+  // mirror that ingested it, and that mirror has just been replaced. The
+  // ingest hook will not re-record them - an already-applied head stays in its
+  // `ingested` set - so without this the registry keeps a closed requester
+  // until a new head arrives or the tree remounts.
+  rebindCloudDraftImageClientForHost(args.hostId, args.client);
   session.start();
   return session;
 }

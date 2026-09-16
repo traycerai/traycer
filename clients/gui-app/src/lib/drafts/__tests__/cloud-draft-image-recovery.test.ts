@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
@@ -15,6 +16,30 @@ import {
   resetCloudDraftImageRecoveryForTests,
 } from "@/lib/drafts/cloud-draft-image-recovery";
 import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
+
+// Passthrough by default; one test below wraps `putImageBytesAtHash` so an
+// account switch can land INSIDE the write, which is the only way to reach the
+// post-write identity fence. Same shape the pending-ingest suite uses.
+const landingImageStoreMocks = vi.hoisted(() => ({
+  putImageBytesAtHash:
+    vi.fn<(hash: string, bytes: ImageBytes) => Promise<boolean>>(),
+  actualPutImageBytesAtHash: null as
+    | ((hash: string, bytes: ImageBytes) => Promise<boolean>)
+    | null,
+}));
+
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
+  landingImageStoreMocks.actualPutImageBytesAtHash = actual.putImageBytesAtHash;
+  landingImageStoreMocks.putImageBytesAtHash.mockImplementation(
+    actual.putImageBytesAtHash,
+  );
+  return {
+    ...actual,
+    putImageBytesAtHash: landingImageStoreMocks.putImageBytesAtHash,
+  };
+});
 
 const IDENTITY: CloudChatIdentity = {
   taskId: "scp_1",
@@ -740,5 +765,41 @@ describe("cloud-draft-image-recovery", () => {
     // before the good address was reached.
     expect(swept.calls).toHaveLength(1);
     expect(good.calls).toHaveLength(1);
+  });
+  it("an identity change DURING the write retires the bytes (DRIVE RED)", async () => {
+    // `putImageBytesAtHash` is itself async - a SHA-256 digest, then IndexedDB -
+    // and it seeds the window-global session cache on the way. A check before
+    // it is not the commit point, so a switch landing inside those awaits put
+    // account A's bytes into the partition account B is now using, and rooted
+    // them there through the session entry.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    useAuthStore.setState({ status: "signed-in" });
+
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+
+    const passthrough = landingImageStoreMocks.actualPutImageBytesAtHash;
+    if (passthrough === null) throw new Error("no passthrough captured");
+    landingImageStoreMocks.putImageBytesAtHash.mockImplementationOnce(
+      async (writtenHash, writtenBytes) => {
+        const stored = await passthrough(writtenHash, writtenBytes);
+        // The switch lands after the bytes are durable and before the caller
+        // is answered - the window the pre-write check cannot see.
+        useAuthStore.setState(useAuthStore.getInitialState(), true);
+        return stored;
+      },
+    );
+
+    const result = await readCloudDraftImageBytes(hash);
+
+    // Nothing is handed back, and nothing is left behind.
+    expect(result).toBeNull();
+    expect(await getImageBytes(hash)).toBeUndefined();
   });
 });

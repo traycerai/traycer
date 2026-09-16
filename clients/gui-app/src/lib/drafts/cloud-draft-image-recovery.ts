@@ -68,8 +68,10 @@ import {
 import { base64ToBytes } from "@/lib/composer/image-base64";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import {
+  deleteImage,
   getImageBytes,
   putImageBytesAtHash,
+  releaseSession,
 } from "@/lib/composer/landing-image-store";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
@@ -147,7 +149,13 @@ interface CloudDraftImageSource {
 const CLOUD_DRAFT_IMAGE_SOURCES_PER_HASH = 3;
 
 const sourcesByHash = new Map<string, CloudDraftImageSource[]>();
-const inFlightByHash = new Map<string, Promise<ImageBytes | null>>();
+interface CloudDraftImageFlight {
+  /** The account that started it. A later owner never joins another's. */
+  readonly owner: string | null;
+  readonly work: Promise<ImageBytes | null>;
+}
+
+const inFlightByHash = new Map<string, CloudDraftImageFlight>();
 /** Hosts that answered `E_HOST_UNSUPPORTED`: never re-probed per image. */
 const payloadUnsupportedHosts = new Set<string>();
 
@@ -187,6 +195,44 @@ export function resetCloudDraftImageRecoveryForTests(): void {
  * different method families and a host can perfectly well have one and not the
  * other.
  */
+/**
+ * Re-point every remembered address on `hostId` at a new requester.
+ *
+ * A recorded source captures the requester of the mirror that ingested the
+ * draft, and a mirror is acquired and released as tiles mount - so when a host
+ * gets a new session, every address still naming the CLOSED requester is dead.
+ *
+ * The ingest hook cannot repair that on its own: `useCloudDraftsIngest` keeps
+ * an already-applied head in its `ingested` set, so a client change does not
+ * re-run the ingest for it and the registry keeps the closed requester until a
+ * new head arrives or the tree remounts. Both the eager pass and later lazy
+ * reads stay unavailable in between.
+ *
+ * Fresh records deliberately: the record object is the attempt identity in
+ * `readAndStoreFromAnyCloudSource`, so re-pointing makes a walk that already
+ * tried the dead requester dispatch against the live one - which is exactly
+ * what should happen here, and the same reason a genuinely replaced client is
+ * not deduped in `recordCloudDraftImageSources`.
+ */
+export function rebindCloudDraftImageClientForHost(
+  hostId: string,
+  client: DraftBlobClient,
+): void {
+  const stale = (source: CloudDraftImageSource): boolean =>
+    source.hostId === hostId && source.client !== client;
+  for (const [hash, sources] of sourcesByHash) {
+    if (!sources.some(stale)) continue;
+    sourcesByHash.set(
+      hash,
+      sources.map((source) =>
+        stale(source)
+          ? { identity: source.identity, hostId: source.hostId, client }
+          : source,
+      ),
+    );
+  }
+}
+
 export function forgetCloudDraftPayloadUnsupportedHost(hostId: string): void {
   payloadCapabilityEpochs.set(hostId, payloadCapabilityEpochOf(hostId) + 1);
   payloadUnsupportedHosts.delete(hostId);
@@ -406,15 +452,24 @@ async function hasLocalImageBytes(hash: string): Promise<boolean> {
  * transfers, which is the only place a bound on concurrent work can mean
  * anything.
  *
- * Keyed by hash alone, not by source. Two drafts can name one digest and the
- * bytes are the same by construction, so joining is correct - and the transfer
- * walks EVERY address recorded for the digest, so a joiner no longer inherits
- * one draft's bad luck: a chat whose blob was never published or has been swept
- * is a miss on that candidate, not on the hash.
+ * Keyed by hash and OWNER, not by source. Two drafts can name one digest and
+ * the bytes are the same by construction, so joining is correct within one
+ * account - and the transfer walks EVERY address recorded for the digest, so a
+ * joiner no longer inherits one draft's bad luck: a chat whose blob was never
+ * published or has been swept is a miss on that candidate, not on the hash.
+ *
+ * Across accounts it is not correct, and the write fence does not cover it.
+ * That fence makes the OLD account's result inert; it does nothing about the
+ * new account JOINING it. A stalled flight from account A lives up to the 60 s
+ * transfer cap while B's caller waits 10 s, so B reports the image missing and
+ * blocks a submit with its own perfectly good source never dispatched. So a
+ * flight belongs to the account that started it, and a different owner starts
+ * its own.
  */
 function transferFor(hash: string): Promise<ImageBytes | null> {
+  const owner = currentDraftBlobOwnerId();
   const existing = inFlightByHash.get(hash);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined && existing.owner === owner) return existing.work;
   // The transfer's OWN cap, and the reason it is not the caller's: a caller
   // gives up to keep a submit moving, while this exists only so a wedged socket
   // or a blocked IndexedDB cannot park an eager worker - and with it the ingest
@@ -433,9 +488,14 @@ function transferFor(hash: string): Promise<ImageBytes | null> {
       return null;
     })
     .finally(() => {
+      // Identity-checked: a flight started under a later owner may already own
+      // the slot, and deleting by key alone would evict that one - leaving the
+      // next ask to start a third. Same rule the blob transport's upload
+      // cleanup follows.
+      if (inFlightByHash.get(hash)?.work !== transfer) return;
       inFlightByHash.delete(hash);
     });
-  inFlightByHash.set(hash, transfer);
+  inFlightByHash.set(hash, { owner, work: transfer });
   return transfer;
 }
 
@@ -480,6 +540,45 @@ async function awaitTransferBounded(hash: string): Promise<ImageBytes | null> {
  * hash-only and the host's guard at send is the authority.
  */
 const MAX_CLOUD_SOURCE_ATTEMPTS = CLOUD_DRAFT_IMAGE_SOURCES_PER_HASH * 2;
+
+/**
+ * Is this window still serving the account a read was dispatched for?
+ *
+ * BOTH halves, and the second is not redundant: a signed-out window has no
+ * `contextMetadata`, so its owner id is `null` - and if the read started before
+ * any identity was established, `owner` is `null` too and the comparison alone
+ * sees nothing. Sign-out is the case this fence is most for, so it is asked
+ * directly rather than inferred from the id.
+ */
+function stillServingIdentity(owner: string | null): boolean {
+  return (
+    currentDraftBlobOwnerId() === owner &&
+    authorizesCloudCapability(useAuthStore.getState().status)
+  );
+}
+
+/**
+ * Undo a write that landed under a different account than the one that asked.
+ *
+ * Only when nothing live names the digest: content addressing means the new
+ * account may legitimately hold the same image, and deleting it then would take
+ * away bytes that are properly theirs. The session entry goes first because it
+ * is itself a GC root - leaving it would keep the bytes reachable even after
+ * the durable delete, and re-seed presence on the next enumeration.
+ */
+async function retireCrossedWrite(hash: string): Promise<void> {
+  appLogger.warn("[cloud-draft-image] identity changed during the write", {
+    hash,
+  });
+  if (landingLiveImageRootHashes().has(hash)) return;
+  releaseSession(hash);
+  await deleteImage(hash).catch((error: unknown) => {
+    appLogger.warn("[cloud-draft-image] could not retire a crossed write", {
+      hash,
+      error: describeLogError(error),
+    });
+  });
+}
 
 async function readAndStoreFromAnyCloudSource(
   hash: string,
@@ -570,6 +669,21 @@ async function readAndStoreCloudDraftImage(
     // never handed to a caller either.
     if (!(await putImageBytesAtHash(hash, bytes))) {
       appLogger.warn("[cloud-draft-image] blob digest mismatch", { hash });
+      return null;
+    }
+    // And AGAIN, after the write. The check above is not the commit point:
+    // `putImageBytesAtHash` awaits a SHA-256 digest and then IndexedDB, and it
+    // seeds the window-global session cache on the way - so a switch landing
+    // inside those awaits puts account A's bytes in account B's partition and
+    // roots them there through the session entry. A check before the last await
+    // you can see is one layer too shallow; this is the layer.
+    //
+    // Retired rather than merely disowned, and only when nothing live names the
+    // digest: content addressing means the new account may legitimately hold
+    // the same image, and deleting it then would take away bytes that are
+    // properly theirs.
+    if (!stillServingIdentity(owner)) {
+      await retireCrossedWrite(hash);
       return null;
     }
     return bytes;
