@@ -1061,7 +1061,7 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
-  it("surfaces a toast and aborts the send when the IndexedDB read rejects", async () => {
+  it("a rejected IndexedDB read falls through to the other legs and still aborts audibly", async () => {
     setSingleWorkspace();
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
     imageStoreMocks.getImageBytes.mockRejectedValue(
@@ -1086,12 +1086,22 @@ describe("useLandingComposerActions", () => {
       });
     });
 
-    // The rejected read is caught (no unhandled rejection) and surfaced; without
-    // the `.catch` the toast never fires and the failure is silent.
+    // Submission resolves through the THREE-LEG resolver now, not the partition
+    // alone, and that resolver CONTAINS an IndexedDB fault by design: a broken
+    // local store is precisely when the host and cloud legs matter. So a
+    // rejected read no longer aborts on the spot with a storage message - it
+    // becomes a leg-1 miss, the other two are tried, and the create is refused
+    // only when all three come back empty.
+    //
+    // What this test has always guaranteed is unchanged and is what it still
+    // asserts: the failure is NOT silent, and no epic is created behind it.
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Couldn't attach an image.", {
-        description: "Image storage is unavailable. Please try again.",
-      });
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't attach an image.",
+        expect.objectContaining({
+          description: "Re-add the image and try sending again.",
+        }),
+      );
     });
     expect(landingMocks.navigate).not.toHaveBeenCalled();
     expect(

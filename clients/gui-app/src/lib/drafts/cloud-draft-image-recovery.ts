@@ -76,6 +76,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { currentDraftBlobOwnerId } from "./draft-blob-transport";
 
 import type { DraftBlobClient } from "./draft-blob-transport";
 
@@ -220,13 +221,30 @@ export function recordCloudDraftImageSources(
     // the hash to the back of the eviction order (delete-then-set on the outer
     // map), which is the freshness signal the doc above describes; what it no
     // longer does is discard the address a previous draft published under.
-    const kept = (sourcesByHash.get(hash) ?? []).filter(
-      (candidate) => !sameCloudDraftImageSource(candidate, source),
+    const existing = sourcesByHash.get(hash) ?? [];
+    // The record OBJECT is the attempt identity in `readAndStoreFromAnyCloudSource`,
+    // so minting a fresh one for an UNCHANGED address makes an in-flight walk
+    // treat it as untried and repeat the request it is already waiting on -
+    // ahead of the older addresses that might actually answer, and against the
+    // attempt cap and the caller's 10 s deadline. Two `useCloudDraftsIngest`
+    // instances on one host ingest the same head with the coordinator's shared
+    // requester, so this is the ordinary case, not a corner.
+    //
+    // Reused only when the requester is the same OBJECT too: a replaced client
+    // is exactly the case a re-dispatch is for.
+    const unchanged = existing.find(
+      (candidate) =>
+        sameCloudDraftImageSource(candidate, source) &&
+        candidate.client === source.client,
+    );
+    const head = unchanged ?? source;
+    const kept = existing.filter(
+      (candidate) => !sameCloudDraftImageSource(candidate, head),
     );
     sourcesByHash.delete(hash);
     sourcesByHash.set(
       hash,
-      [source, ...kept].slice(0, CLOUD_DRAFT_IMAGE_SOURCES_PER_HASH),
+      [head, ...kept].slice(0, CLOUD_DRAFT_IMAGE_SOURCES_PER_HASH),
     );
   }
   evictUnrootedOverflow();
@@ -502,6 +520,15 @@ async function readAndStoreCloudDraftImage(
   // cloud, and a session demoted in between must not spend the retained host
   // credential. Same rule `createHostCloudChatReadPort` applies per call.
   if (!authorizesCloudCapability(useAuthStore.getState().status)) return null;
+  // The ACCOUNT this read is made for, captured at dispatch. The request is not
+  // cancellable, so a sign-out or user switch while it is on the wire cannot
+  // stop it - and the landing-image store it writes into is window-global and
+  // NOT account-partitioned, with its session entries acting as GC roots. So a
+  // late response would land account A's image in the partition account B is
+  // now using, and root it there. Same boundary the prompt-stash handoff
+  // fences, and for the same reason: "is this still the identity that asked?"
+  // has to be answered where the WRITE happens, not only before the request.
+  const owner = currentDraftBlobOwnerId();
   try {
     const response = await source.client.request("epic.readCloudChatPayload", {
       ...source.identity,
@@ -521,6 +548,22 @@ async function readAndStoreCloudDraftImage(
     const bytes = base64ToBytes(outcome.bytesBase64);
     if (bytes === null) return null;
     if (bytes.byteLength !== outcome.byteLength) return null;
+    // Re-checked immediately before the write, against the identity captured
+    // at dispatch. Both halves matter: a signed-out window must not write at
+    // all, and a window that has moved to another account must not write THIS
+    // account's bytes.
+    if (
+      !authorizesCloudCapability(useAuthStore.getState().status) ||
+      currentDraftBlobOwnerId() !== owner
+    ) {
+      appLogger.warn(
+        "[cloud-draft-image] payload arrived after an identity change",
+        {
+          hash,
+        },
+      );
+      return null;
+    }
     // The verification, and the store, in one step. `putImageBytesAtHash`
     // hashes and refuses a mismatch, so bytes that are not the ones this hash
     // names are never written - and, because the return is gated on the write,

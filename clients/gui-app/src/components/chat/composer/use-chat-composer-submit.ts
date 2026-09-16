@@ -787,6 +787,14 @@ export function useChatComposerSubmit(
           { taskId },
           error,
         );
+        // The draft is kept - `onSettled` has already cleared the pending flag
+        // - but kept is not the same as EXPLAINED. Without this the user
+        // presses Send, waits out the preparation, and sees nothing happen at
+        // all. The new-conversation sibling raises its own notice for exactly
+        // this; this surface has no notice channel, so it toasts.
+        toast.error("Couldn't prepare the images in this message.", {
+          description: "The draft has been kept - try sending again.",
+        });
       });
     },
     [

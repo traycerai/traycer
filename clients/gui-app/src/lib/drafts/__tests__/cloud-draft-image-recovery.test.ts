@@ -683,4 +683,62 @@ describe("cloud-draft-image-recovery", () => {
     expect(await reading).toEqual(bytes);
     expect(fresh.calls).toHaveLength(1);
   });
+  it("re-recording an UNCHANGED source does not make an in-flight walk retry it (DRIVE RED)", async () => {
+    // The record object is the attempt identity, so minting a fresh one for an
+    // address that has not changed makes a running walk treat it as untried and
+    // repeat the request it is already waiting on - ahead of the older address
+    // that can actually answer, and against the attempt cap. Two ingest
+    // instances on one host share the coordinator's requester, so this is the
+    // ordinary case.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseSwept: () => void = () => undefined;
+    const sweptGate = new Promise<void>((resolve) => {
+      releaseSwept = resolve;
+    });
+    const swept = recordingClient(async (_method, _params) => {
+      await sweptGate;
+      return { outcome: { status: "unavailable" as const } };
+    });
+    const good = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+
+    // The GOOD address first, then the one that will miss - so the miss is the
+    // head and the good one is the fallback behind it.
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-good" },
+      hostId: "host-a",
+      client: good.client,
+      hashes: [hash],
+    });
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-swept" },
+      hostId: "host-a",
+      client: swept.client,
+      hashes: [hash],
+    });
+    const reading = readCloudDraftImageBytes(hash);
+
+    // A sibling ingest re-records the SAME head with the SAME requester while
+    // the request is in flight. Nothing about the address changed.
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-swept" },
+      hostId: "host-a",
+      client: swept.client,
+      hashes: [hash],
+    });
+    releaseSwept();
+
+    expect(await reading).toEqual(bytes);
+    // Asked ONCE. A re-minted record would have it dispatched a second time
+    // before the good address was reached.
+    expect(swept.calls).toHaveLength(1);
+    expect(good.calls).toHaveLength(1);
+  });
 });
