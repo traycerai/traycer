@@ -728,6 +728,7 @@ describe("prompt-stash ownership transfer: modal/reload/residual", () => {
       },
     ]);
     const snapshot = await h.content.buildPromptStashSnapshot({
+      annotations: [],
       id: "repo-rich",
       createdAt: 1,
       content,

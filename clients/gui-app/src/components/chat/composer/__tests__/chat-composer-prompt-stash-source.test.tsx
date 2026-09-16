@@ -25,6 +25,22 @@ import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 
+/**
+ * A minimal entry for `importAndInsert`, which now takes the entry being
+ * restored so a destination can carry what does not live inside `content`
+ * (today: the annotation sidecar). These cases are about identity and
+ * acceptance, so the sidecar is empty.
+ */
+function stashEntryOf(content: JsonContent): PromptStashEntry {
+  return {
+    id: "stash-entry-fixture",
+    createdAt: 1,
+    content,
+    blobHashes: [],
+    annotations: [],
+  };
+}
+
 const storeMocks = vi.hoisted(() => ({
   save: vi.fn(),
   remove: vi.fn(),
@@ -490,6 +506,7 @@ describe("chat composer prompt-stash destination acknowledgement", () => {
       .getState()
       .setSnapshot(taskId, emptyDoc(), { from: 1, to: 1 });
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "chat-entry-ok",
       createdAt: 1,
       content: textDoc("restored into chat"),
@@ -539,6 +556,7 @@ describe("chat composer prompt-stash destination acknowledgement", () => {
       });
 
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "chat-entry-switch",
       createdAt: 1,
       content: textDoc("should not land"),
@@ -594,6 +612,7 @@ describe("chat composer prompt-stash destination acknowledgement", () => {
       });
 
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "chat-entry-append",
       createdAt: 1,
       content: textDoc("stashed body"),
@@ -671,6 +690,7 @@ describe("chat composer prompt-stash destination acknowledgement", () => {
     const insertResult = await result.current.importAndInsert({
       identity: captured,
       content: textDoc("restored after facade churn"),
+      entry: stashEntryOf(textDoc("restored after facade churn")),
     });
 
     expect(insertResult).toEqual({ status: "accepted" });
@@ -689,6 +709,7 @@ describe("chat composer prompt-stash destination acknowledgement", () => {
       });
 
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "chat-entry-remount",
       createdAt: 1,
       content: textDoc("should not land after remount"),

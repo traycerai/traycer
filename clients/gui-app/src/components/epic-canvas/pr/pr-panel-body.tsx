@@ -19,7 +19,6 @@ import type {
 import { WorkspaceHostSwitcher } from "@/components/home/host-workspace-selector/host-section";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
-import { Button } from "@/components/ui/button";
 import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 import {
   useSurfaceHostPinWithDefault,
@@ -62,8 +61,9 @@ import {
 import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
- * The per-view PR pin defaults to the canvas host. Both header actions and
- * list consume one selected-host subscription, including on mobile. The header
+ * The per-view PR pin defaults to the task's sole agent host, then the canvas
+ * host. Both header actions and list consume one selected-host subscription,
+ * including on mobile. The header
  * stays mounted through empty, loading and failed reads so the user can always
  * choose another host. Merely opening an epic does not latch a pin.
  */
@@ -163,16 +163,6 @@ function PrPanelHostPicker(props: { readonly pin: SurfaceHostPin }): ReactNode {
         intent="pin"
         surface="inline"
       />
-      {pin.isPinned ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => pin.setSelection(null)}
-        >
-          Use task host
-        </Button>
-      ) : null}
     </div>
   );
 }

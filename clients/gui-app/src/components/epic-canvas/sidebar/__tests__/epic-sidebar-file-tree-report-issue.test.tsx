@@ -305,12 +305,24 @@ vi.mock("@/lib/epic-selectors", () => ({
   useRootIds: () => [],
 }));
 
+function fakeEpicStoreState() {
+  return {
+    snapshotLoaded: true,
+    artifacts: { allIds: [], byId: {} },
+    // No GUI/TUI agent records in this suite's fixture - the task-default
+    // boundary `useEpicNodeHostIds`/`useSurfaceHostPin` read
+    // (`useMaybeEpicStore`) resolves through `effective` ("host-1" above),
+    // same as before task-default resolution existed.
+    chats: { allIds: [], byId: {} },
+    tuiAgents: { allIds: [], byId: {} },
+  };
+}
+
 vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      snapshotLoaded: true,
-      artifacts: { allIds: [], byId: {} },
-    }),
+    selector(fakeEpicStoreState()),
+  useMaybeEpicStore: (selector: (state: unknown) => unknown) =>
+    selector(fakeEpicStoreState()),
 }));
 
 vi.mock("@/stores/epics/artifact-read-state-store", () => ({

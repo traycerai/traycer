@@ -5,6 +5,7 @@ import { create } from "zustand";
 
 import type { ComposerMode } from "@/components/home/data/landing-options";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
+import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import {
   notifyDraftLocalDelete,
   notifyDraftLocalEdit,
@@ -295,7 +296,16 @@ export function newChatDraftRememberSynced(
         ...state.draftPatchesByEpicId,
         [found.epicId]: {
           ...current,
-          hostRevision,
+          // Never backward. This field IS the frontier
+          // `applyNewChatHostDocument` fences on, and the store cannot check
+          // the ordering of what reaches it: the session's held revision is
+          // not monotonic across a reconnect, so a stale `drafts.list` can
+          // reset it below what is installed and an acknowledgement then
+          // carries the lower number through. Scoped by draft id alone,
+          // which is exactly how that fence identifies a line too - this
+          // patch carries no owner. If new-chat ever gains cross-host
+          // re-adoption, the fence and this clamp need the owner together.
+          hostRevision: Math.max(current.hostRevision, hostRevision),
           syncedGeneration:
             collectedGeneration >= current.generation
               ? current.generation
@@ -306,10 +316,34 @@ export function newChatDraftRememberSynced(
   });
 }
 
-export function applyNewChatHostDocument(document: DraftDocument): void {
-  if (document.kind !== "new-chat") return;
+/** @returns whether the patch took this document; see `applyHostDocument`. */
+export function applyNewChatHostDocument(document: DraftDocument): boolean {
+  if (document.kind !== "new-chat") return false;
   const epicId = document.target.epicId;
-  if (epicId === null) return;
+  if (epicId === null) return false;
+  // Revision frontier, matching `applyLandingHostDocument` and the composer
+  // store: image reads finish out of order after subscribe-frame admission,
+  // so two upserts for this row can both be admitted and the slower one land
+  // last. The older continuation would otherwise overwrite the newer text.
+  // Only the same draft line is comparable - a re-mint is different
+  // numbering - and a cloud head's synthetic revision 0 is not a position.
+  const held =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+  if (
+    held !== undefined &&
+    held.draftId === document.draftId &&
+    document.revision > 0 &&
+    held.hostRevision > document.revision
+  ) {
+    return false;
+  }
+  // Whether the document's CONTENT lands, which is the question a caller
+  // writing bytes for it has to ask. A dirty row keeps the local text and
+  // takes only the identity, so the document's hashes stay unrooted and
+  // recovering them would leave bytes resident with nothing to release them.
+  // Read before the updater so it is this decision, not a later one.
+  const contentLands =
+    held === undefined || held.generation <= held.syncedGeneration;
   useNewConversationModalStore.setState((state) => {
     const current = state.draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
     if (current.generation > current.syncedGeneration) {
@@ -344,6 +378,7 @@ export function applyNewChatHostDocument(document: DraftDocument): void {
       },
     };
   });
+  return contentLands;
 }
 
 export function applyNewChatHostDelete(draftId: string): void {
@@ -369,6 +404,16 @@ export function collectNewChatDirtyWrites(): ReadonlyArray<{
     if (patch === undefined) continue;
     if (patch.generation <= patch.syncedGeneration) continue;
     if (patch.draftId === null) continue;
+    // Same rule as the chat composer's collect: a pending inline image node is
+    // a hash rewrite still in flight, and publishing now would put the base64
+    // snapshot on the wire that the rewrite is about to make small. The
+    // rewrite's own document change re-dirties this patch moments later.
+    if (
+      patch.content !== null &&
+      containsPendingInlineImageNode(patch.content)
+    ) {
+      continue;
+    }
     out.push({ epicId, patch });
   }
   return out;

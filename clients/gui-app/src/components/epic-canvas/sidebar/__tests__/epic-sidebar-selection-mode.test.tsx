@@ -989,60 +989,78 @@ vi.mock("@/lib/epic-selectors", () => ({
   useRootIds: () => testState.tree.rootIds,
 }));
 
+function fakeEpicStoreState() {
+  const tuiAgentEntries = Object.entries(testState.tuiAgentById).flatMap(
+    ([id, agent]) => {
+      if (agent === undefined) return [];
+      return [
+        [
+          id,
+          {
+            id,
+            hostId: agent.hostId,
+            profileId: agent.profileId,
+            sessionState: agent.sessionState ?? null,
+            lastExit: agent.lastExit ?? null,
+          },
+        ] as const,
+      ];
+    },
+  );
+  const chatRecords = testState.records.filter(
+    (record) => record.type === "chat",
+  );
+  return {
+    snapshotLoaded: testState.snapshotLoaded,
+    // The list's sort-clock override reads the record heads, which these
+    // fixtures still publish none of, so the override stays empty and every
+    // row sorts by the stamp on its node; `chats` itself is populated below
+    // so the real `useEpicNodeHostIds`/`useSurfaceHostPin` selector can see
+    // this task's GUI hosts alongside `tuiAgents`' TUI ones.
+    chatRecordHeads: {},
+    chats: {
+      allIds: chatRecords.map((record) => record.id),
+      byId: Object.fromEntries(
+        chatRecords.map((record) => [record.id, { hostId: record.hostId }]),
+      ),
+    },
+    // The tree index, because the row-level tree reads subscribe HERE now
+    // rather than through `useEpicTreeIndex`. A row that used to take the
+    // whole slice re-rendered on every record change; it now selects its own
+    // answer out of the store, so this fake has to carry what production
+    // reads. Same object the `epic-selectors` fake hands back, so the two
+    // mocks cannot disagree about the shape of the tree.
+    tree: testState.tree,
+    artifacts: {
+      allIds: testState.records
+        .filter((record) => record.type !== "chat")
+        .filter((record) => record.type !== "terminal-agent")
+        .map((record) => record.id),
+      byId: Object.fromEntries(
+        testState.records.map((record) => [
+          record.id,
+          {
+            id: record.id,
+            kind: record.type,
+            status: record.status,
+            title: record.name,
+            updatedAt: 1,
+          },
+        ]),
+      ),
+    },
+    tuiAgents: {
+      allIds: tuiAgentEntries.map(([id]) => id),
+      byId: Object.fromEntries(tuiAgentEntries),
+    },
+  };
+}
+
 vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      snapshotLoaded: testState.snapshotLoaded,
-      // The list's sort-clock override reads the record heads and the chat
-      // projection; these fixtures publish no heads, so the override is
-      // empty and every row sorts by the stamp on its node.
-      chatRecordHeads: {},
-      chats: { byId: {}, allIds: [] },
-      // The tree index, because the row-level tree reads subscribe HERE now
-      // rather than through `useEpicTreeIndex`. A row that used to take the
-      // whole slice re-rendered on every record change; it now selects its own
-      // answer out of the store, so this fake has to carry what production
-      // reads. Same object the `epic-selectors` fake hands back, so the two
-      // mocks cannot disagree about the shape of the tree.
-      tree: testState.tree,
-      artifacts: {
-        allIds: testState.records
-          .filter((record) => record.type !== "chat")
-          .filter((record) => record.type !== "terminal-agent")
-          .map((record) => record.id),
-        byId: Object.fromEntries(
-          testState.records.map((record) => [
-            record.id,
-            {
-              id: record.id,
-              kind: record.type,
-              status: record.status,
-              title: record.name,
-              updatedAt: 1,
-            },
-          ]),
-        ),
-      },
-      tuiAgents: {
-        byId: Object.fromEntries(
-          Object.entries(testState.tuiAgentById).flatMap(([id, agent]) => {
-            if (agent === undefined) return [];
-            return [
-              [
-                id,
-                {
-                  id,
-                  hostId: agent.hostId,
-                  profileId: agent.profileId,
-                  sessionState: agent.sessionState ?? null,
-                  lastExit: agent.lastExit ?? null,
-                },
-              ],
-            ];
-          }),
-        ),
-      },
-    }),
+    selector(fakeEpicStoreState()),
+  useMaybeEpicStore: (selector: (state: unknown) => unknown) =>
+    selector(fakeEpicStoreState()),
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -3385,6 +3403,7 @@ function createSessionHandle(chatId: string): ChatSessionStoreHandle {
     streamClientFactory: () => ({
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => false,
+      draftBlobBridgeSupported: () => false,
       requestTranscriptRange: () => undefined,
       requestResnapshot: () => undefined,
       close: () => undefined,

@@ -1904,7 +1904,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ptyLive: surface.kind === "terminal-agent" && surface.isOwnerActive,
   });
   const stopManagedCommand = useManagedCommandStop();
-  const stopAgent = useAgentStop();
+  const stopAgent = useAgentStop(props.hostClient);
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly choice: TeardownCommitChoice;
     readonly holders: readonly WorktreeBusyHolder[];

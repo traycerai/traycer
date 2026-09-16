@@ -103,6 +103,7 @@ function registerChatSession(
         streamClientFactory: () => ({
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => true,
           requestTranscriptRange: () => undefined,
           requestResnapshot: () => undefined,
           close: () => undefined,

@@ -654,7 +654,7 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
-  // Match the PR panel's per-tab pin, including its canvas-host fallback.
+  // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
     tabSurfaceKey("pull-requests", tabId),
@@ -719,15 +719,13 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
-  // Resolve the same PR host before and after the session loads.
+  // Share the PR resolver; task-agent hosts become available with the session.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
     tabSurfaceKey("pull-requests", tabId),
     canvasHostId,
   );
-  // The persisted PR baseline is readable before the epic's Y.doc resolves, so
-  // the loading rail already shows the same set of panels the live one will -
-  // no icon appears or disappears as the epic finishes opening.
+  // The persisted PR baseline is readable before the epic's Y.doc resolves.
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );

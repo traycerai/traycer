@@ -143,6 +143,7 @@ const STASH_DOCUMENT = {
     content: EMPTY_DOC,
     blobHashes: ["cd".repeat(32)],
     createdAt: 1_753_000_000_000,
+    annotations: [],
   },
   ownerHostId: "host-1",
   origin: "own" as const,

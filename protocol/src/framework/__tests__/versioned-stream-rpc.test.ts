@@ -120,7 +120,7 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // anchors and delivery placement) stays frozen as staging shipped it,
     // provider fallback took @1.10 above it, and the shell host on a resume
     // trigger and the queued managed-command item took @1.11 above that.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(11);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(12);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(

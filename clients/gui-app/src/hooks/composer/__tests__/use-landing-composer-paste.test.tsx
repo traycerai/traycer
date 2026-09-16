@@ -6,7 +6,7 @@ import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/ext
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   getImageBytes,
   imageHashKeys,
   releaseSession,
@@ -90,7 +90,7 @@ beforeEach(async () => {
   const hashes = await imageHashKeys();
   await Promise.all(
     hashes.map(async (hash) => {
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
     }),
   );

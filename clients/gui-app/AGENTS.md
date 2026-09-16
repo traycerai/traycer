@@ -179,12 +179,22 @@ model §1) — one decider per app, delivered to every window. Settings ▸ Acti
 is the only UI gesture that changes it; no picker anywhere writes it, and
 `HostDirectoryService.selectById` is lint-restricted to the one authority
 bridge. Surface pickers write a per-surface pin (`useSurfaceHostPin`), and a
-surface with no pin resolves to `useEffectiveHostId()`.
+surface with no usable pin resolves its default before `useEffectiveHostId()`.
+Task panels (git diff, pull requests, file tree, browsers, new terminal) first
+default to the sole known host across the task's GUI and terminal agents.
+Zero or multiple agent hosts retain the existing fallback (the canvas host
+for PRs, otherwise `effective`). This derived default never writes a pin;
+composers and already-open tiles keep their separate placement/binding rules.
+Git Diff's automatic root selection must not latch a host: workspace bindings
+can arrive before GUI/TUI agent records. Explicit workspace picks still latch.
+Palette browser and new-terminal flows read the target task projection and
+share their sidebar's surface pin through `useActiveEpicSurfaceHostPin`.
 
 **A pin is a preference, not a binding** — the same two-tier shape as
 preferred/effective, one tier down. `resolvedHostId` is the pin while its host
-can serve and `effective` while it cannot, so a surface whose pinned host dies
-AUTO-FOLLOWS and returns on its own when the host is usable again. The pin is
+can serve and its usable default or `effective` while it cannot, so a surface
+whose pinned host dies AUTO-FOLLOWS and returns on its own when the host is
+usable again. The pin is
 never cleared by death; that is what makes the return sticky. Only deliberate
 deregistration clears it (the host left the account — a pointer to nothing),
 mirroring the authority's own `clearPreferredOutsideFleet`, empty-fleet guard

@@ -1557,7 +1557,7 @@ describe("BrowsersPanelActions", () => {
     );
     await user.click(screen.getByRole("menuitem", { name: "Host, Work Mac" }));
     fireEvent.click(
-      screen.getByRole("menuitemradio", { name: /Follow active host/ }),
+      screen.getByRole("menuitemradio", { name: /Follow task host/ }),
     );
 
     expect(browserHostPinState.setSelection).toHaveBeenCalledWith(null);
