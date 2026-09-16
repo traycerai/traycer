@@ -498,7 +498,9 @@ describe("ChatStreamClient protocol capability getters", () => {
   it.each([
     [{ major: 1, minor: 9 }, false],
     [{ major: 1, minor: 10 }, false],
-    [{ major: 1, minor: 11 }, true],
+    // `1.11` is the shell-host line; the draft-blob bridge took `1.12`.
+    [{ major: 1, minor: 11 }, false],
+    [{ major: 1, minor: 12 }, true],
     [null, false],
     [{ major: 2, minor: 0 }, false],
   ] as const)(
@@ -522,9 +524,9 @@ describe("ChatStreamClient protocol capability getters", () => {
     const wsStreamClient: IStreamClient<typeof hostStreamRpcRegistry> = {
       subscribe: () => session,
       subscribeWithParamsProvider: () => session,
-      // Simulate a sibling session that negotiated 1.11: the client-wide
+      // Simulate a sibling session that negotiated 1.12: the client-wide
       // accessor is intentionally newer than this session's 1.10 handshake.
-      getMethodSchemaVersion: () => ({ major: 1, minor: 11 }),
+      getMethodSchemaVersion: () => ({ major: 1, minor: 12 }),
     };
     const client = new ChatStreamClient({
       wsStreamClient,

@@ -136,7 +136,7 @@ interface UseChatComposerSubmitArgs {
   readonly queueEditTargetId: string | null;
   /**
    * Whether THIS chat's live stream can materialize a hash-only draft image at
-   * send (T1's `chat.subscribe` 1.11 capability). The gate is per-session and
+   * send (T1's `chat.subscribe` 1.12 capability). The gate is per-session and
    * not app-wide: one host can serve one chat on a bridging stream and another
    * on a 1.9 one.
    *
@@ -882,7 +882,7 @@ export function useChatComposerSubmit(
     // RR4: full ELIGIBILITY, not just the capability boolean. A dialog can sit
     // open long enough for a mirror close or new bootstrap to invalidate the
     // confirmation, or for another refusal to mark the hash unbridgeable,
-    // while the stream still speaks 1.11. Checking only the flag sent the old
+    // while the stream still speaks 1.12. Checking only the flag sent the old
     // bare hash in all of those cases. `submitHostHeldImageHashes` is the one
     // place that knows the whole question, so ask it rather than a piece of it.
     const stagedHashes = hashOnlyImageHashes(pendingConflict.content);

@@ -196,7 +196,7 @@ interface ChatComposerProps {
   readonly steerProtocolSupported: boolean;
   /**
    * Whether this chat's OWN live stream can materialize a hash-only draft image
-   * at send (T1's `chat.subscribe` 1.11 capability). Gates the hash-only send:
+   * at send (T1's `chat.subscribe` 1.12 capability). Gates the hash-only send:
    * a bare hash on a stream that cannot resolve it is a refusal the user has to
    * read, so the flag is the chat's own, never an app-wide one.
    */
@@ -676,7 +676,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     fallbackVisible: fallbackComposerCardVisible(providerFallback.pending),
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
-    // BY VALUE. The key is present on every live `1.11` frame with `undefined`
+    // BY VALUE. The key is present on every live `1.12` frame with `undefined`
     // meaning "no offer", so a `"pendingReturn" in ...` test here would pin the
     // banner open for the life of the chat.
     fallbackReturnVisible: providerFallback.pendingReturn !== undefined,
